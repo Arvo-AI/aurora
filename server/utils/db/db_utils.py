@@ -1409,6 +1409,55 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_action_runs_action ON action_runs(action_id);
                     CREATE INDEX IF NOT EXISTS idx_action_runs_status ON action_runs(org_id, status);
                 """,
+                # Right-sizing recommendations proposed by the hpa_vpa_rightsizing action.
+                # One live row per (org, workload) while a PR is open; dismissal starts a
+                # cooldown so the action does not re-propose a change a human rejected.
+                #
+                # status values (VARCHAR + documented set, not an ENUM -- there are zero
+                # ENUMs in this module and ALTER TYPE ADD VALUE is transaction-hostile):
+                #   proposed   -- card posted, PR open (at most one per workload)
+                #   dismissed  -- human clicked Dismiss; cooldown_until is running
+                #   merged     -- human merged the PR; accepted, NO cooldown
+                #   closed     -- closed on the VCS by hand, no cooldown
+                #   superseded -- mis-size materially worsened, or a newer rec took over
+                "hpa_vpa_recommendations": """
+                    CREATE TABLE IF NOT EXISTS hpa_vpa_recommendations (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        workload_key VARCHAR(512) NOT NULL,
+                        workload VARCHAR(255) NOT NULL,
+                        environment VARCHAR(128),
+                        service VARCHAR(255),
+                        autoscaler VARCHAR(64),
+                        metrics_source VARCHAR(32),
+                        vcs_provider VARCHAR(32) NOT NULL DEFAULT 'github',
+                        repo_full_name VARCHAR(512),
+                        pr_number INTEGER,
+                        pr_url TEXT,
+                        status VARCHAR(32) NOT NULL DEFAULT 'proposed',
+                        recommendation JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        severity_score NUMERIC,
+                        slack_channel_id VARCHAR(64),
+                        slack_message_ts VARCHAR(64),
+                        action_run_id UUID,
+                        dismissed_by VARCHAR(255),
+                        dismissed_at TIMESTAMP,
+                        cooldown_until TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_hpa_vpa_recs_org_workload
+                        ON hpa_vpa_recommendations(org_id, workload_key, created_at DESC);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_hpa_vpa_recs_live
+                        ON hpa_vpa_recommendations(org_id, workload_key) WHERE status = 'proposed';
+                    CREATE INDEX IF NOT EXISTS idx_hpa_vpa_recs_cooldown
+                        ON hpa_vpa_recommendations(org_id, workload_key, cooldown_until)
+                        WHERE cooldown_until IS NOT NULL;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_hpa_vpa_recs_pr
+                        ON hpa_vpa_recommendations(org_id, repo_full_name, pr_number) WHERE pr_number IS NOT NULL;
+                """,
             }
 
             # List of tables that should have RLS enabled and a policy applied.
@@ -1485,6 +1534,7 @@ def initialize_tables():
             rls_tables.append("postmortem_versions")
             rls_tables.append("artifacts")
             rls_tables.append("artifact_versions")
+            rls_tables.append("hpa_vpa_recommendations")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
