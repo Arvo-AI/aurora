@@ -11,6 +11,7 @@ from typing import Optional
 
 from services.actions.postmortem_action import DEFAULT_POSTMORTEM_INSTRUCTIONS
 from services.actions.alert_gap_action import DEFAULT_ALERT_GAP_INSTRUCTIONS
+from services.actions.hpa_vpa_action import DEFAULT_HPA_VPA_INSTRUCTIONS
 
 from utils.db.connection_pool import db_pool
 
@@ -36,16 +37,51 @@ SYSTEM_ACTIONS = [
         "enabled": False,
         "instructions": None,
     },
+    {
+        "system_key": "hpa_vpa_rightsizing",
+        # This name becomes the living-document artifact title, the chat session
+        # title, and the text in Slack action notifications -- so it reads as a
+        # document title and pairs with its sibling "Alert Gap Audit". "HPA/VPA"
+        # is avoided deliberately: the slash reads badly as a title, and VPA is
+        # not actually deployed in the target environment.
+        "name": "Right-Sizing Audit",
+        "description": "Periodically compares real CPU and memory usage against configured "
+                       "requests, limits, and autoscaler bounds, and opens a PR per materially "
+                       "mis-sized workload with a Slack card to review or dismiss.",
+        "trigger_type": "on_schedule",
+        "trigger_config": {"interval_seconds": 604800},
+        # mode 'agent' is required, not stylistic: ModeAccessController strips
+        # mcp_* tools in ask mode, which would kill PR creation outright.
+        "mode": "agent",
+        "enabled": False,
+        "instructions": None,
+    },
 ]
+
+
+_DEFAULT_INSTRUCTIONS = {
+    "generate_postmortem": DEFAULT_POSTMORTEM_INSTRUCTIONS,
+    "alert_gap_audit": DEFAULT_ALERT_GAP_INSTRUCTIONS,
+    "hpa_vpa_rightsizing": DEFAULT_HPA_VPA_INSTRUCTIONS,
+}
+
+# Fail fast at import if a SYSTEM_ACTIONS entry has no instructions. Deferring
+# this to seeding time is far worse: _get_default_instructions runs inside the
+# loop, so one unmapped key raises on every pass, gets swallowed by the except
+# in seed_system_actions, and silently stops ALL system actions from seeding for
+# every org that lacks them.
+assert set(_DEFAULT_INSTRUCTIONS) >= {a["system_key"] for a in SYSTEM_ACTIONS}, (
+    "SYSTEM_ACTIONS entries missing default instructions: "
+    f"{ {a['system_key'] for a in SYSTEM_ACTIONS} - set(_DEFAULT_INSTRUCTIONS) }"
+)
 
 
 def _get_default_instructions(system_key: str) -> str:
     """Resolve the default instructions for a given system action."""
-    if system_key == "generate_postmortem":
-        return DEFAULT_POSTMORTEM_INSTRUCTIONS
-    if system_key == "alert_gap_audit":
-        return DEFAULT_ALERT_GAP_INSTRUCTIONS
-    raise ValueError(f"Unknown system action: {system_key}")
+    try:
+        return _DEFAULT_INSTRUCTIONS[system_key]
+    except KeyError:
+        raise ValueError(f"Unknown system action: {system_key}") from None
 
 
 def seed_system_actions(org_id: str, user_id: Optional[str] = None) -> int:
@@ -61,7 +97,14 @@ def seed_system_actions(org_id: str, user_id: Optional[str] = None) -> int:
             with conn.cursor() as cur:
                 for action_def in SYSTEM_ACTIONS:
                     key = action_def["system_key"]
-                    instructions = _get_default_instructions(key)
+                    try:
+                        instructions = _get_default_instructions(key)
+                    except ValueError:
+                        # Skip only the broken entry. Letting this propagate would
+                        # abort the whole loop and leave the remaining system
+                        # actions unseeded for this org.
+                        logger.exception("[SystemActions] No default instructions for '%s'; skipping", key)
+                        continue
 
                     cur.execute(
                         "SELECT id FROM actions WHERE org_id = %s AND system_key = %s",
