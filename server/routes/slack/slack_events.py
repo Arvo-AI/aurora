@@ -31,6 +31,17 @@ slack_events_bp = Blueprint("slack_events", __name__)
 # Get frontend URL from environment
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
+# action_id prefix for the Dismiss button on right-sizing recommendation cards.
+# The bare recommendation UUID also travels in the button's `value`; the
+# action_id is what the dispatcher matches on.
+_HPA_VPA_DISMISS_PREFIX = "hpa_vpa_dismiss_"
+
+# The "View PR" button carries a `url`, but Slack still delivers a block_actions
+# interaction for url buttons and expects an acknowledgement. It must be matched
+# and acked with an EMPTY body: any non-empty `text` in a block_actions response
+# replaces the original message, which would wipe the card the user just opened.
+_HPA_VPA_VIEW_PR_PREFIX = "hpa_vpa_view_pr_"
+
 
 @slack_events_bp.route("/events", methods=["POST"])
 def slack_events():
@@ -276,7 +287,22 @@ def slack_interactions():
                     team_id=team_id,
                     channel_id=channel_id
                 )
-        
+
+            # Handle "Dismiss" on a right-sizing recommendation card
+            if action_id.startswith(_HPA_VPA_DISMISS_PREFIX):
+                return _handle_hpa_vpa_dismiss(
+                    payload=payload,
+                    action=action,
+                    slack_user_id=slack_user_id,
+                    team_id=team_id,
+                    channel_id=channel_id
+                )
+
+            # "View PR" is a url button: ack with an empty body so Slack does not
+            # replace the card with the default "Interaction received" text.
+            if action_id.startswith(_HPA_VPA_VIEW_PR_PREFIX):
+                return jsonify({"text": ""}), 200
+
         # Default response for unhandled interactions
         return jsonify({"text": "Interaction received"}), 200
         
@@ -557,3 +583,206 @@ def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, 
     except Exception as e:
         logger.error(f"Error handling suggestion_details action: {e}", exc_info=True)
         return jsonify({"text": ""}), 200
+
+
+def _send_ephemeral(client, channel_id: str, slack_user_id: str, text: str) -> None:
+    """Best-effort ephemeral reply. Never raises into an interaction response."""
+    try:
+        client._make_request(
+            "POST",
+            "chat.postEphemeral",
+            {"channel": channel_id, "user": slack_user_id, "text": text},
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to send ephemeral message to Slack user {sanitize(slack_user_id)}: {e}",
+            exc_info=True,
+        )
+
+
+def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> tuple:
+    """Handle "Dismiss" on a right-sizing recommendation card.
+
+    Dismissing means: close the PR and do not raise this workload again for
+    HPA_VPA_COOLDOWN_DAYS, unless the mis-size materially worsens.
+
+    Ordering is deliberate -- DB transition first, then the PR close. A GitHub
+    failure therefore leaves the rec dismissed with the PR still open, which is
+    the safer direction: we never nag about a workload a human rejected, and a
+    stale open PR is visible and closable by hand. GitHub-first would risk
+    closing the PR and then losing the cooldown, i.e. exactly the nagging this
+    feature exists to prevent. The failure is surfaced on the card so it is
+    never silent.
+
+    Always returns 200: Slack retries non-200 responses, which would turn one
+    failure into a retry storm.
+    """
+    from services.actions.hpa_vpa_recommendations import (
+        HPA_VPA_COOLDOWN_DAYS,
+        close_pull_request,
+        dismiss_recommendation,
+    )
+    from utils.validation import is_valid_uuid
+
+    try:
+        # 1. AUTHENTICATE: who clicked?
+        clicker_user_id = get_user_id_from_slack_user(slack_user_id, team_id)
+        if not clicker_user_id:
+            logger.warning(
+                f"Unauthenticated Slack user {sanitize(slack_user_id)} (team {sanitize(team_id)}) tried to dismiss a recommendation"
+            )
+            workspace_user_id = get_user_id_from_slack_team(team_id)
+            if workspace_user_id:
+                try:
+                    workspace_token_data = get_user_token_data(workspace_user_id, "slack")
+                    if workspace_token_data:
+                        _send_ephemeral(
+                            SlackClient(workspace_token_data.get('access_token')),
+                            channel_id, slack_user_id,
+                            f"WARNING: You're not authenticated in Aurora.\n\nTo dismiss recommendations, connect your Aurora account:\n{FRONTEND_URL}/settings/integrations\n\nClick 'Connect' for Slack and authorize this workspace.",
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to warn unauthenticated Slack user {sanitize(slack_user_id)}: {e}", exc_info=True)
+            return jsonify({"text": ""}), 200
+
+        # 2. PARSE + VALIDATE the recommendation id before any SQL.
+        action_id = action.get('action_id', '') or ''
+        rec_id = (action.get('value') or action_id[len(_HPA_VPA_DISMISS_PREFIX):]).strip()
+        if not is_valid_uuid(rec_id):
+            # Empty body: a non-empty `text` in a block_actions response REPLACES
+            # the original message, so returning an error string here would wipe
+            # the card instead of reporting a problem with it.
+            logger.error(f"Invalid recommendation id on dismiss action: {sanitize(rec_id)}")
+            return jsonify({"text": ""}), 200
+
+        client = get_slack_client_for_user(clicker_user_id)
+
+        # 3. TRANSITION: atomic and idempotent. The status='proposed' predicate
+        #    *is* the double-click defence -- a second click matches no rows.
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                clicker_org_id = set_rls_context(
+                    cursor, conn, clicker_user_id, log_prefix="[SlackEvents:hpa_vpa_dismiss]"
+                )
+                if not clicker_org_id:
+                    logger.error(f"Could not resolve org for Slack clicker {sanitize(slack_user_id)}")
+                    return jsonify({"text": ""}), 200
+
+                # 4. AUTHORIZE: RLS already scopes reads to the clicker's org;
+                #    this exists to give the right message instead of a
+                #    confusing "not found", and as defence in depth.
+                cursor.execute(
+                    "SELECT org_id, status FROM hpa_vpa_recommendations WHERE id = %s::uuid",
+                    (rec_id,),
+                )
+                row = cursor.fetchone()
+                if not row or row[0] != clicker_org_id:
+                    logger.warning(
+                        f"Slack user {sanitize(slack_user_id)} tried to dismiss recommendation outside their org"
+                    )
+                    if client:
+                        _send_ephemeral(client, channel_id, slack_user_id,
+                                        "Unauthorized: that recommendation does not belong to your organization.")
+                    return jsonify({"text": ""}), 200
+
+                dismissed = dismiss_recommendation(cursor, rec_id, clicker_org_id, slack_user_id)
+                # Commit before the GitHub call so a slow API cannot hold the row lock.
+                conn.commit()
+
+        if not dismissed:
+            logger.info(f"Recommendation {rec_id} was already dismissed; no-op")
+            if client:
+                _send_ephemeral(client, channel_id, slack_user_id,
+                                "That recommendation was already dismissed.")
+            return jsonify({"text": ""}), 200
+
+        # 5. CLOSE the PR on whichever VCS hosts it. Close as the account that
+        #    opened it -- the clicker is a teammate in the same org who may have
+        #    no GitHub credential of their own, which would fail every dismissal
+        #    except the opener's own.
+        pr_number = dismissed.get("pr_number")
+        close_as_user_id = dismissed.get("user_id") or clicker_user_id
+        close_result = close_pull_request(
+            close_as_user_id,
+            dismissed.get("vcs_provider") or "github",
+            dismissed.get("repo_full_name") or "",
+            pr_number,
+        ) if pr_number else {"error": "No PR recorded for this recommendation"}
+
+        if close_result.get("already_merged"):
+            # A merge is acceptance, not rejection: it must not start an
+            # anti-nag window, or the next genuine drift goes unreported.
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, clicker_user_id,
+                                        log_prefix="[SlackEvents:hpa_vpa_dismiss]")
+                        from services.actions.hpa_vpa_recommendations import mark_merged
+                        mark_merged(cursor, rec_id, clicker_org_id)
+                        conn.commit()
+            except Exception:
+                logger.exception(f"Failed to mark recommendation {rec_id} merged")
+            status_line = (f"*Status:* PR #{pr_number} was already merged -- the change was accepted. "
+                           "No cooldown applied.")
+        elif close_result.get("success"):
+            status_line = (f"*Status:* Dismissed by <@{slack_user_id}> -- PR #{pr_number} closed. "
+                           f"Aurora will not raise this workload again for {HPA_VPA_COOLDOWN_DAYS} days.")
+        else:
+            logger.error(
+                f"Failed to close PR #{pr_number} for recommendation {rec_id}: {close_result.get('error')}"
+            )
+            status_line = (f"*Status:* Dismissed by <@{slack_user_id}> -- PR #{pr_number} could not be "
+                           "closed automatically; please close it on GitHub.")
+
+        # 6. REWRITE the card with no buttons at all. Nothing to re-click is the
+        #    strongest idempotency guarantee, layered on the conditional UPDATE.
+        _rewrite_dismissed_card(client, payload, dismissed, rec_id, channel_id, status_line)
+
+        return jsonify({"text": ""}), 200
+
+    except Exception as e:
+        logger.error(f"Error handling hpa_vpa_dismiss action: {e}", exc_info=True)
+        return jsonify({"text": ""}), 200
+
+
+def _rewrite_dismissed_card(client, payload: dict, dismissed: dict, rec_id: str,
+                            channel_id: str, status_line: str) -> None:
+    """Replace the card with a button-free dismissed version."""
+    if not client:
+        return
+    try:
+        from chat.backend.agent.tools.hpa_vpa_card_tool import build_recommendation_blocks
+
+        stored = dismissed.get("recommendation") or {}
+        rec = {
+            "workload": dismissed.get("workload"),
+            "service": dismissed.get("service"),
+            "environment": dismissed.get("environment"),
+            "autoscaler": dismissed.get("autoscaler"),
+            "pr_number": dismissed.get("pr_number"),
+            "pr_url": dismissed.get("pr_url"),
+        }
+        for dimension, spec in stored.items():
+            if isinstance(spec, dict):
+                rec[f"{dimension}_current"] = spec.get("current")
+                rec[f"{dimension}_recommended"] = spec.get("recommended")
+                rec[f"{dimension}_evidence"] = spec.get("evidence")
+
+        blocks = build_recommendation_blocks(
+            rec, rec_id, with_actions=False, status_line=status_line
+        )
+        # Prefer the row's own channel/ts; fall back to the click payload.
+        target_channel = dismissed.get("slack_channel_id") or channel_id
+        target_ts = dismissed.get("slack_message_ts") or (payload.get("message") or {}).get("ts")
+        if not (target_channel and target_ts):
+            logger.warning(f"No channel/ts to rewrite dismissed card for recommendation {rec_id}")
+            return
+
+        client.update_message(
+            channel=target_channel,
+            ts=target_ts,
+            text=f"Right-Sizing Recommendation dismissed: {rec.get('workload')}",
+            blocks=blocks,
+        )
+    except Exception as e:
+        logger.error(f"Failed to rewrite dismissed card for recommendation {rec_id}: {e}", exc_info=True)
