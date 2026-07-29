@@ -85,7 +85,7 @@ class ModeAccessController:
                 LOGGER.info("ModeAccessController dropped tool %s due to read-only mode prefix match", name)
                 continue
 
-            if name in {"iac_tool", "github_commit"}:
+            if name in {"iac_tool", "github_commit", "send_hpa_vpa_recommendation"}:
                 LOGGER.info("ModeAccessController dropped tool %s for read-only mode", name)
                 continue
 
@@ -134,7 +134,7 @@ class ModeAccessController:
         if any(name.startswith(prefix) for prefix in cls._POLICY.blocked_tool_prefixes):
             return False
 
-        return name not in {"iac_tool", "github_commit"}
+        return name not in {"iac_tool", "github_commit", "send_hpa_vpa_recommendation"}
 
 
 __all__ = ["ModeAccessController"]

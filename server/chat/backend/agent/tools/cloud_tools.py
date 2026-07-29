@@ -2213,10 +2213,15 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             func=final_dd_func,
             name="query_datadog",
             description=(
-                "Query Datadog for logs, metrics, monitors, events, traces, hosts, or incidents. "
-                "Set resource_type to 'logs', 'metrics', 'monitors', 'events', 'traces', 'hosts', or 'incidents'. "
+                "Query Datadog for logs, metrics, metric_stats, monitors, events, traces, hosts, or incidents. "
+                "Set resource_type to 'logs', 'metrics', 'metric_stats', 'monitors', 'events', 'traces', "
+                "'hosts', or 'incidents'. Use 'metric_stats' for p50/p95/p99/max per series over long "
+                "windows (capacity and right-sizing questions) -- Datadog cannot compute a time-percentile "
+                "in a query, so 'metrics' plus a percentile rollup does not work. "
                 "Examples: query_datadog(resource_type='logs', query='service:web status:error', time_from='-1h') "
-                "or query_datadog(resource_type='metrics', query='avg:system.cpu.user{*}', time_from='-2h')"
+                "or query_datadog(resource_type='metrics', query='avg:system.cpu.user{*}', time_from='-2h') "
+                "or query_datadog(resource_type='metric_stats', "
+                "query='sum:kubernetes.memory.usage{env:production} by {kube_deployment}', time_from='-30d')"
             ),
             args_schema=QueryDatadogArgs,
         ))
@@ -2470,6 +2475,34 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             logging.info(f"Added {len(specs)} Notion tools for user {user_id} (background={is_background})")
     except Exception as e:
         logging.warning(f"Failed to add Notion tools: {e}")
+
+    # Add HPA/VPA right-sizing card tools -- needs Slack (to post the card) and
+    # GitHub (the PR the card links to). Gated on connectors only: State
+    # .trigger_action_id is never set for background action runs, so there is no
+    # way today to scope these to the right-sizing action specifically.
+    # Excluded from PR review, which is read-only, like every other write tool here.
+    try:
+        # Imported here rather than relying on the Slack block ~1000 lines above:
+        # that name is only bound if this function reached that try block without
+        # raising, so depending on it would fail with UnboundLocalError.
+        from .slack_tool import is_slack_connected as _is_slack_connected
+        from .hpa_vpa_card_tool import HPA_VPA_TOOL_SPECS
+        if (not is_pr_review
+                and _safe_connected(_is_slack_connected, "Slack")
+                and _safe_connected(is_github_connected, "GitHub")):
+            for _func, _name, _schema, _desc in HPA_VPA_TOOL_SPECS:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+            logging.info(f"Added {len(HPA_VPA_TOOL_SPECS)} HPA/VPA right-sizing tools for user {user_id}")
+    except Exception as e:
+        logging.warning(f"Failed to add HPA/VPA right-sizing tools: {e}")
 
     # Add Jira tools if enabled
     try:
