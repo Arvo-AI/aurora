@@ -1455,8 +1455,16 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_hpa_vpa_recs_cooldown
                         ON hpa_vpa_recommendations(org_id, workload_key, cooldown_until)
                         WHERE cooldown_until IS NOT NULL;
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_hpa_vpa_recs_pr
-                        ON hpa_vpa_recommendations(org_id, repo_full_name, pr_number) WHERE pr_number IS NOT NULL;
+                    -- Superseded by idx_hpa_vpa_recs_live_pr below. Its predicate
+                    -- covered every status, so a re-proposal pointing at a PR that
+                    -- an earlier dismissal failed to close (a tolerated degraded
+                    -- path) hit a unique violation and lost the whole card post.
+                    -- CREATE ... IF NOT EXISTS cannot redefine an existing index,
+                    -- hence the explicit drop; it is a no-op after the first boot.
+                    DROP INDEX IF EXISTS idx_hpa_vpa_recs_pr;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_hpa_vpa_recs_live_pr
+                        ON hpa_vpa_recommendations(org_id, repo_full_name, pr_number)
+                        WHERE pr_number IS NOT NULL AND status = 'proposed';
                 """,
             }
 

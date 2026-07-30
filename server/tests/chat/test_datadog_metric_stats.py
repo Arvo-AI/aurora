@@ -378,10 +378,12 @@ def test_every_advertised_source_has_a_dispatch_branch():
 
 
 def test_unsupported_source_raises_clearly():
+    client = _FakeClient([], [])
     with pytest.raises(ValueError, match="Unsupported metrics source"):
-        _query_metric_stats(_FakeClient([], []), "q", "-30d", "now", 100, source="newrelic")
+        _query_metric_stats(client, "q", "-30d", "now", 100, source="newrelic")
 
 
 def test_empty_query_is_rejected():
+    client = _FakeClient([], [])
     with pytest.raises(ValueError, match="query is required"):
-        _query_metric_stats(_FakeClient([], []), "", "-30d", "now", 100)
+        _query_metric_stats(client, "", "-30d", "now", 100)

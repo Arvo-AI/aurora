@@ -36,6 +36,13 @@ FRONTEND_URL = os.getenv("FRONTEND_URL")
 # action_id is what the dispatcher matches on.
 _HPA_VPA_DISMISS_PREFIX = "hpa_vpa_dismiss_"
 
+# Slack expects an interaction response within ~3s. The dismissal transition is
+# already committed before this call, so a timeout only costs the automatic PR
+# close (surfaced on the card as "could not be closed automatically"), never the
+# cooldown. Kept short for that reason; moving the close and card rewrite onto a
+# Celery task would remove the constraint entirely and is the better long-term fix.
+_GITHUB_CLOSE_TIMEOUT = 5
+
 # The "View PR" button carries a `url`, but Slack still delivers a block_actions
 # interaction for url buttons and expects an acknowledgement. It must be matched
 # and acked with an EMPTY body: any non-empty `text` in a block_actions response
@@ -642,7 +649,7 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
                             f"WARNING: You're not authenticated in Aurora.\n\nTo dismiss recommendations, connect your Aurora account:\n{FRONTEND_URL}/settings/integrations\n\nClick 'Connect' for Slack and authorize this workspace.",
                         )
                 except Exception as e:
-                    logger.error(f"Failed to warn unauthenticated Slack user {sanitize(slack_user_id)}: {e}", exc_info=True)
+                    logger.exception(f"Failed to warn unauthenticated Slack user {sanitize(slack_user_id)}: {e}")
             return jsonify({"text": ""}), 200
 
         # 2. PARSE + VALIDATE the recommendation id before any SQL.
@@ -707,6 +714,7 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
             dismissed.get("vcs_provider") or "github",
             dismissed.get("repo_full_name") or "",
             pr_number,
+            timeout=_GITHUB_CLOSE_TIMEOUT,
         ) if pr_number else {"error": "No PR recorded for this recommendation"}
 
         if close_result.get("already_merged"):
@@ -741,7 +749,7 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
         return jsonify({"text": ""}), 200
 
     except Exception as e:
-        logger.error(f"Error handling hpa_vpa_dismiss action: {e}", exc_info=True)
+        logger.exception(f"Error handling hpa_vpa_dismiss action: {e}")
         return jsonify({"text": ""}), 200
 
 
@@ -785,4 +793,4 @@ def _rewrite_dismissed_card(client, payload: dict, dismissed: dict, rec_id: str,
             blocks=blocks,
         )
     except Exception as e:
-        logger.error(f"Failed to rewrite dismissed card for recommendation {rec_id}: {e}", exc_info=True)
+        logger.exception(f"Failed to rewrite dismissed card for recommendation {rec_id}: {e}")

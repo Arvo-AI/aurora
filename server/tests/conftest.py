@@ -147,12 +147,15 @@ for _pkg in _OPTIONAL_PACKAGES:
         _stub(_pkg)
 
 for _ns in _STUBBED_NAMESPACES:
-    if _is_installed(_ns):
-        continue  # real package installed -- never mask it
+    # Per-submodule, not per-namespace: `google` is a namespace package that any
+    # installed google-* distribution provides, so gating the whole loop on the
+    # root would leave a missing google.oauth2 unstubbed whenever some unrelated
+    # google package happens to be present. _stub() and _is_installed() both
+    # no-op on real modules, so nothing is ever masked.
     for _mod in _STUBBED_SUBMODULES:
-        if _mod.split(".")[0] == _ns:
+        if _mod.split(".")[0] == _ns and not _is_installed(_mod):
             _stub(_mod)
-    if _ns == "google":
+    if _ns == "google" and not _is_installed("google.oauth2"):
         # These wrappers import google.* at module scope, so they cannot load
         # against stubs even when they are themselves installed.
         for _wrapper in _STUB_WHEN_GOOGLE_ABSENT:

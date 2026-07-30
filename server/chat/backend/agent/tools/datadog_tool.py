@@ -374,12 +374,22 @@ def _p95_datadog(client, query: str, time_from: str, time_to: str, limit: int,
         # returned a partial series. A percentile over a silently-clipped window
         # is not the percentile the caller asked for.
         result["window_exceeds_point_cap"] = True
-        result["window_note"] = (
-            f"This window needs ~{expected_points} points at the coarsest supported "
-            f"interval, above Datadog's {_DATADOG_POINT_CAP}-point per-series limit, so the "
-            "series is partial and these percentiles cover only part of the window. "
-            "Use a window of 250 days or less."
+        _partial = (
+            f"This window needs ~{expected_points} points at a {chosen_interval} ms interval, "
+            f"above Datadog's {_DATADOG_POINT_CAP}-point per-series limit, so the series is "
+            "partial and these percentiles cover only part of the window. "
         )
+        if _clamp_interval(interval) is not None:
+            # Caller pinned the interval, so the fix is theirs to make: a coarser
+            # interval (or omitting it to auto-pick) fits the same window.
+            result["window_note"] = _partial + (
+                "Re-run with a coarser interval, or omit interval to auto-pick one."
+            )
+        else:
+            result["window_note"] = _partial + (
+                "This is already the coarsest supported interval, so use a window of "
+                "250 days or less."
+            )
 
     if truncated:
         result["series_truncated"] = True
@@ -405,11 +415,14 @@ _METRIC_STATS_SOURCES = ("datadog",)
 _P95_BY_SOURCE = {"datadog": _p95_datadog}
 
 # Fail fast at import if a source is advertised without a dispatch entry --
-# mirrors the _ALERTS_PATH_BY_SOURCE guard in aurora_mcp/tools_gated.py.
-assert set(_P95_BY_SOURCE) >= set(_METRIC_STATS_SOURCES), (
-    "metric_stats sources not fully covered by _P95_BY_SOURCE: "
-    f"missing {set(_METRIC_STATS_SOURCES) - set(_P95_BY_SOURCE)}"
-)
+# mirrors the _ALERTS_PATH_BY_SOURCE guard in aurora_mcp/tools_gated.py, but
+# raises instead of asserting: `python -O` strips asserts and would silently
+# drop the guard.
+_uncovered_sources = set(_METRIC_STATS_SOURCES) - set(_P95_BY_SOURCE)
+if _uncovered_sources:
+    raise RuntimeError(
+        f"metric_stats sources not fully covered by _P95_BY_SOURCE: missing {_uncovered_sources}"
+    )
 
 
 def _query_metric_stats(client, query: str, time_from: str, time_to: str, limit: int, **kwargs) -> dict:
@@ -427,6 +440,11 @@ def _query_metric_stats(client, query: str, time_from: str, time_to: str, limit:
             "query is required for resource_type='metric_stats' "
             "(e.g., 'sum:kubernetes.memory.usage{env:production} by {kube_deployment}')"
         )
+    # `source` is deliberately NOT part of QueryDatadogArgs: this tool is the
+    # Datadog surface, so the agent never selects a backend. It is an internal
+    # seam for a future caller that multiplexes providers (mirroring
+    # _resolve_source in aurora_mcp/tools_gated.py), reachable because
+    # query_datadog forwards **kwargs.
     source = (kwargs.get("source") or "datadog").lower().strip()
     backend = _P95_BY_SOURCE.get(source)
     if backend is None:
@@ -527,7 +545,11 @@ def query_datadog(
     logger.info("[DATADOG-TOOL] user=%s resource=%s query=%s", user_id, resource_type, query[:100] if query else "")
 
     try:
-        result = handler(client, query, time_from, time_to, limit, interval=interval)
+        # Forward **kwargs so internal-only handler options (e.g. metric_stats'
+        # `source` seam) actually reach the handler. `interval` is passed
+        # explicitly because it is a declared agent-facing argument.
+        _handler_kwargs = {k: v for k, v in kwargs.items() if k != "interval"}
+        result = handler(client, query, time_from, time_to, limit, interval=interval, **_handler_kwargs)
         result["success"] = True
         result["time_range"] = f"{time_from} to {time_to}"
 
@@ -550,9 +572,14 @@ def query_datadog(
             # count=0 -- indistinguishable from "no data" and a silent wrong
             # answer. Say so loudly instead.
             result["truncated_all"] = True
-            result["note"] = ("A single result exceeded the output size limit; nothing could be "
-                              "returned. Narrow the window or grouping, or use "
-                              "resource_type='metric_stats' for percentile summaries.")
+            # Append, like the branch above: any series_dropped / series_truncated
+            # context already in `note` is exactly what the agent needs to tell
+            # "too big" apart from "no data".
+            _all_note = ("A single result exceeded the output size limit; nothing could be "
+                         "returned. Narrow the window or grouping, or use "
+                         "resource_type='metric_stats' for percentile summaries.")
+            _existing = result.get("note")
+            result["note"] = f"{_existing} {_all_note}" if _existing else _all_note
 
         return json.dumps(result)
 

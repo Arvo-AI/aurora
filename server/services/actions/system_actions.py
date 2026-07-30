@@ -70,10 +70,14 @@ _DEFAULT_INSTRUCTIONS = {
 # loop, so one unmapped key raises on every pass, gets swallowed by the except
 # in seed_system_actions, and silently stops ALL system actions from seeding for
 # every org that lacks them.
-assert set(_DEFAULT_INSTRUCTIONS) >= {a["system_key"] for a in SYSTEM_ACTIONS}, (
-    "SYSTEM_ACTIONS entries missing default instructions: "
-    f"{ {a['system_key'] for a in SYSTEM_ACTIONS} - set(_DEFAULT_INSTRUCTIONS) }"
-)
+# Raise rather than assert: `python -O` strips assert statements, which would
+# silently disable exactly the check that keeps a missing key from breaking
+# seeding for every org.
+_missing_instructions = {a["system_key"] for a in SYSTEM_ACTIONS} - set(_DEFAULT_INSTRUCTIONS)
+if _missing_instructions:
+    raise RuntimeError(
+        f"SYSTEM_ACTIONS entries missing default instructions: {_missing_instructions}"
+    )
 
 
 def _get_default_instructions(system_key: str) -> str:

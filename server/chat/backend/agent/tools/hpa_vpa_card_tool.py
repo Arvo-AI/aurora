@@ -98,7 +98,9 @@ class SendHpaVpaRecommendationArgs(BaseModel):
         default=None, description="Provider the usage percentiles came from, e.g. 'datadog'"
     )
     vcs_provider: Optional[str] = Field(
-        default=None, description="VCS hosting the PR: 'github' (default), 'gitlab', or 'bitbucket'"
+        default=None,
+        description="VCS hosting the PR. Only 'github' is supported today (the default); "
+        "the column exists so GitLab and Bitbucket become a fill-in rather than a migration.",
     )
 
 
@@ -145,9 +147,20 @@ def _validate(args: dict) -> Optional[str]:
         return "pr_url is required so the View PR button has a destination"
     # Slack rejects a button whose url is not http(s), which fails the whole
     # chat.postMessage call -- and a javascript:/data: url would be a live XSS
-    # vector in any other renderer this intermediate dict later feeds.
-    if not pr_url.lower().startswith(("http://", "https://")):
-        return f"pr_url must be an http(s) URL, got '{pr_url[:60]}'"
+    # vector in any other renderer this intermediate dict later feeds. HTTPS
+    # only: every supported VCS serves PRs over TLS, so plain http here is
+    # either a typo or a downgrade.
+    if not pr_url.lower().startswith("https://"):
+        return f"pr_url must be an https:// URL, got '{pr_url[:60]}'"
+
+    # Reject a provider we cannot close a PR on, before a row is claimed and a
+    # card is posted. Otherwise Dismiss would fail on every click, leaving the
+    # PR open with no way to act on the card.
+    provider = (args.get("vcs_provider") or "github").lower().strip()
+    supported = recs.supported_vcs_providers()
+    if provider not in supported:
+        return (f"vcs_provider '{provider}' is not supported yet. "
+                f"Supported: {', '.join(sorted(supported))}.")
 
     present = [key for key, _ in _DIMENSIONS
                if args.get(f"{key}_current") and args.get(f"{key}_recommended")]

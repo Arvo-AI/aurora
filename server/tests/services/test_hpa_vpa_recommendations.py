@@ -59,7 +59,9 @@ def test_workload_key_handles_missing_environment():
 
 
 def test_workload_key_is_stable_across_calls():
-    assert build_workload_key("api", "prod") == build_workload_key("api", "prod")
+    """Pin the exact format, not self-equality: the key is a persisted dedup
+    handle, so a format change silently orphans every existing cooldown row."""
+    assert build_workload_key("api", "prod") == "prod::api"
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +99,10 @@ def test_severity_is_direction_agnostic():
     {"cpu": {"current": 100}},                               # incomplete
     {"cpu": {"recommended": 100}},
     {"cpu": "not-a-dict"},
+    {"cpu": {"current": True, "recommended": 50}},           # bool is an int subclass
+    {"cpu": {"current": 100, "recommended": False}},
+    {"cpu": {"current": float("inf"), "recommended": 50}},
+    {"cpu": {"current": 100, "recommended": float("nan")}},
 ])
 def test_severity_is_none_when_nothing_is_scoreable(dimensions):
     assert compute_severity_score(dimensions) is None
@@ -173,6 +179,36 @@ def test_unsupported_provider_is_a_loud_error(provider):
         assert provider in result["error"]
 
 
-def test_missing_pr_reference_is_rejected_before_any_network_call():
+def test_missing_pr_reference_is_rejected_before_any_network_call(monkeypatch):
+    """Assert the closer is never reached, not merely that an error came back --
+    otherwise this passes for the wrong reason (the fake user's GitHub auth
+    lookup failing) and would keep passing if the guard were removed."""
+    calls = []
+    monkeypatch.setitem(
+        _CLOSERS, "github", lambda *a, **kw: calls.append(a) or {"success": True}
+    )
+
     assert "error" in close_pull_request("user-1", "github", "", 5)
     assert "error" in close_pull_request("user-1", "github", "owner/repo", 0)
+    assert calls == []
+
+
+@pytest.mark.parametrize("bad_repo", [
+    "../../etc/passwd",
+    "owner/repo/extra",
+    "owner",
+    "owner/repo?x=1",
+    "owner/repo#frag",
+    "https://evil.example.com/owner/repo",
+])
+def test_malformed_repo_name_is_rejected_before_any_network_call(monkeypatch, bad_repo):
+    """The repo slug is interpolated into an API URL, so anything but owner/repo
+    must be refused before a request is built."""
+    calls = []
+    monkeypatch.setitem(
+        _CLOSERS, "github", lambda *a, **kw: calls.append(a) or {"success": True}
+    )
+
+    result = close_pull_request("user-1", "github", bad_repo, 5)
+    assert "error" in result
+    assert calls == []

@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -45,6 +46,10 @@ STATUS_DISMISSED = "dismissed"
 STATUS_MERGED = "merged"
 STATUS_CLOSED = "closed"
 STATUS_SUPERSEDED = "superseded"
+
+# Exactly owner/repo, the only shape any supported provider accepts. Guards the
+# API URL these values are interpolated into.
+_REPO_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 
 _ROW_FIELDS = (
     "id", "workload_key", "workload", "environment", "service", "autoscaler",
@@ -88,7 +93,12 @@ def compute_severity_score(dimensions: dict) -> Optional[float]:
         if not isinstance(spec, dict):
             continue
         current, recommended = spec.get("current"), spec.get("recommended")
+        # bool is an int subclass, so True/False would otherwise score as 1/0.
+        if isinstance(current, bool) or isinstance(recommended, bool):
+            continue
         if not isinstance(current, (int, float)) or not isinstance(recommended, (int, float)):
+            continue
+        if not math.isfinite(current) or not math.isfinite(recommended):
             continue
         if current <= 0:
             continue
@@ -378,7 +388,7 @@ def _close_github_pr(user_id: str, repo_full_name: str, pr_number: int, timeout:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    url = f"https://api.github.com/repos/{repo_full_name}/pulls/{pr_number}"
+    url = f"https://api.github.com/repos/{repo_full_name}/pulls/{int(pr_number)}"
 
     try:
         resp = requests.patch(url, headers=headers, json={"state": "closed"}, timeout=timeout)
@@ -415,6 +425,15 @@ def _close_github_pr(user_id: str, repo_full_name: str, pr_number: int, timeout:
 _CLOSERS = {"github": _close_github_pr}
 
 
+def supported_vcs_providers() -> frozenset:
+    """Providers a PR can actually be closed on.
+
+    Callers validate against this *before* posting a card, so a workload is
+    never proposed on a provider whose Dismiss could not close the PR.
+    """
+    return frozenset(_CLOSERS)
+
+
 def close_pull_request(
     user_id: str, vcs_provider: str, repo_full_name: str, pr_number: int, timeout: int = 30
 ) -> dict:
@@ -435,9 +454,21 @@ def close_pull_request(
                           f"Supported: {', '.join(sorted(_CLOSERS))}")}
     if not repo_full_name or not pr_number:
         return {"error": "Cannot close PR: missing repository or PR number"}
+    # The repo slug is interpolated into an API URL, so constrain it to exactly
+    # owner/repo. Rejects traversal ("../.."), extra path segments and query or
+    # fragment characters that would otherwise retarget the request.
+    if not _REPO_FULL_NAME_RE.match(repo_full_name):
+        return {"error": ("Cannot close PR: malformed repository name "
+                          f"'{repo_full_name[:60]}' (expected 'owner/repo')")}
+    try:
+        pr_number = int(pr_number)
+    except (TypeError, ValueError):
+        return {"error": f"Cannot close PR: PR number '{pr_number}' is not an integer"}
+    if pr_number <= 0:
+        return {"error": f"Cannot close PR: PR number {pr_number} is not positive"}
 
     logger.info(
         "[HpaVpaRecs] Closing %s PR #%s in %s for user=%s",
         provider, pr_number, sanitize(repo_full_name), sanitize(user_id),
     )
-    return closer(user_id, repo_full_name, int(pr_number), timeout)
+    return closer(user_id, repo_full_name, pr_number, timeout)
