@@ -18,6 +18,7 @@ import json
 import logging
 import math
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -122,6 +123,133 @@ def compute_severity_score(dimensions: dict) -> Optional[float]:
     """
     scores = [s for s in map(_dimension_score, (dimensions or {}).values()) if s is not None]
     return max(scores) if scores else None
+
+
+# Kubernetes quantity suffixes, normalized to a common base per dimension. Only
+# ratios within one dimension are ever taken, so the absolute base is irrelevant
+# as long as it is consistent.
+_QUANTITY_UNITS = {
+    "": 1.0,
+    "m": 0.001,                      # millicores
+    "k": 1e3, "ki": 1024.0,
+    "M": 1e6, "mi": 1024.0 ** 2,
+    "G": 1e9, "gi": 1024.0 ** 3,
+    "T": 1e12, "ti": 1024.0 ** 4,
+    "P": 1e15, "pi": 1024.0 ** 5,
+}
+_QUANTITY_RE = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*([A-Za-z]*)\s*$")
+
+# Which magnitude family a suffix belongs to. A ratio is only meaningful between
+# two quantities in the SAME family: '512m' vs '256Mi' is a units mistake, not a
+# 5e8x mis-size, and scoring it would hand the model a severity high enough to
+# break any cooldown it likes.
+#
+# Bare numbers and 'm' share a family on purpose -- Kubernetes treats `cpu: 2`
+# and `cpu: 2000m` as the same quantity, and a replica count is bare too. The
+# split that matters is scalar/milli vs the byte suffixes, which is where the
+# 1e9x mistakes live.
+_QUANTITY_FAMILIES = {
+    "": "count",
+    "m": "count",
+    "k": "bytes", "ki": "bytes",
+    "M": "bytes", "mi": "bytes",
+    "G": "bytes", "gi": "bytes",
+    "T": "bytes", "ti": "bytes",
+    "P": "bytes", "pi": "bytes",
+}
+
+
+def _quantity_family(suffix: str) -> Optional[str]:
+    """Magnitude family for a matched suffix, or None when unrecognized."""
+    family = _QUANTITY_FAMILIES.get(suffix)
+    if family is None and len(suffix) == 2:
+        family = _QUANTITY_FAMILIES.get(suffix.lower())
+    return family
+
+
+def _split_quantity(text: object) -> Optional[tuple]:
+    """Parse a display quantity into ``(value, family)``, or None.
+
+    ``family`` is what makes a cross-unit comparison detectable: see
+    :func:`severity_from_display`.
+    """
+    if isinstance(text, bool):
+        return None
+    if isinstance(text, (int, float)):
+        return (float(text), "count") if _is_real_number(text) else None
+    if not isinstance(text, str):
+        return None
+
+    match = _QUANTITY_RE.match(text)
+    if not match:
+        return None
+    number, suffix = match.group(1), match.group(2)
+
+    scale = _QUANTITY_UNITS.get(suffix)
+    if scale is None:
+        # Binary suffixes vary in case in the wild ('Gi', 'GI', 'gi'); the
+        # single-letter decimal ones do not, since m vs M is milli vs mega.
+        scale = _QUANTITY_UNITS.get(suffix.lower()) if len(suffix) == 2 else None
+    if scale is None:
+        return None
+
+    try:
+        value = float(number) * scale
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not _is_real_number(value):
+        return None
+    return value, _quantity_family(suffix)
+
+
+def parse_quantity(text: object) -> Optional[float]:
+    """Parse a Kubernetes-style display quantity ('2 Gi', '750m', '10') to a float.
+
+    Case matters where Kubernetes says it does: ``m`` is milli and ``M`` is mega,
+    so ``750m`` and ``750M`` must not collapse to the same number. Binary
+    suffixes (``Ki``/``Mi``/``Gi``) are matched case-insensitively because that is
+    where real-world YAML actually varies.
+
+    Returns None for anything unparseable, which the caller treats as "unknown"
+    and therefore never as grounds to break a cooldown.
+    """
+    parsed = _split_quantity(text)
+    return parsed[0] if parsed else None
+
+
+def severity_from_display(payload: dict) -> Optional[float]:
+    """Compute severity from the same display strings that go on the card.
+
+    The alternative -- trusting an LLM-supplied ``severity_score`` -- puts the
+    model in charge of whether it may break a human's 30-day cooldown, while also
+    being the party that reports how bad the problem is. Deriving the number from
+    the current/recommended values it already has to state keeps the two
+    consistent and takes the judgement call away from the model.
+
+    A dimension whose two values are in different magnitude families ('512m' vs
+    '256Mi') is skipped rather than scored: the ratio would be astronomical and
+    would break any cooldown, when the real defect is a units mistake in the
+    model's own display strings.
+
+    Returns None when nothing parses, which never breaks a cooldown.
+    """
+    numeric = {}
+    for dimension, spec in (payload or {}).items():
+        if not isinstance(spec, dict):
+            continue
+        current = _split_quantity(spec.get("current"))
+        recommended = _split_quantity(spec.get("recommended"))
+        if not (current and recommended):
+            continue
+        if current[1] != recommended[1]:
+            logger.warning(
+                "[HpaVpaRecs] Mismatched units on %s (%r -> %r); not scoring this "
+                "dimension, so it cannot break a cooldown",
+                dimension, spec.get("current"), spec.get("recommended"),
+            )
+            continue
+        numeric[dimension] = {"current": current[0], "recommended": recommended[0]}
+    return compute_severity_score(numeric)
 
 
 def is_materially_worse(new_score: Optional[float], prior_score: Optional[float]) -> bool:
@@ -243,13 +371,31 @@ def lock_workload(cursor, org_id: str, workload_key: str) -> None:
     cursor.execute("SELECT pg_advisory_xact_lock(%s)", (_advisory_lock_key(org_id, workload_key),))
 
 
-def claim_recommendation(
-    cursor, org_id: str, user_id: str, *, workload_key: str, workload: str,
-    environment: Optional[str], service: Optional[str], autoscaler: Optional[str],
-    metrics_source: Optional[str], vcs_provider: str, repo_full_name: str,
-    pr_number: int, pr_url: str, recommendation: dict,
-    severity_score: Optional[float], action_run_id: Optional[str] = None,
-) -> str:
+@dataclass(frozen=True)
+class WorkloadRecommendation:
+    """The per-workload facts a claim needs, as one value.
+
+    Grouped rather than passed as 16 separate keyword arguments: the fields
+    travel together everywhere, and a long keyword list is exactly where a
+    ``service``/``environment`` transposition hides.
+    """
+
+    workload_key: str
+    workload: str
+    repo_full_name: str
+    pr_number: int
+    pr_url: str
+    recommendation: dict
+    environment: Optional[str] = None
+    service: Optional[str] = None
+    autoscaler: Optional[str] = None
+    metrics_source: Optional[str] = None
+    vcs_provider: str = "github"
+    severity_score: Optional[float] = None
+    action_run_id: Optional[str] = None
+
+
+def claim_recommendation(cursor, org_id: str, user_id: str, rec: WorkloadRecommendation) -> str:
     """INSERT a 'proposed' row with a NULL message ts and return its UUID.
 
     Called under :func:`lock_workload` and *before* the Slack post, so the
@@ -263,9 +409,10 @@ def claim_recommendation(
               status, recommendation, severity_score, action_run_id)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
            RETURNING id""",
-        (org_id, user_id, workload_key, workload, environment, service, autoscaler,
-         metrics_source, vcs_provider, repo_full_name, pr_number, pr_url,
-         STATUS_PROPOSED, json.dumps(recommendation or {}), severity_score, action_run_id),
+        (org_id, user_id, rec.workload_key, rec.workload, rec.environment, rec.service,
+         rec.autoscaler, rec.metrics_source, rec.vcs_provider, rec.repo_full_name,
+         rec.pr_number, rec.pr_url, STATUS_PROPOSED, json.dumps(rec.recommendation or {}),
+         rec.severity_score, rec.action_run_id),
     )
     return str(cursor.fetchone()[0])
 
@@ -288,31 +435,80 @@ def delete_recommendation(cursor, rec_id: str) -> None:
 
 def refresh_recommendation(
     cursor, rec_id: str, *, recommendation: dict, severity_score: Optional[float],
-    repo_full_name: str, pr_number: int, pr_url: str,
+    repo_full_name: str, pr_number: int, pr_url: str, vcs_provider: str,
     autoscaler: Optional[str] = None, metrics_source: Optional[str] = None,
 ) -> None:
-    """Update an existing open recommendation with fresh numbers (card dedup path)."""
+    """Update an existing open recommendation with fresh numbers (card dedup path).
+
+    ``vcs_provider`` is written alongside the PR reference on purpose. The three
+    identify one PR together, so updating the repo and number while leaving a
+    stale provider behind points Dismiss at the wrong API: it would send a GitHub
+    PATCH at a GitLab MR number, or refuse to close a PR it could have closed.
+    Only ``github`` is supported today, so this cannot bite yet -- which is
+    exactly why it is worth fixing before a second provider makes it a live bug.
+    """
     cursor.execute(
         """UPDATE hpa_vpa_recommendations
               SET recommendation = %s::jsonb, severity_score = %s, repo_full_name = %s,
-                  pr_number = %s, pr_url = %s,
+                  pr_number = %s, pr_url = %s, vcs_provider = %s,
                   autoscaler = COALESCE(%s, autoscaler),
                   metrics_source = COALESCE(%s, metrics_source),
                   updated_at = NOW()
             WHERE id = %s::uuid""",
         (json.dumps(recommendation or {}), severity_score, repo_full_name,
-         pr_number, pr_url, autoscaler, metrics_source, rec_id),
+         pr_number, pr_url, vcs_provider, autoscaler, metrics_source, rec_id),
     )
 
 
 def mark_superseded(cursor, rec_id: str) -> None:
-    """Retire a row whose mis-size worsened, or that a newer rec took over."""
+    """Retire a row whose mis-size worsened, or that a newer rec took over.
+
+    ``cooldown_until`` is deliberately left intact rather than nulled. Nulling it
+    is invisible to every read path (``get_active_cooldown`` and
+    ``list_recommendations`` both filter on ``status = 'dismissed'``), but it
+    destroys the only record of how much anti-nag window was left -- and this
+    transition is committed *before* the Slack post that justifies it, so a post
+    failure has to be able to put the dismissal back. See
+    :func:`restore_superseded`.
+    """
     cursor.execute(
         """UPDATE hpa_vpa_recommendations
-              SET status = %s, cooldown_until = NULL, updated_at = NOW()
+              SET status = %s, updated_at = NOW()
             WHERE id = %s::uuid""",
         (STATUS_SUPERSEDED, rec_id),
     )
+
+
+def restore_superseded(cursor, rec_id: str) -> bool:
+    """Undo :func:`mark_superseded`, restoring the dismissal and its cooldown.
+
+    Compensation for a superseding card that never actually posted. Without it
+    the human's remaining anti-nag window is gone for good: the dismissal was
+    retired to make room for a card that does not exist, so the next run sees no
+    cooldown and re-proposes a workload a human already rejected.
+
+    Only touches rows still in 'superseded', so it cannot resurrect a dismissal
+    that a later, genuinely-posted recommendation retired.
+    """
+    cursor.execute(
+        """UPDATE hpa_vpa_recommendations
+              SET status = %s, updated_at = NOW()
+            WHERE id = %s::uuid AND status = %s""",
+        (STATUS_DISMISSED, rec_id, STATUS_SUPERSEDED),
+    )
+    return cursor.rowcount > 0
+
+
+# Fields dismiss_recommendation returns. Single definition: the SQL RETURNING
+# list is generated from it, so the tuple and the mapping can never drift.
+# user_id is the account whose GitHub credential opened the PR -- the clicker is
+# a different person who may have no GitHub connection at all, so the close must
+# be able to fall back to the opener.
+_DISMISS_FIELDS = (
+    "repo_full_name", "pr_number", "pr_url", "workload", "environment", "service",
+    "autoscaler", "vcs_provider", "recommendation", "severity_score",
+    "slack_channel_id", "slack_message_ts", "user_id",
+)
 
 
 def dismiss_recommendation(cursor, rec_id: str, org_id: str, slack_user_id: str) -> Optional[dict]:
@@ -323,39 +519,37 @@ def dismiss_recommendation(cursor, rec_id: str, org_id: str, slack_user_id: str)
     transition, or None when it had already been dismissed.
     """
     now = datetime.now(timezone.utc)
+    cooldown_until = now + timedelta(days=HPA_VPA_COOLDOWN_DAYS)
     cursor.execute(
-        """UPDATE hpa_vpa_recommendations
-              SET status = %s, dismissed_by = %s, dismissed_at = %s,
-                  cooldown_until = %s, updated_at = %s
-            WHERE id = %s::uuid AND org_id = %s AND status = %s
-          RETURNING repo_full_name, pr_number, pr_url, workload, environment, service,
-                    autoscaler, vcs_provider, recommendation, severity_score,
-                    slack_channel_id, slack_message_ts, user_id""",
-        (STATUS_DISMISSED, slack_user_id, now,
-         now + timedelta(days=HPA_VPA_COOLDOWN_DAYS), now,
+        f"""UPDATE hpa_vpa_recommendations
+               SET status = %s, dismissed_by = %s, dismissed_at = %s,
+                   cooldown_until = %s, updated_at = %s
+             WHERE id = %s::uuid AND org_id = %s AND status = %s
+           RETURNING {', '.join(_DISMISS_FIELDS)}""",
+        (STATUS_DISMISSED, slack_user_id, now, cooldown_until, now,
          rec_id, org_id, STATUS_PROPOSED),
     )
     row = cursor.fetchone()
     if not row:
         return None
-    # user_id is the account whose GitHub credential opened the PR. The clicker
-    # is a different person and may have no GitHub connection at all, so the
-    # close must be able to fall back to the opener.
-    keys = ("repo_full_name", "pr_number", "pr_url", "workload", "environment", "service",
-            "autoscaler", "vcs_provider", "recommendation", "severity_score",
-            "slack_channel_id", "slack_message_ts", "user_id")
-    out = dict(zip(keys, row))
-    out["cooldown_until"] = (now + timedelta(days=HPA_VPA_COOLDOWN_DAYS)).isoformat()
+    # strict=True: a silently truncated zip would mis-key every field after the
+    # mismatch, and the caller uses these to close a real PR.
+    out = dict(zip(_DISMISS_FIELDS, row, strict=True))
+    out["cooldown_until"] = cooldown_until.isoformat()
     if out.get("severity_score") is not None:
         out["severity_score"] = float(out["severity_score"])
     return out
 
 
-def mark_merged(cursor, rec_id: str, org_id: str) -> None:
+def mark_merged(cursor, rec_id: str, org_id: str) -> bool:
     """A merged PR was *accepted*, not rejected.
 
     Clearing cooldown_until matters: a merge must never start an anti-nag
     window, or the next genuine drift on this workload goes unreported.
+
+    Returns whether a row was actually updated. A no-op means the cooldown is
+    still running on an *accepted* change, which the caller has to report rather
+    than claim the intended outcome.
     """
     cursor.execute(
         """UPDATE hpa_vpa_recommendations
@@ -363,6 +557,7 @@ def mark_merged(cursor, rec_id: str, org_id: str) -> None:
             WHERE id = %s::uuid AND org_id = %s""",
         (STATUS_MERGED, rec_id, org_id),
     )
+    return cursor.rowcount > 0
 
 
 # ---------------------------------------------------------------------------
@@ -421,9 +616,21 @@ def _close_github_pr(user_id: str, repo_full_name: str, pr_number: int, timeout:
             return {"success": True, "already_merged": True, "state": body.get("state")}
         return {"success": True, "state": body.get("state", "closed")}
     if resp.status_code == 404:
-        # Already gone, or no access. Idempotent either way -- there is no open
-        # PR left to close, which is the state the caller wanted.
-        return {"success": True, "already_gone": True}
+        # GitHub returns 404 for both "no such PR" and "no access to this repo",
+        # deliberately, so the two are indistinguishable from here. Still treated
+        # as success, because retrying cannot help and the dismissal must not be
+        # rolled back over it -- but flagged as unverified so the caller can say
+        # "could not be confirmed" rather than "closed". Claiming a clean close
+        # we never observed is the one outcome worth avoiding: it tells a human
+        # to stop looking at a PR that may well still be open.
+        logger.warning(
+            "[HpaVpaRecs] GitHub 404 closing PR #%s in %s -- already closed, or the "
+            "credential cannot see the repo. Treating as closed but unverified.",
+            pr_number, sanitize(repo_full_name),
+        )
+        return {"success": True, "already_gone": True, "unverified": True,
+                "detail": ("GitHub returned 404: the PR is already gone, or this credential "
+                           "cannot see the repository. Close state could not be confirmed.")}
     if resp.status_code == 403:
         return {"error": f"GitHub returned 403 closing PR #{pr_number} (rate limit or missing permission)"}
     if resp.status_code == 422:

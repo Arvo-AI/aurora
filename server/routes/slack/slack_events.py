@@ -594,6 +594,14 @@ def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, 
 
 def _send_ephemeral(client, channel_id: str, slack_user_id: str, text: str) -> None:
     """Best-effort ephemeral reply. Never raises into an interaction response."""
+    if not client:
+        # Callers must not have to guard this: silence is how a click ends up
+        # indistinguishable from a broken button.
+        logger.warning(
+            "No Slack client available to tell user %s: %s",
+            sanitize(slack_user_id), text[:120],
+        )
+        return
     try:
         client._make_request(
             "POST",
@@ -604,6 +612,55 @@ def _send_ephemeral(client, channel_id: str, slack_user_id: str, text: str) -> N
         logger.exception(
             "Failed to send ephemeral message to Slack user %s", sanitize(slack_user_id)
         )
+
+
+def _slack_client_for_feedback(clicker_user_id: str, team_id: str):
+    """A client that can post feedback about a click, with a workspace fallback.
+
+    The clicker may have no Slack credential of their own even though they are a
+    real Aurora user in the right org. Their *action* still succeeds, so the
+    acknowledgement has to fall back to the workspace token rather than vanish --
+    otherwise the DB transition and PR close both happen while the card keeps its
+    live Dismiss button and no message ever appears.
+    """
+    client = get_slack_client_for_user(clicker_user_id)
+    if client:
+        return client
+    try:
+        workspace_user_id = get_user_id_from_slack_team(team_id)
+        if workspace_user_id:
+            token_data = get_user_token_data(workspace_user_id, "slack")
+            if token_data and token_data.get("access_token"):
+                logger.info("Using workspace Slack token for interaction feedback")
+                return SlackClient(token_data["access_token"])
+    except Exception:
+        logger.exception("Could not build a workspace Slack client for interaction feedback")
+    return None
+
+
+def _warn_unauthenticated_clicker(slack_user_id: str, team_id: str, channel_id: str) -> None:
+    """Nudge a Slack user who has no Aurora account to connect one."""
+    logger.warning(
+        "Unauthenticated Slack user %s (team %s) tried to dismiss a recommendation",
+        sanitize(slack_user_id), sanitize(team_id),
+    )
+    try:
+        workspace_user_id = get_user_id_from_slack_team(team_id)
+        if not workspace_user_id:
+            return
+        workspace_token_data = get_user_token_data(workspace_user_id, "slack")
+        # An access_token-less record would build a client that sends
+        # "Bearer None" and fails every call, so treat it as no client at all.
+        if workspace_token_data and workspace_token_data.get('access_token'):
+            _send_ephemeral(
+                SlackClient(workspace_token_data['access_token']),
+                channel_id, slack_user_id,
+                f"WARNING: You're not authenticated in Aurora.\n\nTo dismiss recommendations, "
+                f"connect your Aurora account:\n{FRONTEND_URL}/settings/integrations\n\n"
+                f"Click 'Connect' for Slack and authorize this workspace.",
+            )
+    except Exception:
+        logger.exception("Failed to warn unauthenticated Slack user %s", sanitize(slack_user_id))
 
 
 def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> tuple:
@@ -624,7 +681,6 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
     failure into a retry storm.
     """
     from services.actions.hpa_vpa_recommendations import (
-        HPA_VPA_COOLDOWN_DAYS,
         close_pull_request,
         dismiss_recommendation,
     )
@@ -634,22 +690,13 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
         # 1. AUTHENTICATE: who clicked?
         clicker_user_id = get_user_id_from_slack_user(slack_user_id, team_id)
         if not clicker_user_id:
-            logger.warning(
-                f"Unauthenticated Slack user {sanitize(slack_user_id)} (team {sanitize(team_id)}) tried to dismiss a recommendation"
-            )
-            workspace_user_id = get_user_id_from_slack_team(team_id)
-            if workspace_user_id:
-                try:
-                    workspace_token_data = get_user_token_data(workspace_user_id, "slack")
-                    if workspace_token_data:
-                        _send_ephemeral(
-                            SlackClient(workspace_token_data.get('access_token')),
-                            channel_id, slack_user_id,
-                            f"WARNING: You're not authenticated in Aurora.\n\nTo dismiss recommendations, connect your Aurora account:\n{FRONTEND_URL}/settings/integrations\n\nClick 'Connect' for Slack and authorize this workspace.",
-                        )
-                except Exception:
-                    logger.exception("Failed to warn unauthenticated Slack user %s", sanitize(slack_user_id))
+            _warn_unauthenticated_clicker(slack_user_id, team_id, channel_id)
             return jsonify({"text": ""}), 200
+
+        # Resolve a feedback client up-front, falling back to the workspace
+        # token. Every branch below reports something, so this must not be None
+        # just because the clicker has no personal Slack credential.
+        client = _slack_client_for_feedback(clicker_user_id, team_id)
 
         # 2. PARSE + VALIDATE the recommendation id before any SQL.
         action_id = action.get('action_id', '') or ''
@@ -657,11 +704,13 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
         if not is_valid_uuid(rec_id):
             # Empty body: a non-empty `text` in a block_actions response REPLACES
             # the original message, so returning an error string here would wipe
-            # the card instead of reporting a problem with it.
+            # the card instead of reporting a problem with it. The ephemeral is
+            # what keeps this distinguishable from a dead button.
             logger.error(f"Invalid recommendation id on dismiss action: {sanitize(rec_id)}")
+            _send_ephemeral(client, channel_id, slack_user_id,
+                            "Sorry -- this card is malformed and cannot be dismissed. "
+                            "Please close the PR on GitHub directly.")
             return jsonify({"text": ""}), 200
-
-        client = get_slack_client_for_user(clicker_user_id)
 
         # 3. TRANSITION: atomic and idempotent. The status='proposed' predicate
         #    *is* the double-click defence -- a second click matches no rows.
@@ -672,6 +721,9 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
                 )
                 if not clicker_org_id:
                     logger.error(f"Could not resolve org for Slack clicker {sanitize(slack_user_id)}")
+                    _send_ephemeral(client, channel_id, slack_user_id,
+                                    "Sorry -- Aurora could not resolve your organization, so this "
+                                    "recommendation was not dismissed. Please try again.")
                     return jsonify({"text": ""}), 200
 
                 # 4. AUTHORIZE: RLS already scopes reads to the clicker's org;
@@ -686,9 +738,8 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
                     logger.warning(
                         f"Slack user {sanitize(slack_user_id)} tried to dismiss recommendation outside their org"
                     )
-                    if client:
-                        _send_ephemeral(client, channel_id, slack_user_id,
-                                        "Unauthorized: that recommendation does not belong to your organization.")
+                    _send_ephemeral(client, channel_id, slack_user_id,
+                                    "Unauthorized: that recommendation does not belong to your organization.")
                     return jsonify({"text": ""}), 200
 
                 dismissed = dismiss_recommendation(cursor, rec_id, clicker_org_id, slack_user_id)
@@ -697,9 +748,8 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
 
         if not dismissed:
             logger.info(f"Recommendation {rec_id} was already dismissed; no-op")
-            if client:
-                _send_ephemeral(client, channel_id, slack_user_id,
-                                "That recommendation was already dismissed.")
+            _send_ephemeral(client, channel_id, slack_user_id,
+                            "That recommendation was already dismissed.")
             return jsonify({"text": ""}), 200
 
         # 5. CLOSE the PR on whichever VCS hosts it. Close as the account that
@@ -716,34 +766,18 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
             timeout=_GITHUB_CLOSE_TIMEOUT,
         ) if pr_number else {"error": "No PR recorded for this recommendation"}
 
-        if close_result.get("already_merged"):
-            # A merge is acceptance, not rejection: it must not start an
-            # anti-nag window, or the next genuine drift goes unreported.
-            try:
-                with db_pool.get_admin_connection() as conn:
-                    with conn.cursor() as cursor:
-                        set_rls_context(cursor, conn, clicker_user_id,
-                                        log_prefix="[SlackEvents:hpa_vpa_dismiss]")
-                        from services.actions.hpa_vpa_recommendations import mark_merged
-                        mark_merged(cursor, rec_id, clicker_org_id)
-                        conn.commit()
-            except Exception:
-                logger.exception("Failed to mark recommendation %s merged", rec_id)
-            status_line = (f"*Status:* PR #{pr_number} was already merged -- the change was accepted. "
-                           "No cooldown applied.")
-        elif close_result.get("success"):
-            status_line = (f"*Status:* Dismissed by <@{slack_user_id}> -- PR #{pr_number} closed. "
-                           f"Aurora will not raise this workload again for {HPA_VPA_COOLDOWN_DAYS} days.")
-        else:
-            logger.error(
-                f"Failed to close PR #{pr_number} for recommendation {rec_id}: {close_result.get('error')}"
-            )
-            status_line = (f"*Status:* Dismissed by <@{slack_user_id}> -- PR #{pr_number} could not be "
-                           "closed automatically; please close it on GitHub.")
+        status_line, keep_pr_link = _dismissal_status_line(
+            close_result, rec_id, pr_number, slack_user_id, clicker_user_id, clicker_org_id
+        )
 
-        # 6. REWRITE the card with no buttons at all. Nothing to re-click is the
-        #    strongest idempotency guarantee, layered on the conditional UPDATE.
-        _rewrite_dismissed_card(client, payload, dismissed, rec_id, channel_id, status_line)
+        # 6. REWRITE the card. Buttons are dropped so it cannot be re-clicked --
+        #    the strongest idempotency guarantee, layered on the conditional
+        #    UPDATE. The exception is a card that asks for manual work: dropping
+        #    every button there would delete the only link to the PR it is asking
+        #    someone to go close, so View PR is kept (a link-out, not an action,
+        #    so it is not re-clickable in the sense that matters).
+        _rewrite_dismissed_card(client, payload, dismissed, rec_id, channel_id, status_line,
+                                keep_pr_link=keep_pr_link)
 
         return jsonify({"text": ""}), 200
 
@@ -752,10 +786,89 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
         return jsonify({"text": ""}), 200
 
 
+def _clear_cooldown_for_merged_pr(rec_id: str, clicker_user_id: str, clicker_org_id: str) -> bool:
+    """Mark a recommendation merged, clearing the cooldown the dismissal started.
+
+    Returns whether it succeeded: the dismissal is already committed, so a
+    failure here leaves an anti-nag window running on a change a human
+    *accepted*, and the card has to say that rather than the intended outcome.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, clicker_user_id,
+                                log_prefix="[SlackEvents:hpa_vpa_dismiss]")
+                from services.actions.hpa_vpa_recommendations import mark_merged
+                cleared = mark_merged(cursor, rec_id, clicker_org_id)
+                conn.commit()
+                if not cleared:
+                    logger.error(
+                        "mark_merged matched no rows for recommendation %s; the cooldown "
+                        "is still running on an accepted change", rec_id
+                    )
+                return cleared
+    except Exception:
+        logger.exception("Failed to mark recommendation %s merged", rec_id)
+        return False
+
+
+def _dismissal_status_line(close_result: dict, rec_id: str, pr_number, slack_user_id: str,
+                           clicker_user_id: str, clicker_org_id: str) -> tuple:
+    """Status line for the rewritten card, plus whether to keep the View PR link.
+
+    Returns ``(status_line, keep_pr_link)``. The link is kept whenever the line
+    asks a human to go look at the PR themselves -- a message requesting manual
+    work must not delete the only link to the thing needing it.
+    """
+    # Imported here, not at module scope, to match this module's convention of
+    # keeping services.actions imports function-local (avoids an import cycle:
+    # the lifecycle module's card renderer imports from this package).
+    from services.actions.hpa_vpa_recommendations import HPA_VPA_COOLDOWN_DAYS
+
+    if close_result.get("already_merged"):
+        # A merge is acceptance, not rejection: it must not start an anti-nag
+        # window, or the next genuine drift goes unreported.
+        if _clear_cooldown_for_merged_pr(rec_id, clicker_user_id, clicker_org_id):
+            return (f"*Status:* PR #{pr_number} was already merged -- the change was accepted. "
+                    "No cooldown applied."), False
+        return (f"*Status:* PR #{pr_number} was already merged -- the change was accepted. "
+                f"Aurora could not clear the dismissal, so this workload stays quiet for "
+                f"{HPA_VPA_COOLDOWN_DAYS} days."), False
+
+    if close_result.get("unverified"):
+        # 404: already closed, or the credential cannot see the repo. Never claim
+        # a close we did not observe.
+        return (f"*Status:* Dismissed by <@{slack_user_id}> -- Aurora could not confirm PR "
+                f"#{pr_number} is closed (it may already be closed, or Aurora may not have "
+                f"access). Please check it on GitHub. Aurora will not raise this workload "
+                f"again for {HPA_VPA_COOLDOWN_DAYS} days."), True
+
+    if close_result.get("success"):
+        return (f"*Status:* Dismissed by <@{slack_user_id}> -- PR #{pr_number} closed. "
+                f"Aurora will not raise this workload again for "
+                f"{HPA_VPA_COOLDOWN_DAYS} days."), False
+
+    logger.error(
+        f"Failed to close PR #{pr_number} for recommendation {rec_id}: {close_result.get('error')}"
+    )
+    return (f"*Status:* Dismissed by <@{slack_user_id}> -- PR #{pr_number} could not be closed "
+            "automatically; please close it on GitHub."), True
+
+
 def _rewrite_dismissed_card(client, payload: dict, dismissed: dict, rec_id: str,
-                            channel_id: str, status_line: str) -> None:
-    """Replace the card with a button-free dismissed version."""
+                            channel_id: str, status_line: str,
+                            keep_pr_link: bool = False) -> None:
+    """Replace the card with a dismissed version that cannot be re-dismissed.
+
+    ``keep_pr_link`` retains the View PR link-out for the cases where the status
+    line asks a human to close the PR themselves -- stripping every button there
+    would remove the only link to the PR the message is about.
+    """
     if not client:
+        logger.warning(
+            "No Slack client available to rewrite dismissed card for recommendation %s; "
+            "the card keeps its Dismiss button but a second click is a safe no-op", rec_id
+        )
         return
     try:
         from chat.backend.agent.tools.hpa_vpa_card_tool import build_recommendation_blocks
@@ -776,7 +889,8 @@ def _rewrite_dismissed_card(client, payload: dict, dismissed: dict, rec_id: str,
                 rec[f"{dimension}_evidence"] = spec.get("evidence")
 
         blocks = build_recommendation_blocks(
-            rec, rec_id, with_actions=False, status_line=status_line
+            rec, rec_id, with_actions=False, status_line=status_line,
+            link_only=keep_pr_link,
         )
         # Prefer the row's own channel/ts; fall back to the click payload.
         target_channel = dismissed.get("slack_channel_id") or channel_id

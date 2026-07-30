@@ -1442,11 +1442,24 @@ def initialize_tables():
                         slack_message_ts VARCHAR(64),
                         action_run_id UUID,
                         dismissed_by VARCHAR(255),
-                        dismissed_at TIMESTAMP,
-                        cooldown_until TIMESTAMP,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        -- TIMESTAMPTZ, not TIMESTAMP: these are written as
+                        -- aware UTC from Python but compared against NOW() in
+                        -- SQL. A naive column discards the offset on write, so
+                        -- on any session whose TimeZone is not UTC the 30-day
+                        -- cooldown silently drifts by the offset -- long enough
+                        -- to re-nag a workload a human dismissed, or to suppress
+                        -- one for too long.
+                        dismissed_at TIMESTAMPTZ,
+                        cooldown_until TIMESTAMPTZ,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
                     );
+
+                    -- Legacy naive columns are converted by a separate, guarded
+                    -- migration below (see "hpa_vpa_recommendations timestamp
+                    -- migration"): an unconditional ALTER COLUMN TYPE here would
+                    -- re-run every boot and, on a session whose TimeZone is not
+                    -- UTC, shift every stored cooldown by the offset each time.
 
                     CREATE INDEX IF NOT EXISTS idx_hpa_vpa_recs_org_workload
                         ON hpa_vpa_recommendations(org_id, workload_key, created_at DESC);
@@ -1635,6 +1648,41 @@ def initialize_tables():
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
+
+            # Migration: hpa_vpa_recommendations timestamp migration. The table
+            # shipped with naive TIMESTAMPs but Python writes aware UTC and SQL
+            # compares against NOW(), so a naive column drifts the 30-day cooldown
+            # by the session offset. Guarded on the current column type: an
+            # unconditional ALTER ... TYPE TIMESTAMPTZ USING x AT TIME ZONE 'UTC'
+            # is NOT idempotent -- re-running it on an already-converted column
+            # re-interprets the local rendering as UTC and shifts every stored
+            # cooldown by the offset on every boot.
+            try:
+                cursor.execute("""
+                    DO $$
+                    DECLARE col text;
+                    BEGIN
+                        FOR col IN
+                            SELECT column_name FROM information_schema.columns
+                             WHERE table_schema = current_schema()
+                               AND table_name = 'hpa_vpa_recommendations'
+                               AND column_name IN ('dismissed_at', 'cooldown_until',
+                                                   'created_at', 'updated_at')
+                               AND data_type = 'timestamp without time zone'
+                        LOOP
+                            EXECUTE format(
+                                'ALTER TABLE hpa_vpa_recommendations '
+                                'ALTER COLUMN %I TYPE TIMESTAMPTZ '
+                                'USING %I AT TIME ZONE ''UTC''', col, col);
+                        END LOOP;
+                    END $$;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error converting hpa_vpa_recommendations timestamps to TIMESTAMPTZ: {e}"
+                )
+                conn.rollback()
 
             try:
                 cursor.execute(

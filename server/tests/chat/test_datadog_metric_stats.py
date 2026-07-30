@@ -273,10 +273,64 @@ def test_non_finite_points_never_reach_json():
     the agent's parse of the whole tool result."""
     row = _summarize_series(["x"], None, [1.0, float("inf"), float("-inf"), 2.0])
     serialized = json.dumps(row)
-    assert "Infinity" not in serialized and "NaN" not in serialized
+    assert "Infinity" not in serialized
+    assert "NaN" not in serialized
     json.loads(serialized)
     assert row["max"] == 2.0
     assert row["nulls"] == 2
+
+
+def test_missing_values_row_is_marked_malformed_not_idle():
+    """A series Datadog describes but returns no values for must not render as an
+    idle workload. Substituting [] gives points: 0 and "no non-null points" --
+    identical to a genuinely quiet workload, which is the exact confusion this
+    resource type exists to prevent. An idle-looking workload gets sized down."""
+    row = _summarize_series(["kube_deployment:api"], None, [], values_missing=True)
+
+    assert row["malformed_response"] is True
+    assert "malformed" in row["note"]
+    assert "NOT an idle workload" in row["note"]
+
+    # The genuinely-idle case must stay distinguishable from it.
+    idle = _summarize_series(["kube_deployment:api"], None, [None, None])
+    assert "malformed_response" not in idle
+    assert idle["note"] == "no non-null points in window"
+
+
+def test_short_values_array_is_reported_at_the_top_level():
+    """Per-row flags are easy to miss across 70 rows, and this one decides whether
+    the whole answer is usable."""
+    series, values = _make_payload(4, 720)
+    result = _p95_datadog(_FakeClient(series, values[:2]), "q", "-30d", "now", 100)
+
+    assert result["malformed_series"] == 2
+    assert "Re-run the query" in result["malformed_note"]
+    assert sum(1 for r in result["results"] if r.get("malformed_response")) == 2
+    # The two series that did come back with data are still summarized normally.
+    assert sum(1 for r in result["results"] if r["p95"] is not None) == 2
+
+
+def test_null_values_entry_is_malformed_not_idle():
+    """A full-length `values` array with a null entry is the same defect as a
+    short array: Datadog described the series but attached no data. Only checking
+    the array length would let this one through as points: 0 -- indistinguishable
+    from an idle workload, which then gets sized down."""
+    series, values = _make_payload(3, 720)
+    result = _p95_datadog(_FakeClient(series, [None, values[1], "not-a-list"]),
+                          "q", "-30d", "now", 100)
+
+    assert result["malformed_series"] == 2
+    assert result["results"][0]["malformed_response"] is True
+    assert result["results"][2]["malformed_response"] is True
+    assert "malformed_response" not in result["results"][1]
+    assert result["results"][1]["p95"] is not None
+
+
+def test_well_formed_response_carries_no_malformed_flag():
+    series, values = _make_payload(3, 720)
+    result = _p95_datadog(_FakeClient(series, values), "q", "-30d", "now", 100)
+    assert "malformed_series" not in result
+    assert not any(r.get("malformed_response") for r in result["results"])
 
 
 def test_booleans_are_not_counted_as_samples():
@@ -380,11 +434,13 @@ def test_per_series_rows_survive_truncation_but_one_fat_dict_does_not():
 
     fat = [{"series": series, "times": list(range(720)), "values": values}]
     kept_fat, truncated_fat = _truncate_results(fat, [json.dumps(i) for i in fat])
-    assert kept_fat == [] and truncated_fat is True  # -> count: 0, silent wrong answer
+    assert kept_fat == []          # -> count: 0, a silent wrong answer
+    assert truncated_fat is True
 
     rows = _p95_datadog(_FakeClient(series, values), "q", "-30d", "now", 100)["results"]
     kept_rows, truncated_rows = _truncate_results(rows, [json.dumps(i) for i in rows])
-    assert len(kept_rows) == len(rows) and truncated_rows is False
+    assert len(kept_rows) == len(rows)
+    assert truncated_rows is False
 
 
 # ---------------------------------------------------------------------------

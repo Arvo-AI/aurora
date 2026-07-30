@@ -17,7 +17,6 @@ call. See the module docstring notes on each in ``send_hpa_vpa_recommendation``.
 
 import json
 import logging
-import math
 import re
 from typing import Optional
 
@@ -89,11 +88,6 @@ class SendHpaVpaRecommendationArgs(BaseModel):
         description="Slack user ID of the reviewer (must be a real ID like 'U0966GURFUK'). "
         "Omit if unknown -- a fabricated ID renders as a blank grey box in Slack.",
     )
-    severity_score: Optional[float] = Field(
-        default=None,
-        description="Max relative mis-size across dimensions: abs(recommended - current) / current. "
-        "Used to decide whether a re-proposal during a cooldown is materially worse.",
-    )
     metrics_source: Optional[str] = Field(
         default=None, description="Provider the usage percentiles came from, e.g. 'datadog'"
     )
@@ -125,12 +119,8 @@ def _check_display(value: Optional[str], label: str) -> Optional[str]:
     return None
 
 
-def _validate(args: dict) -> Optional[str]:
-    """Validate card arguments. Returns an error message, or None when valid."""
-    workload = (args.get("workload") or "").strip()
-    if not workload:
-        return "workload is required"
-
+def _validate_pr_reference(args: dict) -> Optional[str]:
+    """Validate the repo / PR number / PR URL / provider quartet."""
     repo = (args.get("repo") or "").strip()
     if not _REPO_RE.match(repo):
         return f"repo must be in 'owner/repo' form, got '{repo}'"
@@ -161,13 +151,11 @@ def _validate(args: dict) -> Optional[str]:
     if provider not in supported:
         return (f"vcs_provider '{provider}' is not supported yet. "
                 f"Supported: {', '.join(sorted(supported))}.")
+    return None
 
-    present = [key for key, _ in _DIMENSIONS
-               if args.get(f"{key}_current") and args.get(f"{key}_recommended")]
-    if not present:
-        return ("No recommendation to report: at least one of memory, cpu or max_replicas "
-                "needs both a current and a recommended value.")
 
+def _validate_display_values(args: dict) -> Optional[str]:
+    """Validate every human-facing string against length, digits and DDL width."""
     for key, label in _DIMENSIONS:
         for suffix in ("current", "recommended", "evidence"):
             err = _check_display(args.get(f"{key}_{suffix}"), f"{label} {suffix}")
@@ -183,6 +171,24 @@ def _validate(args: dict) -> Optional[str]:
         if isinstance(value, str) and len(value.strip()) > width:
             return f"{field} is too long ({len(value.strip())} chars, max {width})"
     return None
+
+
+def _validate(args: dict) -> Optional[str]:
+    """Validate card arguments. Returns an error message, or None when valid."""
+    if not (args.get("workload") or "").strip():
+        return "workload is required"
+
+    err = _validate_pr_reference(args)
+    if err:
+        return err
+
+    present = [key for key, _ in _DIMENSIONS
+               if args.get(f"{key}_current") and args.get(f"{key}_recommended")]
+    if not present:
+        return ("No recommendation to report: at least one of memory, cpu or max_replicas "
+                "needs both a current and a recommended value.")
+
+    return _validate_display_values(args)
 
 
 # ---------------------------------------------------------------------------
@@ -233,11 +239,17 @@ def _build_body(rec: dict, status_line: str) -> str:
 
 
 def build_recommendation_blocks(rec: dict, rec_id: str, *, with_actions: bool = True,
-                                status_line: Optional[str] = None) -> list:
+                                status_line: Optional[str] = None,
+                                link_only: bool = False) -> list:
     """Build the card from a neutral recommendation dict.
 
     ``with_actions=False`` drops the buttons entirely, which is how the
     post-dismiss rewrite guarantees a card cannot be re-clicked.
+
+    ``link_only=True`` keeps just the View PR button. Used when a dismissal could
+    not close the PR: that card asks a human to go close it by hand, so deleting
+    the only link to it would be actively unhelpful. View PR is a URL link-out
+    with no ``value``, so it carries no re-clickable action.
     """
     pr_number = rec.get("pr_number")
     if status_line is None:
@@ -256,20 +268,29 @@ def build_recommendation_blocks(rec: dict, rec_id: str, *, with_actions: bool = 
                                      "text": f"_Recommendation for_ `{rec.get('workload', 'unknown')}`"}},
     ]
 
-    if with_actions:
+    if with_actions or link_only:
         # An actions block, not a section accessory: Slack's section `accessory`
         # takes a single element object, not an array, so the mockup's two
         # flush-right buttons are not expressible. This keeps the pair together.
-        blocks.append({
-            "type": "actions",
-            "elements": [
+        elements = []
+        # Slack rejects a url-less link button and fails the whole call, so the
+        # View PR button is dropped when there is no destination -- but only that
+        # button. Dropping the whole row would take Dismiss with it and leave a
+        # 'proposed' row nobody can retire, blocking the workload forever behind
+        # the partial unique index.
+        if rec.get("pr_url"):
+            elements.append(
                 {"type": "button", "text": {"type": "plain_text", "text": f"View PR #{pr_number}"},
                  "url": rec.get("pr_url"), "style": "primary",
-                 "action_id": f"hpa_vpa_view_pr_{rec_id}"},
+                 "action_id": f"hpa_vpa_view_pr_{rec_id}"}
+            )
+        if with_actions:
+            elements.append(
                 {"type": "button", "text": {"type": "plain_text", "text": "Dismiss"},
-                 "value": rec_id, "action_id": f"hpa_vpa_dismiss_{rec_id}"},
-            ],
-        })
+                 "value": rec_id, "action_id": f"hpa_vpa_dismiss_{rec_id}"}
+            )
+        if elements:
+            blocks.append({"type": "actions", "elements": elements})
 
     blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": _build_body(rec, status_line)}})
     blocks.append({"type": "context", "elements": [
@@ -302,6 +323,57 @@ def _recommendation_payload(args: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _normalize_args(kwargs: dict) -> dict:
+    """Turn validated tool arguments into the normalized values the flow needs.
+
+    Returns the neutral ``rec`` dict the card renderer consumes, plus the derived
+    dedup key, JSONB payload and severity. Kept separate so the tool body reads as
+    the ordering it has to guarantee (lock -> cooldown -> claim -> post) rather
+    than as argument marshalling.
+    """
+    workload = kwargs["workload"].strip()
+    environment = (kwargs.get("environment") or "").strip() or None
+    payload = _recommendation_payload(kwargs)
+    workload_key = recs.build_workload_key(workload, environment)
+    pr_number = int(kwargs["pr_number"])
+
+    # Severity is DERIVED from the current/recommended values, never taken from
+    # the model. It decides whether a human's 30-day cooldown can be broken
+    # early, and the model is also the party reporting how bad the mis-size is --
+    # so letting it supply the number lets it grade its own exam. Parsing the
+    # display strings it already has to state keeps the card and the gate
+    # consistent by construction. Unparseable values yield None, which never
+    # breaks a cooldown.
+    severity = recs.severity_from_display(payload)
+    if severity is None:
+        logger.info(
+            "[HpaVpaCard] No severity derivable from display values for %s; "
+            "cooldowns cannot be broken for this recommendation",
+            sanitize(workload_key),
+        )
+
+    return {
+        "workload_key": workload_key,
+        "payload": payload,
+        "severity": severity,
+        "repo_full_name": kwargs["repo"].strip(),
+        "pr_number": pr_number,
+        "vcs_provider": (kwargs.get("vcs_provider") or "github").lower().strip(),
+        "metrics_source": (kwargs.get("metrics_source") or None),
+        "rec": {
+            "workload": workload,
+            "service": (kwargs.get("service") or "").strip() or None,
+            "environment": environment,
+            "autoscaler": (kwargs.get("autoscaler") or "").strip() or None,
+            "pr_number": pr_number,
+            "pr_url": kwargs["pr_url"].strip(),
+            "reviewer": kwargs.get("reviewer"),
+            **{f"{k}_{s}": kwargs.get(f"{k}_{s}")
+               for k, _ in _DIMENSIONS for s in ("current", "recommended", "evidence")},
+        },
+    }
+
+
 def send_hpa_vpa_recommendation(user_id: Optional[str] = None, **kwargs) -> str:
     """Post (or update) the Slack card for one right-sized workload.
 
@@ -320,37 +392,8 @@ def send_hpa_vpa_recommendation(user_id: Optional[str] = None, **kwargs) -> str:
     if error:
         return json.dumps({"error": error})
 
-    workload = kwargs["workload"].strip()
-    environment = (kwargs.get("environment") or "").strip() or None
-    workload_key = recs.build_workload_key(workload, environment)
-    repo_full_name = kwargs["repo"].strip()
-    pr_number = int(kwargs["pr_number"])
-    vcs_provider = (kwargs.get("vcs_provider") or "github").lower().strip()
-    payload = _recommendation_payload(kwargs)
-    severity = kwargs.get("severity_score")
-    if severity is not None:
-        try:
-            severity = float(severity)
-        except (TypeError, ValueError):
-            severity = None
-    # A NaN/inf severity would clear is_materially_worse's isinstance check and
-    # then compare as >= anything (inf) or as never-worse (NaN), i.e. the LLM
-    # could break any cooldown by passing Infinity. Treat it as unknown.
-    if severity is not None and not math.isfinite(severity):
-        logger.warning("[HpaVpaCard] Discarding non-finite severity_score for %s", sanitize(workload_key))
-        severity = None
-
-    rec = {
-        "workload": workload,
-        "service": (kwargs.get("service") or "").strip() or None,
-        "environment": environment,
-        "autoscaler": (kwargs.get("autoscaler") or "").strip() or None,
-        "pr_number": pr_number,
-        "pr_url": kwargs["pr_url"].strip(),
-        "reviewer": kwargs.get("reviewer"),
-        **{f"{k}_{s}": kwargs.get(f"{k}_{s}")
-           for k, _ in _DIMENSIONS for s in ("current", "recommended", "evidence")},
-    }
+    card = _normalize_args(kwargs)
+    workload_key = card["workload_key"]
 
     # Resolve Slack up-front, OUTSIDE the DB block. Both helpers take their own
     # pool connection internally, so calling them while this function holds one
@@ -369,54 +412,103 @@ def send_hpa_vpa_recommendation(user_id: Optional[str] = None, **kwargs) -> str:
 
                 recs.lock_workload(cur, org_id, workload_key)
 
-                cooldown = recs.get_active_cooldown(cur, org_id, workload_key)
-                if cooldown:
-                    if not recs.is_materially_worse(severity, cooldown.get("severity_score")):
-                        conn.commit()
-                        logger.info(
-                            "[HpaVpaCard] Suppressed %s for org=%s (cooldown until %s)",
-                            sanitize(workload_key), sanitize(org_id), cooldown.get("cooldown_until"),
-                        )
-                        return json.dumps({
-                            "status": "suppressed",
-                            "reason": "cooldown",
-                            "workload": workload,
-                            "cooldown_until": cooldown.get("cooldown_until"),
-                            "dismissed_severity_score": cooldown.get("severity_score"),
-                            "message": (
-                                "A human dismissed this workload and the cooldown is still "
-                                "running, and the mis-size has not materially worsened. No card "
-                                "was posted. This is the anti-nag rule working -- record it in "
-                                "the living document and move on. Do not work around it."
-                            ),
-                        })
-                    # Materially worse: retire the dismissal and fall through.
-                    recs.mark_superseded(cur, cooldown["id"])
-                    logger.info(
-                        "[HpaVpaCard] Cooldown superseded for %s (severity %s -> %s)",
-                        sanitize(workload_key), cooldown.get("severity_score"), severity,
-                    )
+                suppressed, superseded_id = _check_cooldown(
+                    conn, cur, org_id, workload_key, card["rec"]["workload"], card["severity"]
+                )
+                if suppressed:
+                    return suppressed
 
                 live = recs.get_live_recommendation(cur, org_id, workload_key)
                 if live:
-                    return _update_existing(conn, cur, slack, live, rec, payload, severity,
-                                            repo_full_name, pr_number, kwargs)
+                    return _update_existing(conn, cur, slack, live, card,
+                                            superseded_id=superseded_id)
 
-                rec_id = recs.claim_recommendation(
-                    cur, org_id, user_id,
-                    workload_key=workload_key, workload=workload, environment=environment,
-                    service=rec["service"], autoscaler=rec["autoscaler"],
-                    metrics_source=(kwargs.get("metrics_source") or None),
-                    vcs_provider=vcs_provider, repo_full_name=repo_full_name,
-                    pr_number=pr_number, pr_url=rec["pr_url"],
-                    recommendation=payload, severity_score=severity,
-                )
+                rec_id = recs.claim_recommendation(cur, org_id, user_id, recs.WorkloadRecommendation(
+                    workload_key=workload_key, workload=card["rec"]["workload"],
+                    environment=card["rec"]["environment"], service=card["rec"]["service"],
+                    autoscaler=card["rec"]["autoscaler"], metrics_source=card["metrics_source"],
+                    vcs_provider=card["vcs_provider"], repo_full_name=card["repo_full_name"],
+                    pr_number=card["pr_number"], pr_url=card["rec"]["pr_url"],
+                    recommendation=card["payload"], severity_score=card["severity"],
+                ))
                 conn.commit()
 
-                return _post_new(conn, cur, slack, rec_id, rec)
+                return _post_new(conn, cur, slack, rec_id, card["rec"],
+                                 superseded_id=superseded_id)
     except Exception:
         logger.exception("[HpaVpaCard] Failed to send recommendation for user=%s", sanitize(user_id))
         return json.dumps({"error": "Could not post the right-sizing recommendation card"})
+
+
+def _check_cooldown(conn, cur, org_id: str, workload_key: str, workload: str,
+                    severity: Optional[float]) -> tuple:
+    """Apply the anti-nag gate before anything is claimed or posted.
+
+    Returns ``(suppression_response, superseded_rec_id)``. A non-None first
+    element is the tool's final answer and the caller must return it as-is.
+
+    The second element is the compensation handle: when a cooldown is broken, the
+    dismissal is retired *before* the card that justifies it exists, so a failed
+    post has to be able to put it back. Without that, the human's remaining
+    anti-nag window is lost to a card nobody ever saw.
+    """
+    cooldown = recs.get_active_cooldown(cur, org_id, workload_key)
+    if not cooldown:
+        return None, None
+
+    if not recs.is_materially_worse(severity, cooldown.get("severity_score")):
+        conn.commit()
+        logger.info(
+            "[HpaVpaCard] Suppressed %s for org=%s (cooldown until %s)",
+            sanitize(workload_key), sanitize(org_id), cooldown.get("cooldown_until"),
+        )
+        return json.dumps({
+            "status": "suppressed",
+            "reason": "cooldown",
+            "workload": workload,
+            "cooldown_until": cooldown.get("cooldown_until"),
+            "dismissed_severity_score": cooldown.get("severity_score"),
+            "message": (
+                "A human dismissed this workload and the cooldown is still "
+                "running, and the mis-size has not materially worsened. No card "
+                "was posted. This is the anti-nag rule working -- record it in "
+                "the living document and move on. Do not work around it."
+            ),
+        }), None
+
+    # Materially worse: retire the dismissal and fall through to post.
+    recs.mark_superseded(cur, cooldown["id"])
+    logger.info(
+        "[HpaVpaCard] Cooldown superseded for %s (severity %s -> %s)",
+        sanitize(workload_key), cooldown.get("severity_score"), severity,
+    )
+    return None, cooldown["id"]
+
+
+def _restore_cooldown(conn, cur, superseded_id: Optional[str], workload: str) -> None:
+    """Put back a dismissal that was retired for a card that never posted."""
+    if not superseded_id:
+        return
+    try:
+        # A prior compensating statement in this transaction may have failed and
+        # left it aborted, in which case every further statement raises
+        # InFailedSqlTransaction. Roll back first so this UPDATE runs in a clean
+        # transaction -- the earlier work is already committed or already lost.
+        conn.rollback()
+        if recs.restore_superseded(cur, superseded_id):
+            conn.commit()
+            logger.info(
+                "[HpaVpaCard] Restored superseded cooldown %s after a failed post for %s",
+                superseded_id, sanitize(workload),
+            )
+    except Exception:
+        # Logged loudly: the consequence is a workload a human dismissed being
+        # re-proposed on the next run, which is the exact nagging this feature
+        # exists to prevent.
+        logger.exception(
+            "[HpaVpaCard] Could not restore superseded cooldown %s; the remaining "
+            "anti-nag window for %s is lost", superseded_id, sanitize(workload),
+        )
 
 
 def _resolve_slack_target(user_id: str) -> dict:
@@ -442,7 +534,8 @@ def _resolve_slack_target(user_id: str) -> dict:
         return {"error": f"Could not resolve Slack destination: {type(exc).__name__}"}
 
 
-def _post_new(conn, cur, slack: dict, rec_id: str, rec: dict) -> str:
+def _post_new(conn, cur, slack: dict, rec_id: str, rec: dict,
+              *, superseded_id: Optional[str] = None) -> str:
     """Post a fresh card and attach its ts, releasing the claim on failure."""
     client, channel_id = slack["client"], slack["channel_id"]
 
@@ -465,6 +558,9 @@ def _post_new(conn, cur, slack: dict, rec_id: str, rec: dict) -> str:
             conn.commit()
         except Exception:
             logger.exception("[HpaVpaCard] Failed to release claimed row %s", rec_id)
+        # And if a cooldown was broken to make room for this card, put it back --
+        # the card that justified retiring it does not exist.
+        _restore_cooldown(conn, cur, superseded_id, rec["workload"])
         logger.exception("[HpaVpaCard] Slack post failed for %s", sanitize(rec["workload"]))
         return json.dumps({"error": f"Could not post the Slack card: {type(exc).__name__}: {str(exc)[:150]}"})
 
@@ -480,15 +576,16 @@ def _post_new(conn, cur, slack: dict, rec_id: str, rec: dict) -> str:
     })
 
 
-def _update_existing(conn, cur, slack: dict, live: dict, rec: dict, payload: dict,
-                     severity: Optional[float], repo_full_name: str, pr_number: int,
-                     kwargs: dict) -> str:
+def _update_existing(conn, cur, slack: dict, live: dict, card: dict,
+                     *, superseded_id: Optional[str] = None) -> str:
     """Refresh an open recommendation in place -- one card per workload, ever."""
     rec_id = live["id"]
+    rec = card["rec"]
     recs.refresh_recommendation(
-        cur, rec_id, recommendation=payload, severity_score=severity,
-        repo_full_name=repo_full_name, pr_number=pr_number, pr_url=rec["pr_url"],
-        autoscaler=rec["autoscaler"], metrics_source=(kwargs.get("metrics_source") or None),
+        cur, rec_id, recommendation=card["payload"], severity_score=card["severity"],
+        repo_full_name=card["repo_full_name"], pr_number=card["pr_number"],
+        pr_url=rec["pr_url"], vcs_provider=card["vcs_provider"],
+        autoscaler=rec["autoscaler"], metrics_source=card["metrics_source"],
     )
     conn.commit()
 
@@ -513,10 +610,11 @@ def _update_existing(conn, cur, slack: dict, live: dict, rec: dict, payload: dic
         # Message deleted, or a stale ts. Fall through and post a replacement.
         logger.warning("[HpaVpaCard] update_message failed for rec=%s; reposting", rec_id)
 
-    return _post_new_for_existing(conn, cur, slack, rec_id, rec)
+    return _post_new_for_existing(conn, cur, slack, rec_id, rec, superseded_id=superseded_id)
 
 
-def _post_new_for_existing(conn, cur, slack: dict, rec_id: str, rec: dict) -> str:
+def _post_new_for_existing(conn, cur, slack: dict, rec_id: str, rec: dict,
+                           *, superseded_id: Optional[str] = None) -> str:
     """Repost a card for a row that already exists, overwriting its ts.
 
     Distinct from :func:`_post_new` only in that a failure must NOT delete the
@@ -533,6 +631,7 @@ def _post_new_for_existing(conn, cur, slack: dict, rec_id: str, rec: dict) -> st
         if not message_ts:
             raise ValueError("Slack did not return a message timestamp")
     except Exception as exc:
+        _restore_cooldown(conn, cur, superseded_id, rec["workload"])
         logger.exception("[HpaVpaCard] Repost failed for rec=%s", rec_id)
         return json.dumps({"error": f"Could not post the Slack card: {type(exc).__name__}: {str(exc)[:150]}"})
 
@@ -565,7 +664,8 @@ HPA_VPA_TOOL_SPECS = [
         "Post a Slack card to the incidents channel for ONE workload you have already opened a "
         "right-sizing PR for. The card carries View PR and Dismiss buttons. Pass current and "
         "recommended values as display strings in human units ('2 Gi' -> '768 Mi', '2000 m' -> "
-        "'750 m') -- never raw byte or nanocore integers. Omit any dimension you are not "
+        "'750 m') -- never raw byte or nanocore integers, and keep Kubernetes unit casing exact "
+        "('750m' is millicores, '750M' is megabytes). Omit any dimension you are not "
         "recommending a change to; the card degrades cleanly. Returns status 'posted', 'updated', "
         "or 'suppressed' (a human dismissed this workload and the cooldown is still running -- "
         "respect it, do not work around it).",

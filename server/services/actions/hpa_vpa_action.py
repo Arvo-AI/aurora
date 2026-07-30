@@ -105,8 +105,14 @@ every replica for the worst one and inflate every recommendation.
 
 **Step 4: Size the recommendation**
 
-- `new_request = p95 x 1.3` -- a 30% headroom band over sustained real usage.
-- Round *up*, never down: CPU to the next 50m, memory to the next 64Mi.
+- `new_request = ceil(p95 x 1.3)` -- a 30% headroom band over sustained real usage. Compute the
+  headroom on the p95 *in the IaC's own unit*, after any unit conversion from Step 3.
+- Round *up*, never down: CPU to the next 50m, memory to the next 64Mi. Rounding up further to
+  a conventional value a human would have written (`750m` rather than `700m`, `768Mi` rather
+  than `704Mi`) is fine and preferred -- it reads as a deliberate choice rather than a
+  machine artefact. Never round *down* to reach a tidy number: that silently cuts headroom.
+- State the p95, the headroom multiple, and the rounded result in the PR body, so a reviewer
+  can check the arithmetic instead of taking the number on trust.
 - Preserve the existing request:limit ratio. If that ratio is itself unreasonable, say so in
   the PR body rather than silently normalizing it -- the ratio is someone's decision.
 - **Movement under 20% is not a recommendation.** A 5% shave is measurement noise, and
@@ -178,9 +184,17 @@ it will assume we simply missed it.
 
 **Step 9: Notify**
 
-- Call send_hpa_vpa_recommendation once per workload you opened a PR for, passing the
-  per-dimension current, recommended, and evidence values, and the autoscaler so the card can
-  explain a partial recommendation. Omit any dimension you are not recommending a change to.
+- The PR is the deliverable and the living document is the permanent record. Notification is
+  how a human finds out, and which surfaces exist depends on what the team has connected --
+  so use what is available rather than assuming any particular one.
+- If send_hpa_vpa_recommendation is available, call it once per workload you opened a PR for,
+  passing the per-dimension current, recommended, and evidence values, and the autoscaler so
+  the card can explain a partial recommendation. Omit any dimension you are not recommending
+  a change to.
+- If it is not available, the team has no review-card surface connected. That is not a failed
+  run and it is not a reason to skip the work: the PR still stands on its own. Record the
+  recommendation in the living document with the same per-dimension evidence you would have
+  put on the card, and note that no card surface was available.
 - If it returns `suppressed`, that is the anti-nag rule working correctly. Record it in the
   living document and move on. **Do not work around it** -- do not re-post, rename the
   workload, or open the PR anyway.
@@ -188,7 +202,7 @@ it will assume we simply missed it.
   with which workloads you checked, over what window, and what you found. That is a good
   outcome, not a failed run.
 
-Hard anti-slop rules:
+Hard rules:
 - No recommendation without a sustained measurement behind it -- never from a single spike,
   a short window, or an alert threshold
 - No memory decrease when the observed `max` exceeded the proposed request

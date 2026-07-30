@@ -27,11 +27,19 @@ if os.path.abspath(_server_dir) not in sys.path:
 from services.actions.hpa_vpa_recommendations import (  # noqa: E402
     HPA_VPA_COOLDOWN_DAYS,
     MATERIALLY_WORSE_FACTOR,
+    STATUS_DISMISSED,
+    STATUS_SUPERSEDED,
     _CLOSERS,
+    _DISMISS_FIELDS,
     build_workload_key,
     close_pull_request,
     compute_severity_score,
+    dismiss_recommendation,
     is_materially_worse,
+    mark_superseded,
+    parse_quantity,
+    restore_superseded,
+    severity_from_display,
 )
 
 
@@ -228,3 +236,193 @@ def test_malformed_repo_name_is_rejected_before_any_network_call(monkeypatch, ba
     result = close_pull_request("user-1", "github", bad_repo, 5)
     assert "error" in result
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Quantity parsing + server-derived severity
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("2 Gi", 2 * 1024 ** 3),
+    ("768Mi", 768 * 1024 ** 2),
+    ("512 mi", 512 * 1024 ** 2),      # binary suffixes vary in case in real YAML
+    ("750m", 0.75),
+    ("2000 m", 2.0),
+    ("10", 10.0),
+    ("1.5", 1.5),
+    ("4G", 4e9),
+    (10, 10.0),
+    (2.5, 2.5),
+])
+def test_parse_quantity_reads_kubernetes_display_units(text, expected):
+    assert parse_quantity(text) == pytest.approx(expected)
+
+
+def test_milli_and_mega_are_not_confused():
+    """Kubernetes says m is milli and M is mega. Case-folding the single-letter
+    suffixes would make '750m' and '750M' the same number -- a 1e9x error in the
+    value that gates whether a cooldown may be broken."""
+    assert parse_quantity("750m") == pytest.approx(0.75)
+    assert parse_quantity("750M") == pytest.approx(750e6)
+
+
+@pytest.mark.parametrize("bad", [
+    None, "", "  ", "abc", "2 Gi extra", "Gi", "1/2", "-", "2,048 Mi",
+    "0x10", True, False, [], {}, float("nan"), float("inf"),
+])
+def test_parse_quantity_returns_none_for_unparseable(bad):
+    assert parse_quantity(bad) is None
+
+
+def test_severity_is_derived_from_display_values_not_the_model():
+    """severity_score decides whether a human's 30-day cooldown can be broken
+    early. Taking it from the LLM lets the party reporting the problem also grade
+    how bad it is; deriving it from the current/recommended strings it already has
+    to state keeps the card and the gate consistent by construction."""
+    score = severity_from_display({
+        "memory": {"current": "2 Gi", "recommended": "768 Mi"},
+        "cpu": {"current": "2000 m", "recommended": "750 m"},
+    })
+    # memory: 1 - 768Mi/2Gi = 0.625; cpu: 1 - 750/2000 = 0.625
+    assert score == pytest.approx(0.625)
+
+
+def test_severity_takes_the_worst_parseable_dimension():
+    score = severity_from_display({
+        "memory": {"current": "2 Gi", "recommended": "1 Gi"},        # 0.5
+        "max_replicas": {"current": "10", "recommended": "2"},        # 0.8
+    })
+    assert score == pytest.approx(0.8)
+
+
+def test_severity_skips_unparseable_dimensions_without_failing():
+    score = severity_from_display({
+        "memory": {"current": "lots", "recommended": "less"},
+        "cpu": {"current": "2000 m", "recommended": "1000 m"},
+    })
+    assert score == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("payload", [
+    {},
+    None,
+    {"cpu": "not-a-dict"},
+    {"cpu": {"current": "abc", "recommended": "def"}},
+    {"cpu": {"current": "100m"}},
+])
+def test_unparseable_payload_yields_no_severity_and_cannot_break_a_cooldown(payload):
+    score = severity_from_display(payload)
+    assert score is None
+    assert is_materially_worse(score, 0.6) is False
+
+
+@pytest.mark.parametrize("current,recommended", [
+    ("512m", "256Mi"),      # milli vs mebi -- a units mistake, not a 5e8x mis-size
+    ("2Gi", "750m"),
+    ("10", "1Gi"),
+])
+def test_mismatched_unit_families_are_not_scored(current, recommended):
+    """A cross-family ratio is astronomical and would clear MATERIALLY_WORSE_FACTOR
+    against any prior score, letting a units typo in the model's own display
+    strings break a human's 30-day cooldown. The dimension is skipped instead."""
+    score = severity_from_display({"memory": {"current": current, "recommended": recommended}})
+    assert score is None
+    assert is_materially_worse(score, 0.6) is False
+
+
+def test_bare_and_milli_cpu_stay_comparable():
+    """Kubernetes treats `cpu: 2` and `cpu: 2000m` as the same quantity, so the
+    family split must not reject the mixed form the model legitimately emits."""
+    score = severity_from_display({"cpu": {"current": "2", "recommended": "500m"}})
+    assert score == pytest.approx(0.75)
+
+
+def test_one_mismatched_dimension_does_not_suppress_the_others():
+    score = severity_from_display({
+        "memory": {"current": "512m", "recommended": "256Mi"},   # skipped
+        "cpu": {"current": "2000 m", "recommended": "1000 m"},    # 0.5
+    })
+    assert score == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# Superseded cooldown compensation
+# ---------------------------------------------------------------------------
+
+
+class _FakeCursor:
+    """Records executed SQL and reports a caller-set rowcount."""
+
+    def __init__(self, rowcount=1):
+        self.rowcount = rowcount
+        self.statements = []
+
+    def execute(self, sql, params=None):
+        self.statements.append((" ".join(sql.split()), params))
+
+
+def test_supersede_preserves_the_cooldown_timestamp():
+    """mark_superseded runs BEFORE the Slack post that justifies it, so the
+    dismissal has to be restorable. Nulling cooldown_until destroys the only
+    record of how much anti-nag window was left -- and it buys nothing, because
+    every read path already filters on status, not on the timestamp."""
+    cur = _FakeCursor()
+    mark_superseded(cur, "rec-1")
+
+    sql, params = cur.statements[0]
+    assert "cooldown_until = NULL" not in sql
+    assert STATUS_SUPERSEDED in params
+
+
+def test_restore_superseded_puts_the_dismissal_back():
+    cur = _FakeCursor(rowcount=1)
+    assert restore_superseded(cur, "rec-1") is True
+
+    sql, params = cur.statements[0]
+    assert STATUS_DISMISSED in params
+    # Guarded on the current status, so a later genuinely-posted recommendation
+    # that superseded this row is never resurrected underneath it.
+    assert STATUS_SUPERSEDED in params
+    assert "AND status = %s" in sql
+
+
+def test_mark_merged_reports_whether_it_cleared_the_cooldown():
+    """The caller tells the human "no cooldown applied" on True. A no-op must not
+    report success, or the card claims a cleared window that is still running on a
+    change the human accepted."""
+    from services.actions.hpa_vpa_recommendations import mark_merged
+
+    assert mark_merged(_FakeCursor(rowcount=1), "rec-1", "org-1") is True
+    assert mark_merged(_FakeCursor(rowcount=0), "rec-1", "org-1") is False
+
+
+def test_restore_superseded_reports_when_it_changed_nothing():
+    """The caller logs a lost anti-nag window on False, so a no-op must not
+    report success."""
+    assert restore_superseded(_FakeCursor(rowcount=0), "rec-1") is False
+
+
+def test_dismiss_returning_list_is_generated_from_the_field_tuple():
+    """The RETURNING list and the dict keys are the same definition, so they
+    cannot drift into mis-keyed fields -- and these fields are used to close a
+    real PR."""
+    cur = _FakeCursor()
+    cur.fetchone = lambda: tuple(range(len(_DISMISS_FIELDS)))
+
+    out = dismiss_recommendation(cur, "rec-1", "org-1", "U123")
+
+    sql, _params = cur.statements[0]
+    assert f"RETURNING {', '.join(_DISMISS_FIELDS)}" in sql
+    assert out["repo_full_name"] == 0
+    assert out["user_id"] == len(_DISMISS_FIELDS) - 1
+
+
+def test_dismiss_raises_rather_than_silently_truncating_a_short_row():
+    """zip(strict=True): a short row would otherwise drop trailing fields,
+    including user_id -- the credential the PR close depends on."""
+    cur = _FakeCursor()
+    cur.fetchone = lambda: (1, 2, 3)
+
+    with pytest.raises(ValueError):
+        dismiss_recommendation(cur, "rec-1", "org-1", "U123")

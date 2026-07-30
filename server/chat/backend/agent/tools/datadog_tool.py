@@ -288,8 +288,17 @@ def _scope_and_group(group_tags: Any) -> tuple[str, dict]:
     return ",".join(sorted(tags)), group
 
 
-def _summarize_series(group_tags: Any, unit: Any, row: Any) -> dict:
-    """Reduce one series' points to a compact stats row (never per-point arrays)."""
+def _summarize_series(group_tags: Any, unit: Any, row: Any, *,
+                      values_missing: bool = False) -> dict:
+    """Reduce one series' points to a compact stats row (never per-point arrays).
+
+    ``values_missing`` marks a series Datadog described in its metadata but
+    returned no values row for. Without the distinction that case renders exactly
+    like a genuinely idle workload -- ``points: 0`` and "no non-null points in
+    window" -- which is the specific confusion this resource type exists to
+    prevent: a malformed response would read as "no usage" and get the workload
+    cut.
+    """
     points = row if isinstance(row, list) else []
     # isfinite is not paranoia: a single NaN point breaks list.sort() (NaN
     # compares False against everything, so the "sorted" list stays unsorted and
@@ -312,8 +321,16 @@ def _summarize_series(group_tags: Any, unit: Any, row: Any) -> dict:
     if not vals:
         # All-null or empty: report explicitly so the agent can tell "no data"
         # from "low usage" instead of recommending a cut on an idle-looking gap.
-        stats.update({"p50": None, "p95": None, "p99": None, "max": None, "mean": None,
-                      "note": "no non-null points in window"})
+        stats.update({"p50": None, "p95": None, "p99": None, "max": None, "mean": None})
+        if values_missing:
+            stats["malformed_response"] = True
+            stats["note"] = (
+                "series metadata present but no values row returned -- this is a malformed "
+                "Datadog response, NOT an idle workload. Re-run before drawing any "
+                "conclusion, and never size this workload down from this row."
+            )
+        else:
+            stats["note"] = "no non-null points in window"
         return stats
 
     vals.sort()
@@ -371,12 +388,21 @@ def _p95_datadog(client, query: str, time_from: str, time_to: str, limit: int,
 
     max_series = min(max(limit, 1), _MAX_STATS_SERIES)
     rows, used_bytes, truncated = [], 0, False
+    malformed = 0
     for idx, entry in enumerate(series[:max_series]):
         meta = entry if isinstance(entry, dict) else {}
+        # A values row that is absent OR not a list is a malformed response, not
+        # an idle workload. Substituting [] silently would produce points: 0 and
+        # read as "no usage" -- exactly the failure this resource type exists to
+        # prevent. A null entry inside a full-length `values` array is the same
+        # defect as a short array and must be flagged the same way.
+        row_values = values[idx] if idx < len(values) else None
+        values_missing = not isinstance(row_values, list)
         row = _summarize_series(
             meta.get("group_tags"),
             meta.get("unit"),
-            values[idx] if idx < len(values) else [],
+            [] if values_missing else row_values,
+            values_missing=values_missing,
         )
         row_bytes = len(json.dumps(row))
         if used_bytes + row_bytes > _STATS_BYTE_BUDGET:
@@ -384,6 +410,10 @@ def _p95_datadog(client, query: str, time_from: str, time_to: str, limit: int,
             break
         rows.append(row)
         used_bytes += row_bytes
+        # Counted only once the row is actually kept, so malformed_series can
+        # never claim more malformed rows than the results array contains.
+        if values_missing:
+            malformed += 1
 
     result = {
         "resource_type": "metric_stats",
@@ -394,6 +424,20 @@ def _p95_datadog(client, query: str, time_from: str, time_to: str, limit: int,
         "count": len(rows),
         "results": rows,
     }
+
+    if malformed:
+        # Top level too: a per-row flag is easy to miss when scanning many rows,
+        # and this one changes whether the whole answer can be trusted.
+        result["malformed_series"] = malformed
+        result["malformed_note"] = (
+            f"Datadog returned metadata for {len(series)} series but {malformed} of them have "
+            f"no usable values row ({len(values)} value rows returned). Those rows are marked "
+            "malformed_response and must NOT be read as idle workloads. Re-run the query."
+        )
+        logger.warning(
+            "[DATADOG-TOOL] metric_stats: %d series, %d value rows, %d malformed",
+            len(series), len(values), malformed,
+        )
 
     window_note = _point_cap_note(end_ms - start_ms, chosen_interval, interval)
     if window_note:
