@@ -8,11 +8,12 @@ function-scope to keep tests fully isolated.
 
 from __future__ import annotations
 
+import importlib.machinery as _importlib_machinery
 import importlib.util as _importlib_util
 import os
 import sys
 from collections.abc import Iterator
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -32,6 +33,12 @@ os.environ.setdefault("POSTGRES_PASSWORD", "test_pw")  # noqa: S105
 os.environ.setdefault("POSTGRES_HOST", "localhost")
 os.environ.setdefault("POSTGRES_PORT", "5432")
 
+# routes/gcp/auth.py does `os.getenv("FRONTEND_URL") + "/chat"` at import time,
+# which raises TypeError when the var is unset. Any test that transitively
+# imports a routes package (routes.datadog -> celery_config -> routes.gcp) hits
+# it. Inert placeholder; nothing here dials the frontend.
+os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
+
 # Stub heavy third-party packages so source modules import in a lightweight
 # test env. Only stub when the real package isn't installed — some tests
 # (e.g. test_input_rail.py) need real classes like BaseChatModel / AIMessage.
@@ -46,19 +53,111 @@ _OPTIONAL_PACKAGES = (
     "langchain_core", "langchain_core.tools", "langchain_core.language_models",
     "langchain_core.language_models.chat_models",
     "langchain_anthropic", "langchain_openai", "langchain_google_genai",
+    "langchain_aws", "langchain_ollama",
     "kubernetes", "kubernetes.client", "kubernetes.client.rest",
-    "kubernetes.config", "kubernetes.stream",
+    "kubernetes.client.exceptions", "kubernetes.config", "kubernetes.stream",
+    # Submodules imported directly by source modules. Each needs its own entry:
+    # `from langgraph.types import ...` cannot resolve against a stub of the
+    # parent alone, since a stub package has no real search path.
+    "langchain.agents", "langchain.agents.middleware",
+    "langchain.agents.middleware.types",
+    "langchain_core.callbacks", "langchain_core.messages",
+    "langchain_core.messages.utils", "langchain_core.runnables",
+    "langchain_core.runnables.config",
+    "langgraph.checkpoint", "langgraph.checkpoint.memory",
+    "langgraph.graph", "langgraph.graph.state", "langgraph.types",
+    "celery.exceptions", "celery.signals",
 )
 
-for _pkg in _OPTIONAL_PACKAGES:
-    if _pkg in sys.modules:
-        continue
+# Namespace packages that must be stubbed *prefix-wise*, not module-by-module.
+# Reached transitively by anything importing a routes package (routes.datadog ->
+# routes.datadog.tasks -> chat.background -> google_chat_connector and
+# agent.providers.google_provider). Enumerating submodules does not work here:
+# langchain_google_genai is installed in CI and walks arbitrary google.genai.*
+# submodules at import time, so a fixed list always misses one.
+_STUBBED_NAMESPACES = ("google", "googleapiclient")
+
+
+class _StubModule(ModuleType):
+    """A real module object that mocks any attribute on demand.
+
+    A bare ``MagicMock`` will not do here: as a stand-in for a *package* it needs
+    ``__path__`` (or Python raises "'google' is not a package") and a real
+    ``__spec__`` for pytest's assertion-rewriting machinery -- but setting those
+    on a MagicMock stops it auto-creating the *other* attributes callers want,
+    e.g. ``service_account.Credentials``. Subclassing ModuleType and mocking via
+    ``__getattr__`` satisfies both at once.
+    """
+
+    def __init__(self, fullname: str) -> None:
+        super().__init__(fullname)
+        self.__path__: list[str] = []
+        self.__spec__ = _importlib_machinery.ModuleSpec(fullname, None, is_package=True)
+
+    def __getattr__(self, item: str) -> Any:
+        if item.startswith("__") and item.endswith("__"):
+            raise AttributeError(item)
+        value = MagicMock(name=f"{self.__name__}.{item}")
+        setattr(self, item, value)
+        return value
+
+
+# Submodules of the google* namespace packages that source modules import.
+# Registered explicitly, parents before children: every one must be present in
+# sys.modules before the import machinery sees it, because an empty __path__
+# lets Python's namespace-package resolution return a real, attribute-less
+# module instead of these stubs.
+_STUBBED_SUBMODULES = (
+    "google", "google.auth", "google.auth.transport",
+    "google.auth.transport.requests", "google.oauth2",
+    "google.oauth2.credentials", "google.oauth2.service_account",
+    "google.cloud", "google.cloud.bigquery",
+    "google.api_core", "google.api_core.exceptions",
+    "google.genai", "google.genai.types", "google.genai.client",
+    "googleapiclient", "googleapiclient.discovery", "googleapiclient.errors",
+)
+
+# langchain_google_genai is installed in CI but imports google.genai.* at module
+# scope, so it cannot load against stubs. When google is absent, stub the wrapper
+# too rather than chasing whichever google.genai submodule it reaches next.
+_STUB_WHEN_GOOGLE_ABSENT = ("langchain_google_genai",)
+
+def _is_installed(name: str) -> bool:
     try:
-        spec = _importlib_util.find_spec(_pkg)
+        return _importlib_util.find_spec(name) is not None
     except (ImportError, ValueError):
-        spec = None
-    if spec is None:
-        sys.modules[_pkg] = MagicMock()
+        return False
+
+
+def _stub(name: str) -> None:
+    if name not in sys.modules:
+        sys.modules[name] = _StubModule(name)
+
+
+# Stub each optional package (and any listed submodule) only when the real one
+# is absent, so a real installation always wins. _StubModule rather than a bare
+# MagicMock because several of these are imported as packages -- e.g.
+# `from langgraph.types import ...` fails against a MagicMock with
+# "'langgraph' is not a package".
+for _pkg in _OPTIONAL_PACKAGES:
+    # Check the exact module, not just its root: CI installs langchain-core,
+    # which brings a real `langgraph` package that has no `langgraph.types`.
+    # Gating on the root would skip the submodule and leave the import failing.
+    if not _is_installed(_pkg):
+        _stub(_pkg)
+
+for _ns in _STUBBED_NAMESPACES:
+    if _is_installed(_ns):
+        continue  # real package installed -- never mask it
+    for _mod in _STUBBED_SUBMODULES:
+        if _mod.split(".")[0] == _ns:
+            _stub(_mod)
+    if _ns == "google":
+        # These wrappers import google.* at module scope, so they cannot load
+        # against stubs even when they are themselves installed.
+        for _wrapper in _STUB_WHEN_GOOGLE_ABSENT:
+            sys.modules.pop(_wrapper, None)
+            sys.modules[_wrapper] = _StubModule(_wrapper)
 
 try:
     from cryptography.hazmat.primitives import serialization
