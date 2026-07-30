@@ -647,7 +647,7 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
                             channel_id, slack_user_id,
                             f"WARNING: You're not authenticated in Aurora.\n\nTo dismiss recommendations, connect your Aurora account:\n{FRONTEND_URL}/settings/integrations\n\nClick 'Connect' for Slack and authorize this workspace.",
                         )
-                except Exception as e:
+                except Exception:
                     logger.exception("Failed to warn unauthenticated Slack user %s", sanitize(slack_user_id))
             return jsonify({"text": ""}), 200
 
@@ -747,7 +747,7 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
 
         return jsonify({"text": ""}), 200
 
-    except Exception as e:
+    except Exception:
         logger.exception("Error handling hpa_vpa_dismiss action")
         return jsonify({"text": ""}), 200
 
@@ -791,5 +791,5 @@ def _rewrite_dismissed_card(client, payload: dict, dismissed: dict, rec_id: str,
             text=f"Right-Sizing Recommendation dismissed: {rec.get('workload')}",
             blocks=blocks,
         )
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to rewrite dismissed card for recommendation %s", rec_id)
