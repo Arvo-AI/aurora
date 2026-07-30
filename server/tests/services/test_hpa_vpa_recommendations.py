@@ -185,7 +185,7 @@ def test_missing_pr_reference_is_rejected_before_any_network_call(monkeypatch):
     lookup failing) and would keep passing if the guard were removed."""
     calls = []
     monkeypatch.setitem(
-        _CLOSERS, "github", lambda *a, **kw: calls.append(a) or {"success": True}
+        _CLOSERS, "github", lambda *args, **_kwargs: calls.append(args) or {"success": True}
     )
 
     assert "error" in close_pull_request("user-1", "github", "", 5)
@@ -206,7 +206,7 @@ def test_malformed_repo_name_is_rejected_before_any_network_call(monkeypatch, ba
     must be refused before a request is built."""
     calls = []
     monkeypatch.setitem(
-        _CLOSERS, "github", lambda *a, **kw: calls.append(a) or {"success": True}
+        _CLOSERS, "github", lambda *args, **_kwargs: calls.append(args) or {"success": True}
     )
 
     result = close_pull_request("user-1", "github", bad_repo, 5)

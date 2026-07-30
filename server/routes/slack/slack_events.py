@@ -600,10 +600,9 @@ def _send_ephemeral(client, channel_id: str, slack_user_id: str, text: str) -> N
             "chat.postEphemeral",
             {"channel": channel_id, "user": slack_user_id, "text": text},
         )
-    except Exception as e:
-        logger.error(
-            f"Failed to send ephemeral message to Slack user {sanitize(slack_user_id)}: {e}",
-            exc_info=True,
+    except Exception:
+        logger.exception(
+            "Failed to send ephemeral message to Slack user %s", sanitize(slack_user_id)
         )
 
 
@@ -649,7 +648,7 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
                             f"WARNING: You're not authenticated in Aurora.\n\nTo dismiss recommendations, connect your Aurora account:\n{FRONTEND_URL}/settings/integrations\n\nClick 'Connect' for Slack and authorize this workspace.",
                         )
                 except Exception as e:
-                    logger.exception(f"Failed to warn unauthenticated Slack user {sanitize(slack_user_id)}: {e}")
+                    logger.exception("Failed to warn unauthenticated Slack user %s", sanitize(slack_user_id))
             return jsonify({"text": ""}), 200
 
         # 2. PARSE + VALIDATE the recommendation id before any SQL.
@@ -729,7 +728,7 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
                         mark_merged(cursor, rec_id, clicker_org_id)
                         conn.commit()
             except Exception:
-                logger.exception(f"Failed to mark recommendation {rec_id} merged")
+                logger.exception("Failed to mark recommendation %s merged", rec_id)
             status_line = (f"*Status:* PR #{pr_number} was already merged -- the change was accepted. "
                            "No cooldown applied.")
         elif close_result.get("success"):
@@ -749,7 +748,7 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
         return jsonify({"text": ""}), 200
 
     except Exception as e:
-        logger.exception(f"Error handling hpa_vpa_dismiss action: {e}")
+        logger.exception("Error handling hpa_vpa_dismiss action")
         return jsonify({"text": ""}), 200
 
 
@@ -793,4 +792,4 @@ def _rewrite_dismissed_card(client, payload: dict, dismissed: dict, rec_id: str,
             blocks=blocks,
         )
     except Exception as e:
-        logger.exception(f"Failed to rewrite dismissed card for recommendation {rec_id}: {e}")
+        logger.exception("Failed to rewrite dismissed card for recommendation %s", rec_id)

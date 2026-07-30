@@ -40,6 +40,7 @@ from chat.backend.agent.tools.datadog_tool import (  # noqa: E402
     _clamp_interval,
     _p95_datadog,
     _percentile,
+    _point_cap_note,
     _pick_interval,
     _query_metric_stats,
     _query_metrics,
@@ -150,6 +151,24 @@ def test_window_beyond_the_point_cap_is_flagged_not_silently_clipped():
     assert result["interval_ms"] == _MAX_INTERVAL_MS
     assert result["window_exceeds_point_cap"] is True
     assert str(_DATADOG_POINT_CAP) in result["window_note"]
+
+
+def test_point_cap_advice_matches_why_the_window_overran():
+    """The advice has to be actionable: telling a caller who already pinned the
+    coarsest interval to "use a coarser interval" sends them nowhere."""
+    long_span = 365 * 24 * 3600 * 1000
+
+    auto = _point_cap_note(long_span, _MAX_INTERVAL_MS, None)
+    assert "coarsest supported" in auto
+
+    pinned_below_ceiling = _point_cap_note(long_span, 3_600_000, 3_600_000)
+    assert "coarser interval" in pinned_below_ceiling
+
+    pinned_at_ceiling = _point_cap_note(long_span, _MAX_INTERVAL_MS, _MAX_INTERVAL_MS)
+    assert "coarser interval" not in pinned_at_ceiling
+    assert "coarsest supported" in pinned_at_ceiling
+
+    assert _point_cap_note(30 * 24 * 3600 * 1000, 3_600_000, None) is None
 
 
 def test_normal_window_carries_no_point_cap_warning():

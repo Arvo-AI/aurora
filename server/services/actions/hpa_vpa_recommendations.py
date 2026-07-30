@@ -81,6 +81,30 @@ def _advisory_lock_key(org_id: str, workload_key: str) -> int:
     return int.from_bytes(digest, byteorder="big", signed=False) & 0x7FFFFFFFFFFFFFFF
 
 
+def _is_real_number(value: Any) -> bool:
+    """Whether a value is a finite int/float usable in arithmetic.
+
+    Rejects bool (an int subclass, so True would score as 1) and NaN/inf, both of
+    which reach us from LLM-supplied JSON and would otherwise corrupt a
+    comparison rather than fail it.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value)
+
+
+def _dimension_score(spec: Any) -> Optional[float]:
+    """Relative mis-size for one dimension, or None if it is not scoreable."""
+    if not isinstance(spec, dict):
+        return None
+    current, recommended = spec.get("current"), spec.get("recommended")
+    if not (_is_real_number(current) and _is_real_number(recommended)):
+        return None
+    if current <= 0:
+        return None
+    return abs(float(recommended) - float(current)) / float(current)
+
+
 def compute_severity_score(dimensions: dict) -> Optional[float]:
     """Max relative mis-size across dimensions: max(abs(current - rec) / current).
 
@@ -88,21 +112,7 @@ def compute_severity_score(dimensions: dict) -> Optional[float]:
     ``recommended``. Dimensions missing either value, or with a non-positive
     current, are skipped. Returns None when nothing is scoreable.
     """
-    scores = []
-    for spec in (dimensions or {}).values():
-        if not isinstance(spec, dict):
-            continue
-        current, recommended = spec.get("current"), spec.get("recommended")
-        # bool is an int subclass, so True/False would otherwise score as 1/0.
-        if isinstance(current, bool) or isinstance(recommended, bool):
-            continue
-        if not isinstance(current, (int, float)) or not isinstance(recommended, (int, float)):
-            continue
-        if not math.isfinite(current) or not math.isfinite(recommended):
-            continue
-        if current <= 0:
-            continue
-        scores.append(abs(float(recommended) - float(current)) / float(current))
+    scores = [s for s in map(_dimension_score, (dimensions or {}).values()) if s is not None]
     return max(scores) if scores else None
 
 
@@ -115,11 +125,7 @@ def is_materially_worse(new_score: Optional[float], prior_score: Optional[float]
     worse than everything and break any cooldown on demand. Callers sanitize too;
     this is the gate, so it enforces the invariant itself.
     """
-    if isinstance(new_score, bool) or not isinstance(new_score, (int, float)):
-        return False
-    if isinstance(prior_score, bool) or not isinstance(prior_score, (int, float)):
-        return False
-    if not math.isfinite(new_score) or not math.isfinite(prior_score):
+    if not (_is_real_number(new_score) and _is_real_number(prior_score)):
         return False
     if prior_score <= 0:
         return False

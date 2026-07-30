@@ -327,6 +327,33 @@ def _summarize_series(group_tags: Any, unit: Any, row: Any) -> dict:
     return stats
 
 
+def _point_cap_note(span_ms: int, chosen_interval: int, caller_interval: Optional[int]) -> Optional[str]:
+    """Warn when a window cannot fit in one series, or None when it fits.
+
+    Datadog clips the series rather than erroring, and a percentile over a
+    silently-clipped window is not the percentile that was asked for -- so this
+    has to be said out loud, with advice that matches why it happened.
+    """
+    expected_points = max(span_ms, 0) // chosen_interval
+    if expected_points <= _DATADOG_POINT_CAP:
+        return None
+
+    partial = (
+        f"This window needs ~{expected_points} points at a {chosen_interval} ms interval, "
+        f"above Datadog's {_DATADOG_POINT_CAP}-point per-series limit, so the series is "
+        "partial and these percentiles cover only part of the window. "
+    )
+    if _clamp_interval(caller_interval) is not None and chosen_interval < _MAX_INTERVAL_MS:
+        # Caller pinned a sub-ceiling interval, so the fix is theirs to make: a
+        # coarser one (or omitting it to auto-pick) fits the same window.
+        return partial + "Re-run with a coarser interval, or omit interval to auto-pick one."
+    # Already at the ceiling, whether pinned there or auto-picked: no coarser
+    # interval exists, so only a shorter window can help.
+    return partial + (
+        "This is already the coarsest supported interval, so use a window of 250 days or less."
+    )
+
+
 def _p95_datadog(client, query: str, time_from: str, time_to: str, limit: int,
                  interval: Optional[int] = None) -> dict:
     """Datadog backend: fetch raw rolled-up points and reduce them in Python."""
@@ -368,28 +395,10 @@ def _p95_datadog(client, query: str, time_from: str, time_to: str, limit: int,
         "results": rows,
     }
 
-    expected_points = max(end_ms - start_ms, 0) // chosen_interval
-    if expected_points > _DATADOG_POINT_CAP:
-        # Even the coarsest legal interval cannot cover this window, so Datadog
-        # returned a partial series. A percentile over a silently-clipped window
-        # is not the percentile the caller asked for.
+    window_note = _point_cap_note(end_ms - start_ms, chosen_interval, interval)
+    if window_note:
         result["window_exceeds_point_cap"] = True
-        _partial = (
-            f"This window needs ~{expected_points} points at a {chosen_interval} ms interval, "
-            f"above Datadog's {_DATADOG_POINT_CAP}-point per-series limit, so the series is "
-            "partial and these percentiles cover only part of the window. "
-        )
-        if _clamp_interval(interval) is not None:
-            # Caller pinned the interval, so the fix is theirs to make: a coarser
-            # interval (or omitting it to auto-pick) fits the same window.
-            result["window_note"] = _partial + (
-                "Re-run with a coarser interval, or omit interval to auto-pick one."
-            )
-        else:
-            result["window_note"] = _partial + (
-                "This is already the coarsest supported interval, so use a window of "
-                "250 days or less."
-            )
+        result["window_note"] = window_note
 
     if truncated:
         result["series_truncated"] = True
