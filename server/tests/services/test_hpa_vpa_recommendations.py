@@ -157,6 +157,22 @@ def test_booleans_are_not_treated_as_scores():
     assert is_materially_worse(0.90, True) is False
 
 
+def test_integers_too_large_for_a_float_do_not_raise():
+    """math.isfinite raises OverflowError on an arbitrary-precision int that
+    cannot convert to a float, and json.loads imposes no bound -- so a model can
+    emit one. Unhandled, it escapes the cooldown gate as an error instead of a
+    decision, and the caller reports a generic post failure."""
+    huge = 10 ** 400
+
+    assert is_materially_worse(huge, 0.60) is False
+    assert is_materially_worse(0.90, huge) is False
+    assert compute_severity_score({"cpu": {"current": huge, "recommended": 50}}) is None
+    assert compute_severity_score({"cpu": {"current": 100, "recommended": huge}}) is None
+
+    # Large but representable values must still be accepted.
+    assert compute_severity_score({"cpu": {"current": 10 ** 300, "recommended": 10 ** 299}}) is not None
+
+
 # ---------------------------------------------------------------------------
 # Cooldown + provider dispatch
 # ---------------------------------------------------------------------------

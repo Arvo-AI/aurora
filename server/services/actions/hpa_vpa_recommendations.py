@@ -81,19 +81,27 @@ def _advisory_lock_key(org_id: str, workload_key: str) -> int:
     return int.from_bytes(digest, byteorder="big", signed=False) & 0x7FFFFFFFFFFFFFFF
 
 
-def _is_real_number(value: Any) -> bool:
+def _is_real_number(value: object) -> bool:
     """Whether a value is a finite int/float usable in arithmetic.
 
     Rejects bool (an int subclass, so True would score as 1) and NaN/inf, both of
     which reach us from LLM-supplied JSON and would otherwise corrupt a
     comparison rather than fail it.
+
+    ``math.isfinite`` raises OverflowError on an arbitrary-precision int too
+    large for a float (``json.loads`` imposes no bound, so a model can emit one),
+    which would propagate out of the cooldown gate as an unhandled error rather
+    than a decision. Treat unrepresentable as not usable.
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
-    return math.isfinite(value)
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
-def _dimension_score(spec: Any) -> Optional[float]:
+def _dimension_score(spec: object) -> Optional[float]:
     """Relative mis-size for one dimension, or None if it is not scoreable."""
     if not isinstance(spec, dict):
         return None
