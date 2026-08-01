@@ -314,12 +314,44 @@ def get_live_recommendation(cursor, org_id: str, workload_key: str) -> Optional[
     return _row_to_dict(row) if row else None
 
 
+# Fields list_recommendations returns per row. Everything the prompt needs to
+# decide "update, skip, or propose" and nothing else -- notably not the JSONB
+# recommendation blob, which is the bulk of a row and is not read by any of
+# those three decisions.
+_SUMMARY_FIELDS = (
+    "id", "workload_key", "workload", "environment", "status",
+    "repo_full_name", "pr_number", "pr_url", "severity_score", "cooldown_until",
+    "updated_at",
+)
+
+# Rows per call. Chosen so a full page of _SUMMARY_FIELDS rows stays well inside
+# cap_tool_output's 40 KB pass-through threshold (~380 B/row x 100 ~= 38 KB is
+# too close, so 80 leaves real headroom). Above the threshold the payload is
+# LLM-summarized, which would paraphrase the workload keys and cooldown dates
+# this list exists to be matched against exactly.
+_LIST_PAGE_SIZE = 80
+
+
+def _summary_row(row: dict) -> dict:
+    """Project a full row down to the fields the agent's decision needs."""
+    return {key: row.get(key) for key in _SUMMARY_FIELDS}
+
+
 def list_recommendations(user_id: str) -> dict:
     """Live proposals plus workloads still inside a cooldown window.
 
     This is what lets the prompt check prior work *before* opening a PR. Doing
     it after is the worst ordering: a suppressed workload still gets a PR
     nobody asked for.
+
+    Rows are projected down to the fields the decision actually needs, and the
+    page is capped. The full row is ~1 KB, so the original 200-row page was
+    ~200 KB -- five times ``cap_tool_output``'s 40 KB pass-through threshold, so
+    it was routed through an LLM summarizer, which would paraphrase the workload
+    keys and cooldown dates the anti-nag check matches on exactly. The agent
+    would then re-propose a workload a human already dismissed, which is the one
+    failure this list exists to prevent. Projection plus the cap keeps a full
+    page inside the threshold.
     """
     try:
         with db_pool.get_admin_connection() as conn:
@@ -332,17 +364,19 @@ def list_recommendations(user_id: str) -> dict:
                          WHERE org_id = %s
                            AND (status = %s
                                 OR (status = %s AND cooldown_until > NOW()))
-                         ORDER BY created_at DESC LIMIT 200""",
-                    (org_id, STATUS_PROPOSED, STATUS_DISMISSED),
+                         ORDER BY created_at DESC LIMIT %s""",
+                    (org_id, STATUS_PROPOSED, STATUS_DISMISSED, _LIST_PAGE_SIZE),
                 )
                 rows = [_row_to_dict(r) for r in cur.fetchall()]
     except Exception:
         logger.exception("[HpaVpaRecs] Failed to list recommendations for user=%s", sanitize(user_id))
         return {"error": "Could not read existing right-sizing recommendations"}
 
+    truncated = len(rows) >= _LIST_PAGE_SIZE
+    rows = [_summary_row(r) for r in rows]
     open_recs = [r for r in rows if r["status"] == STATUS_PROPOSED]
     cooling = [r for r in rows if r["status"] == STATUS_DISMISSED]
-    return {
+    result = {
         "open_recommendations": open_recs,
         "in_cooldown": cooling,
         "counts": {"open": len(open_recs), "in_cooldown": len(cooling)},
@@ -353,6 +387,17 @@ def list_recommendations(user_id: str) -> dict:
             f"worsened (>= {MATERIALLY_WORSE_FACTOR}x the dismissed severity)."
         ),
     }
+    if truncated:
+        # A capped page must never read as a complete one: absence from this list
+        # is what the agent treats as "no prior work, safe to propose", so a
+        # silently-clipped list is how a dismissed workload gets re-proposed.
+        result["truncated"] = True
+        result["note"] = (
+            f"Only the {_LIST_PAGE_SIZE} most recent recommendations are listed. A "
+            "workload missing from this list may still have an open recommendation or "
+            "an active cooldown -- do not treat absence here as permission to propose."
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------

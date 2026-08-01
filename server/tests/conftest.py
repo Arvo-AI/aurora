@@ -146,6 +146,13 @@ for _pkg in _OPTIONAL_PACKAGES:
     if not _is_installed(_pkg):
         _stub(_pkg)
 
+# Whether the real google.oauth2 is importable must be sampled BEFORE any
+# stubbing runs. Once `google.oauth2` is placed in sys.modules, find_spec()
+# returns that stub's own ModuleSpec, so _is_installed() answers True and the
+# wrapper guard below could never fire -- leaving langchain_google_genai to
+# import google.genai.* at module scope against stubs and fail.
+_real_google_oauth2 = _is_installed("google.oauth2")
+
 for _ns in _STUBBED_NAMESPACES:
     # Per-submodule, not per-namespace: `google` is a namespace package that any
     # installed google-* distribution provides, so gating the whole loop on the
@@ -155,7 +162,7 @@ for _ns in _STUBBED_NAMESPACES:
     for _mod in _STUBBED_SUBMODULES:
         if _mod.split(".")[0] == _ns and not _is_installed(_mod):
             _stub(_mod)
-    if _ns == "google" and not _is_installed("google.oauth2"):
+    if _ns == "google" and not _real_google_oauth2:
         # These wrappers import google.* at module scope, so they cannot load
         # against stubs even when they are themselves installed.
         for _wrapper in _STUB_WHEN_GOOGLE_ABSENT:

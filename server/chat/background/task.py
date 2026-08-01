@@ -1290,22 +1290,33 @@ async def _run_jira_action(
     logger.info(f"[JiraAction] Completed for {session_id}")
 
 
-def _action_is_generate_postmortem(action_id: Optional[str], user_id: Optional[str] = None) -> bool:
-    """Return True when action_id belongs to the built-in 'generate_postmortem' system action."""
+def _action_has_system_key(action_id: Optional[str], system_key: str,
+                           user_id: Optional[str] = None) -> bool:
+    """Whether action_id is the built-in system action with this system_key.
+
+    Used to scope a write tool to the one action that should have it, rather than
+    to every background run. Fails closed: an unknown action_id or a failed lookup
+    returns False, so the tool is withheld rather than handed out by accident.
+    """
     if not action_id:
         return False
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[BackgroundChat:PostmortemCheck]")
+                set_rls_context(cur, conn, user_id, log_prefix="[BackgroundChat:SystemKeyCheck]")
                 cur.execute(
-                    "SELECT 1 FROM actions WHERE id = %s AND system_key = 'generate_postmortem'",
-                    (action_id,),
+                    "SELECT 1 FROM actions WHERE id = %s AND system_key = %s",
+                    (action_id, system_key),
                 )
                 return cur.fetchone() is not None
     except Exception as e:
-        logger.warning("[BackgroundChat] _action_is_generate_postmortem lookup failed: %s", e)
+        logger.warning("[BackgroundChat] _action_has_system_key(%s) lookup failed: %s", system_key, e)
         return False
+
+
+def _action_is_generate_postmortem(action_id: Optional[str], user_id: Optional[str] = None) -> bool:
+    """Return True when action_id belongs to the built-in 'generate_postmortem' system action."""
+    return _action_has_system_key(action_id, "generate_postmortem", user_id)
 
 
 async def _execute_background_chat(
@@ -1418,6 +1429,12 @@ async def _execute_background_chat(
             and _action_is_generate_postmortem((trigger_metadata or {}).get("action_id"), user_id)
         )
 
+        # True only for the built-in right-sizing action; gates the Slack card
+        # write tool so an ordinary chat cannot post a recommendation card.
+        _is_hpa_vpa_action = _tm_source == "action" and _action_has_system_key(
+            (trigger_metadata or {}).get("action_id"), "hpa_vpa_rightsizing", user_id
+        )
+
         # Create state with is_background=True and rca_context for system prompt
         # Use centralized model configuration for RCA with provider mode awareness
         _is_pr_review = _tm_source == "change_gating"
@@ -1435,6 +1452,7 @@ async def _execute_background_chat(
             mode=mode,
             is_background=True,
             is_postmortem_action=_is_postmortem_action,
+            is_hpa_vpa_action=_is_hpa_vpa_action,
             is_pr_review=_is_pr_review,
             rca_context=rca_context,
             permitted_tools=_resolve_permitted_tools(user_id),

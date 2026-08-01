@@ -55,6 +55,18 @@ _DIMENSIONS = (
     ("max_replicas", "HPA maxReplicas"),
 )
 
+# Slack's confirm-dialog limits. Exceeding any of them fails the whole
+# chat.postMessage with `invalid_blocks`, so the card does not post at all --
+# there is no partial render to fall back on.
+_CONFIRM_TITLE_MAX = 100
+_CONFIRM_TEXT_MAX = 300
+_CONFIRM_BUTTON_MAX = 30
+
+
+def _clip(text: str, limit: int) -> str:
+    """Truncate to a Slack field limit, marking that it was cut."""
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
 
 class SendHpaVpaRecommendationArgs(BaseModel):
     workload: str = Field(description="Workload / deployment name, e.g. 'apiv2worker'")
@@ -208,6 +220,43 @@ def _mention(slack_user_id: Optional[str]) -> Optional[str]:
     return None
 
 
+def _dismiss_confirm(pr_number) -> dict:
+    """Native Slack confirm dialog for the Dismiss button.
+
+    Dismiss does two things a label reading "Dismiss" does not convey: it closes
+    the PR *and* mutes the workload for the cooldown window. Someone closing what
+    they think is a duplicate would silently buy 30 days of silence on a workload
+    that may still be mis-sized.
+
+    This is a plain field on the button element -- no modal, no ``views.open``,
+    no ``view_submission`` handler. Slack renders the dialog and only delivers the
+    ``block_actions`` payload if the user confirms, so the existing handler needs
+    no change and a cancel never reaches the server.
+
+    It also names the alternative: closing the PR on the VCS instead leaves the
+    recommendation live, so Aurora keeps watching the workload.
+    """
+    # Slack caps each of these strings, and an over-long one fails the whole
+    # chat.postMessage with `invalid_blocks` -- so the card would not post at all
+    # rather than degrading. Kept well inside the limits and truncated defensively.
+    text = (
+        f"Closes *PR #{pr_number}* and mutes this workload for "
+        f"*{recs.HPA_VPA_COOLDOWN_DAYS} days*.\n\n"
+        "Only want the PR gone (duplicate, or you will handle it)? Close it on the "
+        "repo instead, so Aurora keeps watching this workload."
+    )
+    return {
+        "title": {"type": "plain_text",
+                  "text": _clip("Dismiss this recommendation?", _CONFIRM_TITLE_MAX)},
+        "text": {"type": "mrkdwn", "text": _clip(text, _CONFIRM_TEXT_MAX)},
+        "confirm": {"type": "plain_text",
+                    "text": _clip(f"Dismiss for {recs.HPA_VPA_COOLDOWN_DAYS} days",
+                                  _CONFIRM_BUTTON_MAX)},
+        "deny": {"type": "plain_text", "text": "Cancel"},
+        "style": "danger",
+    }
+
+
 def _build_body(rec: dict, status_line: str) -> str:
     """Body section text: one line per recommended dimension, present data only."""
     lines = []
@@ -287,7 +336,9 @@ def build_recommendation_blocks(rec: dict, rec_id: str, *, with_actions: bool = 
         if with_actions:
             elements.append(
                 {"type": "button", "text": {"type": "plain_text", "text": "Dismiss"},
-                 "value": rec_id, "action_id": f"hpa_vpa_dismiss_{rec_id}"}
+                 "value": rec_id, "action_id": f"hpa_vpa_dismiss_{rec_id}",
+                 "style": "danger",
+                 "confirm": _dismiss_confirm(pr_number)}
             )
         if elements:
             blocks.append({"type": "actions", "elements": elements})
@@ -477,7 +528,14 @@ def _check_cooldown(conn, cur, org_id: str, workload_key: str, workload: str,
         }), None
 
     # Materially worse: retire the dismissal and fall through to post.
+    # Committed here rather than left pending: _restore_cooldown compensates by
+    # rolling back and re-issuing an UPDATE guarded on status = 'superseded', so
+    # an uncommitted supersede would be undone by that rollback and the guarded
+    # UPDATE would then match zero rows -- logging a lost anti-nag window that
+    # was never actually lost, while a *successful* post path would still see it
+    # correctly. Committing keeps the two paths consistent.
     recs.mark_superseded(cur, cooldown["id"])
+    conn.commit()
     logger.info(
         "[HpaVpaCard] Cooldown superseded for %s (severity %s -> %s)",
         sanitize(workload_key), cooldown.get("severity_score"), severity,

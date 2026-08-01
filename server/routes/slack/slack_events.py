@@ -796,8 +796,16 @@ def _clear_cooldown_for_merged_pr(rec_id: str, clicker_user_id: str, clicker_org
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, clicker_user_id,
-                                log_prefix="[SlackEvents:hpa_vpa_dismiss]")
+                # RLS is FORCED on this table, so without the org context the
+                # UPDATE silently matches zero rows and mark_merged reports a
+                # false "cooldown still running" instead of the real cause.
+                if not set_rls_context(cursor, conn, clicker_user_id,
+                                       log_prefix="[SlackEvents:hpa_vpa_dismiss]"):
+                    logger.error(
+                        "Could not resolve org context to mark recommendation %s merged; "
+                        "the cooldown is still running on an accepted change", rec_id
+                    )
+                    return False
                 from services.actions.hpa_vpa_recommendations import mark_merged
                 cleared = mark_merged(cursor, rec_id, clicker_org_id)
                 conn.commit()
