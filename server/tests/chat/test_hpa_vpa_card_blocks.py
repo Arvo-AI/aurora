@@ -176,3 +176,48 @@ def test_blocks_are_json_serializable():
     """chat.postMessage sends these as JSON; a non-serializable value fails the
     whole call rather than one field."""
     json.dumps(build_recommendation_blocks(_REC, "rec-1"))
+
+
+# ---------------------------------------------------------------------------
+# Cooldown compensation on an unexpected failure
+# ---------------------------------------------------------------------------
+
+
+def test_unexpected_failure_restores_a_superseded_cooldown(monkeypatch):
+    """The supersede is COMMITTED before the card is posted, so a raise anywhere
+    after it -- a failing claim, a dropped connection -- exits past the per-path
+    compensation in _post_new and strands the row as 'superseded'. That silently
+    destroys the human's remaining anti-nag window, so the outer handler has to
+    compensate too.
+
+    Verified against a live Postgres separately; this pins the wiring so the
+    handler cannot lose its restore call in a later refactor.
+    """
+    import chat.backend.agent.tools.hpa_vpa_card_tool as tool
+
+    restored = []
+    monkeypatch.setattr(tool, "_resolve_slack_target",
+                        lambda _uid: {"client": object(), "channel_id": "C1"})
+    monkeypatch.setattr(tool, "_restore_cooldown_standalone",
+                        lambda uid, sid, wl: restored.append(sid))
+
+    # Fail once the cooldown has already been superseded.
+    class _Boom(Exception):
+        pass
+
+    def _explode(*_a, **_k):
+        raise _Boom("connection lost after the supersede committed")
+
+    monkeypatch.setattr(tool.db_pool, "get_admin_connection", _explode)
+
+    result = json.loads(tool.send_hpa_vpa_recommendation(
+        user_id="u1", workload="checkout-api", repo="owner/repo", pr_number=18,
+        pr_url="https://github.com/owner/repo/pull/18",
+        cpu_current="1500 m", cpu_recommended="350 m",
+    ))
+
+    # The tool still fails soft rather than raising into the agent loop...
+    assert "error" in result
+    # ...and the compensation hook is always reached, even when the failure
+    # happened before any superseded_id could be assigned (None is a no-op).
+    assert restored == [None]

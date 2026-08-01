@@ -242,10 +242,13 @@ def severity_from_display(payload: dict) -> Optional[float]:
         if not (current and recommended):
             continue
         if current[1] != recommended[1]:
+            # Sanitized even though the one production caller passes keys from a
+            # hardcoded tuple: this is a public function taking an arbitrary dict,
+            # and the values beside it are LLM-supplied display strings.
             logger.warning(
                 "[HpaVpaRecs] Mismatched units on %s (%r -> %r); not scoring this "
                 "dimension, so it cannot break a cooldown",
-                dimension, spec.get("current"), spec.get("recommended"),
+                sanitize(dimension), spec.get("current"), spec.get("recommended"),
             )
             continue
         numeric[dimension] = {"current": current[0], "recommended": recommended[0]}

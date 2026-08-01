@@ -92,7 +92,7 @@ mixing them up produces a wrong number that still looks plausible:
 
 Ratio and scaling expressions work in a single `query` -- both of these are accepted:
 
-```
+```text
 sum:kubernetes.cpu.usage.total{...} by {kube_deployment} / 1e9
 (sum:kubernetes.cpu.usage.total{...} by {kube_deployment} / 1e9) / sum:kubernetes.cpu.limits{...} by {kube_deployment}
 ```

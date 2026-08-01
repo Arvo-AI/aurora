@@ -454,6 +454,13 @@ def send_hpa_vpa_recommendation(user_id: Optional[str] = None, **kwargs) -> str:
     if slack.get("error"):
         return json.dumps({"error": slack["error"]})
 
+    # Held outside the try so the handler below can compensate. _check_cooldown
+    # COMMITS the supersede, so any later failure -- a raising claim, a lost
+    # connection, anything between here and the post -- leaves the row stranded
+    # as 'superseded' with the human's cooldown gone, and the per-path
+    # compensation in _post_new / _post_new_for_existing never runs because the
+    # exception skipped past them.
+    superseded_id = None
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
@@ -488,6 +495,10 @@ def send_hpa_vpa_recommendation(user_id: Optional[str] = None, **kwargs) -> str:
                                  superseded_id=superseded_id)
     except Exception:
         logger.exception("[HpaVpaCard] Failed to send recommendation for user=%s", sanitize(user_id))
+        # Put back a cooldown that was retired for a card that never posted. Uses
+        # a fresh connection on purpose: the one above is out of scope and may be
+        # the thing that failed.
+        _restore_cooldown_standalone(user_id, superseded_id, card["rec"]["workload"])
         return json.dumps({"error": "Could not post the right-sizing recommendation card"})
 
 
@@ -541,6 +552,35 @@ def _check_cooldown(conn, cur, org_id: str, workload_key: str, workload: str,
         sanitize(workload_key), cooldown.get("severity_score"), severity,
     )
     return None, cooldown["id"]
+
+
+def _restore_cooldown_standalone(user_id: str, superseded_id: Optional[str],
+                                 workload: str) -> None:
+    """Restore a superseded cooldown on a connection of its own.
+
+    For the outer exception handler, where the original connection is gone or
+    unusable. Never raises: it runs while an error response is already being
+    returned, so a failure here must not replace that with a different one.
+    """
+    if not superseded_id:
+        return
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                if not set_rls_context(cur, conn, user_id, log_prefix="[HpaVpaCard]"):
+                    logger.error(
+                        "[HpaVpaCard] No org context to restore superseded cooldown %s; "
+                        "the remaining anti-nag window for %s is lost",
+                        superseded_id, sanitize(workload),
+                    )
+                    return
+                _restore_cooldown(conn, cur, superseded_id, workload)
+    except Exception:
+        logger.exception(
+            "[HpaVpaCard] Could not restore superseded cooldown %s on a fresh "
+            "connection; the remaining anti-nag window for %s is lost",
+            superseded_id, sanitize(workload),
+        )
 
 
 def _restore_cooldown(conn, cur, superseded_id: Optional[str], workload: str) -> None:
