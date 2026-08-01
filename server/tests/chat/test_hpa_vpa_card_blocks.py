@@ -32,6 +32,7 @@ from chat.backend.agent.tools.hpa_vpa_card_tool import (  # noqa: E402
     _clip,
     _dismiss_confirm,
     build_recommendation_blocks,
+    send_hpa_vpa_recommendation,
 )
 
 _REC = {
@@ -193,24 +194,19 @@ def test_unexpected_failure_restores_a_superseded_cooldown(monkeypatch):
     Verified against a live Postgres separately; this pins the wiring so the
     handler cannot lose its restore call in a later refactor.
     """
-    import chat.backend.agent.tools.hpa_vpa_card_tool as tool
-
     restored = []
-    monkeypatch.setattr(tool, "_resolve_slack_target",
+    _patch = "chat.backend.agent.tools.hpa_vpa_card_tool.%s"
+    monkeypatch.setattr(_patch % "_resolve_slack_target",
                         lambda _uid: {"client": object(), "channel_id": "C1"})
-    monkeypatch.setattr(tool, "_restore_cooldown_standalone",
+    monkeypatch.setattr(_patch % "_restore_cooldown_standalone",
                         lambda uid, sid, wl: restored.append(sid))
 
-    # Fail once the cooldown has already been superseded.
-    class _Boom(Exception):
-        pass
-
     def _explode(*_a, **_k):
-        raise _Boom("connection lost after the supersede committed")
+        raise RuntimeError("connection lost after the supersede committed")
 
-    monkeypatch.setattr(tool.db_pool, "get_admin_connection", _explode)
+    monkeypatch.setattr(_patch % "db_pool.get_admin_connection", _explode)
 
-    result = json.loads(tool.send_hpa_vpa_recommendation(
+    result = json.loads(send_hpa_vpa_recommendation(
         user_id="u1", workload="checkout-api", repo="owner/repo", pr_number=18,
         pr_url="https://github.com/owner/repo/pull/18",
         cpu_current="1500 m", cpu_recommended="350 m",
