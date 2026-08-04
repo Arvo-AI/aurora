@@ -1035,12 +1035,16 @@ def get_cloud_tools():
     rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
     is_background = getattr(state_context, 'is_background', False) if state_context else False
     is_postmortem_action = getattr(state_context, 'is_postmortem_action', False) if state_context else False
+    is_hpa_vpa_action = getattr(state_context, 'is_hpa_vpa_action', False) if state_context else False
     is_pr_review = getattr(state_context, 'is_pr_review', False) if state_context else False
     is_rca_context = _is_background_rca(state_context, is_background)
     _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
     _incident_id = getattr(state_context, 'incident_id', None) if state_context else None
     capture_tag = "capture" if tool_capture else "nocapture"
-    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}"
+    # hpa_vpa is part of the key for the same reason postmortem is: it changes
+    # which tools are returned, so sharing a cache entry across contexts would
+    # leak the card tool into an ordinary chat (or withhold it from the action).
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}"
     
     current_time = time.time()
     if (
@@ -2213,10 +2217,15 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             func=final_dd_func,
             name="query_datadog",
             description=(
-                "Query Datadog for logs, metrics, monitors, events, traces, hosts, or incidents. "
-                "Set resource_type to 'logs', 'metrics', 'monitors', 'events', 'traces', 'hosts', or 'incidents'. "
+                "Query Datadog for logs, metrics, metric_stats, monitors, events, traces, hosts, or incidents. "
+                "Set resource_type to 'logs', 'metrics', 'metric_stats', 'monitors', 'events', 'traces', "
+                "'hosts', or 'incidents'. Use 'metric_stats' for p50/p95/p99/max per series over long "
+                "windows (capacity and right-sizing questions) -- Datadog cannot compute a time-percentile "
+                "in a query, so 'metrics' plus a percentile rollup does not work. "
                 "Examples: query_datadog(resource_type='logs', query='service:web status:error', time_from='-1h') "
-                "or query_datadog(resource_type='metrics', query='avg:system.cpu.user{*}', time_from='-2h')"
+                "or query_datadog(resource_type='metrics', query='avg:system.cpu.user{*}', time_from='-2h') "
+                "or query_datadog(resource_type='metric_stats', "
+                "query='sum:kubernetes.memory.usage{env:production} by {kube_deployment}', time_from='-30d')"
             ),
             args_schema=QueryDatadogArgs,
         ))
@@ -2470,6 +2479,71 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             logging.info(f"Added {len(specs)} Notion tools for user {user_id} (background={is_background})")
     except Exception as e:
         logging.warning(f"Failed to add Notion tools: {e}")
+
+    # Add HPA/VPA right-sizing card tools -- scoped to the built-in Right-Sizing
+    # Audit action, and additionally requiring Slack (to post the card) and GitHub
+    # (the PR the card links to).
+    #
+    # is_hpa_vpa_action is resolved in chat/background/task.py from the run's
+    # trigger_metadata action_id via a system_key lookup, mirroring
+    # is_postmortem_action/save_postmortem. It fails closed, so an ordinary chat
+    # -- which has no action_id -- never sees a tool that writes to a customer
+    # Slack channel. Excluded from PR review, which is read-only.
+    try:
+        # Imported here rather than relying on the Slack block ~1000 lines above:
+        # that name is only bound if this function reached that try block without
+        # raising, so depending on it would fail with UnboundLocalError.
+        from .slack_tool import is_slack_connected as _is_slack_connected
+        from .hpa_vpa_card_tool import HPA_VPA_TOOL_SPECS
+        if not is_hpa_vpa_action:
+            # Not the right-sizing action: say so at debug level only. This is the
+            # overwhelmingly common case (every chat, every other action), so a
+            # warning here would be noise that trains people to ignore the real one.
+            # The connectivity probes are deliberately NOT run in this branch: each
+            # one is a Vault + DB round trip, and paying for both on every chat turn
+            # and every other action just to log a debug line is pure overhead.
+            logging.debug(
+                "HPA/VPA right-sizing card tools withheld for user %s: not the "
+                "Right-Sizing Audit action", user_id,
+            )
+        elif is_pr_review:
+            # Read-only surface: nothing to register and nothing to warn about.
+            logging.debug(
+                "HPA/VPA right-sizing card tools withheld for user %s: PR review is "
+                "read-only", user_id,
+            )
+        else:
+            _slack_ok = _safe_connected(_is_slack_connected, "Slack")
+            _github_ok = _safe_connected(is_github_connected, "GitHub")
+            if _slack_ok and _github_ok:
+                for _func, _name, _schema, _desc in HPA_VPA_TOOL_SPECS:
+                    _ctx = with_user_context(_func)
+                    _notif = with_completion_notification(_ctx)
+                    _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                    tools.append(StructuredTool.from_function(
+                        func=_final,
+                        name=_name,
+                        description=_desc,
+                        args_schema=_schema,
+                    ))
+                logging.info(f"Added {len(HPA_VPA_TOOL_SPECS)} HPA/VPA right-sizing tools for user {user_id}")
+            else:
+                # Say WHY the tools are absent. Silence here is indistinguishable from
+                # "the agent chose not to notify": the right-sizing prompt treats a
+                # missing card tool as an acceptable outcome and still opens the PR, so
+                # a dropped tool surfaces to the user as a PR that never reached Slack
+                # with nothing in the logs to explain it. _safe_connected also returns
+                # False on an exception (Vault blip, token refresh failure), which looks
+                # identical to "not connected" -- hence logging the pair, not a guess.
+                _missing = [n for n, ok in (("Slack", _slack_ok), ("GitHub", _github_ok)) if not ok]
+                logging.warning(
+                    "HPA/VPA right-sizing card tools NOT registered for user %s: %s "
+                    "not connected (or its connectivity check failed). The right-sizing "
+                    "action will still open PRs but cannot post the review card.",
+                    user_id, " and ".join(_missing),
+                )
+    except Exception as e:
+        logging.warning(f"Failed to add HPA/VPA right-sizing tools: {e}")
 
     # Add Jira tools if enabled
     try:

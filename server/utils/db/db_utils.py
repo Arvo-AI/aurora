@@ -1409,6 +1409,76 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_action_runs_action ON action_runs(action_id);
                     CREATE INDEX IF NOT EXISTS idx_action_runs_status ON action_runs(org_id, status);
                 """,
+                # Right-sizing recommendations proposed by the hpa_vpa_rightsizing action.
+                # One live row per (org, workload) while a PR is open; dismissal starts a
+                # cooldown so the action does not re-propose a change a human rejected.
+                #
+                # status values (VARCHAR + documented set, not an ENUM -- there are zero
+                # ENUMs in this module and ALTER TYPE ADD VALUE is transaction-hostile):
+                #   proposed   -- card posted, PR open (at most one per workload)
+                #   dismissed  -- human clicked Dismiss; cooldown_until is running
+                #   merged     -- human merged the PR; accepted, NO cooldown
+                #   closed     -- closed on the VCS by hand, no cooldown
+                #   superseded -- mis-size materially worsened, or a newer rec took over
+                "hpa_vpa_recommendations": """
+                    CREATE TABLE IF NOT EXISTS hpa_vpa_recommendations (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        workload_key VARCHAR(512) NOT NULL,
+                        workload VARCHAR(255) NOT NULL,
+                        environment VARCHAR(128),
+                        service VARCHAR(255),
+                        autoscaler VARCHAR(64),
+                        metrics_source VARCHAR(32),
+                        vcs_provider VARCHAR(32) NOT NULL DEFAULT 'github',
+                        repo_full_name VARCHAR(512),
+                        pr_number INTEGER,
+                        pr_url TEXT,
+                        status VARCHAR(32) NOT NULL DEFAULT 'proposed',
+                        recommendation JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        severity_score NUMERIC,
+                        slack_channel_id VARCHAR(64),
+                        slack_message_ts VARCHAR(64),
+                        action_run_id UUID,
+                        dismissed_by VARCHAR(255),
+                        -- TIMESTAMPTZ, not TIMESTAMP: these are written as
+                        -- aware UTC from Python but compared against NOW() in
+                        -- SQL. A naive column discards the offset on write, so
+                        -- on any session whose TimeZone is not UTC the 30-day
+                        -- cooldown silently drifts by the offset -- long enough
+                        -- to re-nag a workload a human dismissed, or to suppress
+                        -- one for too long.
+                        dismissed_at TIMESTAMPTZ,
+                        cooldown_until TIMESTAMPTZ,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+
+                    -- Legacy naive columns are converted by a separate, guarded
+                    -- migration below (see "hpa_vpa_recommendations timestamp
+                    -- migration"): an unconditional ALTER COLUMN TYPE here would
+                    -- re-run every boot and, on a session whose TimeZone is not
+                    -- UTC, shift every stored cooldown by the offset each time.
+
+                    CREATE INDEX IF NOT EXISTS idx_hpa_vpa_recs_org_workload
+                        ON hpa_vpa_recommendations(org_id, workload_key, created_at DESC);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_hpa_vpa_recs_live
+                        ON hpa_vpa_recommendations(org_id, workload_key) WHERE status = 'proposed';
+                    CREATE INDEX IF NOT EXISTS idx_hpa_vpa_recs_cooldown
+                        ON hpa_vpa_recommendations(org_id, workload_key, cooldown_until)
+                        WHERE cooldown_until IS NOT NULL;
+                    -- Superseded by idx_hpa_vpa_recs_live_pr below. Its predicate
+                    -- covered every status, so a re-proposal pointing at a PR that
+                    -- an earlier dismissal failed to close (a tolerated degraded
+                    -- path) hit a unique violation and lost the whole card post.
+                    -- CREATE ... IF NOT EXISTS cannot redefine an existing index,
+                    -- hence the explicit drop; it is a no-op after the first boot.
+                    DROP INDEX IF EXISTS idx_hpa_vpa_recs_pr;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_hpa_vpa_recs_live_pr
+                        ON hpa_vpa_recommendations(org_id, repo_full_name, pr_number)
+                        WHERE pr_number IS NOT NULL AND status = 'proposed';
+                """,
             }
 
             # List of tables that should have RLS enabled and a policy applied.
@@ -1485,6 +1555,7 @@ def initialize_tables():
             rls_tables.append("postmortem_versions")
             rls_tables.append("artifacts")
             rls_tables.append("artifact_versions")
+            rls_tables.append("hpa_vpa_recommendations")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
@@ -1577,6 +1648,41 @@ def initialize_tables():
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
+
+            # Migration: hpa_vpa_recommendations timestamp migration. The table
+            # shipped with naive TIMESTAMPs but Python writes aware UTC and SQL
+            # compares against NOW(), so a naive column drifts the 30-day cooldown
+            # by the session offset. Guarded on the current column type: an
+            # unconditional ALTER ... TYPE TIMESTAMPTZ USING x AT TIME ZONE 'UTC'
+            # is NOT idempotent -- re-running it on an already-converted column
+            # re-interprets the local rendering as UTC and shifts every stored
+            # cooldown by the offset on every boot.
+            try:
+                cursor.execute("""
+                    DO $$
+                    DECLARE col text;
+                    BEGIN
+                        FOR col IN
+                            SELECT column_name FROM information_schema.columns
+                             WHERE table_schema = current_schema()
+                               AND table_name = 'hpa_vpa_recommendations'
+                               AND column_name IN ('dismissed_at', 'cooldown_until',
+                                                   'created_at', 'updated_at')
+                               AND data_type = 'timestamp without time zone'
+                        LOOP
+                            EXECUTE format(
+                                'ALTER TABLE hpa_vpa_recommendations '
+                                'ALTER COLUMN %I TYPE TIMESTAMPTZ '
+                                'USING %I AT TIME ZONE ''UTC''', col, col);
+                        END LOOP;
+                    END $$;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error converting hpa_vpa_recommendations timestamps to TIMESTAMPTZ: {e}"
+                )
+                conn.rollback()
 
             try:
                 cursor.execute(

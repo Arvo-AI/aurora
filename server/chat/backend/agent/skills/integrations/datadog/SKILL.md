@@ -20,23 +20,99 @@ metadata:
 # Datadog Integration
 
 ## Overview
+
 Datadog integration for querying observability data during Root Cause Analysis. Datadog is a REMOTE service. Use ONLY the `query_datadog` API tool. All data is accessed via a single unified tool with `resource_type` parameter.
 
 ## Instructions
 
 ### Tool Usage
-`query_datadog(resource_type=TYPE, query=QUERY, time_from=START, time_to=END, limit=N)`
+
+`query_datadog(resource_type=TYPE, query=QUERY, time_from=START, time_to=END, limit=N, interval=MS)`
 
 ### Resource Types
+
 1. `'logs'` -- Search log entries. query=Datadog log query syntax e.g. `"service:web status:error"`
-2. `'metrics'` -- Query metric timeseries. query=metric query e.g. `"avg:system.cpu.user{*}"`
-3. `'monitors'` -- List monitors with status. query=name filter (optional)
-4. `'events'` -- Platform events. query=source filter (optional)
-5. `'traces'` -- APM spans/traces. query=span query e.g. `"service:web @http.status_code:500"`
-6. `'hosts'` -- Infrastructure hosts. query=host filter (optional)
-7. `'incidents'` -- Datadog incidents. Lists active/recent incidents (requires Incident Management; may 403 if not enabled).
+2. `'metrics'` -- Query metric timeseries (raw points). query=metric query e.g. `"avg:system.cpu.user{*}"`
+3. `'metric_stats'` -- Percentile summary per series (p50/p95/p99/max/mean). Same metric query
+   syntax as `'metrics'`, but returns one compact row per series instead of raw points.
+   Use this for capacity and right-sizing questions over long windows.
+4. `'monitors'` -- List monitors with status. query=name filter (optional)
+5. `'events'` -- Platform events. query=source filter (optional)
+6. `'traces'` -- APM spans/traces. query=span query e.g. `"service:web @http.status_code:500"`
+7. `'hosts'` -- Infrastructure hosts. query=host filter (optional)
+8. `'incidents'` -- Datadog incidents. Lists active/recent incidents (requires Incident Management; may 403 if not enabled).
+
+### The `interval` Parameter
+
+`interval` is the rollup granularity in **milliseconds**, and applies to `'metrics'` and
+`'metric_stats'`. Omit it and a granularity is auto-picked that keeps each series under
+~1000 points -- a 30-day window auto-picks `3600000` (1 hour, 720 points). Values are
+clamped to `60000`..`14400000`. Datadog caps a series at 1500 points, so a long window
+with a fine interval returns less than you asked for; prefer the auto-pick.
+
+### Percentiles
+
+**Datadog cannot compute a time-percentile.** Do not attempt any of these -- every one
+is rejected or silently empty:
+- `.rollup(percentile, 95, 3600)` and `.rollup(p95, 3600)` -- `400 Unrecognized rollup method`.
+  `.rollup()` accepts only `avg`, `sum`, `min`, `max`, `count`.
+- `p95:my.metric{...}` -- returns `200` with **zero series** for gauges. The `pXX:` prefix
+  needs *distribution* metrics; `kubernetes.cpu.usage.total` and `kubernetes.memory.usage`
+  are gauges, so it can never apply to them.
+- `formula: "p95(a)"` -- `400 function "p95()" does not exist`.
+- `formula: "percentile(a, 95, 3600)"` -- `percentile()` exists but is a **space** aggregator:
+  arguments 2 and 3 are *group tags*, not a percentile value and window.
+- scalar `aggregator: "percentile"` or `"p95"` -- `400`.
+
+Use `resource_type='metric_stats'` instead. It fetches the rolled-up points and computes
+percentiles server-side, using **nearest-rank** order statistics -- so every reported p95
+is a value that actually occurred and a reviewer can find it in the Datadog UI.
+
+Each row carries `points` and `nulls`. **Always check them.** Datadog emits nulls for gaps,
+and a row with `p95: null` plus a `note` means *no data*, which is not the same as *low
+usage* -- never treat an empty series as an idle workload.
+
+A row may also carry `malformed_response: true` (with `malformed_series` at the top level).
+That means Datadog described a series but returned no values for it. It is a broken response,
+**not** an idle workload -- re-run rather than concluding anything from it.
+
+### Units -- read the `unit` field before any arithmetic
+
+Every row carries `unit`. Container CPU and memory are reported in different units, and
+mixing them up produces a wrong number that still looks plausible:
+
+- `kubernetes.cpu.usage.total` is a gauge in **nanocores**. Divide by `1e9` for cores, then
+  x1000 for millicores, before comparing against a `500m`-style request. Comparing raw
+  nanocores against millicores is a ~1,000,000x error.
+- `kubernetes.memory.usage` is a gauge in **bytes**. No scaling is needed; convert to Mi/Gi
+  for display only.
+- In a **ratio**, the numerator and denominator must be in the same unit. A CPU
+  usage/limits ratio built from nanocore usage needs the `/1e9`; a memory bytes/bytes ratio
+  does not. A ratio whose two sides disagree on units is silently meaningless.
+
+Ratio and scaling expressions work in a single `query` -- both of these are accepted:
+
+```text
+sum:kubernetes.cpu.usage.total{...} by {kube_deployment} / 1e9
+(sum:kubernetes.cpu.usage.total{...} by {kube_deployment} / 1e9) / sum:kubernetes.cpu.limits{...} by {kube_deployment}
+```
+
+Also keep **requests** and **limits** distinct: saturation monitors usually measure usage
+against *limits*, while right-sizing changes *requests*. Requests drive scheduling and cost;
+limits drive throttling and OOM-kills. Say which field any number refers to.
+
+### Reconciliation vs Sizing
+
+These are two different questions and must not be conflated:
+- **Reconciliation** -- "does our view match the team's?" Read the org's own monitor
+  definitions with `resource_type='monitors'` to get their real `query` strings and
+  `options.thresholds`, then reproduce that formula exactly. This tells you which
+  workloads run hot. It is *not* the basis of any recommended number.
+- **Sizing** -- "what should this value be?" Use `resource_type='metric_stats'` for the
+  usage distribution over the window. Never derive a sizing number from a monitor threshold.
 
 ### Datadog Query Syntax
+
 - Filter by service: `service:X`
 - Filter by status: `status:error`
 - HTTP status codes: `@http.status_code:5*`
@@ -44,8 +120,11 @@ Datadog integration for querying observability data during Root Cause Analysis. 
 - Filter by environment: `env:production`
 
 ### Examples
+
 - Logs: `query_datadog(resource_type='logs', query='service:web status:error', time_from='-1h')`
 - Metrics: `query_datadog(resource_type='metrics', query='avg:system.cpu.user{*}', time_from='-2h')`
+- Metric stats (30-day p95 per deployment, one query for all of them):
+  `query_datadog(resource_type='metric_stats', query='sum:kubernetes.memory.usage{env:production} by {kube_deployment}', time_from='-30d')`
 - Traces: `query_datadog(resource_type='traces', query='service:web @http.status_code:500', time_from='-1h')`
 - Monitors: `query_datadog(resource_type='monitors', query='web')`
 
@@ -70,8 +149,14 @@ Datadog integration for querying observability data during Root Cause Analysis. 
 `query_datadog(resource_type='incidents')`
 
 ## Important Rules
+
 - Datadog is a REMOTE service. Use ONLY the `query_datadog` API tool.
-- The `resource_type` parameter is required and must be one of: logs, metrics, monitors, events, traces, hosts, incidents.
+- The `resource_type` parameter is required and must be one of: logs, metrics, metric_stats, monitors, events, traces, hosts, incidents.
 - Time parameters accept relative strings (`'-1h'`, `'-24h'`, `'-7d'`) or ISO 8601 timestamps.
 - The `incidents` resource type requires Datadog Incident Management to be enabled; may return 403 if not.
 - Results are truncated at the output size limit. Use more specific queries to narrow results.
+- Never reason from a truncated result set. If a response carries `truncated`, `truncated_all`,
+  `series_truncated` or `series_dropped`, narrow the query and re-run before drawing a conclusion.
+- Group with `by {tag}` rather than issuing one query per workload -- a single grouped query
+  returns every deployment at once. A 30-day multi-group query is close to the request timeout,
+  so query one environment at a time.

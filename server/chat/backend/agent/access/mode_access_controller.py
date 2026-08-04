@@ -42,6 +42,15 @@ class ModeAccessController:
         "mcp_get_pull_request",
     }
     
+    # Non-prefixed tools that write and are therefore denied in Ask mode.
+    # One definition, consulted by both filter_tools and is_tool_allowed -- the
+    # two checks must agree, and duplicated literals are how they drift.
+    WRITE_TOOLS_BLOCKED_IN_ASK_MODE = frozenset({
+        "iac_tool",
+        "github_commit",
+        "send_hpa_vpa_recommendation",
+    })
+
     _POLICY = ReadOnlyPolicy(
         safe_tool_names=(
             "web_search",
@@ -85,7 +94,7 @@ class ModeAccessController:
                 LOGGER.info("ModeAccessController dropped tool %s due to read-only mode prefix match", name)
                 continue
 
-            if name in {"iac_tool", "github_commit"}:
+            if name in cls.WRITE_TOOLS_BLOCKED_IN_ASK_MODE:
                 LOGGER.info("ModeAccessController dropped tool %s for read-only mode", name)
                 continue
 
@@ -134,7 +143,7 @@ class ModeAccessController:
         if any(name.startswith(prefix) for prefix in cls._POLICY.blocked_tool_prefixes):
             return False
 
-        return name not in {"iac_tool", "github_commit"}
+        return name not in cls.WRITE_TOOLS_BLOCKED_IN_ASK_MODE
 
 
 __all__ = ["ModeAccessController"]
