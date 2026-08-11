@@ -986,19 +986,20 @@ async def handle_connection(websocket) -> None:
         # Main message loop. Will run each time a message is received from the frontend (aka sent by the user)
         async for message in websocket:
             session_id = None
+            data = json.loads(message)
+            session_id = data.get('session_id')
 
             # Rate limit check
             if not rate_limiter.is_allowed(client_id):
                 logger.warning(f"Rate limit exceeded for client {client_id}")
                 await websocket.send(json.dumps({
                     "type": "error",
+                    "session_id": session_id,
                     "data": {"text": f"Rate limit exceeded. Please wait and try again."},
                 }))
                 continue
 
             logger.debug(f"Received message from client {client_id}: {message}")
-            data = json.loads(message)
-            session_id = data.get('session_id')
 
             # Handle connection initialization for the websocket
             if data.get('type') == 'init':
