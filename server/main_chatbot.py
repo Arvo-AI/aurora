@@ -985,6 +985,8 @@ async def handle_connection(websocket) -> None:
     try:
         # Main message loop. Will run each time a message is received from the frontend (aka sent by the user)
         async for message in websocket:
+            session_id = None
+
             # Rate limit check
             if not rate_limiter.is_allowed(client_id):
                 logger.warning(f"Rate limit exceeded for client {client_id}")
@@ -996,6 +998,7 @@ async def handle_connection(websocket) -> None:
 
             logger.debug(f"Received message from client {client_id}: {message}")
             data = json.loads(message)
+            session_id = data.get('session_id')
 
             # Handle connection initialization for the websocket
             if data.get('type') == 'init':
@@ -1163,7 +1166,6 @@ async def handle_connection(websocket) -> None:
             logger.info(f"Processing question: {question}")
             
             user_id = data.get('user_id')  # Extract user_id from the incoming data
-            session_id = data.get('session_id')  # Extract session_id from the incoming data
 
             # Server-side validation: token identity is authoritative when present.
             if current_user_id:
@@ -1471,8 +1473,8 @@ async def handle_connection(websocket) -> None:
                     }))
                     continue  # Skip processing this message
 
-            except Exception as e:
-                logger.error(f"Error counting input tokens: {e}")
+            except Exception:
+                logger.exception("Error counting input tokens")
                 # Block processing if token counting fails for safety
                 await websocket.send(json.dumps({
                     "type": "error",
