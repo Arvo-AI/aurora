@@ -41,7 +41,7 @@ Connects directly to each provider's native API. Use this when running models lo
 LLM_PROVIDER_MODE=direct
 ```
 
-In direct mode, Aurora auto-detects the provider from the model name prefix (e.g., `anthropic/claude-3-haiku` routes to Anthropic, `google/gemini-3.5-flash` routes to Google AI).
+In direct mode, Aurora auto-detects the provider from the model name prefix (e.g., `anthropic/claude-3-haiku` routes to Anthropic, `google/gemini-3.6-flash` routes to Google AI).
 
 ### Provider Mode (route everything through one provider)
 
@@ -73,12 +73,16 @@ A clean pick like **Claude Opus 4.7** is then translated to that provider's nati
 | | `anthropic/claude-haiku-4.5` | Fast, affordable |
 | | `anthropic/claude-3.5-sonnet` | Widely used, reliable |
 | | `anthropic/claude-3-haiku` | Cheapest (default RCA model) |
-| **Google Gemini** | `google/gemini-3.5-flash` | Fast, cost-effective with thinking |
-| | `google/gemini-3.1-pro-preview` | Latest flagship with thinking |
+| **Google Gemini** | `google/gemini-3.6-flash` | Latest Flash — agentic workflows, coding, multimodal (thinking) |
+| | `google/gemini-3.5-flash-lite` | Fastest, lowest-cost — high-throughput and guardrails |
+| | `google/gemini-3.5-flash` | Previous Flash generation (still supported in env vars) |
+| | `google/gemini-3.1-pro-preview` | Strong reasoning with thinking |
 | | `google/gemini-2.5-pro` | Strong for complex tasks |
-| | `google/gemini-2.5-flash` | Cost-effective |
-| **Vertex AI** | `vertex/gemini-3.5-flash` | Fast, cost-effective with thinking |
-| | `vertex/gemini-3.1-pro-preview` | Latest flagship with thinking |
+| | `google/gemini-2.5-flash` | Cost-effective legacy Flash |
+| **Vertex AI** | `vertex/gemini-3.6-flash` | Latest Flash — agentic workflows, coding, multimodal (thinking) |
+| | `vertex/gemini-3.5-flash-lite` | Fastest, lowest-cost — high-throughput and guardrails |
+| | `vertex/gemini-3.5-flash` | Previous Flash generation (still supported in env vars) |
+| | `vertex/gemini-3.1-pro-preview` | Strong reasoning with thinking |
 | | `vertex/gemini-2.5-pro` | Strong for complex tasks |
 | | `vertex/gemini-2.5-flash` | Cost-effective with IAM auth |
 | **Ollama** | `ollama/llama3.1` | Meta's Llama 3.1 (8B/70B) |
@@ -166,9 +170,14 @@ LLM_PROVIDER_MODE=vertex
 **Optional configuration:**
 
 ```bash
-# Disable thinking mode for Gemini models (reduces latency, lowers token usage)
+# Disable thinking mode for Gemini models (reduces latency, lowers token usage).
+# Recommended for Vertex deployments — Gemini on Vertex is notably slower with thinking enabled.
 GEMINI_DISABLE_THINKING=true
 ```
+
+:::note Gemini model IDs on Vertex
+Use the stable model IDs exactly as listed above (e.g. `gemini-3.6-flash`, `gemini-3.5-flash-lite`). Both are GA on Vertex as of July 2026. Flash-Lite models do not use thinking mode — Aurora skips thinking config for any `*-flash-lite` model automatically.
+:::
 
 ### Ollama (Local Models)
 
@@ -276,11 +285,16 @@ RCA_MODEL=anthropic/claude-haiku-4.5
 # OpenAI
 RCA_MODEL=openai/gpt-4o
 
-# Google AI
-RCA_MODEL=google/gemini-3.5-flash
+# Google AI — recommended for RCA when using Gemini
+RCA_MODEL=google/gemini-3.6-flash
 
-# Vertex AI
-RCA_MODEL=vertex/gemini-3.5-flash
+# Vertex AI — recommended for RCA when LLM_PROVIDER_MODE=vertex
+RCA_MODEL=vertex/gemini-3.6-flash
+
+# Low-cost guardrails / high-throughput workloads
+GUARDRAILS_LLM_MODEL=google/gemini-3.5-flash-lite
+# or on Vertex:
+GUARDRAILS_LLM_MODEL=vertex/gemini-3.5-flash-lite
 
 # Ollama (local)
 RCA_MODEL=ollama/llama3.1

@@ -36,12 +36,18 @@ class ChatContextManager:
         "anthropic/claude-opus-4.6": 950000,  # 1M - 50K buffer
         "anthropic/claude-opus-4.5": 180000,  # 200K - 20K buffer
         "anthropic/claude-3-haiku": 180000,  # 200K - 20K buffer
+        "google/gemini-3.6-flash": 1000000,  # 1M context
+        "google/gemini-3.5-flash-lite": 1000000,  # 1M context
+        "google/gemini-3.5-flash": 1000000,  # 1M context
         "google/gemini-3.1-pro-preview": 1000000,  # 1M context
-        "google/gemini-3-flash": 1000000,  # 1M context
+        "google/gemini-3-flash": 1000000,  # legacy alias for 3.5-flash
         "google/gemini-2.5-pro": 1000000,  # 1M context
         "google/gemini-2.5-flash": 1000000,  # 1M context
+        "vertex/gemini-3.6-flash": 1000000,  # 1M context
+        "vertex/gemini-3.5-flash-lite": 1000000,  # 1M context
+        "vertex/gemini-3.5-flash": 1000000,  # 1M context
         "vertex/gemini-3.1-pro-preview": 1000000,  # 1M context
-        "vertex/gemini-3-flash": 1000000,  # 1M context
+        "vertex/gemini-3-flash": 1000000,  # legacy alias for 3.5-flash
         "vertex/gemini-2.5-pro": 1000000,  # 1M context
         "vertex/gemini-2.5-flash": 1000000,  # 1M context
         # Bedrock-hosted Claude (same models/windows as the direct Anthropic entries above)

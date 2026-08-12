@@ -47,7 +47,8 @@ The safety judge and input rail share the same provider abstraction as the rest 
 
 When `GUARDRAILS_LLM_MODEL` is unset, Aurora picks a default based on `LLM_PROVIDER_MODE`:
 
-- `openrouter` -> `google/gemini-2.5-flash-lite` (small and cheap, keeps per-message cost predictable).
+- `openrouter` -> `google/gemini-3.5-flash-lite` (small and cheap, keeps per-message cost predictable).
+- `vertex` -> `vertex/gemini-3.5-flash-lite` (same rationale when routing through Vertex).
 - Anything else -> `MAIN_MODEL` (the same model the chat agent uses).
 
 ```bash
@@ -61,7 +62,9 @@ Typical choices:
 |-------|-------|
 | `openai/gpt-4o-mini` | Good balance of speed and quality |
 | `anthropic/claude-haiku-4.5` | Strong reasoning at low cost |
-| `google/gemini-2.5-flash-lite` | Lowest cost (OpenRouter default) |
+| `google/gemini-3.5-flash-lite` | Lowest cost Gemini (OpenRouter / Vertex default) |
+| `vertex/gemini-3.5-flash-lite` | Same model via Vertex IAM auth |
+| `google/gemini-2.5-flash-lite` | Legacy lite option |
 | `ollama/llama3.1:8b` | Free, local (requires `OLLAMA_BASE_URL`) |
 
 :::warning Use a non-reasoning model
@@ -73,7 +76,7 @@ The safety judge is a binary Yes/No classifier. **Reasoning models** (e.g. `gpt-
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GUARDRAILS_ENABLED` | `true` | Master switch for the input rail, signature matcher, and LLM judge. When enabled (default), all three run and every LLM check fails closed on error. Set to `false` to disable them. Does not affect the org command policy. |
-| `GUARDRAILS_LLM_MODEL` | _(provider-dependent)_ | Model used by the safety judge and input rail. When unset, defaults to `google/gemini-2.5-flash-lite` under `LLM_PROVIDER_MODE=openrouter`, otherwise falls back to `MAIN_MODEL`. Same format and routing as `MAIN_MODEL`. |
+| `GUARDRAILS_LLM_MODEL` | _(provider-dependent)_ | Model used by the safety judge and input rail. When unset, defaults to `google/gemini-3.5-flash-lite` under `LLM_PROVIDER_MODE=openrouter`, `vertex/gemini-3.5-flash-lite` under `LLM_PROVIDER_MODE=vertex`, otherwise falls back to `MAIN_MODEL`. Same format and routing as `MAIN_MODEL`. |
 | `GUARDRAILS_SIGMA_ENABLED` | `true` | Gates the SigmaHQ rule corpus on top of the hand-written signatures. Requires `GUARDRAILS_ENABLED=true`. Set to `false` to run only the hand-written rules. |
 
 ## Block responses

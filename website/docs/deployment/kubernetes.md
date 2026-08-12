@@ -57,8 +57,9 @@ The key values you'll set during deployment:
 config:
   LLM_PROVIDER_MODE: "openrouter"  # or "vertex", "anthropic", "openai", "bedrock"
   # For non-OpenRouter providers, also set:
-  # MAIN_MODEL: "vertex/gemini-2.5-pro"
-  # RCA_MODEL: "vertex/gemini-2.5-flash"
+  # MAIN_MODEL: "vertex/gemini-3.6-flash"
+  # RCA_MODEL: "vertex/gemini-3.6-flash"
+  # GUARDRAILS_LLM_MODEL: "vertex/gemini-3.5-flash-lite"
 secrets:
   llm:
     OPENROUTER_API_KEY: ""  # or OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
@@ -188,8 +189,9 @@ config:
   STORAGE_REGION: "us-east-1"
   LLM_PROVIDER_MODE: "openrouter"     # see "LLM provider" above
   # For non-OpenRouter providers, uncomment and set:
-  # MAIN_MODEL: "vertex/gemini-2.5-pro"
-  # RCA_MODEL: "vertex/gemini-2.5-flash"
+  # MAIN_MODEL: "vertex/gemini-3.6-flash"
+  # RCA_MODEL: "vertex/gemini-3.6-flash"
+  # GUARDRAILS_LLM_MODEL: "vertex/gemini-3.5-flash-lite"
 
 secrets:
   db:
