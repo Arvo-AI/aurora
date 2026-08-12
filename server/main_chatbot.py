@@ -330,6 +330,29 @@ def create_websocket_sender(websocket, user_id, session_id):
     return sender
 
 
+def _friendly_workflow_error(e: Exception) -> str:
+    """Map a workflow exception to a user-facing message.
+
+    Model/provider failures are common now that the selector exposes the full
+    OpenRouter catalog (many models reject requests, are gated, or are down).
+    Surface an actionable message pointing at the model choice instead of the
+    generic "try again", which doesn't help when the model itself is the problem.
+    """
+    text = str(e).lower()
+    model_signals = (
+        "model", "not a valid", "not supported", "no endpoints",
+        "does not exist", "invalid model", "provider", "openrouter",
+        "unsupported", "not found", "404", "400",
+    )
+    if any(s in text for s in model_signals):
+        return (
+            "The selected model isn't available or rejected this request "
+            "(it may be unsupported, gated, or temporarily down). "
+            "Try selecting a different model."
+        )
+    return "A workflow error occurred. Please try again."
+
+
 async def process_workflow_async(wf, state, websocket, user_id, incident_id=None):
     curr_node = "START"
     sent_message_count = 0
@@ -865,7 +888,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         if websocket_connected:
             error_msg = {
                 "type": "error",
-                "data": {"text": "A workflow error occurred. Please try again."},
+                "data": {"text": _friendly_workflow_error(e)},
             }
             if hasattr(state, 'session_id') and state.session_id:
                 error_msg["session_id"] = state.session_id

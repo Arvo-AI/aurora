@@ -7,7 +7,9 @@ This provider maintains backward compatibility with the existing Aurora setup.
 
 import logging
 import os
+import time
 
+import requests
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
@@ -24,6 +26,12 @@ class OpenRouterProvider(BaseLLMProvider):
         super().__init__()
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.base_url = "https://openrouter.ai/api/v1"
+        # Cache the live model catalog (OpenRouter serves hundreds) for 10 min so
+        # the selector endpoint doesn't hit the network on every request.
+        self._models_cache: list[str] | None = None
+        self._models_cache_time: float = 0.0
+        # TTL of the current cache entry: long on success, short on failure fallback.
+        self._cache_ttl: float = 600.0
 
     def get_chat_model(
         self, model: str, temperature: float = 0.4, **kwargs
@@ -97,5 +105,46 @@ class OpenRouterProvider(BaseLLMProvider):
         return ModelMapper.get_native_name(model, "openrouter")
 
     def get_supported_models(self) -> list[str]:
-        """Get list of all models available via OpenRouter."""
-        return ModelMapper.get_supported_models_for_provider("openrouter")
+        """Get the list of models available via OpenRouter.
+
+        Fetches OpenRouter's live ``/models`` catalog (hundreds of models across
+        every upstream provider), cached for 10 minutes. Falls back to the
+        statically mapped set if the API is unreachable or the key is unset, so
+        the selector always has something to show.
+        """
+        now = time.time()
+        # Success is cached 10 min; a failure fallback is cached briefly (below)
+        # so a down/slow /models doesn't re-incur the 5s timeout on every request.
+        if self._models_cache is not None and (now - self._models_cache_time) < self._cache_ttl:
+            return self._models_cache
+
+        mapped = ModelMapper.get_supported_models_for_provider("openrouter")
+        if not self.api_key:
+            return mapped
+
+        def _cache(models: list[str], ttl: float) -> list[str]:
+            self._models_cache = models
+            self._models_cache_time = now
+            self._cache_ttl = ttl
+            return models
+
+        try:
+            resp = requests.get(
+                f"{self.base_url}/models",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                data = resp.json().get("data", [])
+                # OpenRouter ids are already in "provider/model" form.
+                live = [m["id"] for m in data if m.get("id")]
+                if live:
+                    return _cache(live, 600)  # 10 min on success
+            else:
+                logger.warning("OpenRouter /models returned %s", resp.status_code)
+        except Exception as e:
+            logger.warning("Failed to fetch OpenRouter models: %s", e)
+
+        # Cache the fallback for 60s so repeated selector loads during an
+        # OpenRouter outage don't each block on the timeout; retried after.
+        return _cache(mapped, 60)

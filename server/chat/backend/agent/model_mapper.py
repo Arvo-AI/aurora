@@ -10,8 +10,28 @@ The mapper supports bidirectional translation and automatic provider detection.
 
 from typing import Dict, Optional, Tuple
 
+# The dot and dash spellings of a model are the same mapping; define once and
+# reference under both alias keys (avoids repeating the identical dict/literals).
+_OPUS_4_8 = {
+    "openrouter": "anthropic/claude-opus-4.8",
+    "anthropic": "claude-opus-4-8",
+    "provider": "anthropic",
+}
+
 # Model name mappings from OpenRouter format to native provider formats
 MODEL_MAPPINGS = {
+    "anthropic/claude-opus-4.8": _OPUS_4_8,
+    "anthropic/claude-opus-4-8": _OPUS_4_8,
+    "anthropic/claude-sonnet-5": {
+        "openrouter": "anthropic/claude-sonnet-5",
+        "anthropic": "claude-sonnet-5",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-fable-5": {
+        "openrouter": "anthropic/claude-fable-5",
+        "anthropic": "claude-fable-5",
+        "provider": "anthropic",
+    },
     "openai/gpt-5.5": {
         "openrouter": "openai/gpt-5.5",
         "openai": "gpt-5.5",
