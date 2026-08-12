@@ -9,10 +9,12 @@ import pytest
 
 from services.change_gating.github_adapter import (
     GitHubPRAdapter,
-    decode_marker,
-    encode_marker,
     find_aurora_reviews,
     find_latest_aurora_review,
+)
+from services.change_gating.markers import (
+    decode_marker,
+    encode_marker,
     has_aurora_marker,
 )
 

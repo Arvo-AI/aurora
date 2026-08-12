@@ -339,17 +339,28 @@ def _try_auto_create_hook(
     recorded too, so disable/disconnect can still delete it).
     """
     def _store_hook_uuid(hook_uuid: str) -> None:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:hook]")
-                cur.execute(
-                    """UPDATE connected_repos
-                          SET webhook_hook_uuid = %s, updated_at = NOW()
-                        WHERE org_id = %s AND provider = 'bitbucket'
-                          AND repo_full_name = %s""",
-                    (hook_uuid, org_id, repo_full_name),
-                )
-                conn.commit()
+        # Isolated: by this point the hook EXISTS on Bitbucket, so a DB blip
+        # here must not flip the return to False (which would tell the admin
+        # to create a second hook manually). The cost of a lost uuid is only
+        # that disable/disconnect can't auto-delete this hook later.
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:hook]")
+                    cur.execute(
+                        """UPDATE connected_repos
+                              SET webhook_hook_uuid = %s, updated_at = NOW()
+                            WHERE org_id = %s AND provider = 'bitbucket'
+                              AND repo_full_name = %s""",
+                        (hook_uuid, org_id, repo_full_name),
+                    )
+                    conn.commit()
+        except Exception:
+            logger.warning(
+                "Bitbucket hook created for %s but uuid persistence failed — "
+                "automatic hook deletion on disable will not work for this repo",
+                _sanitize_log(repo_full_name),
+            )
 
     try:
         from chat.backend.agent.tools.bitbucket.utils import get_bb_client_for_user

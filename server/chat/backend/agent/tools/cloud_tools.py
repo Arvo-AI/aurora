@@ -2418,9 +2418,12 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
             # bitbucket_fix needs forced context (incident_id injection) like
             # github_fix, and like github_fix it is RCA-card-only: outside a
-            # background RCA there is no incident card to review the fix in
-            # (and the PR review surface is read-only), so it is withheld.
-            if _is_rca_background:
+            # background RCA there is no incident card to review the fix in.
+            # The explicit `not is_pr_review` is defense in depth — the
+            # read-only review surface must never see a write-capable tool
+            # even if a future trigger path sets both flags.
+            _bb_fix_registered = _is_rca_background and not is_pr_review
+            if _bb_fix_registered:
                 _bb_fix_ctx = with_forced_context(bitbucket_fix)
                 _bb_fix_notif = with_completion_notification(_bb_fix_ctx)
                 _bb_fix_final = wrap_func_with_capture(_bb_fix_notif, "bitbucket_fix") if tool_capture else _bb_fix_notif
@@ -2443,8 +2446,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     args_schema=BitbucketFixArgs,
                 ))
             logging.info(
-                f"Added {len(_bb_tools) + (1 if _is_rca_background else 0)} Bitbucket tools for user "
-                f"{user_id} (rca_background={_is_rca_background}, pr_review={is_pr_review})"
+                "Added %s Bitbucket tools for user %s (rca_background=%s, pr_review=%s)",
+                len(_bb_tools) + (1 if _bb_fix_registered else 0),
+                user_id, _is_rca_background, is_pr_review,
             )
     except Exception as e:
         logging.warning(f"Failed to add Bitbucket tools: {e}")
@@ -2905,8 +2909,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     )
                 ]
                 logging.info(
-                    f"PR review: withheld {before - len(real_mcp_tools)} "
-                    f"destructive MCP tools for user {user_id}"
+                    "PR review: withheld %s destructive MCP tools for user %s",
+                    before - len(real_mcp_tools), user_id,
                 )
             mcp_tools = create_mcp_langchain_tools(
                 real_mcp_tools,

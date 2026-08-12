@@ -14,12 +14,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from services.change_gating.diff_utils import build_per_file_diff, format_changed_files
-from services.change_gating.markers import (  # noqa: F401 — finding_fingerprint/extract_inline_fingerprint re-exported for existing importers
-    encode_marker,
-    extract_inline_fingerprint,
-    finding_fingerprint,
-    inline_marker,
-)
+from services.change_gating.markers import encode_marker, inline_marker
 
 logger = logging.getLogger(__name__)
 

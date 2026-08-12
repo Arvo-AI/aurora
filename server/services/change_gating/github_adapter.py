@@ -21,11 +21,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from services.change_gating.markers import (  # noqa: F401 — re-exported: callers import marker helpers from here
-    decode_marker,
-    encode_marker,
-    has_aurora_marker,
-)
+from services.change_gating.markers import has_aurora_marker
 from utils.auth.github_app_token import get_installation_token
 from utils.auth.log_redact import redact_token
 

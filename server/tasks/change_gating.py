@@ -243,7 +243,7 @@ def _live_fingerprints(comments: Optional[list], aurora_review_ids: set) -> set[
     avoid re-posting a finding that already has a live comment — never to
     delete anything.
     """
-    from services.change_gating.verdict import extract_inline_fingerprint
+    from services.change_gating.markers import extract_inline_fingerprint
 
     fingerprints: set[str] = set()
     for comment in comments or []:
@@ -622,10 +622,10 @@ def _run_investigation_core(
         anchor_findings,
         parse_diff_hunks,
     )
+    from services.change_gating.markers import finding_fingerprint
     from services.change_gating.verdict import (
         build_review_prompt,
         extract_verdict_with_llm,
-        finding_fingerprint,
         parse_verdict,
         render_inline_comment,
         render_review_body,

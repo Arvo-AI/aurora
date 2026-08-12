@@ -135,8 +135,8 @@ def gating_env(monkeypatch):
         "utils.cache.redis_client.get_redis_client", lambda: redis,
     )
 
-    import tasks.change_gating as cg
-    monkeypatch.setattr(cg.investigate_bitbucket_pr, "delay", delay)
+    from tasks.change_gating import investigate_bitbucket_pr
+    monkeypatch.setattr(investigate_bitbucket_pr, "delay", delay)
 
     return state, redis, delay
 
