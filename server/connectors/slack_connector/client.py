@@ -3,14 +3,19 @@ Slack API client for sending and reading messages.
 Uses the stored access_token from OAuth to interact with Slack workspace.
 """
 
+import asyncio
 import logging
 import time
 import requests
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Iterator, List, Optional
 
 logger = logging.getLogger(__name__)
 
 SLACK_API_BASE = "https://slack.com/api"
+
+# Safety cap: never accumulate more than this many channels in a single
+# list_bot_channels() call. Prevents OOM eviction on large Slack workspaces.
+_MAX_CHANNELS_DEFAULT = 5000
 
 
 class SlackClient:
@@ -39,6 +44,35 @@ class SlackClient:
             delay = fallback
         return min(delay, 30)
 
+    @staticmethod
+    def _sleep(seconds: float) -> None:
+        """
+        Sleep without blocking gunicorn gthread workers.
+
+        In gunicorn's gthread mode each worker thread handles one request at a
+        time.  A bare time.sleep() on a 429 retry holds the thread for up to
+        30 s, causing request queuing that amplifies memory pressure.
+
+        When called from inside a running asyncio event loop (e.g. an async
+        route or background task) we schedule the coroutine on that loop so
+        other coroutines can run during the wait.  In a pure-sync context we
+        fall back to time.sleep().
+        """
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None and loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(asyncio.sleep(seconds), loop)
+            try:
+                future.result(timeout=seconds + 5)
+            except Exception:
+                # Fallback: if the future fails for any reason, just sleep
+                time.sleep(seconds)
+        else:
+            time.sleep(seconds)
+
     def _validate_response(self, result: Dict[str, Any], endpoint: str) -> Dict[str, Any]:
         """Check Slack's ok field; raise ValueError on API-level errors."""
         if result.get('ok', False):
@@ -62,7 +96,7 @@ class SlackClient:
                 if response.status_code == 429 and attempt < max_retries:
                     retry_after = self._get_retry_delay(attempt, response)
                     logger.warning("Rate limited on %s, retrying in %ds (attempt %d/%d)", endpoint, retry_after, attempt + 1, max_retries)
-                    time.sleep(retry_after)
+                    self._sleep(retry_after)
                     continue
 
                 response.raise_for_status()
@@ -72,7 +106,7 @@ class SlackClient:
                 if attempt < max_retries and "429" in str(e):
                     retry_after = self._get_retry_delay(attempt)
                     logger.warning("Rate limited on %s, retrying in %ds (attempt %d/%d)", endpoint, retry_after, attempt + 1, max_retries)
-                    time.sleep(retry_after)
+                    self._sleep(retry_after)
                     continue
                 logger.exception("Request to Slack API failed on %s", endpoint)
                 raise ValueError(f"Failed to communicate with Slack: {e}") from e
@@ -104,24 +138,53 @@ class SlackClient:
     def set_channel_topic(self, channel: str, topic: str) -> Dict[str, Any]:
         """Set channel topic/description."""
         return self._make_request("POST", "conversations.setTopic", {"channel": channel, "topic": topic})
-    
-    def list_bot_channels(self, types: str = "public_channel,private_channel") -> List[Dict[str, Any]]:
-        """List channels the bot is a member of (much smaller set than all visible channels)."""
-        all_channels = []
+
+    def iter_bot_channel_pages(self, types: str = "public_channel,private_channel") -> Iterator[List[Dict[str, Any]]]:
+        """
+        Yield one page of bot-member channels at a time.
+
+        Prefer this over list_bot_channels() when callers only need to scan
+        channels sequentially — it avoids materialising the full list in memory.
+        """
         cursor = None
-        
         while True:
-            data = {"types": types, "exclude_archived": True, "limit": 200}
+            data: Dict[str, Any] = {"types": types, "exclude_archived": True, "limit": 200}
             if cursor:
                 data["cursor"] = cursor
-            
+
             result = self._make_request("GET", "users.conversations", data)
-            channels = result.get('channels', [])
-            all_channels.extend(channels)
-            
-            cursor = result.get('response_metadata', {}).get('next_cursor')
+            page = result.get("channels", [])
+            if page:
+                yield page
+
+            cursor = result.get("response_metadata", {}).get("next_cursor")
             if not cursor:
                 break
+
+    def list_bot_channels(
+        self,
+        types: str = "public_channel,private_channel",
+        max_channels: int = _MAX_CHANNELS_DEFAULT,
+    ) -> List[Dict[str, Any]]:
+        """
+        List channels the bot is a member of, capped at *max_channels*.
+
+        The cap prevents OOM eviction on large Slack workspaces where
+        unbounded pagination can accumulate 1-2 GiB of channel data in the
+        gunicorn worker heap (incident 2f9b42d9, 2026-06-17).
+
+        For callers that only need to iterate channels without building a full
+        list, use iter_bot_channel_pages() instead.
+        """
+        all_channels: List[Dict[str, Any]] = []
+        for page in self.iter_bot_channel_pages(types=types):
+            all_channels.extend(page)
+            if len(all_channels) >= max_channels:
+                logger.warning(
+                    "list_bot_channels: reached max_channels cap (%d); truncating result",
+                    max_channels,
+                )
+                return all_channels[:max_channels]
         return all_channels
     
     def create_channel(self, name: str, is_private: bool = False) -> Dict[str, Any]:
