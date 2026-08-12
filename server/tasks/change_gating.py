@@ -100,10 +100,6 @@ class _PermanentProviderError(Exception):
     """
 
 
-# Backward-compatible alias (pre-Bitbucket name).
-_PermanentGitHubError = _PermanentProviderError
-
-
 def _classify_provider_exc(exc: Exception) -> tuple[str, Optional[int]]:
     """Classify an adapter exception as ``("transient"|"permanent", status_code)``.
 
@@ -130,10 +126,6 @@ def _classify_provider_exc(exc: Exception) -> tuple[str, Optional[int]]:
     if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
         return ("transient", None)
     return ("permanent", None)
-
-
-# Backward-compatible alias (pre-Bitbucket name).
-_classify_github_exc = _classify_provider_exc
 
 
 def _verify_enrollment(user_id: str, installation_id: int, repo_full_name: str) -> str:
@@ -359,26 +351,33 @@ def _run_investigation(
     action: str,
     delivery_id: str,
 ) -> dict[str, Any]:
-    """GitHub wrapper: build the adapter + enrollment probe, run the core."""
+    """GitHub wrapper: build the adapter + enrollment probe, run the core.
+
+    The wrapper owns the adapter's lifetime: ``close()`` runs on EVERY
+    exit — early skips, permanent errors, and Celery retries included.
+    """
     from services.change_gating.github_adapter import GitHubPRAdapter
 
     adapter = GitHubPRAdapter(installation_id, repo_full_name)
-    return _run_investigation_core(
-        task, start, user_id, repo_full_name, pr_number, head_sha, action,
-        delivery_id,
-        adapter=adapter,
-        verify_enrollment=lambda: _verify_enrollment(
-            user_id, installation_id, repo_full_name
-        ),
-        provider="github",
-        log_key="investigate_pr",
-        post_review_reject_hint=(
-            "common causes: the GitHub App lacks the "
-            "'Pull requests: write' permission (upgrade in App settings, "
-            "org admin must accept), or APPROVE was attempted on a PR "
-            "authored by the App itself."
-        ),
-    )
+    try:
+        return _run_investigation_core(
+            task, start, user_id, repo_full_name, pr_number, head_sha, action,
+            delivery_id,
+            adapter=adapter,
+            verify_enrollment=lambda: _verify_enrollment(
+                user_id, installation_id, repo_full_name
+            ),
+            provider="github",
+            log_key="investigate_pr",
+            post_review_reject_hint=(
+                "common causes: the GitHub App lacks the "
+                "'Pull requests: write' permission (upgrade in App settings, "
+                "org admin must accept), or APPROVE was attempted on a PR "
+                "authored by the App itself."
+            ),
+        )
+    finally:
+        adapter.close()
 
 
 @celery_app.task(
@@ -456,20 +455,23 @@ def _run_bitbucket_investigation(
             repo_full_name, pr_number, head_sha,
         )
         return {"status": "no_credentials"}
-    return _run_investigation_core(
-        task, start, user_id, repo_full_name, pr_number, head_sha, action,
-        delivery_id,
-        adapter=adapter,
-        verify_enrollment=lambda: _verify_bitbucket_enrollment(
-            user_id, repo_full_name
-        ),
-        provider="bitbucket",
-        log_key="investigate_bitbucket_pr",
-        post_review_reject_hint=(
-            "common causes: the Bitbucket token lacks write:pullrequest "
-            "scope, or approve was attempted on the token owner's own PR."
-        ),
-    )
+    try:
+        return _run_investigation_core(
+            task, start, user_id, repo_full_name, pr_number, head_sha, action,
+            delivery_id,
+            adapter=adapter,
+            verify_enrollment=lambda: _verify_bitbucket_enrollment(
+                user_id, repo_full_name
+            ),
+            provider="bitbucket",
+            log_key="investigate_bitbucket_pr",
+            post_review_reject_hint=(
+                "common causes: the Bitbucket token lacks write:pullrequest "
+                "scope, or approve was attempted on the token owner's own PR."
+            ),
+        )
+    finally:
+        adapter.close()
 
 
 def _run_investigation_core(
@@ -987,5 +989,6 @@ def _run_investigation_core(
     finally:
         # Always remove this attempt's progress comment, on any exit path —
         # return, skip, _PermanentProviderError, or a retry raised by _gh.
+        # (adapter.close() is owned by the task wrapper, which guards the
+        # WHOLE core call — including the early skips before this try.)
         _clear_progress_comment(adapter, progress_comment_id, log_ctx, log_key)
-        adapter.close()

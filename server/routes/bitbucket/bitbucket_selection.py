@@ -268,9 +268,12 @@ def cleanup_org_hooks(user_id: str, org_id: str, repo_full_names=None) -> None:
 
     ``repo_full_names=None`` means every Bitbucket repo in the org
     (disconnect / clear-all); otherwise only the listed repos (deselect).
-    Best-effort: API failures still clear the stored uuid so the DB never
-    points at a hook we no longer manage.
+    The pooled DB connection is NOT held across the Bitbucket HTTP calls
+    (each has a 30s timeout — holding it would starve the pool), and the
+    uuid is cleared only for hooks the API confirmed deleted (or 404'd),
+    so a live hook is never orphaned with no stored uuid.
     """
+    # Phase 1: read the hook list, release the connection.
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[BitbucketHooks:cleanup]")
@@ -292,17 +295,36 @@ def cleanup_org_hooks(user_id: str, org_id: str, repo_full_names=None) -> None:
                     (org_id, list(repo_full_names)),
                 )
             hooks = cur.fetchall()
-            for repo_full_name, hook_uuid in hooks:
-                _delete_repo_hook(user_id, repo_full_name, hook_uuid)
-            if hooks:
+
+    if not hooks:
+        return
+
+    # Phase 2: Bitbucket API calls, no DB connection held.
+    deleted = [
+        repo_full_name
+        for repo_full_name, hook_uuid in hooks
+        if _delete_repo_hook(user_id, repo_full_name, hook_uuid)
+    ]
+
+    # Phase 3: clear uuids only where the delete actually succeeded.
+    if deleted:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[BitbucketHooks:cleanup]")
                 cur.execute(
                     """UPDATE connected_repos
                           SET webhook_hook_uuid = NULL, updated_at = NOW()
                         WHERE org_id = %s AND provider = 'bitbucket'
                           AND repo_full_name = ANY(%s)""",
-                    (org_id, [h[0] for h in hooks]),
+                    (org_id, deleted),
                 )
-            conn.commit()
+                conn.commit()
+    if len(deleted) != len(hooks):
+        logger.warning(
+            "Bitbucket hook cleanup incomplete for org %s: %d of %d deleted "
+            "(uuids kept for retry on the failed ones)",
+            _sanitize_log(org_id), len(deleted), len(hooks),
+        )
 
 
 def _try_auto_create_hook(
@@ -313,8 +335,22 @@ def _try_auto_create_hook(
 
     Needs repo admin (and webhook scopes the connector token usually lacks) —
     manual setup is the primary path, so failure here is informational only.
-    An existing hook with the same URL counts as success.
+    An existing hook with the same URL counts as success (its uuid is
+    recorded too, so disable/disconnect can still delete it).
     """
+    def _store_hook_uuid(hook_uuid: str) -> None:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:hook]")
+                cur.execute(
+                    """UPDATE connected_repos
+                          SET webhook_hook_uuid = %s, updated_at = NOW()
+                        WHERE org_id = %s AND provider = 'bitbucket'
+                          AND repo_full_name = %s""",
+                    (hook_uuid, org_id, repo_full_name),
+                )
+                conn.commit()
+
     try:
         from chat.backend.agent.tools.bitbucket.utils import get_bb_client_for_user
 
@@ -323,11 +359,11 @@ def _try_auto_create_hook(
             return False
         ws, slug = repo_full_name.split("/", 1)
         existing = client.list_webhooks(ws, slug)
-        if any(
-            isinstance(h, dict) and h.get("url") == webhook_url
-            for h in (existing if isinstance(existing, list) else [])
-        ):
-            return True
+        for hook in existing if isinstance(existing, list) else []:
+            if isinstance(hook, dict) and hook.get("url") == webhook_url:
+                if hook.get("uuid"):
+                    _store_hook_uuid(hook["uuid"])
+                return True
         created = client.create_webhook(
             ws, slug, webhook_url, webhook_events,
             description="Aurora Incident Prevention",
@@ -335,19 +371,8 @@ def _try_auto_create_hook(
         )
         if not isinstance(created, dict) or created.get("error"):
             return False
-        hook_uuid = created.get("uuid")
-        if hook_uuid:
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cur:
-                    set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:hook]")
-                    cur.execute(
-                        """UPDATE connected_repos
-                              SET webhook_hook_uuid = %s, updated_at = NOW()
-                            WHERE org_id = %s AND provider = 'bitbucket'
-                              AND repo_full_name = %s""",
-                        (hook_uuid, org_id, repo_full_name),
-                    )
-                    conn.commit()
+        if created.get("uuid"):
+            _store_hook_uuid(created["uuid"])
         return True
     except Exception:
         logger.info(

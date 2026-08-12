@@ -212,7 +212,7 @@ class TestFilterChain:
         delay.assert_not_called()
 
     def test_duplicate_delivery_skips_without_enqueue(self, gating_env):
-        _, redis, delay = gating_env
+        _, _, delay = gating_env
         _run()
         delay.reset_mock()
         _run()  # same (repo, pr, sha) → duplicate

@@ -227,10 +227,12 @@ def _lookup_default_branch(user_id: str, repo_full_name: str) -> Optional[str]:
             with conn.cursor() as cur:
                 if not set_rls_context(cur, conn, user_id, log_prefix="[ChangeGating:BB]"):
                     return None
+                # MAX() over the org's duplicate rows (UNIQUE is per user):
+                # a row whose default_branch is NULL must not shadow a
+                # sibling that carries the real value.
                 cur.execute(
-                    """SELECT default_branch FROM connected_repos
-                        WHERE provider = 'bitbucket' AND repo_full_name = %s
-                        LIMIT 1""",
+                    """SELECT MAX(default_branch) FROM connected_repos
+                        WHERE provider = 'bitbucket' AND repo_full_name = %s""",
                     (repo_full_name,),
                 )
                 row = cur.fetchone()
@@ -326,7 +328,12 @@ class BitbucketPRAdapter:
                 logger.warning(
                     "[ChangeGating:BB] identity lookup failed: %s", type(exc).__name__
                 )
-        self._aurora_uuids = uuids
+        # Cache only a non-empty result: caching {} after a transient /user
+        # failure would make find_aurora_reviews return [] for the whole
+        # investigation, dropping prior-review context and the supersede
+        # step (→ duplicate reviews on the PR).
+        if uuids:
+            self._aurora_uuids = uuids
         return uuids
 
     def _aurora_has_approved(self) -> bool:

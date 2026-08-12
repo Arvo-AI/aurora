@@ -2417,9 +2417,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     func=_final, name=_name, description=_desc, args_schema=_schema))
 
             # bitbucket_fix needs forced context (incident_id injection) like
-            # github_fix. RCA-card-only: the PR review surface is read-only and
-            # has no incident card, so it is withheld there entirely.
-            if not is_pr_review:
+            # github_fix, and like github_fix it is RCA-card-only: outside a
+            # background RCA there is no incident card to review the fix in
+            # (and the PR review surface is read-only), so it is withheld.
+            if _is_rca_background:
                 _bb_fix_ctx = with_forced_context(bitbucket_fix)
                 _bb_fix_notif = with_completion_notification(_bb_fix_ctx)
                 _bb_fix_final = wrap_func_with_capture(_bb_fix_notif, "bitbucket_fix") if tool_capture else _bb_fix_notif
@@ -2442,7 +2443,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     args_schema=BitbucketFixArgs,
                 ))
             logging.info(
-                f"Added {len(_bb_tools) + (0 if is_pr_review else 1)} Bitbucket tools for user "
+                f"Added {len(_bb_tools) + (1 if _is_rca_background else 0)} Bitbucket tools for user "
                 f"{user_id} (rca_background={_is_rca_background}, pr_review={is_pr_review})"
             )
     except Exception as e:
@@ -2890,8 +2891,25 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             real_mcp_tools = []
         
         if real_mcp_tools:
+            # PR risk reviews are strictly read-only: destructive MCP tools
+            # (create/merge/push/delete across GitHub etc.) normally rely on
+            # an interactive human confirmation gate, which an unattended
+            # review session cannot provide — withhold them entirely.
+            if is_pr_review:
+                from .mcp_tools import is_destructive_mcp_tool
+                before = len(real_mcp_tools)
+                real_mcp_tools = [
+                    t for t in real_mcp_tools
+                    if not is_destructive_mcp_tool(
+                        t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
+                    )
+                ]
+                logging.info(
+                    f"PR review: withheld {before - len(real_mcp_tools)} "
+                    f"destructive MCP tools for user {user_id}"
+                )
             mcp_tools = create_mcp_langchain_tools(
-                real_mcp_tools, 
+                real_mcp_tools,
                 tool_capture=tool_capture,
                 send_tool_start=send_tool_start,
                 send_tool_completion=send_tool_completion,

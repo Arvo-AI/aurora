@@ -595,6 +595,7 @@ export default function BitbucketWorkspaceBrowser() {
             Use this SAME URL and secret on every repository you enable — the secret is shared across your organization.
           </p>
           <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground w-12 flex-shrink-0">URL</span>
             <code className="text-xs bg-background border border-border rounded px-2 py-1 flex-1 truncate">{webhookSetup.webhook_url}</code>
             <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Copy webhook URL"
               onClick={() => copyToClipboard(webhookSetup.webhook_url!, 'Webhook URL')}>
@@ -602,6 +603,7 @@ export default function BitbucketWorkspaceBrowser() {
             </Button>
           </div>
           <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground w-12 flex-shrink-0">Secret</span>
             <code className="text-xs bg-background border border-border rounded px-2 py-1 flex-1 truncate">{webhookSetup.webhook_secret}</code>
             <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Copy webhook secret"
               onClick={() => copyToClipboard(webhookSetup.webhook_secret!, 'Webhook secret')}>

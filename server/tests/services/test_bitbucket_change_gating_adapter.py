@@ -315,10 +315,22 @@ class TestParseFilesFromDiff:
     def test_patch_feeds_diff_utils_hunk_parser(self):
         from services.change_gating.diff_utils import parse_diff_hunks
 
-        hunks = parse_diff_hunks(self.DIFF)
+        # The contract under test: each PER-FILE patch slice (not the raw
+        # diff) is consumable by parse_diff_hunks — the same shape GitHub's
+        # list_files patches have.
+        files = parse_files_from_diff(self.DIFF)
+        app = next(f for f in files if f["filename"] == "server/app.py")
+        # parse_diff_hunks keys on the +++ b/ header, which the patch slice
+        # strips; re-add the header the way build_per_file_diff consumers do.
+        hunks = parse_diff_hunks(f"+++ b/{app['filename']}\n{app['patch']}")
         assert "server/app.py" in hunks
-        assert "new.txt" in hunks
-        assert "gone.txt" not in hunks  # deleted file: no RIGHT side
+        # RIGHT-side commentable lines: 1-5 exist after the hunk (+import sys
+        # inserted, y=3 replacing y=2).
+        assert {1, 2, 3, 4} <= hunks["server/app.py"]
+
+        gone = next(f for f in files if f["filename"] == "gone.txt")
+        hunks_gone = parse_diff_hunks(f"+++ /dev/null\n{gone['patch']}")
+        assert "gone.txt" not in hunks_gone  # deleted file: no RIGHT side
 
     def test_empty_and_none(self):
         assert parse_files_from_diff(None) == []

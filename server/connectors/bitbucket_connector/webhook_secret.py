@@ -25,6 +25,16 @@ logger = logging.getLogger(__name__)
 _SECRET_NAME_TEMPLATE = "bitbucket-change-gating-webhook-{org_id}"
 
 
+class WebhookSecretUnavailable(Exception):
+    """The org HAS a secret ref but the secrets backend read failed.
+
+    Distinct from "no secret configured" (``get_webhook_secret`` → None):
+    the webhook route answers 503 for this — Bitbucket retries 5xx but
+    drops deliveries permanently on 4xx, so a transient Vault/AWS SM
+    outage must not read as an authentication failure.
+    """
+
+
 def _get_ref(org_id: str) -> Optional[str]:
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
@@ -38,7 +48,12 @@ def _get_ref(org_id: str) -> Optional[str]:
 
 
 def get_webhook_secret(org_id: str) -> Optional[str]:
-    """Return the org's webhook secret value, or None when never created."""
+    """Return the org's webhook secret value, or None when never created.
+
+    Raises :class:`WebhookSecretUnavailable` when a ref exists but the
+    backend read fails — callers must treat that as transient, not as
+    "this org has no secret".
+    """
     ref = _get_ref(org_id)
     if not ref:
         return None
@@ -46,15 +61,22 @@ def get_webhook_secret(org_id: str) -> Optional[str]:
         from utils.secrets.secret_ref_utils import SecretRefManager
 
         return SecretRefManager().get_secret(ref)
-    except Exception:
+    except Exception as exc:
         logger.exception(
             "[BitbucketWebhookSecret] failed to read secret for org %s", org_id
         )
-        return None
+        raise WebhookSecretUnavailable(
+            f"secrets backend read failed for org {org_id}"
+        ) from exc
 
 
 def get_or_create_webhook_secret(org_id: str) -> str:
-    """Return the org's webhook secret, creating it on first use."""
+    """Return the org's webhook secret, creating it on first use.
+
+    Raises when the org row is missing or the backend is unavailable —
+    the enable endpoint must fail loudly rather than hand the admin a
+    secret that no delivery will ever validate against.
+    """
     existing = get_webhook_secret(org_id)
     if existing:
         return existing
@@ -77,9 +99,11 @@ def get_or_create_webhook_secret(org_id: str) -> str:
             raced = cur.rowcount == 0
         conn.commit()
     if raced:
-        # A concurrent enable won the ref write — use theirs, drop ours.
-        winner = get_webhook_secret(org_id)
-        if winner:
+        # rowcount == 0 has two causes: a concurrent enable already wrote a
+        # ref (use theirs), or the organizations row doesn't exist at all
+        # (fail loudly — returning the fresh value would hand the admin a
+        # secret that no delivery will ever validate against).
+        def _drop_losing_secret() -> None:
             try:
                 SecretRefManager().delete_secret(ref)
             except Exception:
@@ -87,7 +111,15 @@ def get_or_create_webhook_secret(org_id: str) -> str:
                     "[BitbucketWebhookSecret] failed to clean up losing secret "
                     "for org %s", org_id,
                 )
+
+        winner = get_webhook_secret(org_id)
+        if winner:
+            _drop_losing_secret()
             return winner
+        _drop_losing_secret()
+        raise RuntimeError(
+            f"cannot persist webhook secret ref: no organizations row for {org_id}"
+        )
     logger.info("[BitbucketWebhookSecret] created webhook secret for org %s", org_id)
     return value
 

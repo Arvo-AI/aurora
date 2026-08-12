@@ -36,8 +36,9 @@ import hmac
 import logging
 import re
 import time
+from typing import Optional, Tuple
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 from psycopg2 import IntegrityError, errors as psycopg_errors
 
 from utils.auth.log_redact import redact_token
@@ -89,14 +90,17 @@ def verify_bitbucket_signature(raw_body: bytes, signature_header: str, secret: s
     return hmac.compare_digest(expected, received)
 
 
-def _authenticate_delivery(org_id: str, raw_body: bytes, start: float):
+_AuthResult = Tuple[Optional[Tuple[str, str]], Optional[Tuple[Response, int]]]
+
+
+def _authenticate_delivery(org_id: str, raw_body: bytes, start: float) -> _AuthResult:
     """Steps 2-4: signature + org secret + metadata headers.
 
     Returns ``((delivery_id, event_type), None)`` on success or
     ``(None, (json_response, http_status))`` on rejection. ``org_id`` is
     already allowlist-validated by the caller, so it is log-safe here.
     """
-    def _reject(event: str, message: str, status: int):
+    def _reject(event: str, message: str, status: int) -> _AuthResult:
         duration_ms = int((time.monotonic() - start) * 1000)
         logger.warning(
             "bb_webhook_event=%s org_id=%s delivery_id=- event_type=- duration_ms=%d",
@@ -111,10 +115,19 @@ def _authenticate_delivery(org_id: str, raw_body: bytes, start: float):
     # Org secret. Absent secret = this org never enabled Incident
     # Prevention → the delivery cannot be authenticated → 401 (NOT 503:
     # the org id is attacker-chosen, so an unknown org must not read as
-    # "server misconfigured, retry").
-    from connectors.bitbucket_connector.webhook_secret import get_webhook_secret
+    # "server misconfigured, retry"). A secrets-BACKEND failure is the
+    # opposite case: the org HAS a secret we temporarily can't read, and
+    # Bitbucket drops deliveries permanently on 4xx — answer 503 so it
+    # retries once the backend recovers.
+    from connectors.bitbucket_connector.webhook_secret import (
+        WebhookSecretUnavailable,
+        get_webhook_secret,
+    )
 
-    webhook_secret = get_webhook_secret(org_id)
+    try:
+        webhook_secret = get_webhook_secret(org_id)
+    except WebhookSecretUnavailable:
+        return _reject("secret_backend_error", "webhook secret unavailable", 503)
     if not webhook_secret:
         return _reject("secret_unavailable", "unknown webhook endpoint", 401)
 
@@ -127,22 +140,24 @@ def _authenticate_delivery(org_id: str, raw_body: bytes, start: float):
     event_type = _safe_log_value(request.headers.get(EVENT_HEADER, "").strip(), 40)
     if not delivery_id or not event_type:
         return _reject("missing_metadata", "missing webhook metadata", 400)
-    # Bitbucket retries reuse the same X-Request-UUID; namespace by org so
-    # a delivery id can never collide across providers/orgs in the shared
-    # webhook_deliveries table (column is VARCHAR(64); uuid+prefix fits).
+    # Provider-prefix the delivery id ("bb:") so it can never collide with a
+    # GitHub delivery in the shared webhook_deliveries table. No org
+    # component is needed: Bitbucket's X-Request-UUID is globally unique
+    # (column is VARCHAR(64); uuid+prefix fits).
     return ((f"bb:{delivery_id}"[:64], event_type), None)
 
 
 def _record_and_dispatch(
     org_id: str, delivery_id: str, event_type: str, raw_body: bytes, start: float
-):
+) -> Optional[Tuple[Response, int]]:
     """Steps 5-6: idempotent ``webhook_deliveries`` insert + Celery dispatch.
 
     Same status lifecycle as the GitHub ingress (pending → processing →
     processed / failed) so a broker hiccup never permanently drops a
     delivery: the retry lands on the duplicate branch and re-dispatches
-    pending/failed rows. Returns a ``(response, status)`` pair or None to
-    let the caller emit the standard dispatched ack.
+    pending/failed rows. Returns a ``(response, status)`` pair when this
+    request did NOT dispatch (dedupe / lost claim race) or None to let the
+    caller emit the standard ``dispatched`` ack.
     """
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
@@ -193,12 +208,15 @@ def _record_and_dispatch(
             conn.commit()
 
             if not claimed:
+                # A concurrent retry owns the dispatch; ack without emitting
+                # the caller's `dispatched` event (this request enqueued
+                # nothing — `dispatched` is the structured success signal).
                 logger.info(
                     "bb_webhook_event=already_claimed org_id=%s delivery_id=%s "
                     "event_type=%s",
                     org_id, delivery_id, event_type,
                 )
-                return None
+                return jsonify({"received": True, "delivery_id": delivery_id}), 200
 
             # Late import: keeps Flask startup decoupled from Celery
             # broker availability and avoids a circular import at boot.
