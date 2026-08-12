@@ -1738,6 +1738,31 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Migration: Bitbucket Incident Prevention (DEV-1439).
+            # - webhook_hook_uuid: the Bitbucket repo hook UUID (when Aurora
+            #   managed to create the hook via API) so disable/disconnect can
+            #   delete it.
+            # - organizations.bitbucket_webhook_secret_ref: secrets-backend
+            #   reference for the org's webhook HMAC secret (one secret shared
+            #   by every repo hook in the org).
+            try:
+                cursor.execute(
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS webhook_hook_uuid VARCHAR(64);"
+                )
+                cursor.execute(
+                    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS bitbucket_webhook_secret_ref TEXT;"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured Bitbucket Incident Prevention columns exist "
+                    "(connected_repos.webhook_hook_uuid, organizations.bitbucket_webhook_secret_ref)."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding Bitbucket Incident Prevention columns: {e}"
+                )
+                conn.rollback()
+
             # Migration: Add disconnected_at to user_github_installations so
             # Aurora-side disconnect can soft-delete the link instead of
             # dropping the row. Reconnects (which often don't re-fire GitHub's

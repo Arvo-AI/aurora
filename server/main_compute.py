@@ -207,6 +207,9 @@ _OPEN_PREFIXES = (
     # at runtime.
     "/github/callback",
     "/bitbucket/callback",
+    # Bitbucket Incident Prevention webhook — verified via per-org HMAC
+    # (X-Hub-Signature), not session.
+    "/bitbucket/webhook/",
     "/slack/callback",
     "/slack/events",
     "/slack/interactions",
@@ -509,9 +512,11 @@ app.register_blueprint(notion_bp, url_prefix="/notion")
 from routes.bitbucket.bitbucket import bitbucket_bp
 from routes.bitbucket.bitbucket_browsing import bitbucket_browsing_bp
 from routes.bitbucket.bitbucket_selection import bitbucket_selection_bp
+from routes.bitbucket.bitbucket_webhook import bitbucket_webhook_bp
 app.register_blueprint(bitbucket_bp, url_prefix="/bitbucket")
 app.register_blueprint(bitbucket_browsing_bp, url_prefix="/bitbucket")
 app.register_blueprint(bitbucket_selection_bp, url_prefix="/bitbucket")
+app.register_blueprint(bitbucket_webhook_bp, url_prefix="/bitbucket")
 
 # --- Incidents Routes ---
 from routes.incidents_routes import incidents_bp

@@ -25,6 +25,17 @@ export interface StatusResponse {
   username?: string;
   auth_type?: string;
   missing_scopes?: string[];
+  incident_prevention_enabled?: boolean;
+}
+
+export interface ChangeGatingResponse {
+  repo_full_name: string;
+  change_gating_enabled: boolean;
+  webhook_url?: string;
+  webhook_secret?: string;
+  webhook_events?: string[];
+  webhook_note?: string;
+  webhook_auto_created?: boolean;
 }
 
 interface WorkspacesResponse {
@@ -58,6 +69,7 @@ export interface WorkspaceSelectionResponse {
     default_branch?: string | null;
     metadata_summary?: string | null;
     metadata_status?: string | null;
+    change_gating_enabled?: boolean;
   })[];
 }
 
@@ -200,6 +212,13 @@ export class BitbucketIntegrationService {
     await this.request(
       `/repo-metadata/${encodeURIComponent(repoFullName)}`,
       { method: 'PUT', body: { metadata_summary: summary }, errorMessage: 'Failed to update metadata' }
+    );
+  }
+
+  static async updateChangeGating(repoFullName: string, enabled: boolean): Promise<ChangeGatingResponse> {
+    return this.request<ChangeGatingResponse>(
+      `/repo-selections/${encodeURIComponent(repoFullName)}/change-gating`,
+      { method: 'PUT', body: { enabled }, errorMessage: 'Failed to update Incident Prevention setting' }
     );
   }
 }

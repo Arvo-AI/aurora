@@ -281,11 +281,14 @@ def bitbucket_status(user_id):
         granted = set(user_data.get("_granted_scopes", []))
         missing = _REQUIRED_SCOPES - granted if granted else set()
 
+        from utils.flags.feature_flags import is_incident_prevention_enabled
+
         return jsonify({
             "connected": True,
             "username": user_data.get("username"),
             "display_name": user_data.get("display_name"),
             "auth_type": auth_type,
+            "incident_prevention_enabled": is_incident_prevention_enabled(),
             **({"missing_scopes": sorted(missing)} if missing else {}),
         })
 
@@ -297,8 +300,26 @@ def bitbucket_status(user_id):
 @bitbucket_bp.route("/disconnect", methods=["POST"])
 @require_permission("connectors", "write")
 def bitbucket_disconnect(user_id):
-    """Disconnect Bitbucket account for a user."""
+    """Disconnect Bitbucket for the org.
+
+    The Bitbucket connector is org-scoped (one connection shared by the
+    org), so disconnect clears the ORG's connected repos — not just rows
+    the disconnecting user happens to have written — and deletes any
+    Aurora-created Incident Prevention webhooks first (while credentials
+    and hook uuids still exist).
+    """
     try:
+        from utils.db.org_scope import resolve_org
+        org_id = resolve_org(user_id)
+
+        # Delete Aurora-created webhooks BEFORE credentials/rows disappear.
+        if org_id:
+            try:
+                from routes.bitbucket.bitbucket_selection import cleanup_org_hooks
+                cleanup_org_hooks(user_id, org_id)
+            except Exception:
+                logger.warning("Bitbucket hook cleanup failed during disconnect", exc_info=True)
+
         # Delete both bitbucket credentials and workspace selection
         delete_user_secret(user_id, "bitbucket")
 
@@ -308,15 +329,21 @@ def bitbucket_disconnect(user_id):
         except Exception as e:
             logger.debug(f"Legacy Bitbucket workspace selection cleanup skipped: {e}")
 
-        # Clear connected repos
+        # Clear connected repos org-wide
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
                     set_rls_context(cur, conn, user_id, log_prefix="[Bitbucket:disconnect]")
-                    cur.execute(
-                        "DELETE FROM connected_repos WHERE user_id = %s AND provider = 'bitbucket'",
-                        (user_id,),
-                    )
+                    if org_id:
+                        cur.execute(
+                            "DELETE FROM connected_repos WHERE org_id = %s AND provider = 'bitbucket'",
+                            (org_id,),
+                        )
+                    else:
+                        cur.execute(
+                            "DELETE FROM connected_repos WHERE user_id = %s AND provider = 'bitbucket'",
+                            (user_id,),
+                        )
                     conn.commit()
         except Exception as e:
             logger.warning(f"Failed to clear connected_repos on disconnect: {e}")

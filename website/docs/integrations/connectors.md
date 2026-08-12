@@ -1431,6 +1431,49 @@ BB_OAUTH_CLIENT_SECRET=your-bitbucket-secret
 
 Restart Aurora after setting these, then connect via **Connectors** > **Bitbucket** > **OAuth**.
 
+#### Incident Prevention (pre-merge PR review)
+
+Aurora can review pull requests that target the default branch of an enrolled Bitbucket Cloud repository and post an advisory review (a comment, plus an approval when the change looks safe) before merge — the same feature as GitHub Incident Prevention.
+
+Requirements: a connected Bitbucket account (either auth method above), `NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION=true` (the default) on **both** the server and the Celery worker, and Aurora's API reachable from the public internet (Bitbucket must be able to deliver webhooks to it).
+
+##### Enable per repository
+
+1. Navigate to **Connectors** > **Bitbucket** and connect at least one repository
+2. Flip the **Incident Prevention** switch on a connected repository
+3. Aurora responds with a **webhook URL** (`{API_URL}/bitbucket/webhook/{org_id}`) and a **secret**. It also tries to create the repo webhook for you via the API; if your credentials lack repo-admin/webhook rights (common), add it manually:
+   - In Bitbucket: **Repository settings → Webhooks → Add webhook**
+   - Title: `Aurora Incident Prevention`; URL: the webhook URL from Aurora; Secret: the secret from Aurora
+   - Triggers: **Pull request → Created** and **Pull request → Updated** only (do not add approval/comment triggers — they would loop on Aurora's own activity)
+4. Repeat the webhook setup for each repository you enable, using the **same URL and secret** — the secret is shared across your organization
+
+Notes and limits:
+
+- Reviews run only for PRs targeting the repository's **default branch**; drafts are skipped. A draft marked ready **without new commits** is reviewed on the next push.
+- Reviews post as the **connected Bitbucket account** by default. Bitbucket forbids approving your own PR, so a SAFE verdict on a PR authored by the connected account keeps the review comment but skips the approval.
+- Disabling the toggle (or deselecting/disconnecting the repo) deletes the webhook when Aurora created it via API; manually created hooks must be removed manually.
+
+##### Optional: dedicated bot account
+
+To have reviews appear as "Aurora" instead of a team member — and to avoid the own-PR approval limit — create a separate Atlassian account:
+
+1. Create the Atlassian user (e.g. `aurora-bot@yourcompany.com`), invite it to the workspace/repos with **pull request write** access
+2. Create a scoped API token for it with at least `read:pullrequest:bitbucket` and `write:pullrequest:bitbucket`
+3. Store it in the secrets backend as a system secret (no env vars involved):
+
+```bash
+# Vault
+vault kv put aurora/system/bitbucket-bot/credentials \
+  value='{"email": "aurora-bot@yourcompany.com", "api_token": "YOUR_SCOPED_TOKEN"}'
+
+# AWS Secrets Manager
+aws secretsmanager create-secret --name aurora/system/bitbucket-bot/credentials \
+  --secret-string '{"email": "aurora-bot@yourcompany.com", "api_token": "YOUR_SCOPED_TOKEN"}' \
+  --region "$AWS_SM_REGION"
+```
+
+Only **posting** (comments/approvals) uses the bot; investigation reads always use the org's connected account. Bot credentials are never exposed to agent tools.
+
 #### Troubleshooting
 
 | Error | Solution |
@@ -1439,6 +1482,9 @@ Restart Aurora after setting these, then connect via **Connectors** > **Bitbucke
 | "Missing required scopes: ..." | Recreate the API token with all the read+write scopes listed above |
 | "Bitbucket OAuth is not available. Use an API token instead." | `BB_OAUTH_CLIENT_ID`/`BB_OAUTH_CLIENT_SECRET` are not set. Use the API token method, or configure the OAuth consumer |
 | OAuth tab not visible in the UI | `NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH` is not `true`. Set it and restart |
+| Incident Prevention toggle missing | `NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION` is `false`, or Bitbucket is not connected |
+| PRs never get reviewed | Check the webhook in Bitbucket shows recent 2xx deliveries; confirm the PR targets the default branch and is not a draft; confirm the same org secret was pasted into the repo hook |
+| Review comment posted but no approval on SAFE | The posting account authored the PR (Bitbucket forbids self-approval) — configure the dedicated bot account |
 
 ---
 
