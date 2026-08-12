@@ -83,13 +83,15 @@ export default function BitbucketWorkspaceBrowser() {
       } else if (!enabled && webhookSetup?.repo_full_name === repoFullName) {
         setWebhookSetup(null);
       }
+      let description: string | undefined;
+      if (enabled) {
+        description = result.webhook_auto_created
+          ? `Webhook configured automatically for ${repoFullName}.`
+          : `Add the webhook to ${repoFullName} in Bitbucket to start receiving reviews.`;
+      }
       toast({
         title: enabled ? "Incident Prevention enabled" : "Incident Prevention disabled",
-        description: enabled
-          ? (result.webhook_auto_created
-              ? `Webhook configured automatically for ${repoFullName}.`
-              : `Add the webhook to ${repoFullName} in Bitbucket to start receiving reviews.`)
-          : undefined,
+        description,
       });
     } catch (error: unknown) {
       const err = error as Error;

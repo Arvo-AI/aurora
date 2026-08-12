@@ -46,10 +46,9 @@ def get_webhook_secret(org_id: str) -> Optional[str]:
         from utils.secrets.secret_ref_utils import SecretRefManager
 
         return SecretRefManager().get_secret(ref)
-    except Exception as exc:
-        logger.error(
-            "[BitbucketWebhookSecret] failed to read secret for org %s: %s",
-            org_id, type(exc).__name__,
+    except Exception:
+        logger.exception(
+            "[BitbucketWebhookSecret] failed to read secret for org %s", org_id
         )
         return None
 

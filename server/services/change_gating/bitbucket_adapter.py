@@ -457,15 +457,27 @@ class BitbucketPRAdapter:
         return out
 
     def list_review_comments(self, pr_number: int) -> List[Dict[str, Any]]:
-        """No inline comments in the POC — nothing to reconcile against."""
+        """No inline comments in the POC — nothing to reconcile against.
+
+        The parameter is required by the ``PRAdapter`` Protocol signature.
+        """
+        del pr_number
         return []
 
     def get_compare(self, base_sha: str, head_sha: str) -> Optional[Dict[str, Any]]:
-        """No incremental reviews in the POC → full-PR fallback."""
+        """No incremental reviews in the POC → full-PR fallback.
+
+        Parameters are required by the ``PRAdapter`` Protocol signature.
+        """
+        del base_sha, head_sha
         return None
 
     def get_compare_diff(self, base_sha: str, head_sha: str) -> Optional[str]:
-        """No incremental reviews in the POC → full-PR fallback."""
+        """No incremental reviews in the POC → full-PR fallback.
+
+        Parameters are required by the ``PRAdapter`` Protocol signature.
+        """
+        del base_sha, head_sha
         return None
 
     # ------------------------------------------------------------------
@@ -483,10 +495,13 @@ class BitbucketPRAdapter:
     ) -> Dict[str, Any]:
         """Post the review: marker comment (+ approve on SAFE).
 
-        Inline ``comments`` are ignored in the POC — all findings are in
-        the body table. The approve step is best-effort: Bitbucket rejects
-        approving your own PR, and the finding comment must survive that.
+        ``commit_id`` and inline ``comments`` are required by the
+        ``PRAdapter`` Protocol but ignored in the POC — Bitbucket comments
+        are not commit-pinned and all findings live in the body table. The
+        approve step is best-effort: Bitbucket rejects approving your own
+        PR, and the finding comment must survive that.
         """
+        del commit_id, comments
         comment = _checked(
             self._post.add_pr_comment(self.workspace, self.repo_slug, pr_number, body),
             "post_review",

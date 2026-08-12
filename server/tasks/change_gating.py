@@ -46,6 +46,8 @@ logger = logging.getLogger(__name__)
 _POSTED_KEY_TTL_SECONDS = 86400
 _RUN_KEY_TTL_SECONDS = 3600
 _VERDICT_KEY_TTL_SECONDS = 3600
+# Clears per-connection RLS GUCs before a pooled admin connection is reused.
+_RESET_RLS_SQL = "RESET myapp.current_user_id; RESET myapp.current_org_id;"
 # Transient "Aurora is reviewing…" conversation comment, deleted in a finally
 # block the moment the run leaves the review phase (review posted, skipped, or
 # failed). Gives the PR the live signal CodeRabbit shows. The id lives only in
@@ -171,7 +173,7 @@ def _verify_enrollment(user_id: str, installation_id: int, repo_full_name: str) 
                 (repo_full_name, installation_id),
             )
             enrolled = cur.fetchone() is not None
-            cur.execute("RESET myapp.current_user_id; RESET myapp.current_org_id;")
+            cur.execute(_RESET_RLS_SQL)
     return "ok" if enrolled else "not_enrolled"
 
 
@@ -202,7 +204,7 @@ def _verify_bitbucket_enrollment(user_id: str, repo_full_name: str) -> str:
                 (repo_full_name,),
             )
             enrolled = cur.fetchone() is not None
-            cur.execute("RESET myapp.current_user_id; RESET myapp.current_org_id;")
+            cur.execute(_RESET_RLS_SQL)
     return "ok" if enrolled else "not_enrolled"
 
 
@@ -282,7 +284,7 @@ def _read_final_assistant_message(user_id: str, session_id: str) -> Optional[str
                 (session_id,),
             )
             row = cursor.fetchone()
-            cursor.execute("RESET myapp.current_user_id; RESET myapp.current_org_id;")
+            cursor.execute(_RESET_RLS_SQL)
             if not row or not row[0]:
                 return None
             messages = row[0]
