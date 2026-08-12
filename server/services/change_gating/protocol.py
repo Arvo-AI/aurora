@@ -46,32 +46,25 @@ class PRAdapter(Protocol):
 
     def get_pull_request(self, pr_number: int) -> Dict[str, Any]:
         """Return the normalized PR dict (see module docstring)."""
-        ...
 
     def get_diff(self, pr_number: int) -> Optional[str]:
         """Return the PR's unified diff, or None when unavailable."""
-        ...
 
     def list_files(self, pr_number: int) -> List[Dict[str, Any]]:
         """Return the changed files as GitHub ``list_files``-shaped dicts."""
-        ...
 
     def list_reviews(self, pr_number: int) -> List[Dict[str, Any]]:
         """Return all reviews on the PR in chronological order."""
-        ...
 
     def list_review_comments(self, pr_number: int) -> List[Dict[str, Any]]:
         """Return all inline review comments on the PR."""
-        ...
 
     def get_compare(self, base_sha: str, head_sha: str) -> Optional[Dict[str, Any]]:
         """Return compare JSON (``status`` + ``files``), or None when
         unsupported/unavailable — the core then runs a full-PR review."""
-        ...
 
     def get_compare_diff(self, base_sha: str, head_sha: str) -> Optional[str]:
         """Return the incremental unified diff, or None (full-PR fallback)."""
-        ...
 
     # ------------------------------------------------------------------
     # Aurora-identity helpers
@@ -83,7 +76,6 @@ class PRAdapter(Protocol):
         Must pair the body marker with a provider-side authorship check —
         a marker alone (which a human can paste) never qualifies.
         """
-        ...
 
     # ------------------------------------------------------------------
     # Writes
@@ -101,25 +93,20 @@ class PRAdapter(Protocol):
         """Post the review. ``event`` is ``APPROVE`` or ``COMMENT``;
         ``comments`` are inline findings (may be ignored by providers
         without inline support)."""
-        ...
 
     def dismiss_review(self, pr_number: int, review_id: Any, message: str) -> Any:
         """Retract a prior APPROVE (GitHub: dismissal; Bitbucket: unapprove)."""
-        ...
 
     def supersede_review(
         self, pr_number: int, prior_review: Dict[str, Any], message: str
     ) -> None:
         """Mark a prior Aurora review as superseded by a newer one."""
-        ...
 
     def post_issue_comment(self, pr_number: int, body: str) -> Dict[str, Any]:
         """Post a PR conversation comment; the returned dict carries ``id``."""
-        ...
 
     def delete_issue_comment(self, comment_id: Any) -> None:
         """Delete a PR conversation comment (idempotent on already-gone)."""
-        ...
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -127,4 +114,3 @@ class PRAdapter(Protocol):
 
     def close(self) -> None:
         """Release any pooled connections."""
-        ...
