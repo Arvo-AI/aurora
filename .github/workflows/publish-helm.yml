@@ -88,7 +88,8 @@ jobs:
     if: github.repository == 'Arvo-AI/aurora' && needs.validate-version.result == 'success'
     permissions:
       contents: read
-      packages: write   # GHCR OCI push
+      packages: write
+      id-token: write
     outputs:
       chart_version: ${{ steps.package.outputs.chart_version }}
 
@@ -118,6 +119,19 @@ jobs:
 
       - name: Push to GHCR
         run: helm push ${{ steps.package.outputs.package }} oci://${{ env.OCI_REPO }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb # v3.8.2
+
+      - name: Install crane
+        uses: imjasonh/setup-crane@31b88efe9de28ae0ffa220711af4b60be9435f6e # v0.4
+
+      - name: Sign Helm chart OCI artifact
+        run: |
+          CHART_VERSION=${{ steps.package.outputs.chart_version }}
+          DIGEST=$(crane digest ${{ env.OCI_REPO }}/aurora-oss:${CHART_VERSION})
+          echo "Signing ${{ env.OCI_REPO }}/aurora-oss@${DIGEST}"
+          cosign sign --yes ${{ env.OCI_REPO }}/aurora-oss@${DIGEST}
 
   # ===========================================================================
   # Summary
