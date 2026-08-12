@@ -1,28 +1,35 @@
-"""Celery task for PR Change Gating: agentic pre-merge risk review.
+"""Celery tasks for PR Change Gating: agentic pre-merge risk review.
 
 When ``_handle_pull_request_event`` (``tasks/github_webhook_tasks.py``) sees
 a qualifying ``pull_request`` webhook for an enrolled repo's default branch,
-it enqueues :func:`investigate_pr`. The task:
+it enqueues :func:`investigate_pr`. Bitbucket deliveries take the same path
+via ``tasks/bitbucket_webhook_tasks.py`` → :func:`investigate_bitbucket_pr`.
+Each task:
 
 1. Dedupes against Redis (``change_gating:posted:`` / ``change_gating:run:``
    keys) so Celery retries and double-deliveries never double-post.
-2. Re-verifies enrollment + installation suspension (the user may have
-   toggled the repo off while the task sat in the queue).
-3. Fetches the PR, prior Aurora review, file list and diff via
-   ``services.change_gating.github_adapter.GitHubPRAdapter``.
+2. Re-verifies enrollment (+ installation suspension on GitHub — the user
+   may have toggled the repo off while the task sat in the queue).
+3. Fetches the PR, prior Aurora review, file list and diff via the
+   provider's ``PRAdapter`` (``services.change_gating.github_adapter`` /
+   ``bitbucket_adapter``).
 4. Runs a full agentic investigation through the existing
    ``run_background_chat`` task — SYNCHRONOUSLY via ``.apply()`` so this
    task owns the whole review lifecycle — in read-only ``mode="ask"``.
-5. Parses the agent's final message as a verdict JSON and posts a GitHub
-   PR review: APPROVE when SAFE, COMMENT with inline findings when RISKY.
+5. Parses the agent's final message as a verdict JSON and posts a review:
+   APPROVE when SAFE, COMMENT with findings when RISKY.
 
-Provider-specific calls stay behind the adapter so GitLab/Bitbucket can be
-added later without rewriting the task (design doc ``pr-change-gating.md``
-section 11). Deliberately NO rate limiting (design section 12).
+Everything provider-specific stays behind the adapter
+(``services.change_gating.protocol.PRAdapter``); the shared flow lives in
+:func:`_run_investigation_core` so adding a provider is an adapter + a thin
+task wrapper (design docs ``pr-change-gating.md`` section 11,
+``bitbucket-incident-prevention.md``). Deliberately NO rate limiting
+(design section 12).
 
 Logging follows the structured ``key=value`` convention of
-``tasks.github_webhook_tasks`` on the canonical key
-``change_gating=investigate_pr``. Token values are NEVER logged.
+``tasks.github_webhook_tasks`` on the canonical keys
+``change_gating=investigate_pr`` / ``change_gating=investigate_bitbucket_pr``.
+Token values are NEVER logged.
 """
 
 from __future__ import annotations
@@ -52,19 +59,29 @@ _PROGRESS_BODY = (
 )
 
 
-def change_gating_keys(repo_full_name: str, pr_number: int, head_sha: str) -> dict[str, str]:
+def change_gating_keys(
+    repo_full_name: str, pr_number: int, head_sha: str, provider: str = "github"
+) -> dict[str, str]:
     """Build the Redis idempotency keys for one (repo, pr, head) triple.
 
     Single source of truth shared with ``_maybe_enqueue_change_gating``
-    in ``tasks/github_webhook_tasks.py`` so the key shapes can never drift:
+    in ``tasks/github_webhook_tasks.py`` (and the Bitbucket equivalent in
+    ``tasks/bitbucket_webhook_tasks.py``) so the key shapes can never drift:
 
     - ``seen``   — webhook-side delivery dedupe (set by the handler)
     - ``run``    — task-side concurrency lock (holder = Celery request id)
     - ``posted`` — review successfully posted for this head
     - ``verdict``— parsed verdict cache so a transient failure AFTER the
       agent run retries the post without re-running the investigation
+
+    Non-GitHub providers get a provider-prefixed suffix so a GitHub repo
+    and a Bitbucket repo that share a ``workspace/name`` can never collide.
+    GitHub keys keep their original (un-prefixed) shape for backward
+    compatibility with keys already live in Redis.
     """
     suffix = f"{repo_full_name}:{pr_number}:{head_sha}"
+    if provider != "github":
+        suffix = f"{provider}:{suffix}"
     return {
         "seen": f"change_gating:seen:{suffix}",
         "run": f"change_gating:run:{suffix}",
@@ -73,16 +90,19 @@ def change_gating_keys(repo_full_name: str, pr_number: int, head_sha: str) -> di
     }
 
 
-class _PermanentGitHubError(Exception):
-    """Raised for non-retryable (4xx) GitHub API failures.
+class _PermanentProviderError(Exception):
+    """Raised for non-retryable (4xx) provider API failures.
 
-    Converted by :func:`investigate_pr` into a ``{"status": "github_error"}``
+    Converted by the task wrappers into a ``{"status": "<provider>_error"}``
     return so Celery does not burn retries on a permanent failure.
     """
 
 
+# Backward-compatible alias (pre-Bitbucket name).
+_PermanentGitHubError = _PermanentProviderError
 
-def _classify_github_exc(exc: Exception) -> tuple[str, Optional[int]]:
+
+def _classify_provider_exc(exc: Exception) -> tuple[str, Optional[int]]:
     """Classify an adapter exception as ``("transient"|"permanent", status_code)``.
 
     Connection-level errors (requests exceptions subclass OSError) and 5xx
@@ -110,8 +130,12 @@ def _classify_github_exc(exc: Exception) -> tuple[str, Optional[int]]:
     return ("permanent", None)
 
 
+# Backward-compatible alias (pre-Bitbucket name).
+_classify_github_exc = _classify_provider_exc
+
+
 def _verify_enrollment(user_id: str, installation_id: int, repo_full_name: str) -> str:
-    """Re-check suspension + enrollment; returns ``ok | suspended | not_enrolled``.
+    """Re-check GitHub suspension + enrollment; returns ``ok | suspended | not_enrolled``.
 
     ``github_installations`` is NOT RLS-protected; ``connected_repos`` IS
     (FORCE RLS), so the enrollment probe runs under ``set_rls_context``.
@@ -151,7 +175,38 @@ def _verify_enrollment(user_id: str, installation_id: int, repo_full_name: str) 
     return "ok" if enrolled else "not_enrolled"
 
 
-def _post_progress_comment(adapter, pr_number: int, log_ctx: str) -> Optional[int]:
+def _verify_bitbucket_enrollment(user_id: str, repo_full_name: str) -> str:
+    """Re-check Bitbucket enrollment; returns ``ok | not_enrolled``.
+
+    Bitbucket has no installation/suspension concept — enrollment is just
+    an org row in ``connected_repos`` (FORCE RLS, so the probe runs under
+    ``set_rls_context``) with ``provider='bitbucket'`` and the toggle on.
+    """
+    from utils.auth.stateless_auth import set_rls_context
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            if not set_rls_context(cur, conn, user_id, log_prefix="[ChangeGating:BB]"):
+                raise RuntimeError(
+                    f"RLS context unavailable for user {user_id} — cannot "
+                    "verify change-gating enrollment"
+                )
+            cur.execute(
+                """SELECT 1
+                     FROM connected_repos
+                    WHERE repo_full_name = %s
+                      AND provider = 'bitbucket'
+                      AND change_gating_enabled = TRUE
+                    LIMIT 1""",
+                (repo_full_name,),
+            )
+            enrolled = cur.fetchone() is not None
+            cur.execute("RESET myapp.current_user_id; RESET myapp.current_org_id;")
+    return "ok" if enrolled else "not_enrolled"
+
+
+def _post_progress_comment(adapter, pr_number: int, log_ctx: str, log_key: str = "investigate_pr") -> Optional[int]:
     """Post the transient 'Aurora is reviewing…' comment; return its id.
 
     Best-effort: any failure returns None and the review proceeds without
@@ -163,13 +218,13 @@ def _post_progress_comment(adapter, pr_number: int, log_ctx: str) -> Optional[in
         return comment.get("id")
     except Exception as exc:
         logger.warning(
-            "change_gating=investigate_pr %s status=progress_post_failed error_class=%s",
-            log_ctx, type(exc).__name__,
+            "change_gating=%s %s status=progress_post_failed error_class=%s",
+            log_key, log_ctx, type(exc).__name__,
         )
         return None
 
 
-def _clear_progress_comment(adapter, comment_id: Optional[int], log_ctx: str) -> None:
+def _clear_progress_comment(adapter, comment_id: Optional[int], log_ctx: str, log_key: str = "investigate_pr") -> None:
     """Delete the progress comment (best-effort). No-op when never posted."""
     if comment_id is None:
         return
@@ -177,8 +232,8 @@ def _clear_progress_comment(adapter, comment_id: Optional[int], log_ctx: str) ->
         adapter.delete_issue_comment(comment_id)
     except Exception as exc:
         logger.warning(
-            "change_gating=investigate_pr %s status=progress_clear_failed error_class=%s",
-            log_ctx, type(exc).__name__,
+            "change_gating=%s %s status=progress_clear_failed error_class=%s",
+            log_key, log_ctx, type(exc).__name__,
         )
 
 
@@ -259,7 +314,7 @@ def investigate_pr(
     action: str,
     delivery_id: str,
 ) -> dict[str, Any]:
-    """Run an agentic risk review on a PR and post a GitHub review."""
+    """Run an agentic risk review on a GitHub PR and post a GitHub review."""
     from billiard.exceptions import SoftTimeLimitExceeded
     from celery.exceptions import Retry
 
@@ -269,10 +324,10 @@ def investigate_pr(
             self, start, user_id, installation_id, repo_full_name,
             pr_number, head_sha, action, delivery_id,
         )
-    except _PermanentGitHubError:
+    except _PermanentProviderError:
         return {"status": "github_error"}
     except Retry:
-        raise  # task.retry() raised inside _gh — let Celery handle it
+        raise  # task.retry() raised inside the provider-call wrapper — let Celery handle it
     except SoftTimeLimitExceeded:
         logger.error(
             "change_gating=investigate_pr repo=%s pr=%s head_sha=%s status=timeout",
@@ -302,49 +357,182 @@ def _run_investigation(
     action: str,
     delivery_id: str,
 ) -> dict[str, Any]:
-    """Full investigation flow; see module docstring for the step list."""
+    """GitHub wrapper: build the adapter + enrollment probe, run the core."""
+    from services.change_gating.github_adapter import GitHubPRAdapter
+
+    adapter = GitHubPRAdapter(installation_id, repo_full_name)
+    return _run_investigation_core(
+        task, start, user_id, repo_full_name, pr_number, head_sha, action,
+        delivery_id,
+        adapter=adapter,
+        verify_enrollment=lambda: _verify_enrollment(
+            user_id, installation_id, repo_full_name
+        ),
+        provider="github",
+        log_key="investigate_pr",
+        post_review_reject_hint=(
+            "common causes: the GitHub App lacks the "
+            "'Pull requests: write' permission (upgrade in App settings, "
+            "org admin must accept), or APPROVE was attempted on a PR "
+            "authored by the App itself."
+        ),
+    )
+
+
+@celery_app.task(
+    bind=True,
+    name="tasks.change_gating.investigate_bitbucket_pr",
+    max_retries=2,
+    default_retry_delay=60,
+    time_limit=900,
+    soft_time_limit=840,
+)
+def investigate_bitbucket_pr(
+    self,
+    user_id: str,
+    repo_full_name: str,
+    pr_number: int,
+    head_sha: str,
+    action: str,
+    delivery_id: str,
+) -> dict[str, Any]:
+    """Run an agentic risk review on a Bitbucket Cloud PR and post the result.
+
+    Sibling of :func:`investigate_pr`. ``user_id`` is the org member the
+    webhook handler resolved as owning a valid Bitbucket token (there is no
+    GitHub-style ``installation_id``). ``repo_full_name`` is
+    ``workspace/repo_slug``.
+    """
+    from billiard.exceptions import SoftTimeLimitExceeded
+    from celery.exceptions import Retry
+
+    start = time.monotonic()
+    try:
+        return _run_bitbucket_investigation(
+            self, start, user_id, repo_full_name,
+            pr_number, head_sha, action, delivery_id,
+        )
+    except _PermanentProviderError:
+        return {"status": "bitbucket_error"}
+    except Retry:
+        raise
+    except SoftTimeLimitExceeded:
+        logger.error(
+            "change_gating=investigate_bitbucket_pr repo=%s pr=%s head_sha=%s status=timeout",
+            repo_full_name, pr_number, head_sha,
+        )
+        return {"status": "timeout"}
+    except Exception as exc:
+        logger.exception(
+            "change_gating=investigate_bitbucket_pr repo=%s pr=%s head_sha=%s "
+            "status=unexpected_error error_class=%s — retrying",
+            repo_full_name, pr_number, head_sha, type(exc).__name__,
+        )
+        raise self.retry(exc=exc)
+
+
+def _run_bitbucket_investigation(
+    task,
+    start: float,
+    user_id: str,
+    repo_full_name: str,
+    pr_number: int,
+    head_sha: str,
+    action: str,
+    delivery_id: str,
+) -> dict[str, Any]:
+    """Bitbucket wrapper: build the adapter + enrollment probe, run the core."""
+    from services.change_gating.bitbucket_adapter import build_bitbucket_adapter
+
+    adapter = build_bitbucket_adapter(user_id, repo_full_name)
+    if adapter is None:
+        # No usable Bitbucket credentials for this org — a permanent
+        # condition until someone reconnects; don't burn retries.
+        logger.error(
+            "change_gating=investigate_bitbucket_pr repo=%s pr=%s head_sha=%s "
+            "status=no_credentials",
+            repo_full_name, pr_number, head_sha,
+        )
+        return {"status": "no_credentials"}
+    return _run_investigation_core(
+        task, start, user_id, repo_full_name, pr_number, head_sha, action,
+        delivery_id,
+        adapter=adapter,
+        verify_enrollment=lambda: _verify_bitbucket_enrollment(
+            user_id, repo_full_name
+        ),
+        provider="bitbucket",
+        log_key="investigate_bitbucket_pr",
+        post_review_reject_hint=(
+            "common causes: the Bitbucket token lacks write:pullrequest "
+            "scope, or approve was attempted on the token owner's own PR."
+        ),
+    )
+
+
+def _run_investigation_core(
+    task,
+    start: float,
+    user_id: str,
+    repo_full_name: str,
+    pr_number: int,
+    head_sha: str,
+    action: str,
+    delivery_id: str,
+    *,
+    adapter,
+    verify_enrollment: Callable[[], str],
+    provider: str = "github",
+    log_key: str = "investigate_pr",
+    post_review_reject_hint: str = "",
+) -> dict[str, Any]:
+    """Provider-neutral investigation flow; see module docstring for steps.
+
+    All provider I/O goes through ``adapter``
+    (:class:`services.change_gating.protocol.PRAdapter`). Providers that
+    return ``None`` from ``get_compare`` simply never take the incremental
+    path — every review is a full-PR review.
+    """
     log_ctx = (
         f"repo={repo_full_name} pr={pr_number} head_sha={head_sha} "
         f"action={action} delivery_id={delivery_id}"
     )
 
     def _skip(reason: str) -> dict[str, Any]:
-        logger.info("change_gating=investigate_pr %s status=%s", log_ctx, reason)
+        logger.info("change_gating=%s %s status=%s", log_key, log_ctx, reason)
         return {"status": reason}
 
     def _gh(phase: str, fn: Callable[[], Any]) -> Any:
-        """Run a GitHub adapter call with retry/permanent classification."""
+        """Run a provider adapter call with retry/permanent classification."""
         try:
             return fn()
         except Exception as exc:
-            kind, status_code = _classify_github_exc(exc)
+            kind, status_code = _classify_provider_exc(exc)
             if kind == "transient":
                 logger.warning(
-                    "change_gating=investigate_pr %s phase=%s status=transient_github_error "
+                    "change_gating=%s %s phase=%s status=transient_%s_error "
                     "code=%s error_class=%s — retrying",
-                    log_ctx, phase, status_code, type(exc).__name__,
+                    log_key, log_ctx, phase, provider, status_code, type(exc).__name__,
                 )
                 raise task.retry(exc=exc)
             if status_code in (403, 422) and phase == "post_review":
                 logger.error(
-                    "change_gating=investigate_pr %s phase=post_review status=rejected "
-                    "code=%s — common causes: the GitHub App lacks the "
-                    "'Pull requests: write' permission (upgrade in App settings, "
-                    "org admin must accept), or APPROVE was attempted on a PR "
-                    "authored by the App itself.",
-                    log_ctx, status_code,
+                    "change_gating=%s %s phase=post_review status=rejected "
+                    "code=%s — %s",
+                    log_key, log_ctx, status_code, post_review_reject_hint,
                 )
             else:
-                # logging.exception adds the traceback; the GitHub errors that
-                # reach here are requests.HTTPError whose str is "<status> ...
-                # for url: <api path>" — token-free (the token is a header, and
-                # tracebacks don't dump locals), so this stays log-safe.
+                # logging.exception adds the traceback; the provider errors
+                # that reach here are requests.HTTPError whose str is
+                # "<status> ... for url: <api path>" — token-free (the token
+                # is a header, and tracebacks don't dump locals), so this
+                # stays log-safe.
                 logger.exception(
-                    "change_gating=investigate_pr %s phase=%s status=github_error "
+                    "change_gating=%s %s phase=%s status=%s_error "
                     "code=%s error_class=%s",
-                    log_ctx, phase, status_code, type(exc).__name__,
+                    log_key, log_ctx, phase, provider, status_code, type(exc).__name__,
                 )
-            raise _PermanentGitHubError() from exc
+            raise _PermanentProviderError() from exc
 
     # ------------------------------------------------------------------
     # 1. Idempotency (Redis). Celery retries reuse the same request id, so
@@ -355,7 +543,7 @@ def _run_investigation(
     from utils.cache.redis_client import get_redis_client
 
     redis_client = get_redis_client()
-    keys = change_gating_keys(repo_full_name, pr_number, head_sha)
+    keys = change_gating_keys(repo_full_name, pr_number, head_sha, provider=provider)
     task_request_id = str(getattr(task.request, "id", None))
     cached_verdict: Optional[dict[str, Any]] = None
     if redis_client is not None:
@@ -373,27 +561,23 @@ def _run_investigation(
             cached_verdict = None
     else:
         logger.warning(
-            "change_gating=investigate_pr %s status=redis_unavailable — "
-            "proceeding without idempotency keys", log_ctx,
+            "change_gating=%s %s status=redis_unavailable — "
+            "proceeding without idempotency keys", log_key, log_ctx,
         )
 
     # ------------------------------------------------------------------
-    # 2. Re-verify enrollment + suspension (may have changed while queued).
+    # 2. Re-verify enrollment (+ suspension on GitHub) — may have changed
+    #    while queued.
     # ------------------------------------------------------------------
-    enrollment = _verify_enrollment(user_id, installation_id, repo_full_name)
+    enrollment = verify_enrollment()
     if enrollment != "ok":
         return _skip(enrollment)
 
     # ------------------------------------------------------------------
     # 3. Fetch + re-validate the PR.
     # ------------------------------------------------------------------
-    from services.change_gating.github_adapter import (
-        GitHubPRAdapter,
-        decode_marker,
-        find_aurora_reviews,
-    )
+    from services.change_gating.markers import decode_marker
 
-    adapter = GitHubPRAdapter(installation_id, repo_full_name)
     pr = _gh("get_pull_request", lambda: adapter.get_pull_request(pr_number))
 
     if ((pr.get("head") or {}).get("sha")) != head_sha:
@@ -410,7 +594,7 @@ def _run_investigation(
     # 4. Prior Aurora review (re-review context for synchronize pushes).
     # ------------------------------------------------------------------
     reviews = _gh("list_reviews", lambda: adapter.list_reviews(pr_number))
-    prior_aurora_reviews = find_aurora_reviews(reviews)
+    prior_aurora_reviews = adapter.find_aurora_reviews(reviews)
     prior = prior_aurora_reviews[-1] if prior_aurora_reviews else None
     prior_findings = None
     prior_head_sha = None
@@ -425,9 +609,10 @@ def _run_investigation(
     #    Aurora review exists for an earlier head, review ONLY the commits
     #    pushed since then (the compare diff prior_head...head), so unchanged
     #    code is never re-examined. The first review (no prior) — and the
-    #    fallback when the compare is unavailable (force-push / too large) —
-    #    reviews the full PR diff. ``get_diff``/``get_compare_diff`` return
-    #    None when GitHub refuses the diff media type (406 oversized).
+    #    fallback when the compare is unavailable (force-push / too large /
+    #    provider without a compare API) — reviews the full PR diff.
+    #    ``get_diff``/``get_compare_diff`` return None when the provider
+    #    refuses to serve the diff (e.g. GitHub 406 oversized).
     # ------------------------------------------------------------------
     from services.change_gating.diff_utils import (
         anchor_findings,
@@ -472,7 +657,7 @@ def _run_investigation(
     # failure) — so it can never leak; a Celery retry just posts a fresh one.
     progress_comment_id = None
     if cached_verdict is None:
-        progress_comment_id = _post_progress_comment(adapter, pr_number, log_ctx)
+        progress_comment_id = _post_progress_comment(adapter, pr_number, log_ctx, log_key)
 
     try:
         # --------------------------------------------------------------
@@ -485,8 +670,8 @@ def _run_investigation(
             verdict = cached_verdict["verdict"]
             session_id = cached_verdict.get("session_id")
             logger.info(
-                "change_gating=investigate_pr %s session_id=%s status=verdict_cache_hit",
-                log_ctx, session_id,
+                "change_gating=%s %s session_id=%s status=verdict_cache_hit",
+                log_key, log_ctx, session_id,
             )
         else:
             # Incremental mode reuses the file list already returned by the
@@ -511,6 +696,7 @@ def _run_investigation(
 
             trigger_metadata = {
                 "source": "change_gating",
+                "provider": provider,
                 "repo": repo_full_name,
                 "pr_number": pr_number,
                 "head_sha": head_sha,
@@ -541,7 +727,8 @@ def _run_investigation(
 
             if not isinstance(result, dict) or result.get("status") != "completed":
                 logger.error(
-                    "change_gating=investigate_pr %s session_id=%s status=agent_failed agent_status=%s",
+                    "change_gating=%s %s session_id=%s status=agent_failed agent_status=%s",
+                    log_key,
                     log_ctx,
                     session_id,
                     (result or {}).get("status") if isinstance(result, dict) else type(result).__name__,
@@ -553,8 +740,8 @@ def _run_investigation(
                 # notice — there was NO investigation, so posting any verdict
                 # (especially an APPROVE) would be wrong. Post nothing.
                 logger.warning(
-                    "change_gating=investigate_pr %s session_id=%s status=guardrail_blocked",
-                    log_ctx, session_id,
+                    "change_gating=%s %s session_id=%s status=guardrail_blocked",
+                    log_key, log_ctx, session_id,
                 )
                 return {"status": "guardrail_blocked", "session_id": session_id}
 
@@ -564,21 +751,21 @@ def _run_investigation(
                 verdict = parse_verdict(final_text)
                 if verdict:
                     logger.info(
-                        "change_gating=investigate_pr %s verdict_source=parse_verdict",
-                        log_ctx,
+                        "change_gating=%s %s verdict_source=parse_verdict",
+                        log_key, log_ctx,
                     )
                 else:
                     verdict = extract_verdict_with_llm(final_text)
                     if verdict:
                         logger.warning(
-                            "change_gating=investigate_pr %s verdict_source=llm_extraction_fallback",
-                            log_ctx,
+                            "change_gating=%s %s verdict_source=llm_extraction_fallback",
+                            log_key, log_ctx,
                         )
             if not verdict:
                 logger.error(
-                    "change_gating=investigate_pr %s session_id=%s status=verdict_parse_failed "
+                    "change_gating=%s %s session_id=%s status=verdict_parse_failed "
                     "has_final_text=%s",
-                    log_ctx, session_id, bool(final_text),
+                    log_key, log_ctx, session_id, bool(final_text),
                 )
                 return {"status": "verdict_parse_failed", "session_id": session_id}
 
@@ -588,8 +775,8 @@ def _run_investigation(
                 verdict["findings"] = []
             elif verdict.get("verdict") == "RISKY" and not verdict.get("findings"):
                 logger.info(
-                    "change_gating=investigate_pr %s session_id=%s status=demoted_risky_no_findings",
-                    log_ctx, session_id,
+                    "change_gating=%s %s session_id=%s status=demoted_risky_no_findings",
+                    log_key, log_ctx, session_id,
                 )
                 verdict["verdict"] = "SAFE"
                 verdict["findings"] = []
@@ -603,8 +790,8 @@ def _run_investigation(
                     )
                 except Exception as exc:
                     logger.warning(
-                        "change_gating=investigate_pr %s status=verdict_cache_set_failed "
-                        "error_class=%s", log_ctx, type(exc).__name__,
+                        "change_gating=%s %s status=verdict_cache_set_failed "
+                        "error_class=%s", log_key, log_ctx, type(exc).__name__,
                     )
 
         # --------------------------------------------------------------
@@ -640,9 +827,9 @@ def _run_investigation(
             ]
             if len(new_line_findings) != len(verdict["findings"]):
                 logger.info(
-                    "change_gating=investigate_pr %s status=incremental_context_findings_dropped "
+                    "change_gating=%s %s status=incremental_context_findings_dropped "
                     "kept=%d of=%d",
-                    log_ctx, len(new_line_findings), len(verdict["findings"]),
+                    log_key, log_ctx, len(new_line_findings), len(verdict["findings"]),
                 )
                 verdict = {**verdict, "findings": new_line_findings}
                 if not new_line_findings:
@@ -722,13 +909,13 @@ def _run_investigation(
                     superseded += 1
                 except Exception as exc:
                     logger.warning(
-                        "change_gating=investigate_pr %s status=supersede_failed "
+                        "change_gating=%s %s status=supersede_failed "
                         "review_id=%s error_class=%s",
-                        log_ctx, prior_review.get("id"), type(exc).__name__,
+                        log_key, log_ctx, prior_review.get("id"), type(exc).__name__,
                     )
             logger.info(
-                "change_gating=investigate_pr %s status=superseded superseded=%d prior_reviews=%d",
-                log_ctx, superseded, len(prior_aurora_reviews),
+                "change_gating=%s %s status=superseded superseded=%d prior_reviews=%d",
+                log_key, log_ctx, superseded, len(prior_aurora_reviews),
             )
         elif incremental and verdict["verdict"] == "RISKY":
             # An incremental review found NEW risk: retract any stale whole-PR
@@ -748,14 +935,14 @@ def _run_investigation(
                     dismissed += 1
                 except Exception as exc:
                     logger.warning(
-                        "change_gating=investigate_pr %s status=dismiss_stale_approve_failed "
+                        "change_gating=%s %s status=dismiss_stale_approve_failed "
                         "review_id=%s error_class=%s",
-                        log_ctx, prior_review.get("id"), type(exc).__name__,
+                        log_key, log_ctx, prior_review.get("id"), type(exc).__name__,
                     )
             if dismissed:
                 logger.info(
-                    "change_gating=investigate_pr %s status=dismissed_stale_approvals dismissed=%d",
-                    log_ctx, dismissed,
+                    "change_gating=%s %s status=dismissed_stale_approvals dismissed=%d",
+                    log_key, log_ctx, dismissed,
                 )
 
         if redis_client is not None:
@@ -764,8 +951,8 @@ def _run_investigation(
                 redis_client.delete(keys["verdict"])
             except Exception as exc:
                 logger.warning(
-                    "change_gating=investigate_pr %s status=posted_key_set_failed error_class=%s",
-                    log_ctx, type(exc).__name__,
+                    "change_gating=%s %s status=posted_key_set_failed error_class=%s",
+                    log_key, log_ctx, type(exc).__name__,
                 )
 
         # --------------------------------------------------------------
@@ -773,9 +960,10 @@ def _run_investigation(
         # --------------------------------------------------------------
         duration_seconds = round(time.monotonic() - start, 2)
         logger.info(
-            "change_gating=investigate_pr %s session_id=%s status=completed verdict=%s "
+            "change_gating=%s %s session_id=%s status=completed verdict=%s "
             "incremental=%s findings=%d anchored=%d unanchored=%d inline_posted=%d "
             "inline_kept=%d duration_seconds=%.2f",
+            log_key,
             log_ctx,
             session_id,
             verdict["verdict"],
@@ -796,6 +984,6 @@ def _run_investigation(
         }
     finally:
         # Always remove this attempt's progress comment, on any exit path —
-        # return, skip, _PermanentGitHubError, or a retry raised by _gh.
-        _clear_progress_comment(adapter, progress_comment_id, log_ctx)
+        # return, skip, _PermanentProviderError, or a retry raised by _gh.
+        _clear_progress_comment(adapter, progress_comment_id, log_ctx, log_key)
         adapter.close()
