@@ -199,13 +199,11 @@ def _create_safety_llm():
 
     Model selection (first match wins):
     1. ``GUARDRAILS_LLM_MODEL`` - explicit override from config.
-    2. ``google/gemini-3.5-flash-lite`` when ``LLM_PROVIDER_MODE=openrouter`` -
+    2. ``google/gemini-2.5-flash-lite`` when ``LLM_PROVIDER_MODE=openrouter`` -
        the safety judge runs on every user message, so the default points at
        a small/cheap OpenRouter model to keep cost predictable. Operators
        who prefer a stronger judge can override via GUARDRAILS_LLM_MODEL.
-    3. ``vertex/gemini-3.5-flash-lite`` when ``LLM_PROVIDER_MODE=vertex`` -
-       same rationale for Vertex deployments.
-    4. ``ModelConfig.MAIN_MODEL`` - fall back to whatever the chat agent uses.
+    3. ``ModelConfig.MAIN_MODEL`` - fall back to whatever the chat agent uses.
     """
     from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.providers import create_chat_model
@@ -213,9 +211,7 @@ def _create_safety_llm():
     if config.llm_model:
         model = config.llm_model
     elif os.getenv("LLM_PROVIDER_MODE", "").lower() == "openrouter":
-        model = "google/gemini-3.5-flash-lite"
-    elif os.getenv("LLM_PROVIDER_MODE", "").lower() == "vertex":
-        model = "vertex/gemini-3.5-flash-lite"
+        model = "google/gemini-2.5-flash-lite"
     else:
         model = ModelConfig.MAIN_MODEL
 

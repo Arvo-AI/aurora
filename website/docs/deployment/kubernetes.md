@@ -59,7 +59,6 @@ config:
   # For non-OpenRouter providers, also set:
   # MAIN_MODEL: "vertex/gemini-3.6-flash"
   # RCA_MODEL: "vertex/gemini-3.6-flash"
-  # GUARDRAILS_LLM_MODEL: "vertex/gemini-3.5-flash-lite"
 secrets:
   llm:
     OPENROUTER_API_KEY: ""  # or OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
@@ -191,7 +190,6 @@ config:
   # For non-OpenRouter providers, uncomment and set:
   # MAIN_MODEL: "vertex/gemini-3.6-flash"
   # RCA_MODEL: "vertex/gemini-3.6-flash"
-  # GUARDRAILS_LLM_MODEL: "vertex/gemini-3.5-flash-lite"
 
 secrets:
   db:
