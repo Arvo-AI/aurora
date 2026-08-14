@@ -18,7 +18,56 @@ logger = logging.getLogger(__name__)
 
 PROVIDER_NAMES = ["openrouter", "openai", "anthropic", "google", "vertex", "ollama", "bedrock"]
 
+# Env vars that mean "this provider was actually configured" for the chat picker.
+# Bedrock ignores AWS_DEFAULT_REGION — that is set for cloud connectors, not LLM.
+_PICKER_ENV = (
+    ("openai", "OPENAI_API_KEY"),
+    ("anthropic", "ANTHROPIC_API_KEY"),
+    ("google", "GOOGLE_AI_API_KEY"),
+    ("vertex", "VERTEX_AI_PROJECT"),
+    ("ollama", "OLLAMA_BASE_URL"),
+)
+
+
+def picker_prefixes(mode: str | None, env: dict) -> list[str] | None:
+    """Which model-id prefixes the chat picker should show.
+
+    Returns None to show the full catalog:
+    - OpenRouter mode (one key, every provider)
+    - Ollama mode (local runner; model ids still use provider prefixes)
+    - Direct mode with no LLM credentials set (fail at call time)
+    """
+    mode = (mode or "direct").strip().lower()
+    if mode in ("openrouter", "ollama"):
+        return None
+    if mode not in ("direct", "auto"):
+        return [mode]
+
+    configured = [name for name, var in _PICKER_ENV if env.get(var)]
+    if env.get("BEDROCK_BASE_URL") or env.get("BEDROCK_REGION"):
+        configured.append("bedrock")
+    return configured or None
+
+
 llm_config_bp = Blueprint("llm_config", __name__, url_prefix="/api/llm-config")
+
+
+@llm_config_bp.route("/picker", methods=["GET"])
+@require_permission("chat", "read")
+def get_picker_config(user_id):
+    """Chat-picker filter: provider mode + prefixes that can actually run."""
+    try:
+        mode = os.getenv("LLM_PROVIDER_MODE") or "direct"
+        return jsonify(
+            {
+                "success": True,
+                "mode": mode,
+                "prefixes": picker_prefixes(mode, os.environ),
+            }
+        ), 200
+    except Exception as e:
+        logger.error(f"Error getting picker config: {e}", exc_info=True)
+        return jsonify({"success": False, "error": "Failed to get picker config"}), 500
 
 
 @llm_config_bp.route("/available-providers", methods=["GET"])

@@ -41,7 +41,7 @@ Connects directly to each provider's native API. Use this when running models lo
 LLM_PROVIDER_MODE=direct
 ```
 
-In direct mode, Aurora auto-detects the provider from the model name prefix (e.g., `anthropic/claude-3-haiku` routes to Anthropic, `google/gemini-3.6-flash` routes to Google AI).
+In direct mode, Aurora auto-detects the provider from the model name prefix (e.g., `anthropic/claude-3-haiku` routes to Anthropic, `google/gemini-3.5-flash` routes to Google AI).
 
 ### Provider Mode (route everything through one provider)
 
@@ -73,12 +73,10 @@ A clean pick like **Claude Opus 4.7** is then translated to that provider's nati
 | | `anthropic/claude-haiku-4.5` | Fast, affordable |
 | | `anthropic/claude-3.5-sonnet` | Widely used, reliable |
 | | `anthropic/claude-3-haiku` | Cheapest (default RCA model) |
-| **Google Gemini** | `google/gemini-3.6-flash` | Latest Flash — agentic workflows, coding, multimodal (thinking) |
-| | `google/gemini-3.5-flash-lite` | Fastest, lowest-cost — high-throughput workloads |
-| | `google/gemini-3.5-flash` | Previous Flash generation (still supported in env vars) |
-| | `google/gemini-3.1-pro-preview` | Strong reasoning with thinking |
+| **Google Gemini** | `google/gemini-3.5-flash` | Fast, cost-effective with thinking |
+| | `google/gemini-3.1-pro-preview` | Latest flagship with thinking |
 | | `google/gemini-2.5-pro` | Strong for complex tasks |
-| | `google/gemini-2.5-flash` | Cost-effective legacy Flash |
+| | `google/gemini-2.5-flash` | Cost-effective |
 | **Vertex AI** | `vertex/gemini-3.6-flash` | Latest Flash — agentic workflows, coding, multimodal (thinking) |
 | | `vertex/gemini-3.5-flash-lite` | Fastest, lowest-cost — high-throughput workloads |
 | | `vertex/gemini-3.5-flash` | Previous Flash generation (still supported in env vars) |
@@ -285,8 +283,8 @@ RCA_MODEL=anthropic/claude-haiku-4.5
 # OpenAI
 RCA_MODEL=openai/gpt-4o
 
-# Google AI — recommended for RCA when using Gemini
-RCA_MODEL=google/gemini-3.6-flash
+# Google AI
+RCA_MODEL=google/gemini-3.5-flash
 
 # Vertex AI — recommended for RCA when LLM_PROVIDER_MODE=vertex
 RCA_MODEL=vertex/gemini-3.6-flash

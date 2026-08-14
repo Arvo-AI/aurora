@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Button } from "@/components/ui/button";
 import { Brain, ChevronDown } from 'lucide-react';
+import { useQuery, jsonFetcher } from '@/lib/query';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -41,16 +42,12 @@ const modelPricing: Record<string, string> = {
   'openai/gpt-5.5': 'Premium Cost ($5/$30 per 1M)',
   'anthropic/claude-sonnet-4.6': 'Medium Cost ($3/$15 per 1M)',
   'anthropic/claude-opus-4.7': 'High Cost ($5/$25 per 1M)',
-  'google/gemini-3.6-flash': 'Low Cost ($0.75/$3.75 per 1M)',
-  'google/gemini-3.5-flash-lite': 'Lowest Cost ($0.30/$2.50 per 1M)',
+  'google/gemini-3.5-flash': 'Low Cost ($0.50/$3 per 1M)',
   'google/gemini-3.1-pro-preview': 'Medium Cost ($2/$12 per 1M)',
   'google/gemini-2.5-pro': 'Medium Cost ($1.25/$10 per 1M)',
   'google/gemini-2.5-flash': 'Low Cost ($0.30/$2.50 per 1M)',
-};
-
-// ponytail: one-time picker migrations when a model id is retired from the list
-const MODEL_MIGRATIONS: Record<string, string> = {
-  'google/gemini-3.5-flash': 'google/gemini-3.6-flash',
+  'vertex/gemini-3.6-flash': 'Low Cost ($0.75/$3.75 per 1M)',
+  'vertex/gemini-3.5-flash-lite': 'Lowest Cost ($0.30/$2.50 per 1M)',
 };
 
 const modelOptions: ModelOption[] = [
@@ -83,22 +80,13 @@ const modelOptions: ModelOption[] = [
     isSlow: true
   },
   {
-    id: 'google/gemini-3.6-flash',
-    name: 'gemini-3.6-flash',
-    displayName: 'Gemini 3.6 Flash',
+    id: 'google/gemini-3.5-flash',
+    name: 'gemini-3.5-flash',
+    displayName: 'Gemini 3.5 Flash',
     provider: 'Google',
     tier: 'free',
     contextLength: '1M',
     hasReasoning: true
-  },
-  {
-    id: 'google/gemini-3.5-flash-lite',
-    name: 'gemini-3.5-flash-lite',
-    displayName: 'Gemini 3.5 Flash-Lite',
-    provider: 'Google',
-    tier: 'free',
-    contextLength: '1M',
-    hasReasoning: false
   },
   {
     id: 'google/gemini-3.1-pro-preview',
@@ -127,7 +115,55 @@ const modelOptions: ModelOption[] = [
     contextLength: '1M',
     hasReasoning: true
   },
+  // Vertex-only — 3.6 Flash and 3.5 Flash-Lite were tested on Vertex, not Google AI.
+  {
+    id: 'vertex/gemini-3.6-flash',
+    name: 'gemini-3.6-flash',
+    displayName: 'Gemini 3.6 Flash',
+    provider: 'Vertex',
+    tier: 'free',
+    contextLength: '1M',
+    hasReasoning: true
+  },
+  {
+    id: 'vertex/gemini-3.5-flash-lite',
+    name: 'gemini-3.5-flash-lite',
+    displayName: 'Gemini 3.5 Flash-Lite',
+    provider: 'Vertex',
+    tier: 'free',
+    contextLength: '1M',
+    hasReasoning: false
+  },
 ];
+
+interface PickerConfig {
+  prefixes: string[] | null;
+}
+
+function modelsForPrefixes(prefixes: string[] | null): ModelOption[] {
+  // OpenRouter / no keys: full catalog minus Vertex-only ids (those are not Google AI / OpenRouter picks).
+  if (!prefixes) {
+    return modelOptions.filter((m) => m.id.split('/')[0] !== 'vertex');
+  }
+
+  const out: ModelOption[] = [];
+  for (const model of modelOptions) {
+    const prefix = model.id.split('/')[0];
+    if (prefix === 'openai' && prefixes.includes('openai')) {
+      out.push(model);
+    } else if (prefix === 'anthropic' && (prefixes.includes('anthropic') || prefixes.includes('bedrock'))) {
+      out.push(model);
+    } else if (prefix === 'google') {
+      if (prefixes.includes('google')) out.push(model);
+      if (prefixes.includes('vertex')) {
+        out.push({ ...model, id: `vertex/${model.name}` });
+      }
+    } else if (prefix === 'vertex' && prefixes.includes('vertex')) {
+      out.push(model);
+    }
+  }
+  return out;
+}
 
 export default function ModelSelector({ 
   selectedModel, 
@@ -136,25 +172,39 @@ export default function ModelSelector({
   disabled = false 
 }: ModelSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
-  
-  // Load saved model from localStorage on mount
-  useEffect(() => {
-    const savedModel = localStorage.getItem('selectedModel');
-    if (!savedModel) return;
+  const { data: picker, error: pickerError } = useQuery<PickerConfig>(
+    '/api/llm-config/picker',
+    jsonFetcher,
+    { staleTime: 60_000 },
+  );
+  const visibleModels = useMemo(() => {
+    if (pickerError) return modelsForPrefixes(null);
+    if (!picker) return [];
+    return modelsForPrefixes(picker.prefixes);
+  }, [picker, pickerError]);
 
-    const migratedModel = MODEL_MIGRATIONS[savedModel] ?? savedModel;
-    const isValidModel = modelOptions.some((model) => model.id === migratedModel);
-    if (isValidModel && migratedModel !== selectedModel) {
-      onModelChange(migratedModel);
-      localStorage.setItem('selectedModel', migratedModel);
-    } else if (!isValidModel) {
-      localStorage.removeItem('selectedModel');
-      const currentIsValid = modelOptions.some((model) => model.id === selectedModel);
-      if (!currentIsValid) {
-        onModelChange(modelOptions[0].id);
-      }
+  // Load saved model from localStorage on mount, then drop anything this
+  // deployment cannot actually serve (e.g. GPT under Vertex).
+  useEffect(() => {
+    const catalog = visibleModels;
+    if (catalog.length === 0) return;
+
+    const savedModel = localStorage.getItem('selectedModel');
+    const savedName = savedModel?.split('/')[1];
+    const candidate = savedModel && catalog.some((m) => m.id === savedModel)
+      ? savedModel
+      : savedName && catalog.find((m) => m.name === savedName)?.id
+        || (catalog.some((m) => m.id === selectedModel) ? selectedModel : catalog[0].id);
+
+    if (candidate !== selectedModel) {
+      onModelChange(candidate);
     }
-  }, []);
+    if (savedModel && savedModel !== candidate) {
+      localStorage.removeItem('selectedModel');
+    } else if (candidate !== savedModel) {
+      localStorage.setItem('selectedModel', candidate);
+    }
+  }, [visibleModels]);
 
   const handleModelSelect = (modelId: string) => {
     onModelChange(modelId);
@@ -162,7 +212,10 @@ export default function ModelSelector({
     setIsOpen(false);
   };
 
-  const selectedModelData = modelOptions.find(model => model.id === selectedModel) || modelOptions[0];
+  const selectedModelData = visibleModels.find(model => model.id === selectedModel)
+    || modelOptions.find(model => model.id === selectedModel)
+    || visibleModels[0]
+    || modelOptions[0];
 
   return (
     <TooltipProvider>
@@ -189,8 +242,8 @@ export default function ModelSelector({
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
           
-          {modelOptions.map((model) => {
-            const pricingInfo = modelPricing[model.id];
+          {visibleModels.map((model) => {
+            const pricingInfo = modelPricing[model.id] || modelPricing[`google/${model.name}`];
             return (
               <Tooltip key={model.id}>
                 <TooltipTrigger asChild>
