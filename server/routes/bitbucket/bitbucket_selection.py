@@ -41,7 +41,8 @@ def get_workspace_selection(user_id):
                               MAX(default_branch),
                               MAX(metadata_summary),
                               MAX(metadata_status),
-                              bool_or(change_gating_enabled)
+                              bool_or(change_gating_enabled),
+                              bool_or(webhook_hook_uuid IS NOT NULL)
                        FROM connected_repos
                        WHERE org_id = %s AND provider = 'bitbucket'
                        GROUP BY repo_full_name
@@ -70,6 +71,9 @@ def get_workspace_selection(user_id):
                 "metadata_summary": r[2],
                 "metadata_status": r[3],
                 "change_gating_enabled": bool(r[4]),
+                # True once Aurora has confirmed the repo webhook exists
+                # (created it, or found it during enable/verify).
+                "webhook_configured": bool(r[5]),
                 "mainbranch": {"name": r[1]} if r[1] else None,
             })
 
@@ -495,6 +499,76 @@ def update_change_gating(user_id, repo_full_name):
     except Exception:
         logger.exception("Error updating Bitbucket change gating")
         return jsonify({"error": "Failed to update Incident Prevention"}), 500
+
+
+@bitbucket_selection_bp.route("/repo-selections/<path:repo_full_name>/change-gating/verify", methods=["GET"])
+@require_permission("connectors", "read")
+def verify_change_gating_webhook(user_id, repo_full_name):
+    """Check whether the repo's Incident Prevention webhook actually exists.
+
+    Lists the repository's Bitbucket hooks and looks for one pointing at the
+    org's webhook URL with both pullrequest events enabled. On a match the
+    hook uuid is stored (covers manually created hooks) so the UI can show
+    "Active" instead of a bare toggle, and cleanup can delete it later.
+    """
+    try:
+        org_id = resolve_org(user_id)
+        webhook_url = f"{_webhook_base_url()}/bitbucket/webhook/{org_id}"
+
+        from chat.backend.agent.tools.bitbucket.utils import get_bb_client_for_user
+
+        client = get_bb_client_for_user(user_id)
+        if client is None or "/" not in repo_full_name:
+            return jsonify({"verified": False, "reason": "bitbucket_not_connected"}), 200
+        ws, slug = repo_full_name.split("/", 1)
+        hooks = client.list_webhooks(ws, slug)
+        if isinstance(hooks, dict) and hooks.get("error"):
+            # Most common cause: the connector token lacks webhook read
+            # scope — we can't see hooks, which is not proof of absence.
+            return jsonify({
+                "verified": False,
+                "reason": "cannot_list_hooks",
+                "detail": "The connected Bitbucket token cannot list this repository's "
+                          "webhooks (requires repo admin). Verify the hook manually in "
+                          "Bitbucket → Repository settings → Webhooks.",
+            }), 200
+
+        match = None
+        for hook in hooks if isinstance(hooks, list) else []:
+            if isinstance(hook, dict) and hook.get("url") == webhook_url:
+                match = hook
+                break
+        if match is None:
+            return jsonify({"verified": False, "reason": "hook_not_found"}), 200
+
+        events = set(match.get("events") or [])
+        missing_events = {"pullrequest:created", "pullrequest:updated"} - events
+        if not match.get("active"):
+            return jsonify({"verified": False, "reason": "hook_inactive"}), 200
+        if missing_events:
+            return jsonify({
+                "verified": False,
+                "reason": "missing_events",
+                "detail": f"Hook exists but is missing triggers: {', '.join(sorted(missing_events))}",
+            }), 200
+
+        # Hook confirmed — persist its uuid (covers manual setups).
+        if match.get("uuid"):
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:verify]")
+                    cur.execute(
+                        """UPDATE connected_repos
+                              SET webhook_hook_uuid = %s, updated_at = NOW()
+                            WHERE org_id = %s AND provider = 'bitbucket'
+                              AND repo_full_name = %s""",
+                        (match["uuid"], org_id, repo_full_name),
+                    )
+                    conn.commit()
+        return jsonify({"verified": True}), 200
+    except Exception:
+        logger.exception("Error verifying Bitbucket webhook")
+        return jsonify({"error": "Failed to verify webhook"}), 500
 
 
 @bitbucket_selection_bp.route("/repo-metadata/generate", methods=["POST"])

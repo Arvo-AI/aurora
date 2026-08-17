@@ -38,6 +38,12 @@ export interface ChangeGatingResponse {
   webhook_auto_created?: boolean;
 }
 
+export interface WebhookVerifyResponse {
+  verified: boolean;
+  reason?: string;
+  detail?: string;
+}
+
 interface WorkspacesResponse {
   workspaces: Workspace[];
 }
@@ -70,6 +76,7 @@ export interface WorkspaceSelectionResponse {
     metadata_summary?: string | null;
     metadata_status?: string | null;
     change_gating_enabled?: boolean;
+    webhook_configured?: boolean;
   })[];
 }
 
@@ -219,6 +226,13 @@ export class BitbucketIntegrationService {
     return this.request<ChangeGatingResponse>(
       `/repo-selections/${encodeURIComponent(repoFullName)}/change-gating`,
       { method: 'PUT', body: { enabled }, errorMessage: 'Failed to update Incident Prevention setting' }
+    );
+  }
+
+  static async verifyChangeGatingWebhook(repoFullName: string): Promise<WebhookVerifyResponse> {
+    return this.request<WebhookVerifyResponse>(
+      `/repo-selections/${encodeURIComponent(repoFullName)}/change-gating/verify`,
+      { errorMessage: 'Failed to verify webhook' }
     );
   }
 }

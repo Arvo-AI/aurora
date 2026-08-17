@@ -4,14 +4,16 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Check, Pencil, RotateCw, X, RefreshCw, Info, Copy } from 'lucide-react';
+import { Loader2, Check, Pencil, RotateCw, X, RefreshCw, Info, Copy, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { BitbucketIntegrationService } from '@/services/bitbucket-integration-service';
 import type { Workspace, Repo, ChangeGatingResponse } from '@/services/bitbucket-integration-service';
+import { isIncidentPreventionEnabled } from '@/lib/feature-flags';
 
 interface ConnectedRepo {
   slug: string;
@@ -21,6 +23,7 @@ interface ConnectedRepo {
   metadata_summary: string | null;
   metadata_status: string | null;
   change_gating_enabled: boolean;
+  webhook_configured: boolean;
 }
 
 function parseConnectedRepos(repositories: NonNullable<import('@/services/bitbucket-integration-service').WorkspaceSelectionResponse['repositories']>): ConnectedRepo[] {
@@ -34,6 +37,7 @@ function parseConnectedRepos(repositories: NonNullable<import('@/services/bitbuc
       metadata_summary: r.metadata_summary || null,
       metadata_status: r.metadata_status || null,
       change_gating_enabled: !!r.change_gating_enabled,
+      webhook_configured: !!r.webhook_configured,
     }));
 }
 
@@ -59,45 +63,36 @@ export default function BitbucketWorkspaceBrowser() {
   const [editingMetadata, setEditingMetadata] = useState<Record<string, string>>({});
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Incident Prevention (PR change gating)
+  // Incident Prevention (PR change gating). The feature flag is read from
+  // the injected env (instant) — not from /bitbucket/status, which does a
+  // live Bitbucket API round-trip and left the toggle invisible for seconds.
+  const incidentPreventionEnabled = isIncidentPreventionEnabled();
   const [gatingUpdating, setGatingUpdating] = useState<Set<string>>(new Set());
   const [webhookSetup, setWebhookSetup] = useState<ChangeGatingResponse | null>(null);
-  const [incidentPreventionEnabled, setIncidentPreventionEnabled] = useState(false);
-
-  useEffect(() => {
-    BitbucketIntegrationService.checkStatus()
-      .then(s => setIncidentPreventionEnabled(!!s.incident_prevention_enabled))
-      .catch(() => setIncidentPreventionEnabled(false));
-  }, []);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   const handleChangeGatingToggle = async (repoFullName: string, enabled: boolean) => {
     setGatingUpdating(prev => new Set(prev).add(repoFullName));
-    // Optimistic flip; revert on failure
-    setSavedRepos(prev => prev.map(r =>
-      r.full_name === repoFullName ? { ...r, change_gating_enabled: enabled } : r
-    ));
     try {
       const result = await BitbucketIntegrationService.updateChangeGating(repoFullName, enabled);
+      // Only reflect state the server confirmed — no optimistic flip: the
+      // toggle must never show "on" for a repo whose webhook isn't set up.
+      setSavedRepos(prev => prev.map(r =>
+        r.full_name === repoFullName
+          ? { ...r, change_gating_enabled: enabled, webhook_configured: enabled ? !!result.webhook_auto_created : false }
+          : r
+      ));
       if (enabled && result.webhook_url) {
+        // Always walk the user through webhook setup/verification on enable.
         setWebhookSetup(result);
       } else if (!enabled && webhookSetup?.repo_full_name === repoFullName) {
         setWebhookSetup(null);
       }
-      let description: string | undefined;
-      if (enabled) {
-        description = result.webhook_auto_created
-          ? `Webhook configured automatically for ${repoFullName}.`
-          : `Add the webhook to ${repoFullName} in Bitbucket to start receiving reviews.`;
+      if (!enabled) {
+        toast({ title: "Incident Prevention disabled" });
       }
-      toast({
-        title: enabled ? "Incident Prevention enabled" : "Incident Prevention disabled",
-        description,
-      });
     } catch (error: unknown) {
       const err = error as Error;
-      setSavedRepos(prev => prev.map(r =>
-        r.full_name === repoFullName ? { ...r, change_gating_enabled: !enabled } : r
-      ));
       toast({
         title: "Error",
         description: err.message || "Failed to update Incident Prevention setting",
@@ -109,6 +104,36 @@ export default function BitbucketWorkspaceBrowser() {
         next.delete(repoFullName);
         return next;
       });
+    }
+  };
+
+  const handleVerifyWebhook = async (repoFullName: string) => {
+    setIsVerifying(true);
+    try {
+      const result = await BitbucketIntegrationService.verifyChangeGatingWebhook(repoFullName);
+      if (result.verified) {
+        setSavedRepos(prev => prev.map(r =>
+          r.full_name === repoFullName ? { ...r, webhook_configured: true } : r
+        ));
+        setWebhookSetup(null);
+        toast({ title: "Webhook verified", description: `Incident Prevention is active for ${repoFullName}.` });
+      } else if (result.reason === 'cannot_list_hooks') {
+        toast({
+          title: "Cannot verify automatically",
+          description: result.detail || "The connected token cannot list this repository's webhooks. Confirm the hook manually in Bitbucket.",
+        });
+      } else {
+        toast({
+          title: "Webhook not found",
+          description: result.detail || "No matching webhook on the repository yet. Add it in Bitbucket → Repository settings → Webhooks, then verify again.",
+          variant: "destructive",
+        });
+      }
+    } catch (error: unknown) {
+      const err = error as Error;
+      toast({ title: "Error", description: err.message || "Failed to verify webhook", variant: "destructive" });
+    } finally {
+      setIsVerifying(false);
     }
   };
 
@@ -551,19 +576,38 @@ export default function BitbucketWorkspaceBrowser() {
                 )}
                 {incidentPreventionEnabled && (
                   <div className="flex items-center justify-between gap-2 pt-1">
-                    <TooltipProvider delayDuration={0}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button type="button" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
-                            Incident Prevention
-                            <Info className="h-3 w-3" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="right" className="max-w-xs">
-                          <p>Aurora reviews pull requests targeting this repo&apos;s default branch and flags changes that could cause production incidents. Requires a Bitbucket webhook (setup details appear when enabled).</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
+                    <div className="flex items-center gap-2">
+                      <TooltipProvider delayDuration={0}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button type="button" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
+                              Incident Prevention
+                              <Info className="h-3 w-3" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="right" className="max-w-xs">
+                            <p>Aurora reviews pull requests targeting this repo&apos;s default branch and flags changes that could cause production incidents. Requires a Bitbucket webhook (setup details appear when enabled).</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      {repo.change_gating_enabled && repo.webhook_configured && (
+                        <Badge variant="outline" className="text-xs text-green-600 border-green-600/40 gap-1 px-1.5">
+                          <CheckCircle2 className="h-3 w-3" /> Active
+                        </Badge>
+                      )}
+                      {repo.change_gating_enabled && !repo.webhook_configured && (
+                        <button
+                          type="button"
+                          className="inline-flex"
+                          onClick={() => handleVerifyWebhook(repo.full_name)}
+                          title="Webhook not verified yet — click to re-check"
+                        >
+                          <Badge variant="outline" className="text-xs text-amber-600 border-amber-600/40 gap-1 px-1.5 cursor-pointer">
+                            <AlertTriangle className="h-3 w-3" /> Setup required
+                          </Badge>
+                        </button>
+                      )}
+                    </div>
                     <Switch
                       checked={repo.change_gating_enabled}
                       disabled={gatingUpdating.has(repo.full_name)}
@@ -580,12 +624,18 @@ export default function BitbucketWorkspaceBrowser() {
         </div>
       )}
 
-      {webhookSetup?.webhook_url && (
-        <div className="space-y-2 p-3 rounded-md border border-border bg-muted/30">
-          <p className="text-sm font-medium">Webhook setup for {webhookSetup.repo_full_name}</p>
-          {!webhookSetup.webhook_auto_created && (
+      <Dialog open={!!webhookSetup?.webhook_url} onOpenChange={(open) => { if (!open) setWebhookSetup(null); }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Webhook setup — {webhookSetup?.repo_full_name}</DialogTitle>
+            <DialogDescription>
+              {webhookSetup?.webhook_auto_created
+                ? 'Aurora created the repository webhook automatically. Click Verify to confirm it and activate Incident Prevention.'
+                : 'Aurora could not create the webhook automatically (repo admin access is required). Add it in Bitbucket, then click Verify.'}
+            </DialogDescription>
+          </DialogHeader>
+          {!webhookSetup?.webhook_auto_created && (
             <p className="text-xs text-muted-foreground">
-              Aurora could not create the webhook automatically (repo admin access is required).
               In Bitbucket, go to <span className="font-medium">Repository settings → Webhooks → Add webhook</span> and
               paste the URL and secret below, with triggers <span className="font-mono">Pull request: Created</span> and{' '}
               <span className="font-mono">Pull request: Updated</span>.
@@ -594,29 +644,36 @@ export default function BitbucketWorkspaceBrowser() {
           <p className="text-xs text-muted-foreground font-medium">
             Use this SAME URL and secret on every repository you enable — the secret is shared across your organization.
           </p>
-          <div className="flex items-center gap-1">
-            <span className="text-xs text-muted-foreground w-12 flex-shrink-0">URL</span>
-            <code className="text-xs bg-background border border-border rounded px-2 py-1 flex-1 truncate">{webhookSetup.webhook_url}</code>
-            <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Copy webhook URL"
-              onClick={() => copyToClipboard(webhookSetup.webhook_url!, 'Webhook URL')}>
-              <Copy className="h-3 w-3" />
-            </Button>
+          <div className="space-y-2">
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-muted-foreground w-12 flex-shrink-0">URL</span>
+              <code className="text-xs bg-muted border border-border rounded px-2 py-1 flex-1 break-all">{webhookSetup?.webhook_url}</code>
+              <Button variant="ghost" size="sm" className="h-6 w-6 p-0 flex-shrink-0" title="Copy webhook URL"
+                onClick={() => copyToClipboard(webhookSetup!.webhook_url!, 'Webhook URL')}>
+                <Copy className="h-3 w-3" />
+              </Button>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-muted-foreground w-12 flex-shrink-0">Secret</span>
+              <code className="text-xs bg-muted border border-border rounded px-2 py-1 flex-1 break-all">{webhookSetup?.webhook_secret}</code>
+              <Button variant="ghost" size="sm" className="h-6 w-6 p-0 flex-shrink-0" title="Copy webhook secret"
+                onClick={() => copyToClipboard(webhookSetup!.webhook_secret!, 'Webhook secret')}>
+                <Copy className="h-3 w-3" />
+              </Button>
+            </div>
           </div>
-          <div className="flex items-center gap-1">
-            <span className="text-xs text-muted-foreground w-12 flex-shrink-0">Secret</span>
-            <code className="text-xs bg-background border border-border rounded px-2 py-1 flex-1 truncate">{webhookSetup.webhook_secret}</code>
-            <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Copy webhook secret"
-              onClick={() => copyToClipboard(webhookSetup.webhook_secret!, 'Webhook secret')}>
-              <Copy className="h-3 w-3" />
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" onClick={() => setWebhookSetup(null)}>
+              Later
             </Button>
-          </div>
-          <div className="flex justify-end">
-            <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setWebhookSetup(null)}>
-              Done
+            <Button size="sm" disabled={isVerifying}
+              onClick={() => webhookSetup && handleVerifyWebhook(webhookSetup.repo_full_name)}>
+              {isVerifying ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
+              Verify webhook
             </Button>
-          </div>
-        </div>
-      )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

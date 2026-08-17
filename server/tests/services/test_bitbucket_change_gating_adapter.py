@@ -26,9 +26,11 @@ import pytest
 from services.change_gating.bitbucket_adapter import (
     BitbucketAPIError,
     BitbucketPRAdapter,
+    hide_markers_for_bitbucket,
     parse_files_from_diff,
+    restore_markers_from_bitbucket,
 )
-from services.change_gating.markers import encode_marker
+from services.change_gating.markers import decode_marker, encode_marker, has_aurora_marker
 
 _REPO = "acme/api"
 _BOT_UUID = "{bot-uuid-1}"
@@ -266,6 +268,65 @@ class TestProgressComment:
         post.delete_pr_comment.return_value = {"error": True, "status": 404, "message": "gone"}
         comment = adapter.post_issue_comment(7, "x")
         adapter.delete_issue_comment(comment["id"])  # must not raise
+
+
+class TestMarkerHiding:
+    """Bitbucket escapes raw HTML, so HTML-comment markers would render as
+    visible text — the adapter converts them to link-reference definitions
+    (`[//]: # (...)`) on write and back on read."""
+
+    def test_round_trip_preserves_decodability(self):
+        marker = encode_marker([{"severity": "HIGH", "title": "x"}], "abc123")
+        body = f"## Aurora Risk Review\n\nSAFE\n\n{marker}"
+        hidden = hide_markers_for_bitbucket(body)
+        assert "<!--" not in hidden  # nothing left for Bitbucket to escape
+        assert "[//]: # (" in hidden
+        restored = restore_markers_from_bitbucket(hidden)
+        assert has_aurora_marker(restored)
+        assert decode_marker(restored)["head_sha"] == "abc123"
+
+    def test_posted_review_body_carries_no_html_comment(self):
+        adapter, _, post = _adapter()
+        post.add_pr_comment.return_value = {"id": 42}
+        marker = encode_marker([], "abc123")
+        adapter.post_review(
+            7, commit_id="abc123", event="COMMENT",
+            body=f"RISKY body\n\n{marker}", comments=[],
+        )
+        sent_body = post.add_pr_comment.call_args[0][3]
+        assert "<!--" not in sent_body
+        assert "[//]: # (" in sent_body
+
+    def test_list_reviews_restores_hidden_markers(self):
+        adapter, read, _ = _adapter()
+        marker = encode_marker([], "abc123")
+        hidden_body = hide_markers_for_bitbucket(f"## Review\n\n{marker}")
+        read.list_pr_comments.return_value = [
+            {"id": 1, "deleted": False, "inline": None, "parent": None,
+             "content": {"raw": hidden_body}, "user": {"uuid": _BOT_UUID}},
+        ]
+        aurora = adapter.find_aurora_reviews(adapter.list_reviews(7))
+        assert len(aurora) == 1
+        assert decode_marker(aurora[0]["body"])["head_sha"] == "abc123"
+
+    def test_legacy_html_comment_bodies_still_recognized(self):
+        # Comments posted before the translation existed carry raw HTML
+        # comments; restore is a no-op and they must still qualify.
+        adapter, read, _ = _adapter()
+        legacy_body = f"## Review\n\n{encode_marker([], 'abc123')}"
+        read.list_pr_comments.return_value = [
+            {"id": 1, "deleted": False, "inline": None, "parent": None,
+             "content": {"raw": legacy_body}, "user": {"uuid": _BOT_UUID}},
+        ]
+        aurora = adapter.find_aurora_reviews(adapter.list_reviews(7))
+        assert len(aurora) == 1
+
+    def test_progress_comment_marker_hidden(self):
+        adapter, _, post = _adapter()
+        post.add_pr_comment.return_value = {"id": 99}
+        adapter.post_issue_comment(7, "<!-- aurora-change-gating:progress -->\nReviewing…")
+        sent_body = post.add_pr_comment.call_args[0][3]
+        assert "<!--" not in sent_body
 
 
 class TestParseFilesFromDiff:

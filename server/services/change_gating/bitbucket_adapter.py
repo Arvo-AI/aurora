@@ -37,12 +37,47 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from connectors.bitbucket_connector.api_client import BitbucketAPIClient
 from services.change_gating.markers import has_aurora_marker
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Hidden-marker translation.
+#
+# The canonical Aurora markers (markers.py) are HTML comments — invisible on
+# GitHub, but Bitbucket Cloud ESCAPES raw HTML in markdown, so "<!-- ... -->"
+# renders as literal text in the PR comment. The Bitbucket-invisible
+# equivalent is a markdown link-reference definition: a line of the form
+#   [//]: # (payload)
+# is consumed by the renderer and never displayed. This pair translates at
+# the adapter's post/read boundary so markers.py stays provider-neutral:
+# every outgoing body converts HTML-comment markers to the hidden form, and
+# every body read back converts them to HTML-comment form before
+# has_aurora_marker/decode_marker run. Marker payloads are base64/hex plus
+# ":. " — no parentheses or newlines — so the round trip is lossless.
+# ---------------------------------------------------------------------------
+
+_HTML_COMMENT_MARKER_RE = re.compile(r"<!-- ([^\n]*?) -->")
+_BB_HIDDEN_MARKER_RE = re.compile(r"^\[//\]: # \(([^\n)]*)\)[ \t]*$", re.MULTILINE)
+
+
+def hide_markers_for_bitbucket(body: str) -> str:
+    """Rewrite HTML-comment markers into Bitbucket-invisible link labels."""
+    return _HTML_COMMENT_MARKER_RE.sub(lambda m: f"[//]: # ({m.group(1)})", body or "")
+
+
+def restore_markers_from_bitbucket(body: str) -> str:
+    """Inverse of :func:`hide_markers_for_bitbucket` for read-back bodies.
+
+    Bodies that already carry raw HTML-comment markers (posted before this
+    translation existed) pass through unchanged, so both generations of
+    prior reviews stay recognizable.
+    """
+    return _BB_HIDDEN_MARKER_RE.sub(lambda m: f"<!-- {m.group(1)} -->", body or "")
 
 # System-secret logical name for the optional dedicated posting bot
 # (same pattern as ``github-app/webhook-secret``):
@@ -431,7 +466,10 @@ class BitbucketPRAdapter:
                 {
                     "id": comment.get("id"),
                     "state": "COMMENTED",  # refined in find_aurora_reviews
-                    "body": body,
+                    # Read-back translation: hidden Bitbucket markers become
+                    # HTML-comment markers so decode_marker/has_aurora_marker
+                    # (provider-neutral) recognize them.
+                    "body": restore_markers_from_bitbucket(body),
                     "user": comment.get("user") or {},
                     "_pr_number": pr_number,
                 }
@@ -510,7 +548,10 @@ class BitbucketPRAdapter:
         """
         del commit_id, comments
         comment = _checked(
-            self._post.add_pr_comment(self.workspace, self.repo_slug, pr_number, body),
+            self._post.add_pr_comment(
+                self.workspace, self.repo_slug, pr_number,
+                hide_markers_for_bitbucket(body),
+            ),
             "post_review",
         )
         if event == "APPROVE":
@@ -583,10 +624,12 @@ class BitbucketPRAdapter:
                 return
             if body.startswith(note):
                 return
+            # body may carry an HTML-comment marker (from list_reviews'
+            # read-back translation) — re-hide it for the write.
             _checked(
                 self._post.update_pr_comment(
                     self.workspace, self.repo_slug, pr_number, comment_id,
-                    f"{note}\n\n{body}",
+                    hide_markers_for_bitbucket(f"{note}\n\n{body}"),
                 ),
                 "prepend_note",
             )
@@ -600,7 +643,10 @@ class BitbucketPRAdapter:
     def post_issue_comment(self, pr_number: int, body: str) -> Dict[str, Any]:
         """POST a PR conversation comment (progress indicator)."""
         comment = _checked(
-            self._post.add_pr_comment(self.workspace, self.repo_slug, pr_number, body),
+            self._post.add_pr_comment(
+                self.workspace, self.repo_slug, pr_number,
+                hide_markers_for_bitbucket(body),
+            ),
             "post_issue_comment",
         )
         comment_id = comment.get("id")
