@@ -517,6 +517,7 @@ export default function BitbucketWorkspaceBrowser() {
             const isReady = repo.metadata_status === 'ready';
             const isPending = repo.metadata_status === 'pending' || repo.metadata_status === 'generating';
             const isError = repo.metadata_status === 'error';
+            const isGatingUpdating = gatingUpdating.has(repo.full_name);
             return (
               <div key={repo.full_name} className="p-2 rounded-md border border-border space-y-1">
                 <div className="flex items-center justify-between gap-2">
@@ -617,7 +618,8 @@ export default function BitbucketWorkspaceBrowser() {
                       {repo.change_gating_enabled && !repo.webhook_configured && (
                         <button
                           type="button"
-                          className="inline-flex"
+                          className="inline-flex disabled:opacity-50"
+                          disabled={isGatingUpdating}
                           onClick={() => handleReopenSetup(repo.full_name)}
                           title="Waiting for the first pull request event from Bitbucket — click to view the webhook URL and secret"
                         >
@@ -627,14 +629,17 @@ export default function BitbucketWorkspaceBrowser() {
                         </button>
                       )}
                     </div>
-                    <Switch
-                      checked={repo.change_gating_enabled}
-                      disabled={gatingUpdating.has(repo.full_name)}
-                      onCheckedChange={(checked) => handleChangeGatingToggle(repo.full_name, checked)}
-                      className="scale-75 origin-right"
-                      aria-label={`Incident Prevention for ${repo.full_name}`}
-                      data-testid={`bb-repo-change-gating-${repo.full_name}`}
-                    />
+                    {isGatingUpdating ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground flex-shrink-0" />
+                    ) : (
+                      <Switch
+                        checked={repo.change_gating_enabled}
+                        onCheckedChange={(checked) => handleChangeGatingToggle(repo.full_name, checked)}
+                        className="scale-75 origin-right"
+                        aria-label={`Incident Prevention for ${repo.full_name}`}
+                        data-testid={`bb-repo-change-gating-${repo.full_name}`}
+                      />
+                    )}
                   </div>
                 )}
               </div>
