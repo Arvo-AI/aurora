@@ -107,6 +107,25 @@ export default function BitbucketWorkspaceBrowser() {
     }
   };
 
+  const handleReopenSetup = async (repoFullName: string) => {
+    // Re-enable is idempotent and returns the same org webhook URL/secret,
+    // so the setup dialog can always be reopened after being dismissed.
+    setGatingUpdating(prev => new Set(prev).add(repoFullName));
+    try {
+      const result = await BitbucketIntegrationService.updateChangeGating(repoFullName, true);
+      if (result.webhook_url) setWebhookSetup(result);
+    } catch (error: unknown) {
+      const err = error as Error;
+      toast({ title: "Error", description: err.message || "Failed to load webhook setup", variant: "destructive" });
+    } finally {
+      setGatingUpdating(prev => {
+        const next = new Set(prev);
+        next.delete(repoFullName);
+        return next;
+      });
+    }
+  };
+
   const handleVerifyWebhook = async (repoFullName: string) => {
     setIsVerifying(true);
     try {
@@ -599,8 +618,8 @@ export default function BitbucketWorkspaceBrowser() {
                         <button
                           type="button"
                           className="inline-flex"
-                          onClick={() => handleVerifyWebhook(repo.full_name)}
-                          title="Webhook not verified yet — click to re-check"
+                          onClick={() => handleReopenSetup(repo.full_name)}
+                          title="Webhook not verified yet — click to reopen setup (URL, secret, verify)"
                         >
                           <Badge variant="outline" className="text-xs text-amber-600 border-amber-600/40 gap-1 px-1.5 cursor-pointer">
                             <AlertTriangle className="h-3 w-3" /> Setup required

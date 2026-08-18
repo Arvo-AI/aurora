@@ -57,12 +57,23 @@ logger = logging.getLogger(__name__)
 # the adapter's post/read boundary so markers.py stays provider-neutral:
 # every outgoing body converts HTML-comment markers to the hidden form, and
 # every body read back converts them to HTML-comment form before
-# has_aurora_marker/decode_marker run. Marker payloads are base64/hex plus
-# ":. " — no parentheses or newlines — so the round trip is lossless.
+# has_aurora_marker/decode_marker run.
+#
+# Both regexes are line-anchored AND restricted to the exact payload
+# alphabet Aurora markers use (marker names, base64/hex, ":", spaces) —
+# a genuinely inverse pair. The pair deliberately does NOT try to handle
+# arbitrary HTML comments (multiline, parens, etc.): markers.py always
+# emits its marker alone on one line with this alphabet, and anything
+# else in a body is content that must be left untouched.
 # ---------------------------------------------------------------------------
 
-_HTML_COMMENT_MARKER_RE = re.compile(r"<!-- ([^\n]*?) -->")
-_BB_HIDDEN_MARKER_RE = re.compile(r"^\[//\]: # \(([^\n)]*)\)[ \t]*$", re.MULTILINE)
+_MARKER_PAYLOAD = r"[A-Za-z0-9+/=:. _-]+"
+_HTML_COMMENT_MARKER_RE = re.compile(
+    rf"^<!-- ({_MARKER_PAYLOAD}) -->[ \t]*$", re.MULTILINE
+)
+_BB_HIDDEN_MARKER_RE = re.compile(
+    rf"^\[//\]: # \(({_MARKER_PAYLOAD})\)[ \t]*$", re.MULTILINE
+)
 
 
 def hide_markers_for_bitbucket(body: str) -> str:
@@ -260,18 +271,21 @@ def _lookup_default_branch(user_id: str, repo_full_name: str) -> Optional[str]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                if not set_rls_context(cur, conn, user_id, log_prefix="[ChangeGating:BB]"):
+                org_id = set_rls_context(cur, conn, user_id, log_prefix="[ChangeGating:BB]")
+                if not org_id:
                     return None
-                # MAX() over the org's duplicate rows (UNIQUE is per user):
-                # a row whose default_branch is NULL must not shadow a
-                # sibling that carries the real value.
+                # Explicit org predicate as defense in depth alongside RLS
+                # (same belt-and-suspenders as stateless_auth's user_tokens
+                # reads). MAX() over the org's duplicate rows (UNIQUE is per
+                # user): a row whose default_branch is NULL must not shadow
+                # a sibling that carries the real value.
                 cur.execute(
                     """SELECT MAX(default_branch) FROM connected_repos
-                        WHERE provider = 'bitbucket' AND repo_full_name = %s""",
-                    (repo_full_name,),
+                        WHERE provider = 'bitbucket' AND repo_full_name = %s
+                          AND org_id = %s""",
+                    (repo_full_name, org_id),
                 )
                 row = cur.fetchone()
-                cur.execute("RESET myapp.current_user_id; RESET myapp.current_org_id;")
                 return row[0] if row and row[0] else None
     except Exception as exc:
         logger.warning(

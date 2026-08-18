@@ -375,10 +375,19 @@ def _try_auto_create_hook(
         ws, slug = repo_full_name.split("/", 1)
         existing = client.list_webhooks(ws, slug)
         for hook in existing if isinstance(existing, list) else []:
-            if isinstance(hook, dict) and hook.get("url") == webhook_url:
-                if hook.get("uuid"):
-                    _store_hook_uuid(hook["uuid"])
-                return True
+            if not (isinstance(hook, dict) and hook.get("url") == webhook_url):
+                continue
+            # Same bar as verify_change_gating_webhook: an existing hook only
+            # counts as configured when it is active AND carries both
+            # pullrequest triggers — a disabled or partial hook would report
+            # success while deliveries silently never arrive.
+            if not hook.get("active"):
+                continue
+            if {"pullrequest:created", "pullrequest:updated"} - set(hook.get("events") or []):
+                continue
+            if hook.get("uuid"):
+                _store_hook_uuid(hook["uuid"])
+            return True
         created = client.create_webhook(
             ws, slug, webhook_url, webhook_events,
             description="Aurora Incident Prevention",
@@ -501,8 +510,8 @@ def update_change_gating(user_id, repo_full_name):
         return jsonify({"error": "Failed to update Incident Prevention"}), 500
 
 
-@bitbucket_selection_bp.route("/repo-selections/<path:repo_full_name>/change-gating/verify", methods=["GET"])
-@require_permission("connectors", "read")
+@bitbucket_selection_bp.route("/repo-selections/<path:repo_full_name>/change-gating/verify", methods=["POST"])
+@require_permission("connectors", "write")
 def verify_change_gating_webhook(user_id, repo_full_name):
     """Check whether the repo's Incident Prevention webhook actually exists.
 
@@ -510,6 +519,7 @@ def verify_change_gating_webhook(user_id, repo_full_name):
     org's webhook URL with both pullrequest events enabled. On a match the
     hook uuid is stored (covers manually created hooks) so the UI can show
     "Active" instead of a bare toggle, and cleanup can delete it later.
+    POST + connectors:write because of that persistence side effect.
     """
     try:
         org_id = resolve_org(user_id)

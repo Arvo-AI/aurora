@@ -114,13 +114,17 @@ def _repo_gating_state(org_id: str, repo_full_name: str) -> tuple[Optional[str],
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+            # org_id predicate is defense in depth alongside RLS — matching
+            # how stateless_auth.py reads user_tokens — so cross-org
+            # isolation never rests on the policy alone.
             cur.execute(
                 """SELECT MAX(default_branch),
                           bool_or(change_gating_enabled)
                      FROM connected_repos
                     WHERE provider = 'bitbucket'
-                      AND repo_full_name = %s""",
-                (repo_full_name,),
+                      AND repo_full_name = %s
+                      AND org_id = %s""",
+                (repo_full_name, org_id),
             )
             row = cur.fetchone()
             cur.execute(_RESET_RLS_SQL)
@@ -142,13 +146,17 @@ def _resolve_bitbucket_owner(org_id: str) -> Optional[str]:
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+            # Explicit org predicate for the same defense-in-depth reason
+            # as _repo_gating_state above.
             cur.execute(
                 """SELECT user_id
                      FROM user_tokens
                     WHERE provider = 'bitbucket'
                       AND is_active = TRUE
+                      AND org_id = %s
                     ORDER BY timestamp ASC, user_id ASC
                     LIMIT 1""",
+                (org_id,),
             )
             row = cur.fetchone()
             cur.execute(_RESET_RLS_SQL)

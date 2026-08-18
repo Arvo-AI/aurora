@@ -232,7 +232,7 @@ export class BitbucketIntegrationService {
   static async verifyChangeGatingWebhook(repoFullName: string): Promise<WebhookVerifyResponse> {
     return this.request<WebhookVerifyResponse>(
       `/repo-selections/${encodeURIComponent(repoFullName)}/change-gating/verify`,
-      { errorMessage: 'Failed to verify webhook' }
+      { method: 'POST', errorMessage: 'Failed to verify webhook' }
     );
   }
 }

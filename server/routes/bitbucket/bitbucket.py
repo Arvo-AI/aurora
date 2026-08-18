@@ -312,13 +312,21 @@ def bitbucket_disconnect(user_id):
         from utils.db.org_scope import resolve_org
         org_id = resolve_org(user_id)
 
-        # Delete Aurora-created webhooks BEFORE credentials/rows disappear.
+        # Delete Aurora-created webhooks BEFORE credentials/rows disappear,
+        # then the org's webhook HMAC secret — after this, any hook still
+        # pointing at Aurora (e.g. manually created ones we couldn't delete)
+        # fails signature validation instead of feeding a dead org.
         if org_id:
             try:
                 from routes.bitbucket.bitbucket_selection import cleanup_org_hooks
                 cleanup_org_hooks(user_id, org_id)
             except Exception:
                 logger.warning("Bitbucket hook cleanup failed during disconnect", exc_info=True)
+            try:
+                from connectors.bitbucket_connector.webhook_secret import delete_webhook_secret
+                delete_webhook_secret(org_id)
+            except Exception:
+                logger.warning("Bitbucket webhook secret cleanup failed during disconnect", exc_info=True)
 
         # Delete both bitbucket credentials and workspace selection
         delete_user_secret(user_id, "bitbucket")

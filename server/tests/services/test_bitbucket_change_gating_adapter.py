@@ -328,6 +328,21 @@ class TestMarkerHiding:
         sent_body = post.add_pr_comment.call_args[0][3]
         assert "<!--" not in sent_body
 
+    def test_hide_is_line_anchored_like_restore(self):
+        # The pair must be genuinely inverse: a marker NOT alone on its own
+        # line is left untouched by hide (restore couldn't recover it).
+        marker = encode_marker([], "abc123")
+        inline = f"text before {marker} text after"
+        assert hide_markers_for_bitbucket(inline) == inline
+
+    def test_multiline_and_non_marker_html_comments_untouched(self):
+        # CodeQL bad-HTML-filter class: the regex must not pretend to parse
+        # arbitrary HTML comments — only Aurora's single-line marker alphabet.
+        multiline = "<!-- evil\nmultiline -->"
+        assert hide_markers_for_bitbucket(multiline) == multiline
+        scripty = "<!-- <script>alert(1)</script> -->"
+        assert hide_markers_for_bitbucket(scripty) == scripty
+
 
 class TestParseFilesFromDiff:
     DIFF = (
