@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 from connectors.bitbucket_connector.api_client import BitbucketAPIClient
 
 
-def _client_with_gets(responses):
+def _client_with_gets(responses) -> BitbucketAPIClient:
     client = BitbucketAPIClient("token")
     client._get = MagicMock(side_effect=responses)
     return client
@@ -37,8 +37,9 @@ def test_tag_used_when_branch_missing():
 
 def test_sha_passthrough():
     client = _client_with_gets([])
-    sha = "2e94a766f8f2f12b4664d6befd4737a60143808f"
-    assert client._resolve_commit("ws", "repo", sha) == sha
+    # 7 chars is the shortest form _COMMIT_SHA_RE accepts, 40 the longest.
+    for sha in ("2e94a76", "2e94a766f8f2f12b4664d6befd4737a60143808f"):
+        assert client._resolve_commit("ws", "repo", sha) == sha
     client._get.assert_not_called()
 
 
