@@ -58,7 +58,7 @@ class OpenRouterPricingService:
             # Google AI / Vertex AI — verified against Google Cloud Billing Catalog API
             "google/gemini-3.6-flash": {"input": 0.00075, "output": 0.00375},
             "google/gemini-3.5-flash-lite": {"input": 0.0003, "output": 0.0025},
-            "google/gemini-3.5-flash": {"input": 0.0005, "output": 0.003},
+            "google/gemini-3.5-flash": {"input": 0.0015, "output": 0.009},
             "google/gemini-3.1-pro-preview": {"input": 0.002, "output": 0.012},
             "google/gemini-3.1-flash-lite-preview": {"input": 0.00025, "output": 0.0015},
             "google/gemini-3-flash": {"input": 0.0005, "output": 0.003},
@@ -67,7 +67,7 @@ class OpenRouterPricingService:
             "google/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004},
             "vertex/gemini-3.6-flash": {"input": 0.00075, "output": 0.00375},
             "vertex/gemini-3.5-flash-lite": {"input": 0.0003, "output": 0.0025},
-            "vertex/gemini-3.5-flash": {"input": 0.0005, "output": 0.003},
+            "vertex/gemini-3.5-flash": {"input": 0.0015, "output": 0.009},
             "vertex/gemini-3.1-pro-preview": {"input": 0.002, "output": 0.012},
             "vertex/gemini-3.1-flash-lite-preview": {"input": 0.00025, "output": 0.0015},
             "vertex/gemini-3-flash": {"input": 0.0005, "output": 0.003},

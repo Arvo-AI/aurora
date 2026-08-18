@@ -184,8 +184,12 @@ export default function ModelSelector({
   }, [picker, pickerError]);
 
   // Load saved model from localStorage on mount, then drop anything this
-  // deployment cannot actually serve (e.g. GPT under Vertex).
+  // deployment cannot actually serve (e.g. GPT under Vertex). Only reconcile
+  // once the picker config is known: the error fallback catalog is display-only,
+  // so persisting against it would discard a valid saved choice (e.g. Vertex).
   useEffect(() => {
+    if (!picker) return;
+
     const catalog = visibleModels;
     if (catalog.length === 0) return;
 
@@ -204,7 +208,7 @@ export default function ModelSelector({
     } else if (candidate !== savedModel) {
       localStorage.setItem('selectedModel', candidate);
     }
-  }, [visibleModels]);
+  }, [picker, visibleModels]);
 
   const handleModelSelect = (modelId: string) => {
     onModelChange(modelId);
