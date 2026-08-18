@@ -133,6 +133,50 @@ def _repo_gating_state(org_id: str, repo_full_name: str) -> tuple[Optional[str],
     return (row[0], bool(row[1]))
 
 
+def _mark_webhook_verified(org_id: str, repo_full_name: str) -> None:
+    """Record that a delivery for this repo passed HMAC validation.
+
+    This is the scope-free verification path. A delivery that got this far
+    proves the hook exists, is active, targets the right URL AND carries
+    the right secret — strictly more than ``GET /hooks`` can tell us, and
+    without the repo-admin scope that endpoint demands. ``webhook_hook_uuid``
+    can't serve here: a delivery never reveals the hook's UUID.
+
+    Guarded on ``IS NULL`` so this is one write per repo, not one per PR
+    event. Best-effort: a failure must not fail the delivery.
+    """
+    from utils.db.connection_pool import db_pool
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+                # Explicit org predicate alongside RLS, as in _repo_gating_state.
+                cur.execute(
+                    """UPDATE connected_repos
+                          SET webhook_verified_at = NOW()
+                        WHERE provider = 'bitbucket'
+                          AND repo_full_name = %s
+                          AND org_id = %s
+                          AND webhook_verified_at IS NULL""",
+                    (repo_full_name, org_id),
+                )
+                marked = cur.rowcount
+                cur.execute(_RESET_RLS_SQL)
+            conn.commit()
+        if marked:
+            logger.info(
+                "change_gating: webhook verified by delivery provider=bitbucket "
+                "org_id=%s repo=%s",
+                org_id, _fmt_field(repo_full_name),
+            )
+    except Exception as exc:
+        logger.warning(
+            "change_gating: failed to mark webhook verified org_id=%s repo=%s (%s)",
+            org_id, _fmt_field(repo_full_name), type(exc).__name__,
+        )
+
+
 def _resolve_bitbucket_owner(org_id: str) -> Optional[str]:
     """Return an org member who holds active Bitbucket credentials.
 
@@ -248,6 +292,14 @@ def _handle_pullrequest_event(
             _fmt_field(_safe_get(payload, "pullrequest", "id")),
             event_type, delivery_id,
         )
+
+    # Mark the hook live BEFORE the filter chain: a delivery that reached
+    # this task already passed HMAC, so the hook is working even when this
+    # particular PR is a draft or targets a non-default branch. Gating this
+    # behind the filters would leave the badge amber on a healthy setup.
+    delivery_repo = _safe_get(payload, "repository", "full_name")
+    if delivery_repo:
+        _mark_webhook_verified(org_id, delivery_repo)
 
     skip_reason, fields = _prefilter_pullrequest(org_id, payload, event_type)
     if skip_reason:

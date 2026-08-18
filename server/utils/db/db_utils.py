@@ -1745,9 +1745,16 @@ def initialize_tables():
             # - organizations.bitbucket_webhook_secret_ref: secrets-backend
             #   reference for the org's webhook HMAC secret (one secret shared
             #   by every repo hook in the org).
+            # - webhook_verified_at: when a delivery for this repo last passed
+            #   HMAC validation. Proof the hook is live that needs no API
+            #   scopes, unlike webhook_hook_uuid which only exists when Aurora
+            #   created the hook itself (requires repo admin).
             try:
                 cursor.execute(
                     "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS webhook_hook_uuid VARCHAR(64);"
+                )
+                cursor.execute(
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS webhook_verified_at TIMESTAMPTZ;"
                 )
                 cursor.execute(
                     "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS bitbucket_webhook_secret_ref TEXT;"
@@ -1755,7 +1762,8 @@ def initialize_tables():
                 conn.commit()
                 logging.info(
                     "Ensured Bitbucket Incident Prevention columns exist "
-                    "(connected_repos.webhook_hook_uuid, organizations.bitbucket_webhook_secret_ref)."
+                    "(connected_repos.webhook_hook_uuid, connected_repos.webhook_verified_at, "
+                    "organizations.bitbucket_webhook_secret_ref)."
                 )
             except Exception as e:
                 logging.warning(

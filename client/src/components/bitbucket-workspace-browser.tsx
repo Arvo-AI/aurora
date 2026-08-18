@@ -138,13 +138,13 @@ export default function BitbucketWorkspaceBrowser() {
         toast({ title: "Webhook verified", description: `Incident Prevention is active for ${repoFullName}.` });
       } else if (result.reason === 'cannot_list_hooks') {
         toast({
-          title: "Cannot verify automatically",
-          description: result.detail || "The connected token cannot list this repository's webhooks. Confirm the hook manually in Bitbucket.",
+          title: "Verification pending",
+          description: result.detail || "Aurora will confirm the hook automatically on the first pull request event.",
         });
       } else {
         toast({
           title: "Webhook not found",
-          description: result.detail || "No matching webhook on the repository yet. Add it in Bitbucket → Repository settings → Webhooks, then verify again.",
+          description: result.detail || "No matching webhook yet. Add it in Bitbucket → Repository settings → Webhooks, or open a PR and Aurora will confirm it automatically.",
           variant: "destructive",
         });
       }
@@ -619,10 +619,10 @@ export default function BitbucketWorkspaceBrowser() {
                           type="button"
                           className="inline-flex"
                           onClick={() => handleReopenSetup(repo.full_name)}
-                          title="Webhook not verified yet — click to reopen setup (URL, secret, verify)"
+                          title="Waiting for the first pull request event from Bitbucket — click to view the webhook URL and secret"
                         >
                           <Badge variant="outline" className="text-xs text-amber-600 border-amber-600/40 gap-1 px-1.5 cursor-pointer">
-                            <AlertTriangle className="h-3 w-3" /> Setup required
+                            <AlertTriangle className="h-3 w-3" /> Awaiting first delivery
                           </Badge>
                         </button>
                       )}
@@ -650,14 +650,15 @@ export default function BitbucketWorkspaceBrowser() {
             <DialogDescription>
               {webhookSetup?.webhook_auto_created
                 ? 'Aurora created the repository webhook automatically. Click Verify to confirm it and activate Incident Prevention.'
-                : 'Aurora could not create the webhook automatically (repo admin access is required). Add it in Bitbucket, then click Verify.'}
+                : 'Aurora could not create the webhook automatically (repo admin access is required). Add it in Bitbucket using the URL and secret below.'}
             </DialogDescription>
           </DialogHeader>
           {!webhookSetup?.webhook_auto_created && (
             <p className="text-xs text-muted-foreground">
               In Bitbucket, go to <span className="font-medium">Repository settings → Webhooks → Add webhook</span> and
               paste the URL and secret below, with triggers <span className="font-mono">Pull request: Created</span> and{' '}
-              <span className="font-mono">Pull request: Updated</span>.
+              <span className="font-mono">Pull request: Updated</span>. Bitbucket sends no test event, so Aurora confirms
+              the hook on the first pull request — open or update a PR to activate it, or click Verify if you have repo admin.
             </p>
           )}
           <p className="text-xs text-muted-foreground font-medium">

@@ -11,6 +11,10 @@ Pins two contracts:
    — gated event, non-draft, OPEN, destination == default branch, enrolled,
    owner resolvable, Redis dedupe won. Every skip AFTER the seen-claim
    releases the key (otherwise that (repo, pr, sha) is blocked for 24h).
+3. Delivery-side webhook verification: ``_mark_webhook_verified`` runs
+   BEFORE the filter chain, because a delivery that got here already passed
+   HMAC and so proves the hook is live even when the PR itself is filtered
+   out. This is what flips the UI badge without needing repo-admin scope.
 
 DB, Redis and Celery ``delay`` are all mocked — no I/O.
 """
@@ -110,7 +114,7 @@ class _FakeRedis:
 
 @pytest.fixture
 def gating_env(monkeypatch):
-    """Mock flag, repo state, owner, Redis, and the Celery task."""
+    """Mock flag, repo state, owner, Redis, marking, and the Celery task."""
     state = {
         "flag": True,
         "default_branch": "main",
@@ -119,6 +123,7 @@ def gating_env(monkeypatch):
     }
     redis = _FakeRedis()
     delay = MagicMock()
+    marked: list[tuple[str, str]] = []
 
     monkeypatch.setattr(
         "utils.flags.feature_flags.is_incident_prevention_enabled",
@@ -132,13 +137,17 @@ def gating_env(monkeypatch):
         bb_tasks, "_resolve_bitbucket_owner", lambda org_id: state["owner"],
     )
     monkeypatch.setattr(
+        bb_tasks, "_mark_webhook_verified",
+        lambda org_id, repo: marked.append((org_id, repo)),
+    )
+    monkeypatch.setattr(
         "utils.cache.redis_client.get_redis_client", lambda: redis,
     )
 
     from tasks.change_gating import investigate_bitbucket_pr
     monkeypatch.setattr(investigate_bitbucket_pr, "delay", delay)
 
-    return state, redis, delay
+    return state, redis, delay, marked
 
 
 def _run(event="pullrequest:created", payload=None):
@@ -149,7 +158,7 @@ def _run(event="pullrequest:created", payload=None):
 
 class TestFilterChain:
     def test_enqueue_on_happy_path_created(self, gating_env):
-        _, redis, delay = gating_env
+        _, redis, delay, _ = gating_env
         _run("pullrequest:created")
         delay.assert_called_once_with(
             user_id=_USER_ID,
@@ -164,62 +173,62 @@ class TestFilterChain:
         assert any("seen" in k for k in redis.store)
 
     def test_updated_maps_to_synchronize(self, gating_env):
-        _, _, delay = gating_env
+        _, _, delay, _ = gating_env
         _run("pullrequest:updated")
         assert delay.call_args.kwargs["action"] == "synchronize"
 
     def test_seen_key_is_provider_prefixed(self, gating_env):
-        _, redis, _ = gating_env
+        _, redis, _, _ = gating_env
         _run()
         key = next(k for k in redis.store if "seen" in k)
         assert key == f"change_gating:seen:bitbucket:{_REPO}:{_PR_NUMBER}:{_HEAD_SHA}"
 
     def test_feature_flag_off_skips(self, gating_env):
-        state, redis, delay = gating_env
+        state, redis, delay, _ = gating_env
         state["flag"] = False
         _run()
         delay.assert_not_called()
         assert redis.store == {}  # skipped before the claim
 
     def test_draft_skips_before_claim(self, gating_env):
-        _, redis, delay = gating_env
+        _, redis, delay, _ = gating_env
         _run(payload=_payload(draft=True))
         delay.assert_not_called()
         assert redis.store == {}
 
     @pytest.mark.parametrize("state_val", ["MERGED", "DECLINED", "SUPERSEDED"])
     def test_not_open_skips(self, gating_env, state_val):
-        _, _, delay = gating_env
+        _, _, delay, _ = gating_env
         _run(payload=_payload(state=state_val))
         delay.assert_not_called()
 
     def test_non_default_destination_skips(self, gating_env):
-        _, _, delay = gating_env
+        _, _, delay, _ = gating_env
         _run(payload=_payload(dest_branch="develop"))
         delay.assert_not_called()
 
     def test_missing_default_branch_skips(self, gating_env):
-        state, _, delay = gating_env
+        state, _, delay, _ = gating_env
         state["default_branch"] = None
         _run()
         delay.assert_not_called()
 
     def test_missing_fields_skip(self, gating_env):
-        _, _, delay = gating_env
+        _, _, delay, _ = gating_env
         payload = _payload()
         del payload["pullrequest"]["source"]
         _run(payload=payload)
         delay.assert_not_called()
 
     def test_duplicate_delivery_skips_without_enqueue(self, gating_env):
-        _, _, delay = gating_env
+        _, _, delay, _ = gating_env
         _run()
         delay.reset_mock()
         _run()  # same (repo, pr, sha) → duplicate
         delay.assert_not_called()
 
     def test_not_enrolled_releases_seen_key(self, gating_env):
-        state, redis, delay = gating_env
+        state, redis, delay, _ = gating_env
         state["enrolled"] = False
         _run()
         delay.assert_not_called()
@@ -228,24 +237,65 @@ class TestFilterChain:
         assert redis.store == {}  # a later redelivery can claim again
 
     def test_no_owner_releases_seen_key(self, gating_env):
-        state, redis, delay = gating_env
+        state, redis, delay, _ = gating_env
         state["owner"] = None
         _run()
         delay.assert_not_called()
         assert len(redis.deleted) == 1
 
     def test_enqueue_failure_releases_seen_key_and_raises(self, gating_env):
-        _, redis, delay = gating_env
+        _, redis, delay, _ = gating_env
         delay.side_effect = RuntimeError("broker down")
         with pytest.raises(RuntimeError):
             _run()
         assert len(redis.deleted) == 1
 
     def test_ungated_event_skips(self, gating_env):
-        _, redis, delay = gating_env
+        _, redis, delay, _ = gating_env
         _run(event="pullrequest:approved")
         delay.assert_not_called()
         assert redis.store == {}
+
+
+class TestWebhookVerifiedOnDelivery:
+    """A delivery reaching this task already passed HMAC, so it proves the
+    hook is live regardless of whether the PR itself qualifies for review.
+    Marking must therefore happen BEFORE the filter chain, or a healthy
+    setup that only ever sees drafts / feature-branch PRs stays amber."""
+
+    def test_marks_on_happy_path(self, gating_env):
+        _, _, _, marked = gating_env
+        _run()
+        assert marked == [(_ORG_ID, _REPO)]
+
+    @pytest.mark.parametrize(
+        "payload_kwargs",
+        [
+            {"draft": True},
+            {"state": "MERGED"},
+            {"dest_branch": "develop"},
+        ],
+        ids=["draft", "not_open", "non_default_base"],
+    )
+    def test_marks_even_when_pr_is_filtered_out(self, gating_env, payload_kwargs):
+        _, _, delay, marked = gating_env
+        _run(payload=_payload(**payload_kwargs))
+        delay.assert_not_called()
+        assert marked == [(_ORG_ID, _REPO)]
+
+    def test_marks_when_repo_not_enrolled(self, gating_env):
+        state, _, delay, marked = gating_env
+        state["enrolled"] = False
+        _run()
+        delay.assert_not_called()
+        assert marked == [(_ORG_ID, _REPO)]
+
+    def test_no_mark_without_a_repo_name(self, gating_env):
+        _, _, _, marked = gating_env
+        payload = _payload()
+        del payload["repository"]
+        _run(payload=payload)
+        assert marked == []
 
 
 class TestProviderKeys:
