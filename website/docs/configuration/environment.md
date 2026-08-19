@@ -397,6 +397,8 @@ on-prem deployments that cannot expose a public webhook URL.
 | `GITHUB_APP_WEBHOOK_SECRET` | | Fallback only — the secrets backend path `aurora/system/github-app/webhook-secret` (Vault or AWS Secrets Manager) takes precedence. |
 | `GH_OAUTH_CLIENT_ID` | | OAuth App Client ID. Required only when `GITHUB_AUTH_MODE` is `oauth` or `hybrid`. |
 | `GH_OAUTH_CLIENT_SECRET` | | OAuth App Client Secret. Required only when `GITHUB_AUTH_MODE` is `oauth` or `hybrid`. |
+| `HOSTED_SIGNUP_ENABLED` | `false` | Hosted deployments only. Enables the one-click website signup flow (`/github/app/signup/start`): installing the GitHub App provisions an Aurora org + admin account from the GitHub identity and auto-enrolls the granted repos in Incident Prevention. Leave off for self-hosted installs (registration stays invite-only). |
+| `GITHUB_APP_CLIENT_SECRET` | | Client secret from the App settings page. Required only when `HOSTED_SIGNUP_ENABLED=true` — used to exchange the install-time OAuth code for the installer's GitHub identity. The App must have "Request user authorization (OAuth) during installation" enabled and `https://<aurora-host>/github/app/signup/callback` registered as a Callback URL. |
 
 App-mode (recommended):
 

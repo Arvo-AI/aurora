@@ -84,6 +84,47 @@ function AuthPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
+  // One-click GitHub signup handoff: the backend redirects here with a
+  // one-time token after provisioning the account. Redeem it silently and
+  // land the user in the app — no form. The token is burned server-side on
+  // first use, so a stale/replayed URL just falls through to the form.
+  const handoffAttempted = useRef(false)
+  useEffect(() => {
+    const handoffToken = searchParams.get("handoff")
+    if (!handoffToken || handoffAttempted.current) return
+    handoffAttempted.current = true
+    setIsLoading(true)
+    ;(async () => {
+      try {
+        const result = await signIn("handoff", { token: handoffToken, redirect: false })
+        // Scrub the token from the URL/history either way.
+        const url = new URL(globalThis.location.href)
+        url.searchParams.delete("handoff")
+        globalThis.history.replaceState(null, "", url.toString())
+        if (result?.ok) {
+          router.push("/connectors?installed=github")
+          router.refresh()
+        } else {
+          setError("This sign-in link has expired. Please sign in below.")
+        }
+      } catch {
+        setError("An error occurred. Please try again.")
+      } finally {
+        setIsLoading(false)
+      }
+    })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
+
+  // Set by the signup callback when the GitHub email already has an
+  // (unlinked) Aurora account — sign in normally instead.
+  useEffect(() => {
+    if (searchParams.get("error") === "account_exists") {
+      setError("An account with your GitHub email already exists. Sign in below, then finish connecting GitHub from the Connectors page.")
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
+
   useEffect(() => {
     if (resendCooldown <= 0) return
     const t = setTimeout(() => setResendCooldown(resendCooldown - 1), 1000)

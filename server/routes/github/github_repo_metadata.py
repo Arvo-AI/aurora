@@ -196,14 +196,19 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
             _update_metadata(user_id, repo_full_name, None, "error")
 
 
-def _import_installation_repos(self, user_id: str, installation_id: int):
+def _import_installation_repos(
+    self, user_id: str, installation_id: int, enroll_change_gating: bool = False
+):
     """Auto-import a GitHub App installation's repos into ``connected_repos``.
 
     Runs after a user installs/links the App so they do not have to re-select,
     inside Aurora, the repos they already granted on GitHub (the redundant
     second selection). Idempotent: each repo is UPSERTed with its
     ``installation_id`` set and ``change_gating_enabled`` left at its default
-    (FALSE — change gating is still opt-in per repo). Unlike the manual save
+    (FALSE — change gating is still opt-in per repo), unless
+    ``enroll_change_gating`` is passed (one-click website signup, where the
+    user curated the repo list on GitHub's own install screen and expects the
+    bot live immediately). Unlike the manual save
     path this NEVER deletes, so prior manual selections and other installations
     are preserved; the user can still trim the set from the repo picker.
 
@@ -276,19 +281,21 @@ def _import_installation_repos(self, user_id: str, installation_id: int):
                     """INSERT INTO connected_repos
                            (user_id, org_id, provider, repo_full_name, repo_id,
                             default_branch, is_private, installation_id, repo_data,
-                            metadata_status)
-                       VALUES (%s, %s, 'github', %s, %s, %s, %s, %s, %s, 'pending')
+                            metadata_status, change_gating_enabled)
+                       VALUES (%s, %s, 'github', %s, %s, %s, %s, %s, %s, 'pending', %s)
                        ON CONFLICT (user_id, provider, repo_full_name) DO UPDATE SET
                            repo_data = EXCLUDED.repo_data,
                            default_branch = EXCLUDED.default_branch,
                            is_private = EXCLUDED.is_private,
                            installation_id = COALESCE(EXCLUDED.installation_id,
                                                       connected_repos.installation_id),
+                           change_gating_enabled = connected_repos.change_gating_enabled
+                                                   OR EXCLUDED.change_gating_enabled,
                            updated_at = NOW()""",
                     (
                         owner_id, org_id, full_name, repo.get("id"),
                         repo.get("default_branch"), repo.get("private", False),
-                        installation_id, json.dumps(repo),
+                        installation_id, json.dumps(repo), enroll_change_gating,
                     ),
                 )
                 if full_name not in existing:
@@ -314,11 +321,15 @@ def _import_installation_repos(self, user_id: str, installation_id: int):
     bind=True,
     max_retries=2,
 )
-def import_installation_repos(self, user_id: str, installation_id: int):
+def import_installation_repos(
+    self, user_id: str, installation_id: int, enroll_change_gating: bool = False
+):
     """Celery entry point for the App repo auto-import.
 
     Delegates to :func:`_import_installation_repos` so the body stays unit
     testable without Celery's task machinery (which is stubbed out in the
     lightweight test env, turning a decorated task into a no-op MagicMock).
     """
-    return _import_installation_repos(self, user_id, installation_id)
+    return _import_installation_repos(
+        self, user_id, installation_id, enroll_change_gating
+    )
