@@ -96,8 +96,12 @@ def _fetch_bitbucket_readme(access_token: str, auth_type: str, workspace: str, r
     client = BitbucketAPIClient(access_token, auth_type=auth_type, email=email)
     for filename in ("README.md", "README.rst", "README.txt", "README"):
         result = client.get_file_contents(workspace, repo_slug, filename)
-        if isinstance(result, dict) and result.get("error"):
-            continue
+        if isinstance(result, dict):
+            if result.get("error"):
+                continue
+            content = result.get("content")
+            if isinstance(content, str) and content:
+                return content[:4000]
         if isinstance(result, str):
             return result[:4000]
     return ""

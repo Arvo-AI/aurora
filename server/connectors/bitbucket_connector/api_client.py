@@ -4,6 +4,7 @@ Wraps the Bitbucket 2.0 REST API with authentication and pagination support.
 """
 import base64
 import logging
+import re
 from urllib.parse import quote, unquote, urlsplit
 
 import requests
@@ -12,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 BITBUCKET_API_BASE = "https://api.bitbucket.org/2.0"
 _BITBUCKET_ALLOWED_HOSTS = frozenset({"api.bitbucket.org", "bitbucket.org"})
+# Bitbucket Cloud /src/{ref}/ rejects branch names containing "/" (even %2F-encoded).
+# Always put a commit hash in that path segment. See BCLOUD-14674 / Atlassian forums.
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
 
 
 def _validate_bitbucket_url(url: str) -> None:
@@ -264,31 +268,35 @@ class BitbucketAPIClient:
     # ------------------------------------------------------------------
 
     def _resolve_commit(self, workspace, repo_slug, ref):
-        """Resolve a branch/tag name to a commit hash. Returns the ref unchanged if resolution fails."""
-        # "HEAD" isn't a valid ref in Bitbucket's API — resolve to the repo's default branch
+        """Resolve HEAD / branch / tag to a commit hash for /src/{commit}/ paths.
+
+        Returns *ref* unchanged if resolution fails (caller gets a normal API error).
+        """
         if ref == "HEAD":
             repo_info = self._get(
                 f"{BITBUCKET_API_BASE}/repositories/"
                 f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
             )
-            if isinstance(repo_info, dict) and not repo_info.get("error"):
-                main_branch = repo_info.get("mainbranch", {}).get("name")
-                if main_branch:
-                    return main_branch
+            if not isinstance(repo_info, dict) or repo_info.get("error"):
+                return ref
+            ref = (repo_info.get("mainbranch") or {}).get("name") or ref
+            if ref == "HEAD":
+                return ref
+
+        if _COMMIT_SHA_RE.fullmatch(ref):
             return ref
-        # Already a commit SHA — no resolution needed
-        if len(ref) >= 12 and ref.isalnum():
-            return ref
-        # Branch/tag name — resolve to its commit hash
-        result = self._get(
-            f"{BITBUCKET_API_BASE}/repositories/"
-            f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
-            f"/refs/branches/{quote(ref, safe='')}"
-        )
-        if isinstance(result, dict) and not result.get("error"):
-            target_hash = result.get("target", {}).get("hash")
-            if target_hash:
-                return target_hash
+
+        # Prefer branch, then tag. /refs/... accepts URL-encoded "/" in the name.
+        for kind in ("branches", "tags"):
+            result = self._get(
+                f"{BITBUCKET_API_BASE}/repositories/"
+                f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
+                f"/refs/{kind}/{quote(ref, safe='')}"
+            )
+            if isinstance(result, dict) and not result.get("error"):
+                target_hash = (result.get("target") or {}).get("hash")
+                if target_hash:
+                    return target_hash
         return ref
 
     def get_file_contents(self, workspace, repo_slug, path, commit="HEAD"):
@@ -297,7 +305,7 @@ class BitbucketAPIClient:
         url = (
             f"{BITBUCKET_API_BASE}/repositories/"
             f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
-            f"/src/{commit}/{quote(path, safe='/')}"
+            f"/src/{quote(commit, safe='')}/{quote(path, safe='/')}"
         )
         _validate_bitbucket_url(url)
         headers = self._get_headers()
@@ -344,7 +352,7 @@ class BitbucketAPIClient:
         url = (
             f"{BITBUCKET_API_BASE}/repositories/"
             f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
-            f"/src/{commit}/{quote(path, safe='/')}"
+            f"/src/{quote(commit, safe='')}/{quote(path, safe='/')}"
         )
         # format=meta returns directory metadata; omitting it returns the file listing
         params = None if list_files else {"format": "meta"}
