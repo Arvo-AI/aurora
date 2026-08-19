@@ -247,6 +247,11 @@ services:
       # deliveries). Other GitHub vars come from x-common-env.
       GITHUB_APP_WEBHOOK_SECRET: ${GITHUB_APP_WEBHOOK_SECRET}
 
+      # One-click website signup (hosted only). Client secret is server-only:
+      # the signup callback is the sole consumer of the OAuth code exchange.
+      HOSTED_SIGNUP_ENABLED: ${HOSTED_SIGNUP_ENABLED:-false}
+      GITHUB_APP_CLIENT_SECRET: ${GITHUB_APP_CLIENT_SECRET}
+
       # Bitbucket OAuth
       BB_OAUTH_CLIENT_ID: ${BB_OAUTH_CLIENT_ID}
       BB_OAUTH_CLIENT_SECRET: ${BB_OAUTH_CLIENT_SECRET}

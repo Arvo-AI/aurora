@@ -55,6 +55,10 @@ EXEMPT_FUNCTIONS: Set[str] = {
     "oauth_callback",
     "github_callback",
     "github_app_install_callback",
+    # One-click signup (hosted only) — start redirects to GitHub with a signed
+    # state; callback validates that state + GitHub-verified installation.
+    "github_app_signup_start",
+    "github_app_signup_callback",
     "bitbucket_callback",
     "slack_callback",
     "google_chat_callback",

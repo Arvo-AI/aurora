@@ -2870,6 +2870,25 @@ def initialize_tables():
                 logging.warning(f"Error adding must_change_password column: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_mcp_col")
 
+            # Migration: GitHub identity + one-time signup handoff (hosted
+            # one-click website signup). github_user_id is UNIQUE — it is the
+            # auto-login key, so two Aurora accounts must never claim the
+            # same GitHub identity.
+            try:
+                cursor.execute("SAVEPOINT sp_gh_signup_cols")
+                cursor.execute("""
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS github_user_id BIGINT;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS github_login VARCHAR(255);
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_handoff_hash VARCHAR(64);
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_handoff_expires_at TIMESTAMP;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_github_user_id
+                        ON users (github_user_id) WHERE github_user_id IS NOT NULL;
+                """)
+                cursor.execute("RELEASE SAVEPOINT sp_gh_signup_cols")
+            except Exception as e:
+                logging.warning(f"Error adding GitHub signup columns: {e}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_gh_signup_cols")
+
             conn.commit()
 
             # Migration: Add org_id column to users and all org-scoped tables

@@ -192,7 +192,9 @@ if _AURORA_ENV != "dev" and not _INTERNAL_API_SECRET:
         "Refusing to start without authentication secrets in production." % _AURORA_ENV
     )
 
-_OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register"))
+_OPEN_PATHS = frozenset(
+    ("/api/auth/login", "/api/auth/register", "/api/auth/handoff")
+)
 
 _HEALTH_PATH = "/health"
 
@@ -201,6 +203,10 @@ _OPEN_PREFIXES = (
     "/callback",
     # GitHub App install callback — verified via signed state token, not session.
     "/github/app/install/callback",
+    # One-click website signup (hosted only) — start is a public entry point,
+    # callback is verified via signed state + GitHub-verified installation.
+    "/github/app/signup/start",
+    "/github/app/signup/callback",
     "/github/webhook",
     # OAuth callback — registered only when GITHUB_AUTH_MODE allows OAuth, but
     # listed here unconditionally so the gate applies even if OAuth flips on
@@ -359,11 +365,13 @@ from routes.github.github_repo_selection import github_repo_selection_bp
 from routes.github.github_webhook import github_webhook_bp
 from routes.github.github_app import github_app_bp
 from routes.github.github_oauth import github_oauth_bp
+from routes.github.github_signup import github_signup_bp
 app.register_blueprint(github_user_repos_bp, url_prefix="/github")
 app.register_blueprint(github_repo_selection_bp, url_prefix="/github")
 app.register_blueprint(github_webhook_bp, url_prefix="/github")
 app.register_blueprint(github_app_bp, url_prefix="/github")
 app.register_blueprint(github_oauth_bp, url_prefix="/github")
+app.register_blueprint(github_signup_bp, url_prefix="/github")
 
 # --- GitLab Integration Routes ---
 from routes.gitlab.gitlab_routes import gitlab_bp
