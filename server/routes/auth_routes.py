@@ -374,14 +374,17 @@ def exchange_handoff():
                               signup_handoff_expires_at = NULL
                         WHERE signup_handoff_hash = %s
                           AND signup_handoff_expires_at > NOW()
-                       RETURNING id, email, name, role, org_id""",
+                       RETURNING id, email, name, role, org_id,
+                                 COALESCE(must_change_password, FALSE),
+                                 COALESCE(email_verified, FALSE)""",
                     (token_hash,),
                 )
                 row = cursor.fetchone()
                 if not row:
                     conn.commit()
                     return jsonify({"error": "Invalid token"}), 401
-                user_id, user_email, user_name, user_role, user_org_id = row
+                (user_id, user_email, user_name, user_role, user_org_id,
+                 must_change_pw, email_verified) = row
                 cursor.execute(
                     "SELECT name FROM organizations WHERE id = %s", (user_org_id,)
                 )
@@ -399,6 +402,8 @@ def exchange_handoff():
             "role": user_role or "admin",
             "orgId": user_org_id,
             "orgName": org_row[0] if org_row else None,
+            "mustChangePassword": bool(must_change_pw),
+            "emailVerified": bool(email_verified),
         }), 200
     except Exception:
         logging.exception("Error during handoff exchange")

@@ -45,7 +45,6 @@ import os
 import re
 import secrets
 import uuid as uuid_mod
-from datetime import datetime, timedelta
 
 import bcrypt
 import flask
@@ -318,15 +317,20 @@ def _unique_org_identity(cur, base_name: str) -> tuple[str, str]:
 
 
 def _mint_handoff(cur, user_id: str) -> str:
-    """Store a hashed one-time login token on the user row; return the raw token."""
+    """Store a hashed one-time login token on the user row; return the raw token.
+
+    Expiry is computed with Postgres ``NOW()`` — the same clock the
+    redemption query compares against — so app-vs-DB clock skew can't
+    shrink or stretch the window.
+    """
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     cur.execute(
         """UPDATE users
               SET signup_handoff_hash = %s,
-                  signup_handoff_expires_at = %s
+                  signup_handoff_expires_at = NOW() + make_interval(secs => %s)
             WHERE id = %s""",
-        (token_hash, datetime.now() + timedelta(seconds=HANDOFF_TTL_SEC), user_id),
+        (token_hash, HANDOFF_TTL_SEC, user_id),
     )
     return token
 
@@ -391,8 +395,8 @@ def _validate_install_metadata(install_data: dict) -> bool:
 def _provision_and_handoff(identity: dict, install_data: dict):
     """Find-or-create the Aurora account, link the install, mint the handoff.
 
-    Returns ``(redirect_response, user_id, installation_id)`` on success or
-    ``(error_response, None, None)``.
+    Returns ``(redirect_response, user_id, installation_id, created)`` on
+    success or ``(error_response, None, None, False)``.
     """
     gh_id, login = identity["id"], identity["login"]
     installation_id = install_data["id"]
@@ -438,6 +442,7 @@ def _provision_and_handoff(identity: dict, install_data: dict):
                             ),
                             None,
                             None,
+                            False,
                         )
 
                     created = True
@@ -485,7 +490,7 @@ def _provision_and_handoff(identity: dict, install_data: dict):
                 held_conn.commit()
     except Exception:
         logger.exception("[GITHUB-SIGNUP] provisioning transaction failed")
-        return (_render_error(_ERROR_INTERNAL), None, None)
+        return (_render_error(_ERROR_INTERNAL), None, None, False)
 
     if created:
         # Same post-registration seeding as /api/auth/register — all
@@ -512,17 +517,24 @@ def _provision_and_handoff(identity: dict, install_data: dict):
         except Exception:
             logger.warning("[GITHUB-SIGNUP] audit event failed", exc_info=True)
 
-    try:
-        from utils.auth.tool_registry import seed_org_tool_permissions
+    if org_id:
+        try:
+            from utils.auth.tool_registry import seed_org_tool_permissions
 
-        seed_org_tool_permissions(org_id, user_id)
-    except Exception:
-        logger.warning("[GITHUB-SIGNUP] tool permission seeding failed", exc_info=True)
+            seed_org_tool_permissions(org_id, user_id)
+        except Exception:
+            logger.warning("[GITHUB-SIGNUP] tool permission seeding failed", exc_info=True)
+    else:
+        # Returning user whose row predates org backfill — nothing to seed.
+        logger.warning(
+            "[GITHUB-SIGNUP] skipping tool permission seeding: user=%s has no org",
+            user_id,
+        )
 
     redirect = flask.redirect(
         f"{FRONTEND_URL}/sign-in?handoff={handoff_token}", code=302
     )
-    return (redirect, user_id, installation_id)
+    return (redirect, user_id, installation_id, created)
 
 
 @github_signup_bp.route("/app/signup/callback", methods=["GET"])
@@ -567,26 +579,27 @@ def github_app_signup_callback():
     if identity is None:
         return _render_error(_ERROR_IDENTITY)
 
-    response, user_id, linked_installation_id = _provision_and_handoff(
+    response, user_id, linked_installation_id, created = _provision_and_handoff(
         identity, install_data
     )
     if user_id is None:
         return response
 
     logger.info(
-        "[GITHUB-SIGNUP] provisioned user=%s installation_id=%d gh_login=%s",
-        user_id, linked_installation_id, identity["login"],
+        "[GITHUB-SIGNUP] provisioned user=%s installation_id=%d gh_login=%s created=%s",
+        user_id, linked_installation_id, identity["login"], created,
     )
 
-    # Auto-import granted repos WITH Incident Prevention enabled — the user
-    # already curated the repo list on GitHub's install screen; this is what
-    # makes the flow genuinely one-click. Best-effort: the connectors page
-    # remains the fallback.
+    # Auto-import granted repos. Incident Prevention is auto-enabled only for
+    # BRAND-NEW accounts — the user curated the repo list on GitHub's install
+    # screen and that's what makes the flow one-click. A returning user
+    # re-installing keeps their existing per-repo choices (the OR upsert must
+    # never flip back a repo they deliberately turned off).
     try:
         from routes.github.github_repo_metadata import import_installation_repos
 
         import_installation_repos.delay(
-            user_id, linked_installation_id, enroll_change_gating=True
+            user_id, linked_installation_id, enroll_change_gating=created
         )
     except Exception:
         logger.warning(

@@ -305,10 +305,11 @@ class TestProvisioning:
         # fetchone: no github_user_id match, then email EXISTS.
         db_pool, conn, cur = _mock_db(mod, [None, ("existing-user",)])
         with app.test_request_context(), patch.object(mod, "db_pool", db_pool):
-            response, user_id, install_id = mod._provision_and_handoff(
+            response, user_id, install_id, created = mod._provision_and_handoff(
                 self._IDENTITY, _install_payload()
             )
         assert user_id is None
+        assert created is False
         assert response.status_code == 302
         assert "error=account_exists" in response.location
         # Nothing committed on this path.
@@ -321,10 +322,11 @@ class TestProvisioning:
         db_pool, conn, cur = _mock_db(mod, [("user-9",), ("org-9",)])
         with app.test_request_context(), patch.object(mod, "db_pool", db_pool), \
              patch("utils.auth.tool_registry.seed_org_tool_permissions"):
-            response, user_id, install_id = mod._provision_and_handoff(
+            response, user_id, install_id, created = mod._provision_and_handoff(
                 self._IDENTITY, _install_payload()
             )
         assert user_id == "user-9"
+        assert created is False
         assert install_id == 777
         assert response.status_code == 302
         assert "/sign-in?handoff=" in response.location
@@ -347,10 +349,11 @@ class TestProvisioning:
              patch("utils.auth.command_policy.seed_default_command_policy"), \
              patch("utils.auth.tool_registry.seed_org_tool_permissions"), \
              patch("routes.audit_routes.record_audit_event"):
-            response, user_id, install_id = mod._provision_and_handoff(
+            response, user_id, install_id, created = mod._provision_and_handoff(
                 self._IDENTITY, _install_payload()
             )
         assert user_id == "new-user"
+        assert created is True
         assert "/sign-in?handoff=" in response.location
         role.assert_called_once_with("new-user", "admin", "new-org")
         conn.commit.assert_called_once()
@@ -361,8 +364,11 @@ class TestProvisioning:
 
     def test_new_user_has_unusable_password(self, signup_app):
         app, mod = signup_app
+        # Same fetchone order as test_new_user_creates_org_and_handoff:
+        # gh-id miss, email miss, INSERT users RETURNING, org-name check,
+        # slug check, INSERT org RETURNING.
         db_pool, conn, cur = _mock_db(
-            mod, [None, None, None, None, ("new-user",), ("new-org",)]
+            mod, [None, None, ("new-user",), None, None, ("new-org",)]
         )
         with app.test_request_context(), patch.object(mod, "db_pool", db_pool), \
              patch("utils.auth.enforcer.assign_role_to_user"), \
