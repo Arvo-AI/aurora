@@ -29,6 +29,7 @@ const REQUIRED_API_TOKEN_SCOPES = [
   'write:pipeline:bitbucket',
   'read:webhook:bitbucket',
   'write:webhook:bitbucket',
+  'delete:webhook:bitbucket',
 ] as const;
 
 export default function BitbucketProviderIntegration() {

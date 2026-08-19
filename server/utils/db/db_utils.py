@@ -1749,6 +1749,10 @@ def initialize_tables():
             #   HMAC validation. Proof the hook is live that needs no API
             #   scopes, unlike webhook_hook_uuid which only exists when Aurora
             #   created the hook itself (requires repo admin).
+            # - webhook_verified_url: the delivery URL that verification was
+            #   for. When Aurora's public URL changes the old hook is dead, so
+            #   comparing against it turns a stale hook into a visible error
+            #   instead of a green badge that silently never fires.
             try:
                 cursor.execute(
                     "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS webhook_hook_uuid VARCHAR(64);"
@@ -1757,12 +1761,16 @@ def initialize_tables():
                     "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS webhook_verified_at TIMESTAMPTZ;"
                 )
                 cursor.execute(
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS webhook_verified_url TEXT;"
+                )
+                cursor.execute(
                     "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS bitbucket_webhook_secret_ref TEXT;"
                 )
                 conn.commit()
                 logging.info(
                     "Ensured Bitbucket Incident Prevention columns exist "
                     "(connected_repos.webhook_hook_uuid, connected_repos.webhook_verified_at, "
+                    "connected_repos.webhook_verified_url, "
                     "organizations.bitbucket_webhook_secret_ref)."
                 )
             except Exception as e:

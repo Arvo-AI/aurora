@@ -139,13 +139,25 @@ def _mark_webhook_verified(org_id: str, repo_full_name: str) -> None:
     This is the scope-free verification path. A delivery that got this far
     proves the hook exists, is active, targets the right URL AND carries
     the right secret — strictly more than ``GET /hooks`` can tell us, and
-    without the repo-admin scope that endpoint demands. ``webhook_hook_uuid``
-    can't serve here: a delivery never reveals the hook's UUID.
+    without the webhook read scope that endpoint demands.
+    ``webhook_hook_uuid`` can't serve here: a delivery never reveals the
+    hook's UUID.
 
-    Guarded on ``IS NULL`` so this is one write per repo, not one per PR
-    event. Best-effort: a failure must not fail the delivery.
+    ``webhook_verified_url`` records WHERE it arrived, so a later change to
+    Aurora's public URL invalidates this automatically instead of leaving a
+    green badge on a hook that can no longer reach us. The URL is refreshed
+    on every delivery (cheap, and it self-heals after a URL change), but the
+    timestamp only advances when the URL differs so it keeps meaning "first
+    seen at this URL".
+
+    Only stamps repos that are still enabled: an orphan hook Aurora could
+    not delete keeps delivering after a disable, and stamping those would
+    silently undo the disable's state reset and re-green the badge.
     """
+    from connectors.bitbucket_connector.webhook_secret import webhook_url_for_org
     from utils.db.connection_pool import db_pool
+
+    expected_url = webhook_url_for_org(org_id)
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -154,12 +166,15 @@ def _mark_webhook_verified(org_id: str, repo_full_name: str) -> None:
                 # Explicit org predicate alongside RLS, as in _repo_gating_state.
                 cur.execute(
                     """UPDATE connected_repos
-                          SET webhook_verified_at = NOW()
+                          SET webhook_verified_at = NOW(),
+                              webhook_verified_url = %s
                         WHERE provider = 'bitbucket'
                           AND repo_full_name = %s
                           AND org_id = %s
-                          AND webhook_verified_at IS NULL""",
-                    (repo_full_name, org_id),
+                          AND change_gating_enabled = TRUE
+                          AND (webhook_verified_at IS NULL
+                               OR webhook_verified_url IS DISTINCT FROM %s)""",
+                    (expected_url, repo_full_name, org_id, expected_url),
                 )
                 marked = cur.rowcount
                 cur.execute(_RESET_RLS_SQL)

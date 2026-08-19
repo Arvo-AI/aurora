@@ -13,7 +13,6 @@ duplicate rows on read and written to ALL org rows on update, so per-user
 duplicates can never disagree.
 """
 import logging
-import os
 
 from flask import Blueprint, jsonify, request
 
@@ -33,6 +32,7 @@ def get_workspace_selection(user_id):
     """Return connected Bitbucket repos for the org."""
     try:
         org_id = resolve_org(user_id)
+        expected_url = f"{_webhook_base_url()}/bitbucket/webhook/{org_id}"
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[BitbucketSelection:get]")
@@ -42,13 +42,14 @@ def get_workspace_selection(user_id):
                               MAX(metadata_summary),
                               MAX(metadata_status),
                               bool_or(change_gating_enabled),
-                              bool_or(webhook_hook_uuid IS NOT NULL
-                                      OR webhook_verified_at IS NOT NULL)
+                              bool_or(webhook_verified_url = %s),
+                              bool_or(webhook_verified_url IS NOT NULL
+                                      AND webhook_verified_url <> %s)
                        FROM connected_repos
                        WHERE org_id = %s AND provider = 'bitbucket'
                        GROUP BY repo_full_name
                        ORDER BY repo_full_name""",
-                    (org_id,),
+                    (expected_url, expected_url, org_id),
                 )
                 rows = cur.fetchall()
 
@@ -72,9 +73,15 @@ def get_workspace_selection(user_id):
                 "metadata_summary": r[2],
                 "metadata_status": r[3],
                 "change_gating_enabled": bool(r[4]),
-                # True once Aurora has confirmed the repo webhook exists
-                # (created it, or found it during enable/verify).
+                # Green ONLY when a delivery landed, or Verify saw the hook, at
+                # the URL Aurora serves right now. A stored hook uuid is NOT
+                # evidence: it says Aurora once created a hook, not that the
+                # hook still exists or can still reach us.
                 "webhook_configured": bool(r[5]),
+                # True when the hook was verified at a DIFFERENT public URL
+                # than Aurora now serves: it can no longer reach us, so the
+                # UI must surface it as broken rather than merely unverified.
+                "webhook_stale": bool(r[6]),
                 "mainbranch": {"name": r[1]} if r[1] else None,
             })
 
@@ -235,12 +242,9 @@ def clear_workspace_selection(user_id):
 
 def _webhook_base_url() -> str:
     """Externally reachable API base for webhook URLs (ngrok-aware in dev)."""
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-    base_url = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
-    if not base_url:
-        base_url = request.host_url.rstrip("/")
-    return base_url
+    from connectors.bitbucket_connector.webhook_secret import webhook_base_url
+
+    return webhook_base_url()
 
 
 def _delete_repo_hook(user_id: str, repo_full_name: str, hook_uuid: str) -> bool:
@@ -268,15 +272,18 @@ def _delete_repo_hook(user_id: str, repo_full_name: str, hook_uuid: str) -> bool
         return False
 
 
-def cleanup_org_hooks(user_id: str, org_id: str, repo_full_names=None) -> None:
-    """Delete Aurora-created hooks + clear stored uuids for org repos.
+def cleanup_org_hooks(user_id: str, org_id: str, repo_full_names=None) -> list[str]:
+    """Delete Aurora-created hooks + clear verification state for org repos.
+
+    Returns the repos whose hook could NOT be deleted, so the caller can tell
+    the admin to remove it by hand. That is the COMMON case, not an edge one:
+    Bitbucket refuses API deletion of hooks created through its web UI, so
+    "disable" can rarely guarantee the hook is gone.
 
     ``repo_full_names=None`` means every Bitbucket repo in the org
     (disconnect / clear-all); otherwise only the listed repos (deselect).
     The pooled DB connection is NOT held across the Bitbucket HTTP calls
-    (each has a 30s timeout — holding it would starve the pool), and the
-    uuid is cleared only for hooks the API confirmed deleted (or 404'd),
-    so a live hook is never orphaned with no stored uuid.
+    (each has a 30s timeout — holding it would starve the pool).
     """
     # Phase 1: read the hook list, release the connection.
     with db_pool.get_admin_connection() as conn:
@@ -301,39 +308,41 @@ def cleanup_org_hooks(user_id: str, org_id: str, repo_full_names=None) -> None:
                 )
             hooks = cur.fetchall()
 
-    if not hooks:
-        return
-
     # Phase 2: Bitbucket API calls, no DB connection held.
-    deleted = [
-        repo_full_name
-        for repo_full_name, hook_uuid in hooks
-        if _delete_repo_hook(user_id, repo_full_name, hook_uuid)
-    ]
+    deleted, failed = [], []
+    for repo_full_name, hook_uuid in hooks:
+        target = deleted if _delete_repo_hook(user_id, repo_full_name, hook_uuid) else failed
+        target.append(repo_full_name)
 
-    # Phase 3: clear uuids only where the delete actually succeeded.
-    # webhook_verified_at goes with it: the hook we were receiving deliveries
-    # from no longer exists, so past deliveries no longer prove anything.
-    if deleted:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[BitbucketHooks:cleanup]")
-                cur.execute(
-                    """UPDATE connected_repos
-                          SET webhook_hook_uuid = NULL,
-                              webhook_verified_at = NULL,
-                              updated_at = NOW()
-                        WHERE org_id = %s AND provider = 'bitbucket'
-                          AND repo_full_name = ANY(%s)""",
-                    (org_id, deleted),
-                )
-                conn.commit()
-    if len(deleted) != len(hooks):
+    # Phase 3: clear verification state for EVERY targeted repo, whether or
+    # not Bitbucket let us delete the hook. Aurora's own view of "is this
+    # verified" must not depend on a remote delete we often can't perform —
+    # otherwise a failed delete leaves the repo looking connected. The uuid
+    # is cleared only where the delete succeeded, so a live hook keeps its
+    # handle for a later retry (it no longer affects the badge).
+    scope = list(repo_full_names) if repo_full_names is not None else None
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[BitbucketHooks:cleanup]")
+            cur.execute(
+                """UPDATE connected_repos
+                      SET webhook_verified_at = NULL,
+                          webhook_verified_url = NULL,
+                          webhook_hook_uuid = CASE WHEN repo_full_name = ANY(%s)
+                                                   THEN NULL ELSE webhook_hook_uuid END,
+                          updated_at = NOW()
+                    WHERE org_id = %s AND provider = 'bitbucket'
+                      AND (%s::text[] IS NULL OR repo_full_name = ANY(%s))""",
+                (deleted, org_id, scope, scope),
+            )
+            conn.commit()
+    if failed:
         logger.warning(
             "Bitbucket hook cleanup incomplete for org %s: %d of %d deleted "
             "(uuids kept for retry on the failed ones)",
             _sanitize_log(org_id), len(deleted), len(hooks),
         )
+    return failed
 
 
 def _try_auto_create_hook(
@@ -342,9 +351,9 @@ def _try_auto_create_hook(
 ) -> bool:
     """Best-effort API creation of the repo webhook; returns True on success.
 
-    Needs repo admin (and webhook scopes the connector token usually lacks) —
-    manual setup is the primary path, so failure here is informational only.
-    An existing hook with the same URL counts as success (its uuid is
+    Needs the write:webhook:bitbucket scope, which the connector token often
+    lacks — manual setup is the primary path, so failure here is informational
+    only. An existing hook with the same URL counts as success (its uuid is
     recorded too, so disable/disconnect can still delete it).
     """
     def _store_hook_uuid(hook_uuid: str) -> None:
@@ -418,9 +427,13 @@ def update_change_gating(user_id, repo_full_name):
 
     On enable, returns ``{webhook_url, webhook_secret, webhook_events}`` ready
     to paste into the repo's Bitbucket webhook settings (creating the org
-    secret on first use), and best-effort attempts to create the hook via the
-    API — manual setup is the primary path (repo admin + webhook scopes are
-    often unavailable), so an API failure is not an error.
+    secret on first use). On a genuine off -> on transition it also tries to
+    create the hook via the API and reports ``webhook_auto_created``; manual
+    setup is the primary path (the write:webhook:bitbucket scope is often
+    missing), so failure there is not an error. Calling this for an
+    already-enabled repo just re-returns the details and omits
+    ``webhook_auto_created`` — the UI uses that to reopen the setup dialog,
+    which must not mutate anything in Bitbucket.
     """
     try:
         from utils.flags.feature_flags import is_incident_prevention_enabled
@@ -434,18 +447,20 @@ def update_change_gating(user_id, repo_full_name):
             return jsonify({"error": "enabled must be a boolean"}), 400
 
         org_id = resolve_org(user_id)
+        was_enabled = False
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating]")
                 if enabled:
                     cur.execute(
-                        """SELECT MAX(default_branch)
+                        """SELECT MAX(default_branch), bool_or(change_gating_enabled)
                              FROM connected_repos
                             WHERE org_id = %s AND provider = 'bitbucket'
                               AND repo_full_name = %s""",
                         (org_id, repo_full_name),
                     )
                     row = cur.fetchone()
+                    was_enabled = bool(row and row[1])
                     if row is None or row[0] is None:
                         # Repo missing entirely vs missing default_branch both
                         # block gating (the webhook filter compares against it).
@@ -497,12 +512,25 @@ def update_change_gating(user_id, repo_full_name):
                 ),
             })
 
-            response["webhook_auto_created"] = _try_auto_create_hook(
-                user_id, org_id, repo_full_name, webhook_url, webhook_events, secret
-            )
+            # Only create a hook on a real off -> on transition. The UI also
+            # calls this endpoint to re-show the url/secret after the setup
+            # dialog was dismissed, and creating a webhook as a side effect of
+            # *viewing* config is surprising: it silently repairs (or
+            # duplicates) a hook the admin was inspecting. Already-on means
+            # "show me the details again", so leave Bitbucket alone and omit
+            # the flag entirely — absent means "not attempted", which is
+            # neither the success nor the failure message.
+            if not was_enabled:
+                response["webhook_auto_created"] = _try_auto_create_hook(
+                    user_id, org_id, repo_full_name, webhook_url, webhook_events, secret
+                )
         else:
-            # Disable: delete the hook if Aurora created one, clear the uuid.
-            cleanup_org_hooks(user_id, org_id, [repo_full_name])
+            # Disable: try to delete the hook, always clear verification state.
+            # Deletion usually fails (Bitbucket blocks API deletes of hooks made
+            # in its UI), so say so — gating is off either way, but Bitbucket
+            # keeps POSTing until the admin removes the hook by hand.
+            if cleanup_org_hooks(user_id, org_id, [repo_full_name]):
+                response["webhook_cleanup_failed"] = True
 
         logger.info(
             "Bitbucket Incident Prevention %s for %s (org %s, by user %s)",
@@ -518,21 +546,39 @@ def update_change_gating(user_id, repo_full_name):
 @bitbucket_selection_bp.route("/repo-selections/<path:repo_full_name>/change-gating/verify", methods=["POST"])
 @require_permission("connectors", "write")
 def verify_change_gating_webhook(user_id, repo_full_name):
-    """Check whether the repo's Incident Prevention webhook actually exists.
+    """Check whether the repo's Incident Prevention webhook exists RIGHT NOW.
 
-    Two paths, cheapest first:
+    Asks Bitbucket for the repo's hooks and requires one that is active, has
+    both pullrequest triggers, and points at the org's current webhook URL.
+    A match stores the hook uuid (covers manually created hooks, so cleanup
+    can try to delete it) and the URL it was verified against.
 
-    1. ``webhook_verified_at`` is set, meaning a real delivery for this repo
-       already passed HMAC validation. That's conclusive and needs no API
-       scopes, so we short-circuit.
-    2. Otherwise list the repository's Bitbucket hooks and look for one
-       pointing at the org's webhook URL with both pullrequest events
-       enabled. On a match the hook uuid is stored (covers manually created
-       hooks) so cleanup can delete it later. This path needs repo admin,
-       which most users setting up Aurora don't have.
+    A definitive miss (no hook / disabled / missing triggers) CLEARS any
+    previous verification: without that, a repo verified once stays green
+    forever after its hook is deleted or broken in Bitbucket.
 
-    POST + connectors:write because of that persistence side effect.
+    Listing needs the webhook read scope. When Aurora can't look, that is not
+    proof of absence, so it falls back to delivery evidence (a past delivery
+    at this URL passed HMAC) and leaves stored state untouched.
+
+    POST + connectors:write because of those persistence side effects.
     """
+    def _clear_verification() -> None:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:verify]")
+                cur.execute(
+                    """UPDATE connected_repos
+                          SET webhook_verified_at = NULL,
+                              webhook_verified_url = NULL,
+                              updated_at = NOW()
+                        WHERE org_id = %s AND provider = 'bitbucket'
+                          AND repo_full_name = %s
+                          AND webhook_verified_at IS NOT NULL""",
+                    (org_id, repo_full_name),
+                )
+                conn.commit()
+
     try:
         org_id = resolve_org(user_id)
         webhook_url = f"{_webhook_base_url()}/bitbucket/webhook/{org_id}"
@@ -541,37 +587,37 @@ def verify_change_gating_webhook(user_id, repo_full_name):
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:verify]")
                 cur.execute(
-                    """SELECT bool_or(webhook_verified_at IS NOT NULL)
+                    """SELECT bool_or(webhook_verified_url = %s)
                          FROM connected_repos
                         WHERE org_id = %s AND provider = 'bitbucket'
                           AND repo_full_name = %s""",
-                    (org_id, repo_full_name),
+                    (webhook_url, org_id, repo_full_name),
                 )
                 row = cur.fetchone()
-        if row and row[0]:
-            return jsonify({"verified": True, "reason": "delivery_seen"}), 200
+        delivery_seen = bool(row and row[0])
 
         from chat.backend.agent.tools.bitbucket.utils import get_bb_client_for_user
 
         client = get_bb_client_for_user(user_id)
         if client is None or "/" not in repo_full_name:
             return jsonify({
-                "verified": False,
-                "reason": "bitbucket_not_connected",
-                "detail": "Reconnect Bitbucket, then verify again.",
+                "verified": delivery_seen,
+                "reason": "delivery_seen" if delivery_seen else "bitbucket_not_connected",
+                "detail": None if delivery_seen else "Reconnect Bitbucket, then verify again.",
             }), 200
         ws, slug = repo_full_name.split("/", 1)
         hooks = client.list_webhooks(ws, slug)
         if isinstance(hooks, dict) and hooks.get("error"):
             # Most common cause: the connector token lacks webhook read
-            # scope — we can't see hooks, which is not proof of absence.
-            # The delivery path above will verify this repo on its own.
+            # scope — we can't see hooks, which is not proof of absence, so
+            # stored state stands and past delivery evidence still counts.
             return jsonify({
-                "verified": False,
-                "reason": "cannot_list_hooks",
-                "detail": "Aurora can't read this repository's webhook list (that needs "
-                          "repo admin), so it will confirm the hook automatically the "
-                          "first time Bitbucket sends a pull request event.",
+                "verified": delivery_seen,
+                "reason": "delivery_seen" if delivery_seen else "cannot_list_hooks",
+                "detail": None if delivery_seen else
+                          "Aurora can't read this repository's webhook list (that needs the "
+                          "read:webhook:bitbucket scope), so it will confirm the hook "
+                          "automatically the first time Bitbucket sends a pull request event.",
             }), 200
 
         match = None
@@ -579,12 +625,21 @@ def verify_change_gating_webhook(user_id, repo_full_name):
             if isinstance(hook, dict) and hook.get("url") == webhook_url:
                 match = hook
                 break
+        # From here Bitbucket's hook list is authoritative, so a miss clears
+        # any stale verification instead of letting the badge stay green.
         if match is None:
-            return jsonify({"verified": False, "reason": "hook_not_found"}), 200
+            _clear_verification()
+            return jsonify({
+                "verified": False,
+                "reason": "hook_not_found",
+                "detail": "No webhook on this repository points at Aurora. Add it under "
+                          "Repository settings → Webhooks.",
+            }), 200
 
         events = set(match.get("events") or [])
         missing_events = {"pullrequest:created", "pullrequest:updated"} - events
         if not match.get("active"):
+            _clear_verification()
             return jsonify({
                 "verified": False,
                 "reason": "hook_inactive",
@@ -592,25 +647,30 @@ def verify_change_gating_webhook(user_id, repo_full_name):
                           "under Repository settings → Webhooks.",
             }), 200
         if missing_events:
+            _clear_verification()
             return jsonify({
                 "verified": False,
                 "reason": "missing_events",
                 "detail": f"Hook exists but is missing triggers: {', '.join(sorted(missing_events))}",
             }), 200
 
-        # Hook confirmed — persist its uuid (covers manual setups).
-        if match.get("uuid"):
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cur:
-                    set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:verify]")
-                    cur.execute(
-                        """UPDATE connected_repos
-                              SET webhook_hook_uuid = %s, updated_at = NOW()
-                            WHERE org_id = %s AND provider = 'bitbucket'
-                              AND repo_full_name = %s""",
-                        (match["uuid"], org_id, repo_full_name),
-                    )
-                    conn.commit()
+        # Hook confirmed at the CURRENT url — persist its uuid (covers manual
+        # setups) and the url it was verified against, so a later change to
+        # Aurora's public url marks this repo stale instead of leaving it green.
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:verify]")
+                cur.execute(
+                    """UPDATE connected_repos
+                          SET webhook_hook_uuid = COALESCE(%s, webhook_hook_uuid),
+                              webhook_verified_at = COALESCE(webhook_verified_at, NOW()),
+                              webhook_verified_url = %s,
+                              updated_at = NOW()
+                        WHERE org_id = %s AND provider = 'bitbucket'
+                          AND repo_full_name = %s""",
+                    (match.get("uuid"), webhook_url, org_id, repo_full_name),
+                )
+                conn.commit()
         return jsonify({"verified": True}), 200
     except Exception:
         logger.exception("Error verifying Bitbucket webhook")

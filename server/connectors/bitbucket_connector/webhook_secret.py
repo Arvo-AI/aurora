@@ -15,6 +15,7 @@ The secret value lives in the active secrets backend (Vault / AWS SM);
 from __future__ import annotations
 
 import logging
+import os
 import secrets as _secrets
 from typing import Optional
 
@@ -23,6 +24,34 @@ from utils.db.connection_pool import db_pool
 logger = logging.getLogger(__name__)
 
 _SECRET_NAME_TEMPLATE = "bitbucket-change-gating-webhook-{org_id}"
+
+
+def webhook_base_url() -> str:
+    """Externally reachable API base for webhook URLs (ngrok-aware in dev).
+
+    Shared by the Flask enable/verify routes and the Celery dispatcher so
+    both agree on the URL a delivery is expected to arrive at. The Flask
+    request fallback only applies when there IS a request context — in a
+    worker it returns "" rather than raising, and callers skip URL scoping.
+    """
+    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
+    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
+    base_url = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
+    if not base_url:
+        try:
+            from flask import has_request_context, request
+
+            if has_request_context():
+                base_url = request.host_url.rstrip("/")
+        except Exception:
+            base_url = ""
+    return base_url
+
+
+def webhook_url_for_org(org_id: str) -> str:
+    """Full delivery URL for an org's hooks, or "" when the base is unknown."""
+    base = webhook_base_url()
+    return f"{base}/bitbucket/webhook/{org_id}" if base else ""
 
 
 class WebhookSecretUnavailable(Exception):

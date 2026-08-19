@@ -14,7 +14,10 @@ Pins two contracts:
 3. Delivery-side webhook verification: ``_mark_webhook_verified`` runs
    BEFORE the filter chain, because a delivery that got here already passed
    HMAC and so proves the hook is live even when the PR itself is filtered
-   out. This is what flips the UI badge without needing repo-admin scope.
+   out. This is what flips the UI badge without needing the webhook read
+   scope. It stamps only repos that are still enabled, and records the URL
+   the delivery arrived at, so neither a disable nor a URL change can leave
+   a green badge on a hook that no longer works.
 
 DB, Redis and Celery ``delay`` are all mocked — no I/O.
 """
@@ -283,7 +286,9 @@ class TestWebhookVerifiedOnDelivery:
         delay.assert_not_called()
         assert marked == [(_ORG_ID, _REPO)]
 
-    def test_marks_when_repo_not_enrolled(self, gating_env):
+    def test_dispatcher_still_calls_mark_when_not_enrolled(self, gating_env):
+        """The dispatcher marks unconditionally; the enabled-repo guard lives in
+        the SQL (see TestMarkWebhookVerifiedSql), not in the call site."""
         state, _, delay, marked = gating_env
         state["enrolled"] = False
         _run()
@@ -296,6 +301,116 @@ class TestWebhookVerifiedOnDelivery:
         del payload["repository"]
         _run(payload=payload)
         assert marked == []
+
+
+class TestMarkWebhookVerifiedSql:
+    """An orphan hook Aurora could not delete keeps delivering after a disable.
+    Stamping those rows would silently undo the disable and re-green the badge,
+    so the UPDATE must only touch repos that are still enabled."""
+
+    @staticmethod
+    def _capture(monkeypatch):
+        import contextlib
+        from utils.db import connection_pool
+
+        calls: list[tuple[str, tuple]] = []
+
+        class _Cur:
+            rowcount = 0
+
+            def execute(self, sql, params=None):
+                calls.append((sql, params))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        class _Conn:
+            def cursor(self):
+                return _Cur()
+
+            def commit(self):
+                pass
+
+        @contextlib.contextmanager
+        def _get_admin_connection():
+            yield _Conn()
+
+        monkeypatch.setattr(
+            connection_pool.db_pool, "get_admin_connection", _get_admin_connection
+        )
+        return calls
+
+    def test_update_is_scoped_to_enabled_repos_and_current_url(self, monkeypatch):
+        calls = self._capture(monkeypatch)
+        monkeypatch.delenv("NGROK_URL", raising=False)
+        monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "https://api.example.com")
+
+        bb_tasks._mark_webhook_verified(_ORG_ID, _REPO)
+
+        update = next(sql for sql, _ in calls if "UPDATE connected_repos" in sql)
+        assert "change_gating_enabled = TRUE" in update
+        expected = f"https://api.example.com/bitbucket/webhook/{_ORG_ID}"
+        params = next(p for sql, p in calls if "UPDATE connected_repos" in sql)
+        assert expected in params and _ORG_ID in params
+
+
+class TestWebhookUrlScoping:
+    """Verification is scoped to the URL a delivery arrived at, so a change to
+    Aurora's public URL invalidates it instead of leaving a green badge on a
+    hook that can no longer reach us."""
+
+    def test_base_url_prefers_ngrok_only_for_local_backend(self, monkeypatch):
+        from connectors.bitbucket_connector.webhook_secret import webhook_base_url
+
+        monkeypatch.setenv("NGROK_URL", "https://tunnel.example.dev/")
+        monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "http://localhost:5080")
+        assert webhook_base_url() == "https://tunnel.example.dev"
+
+        monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "https://api.example.com")
+        assert webhook_base_url() == "https://api.example.com"
+
+    def test_base_url_is_empty_outside_a_request_context(self, monkeypatch):
+        """The dispatcher runs in a Celery worker: no Flask request exists, so
+        the host_url fallback must return "" rather than raise."""
+        from connectors.bitbucket_connector.webhook_secret import (
+            webhook_base_url, webhook_url_for_org,
+        )
+
+        monkeypatch.delenv("NGROK_URL", raising=False)
+        monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "")
+        assert webhook_base_url() == ""
+        assert webhook_url_for_org(_ORG_ID) == ""
+
+    def test_url_for_org_matches_the_ingress_route(self, monkeypatch):
+        """Must equal the path registered in main_compute (/bitbucket prefix)
+        and the url handed to the admin by the enable endpoint."""
+        from connectors.bitbucket_connector.webhook_secret import webhook_url_for_org
+
+        monkeypatch.delenv("NGROK_URL", raising=False)
+        monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "https://api.example.com")
+        assert webhook_url_for_org(_ORG_ID) == (
+            f"https://api.example.com/bitbucket/webhook/{_ORG_ID}"
+        )
+
+    def test_stale_predicate_only_fires_on_a_url_mismatch(self):
+        """Mirrors the SQL in get_workspace_selection: configured vs stale."""
+        current = f"https://api.example.com/bitbucket/webhook/{_ORG_ID}"
+        old = f"https://tunnel.example.dev/bitbucket/webhook/{_ORG_ID}"
+
+        def state(verified_url, hook_uuid=None):
+            configured = verified_url == current
+            stale = verified_url is not None and verified_url != current
+            return configured, stale
+
+        assert state(current) == (True, False)      # verified here -> Active
+        assert state(old) == (False, True)          # verified elsewhere -> red
+        assert state(None) == (False, False)        # never verified -> amber
+        # A stored hook uuid must NOT imply configured: it only says Aurora once
+        # created a hook, not that the hook still exists or can reach us.
+        assert state(None, hook_uuid="{abc}") == (False, False)
 
 
 class TestProviderKeys:

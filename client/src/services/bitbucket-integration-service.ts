@@ -36,6 +36,7 @@ export interface ChangeGatingResponse {
   webhook_events?: string[];
   webhook_note?: string;
   webhook_auto_created?: boolean;
+  webhook_cleanup_failed?: boolean;
 }
 
 export interface WebhookVerifyResponse {
@@ -77,6 +78,7 @@ export interface WorkspaceSelectionResponse {
     metadata_status?: string | null;
     change_gating_enabled?: boolean;
     webhook_configured?: boolean;
+    webhook_stale?: boolean;
   })[];
 }
 

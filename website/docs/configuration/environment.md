@@ -448,11 +448,15 @@ stored in the secrets backend, not in `.env`. The shared
 `NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION` flag (see the GitHub table above)
 gates this feature too.
 
-Aurora can also create and verify that webhook for you if the connected
-credentials carry the `read:webhook:bitbucket` and `write:webhook:bitbucket`
-scopes (**Webhooks** read+write on an OAuth consumer). Without them the manual
-paste above still works — the hook is confirmed automatically on the first pull
-request event, since Bitbucket sends no test event when a webhook is saved.
+Aurora can also create, verify and remove that webhook for you if the connected
+credentials carry the `read:webhook:bitbucket`, `write:webhook:bitbucket` and
+`delete:webhook:bitbucket` scopes (the single **Webhooks** scope on an OAuth
+consumer covers all three). Without them the manual paste above still works —
+the hook is confirmed automatically on the first pull request event, since
+Bitbucket sends no test event when a webhook is saved. Note that without
+`delete:webhook:bitbucket`, disabling Incident Prevention stops all PR reviews
+but leaves the webhook in place, so Bitbucket keeps sending events that Aurora
+discards; remove it by hand to stop them.
 
 Optional: to post reviews as a dedicated bot account instead of the connected
 user, provision a system secret (again, not an env var):

@@ -14,8 +14,10 @@ logger = logging.getLogger(__name__)
 
 BITBUCKET_AUTHORIZE_URL = "https://bitbucket.org/site/oauth2/authorize"
 BITBUCKET_TOKEN_URL = "https://bitbucket.org/site/oauth2/access_token"
-# `webhook` grants read+write on repository hooks, which Incident Prevention
-# needs to auto-create the change-gating hook and to verify it from the UI.
+# The coarse `webhook` OAuth scope covers list/create/update/delete on hooks,
+# so Incident Prevention needs nothing further here. Granular API tokens are
+# different: they split these into read:/write:/delete:webhook:bitbucket (see
+# _REQUIRED_SCOPES in routes/bitbucket/bitbucket.py).
 BITBUCKET_SCOPES = "repository:write pullrequest:write issue:write account project pipeline:write webhook"
 REQUEST_TIMEOUT = 30  # seconds
 

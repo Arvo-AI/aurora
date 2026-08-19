@@ -24,6 +24,7 @@ interface ConnectedRepo {
   metadata_status: string | null;
   change_gating_enabled: boolean;
   webhook_configured: boolean;
+  webhook_stale: boolean;
 }
 
 function parseConnectedRepos(repositories: NonNullable<import('@/services/bitbucket-integration-service').WorkspaceSelectionResponse['repositories']>): ConnectedRepo[] {
@@ -38,6 +39,7 @@ function parseConnectedRepos(repositories: NonNullable<import('@/services/bitbuc
       metadata_status: r.metadata_status || null,
       change_gating_enabled: !!r.change_gating_enabled,
       webhook_configured: !!r.webhook_configured,
+      webhook_stale: !!r.webhook_stale,
     }));
 }
 
@@ -75,11 +77,12 @@ export default function BitbucketWorkspaceBrowser() {
     setGatingUpdating(prev => new Set(prev).add(repoFullName));
     try {
       const result = await BitbucketIntegrationService.updateChangeGating(repoFullName, enabled);
-      // Only reflect state the server confirmed — no optimistic flip: the
-      // toggle must never show "on" for a repo whose webhook isn't set up.
+      // webhook_configured is never set optimistically: creating a hook is not
+      // evidence that deliveries reach Aurora. It stays false until Verify or a
+      // real delivery confirms it, so the badge can't claim a working setup.
       setSavedRepos(prev => prev.map(r =>
         r.full_name === repoFullName
-          ? { ...r, change_gating_enabled: enabled, webhook_configured: enabled ? !!result.webhook_auto_created : false }
+          ? { ...r, change_gating_enabled: enabled, webhook_configured: false, webhook_stale: false }
           : r
       ));
       if (enabled && result.webhook_url) {
@@ -89,7 +92,12 @@ export default function BitbucketWorkspaceBrowser() {
         setWebhookSetup(null);
       }
       if (!enabled) {
-        toast({ title: "Incident Prevention disabled" });
+        toast({
+          title: "Incident Prevention disabled",
+          description: result.webhook_cleanup_failed
+            ? "Aurora can't delete this webhook (Bitbucket only allows that for hooks it created). No PRs will be reviewed, but remove the webhook in Repository settings to stop Bitbucket sending events."
+            : undefined,
+        });
       }
     } catch (error: unknown) {
       const err = error as Error;
@@ -108,8 +116,10 @@ export default function BitbucketWorkspaceBrowser() {
   };
 
   const handleReopenSetup = async (repoFullName: string) => {
-    // Re-enable is idempotent and returns the same org webhook URL/secret,
-    // so the setup dialog can always be reopened after being dismissed.
+    // Re-enabling an already-enabled repo returns the same org webhook URL and
+    // secret WITHOUT touching Bitbucket (the server skips hook creation when
+    // the repo was already on), so the dialog can be reopened after dismissal
+    // without this read-only action mutating remote state.
     setGatingUpdating(prev => new Set(prev).add(repoFullName));
     try {
       const result = await BitbucketIntegrationService.updateChangeGating(repoFullName, true);
@@ -142,6 +152,11 @@ export default function BitbucketWorkspaceBrowser() {
           description: result.detail || "Aurora will confirm the hook automatically on the first pull request event.",
         });
       } else {
+        // Definitive miss: the server cleared its verification, so clear the
+        // badge too rather than leaving a green one the server disagrees with.
+        setSavedRepos(prev => prev.map(r =>
+          r.full_name === repoFullName ? { ...r, webhook_configured: false } : r
+        ));
         toast({
           title: "Webhook not found",
           description: result.detail || "No matching webhook yet. Add it in Bitbucket → Repository settings → Webhooks, or open a PR and Aurora will confirm it automatically.",
@@ -265,6 +280,34 @@ export default function BitbucketWorkspaceBrowser() {
     });
   };
 
+  // Re-check each enabled repo's hook against Bitbucket on card open. Stored
+  // verification is only ever proof of a PAST success, so without this a repo
+  // stays green after its hook is deleted or disabled in Bitbucket. Failures
+  // are silent (no toast): this is a background refresh, and the badge itself
+  // reports the result.
+  const revalidateWebhooks = (connected: ConnectedRepo[]) => {
+    const enabled = connected.filter(r => r.change_gating_enabled).map(r => r.full_name);
+    if (!incidentPreventionEnabled || enabled.length === 0) return;
+    void Promise.all(enabled.map(async name => {
+      try {
+        const res = await BitbucketIntegrationService.verifyChangeGatingWebhook(name);
+        return { name, verified: !!res.verified };
+      } catch {
+        return null;
+      }
+    })).then(results => {
+      const byName = new Map(results.filter(r => r !== null).map(r => [r!.name, r!.verified]));
+      if (byName.size === 0) return;
+      setSavedRepos(prev => prev.map(r =>
+        byName.has(r.full_name)
+          // A fresh positive also clears `stale`: verify only succeeds against
+          // the URL Aurora serves now.
+          ? { ...r, webhook_configured: byName.get(r.full_name)!, webhook_stale: byName.get(r.full_name)! ? false : r.webhook_stale }
+          : r
+      ));
+    });
+  };
+
   const loadStoredSelection = async () => {
     try {
       const data = await BitbucketIntegrationService.loadWorkspaceSelection();
@@ -284,6 +327,7 @@ export default function BitbucketWorkspaceBrowser() {
       savedReposByWorkspaceRef.current = byWorkspace;
       setSavedRepos(connected);
       startMetadataPolling(connected);
+      revalidateWebhooks(connected);
 
       // Set the active workspace to the first one with saved repos
       const firstWorkspace = data.workspace || byWorkspace.keys().next().value;
@@ -610,22 +654,34 @@ export default function BitbucketWorkspaceBrowser() {
                           </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
-                      {repo.change_gating_enabled && repo.webhook_configured && (
+                      {repo.change_gating_enabled && repo.webhook_configured && !repo.webhook_stale && (
                         <Badge variant="outline" className="text-xs text-green-600 border-green-600/40 gap-1 px-1.5">
                           <CheckCircle2 className="h-3 w-3" /> Active
                         </Badge>
                       )}
-                      {repo.change_gating_enabled && !repo.webhook_configured && (
+                      {/* Stale wins over configured: a hook Aurora created is
+                          tracked by uuid and so counts as configured, but if it
+                          was verified at a different URL it can no longer reach
+                          us and must not read as healthy. */}
+                      {repo.change_gating_enabled && (!repo.webhook_configured || repo.webhook_stale) && (
                         <button
                           type="button"
                           className="inline-flex disabled:opacity-50"
                           disabled={isGatingUpdating}
                           onClick={() => handleReopenSetup(repo.full_name)}
-                          title="Waiting for the first pull request event from Bitbucket — click to view the webhook URL and secret"
+                          title={repo.webhook_stale
+                            ? "This repo's webhook points at a different Aurora URL and can no longer reach us — click to get the current URL and secret"
+                            : "Waiting for the first pull request event from Bitbucket — click to view the webhook URL and secret"}
                         >
-                          <Badge variant="outline" className="text-xs text-amber-600 border-amber-600/40 gap-1 px-1.5 cursor-pointer">
-                            <AlertTriangle className="h-3 w-3" /> Awaiting first delivery
-                          </Badge>
+                          {repo.webhook_stale ? (
+                            <Badge variant="outline" className="text-xs text-red-600 border-red-600/40 gap-1 px-1.5 cursor-pointer">
+                              <AlertTriangle className="h-3 w-3" /> Webhook URL changed
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-xs text-amber-600 border-amber-600/40 gap-1 px-1.5 cursor-pointer">
+                              <AlertTriangle className="h-3 w-3" /> Awaiting first delivery
+                            </Badge>
+                          )}
                         </button>
                       )}
                     </div>
@@ -653,9 +709,11 @@ export default function BitbucketWorkspaceBrowser() {
           <DialogHeader>
             <DialogTitle>Webhook setup — {webhookSetup?.repo_full_name}</DialogTitle>
             <DialogDescription>
-              {webhookSetup?.webhook_auto_created
-                ? 'Aurora created the repository webhook automatically. Click Verify to confirm it and activate Incident Prevention.'
-                : 'Aurora could not create the webhook automatically (repo admin access is required). Add it in Bitbucket using the URL and secret below.'}
+              {webhookSetup?.webhook_auto_created === undefined
+                ? 'Incident Prevention is already on for this repository. Below are the webhook details for it.'
+                : webhookSetup.webhook_auto_created
+                ? 'Aurora created the webhook on this repository, so there is nothing to paste. Click Verify to confirm it.'
+                : 'Aurora could not create the webhook automatically (that needs the write:webhook:bitbucket scope). Add it in Bitbucket using the URL and secret below.'}
             </DialogDescription>
           </DialogHeader>
           {!webhookSetup?.webhook_auto_created && (
@@ -663,11 +721,13 @@ export default function BitbucketWorkspaceBrowser() {
               In Bitbucket, go to <span className="font-medium">Repository settings → Webhooks → Add webhook</span> and
               paste the URL and secret below, with triggers <span className="font-mono">Pull request: Created</span> and{' '}
               <span className="font-mono">Pull request: Updated</span>. Bitbucket sends no test event, so Aurora confirms
-              the hook on the first pull request — open or update a PR to activate it, or click Verify if you have repo admin.
+              the hook on the first pull request — open or update a PR to activate it, or click Verify to check now.
             </p>
           )}
           <p className="text-xs text-muted-foreground font-medium">
-            Use this SAME URL and secret on every repository you enable — the secret is shared across your organization.
+            {webhookSetup?.webhook_auto_created
+              ? 'Keep these: the same URL and secret apply to every repository you enable, and you will need them if this webhook is ever removed.'
+              : 'Use this SAME URL and secret on every repository you enable — the secret is shared across your organization.'}
           </p>
           <div className="space-y-2">
             <div className="flex items-center gap-1">
