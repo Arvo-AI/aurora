@@ -20,6 +20,10 @@ _REQUIRED_SCOPES = {
     "read:pullrequest:bitbucket", "write:pullrequest:bitbucket",
     "read:issue:bitbucket", "write:issue:bitbucket",
     "read:pipeline:bitbucket", "write:pipeline:bitbucket",
+    # Incident Prevention: read to verify the change-gating hook from the UI,
+    # write to auto-create it. Advisory only (surfaced as `missing_scopes`),
+    # so tokens without them still connect and work for everything else.
+    "read:webhook:bitbucket", "write:webhook:bitbucket",
 }
 from utils.auth.stateless_auth import set_rls_context
 from connectors.bitbucket_connector.api_client import BitbucketAPIClient

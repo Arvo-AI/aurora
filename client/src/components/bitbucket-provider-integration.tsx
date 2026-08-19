@@ -14,6 +14,7 @@ import { isBitbucketOAuthEnabled } from '@/lib/feature-flags';
 // Re-export service so existing imports from this path keep working
 export { BitbucketIntegrationService } from '@/services/bitbucket-integration-service';
 
+// Keep in sync with server `_REQUIRED_SCOPES` (routes/bitbucket/bitbucket.py).
 const REQUIRED_API_TOKEN_SCOPES = [
   'read:user:bitbucket',
   'read:workspace:bitbucket',
@@ -26,6 +27,8 @@ const REQUIRED_API_TOKEN_SCOPES = [
   'write:issue:bitbucket',
   'read:pipeline:bitbucket',
   'write:pipeline:bitbucket',
+  'read:webhook:bitbucket',
+  'write:webhook:bitbucket',
 ] as const;
 
 export default function BitbucketProviderIntegration() {

@@ -1399,6 +1399,7 @@ Grant these scopes:
 - `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`
 - `read:issue:bitbucket`, `write:issue:bitbucket`
 - `read:pipeline:bitbucket`, `write:pipeline:bitbucket`
+- `read:webhook:bitbucket`, `write:webhook:bitbucket` — only needed for [Incident Prevention](#incident-prevention-pre-merge-pr-review); lets Aurora create and verify the change-gating webhook for you
 
 ##### 2. Connect via Aurora UI
 
@@ -1415,8 +1416,12 @@ Use OAuth if you prefer a per-user consent flow. This path requires both a featu
 1. Go to **Bitbucket workspace settings** > **OAuth consumers** > **Add consumer**
    - Name: `Aurora`
    - Callback URL: `{NEXT_PUBLIC_BACKEND_URL}/bitbucket/callback` (e.g. `https://your-aurora-domain/bitbucket/callback`)
-   - Permissions: **Account** (Read), **Projects** (Read), **Repositories** (Read & Write), **Pull requests** (Read & Write), **Issues** (Read & Write), **Pipelines** (Read & Write)
+   - Permissions: **Account** (Read), **Projects** (Read), **Repositories** (Read & Write), **Pull requests** (Read & Write), **Issues** (Read & Write), **Pipelines** (Read & Write), **Webhooks** (Read & Write)
 2. Copy the **Key** and **Secret**
+
+:::note
+**Webhooks** is only required for [Incident Prevention](#incident-prevention-pre-merge-pr-review). Existing consumers keep working without it; add the permission and re-authorize to let Aurora create and verify change-gating webhooks for you.
+:::
 
 ##### 2. Configure Environment
 
@@ -1441,11 +1446,24 @@ Requirements: a connected Bitbucket account (either auth method above), `NEXT_PU
 
 1. Navigate to **Connectors** > **Bitbucket** and connect at least one repository
 2. Flip the **Incident Prevention** switch on a connected repository
-3. Aurora responds with a **webhook URL** (`{API_URL}/bitbucket/webhook/{org_id}`) and a **secret**. It also tries to create the repo webhook for you via the API; if your credentials lack repo-admin/webhook rights (common), add it manually:
+3. Aurora responds with a **webhook URL** (`{API_URL}/bitbucket/webhook/{org_id}`) and a **secret**. It also tries to create the repo webhook for you via the API; if your credentials lack the webhook scopes or repo-admin rights, add it manually:
    - In Bitbucket: **Repository settings → Webhooks → Add webhook**
    - Title: `Aurora Incident Prevention`; URL: the webhook URL from Aurora; Secret: the secret from Aurora
    - Triggers: **Pull request → Created** and **Pull request → Updated** only (do not add approval/comment triggers — they would loop on Aurora's own activity)
 4. Repeat the webhook setup for each repository you enable, using the **same URL and secret** — the secret is shared across your organization
+
+##### How the webhook gets verified
+
+The repository badge reads **Awaiting first delivery** until Aurora confirms the hook, then **Active**. There are two ways it gets confirmed:
+
+- **Verify webhook** (immediate) — reads the repository's hooks via the API and looks for one pointing at Aurora's URL with both pull request triggers. Needs `read:webhook:bitbucket` **and** repo-admin rights on the repo. Without them you get *Verification pending* rather than a failure, because not being able to look is not proof of absence.
+- **First delivery** (automatic) — any pull request event that passes signature validation confirms the hook on its own. This is the stronger check: it proves the hook exists, is enabled, points at the right URL **and** carries the right secret, none of which the API listing can tell you.
+
+Bitbucket sends **no test event** when you save a webhook (unlike GitHub's `ping`), so a manually added hook stays *Awaiting first delivery* until a real PR event arrives. Open or update a pull request to confirm it.
+
+:::note
+If Aurora's public URL changes (for example a new dev tunnel), update the URL on the existing hook in Bitbucket — Aurora cannot rewrite a hook it did not create, and deliveries to the old URL are simply lost.
+:::
 
 Notes and limits:
 
@@ -1483,6 +1501,9 @@ Only **posting** (comments/approvals) uses the bot; investigation reads always u
 | "Bitbucket OAuth is not available. Use an API token instead." | `BB_OAUTH_CLIENT_ID`/`BB_OAUTH_CLIENT_SECRET` are not set. Use the API token method, or configure the OAuth consumer |
 | OAuth tab not visible in the UI | `NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH` is not `true`. Set it and restart |
 | Incident Prevention toggle missing | `NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION` is `false`, or Bitbucket is not connected |
+| "Verification pending" when clicking Verify webhook | The token lacks `read:webhook:bitbucket`, or the account is not a repo admin. Not a failure — open or update a PR and the first delivery confirms the hook automatically |
+| Badge stuck on "Awaiting first delivery" | No PR event has arrived yet. Bitbucket sends no test event on save, so push to a PR. If it still does not flip, check **Repository settings → Webhooks → View requests** for the delivery attempts and their response codes |
+| Badge went from Active back to Awaiting after Aurora's URL changed | Expected: the hook still points at the old URL. Edit the existing hook in Bitbucket to the new URL |
 | PRs never get reviewed | Check the webhook in Bitbucket shows recent 2xx deliveries; confirm the PR targets the default branch and is not a draft; confirm the same org secret was pasted into the repo hook |
 | Review comment posted but no approval on SAFE | The posting account authored the PR (Bitbucket forbids self-approval) — configure the dedicated bot account |
 

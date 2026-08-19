@@ -448,6 +448,12 @@ stored in the secrets backend, not in `.env`. The shared
 `NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION` flag (see the GitHub table above)
 gates this feature too.
 
+Aurora can also create and verify that webhook for you if the connected
+credentials carry the `read:webhook:bitbucket` and `write:webhook:bitbucket`
+scopes (**Webhooks** read+write on an OAuth consumer). Without them the manual
+paste above still works — the hook is confirmed automatically on the first pull
+request event, since Bitbucket sends no test event when a webhook is saved.
+
 Optional: to post reviews as a dedicated bot account instead of the connected
 user, provision a system secret (again, not an env var):
 
