@@ -529,6 +529,21 @@ class BitbucketAPIClient:
             json_data={"content": {"raw": content}},
         )
 
+    def update_pr_comment(self, workspace, repo_slug, pr_id, comment_id, content):
+        """Update an existing pull request comment's content."""
+        return self._put(
+            f"{self._pr_base(workspace, repo_slug, pr_id)}/comments/"
+            f"{quote(str(comment_id), safe='')}",
+            json_data={"content": {"raw": content}},
+        )
+
+    def delete_pr_comment(self, workspace, repo_slug, pr_id, comment_id):
+        """Delete a pull request comment."""
+        return self._delete(
+            f"{self._pr_base(workspace, repo_slug, pr_id)}/comments/"
+            f"{quote(str(comment_id), safe='')}"
+        )
+
     def get_pr_diff(self, workspace, repo_slug, pr_id):
         """Get the diff for a pull request."""
         return self._get_raw(f"{self._pr_base(workspace, repo_slug, pr_id)}/diff")
@@ -536,6 +551,46 @@ class BitbucketAPIClient:
     def get_pr_activity(self, workspace, repo_slug, pr_id):
         """Get activity log for a pull request."""
         return self._paginated_get(f"{self._pr_base(workspace, repo_slug, pr_id)}/activity")
+
+    # ------------------------------------------------------------------
+    # Repository webhooks
+    # ------------------------------------------------------------------
+
+    def _hook_base(self, workspace, repo_slug, hook_uuid=None):
+        base = (
+            f"{BITBUCKET_API_BASE}/repositories/"
+            f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}/hooks"
+        )
+        if hook_uuid is not None:
+            return f"{base}/{quote(str(hook_uuid), safe='')}"
+        return base
+
+    def list_webhooks(self, workspace, repo_slug):
+        """List webhooks configured on a repository."""
+        return self._paginated_get(self._hook_base(workspace, repo_slug))
+
+    def create_webhook(self, workspace, repo_slug, url, events, description="", secret=None, active=True):
+        """Create a repository webhook. Requires repo admin.
+
+        Args:
+            url: Delivery URL.
+            events: List of event keys (e.g. ``["pullrequest:created", "pullrequest:updated"]``).
+            secret: Optional HMAC signing secret (Bitbucket signs with
+                SHA-256 in the ``X-Hub-Signature`` header).
+        """
+        payload = {
+            "description": description or "Aurora Incident Prevention",
+            "url": url,
+            "active": active,
+            "events": events,
+        }
+        if secret:
+            payload["secret"] = secret
+        return self._post(self._hook_base(workspace, repo_slug), json_data=payload)
+
+    def delete_webhook(self, workspace, repo_slug, hook_uuid):
+        """Delete a repository webhook by its UUID."""
+        return self._delete(self._hook_base(workspace, repo_slug, hook_uuid))
 
     # ------------------------------------------------------------------
     # Issues

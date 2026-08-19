@@ -2333,24 +2333,30 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
             _is_rca_background = _is_background_rca(state_context, is_background)
 
-            if _is_rca_background:
+            # PR change-gating reviews are strictly read-only: the review
+            # agent must never merge/approve/decline PRs, push files, or
+            # trigger pipelines. Reuse the RCA read-only descriptor set
+            # (minus bitbucket_fix, which is RCA-card-only — see below).
+            if _is_rca_background or is_pr_review:
+                _ro_reason = "PR review" if is_pr_review else "RCA"
                 _bb_tools = [
                     (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
-                     "Query Bitbucket repositories and files (READ-ONLY during RCA). "
+                     f"Query Bitbucket repositories and files (READ-ONLY during {_ro_reason}). "
                      "Actions: list_repos, get_repo, get_file_contents, get_directory_tree, "
                      "search_code, list_workspaces, get_workspace. "
-                     "Do NOT use create_or_update_file — use bitbucket_fix to propose code changes instead."),
+                     "Do NOT use create_or_update_file or delete_file."),
                     (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
-                     "Query Bitbucket branches and commits (READ-ONLY during RCA). "
+                     f"Query Bitbucket branches and commits (READ-ONLY during {_ro_reason}). "
                      "Actions: list_branches, list_commits, get_commit, get_diff, compare. "
-                     "Do NOT create branches manually — use bitbucket_fix to propose code changes instead."),
+                     "Do NOT create or delete branches."),
                     (bitbucket_pull_requests, "bitbucket_pull_requests", BitbucketPullRequestsArgs,
-                     "Query Bitbucket pull requests (READ-ONLY during RCA). "
+                     f"Query Bitbucket pull requests (READ-ONLY during {_ro_reason}). "
                      "Actions: list_prs, get_pr, list_pr_comments, get_pr_diff, get_pr_activity. "
-                     "Do NOT create PRs manually — use bitbucket_fix to propose code changes instead."),
+                     "Do NOT create, merge, approve, decline, or comment on PRs."),
                     (bitbucket_pipelines, "bitbucket_pipelines", BitbucketPipelinesArgs,
-                     "Query Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
-                     "list_pipeline_steps, get_step_log, get_pipeline_step."),
+                     "Query Bitbucket Pipelines CI/CD (READ-ONLY). Actions: list_pipelines, "
+                     "get_pipeline, list_pipeline_steps, get_step_log, get_pipeline_step. "
+                     "Do NOT trigger or stop pipelines."),
                 ]
             else:
                 _bb_tools = [
@@ -2373,36 +2379,77 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                      "Manage Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
                      "trigger_pipeline, stop_pipeline, list_pipeline_steps, get_step_log, get_pipeline_step."),
                 ]
+            # Hard gate (not just descriptions): during a PR review the tool
+            # FUNCTIONS reject Bitbucket write actions, so a prompt-injected
+            # diff can't talk the agent into merging/approving/pushing.
+            _BB_WRITE_ACTIONS = {
+                "create_or_update_file", "delete_file",
+                "create_branch", "delete_branch",
+                "create_pr", "update_pr", "merge_pr", "approve_pr",
+                "unapprove_pr", "decline_pr", "add_pr_comment",
+                "create_issue", "update_issue", "add_issue_comment",
+                "trigger_pipeline", "stop_pipeline",
+            }
+
+            def _read_only_gate(func, tool_name):
+                def gated(*args, **kwargs):
+                    _action = kwargs.get("action") or (args[0] if args else None)
+                    if _action in _BB_WRITE_ACTIONS:
+                        return json.dumps({
+                            "error": True,
+                            "message": (
+                                f"Action '{_action}' is not permitted: PR risk "
+                                "reviews are read-only on Bitbucket."
+                            ),
+                        })
+                    return func(*args, **kwargs)
+                gated.__name__ = getattr(func, "__name__", tool_name)
+                gated.__doc__ = func.__doc__
+                return gated
+
             for _func, _name, _schema, _desc in _bb_tools:
+                if is_pr_review:
+                    _func = _read_only_gate(_func, _name)
                 _ctx = with_user_context(_func)
                 _notif = with_completion_notification(_ctx)
                 _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
                 tools.append(StructuredTool.from_function(
                     func=_final, name=_name, description=_desc, args_schema=_schema))
 
-            # bitbucket_fix needs forced context (incident_id injection) like github_fix
-            _bb_fix_ctx = with_forced_context(bitbucket_fix)
-            _bb_fix_notif = with_completion_notification(_bb_fix_ctx)
-            _bb_fix_final = wrap_func_with_capture(_bb_fix_notif, "bitbucket_fix") if tool_capture else _bb_fix_notif
-            tools.append(StructuredTool.from_function(
-                func=_bb_fix_final,
-                name="bitbucket_fix",
-                description=(
-                    "Suggest a code fix or create a new file for an identified issue during RCA. "
-                    "Use this when you identify a specific code change that would fix the root cause "
-                    "and the repository is on Bitbucket. "
-                    "The fix is stored for user review before being applied as a PR. "
-                    "Parameters: file_path (path in repo), "
-                    "edits (list of anchored search-and-replace edits: each has old_string + new_string; "
-                    "old_string must match the current file exactly, with enough surrounding context to be unique; "
-                    "set replace_all=true if you want every occurrence replaced; "
-                    "to CREATE a new file, use old_string='' with the full content in new_string), "
-                    "fix_description (what this fix does), root_cause_summary (why this change is needed). "
-                    "Optional: repo (workspace/repo_slug format), commit_message, branch."
-                ),
-                args_schema=BitbucketFixArgs,
-            ))
-            logging.info(f"Added {len(_bb_tools) + 1} Bitbucket tools for user {user_id} (rca_background={_is_rca_background})")
+            # bitbucket_fix needs forced context (incident_id injection) like
+            # github_fix, and like github_fix it is RCA-card-only: outside a
+            # background RCA there is no incident card to review the fix in.
+            # The explicit `not is_pr_review` is defense in depth — the
+            # read-only review surface must never see a write-capable tool
+            # even if a future trigger path sets both flags.
+            _bb_fix_registered = _is_rca_background and not is_pr_review
+            if _bb_fix_registered:
+                _bb_fix_ctx = with_forced_context(bitbucket_fix)
+                _bb_fix_notif = with_completion_notification(_bb_fix_ctx)
+                _bb_fix_final = wrap_func_with_capture(_bb_fix_notif, "bitbucket_fix") if tool_capture else _bb_fix_notif
+                tools.append(StructuredTool.from_function(
+                    func=_bb_fix_final,
+                    name="bitbucket_fix",
+                    description=(
+                        "Suggest a code fix or create a new file for an identified issue during RCA. "
+                        "Use this when you identify a specific code change that would fix the root cause "
+                        "and the repository is on Bitbucket. "
+                        "The fix is stored for user review before being applied as a PR. "
+                        "Parameters: file_path (path in repo), "
+                        "edits (list of anchored search-and-replace edits: each has old_string + new_string; "
+                        "old_string must match the current file exactly, with enough surrounding context to be unique; "
+                        "set replace_all=true if you want every occurrence replaced; "
+                        "to CREATE a new file, use old_string='' with the full content in new_string), "
+                        "fix_description (what this fix does), root_cause_summary (why this change is needed). "
+                        "Optional: repo (workspace/repo_slug format), commit_message, branch."
+                    ),
+                    args_schema=BitbucketFixArgs,
+                ))
+            logging.info(
+                "Added %s Bitbucket tools for user %s (rca_background=%s, pr_review=%s)",
+                len(_bb_tools) + (1 if _bb_fix_registered else 0),
+                user_id, _is_rca_background, is_pr_review,
+            )
     except Exception as e:
         logging.warning(f"Failed to add Bitbucket tools: {e}")
 
@@ -2848,8 +2895,25 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             real_mcp_tools = []
         
         if real_mcp_tools:
+            # PR risk reviews are strictly read-only: destructive MCP tools
+            # (create/merge/push/delete across GitHub etc.) normally rely on
+            # an interactive human confirmation gate, which an unattended
+            # review session cannot provide — withhold them entirely.
+            if is_pr_review:
+                from .mcp_tools import is_destructive_mcp_tool
+                before = len(real_mcp_tools)
+                real_mcp_tools = [
+                    t for t in real_mcp_tools
+                    if not is_destructive_mcp_tool(
+                        t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
+                    )
+                ]
+                logging.info(
+                    "PR review: withheld %s destructive MCP tools for user %s",
+                    before - len(real_mcp_tools), user_id,
+                )
             mcp_tools = create_mcp_langchain_tools(
-                real_mcp_tools, 
+                real_mcp_tools,
                 tool_capture=tool_capture,
                 send_tool_start=send_tool_start,
                 send_tool_completion=send_tool_completion,
