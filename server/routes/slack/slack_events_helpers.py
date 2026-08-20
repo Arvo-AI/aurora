@@ -75,11 +75,13 @@ def _lookup_slack_token(team_id: str, include_secret_ref: bool = False) -> list:
     """
     Query user_tokens for Slack entries matching team_id, iterating orgs to
     bypass FORCE ROW LEVEL SECURITY (which blocks even superuser without context).
+    Returns all matching tokens across all orgs (multiple users may share a workspace).
     """
     org_ids = _get_all_org_ids()
     if not org_ids:
         return []
 
+    all_results = []
     errors = 0
     for org_id in org_ids:
         try:
@@ -110,7 +112,7 @@ def _lookup_slack_token(team_id: str, include_secret_ref: bool = False) -> list:
                         )
                     results = cursor.fetchall()
                     if results:
-                        return results
+                        all_results.extend(results)
         except Exception as e:
             errors += 1
             logger.debug(f"Error querying slack tokens for org {org_id}: {e}")
@@ -118,7 +120,7 @@ def _lookup_slack_token(team_id: str, include_secret_ref: bool = False) -> list:
 
     if errors == len(org_ids):
         logger.warning(f"All org lookups failed for Slack team {sanitize(team_id)} ({errors} errors)")
-    return []
+    return all_results
 
 
 def get_user_id_from_slack_team(team_id: str) -> Optional[str]:
