@@ -270,11 +270,18 @@ class TestThresholdConfiguration:
 
         assert result.stdout.strip() == "16000 120000"
 
-    def test_module_rejects_reversed_limits_at_startup(self):
+    @pytest.mark.parametrize(
+        ("pass_through", "max_summarization"),
+        [("120000", "16000"), ("16000", "16000")],
+        ids=["reversed", "equal"],
+    )
+    def test_module_rejects_invalid_limit_order_at_startup(
+        self, pass_through, max_summarization
+    ):
         """Import fails when the pass-through limit is not below the input cap."""
         env = {
-            "TOOL_OUTPUT_PASS_THROUGH_CHARS": "120000",
-            "TOOL_OUTPUT_MAX_SUMMARIZATION_INPUT_CHARS": "16000",
+            "TOOL_OUTPUT_PASS_THROUGH_CHARS": pass_through,
+            "TOOL_OUTPUT_MAX_SUMMARIZATION_INPUT_CHARS": max_summarization,
         }
 
         result = subprocess.run(
