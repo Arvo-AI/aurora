@@ -37,6 +37,21 @@ export interface ChangeGatingResponse {
   webhook_note?: string;
   webhook_auto_created?: boolean;
   webhook_cleanup_failed?: boolean;
+  manual_count?: number;
+}
+
+export interface ChangeGatingBulkResult {
+  repo_full_name: string;
+  webhook_auto_created?: boolean;
+  error?: string;
+}
+
+export interface ChangeGatingBulkResponse {
+  change_gating_enabled: boolean;
+  webhook_url?: string;
+  webhook_secret?: string;
+  webhook_events?: string[];
+  results: ChangeGatingBulkResult[];
 }
 
 export interface WebhookVerifyResponse {
@@ -228,6 +243,17 @@ export class BitbucketIntegrationService {
     return this.request<ChangeGatingResponse>(
       `/repo-selections/${encodeURIComponent(repoFullName)}/change-gating`,
       { method: 'PUT', body: { enabled }, errorMessage: 'Failed to update Incident Prevention setting' }
+    );
+  }
+
+  static async updateChangeGatingBulk(repoFullNames?: string[]): Promise<ChangeGatingBulkResponse> {
+    return this.request<ChangeGatingBulkResponse>(
+      '/repo-selections/change-gating',
+      {
+        method: 'PUT',
+        body: { enabled: true, ...(repoFullNames ? { repo_full_names: repoFullNames } : {}) },
+        errorMessage: 'Failed to enable Incident Prevention',
+      }
     );
   }
 

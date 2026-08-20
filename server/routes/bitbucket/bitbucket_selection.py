@@ -420,6 +420,113 @@ def _try_auto_create_hook(
         return False
 
 
+@bitbucket_selection_bp.route("/repo-selections/change-gating", methods=["PUT"])
+@require_permission("connectors", "write")
+def update_change_gating_bulk(user_id):
+    """Enable Incident Prevention on many connected Bitbucket repos.
+
+    Body: ``{enabled: true, repo_full_names?: [str]}``. Omit names to enable
+    every connected Bitbucket repo for the org. Already-on repos are left
+    untouched in Bitbucket (no extra hook create). Repos with no recorded
+    default branch are skipped. Sequential hook creates — Bitbucket rate limits.
+    """
+    try:
+        from utils.flags.feature_flags import is_incident_prevention_enabled
+
+        if not is_incident_prevention_enabled():
+            return jsonify({"error": "Incident Prevention is disabled on this deployment."}), 409
+
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or data.get("enabled") is not True:
+            return jsonify({"error": "enabled must be true"}), 400
+
+        names = data.get("repo_full_names")
+        if names is not None:
+            if not isinstance(names, list) or not names or not all(
+                isinstance(n, str) and n.strip() for n in names
+            ):
+                return jsonify({"error": "repo_full_names must be a non-empty list of strings"}), 400
+
+        org_id = resolve_org(user_id)
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:bulk]")
+                if names is None:
+                    cur.execute(
+                        """SELECT repo_full_name, MAX(default_branch), bool_or(change_gating_enabled)
+                             FROM connected_repos
+                            WHERE org_id = %s AND provider = 'bitbucket'
+                            GROUP BY repo_full_name""",
+                        (org_id,),
+                    )
+                else:
+                    cur.execute(
+                        """SELECT repo_full_name, MAX(default_branch), bool_or(change_gating_enabled)
+                             FROM connected_repos
+                            WHERE org_id = %s AND provider = 'bitbucket'
+                              AND repo_full_name = ANY(%s)
+                            GROUP BY repo_full_name""",
+                        (org_id, names),
+                    )
+                rows = cur.fetchall()
+                found = {r[0] for r in rows}
+                if names is not None:
+                    missing = [n for n in names if n not in found]
+                    if missing:
+                        return jsonify({"error": "Repository not found", "missing": missing}), 404
+                if not rows:
+                    return jsonify({"error": "No connected repositories"}), 400
+
+                to_enable = [r[0] for r in rows if r[1] is not None]
+                skipped_no_branch = [r[0] for r in rows if r[1] is None]
+                already_on = {r[0] for r in rows if r[1] is not None and r[2]}
+                if to_enable:
+                    cur.execute(
+                        """UPDATE connected_repos
+                              SET change_gating_enabled = TRUE, updated_at = NOW()
+                            WHERE org_id = %s AND provider = 'bitbucket'
+                              AND repo_full_name = ANY(%s)""",
+                        (org_id, to_enable),
+                    )
+                conn.commit()
+
+        results = [{"repo_full_name": n, "error": "no_default_branch"} for n in skipped_no_branch]
+        webhook_events = ["pullrequest:created", "pullrequest:updated"]
+        response = {"change_gating_enabled": True, "results": results}
+
+        if to_enable:
+            from connectors.bitbucket_connector.webhook_secret import (
+                get_or_create_webhook_secret,
+            )
+
+            secret = get_or_create_webhook_secret(org_id)
+            webhook_url = f"{_webhook_base_url()}/bitbucket/webhook/{org_id}"
+            response.update({
+                "webhook_url": webhook_url,
+                "webhook_secret": secret,
+                "webhook_events": webhook_events,
+            })
+            for name in to_enable:
+                if name in already_on:
+                    results.append({"repo_full_name": name})
+                    continue
+                results.append({
+                    "repo_full_name": name,
+                    "webhook_auto_created": _try_auto_create_hook(
+                        user_id, org_id, name, webhook_url, webhook_events, secret
+                    ),
+                })
+
+        logger.info(
+            "Bitbucket Incident Prevention bulk-enabled %s repos (org %s, by user %s)",
+            len(to_enable), _sanitize_log(org_id), _sanitize_log(user_id),
+        )
+        return jsonify(response)
+    except Exception:
+        logger.exception("Error bulk-updating Bitbucket change gating")
+        return jsonify({"error": "Failed to update Incident Prevention"}), 500
+
+
 @bitbucket_selection_bp.route("/repo-selections/<path:repo_full_name>/change-gating", methods=["PUT"])
 @require_permission("connectors", "write")
 def update_change_gating(user_id, repo_full_name):
