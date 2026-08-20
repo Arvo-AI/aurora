@@ -18,7 +18,7 @@ jobs:
   airtight:
     name: Airtight ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
-    if: github.repository == 'Arvo-AI/aurora'
+    if: github.repository == 'Arvo-AI/aurora' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: read
       id-token: write
