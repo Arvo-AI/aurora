@@ -9,22 +9,46 @@ Huge outputs are truncated first, then summarized.
 """
 
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
+
+def _positive_int_env(name: str, default: int) -> int:
+    """Read a positive integer environment variable or fail at startup."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer, got {raw_value!r}") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {raw_value!r}")
+    return value
+
+
 # Outputs below this are passed through unchanged (~10K tokens)
-PASS_THROUGH_CHARS = 40_000
+PASS_THROUGH_CHARS = _positive_int_env("TOOL_OUTPUT_PASS_THROUGH_CHARS", 40_000)
 
 # Outputs above this are truncated before summarization
-MAX_SUMMARIZATION_INPUT_CHARS = 400_000
+MAX_SUMMARIZATION_INPUT_CHARS = _positive_int_env(
+    "TOOL_OUTPUT_MAX_SUMMARIZATION_INPUT_CHARS", 400_000
+)
+
+if PASS_THROUGH_CHARS >= MAX_SUMMARIZATION_INPUT_CHARS:
+    raise ValueError(
+        "TOOL_OUTPUT_PASS_THROUGH_CHARS must be smaller than "
+        "TOOL_OUTPUT_MAX_SUMMARIZATION_INPUT_CHARS"
+    )
 
 
 def cap_tool_output(output: str, tool_name: str = "unknown") -> str:
     """Cap a tool output to a reasonable size for LLM context.
 
-    - < 40K chars: pass through as-is
-    - 40K - 400K chars: summarize via LLM
-    - > 400K chars: truncate to 400K, then summarize
+    - <= PASS_THROUGH_CHARS: pass through as-is
+    - up to MAX_SUMMARIZATION_INPUT_CHARS: summarize via LLM
+    - above MAX_SUMMARIZATION_INPUT_CHARS: truncate, then summarize
 
     Args:
         output: Raw tool output string.

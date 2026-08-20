@@ -194,7 +194,7 @@ _TARGET_POINTS = 1000
 # rather than letting a partial window read as a complete one.
 _DATADOG_POINT_CAP = 1500
 
-# Budget against cap_tool_output's PASS_THROUGH_CHARS (40_000), NOT
+# Budget against cap_tool_output's default PASS_THROUGH_CHARS (40_000), NOT
 # MAX_OUTPUT_SIZE (120_000). Anything above 40K is routed through an LLM
 # summarizer, which would paraphrase percentiles into plausible fiction --
 # strictly worse than truncation, because the numbers come back looking

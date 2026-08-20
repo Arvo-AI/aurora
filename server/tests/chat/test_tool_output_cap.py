@@ -9,6 +9,7 @@ when the summarizer LLM itself fails.
 
 import logging
 import os
+import subprocess
 import sys
 import types
 from unittest.mock import MagicMock
@@ -23,6 +24,7 @@ from chat.backend.agent.utils import tool_output_cap  # noqa: E402
 from chat.backend.agent.utils.tool_output_cap import (  # noqa: E402
     MAX_SUMMARIZATION_INPUT_CHARS,
     PASS_THROUGH_CHARS,
+    _positive_int_env,
     cap_tool_output,
 )
 
@@ -219,3 +221,68 @@ class TestThresholdInvariants:
             f"MAX_SUMMARIZATION_INPUT_CHARS - PASS_THROUGH_CHARS = {band:,}, "
             "expected >= 100_000"
         )
+
+
+class TestThresholdConfiguration:
+    def test_positive_integer_override(self, monkeypatch):
+        monkeypatch.setenv("AURORA_TEST_LIMIT", "120000")
+
+        assert _positive_int_env("AURORA_TEST_LIMIT", 40_000) == 120_000
+
+    @pytest.mark.parametrize("value", ["0", "-1", "invalid", "1.5"])
+    def test_invalid_override_fails_fast(self, monkeypatch, value):
+        monkeypatch.setenv("AURORA_TEST_LIMIT", value)
+
+        with pytest.raises(ValueError, match="must be a positive integer"):
+            _positive_int_env("AURORA_TEST_LIMIT", 40_000)
+
+    def test_missing_override_uses_default(self, monkeypatch):
+        monkeypatch.delenv("AURORA_TEST_LIMIT", raising=False)
+
+        assert _positive_int_env("AURORA_TEST_LIMIT", 40_000) == 40_000
+
+    def test_module_reads_environment_overrides_at_startup(self):
+        env = os.environ.copy()
+        env.update(
+            TOOL_OUTPUT_PASS_THROUGH_CHARS="16000",
+            TOOL_OUTPUT_MAX_SUMMARIZATION_INPUT_CHARS="120000",
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from chat.backend.agent.utils.tool_output_cap import "
+                "PASS_THROUGH_CHARS, MAX_SUMMARIZATION_INPUT_CHARS; "
+                "print(PASS_THROUGH_CHARS, MAX_SUMMARIZATION_INPUT_CHARS)",
+            ],
+            cwd=os.path.abspath(_server_dir),
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.stdout.strip() == "16000 120000"
+
+    def test_module_rejects_reversed_limits_at_startup(self):
+        env = os.environ.copy()
+        env.update(
+            TOOL_OUTPUT_PASS_THROUGH_CHARS="120000",
+            TOOL_OUTPUT_MAX_SUMMARIZATION_INPUT_CHARS="16000",
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import chat.backend.agent.utils.tool_output_cap",
+            ],
+            cwd=os.path.abspath(_server_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode != 0
+        assert "must be smaller" in result.stderr
