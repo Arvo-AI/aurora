@@ -114,57 +114,65 @@ export default function BitbucketWorkspaceBrowser() {
     }
   };
 
-  const handleBulkEnable = async () => {
+  const handleBulkGating = async (enabled: boolean) => {
     const names = savedRepos
-      .filter(r => r.workspace === selectedWorkspace && checkedRepos.has(r.slug) && !r.change_gating_enabled)
+      .filter(r => r.workspace === selectedWorkspace && checkedRepos.has(r.slug) && r.change_gating_enabled !== enabled)
       .map(r => r.full_name);
     if (names.length === 0) {
       const checkedConnected = [...checkedRepos].some(s => savedReposByWorkspace.get(selectedWorkspace)?.has(s));
       toast({
-        title: checkedConnected ? "Incident Prevention is already on for the selected connected repos" : "Save selected repos first",
+        title: checkedConnected
+          ? `Incident Prevention is already ${enabled ? 'on' : 'off'} for the selected connected repos`
+          : 'Save selected repos first',
       });
       return;
     }
     setBulkEnabling(true);
     try {
-      const job = await BitbucketIntegrationService.updateChangeGatingBulk(names);
+      const job = await BitbucketIntegrationService.updateChangeGatingBulk(names, enabled);
       let status = await BitbucketIntegrationService.getChangeGatingBulkJob(job.task_id);
       while (!status.complete) {
         await new Promise(r => setTimeout(r, 2000));
         status = await BitbucketIntegrationService.getChangeGatingBulkJob(job.task_id);
       }
-      if (status.error) throw new Error(status.status || "Failed to enable Incident Prevention");
+      if (status.error) throw new Error(status.status || 'Failed to update Incident Prevention');
       const result = status.result;
       const data = await BitbucketIntegrationService.loadWorkspaceSelection();
       if (data?.repositories) setSavedRepos(parseConnectedRepos(data.repositories));
-      const manual = result?.results.filter(r => r.webhook_auto_created === false) ?? [];
-      if (manual.length && result?.webhook_url) {
-        setWebhookSetup({
-          repo_full_name: manual[0].repo_full_name,
-          change_gating_enabled: true,
-          webhook_url: result.webhook_url,
-          webhook_secret: result.webhook_secret,
-          webhook_events: result.webhook_events,
-          webhook_auto_created: false,
-          manual_count: manual.length,
-        });
-      } else {
-        const enabled = result?.results.filter(r => !r.error).length ?? 0;
-        if (enabled) {
-          toast({ title: `Incident Prevention enabled on ${enabled} repo${enabled === 1 ? '' : 's'}` });
+      if (enabled) {
+        const manual = result?.results.filter(r => r.webhook_auto_created === false) ?? [];
+        if (manual.length && result?.webhook_url) {
+          setWebhookSetup({
+            repo_full_name: manual[0].repo_full_name,
+            change_gating_enabled: true,
+            webhook_url: result.webhook_url,
+            webhook_secret: result.webhook_secret,
+            webhook_events: result.webhook_events,
+            webhook_auto_created: false,
+            manual_count: manual.length,
+          });
+        } else {
+          toast({ title: `Incident Prevention enabled on ${names.length} repo${names.length === 1 ? '' : 's'}` });
         }
-      }
-      const skipped = result?.results.filter(r => r.error === 'no_default_branch').length ?? 0;
-      if (skipped) {
+        const skipped = result?.results.filter(r => r.error === 'no_default_branch').length ?? 0;
+        if (skipped) {
+          toast({
+            title: `${skipped} repo${skipped === 1 ? '' : 's'} skipped`,
+            description: 'No default branch recorded. Re-save the repository selection, then try again.',
+            variant: 'destructive',
+          });
+        }
+      } else {
         toast({
-          title: `${skipped} repo${skipped === 1 ? '' : 's'} skipped`,
-          description: "No default branch recorded. Re-save the repository selection, then try again.",
-          variant: "destructive",
+          title: `Incident Prevention disabled on ${names.length} repo${names.length === 1 ? '' : 's'}`,
+          description: result?.webhook_cleanup_failed
+            ? "Aurora can't delete some webhooks (Bitbucket only allows that for hooks it created). Remove those in Repository settings to stop Bitbucket sending events."
+            : undefined,
         });
       }
     } catch (error: unknown) {
       const err = error as Error;
-      toast({ title: "Error", description: err.message || "Failed to enable Incident Prevention", variant: "destructive" });
+      toast({ title: 'Error', description: err.message || 'Failed to update Incident Prevention', variant: 'destructive' });
     } finally {
       setBulkEnabling(false);
     }
@@ -477,24 +485,6 @@ export default function BitbucketWorkspaceBrowser() {
     }
   };
 
-  const handleClear = async () => {
-    try {
-      await BitbucketIntegrationService.clearWorkspaceSelection();
-      setSelectedWorkspace('');
-      setCheckedRepos(new Set());
-      setRepos([]);
-      setSavedReposByWorkspace(new Map());
-      savedReposByWorkspaceRef.current = new Map();
-      setSavedRepos([]);
-      window.dispatchEvent(new CustomEvent('providerStateChanged'));
-      toast({ title: "Cleared", description: "Bitbucket repos disconnected" });
-    } catch (error: unknown) {
-      const err = error as Error;
-      console.error('Error clearing selection:', err);
-      toast({ title: "Error", description: err.message || "Failed to clear", variant: "destructive" });
-    }
-  };
-
   const handleRegenerate = async (repoFullName: string) => {
     try {
       await BitbucketIntegrationService.generateRepoMetadata(repoFullName);
@@ -526,7 +516,6 @@ export default function BitbucketWorkspaceBrowser() {
     }
   };
 
-  const totalSavedRepos = Array.from(savedReposByWorkspace.values()).reduce((sum, set) => sum + set.size, 0);
   const currentWorkspaceSaved = savedReposByWorkspace.get(selectedWorkspace);
   const selectionChanged = selectedWorkspace && (
     checkedRepos.size !== (currentWorkspaceSaved?.size ?? 0) ||
@@ -677,25 +666,31 @@ export default function BitbucketWorkspaceBrowser() {
           </Button>
           {!!currentWorkspaceSaved?.size && [...checkedRepos].some(s => currentWorkspaceSaved.has(s)) && (
             <Button size="sm" variant="outline" onClick={handleDisconnectSelected} disabled={isSaving || bulkEnabling}>
-              Disconnect selected
+              Disconnect
             </Button>
           )}
           {incidentPreventionEnabled && checkedRepos.size > 0 && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={isSaving || bulkEnabling}
-              onClick={handleBulkEnable}
-              data-testid="bb-enable-gating-selected"
-            >
-              {bulkEnabling ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
-              Enable Incident Prevention
-            </Button>
-          )}
-          {totalSavedRepos > 0 && (
-            <Button size="sm" variant="outline" onClick={handleClear} disabled={isSaving || bulkEnabling}>
-              Clear All
-            </Button>
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isSaving || bulkEnabling}
+                onClick={() => handleBulkGating(true)}
+                data-testid="bb-enable-gating-selected"
+              >
+                {bulkEnabling ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
+                Enable Incident Prevention
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isSaving || bulkEnabling}
+                onClick={() => handleBulkGating(false)}
+                data-testid="bb-disable-gating-selected"
+              >
+                Disable Incident Prevention
+              </Button>
+            </>
           )}
         </div>
       )}

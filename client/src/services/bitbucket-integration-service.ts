@@ -51,6 +51,7 @@ export interface ChangeGatingBulkResponse {
   webhook_url?: string;
   webhook_secret?: string;
   webhook_events?: string[];
+  webhook_cleanup_failed?: boolean;
   results: ChangeGatingBulkResult[];
 }
 
@@ -231,13 +232,6 @@ export class BitbucketIntegrationService {
     );
   }
 
-  static async clearWorkspaceSelection(): Promise<void> {
-    await this.request(
-      '/workspace-selection',
-      { method: 'DELETE', errorMessage: 'Failed to clear workspace selection' }
-    );
-  }
-
   static async generateRepoMetadata(repoFullName: string): Promise<void> {
     await this.request(
       '/repo-metadata/generate',
@@ -259,13 +253,13 @@ export class BitbucketIntegrationService {
     );
   }
 
-  static async updateChangeGatingBulk(repoFullNames: string[]): Promise<ChangeGatingBulkJob> {
+  static async updateChangeGatingBulk(repoFullNames: string[], enabled: boolean): Promise<ChangeGatingBulkJob> {
     return this.request<ChangeGatingBulkJob>(
       '/repo-selections/change-gating',
       {
         method: 'PUT',
-        body: { enabled: true, repo_full_names: repoFullNames },
-        errorMessage: 'Failed to enable Incident Prevention',
+        body: { enabled, repo_full_names: repoFullNames },
+        errorMessage: 'Failed to update Incident Prevention',
       }
     );
   }

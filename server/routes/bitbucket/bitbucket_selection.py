@@ -438,8 +438,27 @@ def _try_auto_create_hook(
 
 
 @celery_app.task(name="bitbucket.enable_change_gating_bulk", time_limit=3600)
-def enable_change_gating_bulk(user_id, org_id, names):
+def enable_change_gating_bulk(user_id, org_id, names, enabled=True):
     # ponytail: Bitbucket has no bulk webhook API. 3-wide pool; raise workers if 429s stay rare at 500 repos.
+    if not enabled:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:bulk]")
+                cur.execute(
+                    """UPDATE connected_repos
+                          SET change_gating_enabled = FALSE, updated_at = NOW()
+                        WHERE org_id = %s AND provider = 'bitbucket'
+                          AND repo_full_name = ANY(%s)""",
+                    (org_id, names),
+                )
+                conn.commit()
+        failed = cleanup_org_hooks(user_id, org_id, names)
+        return {
+            "change_gating_enabled": False,
+            "webhook_cleanup_failed": bool(failed),
+            "results": [{"repo_full_name": n} for n in names],
+        }
+
     webhook_events = ["pullrequest:created", "pullrequest:updated"]
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
@@ -504,8 +523,9 @@ def update_change_gating_bulk(user_id):
             return jsonify({"error": "Incident Prevention is disabled on this deployment."}), 409
 
         data = request.get_json(silent=True)
-        if not isinstance(data, dict) or data.get("enabled") is not True:
-            return jsonify({"error": "enabled must be true"}), 400
+        enabled = data.get("enabled") if isinstance(data, dict) else None
+        if not isinstance(enabled, bool):
+            return jsonify({"error": "enabled must be a boolean"}), 400
         names = data.get("repo_full_names")
         if not isinstance(names, list) or not names or not all(
             isinstance(n, str) and n.strip() for n in names
@@ -528,9 +548,10 @@ def update_change_gating_bulk(user_id):
         if missing:
             return jsonify({"error": "Repository not found", "missing": missing}), 404
 
-        task = enable_change_gating_bulk.delay(user_id, org_id, names)
+        task = enable_change_gating_bulk.delay(user_id, org_id, names, enabled)
         logger.info(
-            "Bitbucket Incident Prevention bulk-enable queued %s repos (org %s, by user %s, task %s)",
+            "Bitbucket Incident Prevention bulk-%s queued %s repos (org %s, by user %s, task %s)",
+            "enable" if enabled else "disable",
             len(names), _sanitize_log(org_id), _sanitize_log(user_id), task.id,
         )
         return jsonify({"task_id": task.id, "count": len(names)}), 202
