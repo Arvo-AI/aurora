@@ -5,6 +5,7 @@ Wraps the Bitbucket 2.0 REST API with authentication and pagination support.
 import base64
 import logging
 import re
+import time
 from urllib.parse import quote, unquote, urlsplit
 
 import requests
@@ -112,9 +113,19 @@ class BitbucketAPIClient:
     def _get(self, url, params=None):
         """Single-resource GET. Returns response JSON or error dict."""
         _validate_bitbucket_url(url)
-        response = requests.get(url, headers=self._get_headers(), params=params, timeout=self.REQUEST_TIMEOUT)
+        delay = 1
+        response = None
+        for _ in range(6):
+            response = requests.get(
+                url, headers=self._get_headers(), params=params, timeout=self.REQUEST_TIMEOUT
+            )
+            if response.status_code != 429:
+                break
+            time.sleep(delay)
+            delay = min(delay * 2, 16)
         if response.status_code != 200:
-            logger.error(f"Bitbucket GET {_sanitize_url(url)} failed: {response.status_code}")
+            if response.status_code != 404:
+                logger.error(f"Bitbucket GET {_sanitize_url(url)} failed: {response.status_code}")
             return self._handle_error(response)
         return response.json()
 
@@ -185,14 +196,26 @@ class BitbucketAPIClient:
                 _validate_bitbucket_url(url)
             except ValueError:
                 logger.warning("Pagination rejected untrusted next URL: %s", _sanitize_url(url))
+                if all_values:
+                    return all_values
                 return {
                     "error": True,
                     "status": None,
                     "message": "Pagination halted: next URL failed validation",
                 }
-            response = requests.get(url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT)
+            delay = 1
+            response = None
+            for _ in range(6):
+                response = requests.get(
+                    url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT
+                )
+                if response.status_code != 429:
+                    break
+                time.sleep(delay)
+                delay = min(delay * 2, 16)
             if response.status_code != 200:
-                logger.error(f"Bitbucket API error {response.status_code} at {_sanitize_url(url)}")
+                if response.status_code != 404:
+                    logger.error(f"Bitbucket API error {response.status_code} at {_sanitize_url(url)}")
                 if not all_values:
                     return self._handle_error(response)
                 logger.warning("Returning partial results due to mid-pagination error")
@@ -253,7 +276,8 @@ class BitbucketAPIClient:
     def get_repositories(self, workspace):
         """List repositories in a workspace."""
         return self._paginated_get(
-            f"{BITBUCKET_API_BASE}/repositories/{quote(workspace, safe='')}"
+            f"{BITBUCKET_API_BASE}/repositories/{quote(workspace, safe='')}",
+            params={"pagelen": 100},
         )
 
     def get_repository(self, workspace, repo_slug):
@@ -309,9 +333,17 @@ class BitbucketAPIClient:
         )
         _validate_bitbucket_url(url)
         headers = self._get_headers()
-        response = requests.get(url, headers=headers, timeout=self.REQUEST_TIMEOUT)
+        delay = 1
+        response = None
+        for _ in range(6):
+            response = requests.get(url, headers=headers, timeout=self.REQUEST_TIMEOUT)
+            if response.status_code != 429:
+                break
+            time.sleep(delay)
+            delay = min(delay * 2, 16)
         if response.status_code != 200:
-            logger.error(f"Failed to get file {path}: {response.status_code}")
+            if response.status_code != 404:
+                logger.error(f"Failed to get file {path}: {response.status_code}")
             return self._handle_error(response)
         content_type = response.headers.get("Content-Type", "")
         if "application/json" in content_type:

@@ -58,6 +58,7 @@ export default function BitbucketWorkspaceBrowser() {
   const [isSaving, setIsSaving] = useState(false);
 
   const isRestoringSelectionRef = useRef(false);
+  const reposFetchGen = useRef(0);
   // Map of workspace → set of saved slugs (supports multi-workspace)
   const [savedReposByWorkspace, setSavedReposByWorkspace] = useState<Map<string, Set<string>>>(new Map());
   const savedReposByWorkspaceRef = useRef<Map<string, Set<string>>>(new Map());
@@ -72,7 +73,7 @@ export default function BitbucketWorkspaceBrowser() {
   // live Bitbucket API round-trip and left the toggle invisible for seconds.
   const incidentPreventionEnabled = isIncidentPreventionEnabled();
   const [gatingUpdating, setGatingUpdating] = useState<Set<string>>(new Set());
-  const [bulkEnabling, setBulkEnabling] = useState(false);
+  const [bulkEnabling, setBulkEnabling] = useState<false | 'enable' | 'disable'>(false);
   const [webhookSetup, setWebhookSetup] = useState<ChangeGatingResponse | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
 
@@ -127,15 +128,37 @@ export default function BitbucketWorkspaceBrowser() {
       });
       return;
     }
-    setBulkEnabling(true);
+    setBulkEnabling(enabled ? 'enable' : 'disable');
+    setGatingUpdating(new Set(names));
     try {
       const job = await BitbucketIntegrationService.updateChangeGatingBulk(names, enabled);
       let status = await BitbucketIntegrationService.getChangeGatingBulkJob(job.task_id);
       while (!status.complete) {
+        const data = await BitbucketIntegrationService.loadWorkspaceSelection();
+        if (data?.repositories) {
+          const updated = parseConnectedRepos(data.repositories);
+          setSavedRepos(updated);
+          setGatingUpdating(prev => {
+            const next = new Set(prev);
+            for (const r of updated) {
+              if (!next.has(r.full_name)) continue;
+              const settled = enabled
+                ? r.webhook_configured || !r.change_gating_enabled
+                : !r.change_gating_enabled;
+              if (settled) next.delete(r.full_name);
+            }
+            return next;
+          });
+          // Disable is done once the DB flag is off. Hook deletes keep
+          // running in the worker; the UI does not wait on them.
+          if (!enabled && names.every(n => !updated.find(r => r.full_name === n)?.change_gating_enabled)) {
+            break;
+          }
+        }
         await new Promise(r => setTimeout(r, 2000));
         status = await BitbucketIntegrationService.getChangeGatingBulkJob(job.task_id);
       }
-      if (status.error) throw new Error(status.status || 'Failed to update Incident Prevention');
+      if (status.complete && status.error) throw new Error(status.status || 'Failed to update Incident Prevention');
       const result = status.result;
       const data = await BitbucketIntegrationService.loadWorkspaceSelection();
       if (data?.repositories) setSavedRepos(parseConnectedRepos(data.repositories));
@@ -165,9 +188,6 @@ export default function BitbucketWorkspaceBrowser() {
       } else {
         toast({
           title: `Incident Prevention disabled on ${names.length} repo${names.length === 1 ? '' : 's'}`,
-          description: result?.webhook_cleanup_failed
-            ? "Aurora can't delete some webhooks (Bitbucket only allows that for hooks it created). Remove those in Repository settings to stop Bitbucket sending events."
-            : undefined,
         });
       }
     } catch (error: unknown) {
@@ -175,6 +195,7 @@ export default function BitbucketWorkspaceBrowser() {
       toast({ title: 'Error', description: err.message || 'Failed to update Incident Prevention', variant: 'destructive' });
     } finally {
       setBulkEnabling(false);
+      setGatingUpdating(new Set());
     }
   };
 
@@ -350,20 +371,24 @@ export default function BitbucketWorkspaceBrowser() {
   };
 
   const fetchRepos = async (workspace: string) => {
+    const gen = ++reposFetchGen.current;
     setIsLoadingRepos(true);
     try {
       const data = await BitbucketIntegrationService.getRepos(workspace);
-      const repoList = Array.isArray(data) ? data : data?.repositories || [];
+      if (gen !== reposFetchGen.current) return;
+      const repoList = Array.isArray(data) ? data : data?.repositories;
+      if (!Array.isArray(repoList)) throw new Error('Failed to fetch repositories');
       setRepos(repoList);
       // Use ref to always read the latest saved state (avoids stale closure)
       const saved = savedReposByWorkspaceRef.current.get(workspace);
       setCheckedRepos(saved ? new Set(saved) : new Set());
     } catch (error) {
+      if (gen !== reposFetchGen.current) return;
       console.error('Error fetching repos:', error);
       setRepos([]);
       setCheckedRepos(new Set());
     } finally {
-      setIsLoadingRepos(false);
+      if (gen === reposFetchGen.current) setIsLoadingRepos(false);
     }
   };
 
@@ -387,24 +412,27 @@ export default function BitbucketWorkspaceBrowser() {
   const revalidateWebhooks = (connected: ConnectedRepo[]) => {
     const enabled = connected.filter(r => r.change_gating_enabled).map(r => r.full_name);
     if (!incidentPreventionEnabled || enabled.length === 0) return;
-    void Promise.all(enabled.map(async name => {
-      try {
-        const res = await BitbucketIntegrationService.verifyChangeGatingWebhook(name);
-        return { name, verified: !!res.verified };
-      } catch {
-        return null;
-      }
-    })).then(results => {
-      const byName = new Map(results.filter(r => r !== null).map(r => [r!.name, r!.verified]));
+    // ponytail: browser ~6 connections/host. 50 parallel verifies starved GET /repos.
+    void (async () => {
+      const byName = new Map<string, boolean>();
+      let i = 0;
+      const worker = async () => {
+        while (i < enabled.length) {
+          const name = enabled[i++];
+          try {
+            const res = await BitbucketIntegrationService.verifyChangeGatingWebhook(name);
+            byName.set(name, !!res.verified);
+          } catch { /* background refresh; badge stays as last known */ }
+        }
+      };
+      await Promise.all([worker(), worker()]);
       if (byName.size === 0) return;
       setSavedRepos(prev => prev.map(r =>
         byName.has(r.full_name)
-          // A fresh positive also clears `stale`: verify only succeeds against
-          // the URL Aurora serves now.
           ? { ...r, webhook_configured: byName.get(r.full_name)!, webhook_stale: byName.get(r.full_name)! ? false : r.webhook_stale }
           : r
       ));
-    });
+    })();
   };
 
   const loadStoredSelection = async () => {
@@ -426,22 +454,18 @@ export default function BitbucketWorkspaceBrowser() {
       savedReposByWorkspaceRef.current = byWorkspace;
       setSavedRepos(connected);
       startMetadataPolling(connected);
-      revalidateWebhooks(connected);
 
-      // Set the active workspace to the first one with saved repos
       const firstWorkspace = data.workspace || byWorkspace.keys().next().value;
       if (firstWorkspace) {
         isRestoringSelectionRef.current = true;
         setSelectedWorkspace(firstWorkspace);
-
-        const repoData = await BitbucketIntegrationService.getRepos(firstWorkspace);
-        const repoList = Array.isArray(repoData) ? repoData : repoData?.repositories || [];
-        setRepos(repoList);
-
-        const saved = byWorkspace.get(firstWorkspace);
-        setCheckedRepos(saved ? new Set(saved) : new Set());
-        isRestoringSelectionRef.current = false;
+        try {
+          await fetchRepos(firstWorkspace);
+        } finally {
+          isRestoringSelectionRef.current = false;
+        }
       }
+      revalidateWebhooks(connected);
     } catch (error) {
       console.error('Error loading stored selection:', error);
       isRestoringSelectionRef.current = false;
@@ -525,6 +549,12 @@ export default function BitbucketWorkspaceBrowser() {
     ? repos.filter(r => `${r.full_name} ${r.name}`.toLowerCase().includes(searchFilter.toLowerCase()))
     : repos;
   const allVisibleChecked = visibleRepos.length > 0 && visibleRepos.every(r => checkedRepos.has(r.slug));
+  const bulkBusy = !!bulkEnabling;
+  const checkedConnected = savedRepos.filter(
+    r => r.workspace === selectedWorkspace && checkedRepos.has(r.slug)
+  );
+  const canEnableGating = checkedConnected.some(r => !r.change_gating_enabled);
+  const canDisableGating = checkedConnected.some(r => r.change_gating_enabled);
 
   return (
     <div className="space-y-3">
@@ -659,37 +689,42 @@ export default function BitbucketWorkspaceBrowser() {
           <Button
             size="sm"
             onClick={handleSave}
-            disabled={isSaving || bulkEnabling || checkedRepos.size === 0 || !selectionChanged}
+            disabled={isSaving || bulkBusy || checkedRepos.size === 0 || !selectionChanged}
           >
             {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
             Save
           </Button>
           {!!currentWorkspaceSaved?.size && [...checkedRepos].some(s => currentWorkspaceSaved.has(s)) && (
-            <Button size="sm" variant="outline" onClick={handleDisconnectSelected} disabled={isSaving || bulkEnabling}>
+            <Button size="sm" variant="outline" onClick={handleDisconnectSelected} disabled={isSaving || bulkBusy}>
               Disconnect
             </Button>
           )}
           {incidentPreventionEnabled && checkedRepos.size > 0 && (
             <>
+              {(canEnableGating || bulkEnabling === 'enable') && (
               <Button
                 size="sm"
                 variant="outline"
-                disabled={isSaving || bulkEnabling}
+                disabled={isSaving || bulkBusy}
                 onClick={() => handleBulkGating(true)}
                 data-testid="bb-enable-gating-selected"
               >
-                {bulkEnabling ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
+                {bulkEnabling === 'enable' ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
                 Enable Incident Prevention
               </Button>
+              )}
+              {(canDisableGating || bulkEnabling === 'disable') && (
               <Button
                 size="sm"
                 variant="outline"
-                disabled={isSaving || bulkEnabling}
+                disabled={isSaving || bulkBusy}
                 onClick={() => handleBulkGating(false)}
                 data-testid="bb-disable-gating-selected"
               >
+                {bulkEnabling === 'disable' ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
                 Disable Incident Prevention
               </Button>
+              )}
             </>
           )}
         </div>
@@ -809,7 +844,7 @@ export default function BitbucketWorkspaceBrowser() {
                         <button
                           type="button"
                           className="inline-flex disabled:opacity-50"
-                          disabled={isGatingUpdating || bulkEnabling}
+                          disabled={isGatingUpdating || bulkBusy}
                           onClick={() => handleReopenSetup(repo.full_name)}
                           title={repo.webhook_stale
                             ? "This repo's webhook points at a different Aurora URL and can no longer reach us — click to get the current URL and secret"
@@ -832,7 +867,7 @@ export default function BitbucketWorkspaceBrowser() {
                     ) : (
                       <Switch
                         checked={repo.change_gating_enabled}
-                        disabled={bulkEnabling}
+                        disabled={bulkBusy}
                         onCheckedChange={(checked) => handleChangeGatingToggle(repo.full_name, checked)}
                         className="scale-75 origin-right"
                         aria-label={`Incident Prevention for ${repo.full_name}`}

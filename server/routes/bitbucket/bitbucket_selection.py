@@ -312,10 +312,15 @@ def cleanup_org_hooks(user_id: str, org_id: str, repo_full_names=None) -> list[s
             hooks = cur.fetchall()
 
     # Phase 2: Bitbucket API calls, no DB connection held.
+    # Same 3-wide pool as bulk enable — Bitbucket has no bulk webhook API.
+    def _one(item):
+        repo_full_name, hook_uuid = item
+        return repo_full_name, _delete_repo_hook(user_id, repo_full_name, hook_uuid)
+
     deleted, failed = [], []
-    for repo_full_name, hook_uuid in hooks:
-        target = deleted if _delete_repo_hook(user_id, repo_full_name, hook_uuid) else failed
-        target.append(repo_full_name)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        for repo_full_name, ok in pool.map(_one, hooks):
+            (deleted if ok else failed).append(repo_full_name)
 
     # Phase 3: clear verification state for EVERY targeted repo, whether or
     # not Bitbucket let us delete the hook. Aurora's own view of "is this
@@ -437,8 +442,7 @@ def _try_auto_create_hook(
         return False
 
 
-@celery_app.task(name="bitbucket.enable_change_gating_bulk", time_limit=3600)
-def enable_change_gating_bulk(user_id, org_id, names, enabled=True):
+def _apply_change_gating_bulk(user_id, org_id, names, enabled=True):
     # ponytail: Bitbucket has no bulk webhook API. 3-wide pool; raise workers if 429s stay rare at 500 repos.
     if not enabled:
         with db_pool.get_admin_connection() as conn:
@@ -460,21 +464,23 @@ def enable_change_gating_bulk(user_id, org_id, names, enabled=True):
         }
 
     webhook_events = ["pullrequest:created", "pullrequest:updated"]
+    webhook_url = f"{_webhook_base_url()}/bitbucket/webhook/{org_id}"
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:bulk]")
             cur.execute(
-                """SELECT repo_full_name, MAX(default_branch), bool_or(change_gating_enabled)
+                """SELECT repo_full_name, MAX(default_branch), bool_or(change_gating_enabled),
+                          bool_or(webhook_verified_url = %s)
                      FROM connected_repos
                     WHERE org_id = %s AND provider = 'bitbucket'
                       AND repo_full_name = ANY(%s)
                     GROUP BY repo_full_name""",
-                (org_id, names),
+                (webhook_url, org_id, names),
             )
             rows = cur.fetchall()
             to_enable = [r[0] for r in rows if r[1] is not None]
             skipped_no_branch = [r[0] for r in rows if r[1] is None]
-            already_on = {r[0] for r in rows if r[1] is not None and r[2]}
+            hook_ok = {r[0] for r in rows if r[3]}
             if to_enable:
                 cur.execute(
                     """UPDATE connected_repos
@@ -486,17 +492,17 @@ def enable_change_gating_bulk(user_id, org_id, names, enabled=True):
             conn.commit()
 
     results = [{"repo_full_name": n, "error": "no_default_branch"} for n in skipped_no_branch]
-    results.extend({"repo_full_name": n} for n in to_enable if n in already_on)
+    results.extend({"repo_full_name": n} for n in to_enable if n in hook_ok)
     out = {"change_gating_enabled": True, "results": results}
-    need_hooks = [n for n in to_enable if n not in already_on]
+    need_hooks = [n for n in to_enable if n not in hook_ok]
     if not need_hooks and not to_enable:
         return out
 
     secret = get_or_create_webhook_secret(org_id)
-    webhook_url = f"{_webhook_base_url()}/bitbucket/webhook/{org_id}"
+    # Secret is attached on job poll only if a repo needs the manual dialog.
+    # Celery INFO-logs the return value; never put the secret in the task result.
     out.update({
         "webhook_url": webhook_url,
-        "webhook_secret": secret,
         "webhook_events": webhook_events,
     })
     if need_hooks:
@@ -510,6 +516,11 @@ def enable_change_gating_bulk(user_id, org_id, names, enabled=True):
         with ThreadPoolExecutor(max_workers=3) as pool:
             results.extend(pool.map(_one, need_hooks))
     return out
+
+
+@celery_app.task(name="bitbucket.enable_change_gating_bulk", time_limit=3600, queue="high")
+def enable_change_gating_bulk(user_id, org_id, names, enabled=True, *_args, **_kwargs):
+    return _apply_change_gating_bulk(user_id, org_id, names, enabled)
 
 
 @bitbucket_selection_bp.route("/repo-selections/change-gating", methods=["PUT"])
@@ -548,7 +559,7 @@ def update_change_gating_bulk(user_id):
         if missing:
             return jsonify({"error": "Repository not found", "missing": missing}), 404
 
-        task = enable_change_gating_bulk.delay(user_id, org_id, names, enabled)
+        task = enable_change_gating_bulk.delay(user_id, org_id, names, enabled=enabled)
         logger.info(
             "Bitbucket Incident Prevention bulk-%s queued %s repos (org %s, by user %s, task %s)",
             "enable" if enabled else "disable",
@@ -568,7 +579,13 @@ def get_change_gating_bulk_job(user_id, task_id):
     if task.state in ("PENDING", "STARTED"):
         return jsonify({"state": task.state, "complete": False})
     if task.state == "SUCCESS":
-        return jsonify({"state": task.state, "complete": True, "result": task.result or {}})
+        result = dict(task.result or {})
+        results = result.get("results") or []
+        if result.get("change_gating_enabled") and any(
+            r.get("webhook_auto_created") is False for r in results
+        ):
+            result["webhook_secret"] = get_or_create_webhook_secret(resolve_org(user_id))
+        return jsonify({"state": task.state, "complete": True, "result": result})
     return jsonify({"state": task.state, "complete": True, "error": True, "status": str(task.info)}), 200
 
 
