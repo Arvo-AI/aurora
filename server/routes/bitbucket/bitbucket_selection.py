@@ -13,9 +13,13 @@ duplicate rows on read and written to ALL org rows on update, so per-user
 duplicates can never disagree.
 """
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
 
+from celery_config import celery_app
 from flask import Blueprint, jsonify, request
 
+from connectors.bitbucket_connector.webhook_secret import get_or_create_webhook_secret
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
@@ -118,10 +122,9 @@ def save_workspace_selection(user_id):
 
         if not workspace:
             return jsonify({"error": "Workspace is required"}), 400
-        if not repositories and not repository:
-            return jsonify({"error": "At least one repository is required"}), 400
-
-        if not repositories:
+        if repositories is None:
+            if not repository:
+                return jsonify({"error": "At least one repository is required"}), 400
             repositories = [repository]
 
         newly_added = []
@@ -345,6 +348,18 @@ def cleanup_org_hooks(user_id: str, org_id: str, repo_full_names=None) -> list[s
     return failed
 
 
+def _until_not_429(fn):
+    delay = 1
+    result = fn()
+    for _ in range(7):
+        if not (isinstance(result, dict) and result.get("status") == 429):
+            return result
+        time.sleep(delay)
+        delay = min(delay * 2, 32)
+        result = fn()
+    return result
+
+
 def _try_auto_create_hook(
     user_id: str, org_id: str, repo_full_name: str,
     webhook_url: str, webhook_events, secret: str,
@@ -354,9 +369,10 @@ def _try_auto_create_hook(
     Needs the write:webhook:bitbucket scope, which the connector token often
     lacks — manual setup is the primary path, so failure here is informational
     only. An existing hook with the same URL counts as success (its uuid is
-    recorded too, so disable/disconnect can still delete it).
+    recorded too, so disable/disconnect can still delete it). A success also
+    records verification: creating/finding the hook is the same bar as Verify.
     """
-    def _store_hook_uuid(hook_uuid: str) -> None:
+    def _mark_verified(hook_uuid=None) -> None:
         # Isolated: by this point the hook EXISTS on Bitbucket, so a DB blip
         # here must not flip the return to False (which would tell the admin
         # to create a second hook manually). The cost of a lost uuid is only
@@ -367,10 +383,13 @@ def _try_auto_create_hook(
                     set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:hook]")
                     cur.execute(
                         """UPDATE connected_repos
-                              SET webhook_hook_uuid = %s, updated_at = NOW()
+                              SET webhook_hook_uuid = COALESCE(%s, webhook_hook_uuid),
+                                  webhook_verified_at = COALESCE(webhook_verified_at, NOW()),
+                                  webhook_verified_url = %s,
+                                  updated_at = NOW()
                             WHERE org_id = %s AND provider = 'bitbucket'
                               AND repo_full_name = %s""",
-                        (hook_uuid, org_id, repo_full_name),
+                        (hook_uuid, webhook_url, org_id, repo_full_name),
                     )
                     conn.commit()
         except Exception:
@@ -387,7 +406,7 @@ def _try_auto_create_hook(
         if client is None or "/" not in repo_full_name:
             return False
         ws, slug = repo_full_name.split("/", 1)
-        existing = client.list_webhooks(ws, slug)
+        existing = _until_not_429(lambda: client.list_webhooks(ws, slug))
         for hook in existing if isinstance(existing, list) else []:
             if not (isinstance(hook, dict) and hook.get("url") == webhook_url):
                 continue
@@ -399,18 +418,16 @@ def _try_auto_create_hook(
                 continue
             if {"pullrequest:created", "pullrequest:updated"} - set(hook.get("events") or []):
                 continue
-            if hook.get("uuid"):
-                _store_hook_uuid(hook["uuid"])
+            _mark_verified(hook.get("uuid"))
             return True
-        created = client.create_webhook(
+        created = _until_not_429(lambda: client.create_webhook(
             ws, slug, webhook_url, webhook_events,
             description="Aurora Incident Prevention",
             secret=secret,
-        )
+        ))
         if not isinstance(created, dict) or created.get("error"):
             return False
-        if created.get("uuid"):
-            _store_hook_uuid(created["uuid"])
+        _mark_verified(created.get("uuid"))
         return True
     except Exception:
         logger.info(
@@ -420,16 +437,66 @@ def _try_auto_create_hook(
         return False
 
 
+@celery_app.task(name="bitbucket.enable_change_gating_bulk", time_limit=3600)
+def enable_change_gating_bulk(user_id, org_id, names):
+    # ponytail: Bitbucket has no bulk webhook API. 3-wide pool; raise workers if 429s stay rare at 500 repos.
+    webhook_events = ["pullrequest:created", "pullrequest:updated"]
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:bulk]")
+            cur.execute(
+                """SELECT repo_full_name, MAX(default_branch), bool_or(change_gating_enabled)
+                     FROM connected_repos
+                    WHERE org_id = %s AND provider = 'bitbucket'
+                      AND repo_full_name = ANY(%s)
+                    GROUP BY repo_full_name""",
+                (org_id, names),
+            )
+            rows = cur.fetchall()
+            to_enable = [r[0] for r in rows if r[1] is not None]
+            skipped_no_branch = [r[0] for r in rows if r[1] is None]
+            already_on = {r[0] for r in rows if r[1] is not None and r[2]}
+            if to_enable:
+                cur.execute(
+                    """UPDATE connected_repos
+                          SET change_gating_enabled = TRUE, updated_at = NOW()
+                        WHERE org_id = %s AND provider = 'bitbucket'
+                          AND repo_full_name = ANY(%s)""",
+                    (org_id, to_enable),
+                )
+            conn.commit()
+
+    results = [{"repo_full_name": n, "error": "no_default_branch"} for n in skipped_no_branch]
+    results.extend({"repo_full_name": n} for n in to_enable if n in already_on)
+    out = {"change_gating_enabled": True, "results": results}
+    need_hooks = [n for n in to_enable if n not in already_on]
+    if not need_hooks and not to_enable:
+        return out
+
+    secret = get_or_create_webhook_secret(org_id)
+    webhook_url = f"{_webhook_base_url()}/bitbucket/webhook/{org_id}"
+    out.update({
+        "webhook_url": webhook_url,
+        "webhook_secret": secret,
+        "webhook_events": webhook_events,
+    })
+    if need_hooks:
+        def _one(name):
+            return {
+                "repo_full_name": name,
+                "webhook_auto_created": _try_auto_create_hook(
+                    user_id, org_id, name, webhook_url, webhook_events, secret
+                ),
+            }
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            results.extend(pool.map(_one, need_hooks))
+    return out
+
+
 @bitbucket_selection_bp.route("/repo-selections/change-gating", methods=["PUT"])
 @require_permission("connectors", "write")
 def update_change_gating_bulk(user_id):
-    """Enable Incident Prevention on many connected Bitbucket repos.
-
-    Body: ``{enabled: true, repo_full_names?: [str]}``. Omit names to enable
-    every connected Bitbucket repo for the org. Already-on repos are left
-    untouched in Bitbucket (no extra hook create). Repos with no recorded
-    default branch are skipped. Sequential hook creates — Bitbucket rate limits.
-    """
+    """Enqueue Incident Prevention enable for selected connected Bitbucket repos."""
     try:
         from utils.flags.feature_flags import is_incident_prevention_enabled
 
@@ -439,92 +506,49 @@ def update_change_gating_bulk(user_id):
         data = request.get_json(silent=True)
         if not isinstance(data, dict) or data.get("enabled") is not True:
             return jsonify({"error": "enabled must be true"}), 400
-
         names = data.get("repo_full_names")
-        if names is not None:
-            if not isinstance(names, list) or not names or not all(
-                isinstance(n, str) and n.strip() for n in names
-            ):
-                return jsonify({"error": "repo_full_names must be a non-empty list of strings"}), 400
+        if not isinstance(names, list) or not names or not all(
+            isinstance(n, str) and n.strip() for n in names
+        ):
+            return jsonify({"error": "repo_full_names must be a non-empty list of strings"}), 400
 
         org_id = resolve_org(user_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:bulk]")
-                if names is None:
-                    cur.execute(
-                        """SELECT repo_full_name, MAX(default_branch), bool_or(change_gating_enabled)
-                             FROM connected_repos
-                            WHERE org_id = %s AND provider = 'bitbucket'
-                            GROUP BY repo_full_name""",
-                        (org_id,),
-                    )
-                else:
-                    cur.execute(
-                        """SELECT repo_full_name, MAX(default_branch), bool_or(change_gating_enabled)
-                             FROM connected_repos
-                            WHERE org_id = %s AND provider = 'bitbucket'
-                              AND repo_full_name = ANY(%s)
-                            GROUP BY repo_full_name""",
-                        (org_id, names),
-                    )
-                rows = cur.fetchall()
-                found = {r[0] for r in rows}
-                if names is not None:
-                    missing = [n for n in names if n not in found]
-                    if missing:
-                        return jsonify({"error": "Repository not found", "missing": missing}), 404
-                if not rows:
-                    return jsonify({"error": "No connected repositories"}), 400
+                cur.execute(
+                    """SELECT repo_full_name FROM connected_repos
+                       WHERE org_id = %s AND provider = 'bitbucket'
+                         AND repo_full_name = ANY(%s)
+                       GROUP BY repo_full_name""",
+                    (org_id, names),
+                )
+                found = {r[0] for r in cur.fetchall()}
+        missing = [n for n in names if n not in found]
+        if missing:
+            return jsonify({"error": "Repository not found", "missing": missing}), 404
 
-                to_enable = [r[0] for r in rows if r[1] is not None]
-                skipped_no_branch = [r[0] for r in rows if r[1] is None]
-                already_on = {r[0] for r in rows if r[1] is not None and r[2]}
-                if to_enable:
-                    cur.execute(
-                        """UPDATE connected_repos
-                              SET change_gating_enabled = TRUE, updated_at = NOW()
-                            WHERE org_id = %s AND provider = 'bitbucket'
-                              AND repo_full_name = ANY(%s)""",
-                        (org_id, to_enable),
-                    )
-                conn.commit()
-
-        results = [{"repo_full_name": n, "error": "no_default_branch"} for n in skipped_no_branch]
-        webhook_events = ["pullrequest:created", "pullrequest:updated"]
-        response = {"change_gating_enabled": True, "results": results}
-
-        if to_enable:
-            from connectors.bitbucket_connector.webhook_secret import (
-                get_or_create_webhook_secret,
-            )
-
-            secret = get_or_create_webhook_secret(org_id)
-            webhook_url = f"{_webhook_base_url()}/bitbucket/webhook/{org_id}"
-            response.update({
-                "webhook_url": webhook_url,
-                "webhook_secret": secret,
-                "webhook_events": webhook_events,
-            })
-            for name in to_enable:
-                if name in already_on:
-                    results.append({"repo_full_name": name})
-                    continue
-                results.append({
-                    "repo_full_name": name,
-                    "webhook_auto_created": _try_auto_create_hook(
-                        user_id, org_id, name, webhook_url, webhook_events, secret
-                    ),
-                })
-
+        task = enable_change_gating_bulk.delay(user_id, org_id, names)
         logger.info(
-            "Bitbucket Incident Prevention bulk-enabled %s repos (org %s, by user %s)",
-            len(to_enable), _sanitize_log(org_id), _sanitize_log(user_id),
+            "Bitbucket Incident Prevention bulk-enable queued %s repos (org %s, by user %s, task %s)",
+            len(names), _sanitize_log(org_id), _sanitize_log(user_id), task.id,
         )
-        return jsonify(response)
+        return jsonify({"task_id": task.id, "count": len(names)}), 202
     except Exception:
-        logger.exception("Error bulk-updating Bitbucket change gating")
+        logger.exception("Error queueing Bitbucket change gating bulk enable")
         return jsonify({"error": "Failed to update Incident Prevention"}), 500
+
+
+@bitbucket_selection_bp.route("/repo-selections/change-gating/jobs/<task_id>", methods=["GET"])
+@require_permission("connectors", "write")
+def get_change_gating_bulk_job(user_id, task_id):
+    """Poll the Celery bulk-enable job."""
+    task = enable_change_gating_bulk.AsyncResult(task_id)
+    if task.state in ("PENDING", "STARTED"):
+        return jsonify({"state": task.state, "complete": False})
+    if task.state == "SUCCESS":
+        return jsonify({"state": task.state, "complete": True, "result": task.result or {}})
+    return jsonify({"state": task.state, "complete": True, "error": True, "status": str(task.info)}), 200
 
 
 @bitbucket_selection_bp.route("/repo-selections/<path:repo_full_name>/change-gating", methods=["PUT"])
@@ -603,10 +627,6 @@ def update_change_gating(user_id, repo_full_name):
 
         webhook_events = ["pullrequest:created", "pullrequest:updated"]
         if enabled:
-            from connectors.bitbucket_connector.webhook_secret import (
-                get_or_create_webhook_secret,
-            )
-
             secret = get_or_create_webhook_secret(org_id)
             webhook_url = f"{_webhook_base_url()}/bitbucket/webhook/{org_id}"
             response.update({

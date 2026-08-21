@@ -54,6 +54,19 @@ export interface ChangeGatingBulkResponse {
   results: ChangeGatingBulkResult[];
 }
 
+export interface ChangeGatingBulkJob {
+  task_id: string;
+  count: number;
+}
+
+export interface ChangeGatingBulkJobStatus {
+  state: string;
+  complete: boolean;
+  error?: boolean;
+  status?: string;
+  result?: ChangeGatingBulkResponse;
+}
+
 export interface WebhookVerifyResponse {
   verified: boolean;
   reason?: string;
@@ -246,14 +259,21 @@ export class BitbucketIntegrationService {
     );
   }
 
-  static async updateChangeGatingBulk(repoFullNames?: string[]): Promise<ChangeGatingBulkResponse> {
-    return this.request<ChangeGatingBulkResponse>(
+  static async updateChangeGatingBulk(repoFullNames: string[]): Promise<ChangeGatingBulkJob> {
+    return this.request<ChangeGatingBulkJob>(
       '/repo-selections/change-gating',
       {
         method: 'PUT',
-        body: { enabled: true, ...(repoFullNames ? { repo_full_names: repoFullNames } : {}) },
+        body: { enabled: true, repo_full_names: repoFullNames },
         errorMessage: 'Failed to enable Incident Prevention',
       }
+    );
+  }
+
+  static async getChangeGatingBulkJob(taskId: string): Promise<ChangeGatingBulkJobStatus> {
+    return this.request<ChangeGatingBulkJobStatus>(
+      `/repo-selections/change-gating/jobs/${encodeURIComponent(taskId)}`,
+      { errorMessage: 'Failed to check Incident Prevention job' }
     );
   }
 
