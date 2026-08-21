@@ -91,37 +91,71 @@ def _fetch_gitlab_listing(base_url: str, token: str, project_path: str) -> str:
     return "\n".join(f"{'dir' if i.get('type') == 'tree' else 'file'}: {i.get('name')}" for i in items)
 
 
-def _fetch_bitbucket_readme(access_token: str, auth_type: str, workspace: str, repo_slug: str, email: Optional[str] = None) -> str:
+_README_NAMES = ("README.md", "README.rst", "README.txt", "README")
+_EMPTY_SUMMARY = "No files in this repository yet."
+
+
+def _parse_bitbucket_listing(result) -> str:
+    if isinstance(result, dict) and "values" in result:
+        items = result["values"]
+        return "\n".join(
+            f"{'dir' if i.get('type') == 'commit_directory' else 'file'}: {i.get('path', i.get('name', ''))}"
+            for i in items[:100]
+        )
+    if isinstance(result, list):
+        return "\n".join(
+            f"{'dir' if i.get('type') == 'commit_directory' else 'file'}: {i.get('path', i.get('name', ''))}"
+            for i in result[:100]
+        )
+    return "(could not list files)"
+
+
+def _fetch_bitbucket_context(
+    access_token: str, auth_type: str, workspace: str, repo_slug: str, email: Optional[str] = None
+) -> tuple[str, str]:
+    """README + listing in one pass. Empty repo → ("", ""). Fetch failure → ("", "(could not list files)")."""
     from connectors.bitbucket_connector.api_client import BitbucketAPIClient
+
     client = BitbucketAPIClient(access_token, auth_type=auth_type, email=email)
-    for filename in ("README.md", "README.rst", "README.txt", "README"):
-        result = client.get_file_contents(workspace, repo_slug, filename)
+    repo = client.get_repository(workspace, repo_slug)
+    if not isinstance(repo, dict) or repo.get("error"):
+        return "", "(could not list files)"
+    if repo.get("size") == 0:
+        return "", ""
+    ref = (repo.get("mainbranch") or {}).get("name") or "HEAD"
+    commit = client._resolve_commit(workspace, repo_slug, ref)
+    listing_raw = client.get_directory_tree(workspace, repo_slug, "", commit=commit, list_files=True)
+    if isinstance(listing_raw, dict) and listing_raw.get("status") == 404:
+        return "", ""
+    if isinstance(listing_raw, dict) and listing_raw.get("error"):
+        logger.warning(
+            f"Bitbucket directory listing error for {workspace}/{repo_slug}: {listing_raw.get('status')}"
+        )
+        return "", "(could not list files)"
+    listing = _parse_bitbucket_listing(listing_raw)
+    if listing == "(could not list files)":
+        return "", "(could not list files)"
+    listed_names = {
+        line.split(": ", 1)[1].rsplit("/", 1)[-1].lower()
+        for line in listing.splitlines()
+        if ": " in line
+    }
+    readme = ""
+    for filename in _README_NAMES:
+        if filename.lower() not in listed_names:
+            continue
+        result = client.get_file_contents(workspace, repo_slug, filename, commit=commit)
         if isinstance(result, dict):
             if result.get("error"):
                 continue
             content = result.get("content")
             if isinstance(content, str) and content:
-                return content[:4000]
-        if isinstance(result, str):
-            return result[:4000]
-    return ""
-
-
-def _fetch_bitbucket_listing(access_token: str, auth_type: str, workspace: str, repo_slug: str, email: Optional[str] = None) -> str:
-    from connectors.bitbucket_connector.api_client import BitbucketAPIClient
-    client = BitbucketAPIClient(access_token, auth_type=auth_type, email=email)
-    # Call without format=meta to get the actual file listing (paginated with "values")
-    result = client.get_directory_tree(workspace, repo_slug, "", list_files=True)
-    if isinstance(result, dict) and result.get("error"):
-        logger.warning(f"Bitbucket directory listing error for {workspace}/{repo_slug}: {result.get('error')}")
-        return "(could not list files)"
-    if isinstance(result, dict) and "values" in result:
-        items = result["values"]
-        return "\n".join(f"{'dir' if i.get('type') == 'commit_directory' else 'file'}: {i.get('path', i.get('name', ''))}" for i in items[:100])
-    if isinstance(result, list):
-        return "\n".join(f"{'dir' if i.get('type') == 'commit_directory' else 'file'}: {i.get('path', i.get('name', ''))}" for i in result[:100])
-    logger.warning(f"Bitbucket directory listing unexpected response for {workspace}/{repo_slug}: keys={list(result.keys()) if isinstance(result, dict) else type(result)}")
-    return "(could not list files)"
+                readme = content[:4000]
+                break
+        elif isinstance(result, str) and result:
+            readme = result[:4000]
+            break
+    return readme, listing
 
 
 # ---------------------------------------------------------------------------
@@ -140,13 +174,14 @@ def _update_metadata(user_id: str, provider: str, repo_full_name: str, summary: 
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
-            if not set_rls_context(cur, conn, user_id, log_prefix=f"[{provider.title()}Metadata]"):
+            org_id = set_rls_context(cur, conn, user_id, log_prefix=f"[{provider.title()}Metadata]")
+            if not org_id:
                 return
             cur.execute(
                 """UPDATE connected_repos
                    SET metadata_summary = %s, metadata_status = %s, updated_at = NOW()
-                   WHERE user_id = %s AND provider = %s AND repo_full_name = %s""",
-                (summary, status, user_id, provider, repo_full_name),
+                   WHERE provider = %s AND repo_full_name = %s""",
+                (summary, status, provider, repo_full_name),
             )
             conn.commit()
 
@@ -174,10 +209,7 @@ def _fetch_repo_context(provider: str, creds: dict, repo_full_name: str) -> tupl
         if len(parts) != 2:
             return "", "(invalid repo format)"
         workspace, repo_slug = parts
-        return (
-            _fetch_bitbucket_readme(token, auth_type, workspace, repo_slug, email),
-            _fetch_bitbucket_listing(token, auth_type, workspace, repo_slug, email),
-        )
+        return _fetch_bitbucket_context(token, auth_type, workspace, repo_slug, email)
 
     return "", "(unsupported provider)"
 
@@ -230,6 +262,10 @@ def generate_repo_metadata(self, user_id: str, provider: str, repo_full_name: st
             return
 
         readme, file_list = _fetch_repo_context(provider, creds, repo_full_name)
+
+        if not readme and not file_list:
+            _update_metadata(user_id, provider, repo_full_name, _EMPTY_SUMMARY, "ready")
+            return
 
         # Both README and file listing failed — nothing to summarize
         if not readme and (not file_list or file_list == "(could not list files)"):

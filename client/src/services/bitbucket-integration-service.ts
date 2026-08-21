@@ -37,6 +37,35 @@ export interface ChangeGatingResponse {
   webhook_note?: string;
   webhook_auto_created?: boolean;
   webhook_cleanup_failed?: boolean;
+  manual_count?: number;
+}
+
+export interface ChangeGatingBulkResult {
+  repo_full_name: string;
+  webhook_auto_created?: boolean;
+  error?: string;
+}
+
+export interface ChangeGatingBulkResponse {
+  change_gating_enabled: boolean;
+  webhook_url?: string;
+  webhook_secret?: string;
+  webhook_events?: string[];
+  webhook_cleanup_failed?: boolean;
+  results: ChangeGatingBulkResult[];
+}
+
+export interface ChangeGatingBulkJob {
+  task_id: string;
+  count: number;
+}
+
+export interface ChangeGatingBulkJobStatus {
+  state: string;
+  complete: boolean;
+  error?: boolean;
+  status?: string;
+  result?: ChangeGatingBulkResponse;
 }
 
 export interface WebhookVerifyResponse {
@@ -203,13 +232,6 @@ export class BitbucketIntegrationService {
     );
   }
 
-  static async clearWorkspaceSelection(): Promise<void> {
-    await this.request(
-      '/workspace-selection',
-      { method: 'DELETE', errorMessage: 'Failed to clear workspace selection' }
-    );
-  }
-
   static async generateRepoMetadata(repoFullName: string): Promise<void> {
     await this.request(
       '/repo-metadata/generate',
@@ -228,6 +250,24 @@ export class BitbucketIntegrationService {
     return this.request<ChangeGatingResponse>(
       `/repo-selections/${encodeURIComponent(repoFullName)}/change-gating`,
       { method: 'PUT', body: { enabled }, errorMessage: 'Failed to update Incident Prevention setting' }
+    );
+  }
+
+  static async updateChangeGatingBulk(repoFullNames: string[], enabled: boolean): Promise<ChangeGatingBulkJob> {
+    return this.request<ChangeGatingBulkJob>(
+      '/repo-selections/change-gating',
+      {
+        method: 'PUT',
+        body: { enabled, repo_full_names: repoFullNames },
+        errorMessage: 'Failed to update Incident Prevention',
+      }
+    );
+  }
+
+  static async getChangeGatingBulkJob(taskId: string): Promise<ChangeGatingBulkJobStatus> {
+    return this.request<ChangeGatingBulkJobStatus>(
+      `/repo-selections/change-gating/jobs/${encodeURIComponent(taskId)}`,
+      { errorMessage: 'Failed to check Incident Prevention job' }
     );
   }
 
