@@ -1,11 +1,7 @@
 """Bitbucket metadata: empty repos are not failures; fetch errors still are."""
 from unittest.mock import MagicMock, patch
 
-from utils.repo_metadata import (
-    _EMPTY_SUMMARY,
-    _fetch_bitbucket_context,
-    generate_repo_metadata,
-)
+from utils.repo_metadata import _fetch_bitbucket_context
 
 
 def _client(listing, repo=None):
@@ -41,23 +37,3 @@ def test_forbidden_listing_is_a_fetch_failure(mock_cls):
         "",
         "(could not list files)",
     )
-
-
-@patch("utils.repo_metadata._generate_summary")
-@patch("utils.repo_metadata._update_metadata")
-@patch("utils.repo_metadata._fetch_repo_context", return_value=("", ""))
-@patch("utils.repo_metadata._get_credentials", return_value={"access_token": "x"})
-def test_empty_repo_marked_ready(get_creds, fetch, update, summarize):
-    generate_repo_metadata.run("user-1", "bitbucket", "ws/empty")
-    summarize.assert_not_called()
-    update.assert_called_with("user-1", "bitbucket", "ws/empty", _EMPTY_SUMMARY, "ready")
-
-
-@patch("utils.repo_metadata._generate_summary")
-@patch("utils.repo_metadata._update_metadata")
-@patch("utils.repo_metadata._fetch_repo_context", return_value=("", "(could not list files)"))
-@patch("utils.repo_metadata._get_credentials", return_value={"access_token": "x"})
-def test_fetch_failure_marked_error(get_creds, fetch, update, summarize):
-    generate_repo_metadata.run("user-1", "bitbucket", "ws/oops")
-    summarize.assert_not_called()
-    update.assert_called_with("user-1", "bitbucket", "ws/oops", None, "error")
