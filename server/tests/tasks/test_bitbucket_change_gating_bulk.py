@@ -61,17 +61,19 @@ def test_disable_updates_and_cleans_hooks(monkeypatch):
     _patch_db(monkeypatch, [])
     monkeypatch.setattr(sel, "cleanup_org_hooks", lambda *a: ["ws/r"])
     out = sel._apply_change_gating_bulk("u", "org-1", ["ws/r"], False)
+    assert out["org_id"] == "org-1"
     assert out["change_gating_enabled"] is False
     assert out["webhook_cleanup_failed"] is True
     assert out["results"] == [{"repo_full_name": "ws/r"}]
 
 
 def test_enable_creates_and_reports_hooks(monkeypatch):
-    _patch_db(monkeypatch, [("ws/r", "main", False, False)])
+    _patch_db(monkeypatch, [("ws/r", "main", False)])
     monkeypatch.setattr(sel, "get_or_create_webhook_secret", lambda org: "secret")
     monkeypatch.setattr(sel, "_webhook_base_url", lambda: "https://api.example.com")
     monkeypatch.setattr(sel, "_try_auto_create_hook", lambda *a: True)
     out = sel._apply_change_gating_bulk("u", "org-1", ["ws/r"], True)
+    assert out["org_id"] == "org-1"
     assert out["change_gating_enabled"] is True
     assert out["webhook_url"] == "https://api.example.com/bitbucket/webhook/org-1"
     assert "webhook_secret" not in out
@@ -80,7 +82,7 @@ def test_enable_creates_and_reports_hooks(monkeypatch):
 
 
 def test_enable_retries_hook_when_already_on_but_unverified(monkeypatch):
-    _patch_db(monkeypatch, [("ws/r", "main", True, False)])
+    _patch_db(monkeypatch, [("ws/r", "main", False)])
     monkeypatch.setattr(sel, "get_or_create_webhook_secret", lambda org: "secret")
     monkeypatch.setattr(sel, "_webhook_base_url", lambda: "https://api.example.com")
     called = []
@@ -91,7 +93,7 @@ def test_enable_retries_hook_when_already_on_but_unverified(monkeypatch):
 
 
 def test_enable_skips_hook_when_already_verified(monkeypatch):
-    _patch_db(monkeypatch, [("ws/r", "main", True, True)])
+    _patch_db(monkeypatch, [("ws/r", "main", True)])
     monkeypatch.setattr(sel, "get_or_create_webhook_secret", lambda org: "secret")
     monkeypatch.setattr(sel, "_webhook_base_url", lambda: "https://api.example.com")
     monkeypatch.setattr(

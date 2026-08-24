@@ -158,9 +158,9 @@ def save_workspace_selection(user_id):
                            VALUES (%s, %s, 'bitbucket', %s, %s, %s, 'pending')
                            ON CONFLICT (user_id, provider, repo_full_name) DO UPDATE SET
                                default_branch = COALESCE(EXCLUDED.default_branch, connected_repos.default_branch),
-                               is_private = EXCLUDED.is_private,
+                               is_private = COALESCE(EXCLUDED.is_private, connected_repos.is_private),
                                updated_at = NOW()""",
-                        (user_id, org_id, full_name, default_branch, repo.get("is_private", False)),
+                        (user_id, org_id, full_name, default_branch, repo.get("is_private")),
                     )
                     if full_name not in existing:
                         newly_added.append(full_name)
@@ -458,6 +458,7 @@ def _apply_change_gating_bulk(user_id, org_id, names, enabled=True):
                 conn.commit()
         failed = cleanup_org_hooks(user_id, org_id, names)
         return {
+            "org_id": org_id,
             "change_gating_enabled": False,
             "webhook_cleanup_failed": bool(failed),
             "results": [{"repo_full_name": n} for n in names],
@@ -469,7 +470,7 @@ def _apply_change_gating_bulk(user_id, org_id, names, enabled=True):
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[BitbucketChangeGating:bulk]")
             cur.execute(
-                """SELECT repo_full_name, MAX(default_branch), bool_or(change_gating_enabled),
+                """SELECT repo_full_name, MAX(default_branch),
                           bool_or(webhook_verified_url = %s)
                      FROM connected_repos
                     WHERE org_id = %s AND provider = 'bitbucket'
@@ -480,7 +481,7 @@ def _apply_change_gating_bulk(user_id, org_id, names, enabled=True):
             rows = cur.fetchall()
             to_enable = [r[0] for r in rows if r[1] is not None]
             skipped_no_branch = [r[0] for r in rows if r[1] is None]
-            hook_ok = {r[0] for r in rows if r[3]}
+            hook_ok = {r[0] for r in rows if r[2]}
             if to_enable:
                 cur.execute(
                     """UPDATE connected_repos
@@ -493,7 +494,7 @@ def _apply_change_gating_bulk(user_id, org_id, names, enabled=True):
 
     results = [{"repo_full_name": n, "error": "no_default_branch"} for n in skipped_no_branch]
     results.extend({"repo_full_name": n} for n in to_enable if n in hook_ok)
-    out = {"change_gating_enabled": True, "results": results}
+    out = {"org_id": org_id, "change_gating_enabled": True, "results": results}
     need_hooks = [n for n in to_enable if n not in hook_ok]
     if not need_hooks and not to_enable:
         return out
@@ -519,7 +520,7 @@ def _apply_change_gating_bulk(user_id, org_id, names, enabled=True):
 
 
 @celery_app.task(name="bitbucket.enable_change_gating_bulk", time_limit=3600, queue="high")
-def enable_change_gating_bulk(user_id, org_id, names, enabled=True, *_args, **_kwargs):
+def enable_change_gating_bulk(user_id, org_id, names, enabled=True):
     return _apply_change_gating_bulk(user_id, org_id, names, enabled)
 
 
@@ -580,13 +581,25 @@ def get_change_gating_bulk_job(user_id, task_id):
         return jsonify({"state": task.state, "complete": False})
     if task.state == "SUCCESS":
         result = dict(task.result or {})
+        owner = result.pop("org_id", None)
+        if owner is not None and owner != resolve_org(user_id):
+            return jsonify({"error": "Not found"}), 404
         results = result.get("results") or []
         if result.get("change_gating_enabled") and any(
             r.get("webhook_auto_created") is False for r in results
         ):
             result["webhook_secret"] = get_or_create_webhook_secret(resolve_org(user_id))
         return jsonify({"state": task.state, "complete": True, "result": result})
-    return jsonify({"state": task.state, "complete": True, "error": True, "status": str(task.info)}), 200
+    logger.error(
+        "Bitbucket bulk-enable task %s ended in state %s: %s",
+        _sanitize_log(task_id), task.state, task.info,
+    )
+    return jsonify({
+        "state": task.state,
+        "complete": True,
+        "error": True,
+        "status": "Failed to update Incident Prevention",
+    }), 200
 
 
 @bitbucket_selection_bp.route("/repo-selections/<path:repo_full_name>/change-gating", methods=["PUT"])

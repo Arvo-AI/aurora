@@ -133,7 +133,11 @@ export default function BitbucketWorkspaceBrowser() {
     try {
       const job = await BitbucketIntegrationService.updateChangeGatingBulk(names, enabled);
       let status = await BitbucketIntegrationService.getChangeGatingBulkJob(job.task_id);
+      const deadline = Date.now() + 10 * 60 * 1000;
       while (!status.complete) {
+        if (Date.now() > deadline) {
+          throw new Error('Incident Prevention is taking longer than expected. Reload this page to see the current state.');
+        }
         const data = await BitbucketIntegrationService.loadWorkspaceSelection();
         if (data?.repositories) {
           const updated = parseConnectedRepos(data.repositories);
@@ -209,9 +213,9 @@ export default function BitbucketWorkspaceBrowser() {
     try {
       await BitbucketIntegrationService.saveWorkspaceSelection({
         workspace: selectedWorkspace,
-        repositories: remainingSlugs.map(slug => {
+        repositories: remainingSlugs.map((slug): Repo => {
           const repo = repos.find(r => r.slug === slug);
-          return repo ?? { slug, name: slug, full_name: `${selectedWorkspace}/${slug}`, is_private: false };
+          return repo ?? { slug, name: slug, full_name: `${selectedWorkspace}/${slug}` };
         }),
       });
       setCheckedRepos(new Set(remainingSlugs));

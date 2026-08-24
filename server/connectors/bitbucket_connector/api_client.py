@@ -115,11 +115,11 @@ class BitbucketAPIClient:
         _validate_bitbucket_url(url)
         delay = 1
         response = None
-        for _ in range(6):
+        for attempt in range(6):
             response = requests.get(
                 url, headers=self._get_headers(), params=params, timeout=self.REQUEST_TIMEOUT
             )
-            if response.status_code != 429:
+            if response.status_code != 429 or attempt == 5:
                 break
             time.sleep(delay)
             delay = min(delay * 2, 16)
@@ -205,11 +205,11 @@ class BitbucketAPIClient:
                 }
             delay = 1
             response = None
-            for _ in range(6):
+            for attempt in range(6):
                 response = requests.get(
                     url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT
                 )
-                if response.status_code != 429:
+                if response.status_code != 429 or attempt == 5:
                     break
                 time.sleep(delay)
                 delay = min(delay * 2, 16)
@@ -335,9 +335,9 @@ class BitbucketAPIClient:
         headers = self._get_headers()
         delay = 1
         response = None
-        for _ in range(6):
+        for attempt in range(6):
             response = requests.get(url, headers=headers, timeout=self.REQUEST_TIMEOUT)
-            if response.status_code != 429:
+            if response.status_code != 429 or attempt == 5:
                 break
             time.sleep(delay)
             delay = min(delay * 2, 16)
@@ -387,7 +387,7 @@ class BitbucketAPIClient:
             f"/src/{quote(commit, safe='')}/{quote(path, safe='/')}"
         )
         # format=meta returns directory metadata; omitting it returns the file listing
-        params = None if list_files else {"format": "meta"}
+        params = {"pagelen": 100} if list_files else {"format": "meta"}
         return self._get(url, params=params)
 
     def search_code(self, workspace, query):

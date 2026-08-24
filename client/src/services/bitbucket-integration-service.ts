@@ -10,7 +10,7 @@ export interface Repo {
   slug: string;
   name: string;
   full_name: string;
-  is_private: boolean;
+  is_private?: boolean;
   description?: string;
   mainbranch?: { name: string };
 }
