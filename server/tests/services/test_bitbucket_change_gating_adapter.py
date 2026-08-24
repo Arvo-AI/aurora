@@ -10,7 +10,7 @@ Pins the provider-normalization contract of ``BitbucketPRAdapter``
   status_code) instead of flowing through as data.
 - ``find_aurora_reviews`` requires marker AND allowlisted author UUID —
   a marker alone (paste attack) never qualifies.
-- SAFE posting keeps the comment when the approve step fails.
+- ``post_review`` posts a marker comment only — approve is never called.
 - ``get_compare`` / ``get_compare_diff`` return None (full-PR fallback).
 - ``parse_files_from_diff`` yields GitHub ``list_files``-shaped dicts.
 
@@ -171,36 +171,23 @@ class TestAuroraIdentity:
 
 
 class TestPosting:
-    def test_safe_posts_comment_and_approves(self):
+    def test_safe_posts_comment_never_approves(self):
         adapter, _, post = _adapter()
         post.add_pr_comment.return_value = {"id": 42}
-        post.approve_pull_request.return_value = {"approved": True}
 
         result = adapter.post_review(
-            7, commit_id="abc123", event="APPROVE", body="SAFE body", comments=[]
+            7, commit_id="abc123", body="SAFE body", comments=[]
         )
 
         assert result["id"] == 42
         post.add_pr_comment.assert_called_once()
-        post.approve_pull_request.assert_called_once()
-
-    def test_safe_keeps_comment_when_approve_fails(self):
-        adapter, _, post = _adapter()
-        post.add_pr_comment.return_value = {"id": 42}
-        post.approve_pull_request.return_value = {
-            "error": True, "status": 400, "message": "You cannot approve your own pull request",
-        }
-        # Must NOT raise — the comment is the review.
-        result = adapter.post_review(
-            7, commit_id="abc123", event="APPROVE", body="SAFE body", comments=[]
-        )
-        assert result["id"] == 42
+        post.approve_pull_request.assert_not_called()
 
     def test_risky_posts_comment_only(self):
         adapter, _, post = _adapter()
         post.add_pr_comment.return_value = {"id": 43}
         adapter.post_review(
-            7, commit_id="abc123", event="COMMENT", body="RISKY body",
+            7, commit_id="abc123", body="RISKY body",
             comments=[{"path": "a.py", "line": 3, "body": "x"}],
         )
         post.add_pr_comment.assert_called_once()
@@ -210,7 +197,7 @@ class TestPosting:
         adapter, _, post = _adapter()
         post.add_pr_comment.return_value = {"error": True, "status": 403, "message": "forbidden"}
         with pytest.raises(BitbucketAPIError):
-            adapter.post_review(7, commit_id="abc", event="COMMENT", body="b", comments=[])
+            adapter.post_review(7, commit_id="abc", body="b", comments=[])
 
     def test_dismiss_unapproves(self):
         adapter, read, post = _adapter()
@@ -290,7 +277,7 @@ class TestMarkerHiding:
         post.add_pr_comment.return_value = {"id": 42}
         marker = encode_marker([], "abc123")
         adapter.post_review(
-            7, commit_id="abc123", event="COMMENT",
+            7, commit_id="abc123",
             body=f"RISKY body\n\n{marker}", comments=[],
         )
         sent_body = post.add_pr_comment.call_args[0][3]
