@@ -17,11 +17,16 @@ review flow it uses for GitHub. Provider quirks handled here (design doc
   are a follow-up).
 - **No first-class reviews**: prior Aurora reviews are synthesized from
   top-level marker comments + the PR's approval participants.
-- **Post SAFE** = marker comment + approve; if approve fails (e.g. the
-  token owner's own PR) the comment is still kept.
-- **Post RISKY** = marker comment only (no inline comments in the POC).
-- **Dismiss / supersede** = unapprove + prepend a note on the prior
-  marker comment.
+- **Post review** = marker comment only (no inline comments in the POC).
+  Aurora never approves PRs — there is no approve call in the posting
+  path.
+- **Dismiss / supersede** = unapprove (retracts legacy approvals posted
+  before Aurora stopped approving) + prepend a note on the prior
+  marker comment. Caveats: Bitbucket approval is account-level and
+  unapprove removes only the CALLING account's approval, so with no
+  bot configured this can retract a manual approval the connected
+  user made themselves, and a legacy approval left by a different
+  account (e.g. pre-bot) survives (the 404 is tolerated).
 - **"Is this Aurora?"** = marker AND author UUID in
   ``{bot_uuid, token_owner_uuid}`` — a marker alone (which a human can
   paste) never qualifies.
@@ -548,17 +553,14 @@ class BitbucketPRAdapter:
         pr_number: int,
         *,
         commit_id: str,
-        event: str,
         body: str,
         comments: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """Post the review: marker comment (+ approve on SAFE).
+        """Post the review as a marker comment — never an approval.
 
         ``commit_id`` and inline ``comments`` are required by the
         ``PRAdapter`` Protocol but ignored in the POC — Bitbucket comments
-        are not commit-pinned and all findings live in the body table. The
-        approve step is best-effort: Bitbucket rejects approving your own
-        PR, and the finding comment must survive that.
+        are not commit-pinned and all findings live in the body table.
         """
         del commit_id, comments
         comment = _checked(
@@ -568,18 +570,6 @@ class BitbucketPRAdapter:
             ),
             "post_review",
         )
-        if event == "APPROVE":
-            result = self._post.approve_pull_request(
-                self.workspace, self.repo_slug, pr_number
-            )
-            if isinstance(result, dict) and result.get("error"):
-                logger.warning(
-                    "[ChangeGating:BB] approve failed (status=%s) for %s#%s — "
-                    "keeping the SAFE review comment. Common cause: the posting "
-                    "account authored this PR (Bitbucket forbids self-approval); "
-                    "configure a dedicated bot account to avoid this.",
-                    result.get("status"), self.repo_full_name, pr_number,
-                )
         return {"id": comment.get("id")}
 
     def dismiss_review(self, pr_number: int, review_id: Any, message: str) -> Any:

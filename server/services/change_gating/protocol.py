@@ -86,16 +86,17 @@ class PRAdapter(Protocol):
         pr_number: int,
         *,
         commit_id: str,
-        event: str,
         body: str,
         comments: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """Post the review. ``event`` is ``APPROVE`` or ``COMMENT``;
-        ``comments`` are inline findings (may be ignored by providers
-        without inline support)."""
+        """Post the verdict as a COMMENT review — adapters must never
+        approve a PR (an approval would count toward required-approval
+        merge checks). ``comments`` are inline findings (may be ignored
+        by providers without inline support)."""
 
     def dismiss_review(self, pr_number: int, review_id: Any, message: str) -> Any:
-        """Retract a prior APPROVE (GitHub: dismissal; Bitbucket: unapprove)."""
+        """Retract a legacy APPROVE posted before Aurora stopped approving
+        (GitHub: dismissal; Bitbucket: unapprove)."""
 
     def supersede_review(
         self, pr_number: int, prior_review: Dict[str, Any], message: str
