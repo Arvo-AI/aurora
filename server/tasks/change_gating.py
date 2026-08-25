@@ -372,9 +372,10 @@ def _run_investigation(
             provider="github",
             log_key="investigate_pr",
             post_review_reject_hint=(
-                "common cause: the GitHub App lacks the "
-                "'Pull requests: write' permission (upgrade in App settings, "
-                "org admin must accept)."
+                "on 403 the GitHub App likely lacks the 'Pull requests: "
+                "write' permission (upgrade in App settings, org admin must "
+                "accept); on 422 GitHub rejected the review payload (e.g. "
+                "stale commit_id after a force-push, or an oversized body)."
             ),
         )
     finally:
@@ -467,8 +468,8 @@ def _run_bitbucket_investigation(
             provider="bitbucket",
             log_key="investigate_bitbucket_pr",
             post_review_reject_hint=(
-                "common cause: the Bitbucket token lacks write:pullrequest "
-                "scope."
+                "on 403 the Bitbucket token likely lacks write:pullrequest "
+                "scope; on 422 Bitbucket rejected the comment payload."
             ),
         )
     finally:
@@ -919,12 +920,16 @@ def _run_investigation_core(
             )
         elif incremental:
             # Retract any stale whole-PR APPROVE (posted before Aurora stopped
-            # approving) regardless of this slice's verdict — a legacy approval
-            # must never keep satisfying required-approval merge checks, and
-            # the full-path supersede above doesn't run on incremental
-            # reviews. COMMENT reviews are valid per-slice history, left
-            # intact (dismissing skips non-APPROVED reviews, so this is a
-            # no-op when no legacy approval exists).
+            # approving) regardless of this slice's verdict, since the
+            # full-path supersede above doesn't run on incremental reviews.
+            # Best-effort and GitHub-only in practice: retraction happens on
+            # the next review run of the PR (a failed dismissal is retried on
+            # the next push), and Bitbucket never reaches this branch — its
+            # adapter has no incremental path and never surfaces APPROVED, so
+            # legacy Bitbucket approvals must be removed by hand (see the
+            # bitbucket_adapter module docstring). COMMENT reviews are valid
+            # per-slice history, left intact (dismissing skips non-APPROVED
+            # reviews, so this is a no-op when no legacy approval exists).
             dismiss_message = (
                 "Later changes introduce incident risk — see the latest review."
                 if verdict["verdict"] == "RISKY"

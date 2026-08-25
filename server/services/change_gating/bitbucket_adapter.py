@@ -16,17 +16,16 @@ review flow it uses for GitHub. Provider quirks handled here (design doc
   so the core always falls back to a full-PR review (incremental reviews
   are a follow-up).
 - **No first-class reviews**: prior Aurora reviews are synthesized from
-  top-level marker comments + the PR's approval participants.
+  top-level marker comments.
 - **Post review** = marker comment only (no inline comments in the POC).
   Aurora never approves PRs — there is no approve call in the posting
   path.
-- **Dismiss / supersede** = unapprove (retracts legacy approvals posted
-  before Aurora stopped approving) + prepend a note on the prior
-  marker comment. Caveats: Bitbucket approval is account-level and
-  unapprove removes only the CALLING account's approval, so with no
-  bot configured this can retract a manual approval the connected
-  user made themselves, and a legacy approval left by a different
-  account (e.g. pre-bot) survives (the 404 is tolerated).
+- **Dismiss / supersede** = prepend a note on the prior marker comment
+  ONLY. The adapter never touches approvals in either direction:
+  Bitbucket approval is account-level, so an unapprove could strip a
+  manual approval the connected user made themselves. Legacy Aurora
+  approvals (posted before Aurora stopped approving) must be removed
+  by hand.
 - **"Is this Aurora?"** = marker AND author UUID in
   ``{bot_uuid, token_owner_uuid}`` — a marker alone (which a human can
   paste) never qualifies.
@@ -347,9 +346,6 @@ class BitbucketPRAdapter:
         self._default_branch = default_branch
         # Author UUIDs allowed to count as "Aurora" — resolved lazily, once.
         self._aurora_uuids: Optional[set] = None
-        # Participants captured from the latest get_pull_request call, used
-        # to derive the synthetic APPROVED state for the last marker comment.
-        self._last_participants: List[Dict[str, Any]] = []
         # post_issue_comment(pr) → delete_issue_comment(comment_id) mapping
         # (Bitbucket's comment-delete endpoint is PR-scoped, GitHub's isn't).
         self._comment_pr: Dict[Any, int] = {}
@@ -362,7 +358,7 @@ class BitbucketPRAdapter:
     # ------------------------------------------------------------------
 
     def _allowed_uuids(self) -> set:
-        """UUIDs whose comments/approvals count as Aurora's own.
+        """UUIDs whose comments count as Aurora's own.
 
         The posting identity (bot or connected user) plus the read identity
         (connected user) — reviews posted before a bot was configured must
@@ -390,17 +386,6 @@ class BitbucketPRAdapter:
             self._aurora_uuids = uuids
         return uuids
 
-    def _aurora_has_approved(self) -> bool:
-        """True when an allowlisted identity currently approves the PR."""
-        allowed = self._allowed_uuids()
-        for participant in self._last_participants:
-            if not isinstance(participant, dict) or not participant.get("approved"):
-                continue
-            user = participant.get("user") or {}
-            if isinstance(user, dict) and user.get("uuid") in allowed:
-                return True
-        return False
-
     # ------------------------------------------------------------------
     # Reads
     # ------------------------------------------------------------------
@@ -411,7 +396,6 @@ class BitbucketPRAdapter:
             self._read.get_pull_request(self.workspace, self.repo_slug, pr_number),
             "get_pull_request",
         )
-        self._last_participants = raw.get("participants") or []
         source = raw.get("source") or {}
         destination = raw.get("destination") or {}
         author = raw.get("author") or {}
@@ -484,7 +468,7 @@ class BitbucketPRAdapter:
             reviews.append(
                 {
                     "id": comment.get("id"),
-                    "state": "COMMENTED",  # refined in find_aurora_reviews
+                    "state": "COMMENTED",  # Bitbucket has no review states; never APPROVED
                     # Read-back translation: hidden Bitbucket markers become
                     # HTML-comment markers so decode_marker/has_aurora_marker
                     # (provider-neutral) recognize them.
@@ -500,10 +484,7 @@ class BitbucketPRAdapter:
 
         The marker alone is not enough — any workspace member could paste
         one into a comment to hijack the prior-review context or redirect
-        the supersede step. The synthetic ``state`` of the LAST Aurora
-        review becomes ``APPROVED`` when an allowlisted identity currently
-        approves the PR (approval is account-level on Bitbucket, so it
-        can only describe the most recent verdict).
+        the supersede step.
         """
         allowed = self._allowed_uuids()
         out: List[Dict[str, Any]] = []
@@ -516,8 +497,6 @@ class BitbucketPRAdapter:
             if not (isinstance(user, dict) and user.get("uuid") in allowed):
                 continue
             out.append(review)
-        if out and self._aurora_has_approved():
-            out[-1] = {**out[-1], "state": "APPROVED"}
         return out
 
     def list_review_comments(self, pr_number: int) -> List[Dict[str, Any]]:
@@ -573,39 +552,32 @@ class BitbucketPRAdapter:
         return {"id": comment.get("id")}
 
     def dismiss_review(self, pr_number: int, review_id: Any, message: str) -> Any:
-        """Retract a stale APPROVE: unapprove + best-effort note on the comment."""
-        result = self._post.unapprove_pull_request(
-            self.workspace, self.repo_slug, pr_number
-        )
-        if isinstance(result, dict) and result.get("error") and result.get("status") != 404:
-            # 404 = no approval to remove — already the desired end state.
-            raise BitbucketAPIError(
-                f"Bitbucket unapprove failed (status={result.get('status')})",
-                status_code=result.get("status") if isinstance(result.get("status"), int) else None,
-            )
+        """Mark a stale review: best-effort note on the comment.
+
+        Approvals are never touched — Bitbucket approval is account-level,
+        so an unapprove could strip a manual approval the connected user
+        made themselves.
+
+        Currently unreachable in production (kept for ``PRAdapter``
+        conformance): the core's only call site is the incremental dismiss
+        loop, gated on ``state == "APPROVED"`` — this adapter has no
+        incremental path and never surfaces APPROVED.
+        """
         self._prepend_note(pr_number, review_id, message, body=None)
         return {"id": review_id}
 
     def supersede_review(
         self, pr_number: int, prior_review: Dict[str, Any], message: str
     ) -> None:
-        """Mark a prior Aurora review superseded: prepend note (+ unapprove).
+        """Mark a prior Aurora review superseded: prepend a note.
 
+        Approvals are never touched (see :meth:`dismiss_review`).
         Idempotent: if the note is already there (a previous supersede whose
         follow-up failed), the body is left untouched.
         """
         self._prepend_note(
             pr_number, prior_review.get("id"), message, body=prior_review.get("body")
         )
-        if prior_review.get("state") == "APPROVED":
-            result = self._post.unapprove_pull_request(
-                self.workspace, self.repo_slug, pr_number
-            )
-            if isinstance(result, dict) and result.get("error") and result.get("status") != 404:
-                raise BitbucketAPIError(
-                    f"Bitbucket unapprove failed (status={result.get('status')})",
-                    status_code=result.get("status") if isinstance(result.get("status"), int) else None,
-                )
 
     def _prepend_note(
         self, pr_number: int, comment_id: Any, message: str, body: Optional[str]
@@ -638,7 +610,7 @@ class BitbucketPRAdapter:
                 "prepend_note",
             )
         except Exception as exc:
-            # The note is cosmetic; the unapprove/new review carry the signal.
+            # The note is cosmetic; the new review carries the signal.
             logger.warning(
                 "[ChangeGating:BB] supersede note failed for comment %s: %s",
                 comment_id, type(exc).__name__,
