@@ -1438,7 +1438,7 @@ Restart Aurora after setting these, then connect via **Connectors** > **Bitbucke
 
 #### Incident Prevention (pre-merge PR review)
 
-Aurora can review pull requests that target the default branch of an enrolled Bitbucket Cloud repository and post an advisory review comment before merge — the same feature as GitHub Incident Prevention. Aurora never approves (or blocks) a PR: approval stays with human reviewers.
+Aurora can review pull requests that target the default branch of an enrolled Bitbucket Cloud repository and post an advisory review comment before merge — the same feature as GitHub Incident Prevention. The Incident Prevention review never approves (or blocks) a PR: approval stays with human reviewers.
 
 Requirements: a connected Bitbucket account (either auth method above), `NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION=true` (the default) on **both** the server and the Celery worker, and Aurora's API reachable from the public internet (Bitbucket must be able to deliver webhooks to it).
 
@@ -1469,6 +1469,7 @@ Notes and limits:
 
 - Reviews run only for PRs targeting the repository's **default branch**; drafts are skipped. A draft marked ready **without new commits** is reviewed on the next push.
 - Reviews post as the **connected Bitbucket account** by default. Both SAFE and RISKY verdicts post as a review comment only — Aurora never approves the PR.
+- Approvals posted by older Aurora versions (which approved on SAFE verdicts) are **not retracted automatically**: Bitbucket approvals are account-level, so unapproving could strip an approval the connected user made themselves — remove legacy Aurora approvals by hand on any still-open PRs. (On GitHub, Aurora dismisses its own legacy approvals the next time it reviews the PR.)
 - Disabling the toggle (or deselecting/disconnecting the repo) deletes the webhook when Aurora created it via API; manually created hooks must be removed manually.
 
 ##### Optional: dedicated bot account
