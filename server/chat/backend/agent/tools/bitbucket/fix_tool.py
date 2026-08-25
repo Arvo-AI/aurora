@@ -19,6 +19,7 @@ from .utils import (
     get_default_branch,
     build_error_response,
     build_success_response,
+    apply_edits_checked,
 )
 
 from chat.backend.agent.tools.vcs_rca_utils import resolve_repository as _vcs_resolve_repository
@@ -240,18 +241,10 @@ def bitbucket_fix(
                 "The file does not exist. To create a new file, set old_string to an empty string."
             )
     else:
-        # File exists — apply edits using the shared replacer chain from github_fix_tool
-        from chat.backend.agent.tools.github_fix_tool import _apply_edits
-
-        suggested_content, apply_err = _apply_edits(original_content, edits)
+        suggested_content, apply_err = apply_edits_checked(original_content, edits)
         if apply_err or suggested_content is None:
             logger.warning("%s edit application failed for %s: %s", _LOG_PREFIX, file_path, apply_err)
             return build_error_response(apply_err or "edit application failed")
-
-        if suggested_content == original_content:
-            return build_error_response(
-                "Applied edits produced no change to the file. Double-check old_string/new_string."
-            )
 
     if not suggested_content.strip():
         return build_error_response(

@@ -11,10 +11,72 @@ from connectors.bitbucket_connector.oauth_utils import refresh_token_if_needed
 from utils.auth.token_management import store_tokens_in_db
 from utils.secrets.secret_ref_utils import get_token_owner_id
 from utils.auth.command_gate import gate_action
+from chat.backend.agent.tools.github_fix_tool import _apply_edits
 
 logger = logging.getLogger(__name__)
 
 DIFF_TRUNCATE_LIMIT = 50_000
+
+# Under tool_output_cap PASS_THROUGH_CHARS (40K) and ~10K-token capture threshold.
+_FILE_PAGE_CHARS = 30_000
+
+
+def page_file_content(content: str, start_line: int = 1) -> str:
+    """Return a verbatim slice under _FILE_PAGE_CHARS so summarizers never fire.
+
+    Files that fit from line 1 are returned unchanged (no header). Larger files
+    (or continuations) get a ``lines X-Y of N`` header and a continue hint.
+    """
+    if start_line < 1:
+        start_line = 1
+    if start_line == 1 and len(content) <= _FILE_PAGE_CHARS:
+        return content
+
+    lines = content.splitlines(keepends=True)
+    n = len(lines)
+    if start_line > n:
+        return f"lines {start_line}-{start_line} of {n} (start_line past end of file)\n"
+
+    out: list[str] = []
+    chars = 0
+    i = start_line - 1
+    while i < n:
+        line = lines[i]
+        if out and chars + len(line) > _FILE_PAGE_CHARS:
+            break
+        if not out and len(line) > _FILE_PAGE_CHARS:
+            line = line[:_FILE_PAGE_CHARS]
+            out.append(line)
+            i += 1
+            break
+        out.append(line)
+        chars += len(line)
+        i += 1
+
+    last = i  # 1-indexed last line included
+    header = f"lines {start_line}-{last} of {n}"
+    if last < n:
+        header += f" — pass start_line={last + 1} to continue"
+    return header + "\n" + "".join(out)
+
+
+def apply_edits_checked(original: str, edits: list) -> tuple[Optional[str], Optional[str]]:
+    """Apply anchored edits; reject no-op and empty/whitespace-only results."""
+    suggested, err = _apply_edits(original, edits)
+    if err or suggested is None:
+        return None, err or "edit application failed"
+    if suggested == original:
+        return None, (
+            "Applied edits produced no change to the file. "
+            "Double-check old_string/new_string."
+        )
+    if not suggested.strip():
+        return None, (
+            "Applied edits produced an empty (or whitespace-only) file. If you "
+            "really intend to empty this file, do it manually — Bitbucket tools "
+            "are for targeted code changes."
+        )
+    return suggested, None
 
 
 def get_bb_client_for_user(user_id: str):

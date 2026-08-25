@@ -35,8 +35,10 @@ Workspace and repository auto-resolve from saved user selection if not passed ex
 ### Tools (6 tools, 42 actions)
 
 **bitbucket_repos** -- Repository, File & Code Operations:
-- `list_repos`, `get_repo`, `get_file_contents`, `create_or_update_file`, `delete_file`
+- `list_repos`, `get_repo`, `get_file_contents`, `edit_file`, `create_or_update_file`, `delete_file`
 - `get_directory_tree`, `search_code`, `list_workspaces`, `get_workspace`
+- Prefer `edit_file` (anchored search-and-replace) for existing files. Use `create_or_update_file` only to create **new** files.
+- `get_file_contents` returns verbatim pages; if you see `pass start_line=N to continue`, call again with that `start_line`.
 
 **bitbucket_branches** -- Branch & Commit Operations:
 - `list_branches`, `create_branch`, `delete_branch`, `list_commits`, `get_commit`, `get_diff`, `compare`
@@ -81,15 +83,16 @@ Workspace and repository auto-resolve from saved user selection if not passed ex
 - `list_repos` and `list_workspaces` return only the repos/workspaces the user has connected — not everything in their Bitbucket account.
 - When user asks about PRs, issues, repos, or branches WITHOUT specifying a repository, use the selected workspace/repo from context.
 - Workspace and `repo_slug` auto-resolve from saved selection if not passed explicitly.
-- **During background RCA**: tools are READ-ONLY. Do NOT manually create branches, commit files, or create PRs. Use `bitbucket_fix` to propose code changes — it saves suggestions for user review.
+- **During background RCA**: tools are READ-ONLY for writes. Do NOT create branches, commit files, or create PRs. Use `bitbucket_fix` to propose code changes — it saves suggestions for user review.
+- **During Actions / interactive chat**: edit existing files with `edit_file`; use `create_or_update_file` only for new files; then `create_branch` + `create_pr` as needed. Never overwrite an existing file via `create_or_update_file`.
 - Destructive actions (delete branch, delete file, merge PR, decline PR, trigger/stop pipeline) require user confirmation and will prompt automatically.
 - Non-destructive operations (create branch, create PR, update PR, approve, comment, create issue) proceed without extra confirmation.
-- `bitbucket_fix` does NOT modify the repo directly — it saves the suggestion for user review. No confirmation needed.
+- `bitbucket_fix` does NOT modify the repo directly — it saves the suggestion for user review. No confirmation needed. Only available during RCA.
 - If no repository is selected and user doesn't specify one, ask which repository they want to work with.
 
 ### Important Rules
 - Look for: config changes, k8s manifests, Terraform, dependency updates.
 - Check pipeline logs when builds fail near the incident time.
 - Cross-reference commit history with deployment timing.
-- When you identify the problematic code change, use `bitbucket_fix` to propose a revert or correction.
-- **NEVER** manually create a branch + commit file + create PR. Always use `bitbucket_fix` instead — the user will create the PR from the Incidents UI after reviewing your suggestion.
+- **RCA**: when you identify the problematic code change, use `bitbucket_fix` to propose a revert or correction. Never manually create a branch + commit + PR during RCA.
+- **Actions**: commit real code via `edit_file` (or `create_or_update_file` for brand-new paths only), then open the PR. Comments-only config files are never a valid change.

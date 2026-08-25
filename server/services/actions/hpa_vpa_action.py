@@ -176,6 +176,7 @@ it will assume we simply missed it.
 
 - One workload per PR. A reviewer should be able to accept or reject a single decision.
 - Change only what your evidence supports. Do not tidy adjacent config.
+- Prefer `edit_file` on existing manifests; use `create_or_update_file` only for brand-new paths.
 - Match the repo's branch naming, title style, and label conventions.
 - At most one short inline comment, and only where a number would otherwise look arbitrary.
 - PR body, a few lines per dimension: current value, recommended value, the p95, the max, the

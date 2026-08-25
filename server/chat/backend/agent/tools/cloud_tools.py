@@ -2344,7 +2344,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                      f"Query Bitbucket repositories and files (READ-ONLY during {_ro_reason}). "
                      "Actions: list_repos, get_repo, get_file_contents, get_directory_tree, "
                      "search_code, list_workspaces, get_workspace. "
-                     "Do NOT use create_or_update_file or delete_file."),
+                     "Do NOT use create_or_update_file, edit_file, or delete_file."),
                     (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
                      f"Query Bitbucket branches and commits (READ-ONLY during {_ro_reason}). "
                      "Actions: list_branches, list_commits, get_commit, get_diff, compare. "
@@ -2362,8 +2362,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 _bb_tools = [
                     (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
                      "Manage Bitbucket repositories, files, and code. Actions: list_repos, get_repo, "
-                     "get_file_contents, create_or_update_file, delete_file, get_directory_tree, "
-                     "search_code, list_workspaces, get_workspace. Workspace and repo auto-resolve "
+                     "get_file_contents, edit_file, create_or_update_file, delete_file, get_directory_tree, "
+                     "search_code, list_workspaces, get_workspace. Prefer edit_file for existing files; "
+                     "create_or_update_file only for new files. Workspace and repo auto-resolve "
                      "from saved selection if not specified."),
                     (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
                      "Manage Bitbucket branches and view commits/diffs. Actions: list_branches, create_branch, "
@@ -2383,7 +2384,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             # FUNCTIONS reject Bitbucket write actions, so a prompt-injected
             # diff can't talk the agent into merging/approving/pushing.
             _BB_WRITE_ACTIONS = {
-                "create_or_update_file", "delete_file",
+                "create_or_update_file", "edit_file", "delete_file",
                 "create_branch", "delete_branch",
                 "create_pr", "update_pr", "merge_pr", "approve_pr",
                 "unapprove_pr", "decline_pr", "add_pr_comment",

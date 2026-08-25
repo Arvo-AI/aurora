@@ -69,7 +69,8 @@ Hard anti-slop rules:
 - First check for existing open PRs/MRs from prior runs of this action.
   Do not open a second one if a previous proposal is still pending review.
 - Create a branch, commit the alert definitions, and open a PR (GitHub/Bitbucket)
-  or MR (GitLab) using the appropriate VCS tools.
+  or MR (GitLab) using the appropriate VCS tools. For existing files prefer
+  `edit_file` (anchored edits); use `create_or_update_file` only for brand-new paths.
 - PR/MR body: for each proposed alert, one sentence on the gap it fills and why it matters.
   No filler, no essay. Reviewers are busy.
 - If you found no gaps worth proposing, do not open an empty or low-value PR. Instead,

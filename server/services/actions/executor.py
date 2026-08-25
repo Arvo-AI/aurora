@@ -193,6 +193,7 @@ def build_action_prompt(
         "## Guidelines",
         "- Use your available tools to complete the task.",
         "- If you need to make infrastructure changes, open a PR rather than applying directly.",
+        "- When editing an existing VCS file, use edit_file (anchored search-and-replace). Use create_or_update_file only to create new files — never to overwrite a file you already read.",
         "- Report what you did and any issues encountered.",
     ]
 

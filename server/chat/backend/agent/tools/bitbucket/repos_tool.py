@@ -6,6 +6,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from .fix_tool import FixEdit
 from .utils import (
     get_bb_client_for_user,
     get_default_branch,
@@ -14,6 +15,8 @@ from .utils import (
     build_error_response,
     build_success_response,
     confirm_or_cancel,
+    page_file_content,
+    apply_edits_checked,
 )
 
 from utils.db.connection_pool import db_pool
@@ -28,6 +31,7 @@ class BitbucketReposArgs(BaseModel):
         "get_repo",
         "get_file_contents",
         "create_or_update_file",
+        "edit_file",
         "delete_file",
         "get_directory_tree",
         "search_code",
@@ -38,10 +42,18 @@ class BitbucketReposArgs(BaseModel):
     repo_slug: Optional[str] = Field(None, description="Repository slug (required for repo-scoped actions).")
     path: Optional[str] = Field(None, description="File or directory path (for file/directory operations).")
     content: Optional[str] = Field(None, description="File content (for create_or_update_file).")
-    message: Optional[str] = Field(None, description="Commit message (for create_or_update_file, delete_file).")
+    message: Optional[str] = Field(None, description="Commit message (for create_or_update_file, edit_file, delete_file).")
     branch: Optional[str] = Field(None, description="Branch name (for file operations). Defaults to saved branch.")
     commit: Optional[str] = Field(None, description="Commit hash or branch ref (for get_file_contents, get_directory_tree). Defaults to HEAD.")
     query: Optional[str] = Field(None, description="Search query (for search_code).")
+    start_line: Optional[int] = Field(
+        None,
+        description="1-indexed start line for get_file_contents paging. Defaults to 1. Pass the continue hint to read more.",
+    )
+    edits: Optional[list[FixEdit]] = Field(
+        None,
+        description="Anchored search-and-replace edits for edit_file (old_string/new_string/replace_all).",
+    )
 
 
 def bitbucket_repos(
@@ -54,6 +66,8 @@ def bitbucket_repos(
     branch: Optional[str] = None,
     commit: Optional[str] = None,
     query: Optional[str] = None,
+    start_line: Optional[int] = None,
+    edits: Optional[list] = None,
     user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
@@ -68,7 +82,7 @@ def bitbucket_repos(
 
     repo_scoped = action in (
         "get_repo", "get_file_contents", "create_or_update_file",
-        "delete_file", "get_directory_tree",
+        "edit_file", "delete_file", "get_directory_tree",
     )
     if repo_scoped and ws and repo:
         if not branch:
@@ -145,7 +159,12 @@ def bitbucket_repos(
             if not path:
                 return build_error_response("path is required")
             ref = commit or branch or "HEAD"
-            return json.dumps(client.get_file_contents(ws, repo, path, commit=ref), default=str)
+            result = client.get_file_contents(ws, repo, path, commit=ref)
+            if err := forward_if_error(result):
+                return err
+            if isinstance(result, dict) and isinstance(result.get("content"), str):
+                result = {**result, "content": page_file_content(result["content"], start_line or 1)}
+            return json.dumps(result, default=str)
 
         if action == "create_or_update_file":
             if err := require_repo(ws, repo):
@@ -166,6 +185,35 @@ def bitbucket_repos(
             if err := forward_if_error(result):
                 return err
             return build_success_response(message=f"File '{path}' committed to {branch}", result=result)
+
+        if action == "edit_file":
+            if err := require_repo(ws, repo):
+                return build_error_response(err)
+            if not path:
+                return build_error_response("path is required")
+            if not edits:
+                return build_error_response("edits is required")
+            if not message:
+                return build_error_response("message (commit message) is required")
+            if not branch:
+                return build_error_response("branch is required")
+            fetched = client.get_file_contents(ws, repo, path, commit=branch)
+            if err := forward_if_error(fetched):
+                return err
+            original = fetched.get("content") if isinstance(fetched, dict) else None
+            if not isinstance(original, str):
+                return build_error_response(f"Could not read current contents of {path}")
+            suggested, apply_err = apply_edits_checked(original, edits)
+            if apply_err or suggested is None:
+                return build_error_response(apply_err or "edit application failed")
+            if cancelled := confirm_or_cancel(user_id,
+                    f"Commit edit to '{path}' on branch '{branch}' in {ws}/{repo}",
+                    "bitbucket:commit_file"):
+                return cancelled
+            result = client.create_or_update_file(ws, repo, path, suggested, message, branch)
+            if err := forward_if_error(result):
+                return err
+            return build_success_response(message=f"File '{path}' edited on {branch}", result=result)
 
         if action == "delete_file":
             if err := require_repo(ws, repo):
