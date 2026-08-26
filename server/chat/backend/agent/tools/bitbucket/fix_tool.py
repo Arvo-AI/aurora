@@ -19,6 +19,8 @@ from .utils import (
     get_default_branch,
     build_error_response,
     build_success_response,
+    apply_edits_checked,
+    is_commit_sha_like,
 )
 
 from chat.backend.agent.tools.vcs_rca_utils import resolve_repository as _vcs_resolve_repository
@@ -96,11 +98,21 @@ def _get_file_content(
     repo_slug: str,
     file_path: str,
     branch: Optional[str],
-) -> Optional[str]:
-    """Fetch file contents from Bitbucket. Returns text content or None."""
+) -> tuple[Optional[str], Optional[str], bool]:
+    """Fetch file contents from Bitbucket.
+
+    Returns ``(content, error_message, is_missing)``:
+    - ``(str, None, False)`` on success
+    - ``(None, None, True)`` when the FILE does not exist (HTTP 404 with a
+      resolvable ref) — the only case where the new-file creation path is
+      allowed
+    - ``(None, str, False)`` on any other failure (auth, network, bad
+      branch, directory path) — must surface as a hard error, never as
+      "file doesn't exist"
+    """
     client = get_bb_client_for_user(user_id)
     if not client:
-        return None
+        return None, "Bitbucket is not connected", False
 
     ref = branch or "HEAD"
     result = client.get_file_contents(workspace, repo_slug, file_path, commit=ref)
@@ -111,13 +123,37 @@ def _get_file_content(
                 "%s Failed to fetch %s from %s/%s: %s",
                 _LOG_PREFIX, file_path, workspace, repo_slug, result.get("message"),
             )
-            return None
-        return result.get("content")
+            if result.get("status") == 404:
+                # /src returns 404 both for a missing FILE and for a missing
+                # BRANCH/ref (e.g. a typo). Only a resolvable ref may take
+                # the new-file path — otherwise the "new file" would shadow
+                # a file that exists on the real branch.
+                if _ref_resolves(client, workspace, repo_slug, ref):
+                    return None, None, True
+                return None, (
+                    f"branch or ref '{ref}' not found (or could not be resolved)"
+                ), False
+            return None, str(result.get("message") or "Bitbucket API error"), False
+        file_content = result.get("content")
+        if isinstance(file_content, str):
+            return file_content, None, False
 
-    if isinstance(result, str):
-        return result
+    return None, "Unexpected response from Bitbucket (is the path a directory?)", False
 
-    return None
+
+def _ref_resolves(client, workspace: str, repo_slug: str, ref: str) -> bool:
+    """True when ``ref`` resolves to a commit, so a /src 404 means the FILE
+    is missing. Fails closed (False) on resolution errors — a bad branch
+    must never masquerade as a missing file."""
+    try:
+        resolved = client._resolve_commit(workspace, repo_slug, ref)
+    except Exception:
+        return False
+    if resolved != ref:
+        return True  # resolved to a commit hash — the ref exists
+    # Unchanged ref: either it already looks like a commit SHA (passed
+    # through as-is) or resolution failed.
+    return is_commit_sha_like(ref)
 
 
 def _save_fix_suggestion(
@@ -216,8 +252,18 @@ def bitbucket_fix(
     if not effective_branch:
         effective_branch = get_default_branch(user_id, workspace, repo_slug)
 
-    original_content = _get_file_content(user_id, workspace, repo_slug, file_path, effective_branch)
-    if original_content is None:
+    original_content, fetch_err, is_missing = _get_file_content(
+        user_id, workspace, repo_slug, file_path, effective_branch
+    )
+    if fetch_err:
+        # Any failure other than a confirmed 404 is a hard error: falling
+        # through to the new-file path here would silently replace the whole
+        # file with content built only from the edits' new_string values.
+        return build_error_response(
+            f"Could not fetch current contents of {file_path} from {full_repo}: {fetch_err}. "
+            "Verify the path and branch, then retry."
+        )
+    if is_missing:
         # Support creating new files: if all edits have empty old_string, treat as new file
         all_empty_old = all(
             (e.get("old_string", "") if isinstance(e, dict) else getattr(e, "old_string", "")) == ""
@@ -229,6 +275,11 @@ def bitbucket_fix(
                 e.get("new_string", "") if isinstance(e, dict) else getattr(e, "new_string", "")
                 for e in edits
             )
+            if not suggested_content.strip():
+                return build_error_response(
+                    "Refusing to create an empty (or whitespace-only) file. "
+                    "Provide the new file's content in new_string."
+                )
             original_content = None
             logger.info(
                 "%s File %s does not exist, creating new file (%d bytes)",
@@ -236,29 +287,16 @@ def bitbucket_fix(
             )
         else:
             return build_error_response(
-                f"Could not fetch current contents of {file_path} from {full_repo}. "
-                "The file does not exist. To create a new file, set old_string to an empty string."
+                f"File {file_path} does not exist in {full_repo}. "
+                "To create a new file, set old_string to an empty string."
             )
     else:
-        # File exists — apply edits using the shared replacer chain from github_fix_tool
-        from chat.backend.agent.tools.github_fix_tool import _apply_edits
-
-        suggested_content, apply_err = _apply_edits(original_content, edits)
+        # File exists — apply edits using the shared replacer chain (which
+        # also rejects no-op and empty/whitespace-only results).
+        suggested_content, apply_err = apply_edits_checked(original_content, edits)
         if apply_err or suggested_content is None:
             logger.warning("%s edit application failed for %s: %s", _LOG_PREFIX, file_path, apply_err)
             return build_error_response(apply_err or "edit application failed")
-
-        if suggested_content == original_content:
-            return build_error_response(
-                "Applied edits produced no change to the file. Double-check old_string/new_string."
-            )
-
-    if not suggested_content.strip():
-        return build_error_response(
-            "Applied edits produced an empty (or whitespace-only) file. If you "
-            "really intend to empty this file, do it manually — bitbucket_fix is "
-            "for targeted code changes."
-        )
 
     final_commit_message = commit_message or f"fix: {fix_description[:100]}"
     title = _build_title(file_path, fix_description)

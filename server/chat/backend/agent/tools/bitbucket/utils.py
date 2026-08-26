@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Optional
 
 from utils.db.connection_pool import db_pool
@@ -11,10 +12,32 @@ from connectors.bitbucket_connector.oauth_utils import refresh_token_if_needed
 from utils.auth.token_management import store_tokens_in_db
 from utils.secrets.secret_ref_utils import get_token_owner_id
 from utils.auth.command_gate import gate_action
+from chat.backend.agent.utils.tool_output_cap import PASS_THROUGH_CHARS as _PASS_THROUGH_CHARS
 
 logger = logging.getLogger(__name__)
 
 DIFF_TRUNCATE_LIMIT = 50_000
+
+# Budget for one page of file content, measured on the JSON-ESCAPED form of
+# the text (what actually lands in the serialized tool output). Derived from
+# tool_output_cap.PASS_THROUGH_CHARS with a 10K margin for the JSON envelope,
+# so a file read is returned verbatim and never replaced by an LLM summary —
+# even if the pass-through threshold is later lowered.
+PAGE_CONTENT_BUDGET = min(30_000, _PASS_THROUGH_CHARS - 10_000)
+
+_SHA40_RE = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
+# Mirrors api_client._COMMIT_SHA_RE: what _resolve_commit passes through as-is.
+_SHA_LIKE_RE = re.compile(r"[0-9a-f]{7,40}", re.IGNORECASE)
+
+
+def is_full_commit_sha(value) -> bool:
+    """True when ``value`` is a full 40-hex commit SHA (not a ref name)."""
+    return isinstance(value, str) and bool(_SHA40_RE.fullmatch(value))
+
+
+def is_commit_sha_like(value) -> bool:
+    """True when ``value`` looks like a (possibly abbreviated) commit SHA."""
+    return isinstance(value, str) and bool(_SHA_LIKE_RE.fullmatch(value))
 
 
 def get_bb_client_for_user(user_id: str):
@@ -83,6 +106,141 @@ def get_default_branch(user_id: str, workspace: str, repo_slug: str) -> Optional
     except Exception as e:
         logger.warning(f"Failed to look up default branch for {workspace}/{repo_slug}: {e}")
     return None
+
+
+def _escaped_len(text: str) -> int:
+    """Length of ``text`` once JSON-escaped inside a serialized string."""
+    return len(json.dumps(text)) - 2
+
+
+def _slice_to_escaped_budget(text: str, budget: int) -> str:
+    """Longest prefix of ``text`` whose JSON-escaped length fits ``budget``."""
+    # Escaped length >= raw length, so no prefix longer than ``budget`` raw
+    # chars can ever fit — capping ``hi`` keeps the binary-search probes small.
+    lo, hi = 0, min(len(text), budget)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _escaped_len(text[:mid]) <= budget:
+            lo = mid
+        else:
+            hi = mid - 1
+    # Never return an empty slice: paging must always make progress.
+    return text[: max(lo, 1)]
+
+
+def page_file_content(content: str, start_line: int = 1, start_char: int = 0,
+                      ref: Optional[str] = None) -> str:
+    """Return a verbatim page of ``content`` starting at ``start_line``.
+
+    The page is sized so its JSON-escaped form stays under
+    PAGE_CONTENT_BUDGET, which keeps the serialized tool output under the
+    pass-through summarizer threshold — file reads are never summarized. A
+    file that fits in one page from line 1 is returned unchanged (no header).
+    Otherwise the page is prefixed with a header line:
+
+        [lines X-Y of N — pass start_line=<Y+1> to continue]
+
+    A single line longer than the budget is sliced and continued WITHIN the
+    line via ``start_char``:
+
+        [lines X-X of N — pass start_line=<X> start_char=<offset> to continue]
+
+    When ``ref`` is given (the resolved commit SHA the content was read at),
+    continue hints include ``commit=<ref>`` so follow-up pages are pinned to
+    the same file version even if the branch tip moves mid-read.
+
+    Concatenating the header-stripped pages reproduces the file
+    byte-for-byte (each page carries its own line terminators).
+    """
+    start_line = max(start_line or 1, 1)
+    start_char = max(start_char or 0, 0)
+
+    # Raw length is a lower bound on escaped length, so only files that are
+    # candidates for single-page return pay the whole-file escape check.
+    if (start_line == 1 and start_char == 0
+            and len(content) <= PAGE_CONTENT_BUDGET
+            and _escaped_len(content) <= PAGE_CONTENT_BUDGET):
+        return content
+
+    ref_hint = f" commit={ref}" if ref else ""
+
+    lines = content.split("\n")
+    total = len(lines)
+    idx = start_line - 1
+    if idx >= total:
+        return f"[start_line {start_line} is past the end of the file ({total} lines)]"
+
+    first = start_line
+    parts: list[str] = []
+    used = 0
+    continue_hint = None
+    last = total
+    while idx < total:
+        line = lines[idx]
+        offset = start_char if idx == start_line - 1 else 0
+        if offset:
+            if offset > len(line):
+                # A stale or invented hint: never return a page whose header
+                # claims a range while silently dropping part of a line.
+                return (
+                    f"[start_char {start_char} is past the end of line "
+                    f"{start_line} ({len(line)} chars)]"
+                )
+            line = line[offset:]
+        terminator = "\n" if idx < total - 1 else ""
+        piece = line + terminator
+        cost = _escaped_len(piece)
+        if used + cost > PAGE_CONTENT_BUDGET:
+            if not parts:
+                # A single line bigger than the whole budget: slice within it.
+                sliced = _slice_to_escaped_budget(line, PAGE_CONTENT_BUDGET)
+                parts.append(sliced)
+                continue_hint = (
+                    f"pass start_line={idx + 1} "
+                    f"start_char={offset + len(sliced)}{ref_hint} to continue"
+                )
+                last = idx + 1
+            else:
+                continue_hint = f"pass start_line={idx + 1}{ref_hint} to continue"
+                last = idx
+            break
+        parts.append(piece)
+        used += cost
+        idx += 1
+
+    if continue_hint:
+        header = f"[lines {first}-{last} of {total} — {continue_hint}]\n"
+    else:
+        header = f"[lines {first}-{last} of {total} — end of file]\n"
+    return header + "".join(parts)
+
+
+def apply_edits_checked(original: str, edits: list) -> tuple[Optional[str], Optional[str]]:
+    """Apply anchored search-and-replace edits to ``original``.
+
+    Wraps the shared replacer chain from github_fix_tool (exact through
+    fuzzy matching, whole-file old_string ratio guard, overlap rejection)
+    and additionally rejects no-op and empty/whitespace-only results.
+
+    Returns ``(new_content, None)`` on success or ``(None, error)``.
+    """
+    from chat.backend.agent.tools.github_fix_tool import _apply_edits
+
+    suggested, apply_err = _apply_edits(original, edits)
+    if apply_err or suggested is None:
+        return None, apply_err or "edit application failed"
+    if suggested == original:
+        return None, (
+            "Applied edits produced no change to the file. "
+            "Double-check old_string/new_string."
+        )
+    if not suggested.strip():
+        return None, (
+            "Applied edits produced an empty (or whitespace-only) file. If you "
+            "really intend to empty this file, do it manually — anchored edits "
+            "are for targeted code changes."
+        )
+    return suggested, None
 
 
 def require_repo(ws: Optional[str], repo: Optional[str]) -> Optional[str]:

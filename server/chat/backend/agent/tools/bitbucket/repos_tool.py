@@ -2,6 +2,8 @@
 
 import json
 import logging
+import re
+import threading
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -14,7 +16,11 @@ from .utils import (
     build_error_response,
     build_success_response,
     confirm_or_cancel,
+    page_file_content,
+    apply_edits_checked,
+    is_full_commit_sha,
 )
+from .fix_tool import FixEdit
 
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
@@ -27,6 +33,8 @@ class BitbucketReposArgs(BaseModel):
         "list_repos",
         "get_repo",
         "get_file_contents",
+        "find_in_file",
+        "edit_file",
         "create_or_update_file",
         "delete_file",
         "get_directory_tree",
@@ -38,10 +46,108 @@ class BitbucketReposArgs(BaseModel):
     repo_slug: Optional[str] = Field(None, description="Repository slug (required for repo-scoped actions).")
     path: Optional[str] = Field(None, description="File or directory path (for file/directory operations).")
     content: Optional[str] = Field(None, description="File content (for create_or_update_file).")
-    message: Optional[str] = Field(None, description="Commit message (for create_or_update_file, delete_file).")
-    branch: Optional[str] = Field(None, description="Branch name (for file operations). Defaults to saved branch.")
-    commit: Optional[str] = Field(None, description="Commit hash or branch ref (for get_file_contents, get_directory_tree). Defaults to HEAD.")
-    query: Optional[str] = Field(None, description="Search query (for search_code).")
+    message: Optional[str] = Field(None, description="Commit message (for edit_file, create_or_update_file, delete_file).")
+    branch: Optional[str] = Field(None, description="Branch name (for file operations). Defaults to saved branch — except edit_file, which requires an explicit branch (create one first, then open a PR).")
+    commit: Optional[str] = Field(None, description="Commit hash or branch ref (for get_file_contents, find_in_file, get_directory_tree). Defaults to HEAD.")
+    query: Optional[str] = Field(None, description="Search query (for search_code) or pattern (for find_in_file — matched as a literal substring first, then as a regex).")
+    start_line: Optional[int] = Field(
+        None,
+        description=(
+            "For get_file_contents: 1-based line to start reading from. Large "
+            "files are returned in verbatim pages; follow the continue hint in "
+            "the page header to read further."
+        ),
+    )
+    start_char: Optional[int] = Field(
+        None,
+        description=(
+            "For get_file_contents: character offset within start_line, used to "
+            "continue an oversized single line (copy it from the page header's "
+            "continue hint)."
+        ),
+    )
+    edits: Optional[list[FixEdit]] = Field(
+        None,
+        description=(
+            "For edit_file: list of anchored search-and-replace edits "
+            "({old_string, new_string, replace_all}). Copy old_string exactly "
+            "from get_file_contents output and keep it narrow — the changed "
+            "lines plus 1-3 lines of context, never the whole file."
+        ),
+    )
+
+
+_FIND_MAX_MATCHES = 50
+_FIND_LINE_TRUNCATE = 200
+_FIND_REGEX_TIMEOUT_S = 2.0
+
+
+class _RegexSearchTimeout(Exception):
+    """Raised when a find_in_file regex scan exceeds its deadline."""
+
+
+def _scan_lines(lines: list, matches) -> tuple[list[str], int]:
+    """Scan ``lines`` with predicate ``matches``; format up to the cap."""
+    formatted: list[str] = []
+    total = 0
+    for line_no, line in enumerate(lines, 1):
+        if matches(line):
+            total += 1
+            if len(formatted) < _FIND_MAX_MATCHES:
+                text = line if len(line) <= _FIND_LINE_TRUNCATE else line[:_FIND_LINE_TRUNCATE] + "..."
+                formatted.append(f"L{line_no}: {text}")
+    return formatted, total
+
+
+def _find_in_content(file_content: str, query: str) -> tuple[list[str], int]:
+    """Return (formatted match lines, total match count) for ``query``.
+
+    Literal substring matching runs first: it is exact (no regex misreads of
+    code like ``arr[0]`` or ``foo.bar``) and immune to backtracking. Only
+    when the query never occurs literally is it tried as a regex — and since
+    stdlib ``re`` has no timeout and a pathological pattern (e.g. ``(x+)+y``)
+    backtracks exponentially on long lines, the regex scan runs in a worker
+    thread with a hard deadline and raises _RegexSearchTimeout on overrun.
+    At most _FIND_MAX_MATCHES lines are formatted as ``L<line_no>: <line>``
+    (truncated), so the output stays small.
+    """
+    lines = file_content.split("\n")
+    formatted, total = _scan_lines(lines, lambda line: query in line)
+    if total:
+        return formatted, total
+
+    try:
+        pattern = re.compile(query)
+    except re.error:
+        return formatted, total  # not a regex either — genuinely no matches
+
+    # A daemon thread (NOT concurrent.futures: its non-daemon workers are
+    # joined at interpreter exit, so an abandoned catastrophic scan would
+    # block process shutdown). On timeout the runaway thread is abandoned —
+    # it burns CPU until the scan finishes but never blocks exit, and it
+    # holds only this call's line list.
+    outcome: dict = {}
+
+    def _regex_scan():
+        try:
+            outcome["result"] = _scan_lines(
+                lines, lambda line: pattern.search(line) is not None
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=_regex_scan, daemon=True, name="bb-find-regex")
+    worker.start()
+    worker.join(timeout=_FIND_REGEX_TIMEOUT_S)
+    if "result" in outcome:
+        return outcome["result"]
+    if "error" in outcome:
+        raise outcome["error"]
+    raise _RegexSearchTimeout(
+        f"Regex search for {query!r} timed out after "
+        f"{_FIND_REGEX_TIMEOUT_S:.0f}s (catastrophic backtracking). "
+        "Retry with a literal code snippet or a simpler pattern."
+    )
 
 
 def bitbucket_repos(
@@ -54,6 +160,9 @@ def bitbucket_repos(
     branch: Optional[str] = None,
     commit: Optional[str] = None,
     query: Optional[str] = None,
+    start_line: Optional[int] = None,
+    start_char: Optional[int] = None,
+    edits: Optional[list] = None,
     user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
@@ -66,11 +175,14 @@ def bitbucket_repos(
 
     ws, repo = workspace, repo_slug
 
-    repo_scoped = action in (
-        "get_repo", "get_file_contents", "create_or_update_file",
-        "delete_file", "get_directory_tree",
+    # edit_file is deliberately absent: it REQUIRES an explicit branch (see
+    # its handler) — auto-filling the saved/default branch here would let an
+    # agent that omits `branch` commit straight to the default branch.
+    branch_defaulted = action in (
+        "get_repo", "get_file_contents", "find_in_file",
+        "create_or_update_file", "delete_file", "get_directory_tree",
     )
-    if repo_scoped and ws and repo:
+    if branch_defaulted and ws and repo:
         if not branch:
             branch = get_default_branch(user_id, ws, repo)
 
@@ -145,7 +257,105 @@ def bitbucket_repos(
             if not path:
                 return build_error_response("path is required")
             ref = commit or branch or "HEAD"
-            return json.dumps(client.get_file_contents(ws, repo, path, commit=ref), default=str)
+            result = client.get_file_contents(ws, repo, path, commit=ref)
+            if err := forward_if_error(result):
+                return err
+            if isinstance(result, dict) and isinstance(result.get("content"), str):
+                result = dict(result)
+                # Pin continue hints to the resolved commit so follow-up
+                # pages read the same file version even if the branch moves.
+                read_commit = result.get("commit")
+                result["content"] = page_file_content(
+                    result["content"], start_line or 1, start_char or 0,
+                    ref=read_commit if is_full_commit_sha(read_commit) else None,
+                )
+            return json.dumps(result, default=str)
+
+        if action == "find_in_file":
+            if err := require_repo(ws, repo):
+                return build_error_response(err)
+            if not path:
+                return build_error_response("path is required")
+            if not query:
+                return build_error_response("query is required")
+            ref = commit or branch or "HEAD"
+            result = client.get_file_contents(ws, repo, path, commit=ref)
+            if err := forward_if_error(result):
+                return err
+            file_content = result.get("content") if isinstance(result, dict) else None
+            if not isinstance(file_content, str):
+                return build_error_response(f"'{path}' is not a readable file")
+            try:
+                matches, total = _find_in_content(file_content, query)
+            except _RegexSearchTimeout as exc:
+                return build_error_response(str(exc))
+            read_commit = result.get("commit")
+            pin = f" commit={read_commit}" if is_full_commit_sha(read_commit) else ""
+            return build_success_response(
+                path=path,
+                query=query,
+                commit=read_commit,
+                total_matches=total,
+                shown=len(matches),
+                matches=matches,
+                hint=(
+                    "Jump to a match with get_file_contents "
+                    f"start_line=<line number>{pin}."
+                ),
+            )
+
+        if action == "edit_file":
+            if err := require_repo(ws, repo):
+                return build_error_response(err)
+            if not path:
+                return build_error_response("path is required")
+            if not edits:
+                return build_error_response("edits is required (list of {old_string, new_string} edits)")
+            if not message:
+                return build_error_response("message (commit message) is required")
+            if not branch:
+                return build_error_response("branch is required")
+            fetched = client.get_file_contents(ws, repo, path, commit=branch)
+            if err := forward_if_error(fetched):
+                return err
+            original = fetched.get("content") if isinstance(fetched, dict) else None
+            if not isinstance(original, str):
+                return build_error_response(
+                    f"Could not read '{path}' on branch '{branch}' — it may be a directory. "
+                    "edit_file only works on existing files; use create_or_update_file for new files."
+                )
+            # The compare-and-swap below is only real if the read was pinned
+            # to an actual commit SHA. When ref resolution fell back (the
+            # envelope echoes the raw branch name), fail closed instead of
+            # sending Bitbucket a non-SHA `parents` (400) or silently
+            # voiding the CAS.
+            read_commit = fetched.get("commit")
+            if not is_full_commit_sha(read_commit):
+                return build_error_response(
+                    f"Could not pin the current tip of branch '{branch}' for a safe "
+                    "compare-and-swap commit (ref resolution failed). Retry the edit; "
+                    "if it persists, verify the branch name."
+                )
+            new_content, apply_err = apply_edits_checked(original, edits)
+            if apply_err or new_content is None:
+                return build_error_response(apply_err or "edit application failed")
+            if cancelled := confirm_or_cancel(user_id,
+                    f"Commit edit to '{path}' on branch '{branch}' in {ws}/{repo}",
+                    "bitbucket:commit_file"):
+                return cancelled
+            # parents = the commit the file was read at → compare-and-swap:
+            # Bitbucket rejects the write if the branch tip moved since the read.
+            result = client.create_or_update_file(
+                ws, repo, path, new_content, message, branch,
+                parents=read_commit,
+            )
+            if err := forward_if_error(result):
+                return err
+            return build_success_response(
+                message=f"Applied {len(edits)} edit(s) to '{path}' on {branch}",
+                edits_applied=len(edits),
+                result=result,
+            )
 
         if action == "create_or_update_file":
             if err := require_repo(ws, repo):

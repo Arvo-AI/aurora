@@ -66,6 +66,46 @@ def _resolve_base_hash(client, workspace: str, repo_slug: str, base_branch: str)
     return None, f"Could not find base branch '{base_branch}' in {workspace}/{repo_slug}"
 
 
+def _check_suggestion_not_stale(client, workspace: str, repo_slug: str, file_path: str,
+                                base_branch: str, original_content) -> Optional[str]:
+    """Verify the file on ``base_branch`` still matches the content the
+    suggestion was rendered from. Returns an error string, or None if safe."""
+    result = client.get_file_contents(workspace, repo_slug, file_path, commit=base_branch)
+    current = None
+    if isinstance(result, dict):
+        if result.get("error"):
+            if result.get("status") != 404:
+                return (
+                    f"Could not verify the current state of {file_path} on "
+                    f"'{base_branch}': {result.get('message')}. Retry, or regenerate the fix."
+                )
+            # 404 → the file does not exist on the base branch
+        else:
+            content = result.get("content")
+            current = content if isinstance(content, str) else None
+
+    if original_content is None:
+        # New-file suggestion: the path must still be absent.
+        if current is not None:
+            return (
+                f"{file_path} now exists on '{base_branch}' but this suggestion would "
+                "create it from scratch, overwriting the current file. Regenerate the fix."
+            )
+        return None
+    if current is None:
+        return (
+            f"{file_path} is no longer readable on '{base_branch}' (deleted or moved "
+            "since this fix was suggested). Regenerate the fix against the current repo."
+        )
+    if current != original_content:
+        return (
+            f"{file_path} has changed on '{base_branch}' since this fix was suggested — "
+            "applying it would overwrite those newer changes. Regenerate the fix "
+            "against the current file."
+        )
+    return None
+
+
 def _create_branch_and_commit(client, workspace: str, repo_slug: str, branch_name: str,
                               base_hash: str, file_path: str, content: str, commit_message: str) -> Optional[str]:
     """Create branch and push the fix. Returns error string or None on success."""
@@ -74,9 +114,14 @@ def _create_branch_and_commit(client, workspace: str, repo_slug: str, branch_nam
     if err := forward_if_error(result):
         return f"Failed to create branch: {result.get('message', err)}"
 
+    # The fresh branch's tip is the commit we branched from; passing it as
+    # parents makes the commit a compare-and-swap (rejected if the tip moved).
+    branch_tip = (result.get("target") or {}).get("hash") if isinstance(result, dict) else None
+
     logger.info(f"{_LOG_PREFIX} Pushing fix to {file_path} on branch {branch_name}")
     result = client.create_or_update_file(
-        workspace, repo_slug, file_path, content, commit_message, branch_name
+        workspace, repo_slug, file_path, content, commit_message, branch_name,
+        parents=branch_tip or base_hash,
     )
     if err := forward_if_error(result):
         return f"Failed to push fix: {result.get('message', err)}"
@@ -153,6 +198,15 @@ def bitbucket_apply_fix(
         return build_error_response(err)
     if not base_hash:
         return build_error_response(f"No commit hash found for branch '{base_branch}'")
+
+    # Staleness guard: suggested_content is a WHOLE-FILE body rendered from
+    # the file as it was at suggestion time. If the file has changed on the
+    # base branch since, pushing it would silently revert those changes —
+    # the parents CAS below only protects against races during the apply.
+    err = _check_suggestion_not_stale(client, workspace, repo_slug, file_path,
+                                      base_branch, suggestion.get("original_content"))
+    if err:
+        return build_error_response(err)
 
     err = _create_branch_and_commit(
         client, workspace, repo_slug, branch_name, base_hash, file_path, content, commit_message
