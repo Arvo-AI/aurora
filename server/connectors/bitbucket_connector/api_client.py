@@ -118,6 +118,21 @@ class BitbucketAPIClient:
             return self._handle_error(response)
         return response.json()
 
+    @staticmethod
+    def _default_to_utf8(response):
+        """Default an undeclared response charset to UTF-8.
+
+        Bitbucket serves file/diff bytes as ``text/plain`` with NO charset;
+        ``requests`` then falls back to ISO-8859-1 (the HTTP default), which
+        mojibakes UTF-8 content — and a subsequent write would re-encode the
+        mojibake, corrupting every non-ASCII character. Repo files are
+        conventionally UTF-8, so decode them as such unless the response
+        explicitly declares a charset.
+        """
+        content_type = response.headers.get("Content-Type", "")
+        if "charset" not in content_type.lower():
+            response.encoding = "utf-8"
+
     def _get_raw(self, url, params=None):
         """GET that returns raw text (for diffs, logs). Returns string or error dict."""
         _validate_bitbucket_url(url)
@@ -127,6 +142,7 @@ class BitbucketAPIClient:
         if response.status_code != 200:
             logger.error(f"Bitbucket GET (raw) {_sanitize_url(url)} failed: {response.status_code}")
             return self._handle_error(response)
+        self._default_to_utf8(response)
         return response.text
 
     def _post(self, url, json_data=None, data=None, files=None):
@@ -315,11 +331,34 @@ class BitbucketAPIClient:
             return self._handle_error(response)
         content_type = response.headers.get("Content-Type", "")
         if "application/json" in content_type:
-            return response.json()
+            # /src answers with JSON for a DIRECTORY listing — but also for a
+            # .json FILE, whose parsed body has no "content" key and would look
+            # like a nonexistent file to callers. Only pass through an actual
+            # paginated directory listing: top-level "values"+"pagelen" AND
+            # every entry typed commit_file/commit_directory (so a stored
+            # pagination fixture of, say, PRs is still treated as file text).
+            try:
+                parsed = response.json()
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict) and "values" in parsed and "pagelen" in parsed:
+                values = parsed.get("values")
+                if isinstance(values, list) and all(
+                    isinstance(v, dict) and str(v.get("type", "")).startswith("commit_")
+                    for v in values
+                ):
+                    return parsed
+        self._default_to_utf8(response)
         return {"content": response.text, "path": path, "commit": commit}
 
-    def create_or_update_file(self, workspace, repo_slug, path, content, message, branch, author=None):
-        """Create or update a file via multipart form POST to /src."""
+    def create_or_update_file(self, workspace, repo_slug, path, content, message, branch, author=None, parents=None):
+        """Create or update a file via multipart form POST to /src.
+
+        ``parents`` (a commit hash) makes the write a compare-and-swap:
+        Bitbucket rejects the commit (400, "parent commit ... is not the
+        head of branch") if ``branch`` no longer points at that commit,
+        instead of silently clobbering newer work.
+        """
         url = (
             f"{BITBUCKET_API_BASE}/repositories/"
             f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}/src"
@@ -330,6 +369,8 @@ class BitbucketAPIClient:
         }
         if author:
             form_data["author"] = author
+        if parents:
+            form_data["parents"] = parents
         files = {path: (path, content)}
         return self._post(url, data=form_data, files=files)
 
