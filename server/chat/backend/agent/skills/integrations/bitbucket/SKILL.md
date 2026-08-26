@@ -101,5 +101,5 @@ Workspace and repository auto-resolve from saved user selection if not passed ex
 - Look for: config changes, k8s manifests, Terraform, dependency updates.
 - Check pipeline logs when builds fail near the incident time.
 - Cross-reference commit history with deployment timing.
-- When you identify the problematic code change, use `bitbucket_fix` to propose a revert or correction.
-- **NEVER** manually create a branch + commit file + create PR. Always use `bitbucket_fix` instead — the user will create the PR from the Incidents UI after reviewing your suggestion.
+- When you identify the problematic code change during RCA, use `bitbucket_fix` to propose a revert or correction.
+- **During background RCA, NEVER** manually create a branch + commit file + create PR — use `bitbucket_fix` instead; the user will create the PR from the Incidents UI after reviewing your suggestion. During Aurora Actions / interactive chat, the branch → `edit_file` → PR workflow described above IS the correct way to ship a change.
