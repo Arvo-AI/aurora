@@ -4,7 +4,16 @@ import json
 import logging
 import re
 import threading
+import time
 from typing import Literal, Optional
+
+try:
+    # Supports a true per-call timeout for the find_in_file regex fallback.
+    # Transitively present via tiktoken; the daemon-thread deadline below
+    # covers its absence.
+    import regex as _regex_mod
+except ImportError:  # pragma: no cover — regex ships with tiktoken
+    _regex_mod = None
 
 from pydantic import BaseModel, Field
 
@@ -99,33 +108,51 @@ def _scan_lines(lines: list, matches) -> tuple[list[str], int]:
     return formatted, total
 
 
-def _find_in_content(file_content: str, query: str) -> tuple[list[str], int]:
-    """Return (formatted match lines, total match count) for ``query``.
+def _regex_timeout_message(query: str) -> str:
+    return (
+        f"Regex search for {query!r} timed out after "
+        f"{_FIND_REGEX_TIMEOUT_S:.0f}s (catastrophic backtracking). "
+        "Retry with a literal code snippet or a simpler pattern."
+    )
 
-    Literal substring matching runs first: it is exact (no regex misreads of
-    code like ``arr[0]`` or ``foo.bar``) and immune to backtracking. Only
-    when the query never occurs literally is it tried as a regex — and since
-    stdlib ``re`` has no timeout and a pathological pattern (e.g. ``(x+)+y``)
-    backtracks exponentially on long lines, the regex scan runs in a worker
-    thread with a hard deadline and raises _RegexSearchTimeout on overrun.
-    At most _FIND_MAX_MATCHES lines are formatted as ``L<line_no>: <line>``
-    (truncated), so the output stays small.
-    """
-    lines = file_content.split("\n")
-    formatted, total = _scan_lines(lines, lambda line: query in line)
-    if total:
-        return formatted, total
 
+def _regex_scan_with_module_timeout(lines: list, query: str) -> tuple[list[str], int]:
+    """Regex fallback scan using the ``regex`` module's native per-call
+    timeout — a genuinely cancellable boundary: the engine checks the
+    deadline DURING matching, so a catastrophic pattern stops burning CPU
+    at the deadline instead of running to completion in an abandoned
+    thread."""
+    try:
+        pattern = _regex_mod.compile(query)
+    except _regex_mod.error:
+        return [], 0  # not a regex either — genuinely no matches
+
+    deadline = time.monotonic() + _FIND_REGEX_TIMEOUT_S
+
+    def matches(line: str) -> bool:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError
+        return pattern.search(line, timeout=remaining) is not None
+
+    try:
+        return _scan_lines(lines, matches)
+    except TimeoutError:
+        raise _RegexSearchTimeout(_regex_timeout_message(query)) from None
+
+
+def _regex_scan_with_thread_deadline(lines: list, query: str) -> tuple[list[str], int]:
+    """Stdlib fallback when the ``regex`` module is absent. A daemon thread
+    (NOT concurrent.futures: its non-daemon workers are joined at
+    interpreter exit, so an abandoned catastrophic scan would block process
+    shutdown). On timeout the runaway thread is abandoned — it burns CPU
+    until the scan finishes but never blocks exit, and it holds only this
+    call's line list."""
     try:
         pattern = re.compile(query)
     except re.error:
-        return formatted, total  # not a regex either — genuinely no matches
+        return [], 0  # not a regex either — genuinely no matches
 
-    # A daemon thread (NOT concurrent.futures: its non-daemon workers are
-    # joined at interpreter exit, so an abandoned catastrophic scan would
-    # block process shutdown). On timeout the runaway thread is abandoned —
-    # it burns CPU until the scan finishes but never blocks exit, and it
-    # holds only this call's line list.
     outcome: dict = {}
 
     def _regex_scan():
@@ -143,11 +170,29 @@ def _find_in_content(file_content: str, query: str) -> tuple[list[str], int]:
         return outcome["result"]
     if "error" in outcome:
         raise outcome["error"]
-    raise _RegexSearchTimeout(
-        f"Regex search for {query!r} timed out after "
-        f"{_FIND_REGEX_TIMEOUT_S:.0f}s (catastrophic backtracking). "
-        "Retry with a literal code snippet or a simpler pattern."
-    )
+    raise _RegexSearchTimeout(_regex_timeout_message(query))
+
+
+def _find_in_content(file_content: str, query: str) -> tuple[list[str], int]:
+    """Return (formatted match lines, total match count) for ``query``.
+
+    Literal substring matching runs first: it is exact (no regex misreads of
+    code like ``arr[0]`` or ``foo.bar``) and immune to backtracking. Only
+    when the query never occurs literally is it tried as a regex, under a
+    hard deadline: via the ``regex`` module's native timeout when available
+    (truly cancellable mid-match), else a daemon-thread deadline. Both raise
+    _RegexSearchTimeout on overrun. At most _FIND_MAX_MATCHES lines are
+    formatted as ``L<line_no>: <line>`` (truncated), so the output stays
+    small.
+    """
+    lines = file_content.split("\n")
+    formatted, total = _scan_lines(lines, lambda line: query in line)
+    if total:
+        return formatted, total
+
+    if _regex_mod is not None:
+        return _regex_scan_with_module_timeout(lines, query)
+    return _regex_scan_with_thread_deadline(lines, query)
 
 
 def bitbucket_repos(

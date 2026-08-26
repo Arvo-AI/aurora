@@ -162,57 +162,58 @@ def page_file_content(content: str, start_line: int = 1, start_char: int = 0,
             and _escaped_len(content) <= PAGE_CONTENT_BUDGET):
         return content
 
-    ref_hint = f" commit={ref}" if ref else ""
-
     lines = content.split("\n")
     total = len(lines)
     idx = start_line - 1
     if idx >= total:
         return f"[start_line {start_line} is past the end of the file ({total} lines)]"
+    if start_char > len(lines[idx]):
+        # A stale or invented hint: never return a page whose header claims
+        # a range while silently dropping part of a line.
+        return (
+            f"[start_char {start_char} is past the end of line "
+            f"{start_line} ({len(lines[idx])} chars)]"
+        )
 
-    first = start_line
+    ref_hint = f" commit={ref}" if ref else ""
+    parts, last, continue_hint = _collect_page(lines, idx, start_char, ref_hint)
+    return _page_header(start_line, last, total, continue_hint) + "".join(parts)
+
+
+def _collect_page(lines: list, start_idx: int, start_char: int,
+                  ref_hint: str) -> tuple[list[str], int, Optional[str]]:
+    """Accumulate whole lines (with terminators) from ``start_idx`` until the
+    escaped budget is spent. Returns ``(parts, last_line_1based,
+    continue_hint)``; ``continue_hint`` is None at end of file."""
+    total = len(lines)
     parts: list[str] = []
     used = 0
-    continue_hint = None
-    last = total
+    idx = start_idx
     while idx < total:
-        line = lines[idx]
-        offset = start_char if idx == start_line - 1 else 0
-        if offset:
-            if offset > len(line):
-                # A stale or invented hint: never return a page whose header
-                # claims a range while silently dropping part of a line.
-                return (
-                    f"[start_char {start_char} is past the end of line "
-                    f"{start_line} ({len(line)} chars)]"
-                )
-            line = line[offset:]
-        terminator = "\n" if idx < total - 1 else ""
-        piece = line + terminator
+        offset = start_char if idx == start_idx else 0
+        line = lines[idx][offset:] if offset else lines[idx]
+        piece = line + ("\n" if idx < total - 1 else "")
         cost = _escaped_len(piece)
         if used + cost > PAGE_CONTENT_BUDGET:
             if not parts:
                 # A single line bigger than the whole budget: slice within it.
                 sliced = _slice_to_escaped_budget(line, PAGE_CONTENT_BUDGET)
-                parts.append(sliced)
-                continue_hint = (
+                hint = (
                     f"pass start_line={idx + 1} "
                     f"start_char={offset + len(sliced)}{ref_hint} to continue"
                 )
-                last = idx + 1
-            else:
-                continue_hint = f"pass start_line={idx + 1}{ref_hint} to continue"
-                last = idx
-            break
+                return [sliced], idx + 1, hint
+            return parts, idx, f"pass start_line={idx + 1}{ref_hint} to continue"
         parts.append(piece)
         used += cost
         idx += 1
+    return parts, total, None
 
-    if continue_hint:
-        header = f"[lines {first}-{last} of {total} — {continue_hint}]\n"
-    else:
-        header = f"[lines {first}-{last} of {total} — end of file]\n"
-    return header + "".join(parts)
+
+def _page_header(first: int, last: int, total: int,
+                 continue_hint: Optional[str]) -> str:
+    tail = continue_hint or "end of file"
+    return f"[lines {first}-{last} of {total} — {tail}]\n"
 
 
 def apply_edits_checked(original: str, edits: list) -> tuple[Optional[str], Optional[str]]:
