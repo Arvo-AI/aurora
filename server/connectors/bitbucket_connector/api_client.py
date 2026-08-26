@@ -196,8 +196,6 @@ class BitbucketAPIClient:
                 _validate_bitbucket_url(url)
             except ValueError:
                 logger.warning("Pagination rejected untrusted next URL: %s", _sanitize_url(url))
-                if all_values:
-                    return all_values
                 return {
                     "error": True,
                     "status": None,

@@ -353,10 +353,17 @@ def cleanup_org_hooks(user_id: str, org_id: str, repo_full_names=None) -> list[s
     return failed
 
 
-def _until_not_429(fn):
+def _until_not_429(fn, attempts=7):
+    """Retry ``fn`` while it reports 429, with exponential backoff.
+
+    ``attempts`` exists because two very different callers share this: the
+    Celery bulk task can afford the full ~95s budget, but the single-repo
+    route runs inside a Flask request and must not hold a worker thread
+    that long — it passes a much smaller budget.
+    """
     delay = 1
     result = fn()
-    for _ in range(7):
+    for _ in range(attempts):
         if not (isinstance(result, dict) and result.get("status") == 429):
             return result
         time.sleep(delay)
@@ -368,20 +375,25 @@ def _until_not_429(fn):
 def _try_auto_create_hook(
     user_id: str, org_id: str, repo_full_name: str,
     webhook_url: str, webhook_events, secret: str,
+    retry_attempts: int = 7,
 ) -> bool:
     """Best-effort API creation of the repo webhook; returns True on success.
 
     Needs the write:webhook:bitbucket scope, which the connector token often
     lacks — manual setup is the primary path, so failure here is informational
-    only. An existing hook with the same URL counts as success (its uuid is
-    recorded too, so disable/disconnect can still delete it). A success also
-    records verification: creating/finding the hook is the same bar as Verify.
+    only. An existing hook with the same URL only counts as success when it is
+    active and carries both pullrequest triggers (its uuid is recorded too, so
+    disable/disconnect can still delete it). Success also records verification.
+
+    ``retry_attempts`` bounds the 429 backoff: callers on a Flask request
+    thread pass a small budget, the Celery bulk task keeps the default.
     """
     def _mark_verified(hook_uuid=None) -> None:
         # Isolated: by this point the hook EXISTS on Bitbucket, so a DB blip
         # here must not flip the return to False (which would tell the admin
-        # to create a second hook manually). The cost of a lost uuid is only
-        # that disable/disconnect can't auto-delete this hook later.
+        # to create a second hook manually). The cost is that this repo keeps
+        # no record of the hook: disable/disconnect can't auto-delete it, and
+        # it reports unverified until a delivery or Verify says otherwise.
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
@@ -399,8 +411,9 @@ def _try_auto_create_hook(
                     conn.commit()
         except Exception:
             logger.warning(
-                "Bitbucket hook created for %s but uuid persistence failed — "
-                "automatic hook deletion on disable will not work for this repo",
+                "Bitbucket hook exists for %s but persisting its state failed — "
+                "this repo will report unverified and automatic hook deletion "
+                "on disable will not work for it",
                 _sanitize_log(repo_full_name),
             )
 
@@ -411,14 +424,16 @@ def _try_auto_create_hook(
         if client is None or "/" not in repo_full_name:
             return False
         ws, slug = repo_full_name.split("/", 1)
-        existing = _until_not_429(lambda: client.list_webhooks(ws, slug))
+        existing = _until_not_429(lambda: client.list_webhooks(ws, slug), retry_attempts)
         for hook in existing if isinstance(existing, list) else []:
             if not (isinstance(hook, dict) and hook.get("url") == webhook_url):
                 continue
-            # Same bar as verify_change_gating_webhook: an existing hook only
-            # counts as configured when it is active AND carries both
-            # pullrequest triggers — a disabled or partial hook would report
-            # success while deliveries silently never arrive.
+            # An existing hook was configured by someone else, so it has to
+            # clear verify_change_gating_webhook's bar: active AND both
+            # pullrequest triggers. A disabled or partial hook would report
+            # success while deliveries silently never arrive. The create path
+            # below needs no such check — we set active and both events in
+            # our own request.
             if not hook.get("active"):
                 continue
             if {"pullrequest:created", "pullrequest:updated"} - set(hook.get("events") or []):
@@ -429,7 +444,7 @@ def _try_auto_create_hook(
             ws, slug, webhook_url, webhook_events,
             description="Aurora Incident Prevention",
             secret=secret,
-        ))
+        ), retry_attempts)
         if not isinstance(created, dict) or created.get("error"):
             return False
         _mark_verified(created.get("uuid"))
@@ -576,30 +591,36 @@ def update_change_gating_bulk(user_id):
 @require_permission("connectors", "write")
 def get_change_gating_bulk_job(user_id, task_id):
     """Poll the Celery bulk-enable job."""
-    task = enable_change_gating_bulk.AsyncResult(task_id)
-    if task.state in ("PENDING", "STARTED"):
-        return jsonify({"state": task.state, "complete": False})
-    if task.state == "SUCCESS":
-        result = dict(task.result or {})
-        owner = result.pop("org_id", None)
-        if owner is not None and owner != resolve_org(user_id):
-            return jsonify({"error": "Not found"}), 404
-        results = result.get("results") or []
-        if result.get("change_gating_enabled") and any(
-            r.get("webhook_auto_created") is False for r in results
-        ):
-            result["webhook_secret"] = get_or_create_webhook_secret(resolve_org(user_id))
-        return jsonify({"state": task.state, "complete": True, "result": result})
-    logger.error(
-        "Bitbucket bulk-enable task %s ended in state %s: %s",
-        _sanitize_log(task_id), task.state, task.info,
-    )
-    return jsonify({
-        "state": task.state,
-        "complete": True,
-        "error": True,
-        "status": "Failed to update Incident Prevention",
-    }), 200
+    try:
+        task = enable_change_gating_bulk.AsyncResult(task_id)
+        if task.state in ("PENDING", "STARTED"):
+            return jsonify({"state": task.state, "complete": False})
+        if task.state == "SUCCESS":
+            result = dict(task.result or {})
+            owner = result.pop("org_id", None)
+            if owner is not None and owner != resolve_org(user_id):
+                return jsonify({"error": "Not found"}), 404
+            results = result.get("results") or []
+            if result.get("change_gating_enabled") and any(
+                r.get("webhook_auto_created") is False for r in results
+            ):
+                result["webhook_secret"] = get_or_create_webhook_secret(resolve_org(user_id))
+            return jsonify({"state": task.state, "complete": True, "result": result})
+        logger.error(
+            "Bitbucket bulk-enable task %s ended in state %s: %s",
+            _sanitize_log(task_id), task.state, task.info,
+        )
+        return jsonify({
+            "state": task.state,
+            "complete": True,
+            "error": True,
+            "status": "Failed to update Incident Prevention",
+        }), 200
+    except Exception:
+        # resolve_org and get_or_create_webhook_secret both hit the secrets
+        # backend; a blip there must not surface as a raw 500.
+        logger.exception("Failed to poll Bitbucket bulk-enable task %s", _sanitize_log(task_id))
+        return jsonify({"error": "Failed to check Incident Prevention"}), 500
 
 
 @bitbucket_selection_bp.route("/repo-selections/<path:repo_full_name>/change-gating", methods=["PUT"])
@@ -699,8 +720,11 @@ def update_change_gating(user_id, repo_full_name):
             # the flag entirely — absent means "not attempted", which is
             # neither the success nor the failure message.
             if not was_enabled:
+                # Small 429 budget: this runs on a Flask request thread, so it
+                # must not sleep out the full backoff the bulk task can afford.
                 response["webhook_auto_created"] = _try_auto_create_hook(
-                    user_id, org_id, repo_full_name, webhook_url, webhook_events, secret
+                    user_id, org_id, repo_full_name, webhook_url, webhook_events, secret,
+                    retry_attempts=2,
                 )
         else:
             # Disable: try to delete the hook, always clear verification state.

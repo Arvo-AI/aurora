@@ -134,33 +134,43 @@ export default function BitbucketWorkspaceBrowser() {
       const job = await BitbucketIntegrationService.updateChangeGatingBulk(names, enabled);
       let status = await BitbucketIntegrationService.getChangeGatingBulkJob(job.task_id);
       const deadline = Date.now() + 10 * 60 * 1000;
+      let consecutiveErrors = 0;
       while (!status.complete) {
         if (Date.now() > deadline) {
           throw new Error('Incident Prevention is taking longer than expected. Reload this page to see the current state.');
         }
-        const data = await BitbucketIntegrationService.loadWorkspaceSelection();
-        if (data?.repositories) {
-          const updated = parseConnectedRepos(data.repositories);
-          setSavedRepos(updated);
-          setGatingUpdating(prev => {
-            const next = new Set(prev);
-            for (const r of updated) {
-              if (!next.has(r.full_name)) continue;
-              const settled = enabled
-                ? r.webhook_configured || !r.change_gating_enabled
-                : !r.change_gating_enabled;
-              if (settled) next.delete(r.full_name);
+        // A failed poll is not evidence the job failed — the worker runs
+        // regardless. Only give up once several in a row fail; a real task
+        // failure arrives as status.error and is handled after the loop.
+        try {
+          const data = await BitbucketIntegrationService.loadWorkspaceSelection();
+          if (data?.repositories) {
+            const updated = parseConnectedRepos(data.repositories);
+            setSavedRepos(updated);
+            setGatingUpdating(prev => {
+              const next = new Set(prev);
+              for (const r of updated) {
+                if (!next.has(r.full_name)) continue;
+                const settled = enabled
+                  ? r.webhook_configured || !r.change_gating_enabled
+                  : !r.change_gating_enabled;
+                if (settled) next.delete(r.full_name);
+              }
+              return next;
+            });
+            // Disable is done once the DB flag is off. Hook deletes keep
+            // running in the worker; the UI does not wait on them.
+            if (!enabled && names.every(n => !updated.find(r => r.full_name === n)?.change_gating_enabled)) {
+              break;
             }
-            return next;
-          });
-          // Disable is done once the DB flag is off. Hook deletes keep
-          // running in the worker; the UI does not wait on them.
-          if (!enabled && names.every(n => !updated.find(r => r.full_name === n)?.change_gating_enabled)) {
-            break;
           }
+          await new Promise(r => setTimeout(r, 2000));
+          status = await BitbucketIntegrationService.getChangeGatingBulkJob(job.task_id);
+          consecutiveErrors = 0;
+        } catch (pollError) {
+          if (++consecutiveErrors >= 3) throw pollError;
+          await new Promise(r => setTimeout(r, 2000));
         }
-        await new Promise(r => setTimeout(r, 2000));
-        status = await BitbucketIntegrationService.getChangeGatingBulkJob(job.task_id);
       }
       if (status.complete && status.error) throw new Error(status.status || 'Failed to update Incident Prevention');
       const result = status.result;
@@ -179,7 +189,8 @@ export default function BitbucketWorkspaceBrowser() {
             manual_count: manual.length,
           });
         } else {
-          toast({ title: `Incident Prevention enabled on ${names.length} repo${names.length === 1 ? '' : 's'}` });
+          const succeeded = result?.results.filter(r => !r.error).length ?? names.length;
+          toast({ title: `Incident Prevention enabled on ${succeeded} repo${succeeded === 1 ? '' : 's'}` });
         }
         const skipped = result?.results.filter(r => r.error === 'no_default_branch').length ?? 0;
         if (skipped) {
@@ -620,8 +631,9 @@ export default function BitbucketWorkspaceBrowser() {
           ) : repos.length > 0 ? (
             <div className="space-y-1">
               <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+                <Search aria-hidden="true" className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
                 <Input
+                  aria-label="Filter repositories"
                   placeholder="Filter repositories..."
                   value={searchFilter}
                   onChange={(e) => setSearchFilter(e.target.value)}
