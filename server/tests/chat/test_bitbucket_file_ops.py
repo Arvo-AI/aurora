@@ -68,6 +68,7 @@ def _read_all_pages(content: str) -> tuple[list[str], list[str]]:
         start_line = int(m.group(4))
         start_char = int(m.group(5)) if m.group(5) else 0
     pytest.fail("paging did not terminate")
+    raise AssertionError("unreachable")  # pytest.fail raises; appeases linters
 
 
 # ---------------------------------------------------------------------------
@@ -702,3 +703,15 @@ def test_declared_charset_is_honored(monkeypatch):
     client = bb_api.BitbucketAPIClient("tok")
     result = client.get_file_contents("ws", "r", "cfg.py", commit=_SHA)
     assert result["content"] == "café\n"
+
+
+def test_regex_fallback_timeout_is_cancellable_and_loud(monkeypatch):
+    # A catastrophic pattern must surface as _RegexSearchTimeout at the
+    # deadline (with the regex module, the engine itself stops mid-match
+    # instead of burning an abandoned thread).
+    if repos_tool._regex_mod is None:
+        pytest.skip("regex module not installed")
+    monkeypatch.setattr(repos_tool, "_FIND_REGEX_TIMEOUT_S", 0.2)
+    content = "x" * 5000 + "\nno match here"
+    with pytest.raises(repos_tool._RegexSearchTimeout, match="timed out"):
+        repos_tool._find_in_content(content, r"(x+)+z")
