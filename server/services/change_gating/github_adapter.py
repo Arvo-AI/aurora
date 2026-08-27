@@ -256,11 +256,13 @@ class GitHubPRAdapter:
         pr_number: int,
         *,
         commit_id: str,
-        event: str,
         body: str,
         comments: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """POST a PR review (APPROVE or COMMENT) with optional inline comments.
+        """POST a COMMENT PR review with optional inline comments.
+
+        The event is hardcoded to COMMENT — Aurora never approves a PR,
+        so no caller can turn the verdict into an approval.
 
         Each comment is ``{"path", "line", "side": "RIGHT", "body"}``.
         GitHub 422s when any inline comment falls outside the diff hunks;
@@ -270,7 +272,7 @@ class GitHubPRAdapter:
         path = f"/pulls/{pr_number}/reviews"
         payload = {
             "commit_id": commit_id,
-            "event": event,
+            "event": "COMMENT",
             "body": body,
             "comments": comments,
         }
