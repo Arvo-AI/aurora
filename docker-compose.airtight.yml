@@ -268,6 +268,7 @@ services:
       celery -A celery_config worker
         --loglevel=info
         --concurrency=${CELERY_CONCURRENCY:-4}
+        -Q high,celery
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: celery-worker
@@ -276,6 +277,7 @@ services:
       FRONTEND_URL: ${FRONTEND_URL}
       BACKEND_URL: ${BACKEND_URL}
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
+      NGROK_URL: ${NGROK_URL}
       AURORA_SETUP_CACHE_ENABLED: ${AURORA_SETUP_CACHE_ENABLED}
       AURORA_SETUP_CACHE_TTL: ${AURORA_SETUP_CACHE_TTL}
       AURORA_VERIFY_CLI_IDENTITY: ${AURORA_VERIFY_CLI_IDENTITY}

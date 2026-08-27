@@ -304,6 +304,7 @@ services:
       celery -A celery_config worker
         --loglevel=info
         --concurrency=${CELERY_CONCURRENCY:-4}
+        -Q high,celery
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: celery-worker
@@ -314,6 +315,7 @@ services:
       FRONTEND_URL: ${FRONTEND_URL}
       BACKEND_URL: ${BACKEND_URL}
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
+      NGROK_URL: ${NGROK_URL}
 
       # Cloud Provider Cache Settings (applies to all providers)
       AURORA_SETUP_CACHE_ENABLED: ${AURORA_SETUP_CACHE_ENABLED}
