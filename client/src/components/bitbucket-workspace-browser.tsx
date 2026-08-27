@@ -161,6 +161,28 @@ export default function BitbucketWorkspaceBrowser() {
             // Disable is done once the DB flag is off. Hook deletes keep
             // running in the worker; the UI does not wait on them.
             if (!enabled && names.every(n => !updated.find(r => r.full_name === n)?.change_gating_enabled)) {
+              void (async () => {
+                const cleanupDeadline = Date.now() + 10 * 60 * 1000;
+                while (Date.now() < cleanupDeadline) {
+                  try {
+                    const cleanupStatus = await BitbucketIntegrationService.getChangeGatingBulkJob(job.task_id);
+                    if (!cleanupStatus.complete) {
+                      await new Promise(r => setTimeout(r, 2000));
+                      continue;
+                    }
+                    if (cleanupStatus.result?.webhook_cleanup_failed) {
+                      toast({
+                        title: "Some webhooks couldn't be removed",
+                        description: "No PRs will be reviewed, but remove them in Repository settings to stop Bitbucket sending events.",
+                        variant: "destructive",
+                      });
+                    }
+                    return;
+                  } catch {
+                    return;
+                  }
+                }
+              })();
               break;
             }
           }
