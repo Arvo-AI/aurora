@@ -2369,10 +2369,12 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             _bb_read_only = _is_rca_background or is_pr_review
             _ro_reason = "PR review" if is_pr_review else "RCA"
 
-            # PR change-gating reviews are strictly read-only: the review
-            # agent must never merge/approve/decline PRs, push files, or
-            # trigger pipelines. Reuse the RCA read-only descriptor set
-            # (minus bitbucket_fix, which is RCA-card-only — see below).
+            # PR change-gating reviews AND background RCA are both hard
+            # read-only for Bitbucket writes: the agent must never
+            # merge/approve/decline PRs, push files, or trigger pipelines.
+            # The shared read-only descriptor set below (minus bitbucket_fix,
+            # which is RCA-card-only — see below) is backed by the
+            # _bb_read_only_gate function-level rejection in both modes.
             if _bb_read_only:
                 _bb_tools = [
                     (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,

@@ -715,3 +715,24 @@ def test_regex_fallback_timeout_is_cancellable_and_loud(monkeypatch):
     content = "x" * 5000 + "\nno match here"
     with pytest.raises(repos_tool._RegexSearchTimeout, match="timed out"):
         repos_tool._find_in_content(content, r"(x+)+z")
+
+
+def test_invalid_regex_with_no_literal_match_is_a_loud_error(fake_bb):
+    # An unclosed bracket that also never occurs literally is a bad
+    # argument, not a genuine zero-match result — the model must be told
+    # to fix the query instead of concluding the code isn't there.
+    fake_bb.content = "alpha\nbeta\n"
+    out = json.loads(bitbucket_repos(
+        action="find_in_file", workspace="ws", repo_slug="r",
+        path="f.txt", query="gamma[", user_id="u1",
+    ))
+    assert out.get("error") is True
+    assert "does not compile" in out["message"]
+    # ...but the same broken pattern that DOES occur literally still matches.
+    fake_bb.content = "x = gamma[0]\n"
+    out = json.loads(bitbucket_repos(
+        action="find_in_file", workspace="ws", repo_slug="r",
+        path="f.txt", query="gamma[", user_id="u1",
+    ))
+    assert out.get("success") is True
+    assert out["total_matches"] == 1

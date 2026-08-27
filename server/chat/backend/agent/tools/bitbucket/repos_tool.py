@@ -95,6 +95,19 @@ class _RegexSearchTimeout(Exception):
     """Raised when a find_in_file regex scan exceeds its deadline."""
 
 
+class _InvalidFindQuery(Exception):
+    """Raised when a find_in_file query has no literal matches AND does not
+    compile as a regex — a bad argument, not a genuine zero-match result."""
+
+
+def _invalid_query_message(query: str, exc) -> str:
+    return (
+        f"No literal matches for {query!r}, and it does not compile as a "
+        f"regex ({exc}). Fix the pattern, or search for an exact code snippet "
+        "copied from the file."
+    )
+
+
 def _scan_lines(lines: list, matches) -> tuple[list[str], int]:
     """Scan ``lines`` with predicate ``matches``; format up to the cap."""
     formatted: list[str] = []
@@ -124,8 +137,8 @@ def _regex_scan_with_module_timeout(lines: list, query: str) -> tuple[list[str],
     thread."""
     try:
         pattern = _regex_mod.compile(query)
-    except _regex_mod.error:
-        return [], 0  # not a regex either — genuinely no matches
+    except _regex_mod.error as exc:
+        raise _InvalidFindQuery(_invalid_query_message(query, exc)) from None
 
     deadline = time.monotonic() + _FIND_REGEX_TIMEOUT_S
 
@@ -150,8 +163,8 @@ def _regex_scan_with_thread_deadline(lines: list, query: str) -> tuple[list[str]
     call's line list."""
     try:
         pattern = re.compile(query)
-    except re.error:
-        return [], 0  # not a regex either — genuinely no matches
+    except re.error as exc:
+        raise _InvalidFindQuery(_invalid_query_message(query, exc)) from None
 
     outcome: dict = {}
 
@@ -181,7 +194,9 @@ def _find_in_content(file_content: str, query: str) -> tuple[list[str], int]:
     when the query never occurs literally is it tried as a regex, under a
     hard deadline: via the ``regex`` module's native timeout when available
     (truly cancellable mid-match), else a daemon-thread deadline. Both raise
-    _RegexSearchTimeout on overrun. At most _FIND_MAX_MATCHES lines are
+    _RegexSearchTimeout on overrun; a query that also fails to compile
+    raises _InvalidFindQuery (a bad argument, distinct from a genuine
+    zero-match result). At most _FIND_MAX_MATCHES lines are
     formatted as ``L<line_no>: <line>`` (truncated), so the output stays
     small.
     """
@@ -332,7 +347,7 @@ def bitbucket_repos(
                 return build_error_response(f"'{path}' is not a readable file")
             try:
                 matches, total = _find_in_content(file_content, query)
-            except _RegexSearchTimeout as exc:
+            except (_RegexSearchTimeout, _InvalidFindQuery) as exc:
                 return build_error_response(str(exc))
             read_commit = result.get("commit")
             pin = f" commit={read_commit}" if is_full_commit_sha(read_commit) else ""

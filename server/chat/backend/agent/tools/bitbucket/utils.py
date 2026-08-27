@@ -23,7 +23,7 @@ DIFF_TRUNCATE_LIMIT = 50_000
 # tool_output_cap.PASS_THROUGH_CHARS with a 10K margin for the JSON envelope,
 # so a file read is returned verbatim and never replaced by an LLM summary —
 # even if the pass-through threshold is later lowered.
-PAGE_CONTENT_BUDGET = min(30_000, _PASS_THROUGH_CHARS - 10_000)
+PAGE_CONTENT_BUDGET = max(1, min(30_000, _PASS_THROUGH_CHARS - 10_000))
 
 _SHA40_RE = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 # Mirrors api_client._COMMIT_SHA_RE: what _resolve_commit passes through as-is.
