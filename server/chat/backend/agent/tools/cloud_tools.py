@@ -1005,6 +1005,40 @@ def _is_background_rca(state_context, is_background: bool) -> bool:
     return bool(rca_source) and rca_source not in _NON_RCA_SOURCES
 
 
+# Bitbucket tool actions that mutate state. Read-only sessions (PR change-
+# gating reviews, background RCA) hard-reject these at the tool FUNCTION
+# level — not just via descriptions — so a prompt-injected diff can't talk
+# the agent into merging/approving/pushing.
+_BB_WRITE_ACTIONS = frozenset({
+    "create_or_update_file", "edit_file", "delete_file",
+    "create_branch", "delete_branch",
+    "create_pr", "update_pr", "merge_pr", "approve_pr",
+    "unapprove_pr", "decline_pr", "add_pr_comment",
+    "create_issue", "update_issue", "add_issue_comment",
+    "trigger_pipeline", "stop_pipeline",
+})
+
+
+def _bb_read_only_gate(func, tool_name, reason):
+    """Wrap a Bitbucket tool so write actions are rejected during read-only
+    sessions. ``reason`` names the session type in the error ("PR review",
+    "RCA")."""
+    def gated(*args, **kwargs):
+        _action = kwargs.get("action") or (args[0] if args else None)
+        if _action in _BB_WRITE_ACTIONS:
+            return json.dumps({
+                "error": True,
+                "message": (
+                    f"Action '{_action}' is not permitted: {reason} "
+                    "sessions are read-only on Bitbucket."
+                ),
+            })
+        return func(*args, **kwargs)
+    gated.__name__ = getattr(func, "__name__", tool_name)
+    gated.__doc__ = func.__doc__
+    return gated
+
+
 def get_cloud_tools():
     """Get all cloud management tools including both Aurora native tools and REAL MCP tools."""
     # Import required classes at function start to avoid scope issues
@@ -2332,19 +2366,24 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             )
 
             _is_rca_background = _is_background_rca(state_context, is_background)
+            _bb_read_only = _is_rca_background or is_pr_review
+            _ro_reason = "PR review" if is_pr_review else "RCA"
 
-            # PR change-gating reviews are strictly read-only: the review
-            # agent must never merge/approve/decline PRs, push files, or
-            # trigger pipelines. Reuse the RCA read-only descriptor set
-            # (minus bitbucket_fix, which is RCA-card-only — see below).
-            if _is_rca_background or is_pr_review:
-                _ro_reason = "PR review" if is_pr_review else "RCA"
+            # PR change-gating reviews AND background RCA are both hard
+            # read-only for Bitbucket writes: the agent must never
+            # merge/approve/decline PRs, push files, or trigger pipelines.
+            # The shared read-only descriptor set below (minus bitbucket_fix,
+            # which is RCA-card-only — see below) is backed by the
+            # _bb_read_only_gate function-level rejection in both modes.
+            if _bb_read_only:
                 _bb_tools = [
                     (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
                      f"Query Bitbucket repositories and files (READ-ONLY during {_ro_reason}). "
-                     "Actions: list_repos, get_repo, get_file_contents, get_directory_tree, "
-                     "search_code, list_workspaces, get_workspace. "
-                     "Do NOT use create_or_update_file or delete_file."),
+                     "Actions: list_repos, get_repo, get_file_contents, find_in_file, "
+                     "get_directory_tree, search_code, list_workspaces, get_workspace. "
+                     "Large files come back in verbatim pages — follow the start_line "
+                     "continue hint in the page header; use find_in_file to locate lines. "
+                     "Do NOT use edit_file, create_or_update_file, or delete_file."),
                     (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
                      f"Query Bitbucket branches and commits (READ-ONLY during {_ro_reason}). "
                      "Actions: list_branches, list_commits, get_commit, get_diff, compare. "
@@ -2362,9 +2401,14 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 _bb_tools = [
                     (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
                      "Manage Bitbucket repositories, files, and code. Actions: list_repos, get_repo, "
-                     "get_file_contents, create_or_update_file, delete_file, get_directory_tree, "
-                     "search_code, list_workspaces, get_workspace. Workspace and repo auto-resolve "
-                     "from saved selection if not specified."),
+                     "get_file_contents, find_in_file, edit_file, create_or_update_file, delete_file, "
+                     "get_directory_tree, search_code, list_workspaces, get_workspace. "
+                     "Prefer edit_file (anchored old_string/new_string edits applied server-side "
+                     "against the current file) for existing files; use create_or_update_file only "
+                     "for brand-new files. Large files come back in verbatim pages — follow the "
+                     "start_line/start_char continue hint in the page header; use find_in_file to "
+                     "locate lines, then get_file_contents with start_line to read that region. "
+                     "Workspace and repo auto-resolve from saved selection if not specified."),
                     (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
                      "Manage Bitbucket branches and view commits/diffs. Actions: list_branches, create_branch, "
                      "delete_branch, list_commits, get_commit, get_diff, compare."),
@@ -2379,37 +2423,12 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                      "Manage Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
                      "trigger_pipeline, stop_pipeline, list_pipeline_steps, get_step_log, get_pipeline_step."),
                 ]
-            # Hard gate (not just descriptions): during a PR review the tool
-            # FUNCTIONS reject Bitbucket write actions, so a prompt-injected
-            # diff can't talk the agent into merging/approving/pushing.
-            _BB_WRITE_ACTIONS = {
-                "create_or_update_file", "delete_file",
-                "create_branch", "delete_branch",
-                "create_pr", "update_pr", "merge_pr", "approve_pr",
-                "unapprove_pr", "decline_pr", "add_pr_comment",
-                "create_issue", "update_issue", "add_issue_comment",
-                "trigger_pipeline", "stop_pipeline",
-            }
-
-            def _read_only_gate(func, tool_name):
-                def gated(*args, **kwargs):
-                    _action = kwargs.get("action") or (args[0] if args else None)
-                    if _action in _BB_WRITE_ACTIONS:
-                        return json.dumps({
-                            "error": True,
-                            "message": (
-                                f"Action '{_action}' is not permitted: PR risk "
-                                "reviews are read-only on Bitbucket."
-                            ),
-                        })
-                    return func(*args, **kwargs)
-                gated.__name__ = getattr(func, "__name__", tool_name)
-                gated.__doc__ = func.__doc__
-                return gated
-
+            # Hard gate (not just descriptions): during a PR review or a
+            # background RCA the tool FUNCTIONS reject Bitbucket write
+            # actions (_bb_read_only_gate / _BB_WRITE_ACTIONS, module level).
             for _func, _name, _schema, _desc in _bb_tools:
-                if is_pr_review:
-                    _func = _read_only_gate(_func, _name)
+                if _bb_read_only:
+                    _func = _bb_read_only_gate(_func, _name, _ro_reason)
                 _ctx = with_user_context(_func)
                 _notif = with_completion_notification(_ctx)
                 _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
