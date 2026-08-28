@@ -266,6 +266,13 @@ config:
   SUMMARIZATION_MODEL: ""
   # Model used by the Next Steps enrichment pass (rationale, undo commands, safety labels). Empty = falls back to MAIN_MODEL.
   ENRICHMENT_MODEL: ""
+  # Root-cause recurrence detection (dedup layer 1): off | shadow | live.
+  RECURRENCE_DETECTION_MODE: "off"
+  # Wall-clock budget (seconds) for one recurrence check; keep well under the
+  # summarization task's soft time limit (330s) minus summary work.
+  RECURRENCE_AGENT_TIMEOUT_SECONDS: "120"
+  # Model for the recurrence agent. Empty = falls back to MAIN_MODEL.
+  RECURRENCE_AGENT_MODEL: ""
 
   # --- AWS Bedrock (non-secret config; credentials live in secrets.llm) ---
   # Gateway mode: set BEDROCK_BASE_URL to an OpenAI-compatible endpoint in front of

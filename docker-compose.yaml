@@ -74,6 +74,11 @@ x-common-env: &common-env
   AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
   GEMINI_DISABLE_THINKING: ${GEMINI_DISABLE_THINKING}
 
+  # Root-cause recurrence detection (dedup layer 1): off | shadow | live
+  RECURRENCE_DETECTION_MODE: ${RECURRENCE_DETECTION_MODE:-off}
+  RECURRENCE_AGENT_TIMEOUT_SECONDS: ${RECURRENCE_AGENT_TIMEOUT_SECONDS:-120}
+  RECURRENCE_AGENT_MODEL: ${RECURRENCE_AGENT_MODEL}
+
   # GitHub auth — every Aurora service that talks to GitHub (server,
   # celery_worker, chatbot) needs the auth mode + App credentials to mint
   # installation tokens. OAuth client credentials are also shared so the
