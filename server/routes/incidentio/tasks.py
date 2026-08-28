@@ -156,20 +156,19 @@ def _try_correlate(cursor, conn, *, user_id, alert_db_id, fields, service,
             alert_service=service, alert_severity=normalized_severity,
             alert_metadata=alert_metadata, org_id=org_id,
         )
-        if result.is_correlated:
-            if apply_correlation_outcome(
-                cursor=cursor, user_id=user_id, incident_id=result.incident_id,
-                source_type="incidentio", source_alert_id=alert_db_id,
-                alert_title=fields["incident_name"], alert_service=service,
-                alert_severity=normalized_severity, correlation_result=result,
-                alert_metadata=alert_metadata, raw_payload=payload, org_id=org_id,
-                # Live hint-only mode needs the fall-through to actually create
-                # an incident; with RCA disabled it would not, so keep the
-                # legacy attach in that case.
-                hint_only_eligible=_should_trigger_rca(user_id),
-            ):
-                conn.commit()
-                return True
+        if result.is_correlated and apply_correlation_outcome(
+            cursor=cursor, user_id=user_id, incident_id=result.incident_id,
+            source_type="incidentio", source_alert_id=alert_db_id,
+            alert_title=fields["incident_name"], alert_service=service,
+            alert_severity=normalized_severity, correlation_result=result,
+            alert_metadata=alert_metadata, raw_payload=payload, org_id=org_id,
+            # Live hint-only mode needs the fall-through to actually create
+            # an incident; with RCA disabled it would not, so keep the
+            # legacy attach in that case.
+            hint_only_eligible=_should_trigger_rca(user_id),
+        ):
+            conn.commit()
+            return True
         cursor.execute("RELEASE SAVEPOINT sp_correlation")
     except Exception as corr_exc:
         cursor.execute("ROLLBACK TO SAVEPOINT sp_correlation")

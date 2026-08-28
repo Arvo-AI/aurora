@@ -158,23 +158,22 @@ def process_netdata_alert(
                                 org_id=org_id,
                             )
 
-                            if correlation_result.is_correlated:
-                                if apply_correlation_outcome(
-                                    cursor=cursor,
-                                    user_id=user_id,
-                                    incident_id=correlation_result.incident_id,
-                                    source_type="netdata",
-                                    source_alert_id=alert_id,
-                                    alert_title=data["name"],
-                                    alert_service=service,
-                                    alert_severity=severity,
-                                    correlation_result=correlation_result,
-                                    alert_metadata=alert_metadata,
-                                    raw_payload=payload,
-                                    org_id=org_id,
-                                ):
-                                    conn.commit()
-                                    return
+                            if correlation_result.is_correlated and apply_correlation_outcome(
+                                cursor=cursor,
+                                user_id=user_id,
+                                incident_id=correlation_result.incident_id,
+                                source_type="netdata",
+                                source_alert_id=alert_id,
+                                alert_title=data["name"],
+                                alert_service=service,
+                                alert_severity=severity,
+                                correlation_result=correlation_result,
+                                alert_metadata=alert_metadata,
+                                raw_payload=payload,
+                                org_id=org_id,
+                            ):
+                                conn.commit()
+                                return
                         except Exception as corr_exc:
                             logger.warning(
                                 "[NETDATA] Correlation check failed, proceeding with normal flow: %s",

@@ -193,38 +193,37 @@ def process_jenkins_deployment(
                             org_id=org_id,
                         )
 
-                        if correlation_result.is_correlated:
-                            if apply_correlation_outcome(
-                                cursor=cursor,
-                                user_id=user_id,
-                                incident_id=correlation_result.incident_id,
-                                source_type=source,
-                                source_alert_id=alert_id,
-                                alert_title=alert_title,
-                                alert_service=service,
-                                alert_severity=severity,
-                                correlation_result=correlation_result,
-                                alert_metadata=alert_metadata,
-                                raw_payload=payload,
-                                org_id=org_id,
-                                # Live hint-only mode needs the fall-through to
-                                # actually create an incident; only FAILURE and
-                                # UNSTABLE do (see below), so other correlated
-                                # results (ABORTED, ...) keep the legacy attach.
-                                hint_only_eligible=result in ("FAILURE", "UNSTABLE"),
-                            ):
-                                conn.commit()
-                                logger.info(
-                                    "%s Correlated with incident %s",
-                                    log_prefix, correlation_result.incident_id,
-                                )
+                        if correlation_result.is_correlated and apply_correlation_outcome(
+                            cursor=cursor,
+                            user_id=user_id,
+                            incident_id=correlation_result.incident_id,
+                            source_type=source,
+                            source_alert_id=alert_id,
+                            alert_title=alert_title,
+                            alert_service=service,
+                            alert_severity=severity,
+                            correlation_result=correlation_result,
+                            alert_metadata=alert_metadata,
+                            raw_payload=payload,
+                            org_id=org_id,
+                            # Live hint-only mode needs the fall-through to
+                            # actually create an incident; only FAILURE and
+                            # UNSTABLE do (see below), so other correlated
+                            # results (ABORTED, ...) keep the legacy attach.
+                            hint_only_eligible=result in ("FAILURE", "UNSTABLE"),
+                        ):
+                            conn.commit()
+                            logger.info(
+                                "%s Correlated with incident %s",
+                                log_prefix, correlation_result.incident_id,
+                            )
 
-                                _inject_rca_context(
-                                    cursor, conn, user_id, correlation_result.incident_id,
-                                    service, result, environment, git, build_url, deployer,
-                                    trace_id, alert_title, source,
-                                )
-                                return
+                            _inject_rca_context(
+                                cursor, conn, user_id, correlation_result.incident_id,
+                                service, result, environment, git, build_url, deployer,
+                                trace_id, alert_title, source,
+                            )
+                            return
 
                         cursor.execute("RELEASE SAVEPOINT correlation_sp")
                     except Exception as corr_exc:

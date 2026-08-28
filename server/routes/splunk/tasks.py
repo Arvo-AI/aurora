@@ -190,30 +190,29 @@ def process_splunk_alert(
                                 org_id=org_id,
                             )
 
-                            if correlation_result.is_correlated:
-                                if apply_correlation_outcome(
-                                    cursor=cursor,
-                                    user_id=user_id,
-                                    incident_id=correlation_result.incident_id,
-                                    source_type="splunk",
-                                    source_alert_id=alert_db_id,
-                                    alert_title=correlation_title,
-                                    alert_service=service,
-                                    alert_severity=severity,
-                                    correlation_result=correlation_result,
-                                    alert_metadata=alert_metadata,
-                                    raw_payload=payload,
-                                    org_id=org_id,
-                                    # Live hint-only mode needs the fall-through
-                                    # to actually create an incident; with RCA
-                                    # disabled it would not, so keep the legacy
-                                    # attach in that case.
-                                    hint_only_eligible=_should_trigger_background_chat(
-                                        user_id, payload
-                                    ),
-                                ):
-                                    conn.commit()
-                                    return
+                            if correlation_result.is_correlated and apply_correlation_outcome(
+                                cursor=cursor,
+                                user_id=user_id,
+                                incident_id=correlation_result.incident_id,
+                                source_type="splunk",
+                                source_alert_id=alert_db_id,
+                                alert_title=correlation_title,
+                                alert_service=service,
+                                alert_severity=severity,
+                                correlation_result=correlation_result,
+                                alert_metadata=alert_metadata,
+                                raw_payload=payload,
+                                org_id=org_id,
+                                # Live hint-only mode needs the fall-through
+                                # to actually create an incident; with RCA
+                                # disabled it would not, so keep the legacy
+                                # attach in that case.
+                                hint_only_eligible=_should_trigger_background_chat(
+                                    user_id, payload
+                                ),
+                            ):
+                                conn.commit()
+                                return
                         except Exception as corr_exc:
                             logger.warning(
                                 "[SPLUNK] Correlation check failed, proceeding with normal flow: %s",

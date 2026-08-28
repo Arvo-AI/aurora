@@ -178,20 +178,19 @@ def process_bigpanda_event(
                     alert_service=service, alert_severity=severity,
                     alert_metadata=alert_metadata, org_id=org_id,
                 )
-                if result.is_correlated:
-                    if apply_correlation_outcome(
-                        cursor=cursor, user_id=user_id, incident_id=result.incident_id,
-                        source_type="bigpanda", source_alert_id=alert_db_id,
-                        alert_title=title, alert_service=service, alert_severity=severity,
-                        correlation_result=result, alert_metadata=alert_metadata,
-                        raw_payload=raw_payload, org_id=org_id,
-                        # Live hint-only mode needs the fall-through to actually
-                        # create an incident; with RCA disabled it would not, so
-                        # keep the legacy attach in that case.
-                        hint_only_eligible=_should_trigger_rca(user_id),
-                    ):
-                        conn.commit()
-                        return
+                if result.is_correlated and apply_correlation_outcome(
+                    cursor=cursor, user_id=user_id, incident_id=result.incident_id,
+                    source_type="bigpanda", source_alert_id=alert_db_id,
+                    alert_title=title, alert_service=service, alert_severity=severity,
+                    correlation_result=result, alert_metadata=alert_metadata,
+                    raw_payload=raw_payload, org_id=org_id,
+                    # Live hint-only mode needs the fall-through to actually
+                    # create an incident; with RCA disabled it would not, so
+                    # keep the legacy attach in that case.
+                    hint_only_eligible=_should_trigger_rca(user_id),
+                ):
+                    conn.commit()
+                    return
             except Exception as corr_exc:
                 logger.warning("[BIGPANDA] Correlation failed, proceeding: %s", corr_exc)
 

@@ -613,23 +613,22 @@ def process_pagerduty_event(
                             org_id=org_id,
                         )
 
-                        if correlation_result.is_correlated:
-                            if apply_correlation_outcome(
-                                cursor=cursor,
-                                user_id=user_id,
-                                incident_id=correlation_result.incident_id,
-                                source_type="pagerduty",
-                                source_alert_id=event_db_id,
-                                alert_title=incident_title,
-                                alert_service=service_name,
-                                alert_severity=severity,
-                                correlation_result=correlation_result,
-                                alert_metadata=alert_metadata,
-                                raw_payload=raw_payload,
-                                org_id=org_id,
-                            ):
-                                conn.commit()
-                                return
+                        if correlation_result.is_correlated and apply_correlation_outcome(
+                            cursor=cursor,
+                            user_id=user_id,
+                            incident_id=correlation_result.incident_id,
+                            source_type="pagerduty",
+                            source_alert_id=event_db_id,
+                            alert_title=incident_title,
+                            alert_service=service_name,
+                            alert_severity=severity,
+                            correlation_result=correlation_result,
+                            alert_metadata=alert_metadata,
+                            raw_payload=raw_payload,
+                            org_id=org_id,
+                        ):
+                            conn.commit()
+                            return
                     except Exception as corr_exc:
                         logger.warning(
                             "[PAGERDUTY] Correlation check failed, proceeding with normal flow: %s",
