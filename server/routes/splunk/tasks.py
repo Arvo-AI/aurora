@@ -175,6 +175,7 @@ def process_splunk_alert(
                             alert_metadata["owner"] = payload.get("owner")
 
                         correlation_title = alert_title or "Unknown Alert"
+                        rca_enabled = _should_trigger_background_chat(user_id, payload)
 
                         try:
                             correlator = AlertCorrelator()
@@ -207,9 +208,7 @@ def process_splunk_alert(
                                 # to actually create an incident; with RCA
                                 # disabled it would not, so keep the legacy
                                 # attach in that case.
-                                hint_only_eligible=_should_trigger_background_chat(
-                                    user_id, payload
-                                ),
+                                hint_only_eligible=rca_enabled,
                             ):
                                 conn.commit()
                                 return
@@ -220,7 +219,7 @@ def process_splunk_alert(
                             )
 
                         # Check if RCA is enabled before creating incident
-                        if not _should_trigger_background_chat(user_id, payload):
+                        if not rca_enabled:
                             # RCA disabled - just commit the alert and return
                             conn.commit()
                             logger.info(
