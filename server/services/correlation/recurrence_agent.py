@@ -464,6 +464,124 @@ async def _run_agent(
             logger.exception("%s Failed to close postgres client", _LOG_PREFIX)
 
 
+def _execute_agent_check(
+    *,
+    incident_id: str,
+    user_id: str,
+    session_id: Optional[str],
+    ctx: Dict[str, Any],
+    decision_point: str,
+) -> Tuple[Optional[RecurrenceVerdict], Optional[str]]:
+    """Run the agent under the wall-clock budget; return (verdict, reject).
+
+    Re-raises SoftTimeLimitExceeded so the caller's degrade path handles it.
+    """
+    captured: Dict[str, Any] = {}
+    reject: Optional[str] = None
+    try:
+        asyncio.run(
+            asyncio.wait_for(
+                _run_agent(
+                    incident_id=str(incident_id),
+                    user_id=user_id,
+                    session_id=session_id,
+                    org_id=ctx.get("org_id"),
+                    ctx=ctx,
+                    decision_point=decision_point,
+                    captured=captured,
+                ),
+                timeout=get_agent_timeout_seconds(),
+            )
+        )
+    except (asyncio.TimeoutError, TimeoutError):
+        if "verdict" not in captured:
+            reject = REJECT_TIMEOUT
+        logger.warning(
+            "%s Recurrence check timed out for incident %s (verdict_captured=%s)",
+            _LOG_PREFIX, incident_id, "verdict" in captured,
+        )
+    except Exception as exc:
+        if _SoftTimeLimit is not None and isinstance(exc, _SoftTimeLimit):
+            # Celery's soft limit fired mid-agent: stop all recurrence work
+            # now — the outer handler degrades to standalone so the caller
+            # can still notify inside the soft-to-hard margin.
+            raise
+        if "verdict" not in captured:
+            reject = REJECT_ERROR
+        logger.exception(
+            "%s Recurrence agent failed for incident %s (verdict_captured=%s)",
+            _LOG_PREFIX, incident_id, "verdict" in captured,
+        )
+
+    verdict: Optional[RecurrenceVerdict] = captured.get("verdict")
+    if verdict is None and reject is None:
+        reject = REJECT_NO_VERDICT
+    return verdict, reject
+
+
+def _apply_verdict_outcome(
+    *,
+    incident_id: str,
+    user_id: str,
+    mode: str,
+    decision_point: str,
+    verdict: Optional[RecurrenceVerdict],
+    reject: Optional[str],
+    correlator_score: Optional[float],
+    elapsed_ms: int,
+    model: Optional[str],
+) -> None:
+    """Clamp the claim, then fold (live) or persist the verdict row."""
+    claimed = verdict.recurrence_of if verdict else None
+    reasoning = verdict.reasoning if verdict else None
+
+    accepted: Optional[str] = None
+    if reject is None and claimed:
+        accepted, reject = _clamp_claimed_id(claimed, str(incident_id), user_id)
+
+    if mode == MODE_LIVE and accepted:
+        # Pass the verbatim claim — fold_incident re-validates, resolves the
+        # group root itself, and records claimed vs accepted separately.
+        result = fold_incident(
+            incident_id=str(incident_id),
+            user_id=user_id,
+            claimed_recurrence_of=claimed,
+            reasoning=reasoning or "",
+            mode=mode,
+            decision_point=decision_point,
+            correlator_score=correlator_score,
+            elapsed_ms=elapsed_ms,
+            model=model,
+        )
+        logger.info(
+            "%s Live verdict for incident %s: folded=%s root=%s reject=%s (%dms)",
+            _LOG_PREFIX, incident_id, result.folded, result.root_id,
+            result.reject_reason, elapsed_ms,
+        )
+        return
+
+    if accepted:
+        # Same convention the rule correlator uses for its shadow decisions.
+        logger.info(
+            "[CORRELATION][SHADOW] Would fold incident %s into %s (recurrence agent, %dms)",
+            incident_id, accepted, elapsed_ms,
+        )
+    persist_verdict(
+        user_id,
+        incident_id=str(incident_id),
+        decision_point=decision_point,
+        mode=mode,
+        claimed_recurrence_of=claimed,
+        accepted_recurrence_of=accepted,
+        reasoning=reasoning,
+        correlator_score=correlator_score,
+        folded=False,
+        reject_reason=reject,
+        elapsed_ms=elapsed_ms,
+        model=model,
+    )
+
+
 def run_recurrence_check(
     *,
     incident_id: str,
@@ -484,8 +602,7 @@ def run_recurrence_check(
         if mode == MODE_OFF:
             return
 
-        existing = get_existing_verdict(incident_id, user_id, decision_point)
-        if existing:
+        if get_existing_verdict(incident_id, user_id, decision_point):
             logger.info(
                 "%s Verdict already exists for incident %s (%s); skipping re-run",
                 _LOG_PREFIX, incident_id, decision_point,
@@ -495,121 +612,43 @@ def run_recurrence_check(
         ctx = _fetch_incident_context(incident_id, user_id)
         if not ctx:
             return
-        correlator_score = (ctx.get("hint") or {}).get("score")
 
         from chat.backend.agent.llm import ModelConfig
-        model = ModelConfig.RECURRENCE_AGENT_MODEL
 
-        captured: Dict[str, Any] = {}
-        reject: Optional[str] = None
-        try:
-            asyncio.run(
-                asyncio.wait_for(
-                    _run_agent(
-                        incident_id=str(incident_id),
-                        user_id=user_id,
-                        session_id=session_id,
-                        org_id=ctx.get("org_id"),
-                        ctx=ctx,
-                        decision_point=decision_point,
-                        captured=captured,
-                    ),
-                    timeout=get_agent_timeout_seconds(),
-                )
-            )
-        except (asyncio.TimeoutError, TimeoutError):
-            if "verdict" not in captured:
-                reject = REJECT_TIMEOUT
-            logger.warning(
-                "%s Recurrence check timed out for incident %s (verdict_captured=%s)",
-                _LOG_PREFIX, incident_id, "verdict" in captured,
-            )
-        except Exception as exc:
-            if _SoftTimeLimit is not None and isinstance(exc, _SoftTimeLimit):
-                # Celery's soft limit fired mid-agent: stop all recurrence work
-                # now — the outer handler degrades to standalone so the caller
-                # can still notify inside the soft-to-hard margin.
-                raise
-            if "verdict" not in captured:
-                reject = REJECT_ERROR
-            logger.exception(
-                "%s Recurrence agent failed for incident %s (verdict_captured=%s)",
-                _LOG_PREFIX, incident_id, "verdict" in captured,
-            )
-
-        verdict: Optional[RecurrenceVerdict] = captured.get("verdict")
-        if verdict is None and reject is None:
-            reject = REJECT_NO_VERDICT
-
-        elapsed_ms = int((time.monotonic() - started) * 1000)
-        claimed = verdict.recurrence_of if verdict else None
-        reasoning = verdict.reasoning if verdict else None
-
-        accepted: Optional[str] = None
-        if reject is None and claimed:
-            accepted, reject = _clamp_claimed_id(claimed, str(incident_id), user_id)
-
-        if mode == MODE_LIVE and accepted:
-            # Pass the verbatim claim — fold_incident re-validates, resolves the
-            # group root itself, and records claimed vs accepted separately.
-            result = fold_incident(
-                incident_id=str(incident_id),
-                user_id=user_id,
-                claimed_recurrence_of=claimed,
-                reasoning=reasoning or "",
-                mode=mode,
-                decision_point=decision_point,
-                correlator_score=correlator_score,
-                elapsed_ms=elapsed_ms,
-                model=model,
-            )
-            logger.info(
-                "%s Live verdict for incident %s: folded=%s root=%s reject=%s (%dms)",
-                _LOG_PREFIX, incident_id, result.folded, result.root_id,
-                result.reject_reason, elapsed_ms,
-            )
-            return
-
-        if accepted:
-            # Same convention the rule correlator uses for its shadow decisions.
-            logger.info(
-                "[CORRELATION][SHADOW] Would fold incident %s into %s (recurrence agent, %dms)",
-                incident_id, accepted, elapsed_ms,
-            )
-        persist_verdict(
-            user_id,
+        verdict, reject = _execute_agent_check(
             incident_id=str(incident_id),
+            user_id=user_id,
+            session_id=session_id,
+            ctx=ctx,
             decision_point=decision_point,
-            mode=mode,
-            claimed_recurrence_of=claimed,
-            accepted_recurrence_of=accepted,
-            reasoning=reasoning,
-            correlator_score=correlator_score,
-            folded=False,
-            reject_reason=reject,
-            elapsed_ms=elapsed_ms,
-            model=model,
         )
-    except BaseException as exc:  # noqa: BLE001 — includes SoftTimeLimitExceeded on some Celery versions
+        _apply_verdict_outcome(
+            incident_id=str(incident_id),
+            user_id=user_id,
+            mode=mode,
+            decision_point=decision_point,
+            verdict=verdict,
+            reject=reject,
+            correlator_score=(ctx.get("hint") or {}).get("score"),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+            model=ModelConfig.RECURRENCE_AGENT_MODEL,
+        )
+    except asyncio.CancelledError:
+        # A cancellation leaking out of asyncio.run is not a process shutdown
+        # signal here — honor the never-raises contract so the caller's
+        # completion notification still goes out.
+        logger.error(
+            "%s Recurrence check cancelled for incident %s; degrading to standalone",
+            _LOG_PREFIX, incident_id,
+        )
+    except Exception as exc:
         if _SoftTimeLimit is not None and isinstance(exc, _SoftTimeLimit):
             logger.error(
                 "%s Soft time limit hit during recurrence check for %s; degrading to standalone",
                 _LOG_PREFIX, incident_id,
             )
             return
-        if isinstance(exc, asyncio.CancelledError):
-            # A cancellation leaking out of asyncio.run is not a process
-            # shutdown signal here — honor the never-raises contract so the
-            # caller's completion notification still goes out.
-            logger.error(
-                "%s Recurrence check cancelled for incident %s; degrading to standalone",
-                _LOG_PREFIX, incident_id,
-            )
-            return
-        if isinstance(exc, Exception):
-            logger.exception(
-                "%s Recurrence check failed for incident %s; degrading to standalone",
-                _LOG_PREFIX, incident_id,
-            )
-            return
-        raise  # genuine BaseException (KeyboardInterrupt/SystemExit) — propagate
+        logger.exception(
+            "%s Recurrence check failed for incident %s; degrading to standalone",
+            _LOG_PREFIX, incident_id,
+        )

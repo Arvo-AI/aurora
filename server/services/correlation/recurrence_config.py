@@ -5,6 +5,7 @@ webhook task, so it must stay cheap (stdlib only).
 """
 
 import logging
+import math
 import os
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,10 @@ GROUP_IDLE_HOURS = 24
 # Max agent loop turns for one recurrence check (economy bound; the wall-clock
 # timeout below is the primary bound).
 MAX_TURNS = 15
+
+# Hard ceiling for RECURRENCE_AGENT_TIMEOUT_SECONDS: must stay well under the
+# summarization task's soft_time_limit (330s) minus summary work.
+MAX_AGENT_TIMEOUT_SECONDS = 300
 
 # Reject reasons persisted on recurrence_verdicts.reject_reason (VARCHAR(30)).
 REJECT_INVALID_ID = "invalid_id"
@@ -66,8 +71,11 @@ def get_agent_timeout_seconds() -> int:
     """
     raw = os.getenv("RECURRENCE_AGENT_TIMEOUT_SECONDS") or "120"
     try:
-        value = int(float(raw))
-    except ValueError:
+        parsed = float(raw)
+        if not math.isfinite(parsed):
+            raise ValueError("non-finite")
+        value = int(parsed)
+    except (ValueError, OverflowError):
         logger.warning(
             "[RECURRENCE] Invalid RECURRENCE_AGENT_TIMEOUT_SECONDS=%r; using 120", raw
         )
@@ -80,4 +88,13 @@ def get_agent_timeout_seconds() -> int:
             raw,
         )
         return 120
+    if value > MAX_AGENT_TIMEOUT_SECONDS:
+        # Must stay well under the summarization task's soft_time_limit (330s)
+        # minus summary work — a larger budget would let the Celery soft limit
+        # fire mid-check instead of the check's own wait_for.
+        logger.warning(
+            "[RECURRENCE] RECURRENCE_AGENT_TIMEOUT_SECONDS=%r exceeds max %d; clamping",
+            raw, MAX_AGENT_TIMEOUT_SECONDS,
+        )
+        return MAX_AGENT_TIMEOUT_SECONDS
     return value

@@ -610,8 +610,6 @@ def generate_incident_summary(
         logger.warning(f"{_LOG_PREFIX} Hook blocked for user {user_id}: {hook_message}")
         return {"incident_id": incident_id, "status": "hook_blocked", "error": hook_message}
 
-    summary_written = False  # guards the soft-limit handler's error overwrite
-
     try:
         # Build the prompt
         prompt = _build_summary_prompt(
@@ -735,6 +733,8 @@ def generate_incident_summary_from_chat(
     if not hook_allowed:
         logger.warning(f"{_LOG_PREFIX} Hook blocked for user {user_id}: {hook_message}")
         return {"incident_id": incident_id, "status": "hook_blocked", "error": hook_message}
+
+    summary_written = False  # guards the soft-limit handler's error overwrite
 
     try:
         basics = _fetch_incident_basics(incident_id, user_id=user_id)
