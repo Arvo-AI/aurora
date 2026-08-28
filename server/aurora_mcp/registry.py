@@ -569,14 +569,6 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         body_keys=("status", "auroraStatus", "summary", "activeTab"),
     ),
     DispatchEntry(
-        name="incident_list_recent_unlinked",
-        description="List recent incidents not yet linked to an alert.",
-        category="incidents",
-        method="GET",
-        path="/api/incidents/recent-unlinked",
-        enabling_skills=(),
-    ),
-    DispatchEntry(
         name="incident_submit_feedback",
         description="Submit feedback on the RCA/postmortem of an incident.",
         category="incidents",
@@ -585,18 +577,6 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         enabling_skills=(),
         path_args=("incident_id",),
         body_keys=("rating", "comment", "category"),
-    ),
-    DispatchEntry(
-        name="incident_merge_alert",
-        description="Merge an alert into an existing incident.",
-        category="incidents",
-        method="POST",
-        path="/api/incidents/{target_incident_id}/merge-alert",
-        enabling_skills=(),
-        path_args=("target_incident_id",),
-        # The route only reads `sourceIncidentId` (camelCase) from the body.
-        # `alert_id` and snake_case `source_incident_id` would be ignored.
-        body_keys=("sourceIncidentId",),
     ),
     DispatchEntry(
         name="incident_suggestion_apply",
