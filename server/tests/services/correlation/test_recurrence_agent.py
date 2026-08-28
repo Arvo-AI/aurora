@@ -37,7 +37,7 @@ def _ctx():
     }
 
 
-@pytest.fixture()
+@pytest.fixture
 def harness(monkeypatch):
     """Stub every collaborator; return the mocks for assertions."""
     fake_llm = types.ModuleType("chat.backend.agent.llm")

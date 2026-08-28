@@ -23,7 +23,7 @@ from services.correlation.alert_correlator import (  # noqa: E402
 )
 
 
-def _call(mode, alert_metadata):
+def _call(mode, alert_metadata, hint_only_eligible=True):
     result = CorrelationResult(
         is_correlated=True, incident_id="inc-1", score=0.72, strategy="similarity"
     )
@@ -45,6 +45,7 @@ def _call(mode, alert_metadata):
                 alert_metadata=alert_metadata,
                 raw_payload={"k": "v"},
                 org_id="org-1",
+                hint_only_eligible=hint_only_eligible,
             )
     return returned, mock_handle
 
@@ -74,6 +75,15 @@ class TestApplyCorrelationOutcome:
         assert hint["score"] == pytest.approx(0.72)
         assert hint["strategy"] == "similarity"
         assert hint["computed_at"]
+
+    def test_live_ineligible_fallthrough_keeps_legacy_attach(self):
+        # When the caller's fall-through would NOT create an incident (e.g.
+        # RCA disabled), live mode must not drop the alert: legacy attach.
+        meta = {}
+        returned, mock_handle = _call("live", meta, hint_only_eligible=False)
+        assert returned is True
+        mock_handle.assert_called_once()
+        assert "correlation_hint" not in meta
 
     def test_unknown_mode_treated_as_off(self):
         meta = {}

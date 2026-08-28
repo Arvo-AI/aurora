@@ -13,8 +13,6 @@ import uuid
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 _server_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir)
 if os.path.abspath(_server_dir) not in sys.path:
     sys.path.insert(0, os.path.abspath(_server_dir))
@@ -39,6 +37,7 @@ class FakeDB:
         self.primary_alert = ("datadog", 7, "High CPU", "api", "critical", {"m": 1})
         self.has_recurrence_row = False
         self.verdicts = []
+        self.verdict_updates = []
         self.lifecycle = []
         self.alert_inserts = []
         self.anchor_updates = []
@@ -90,6 +89,8 @@ class FakeCursor:
             self._result = (1,) if db.has_recurrence_row else None
         elif "INSERT INTO incident_alerts" in s:
             db.alert_inserts.append(params)
+        elif "UPDATE recurrence_verdicts" in s:
+            db.verdict_updates.append(params)
         elif "INSERT INTO recurrence_verdicts" in s:
             db.verdicts.append(params)
         elif "INSERT INTO incident_lifecycle_events" in s:
@@ -245,6 +246,13 @@ class TestConcurrency:
         assert result.root_id == A
         assert db.incidents[A]["recurrence_of"] is None
         assert db.incidents[B]["recurrence_of"] == A
+        # The losing fold's audit rows are corrected: its verdict flips to
+        # folded=false/mutual_fold_lost and the root gets a recurrence_unfolded
+        # lifecycle event alongside the winner's recurrence_folded.
+        assert db.verdict_updates == [("mutual_fold_lost", A, B)]
+        events = {(p[0], p[3]) for p in db.lifecycle}
+        assert (A, "recurrence_unfolded") in events
+        assert (B, "recurrence_folded") in events
 
     def test_mutual_fold_child_earlier_loses(self):
         db = FakeDB({A: _incident(started_at=_T0 + timedelta(minutes=5)), B: _incident(started_at=_T0)})
