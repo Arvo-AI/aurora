@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional
 
 from celery_config import celery_app
 from services.correlation.alert_correlator import AlertCorrelator
-from services.correlation import handle_correlated_alert
+from services.correlation import apply_correlation_outcome
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +257,7 @@ def _try_correlate_alarm(
 
     try:
         cursor.execute("SAVEPOINT sp_handle_correlated")
-        handle_correlated_alert(
+        applied = apply_correlation_outcome(
             cursor=cursor, user_id=user_id,
             incident_id=correlation_result.incident_id,
             source_type="cloudwatch", source_alert_id=alarm_db_id,
@@ -268,6 +268,10 @@ def _try_correlate_alarm(
             org_id=org_id,
         )
         cursor.execute("RELEASE SAVEPOINT sp_handle_correlated")
+        if not applied:
+            # Live recurrence mode: hint stashed on alert_metadata; caller
+            # proceeds with normal incident creation.
+            return False
         conn.commit()
         logger.info(
             "[CLOUDWATCH][ALARM] Correlated alarm '%s' to incident %s",
@@ -275,7 +279,7 @@ def _try_correlate_alarm(
         )
     except Exception as exc:
         cursor.execute("ROLLBACK TO SAVEPOINT sp_handle_correlated")
-        logger.warning("[CLOUDWATCH][ALARM] handle_correlated_alert failed: %s", exc)
+        logger.warning("[CLOUDWATCH][ALARM] apply_correlation_outcome failed: %s", exc)
         return False
     return True
 

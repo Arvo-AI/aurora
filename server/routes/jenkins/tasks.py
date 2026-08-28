@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
-from services.correlation import handle_correlated_alert
+from services.correlation import apply_correlation_outcome
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +194,7 @@ def process_jenkins_deployment(
                         )
 
                         if correlation_result.is_correlated:
-                            handle_correlated_alert(
+                            if apply_correlation_outcome(
                                 cursor=cursor,
                                 user_id=user_id,
                                 incident_id=correlation_result.incident_id,
@@ -207,19 +207,24 @@ def process_jenkins_deployment(
                                 alert_metadata=alert_metadata,
                                 raw_payload=payload,
                                 org_id=org_id,
-                            )
-                            conn.commit()
-                            logger.info(
-                                "%s Correlated with incident %s",
-                                log_prefix, correlation_result.incident_id,
-                            )
+                                # Live hint-only mode needs the fall-through to
+                                # actually create an incident; only FAILURE and
+                                # UNSTABLE do (see below), so other correlated
+                                # results (ABORTED, ...) keep the legacy attach.
+                                hint_only_eligible=result in ("FAILURE", "UNSTABLE"),
+                            ):
+                                conn.commit()
+                                logger.info(
+                                    "%s Correlated with incident %s",
+                                    log_prefix, correlation_result.incident_id,
+                                )
 
-                            _inject_rca_context(
-                                cursor, conn, user_id, correlation_result.incident_id,
-                                service, result, environment, git, build_url, deployer,
-                                trace_id, alert_title, source,
-                            )
-                            return
+                                _inject_rca_context(
+                                    cursor, conn, user_id, correlation_result.incident_id,
+                                    service, result, environment, git, build_url, deployer,
+                                    trace_id, alert_title, source,
+                                )
+                                return
 
                         cursor.execute("RELEASE SAVEPOINT correlation_sp")
                     except Exception as corr_exc:

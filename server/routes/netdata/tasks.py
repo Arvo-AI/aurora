@@ -22,7 +22,7 @@ from routes.netdata.helpers import (
 )
 from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
-from services.correlation import handle_correlated_alert
+from services.correlation import apply_correlation_outcome
 from utils.payload_timestamp import extract_alert_fired_at
 
 logger = logging.getLogger(__name__)
@@ -159,7 +159,7 @@ def process_netdata_alert(
                             )
 
                             if correlation_result.is_correlated:
-                                handle_correlated_alert(
+                                if apply_correlation_outcome(
                                     cursor=cursor,
                                     user_id=user_id,
                                     incident_id=correlation_result.incident_id,
@@ -172,9 +172,9 @@ def process_netdata_alert(
                                     alert_metadata=alert_metadata,
                                     raw_payload=payload,
                                     org_id=org_id,
-                                )
-                                conn.commit()
-                                return
+                                ):
+                                    conn.commit()
+                                    return
                         except Exception as corr_exc:
                             logger.warning(
                                 "[NETDATA] Correlation check failed, proceeding with normal flow: %s",
