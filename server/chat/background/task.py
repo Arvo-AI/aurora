@@ -80,64 +80,6 @@ def _resolve_permitted_tools(user_id: str) -> Optional[set]:
         return None
 
 
-def cancel_rca_for_incident(incident_id: str, user_id: str) -> bool:
-    """Cancel a running RCA for an incident by revoking its Celery task.
-    
-    This is the proper way to stop an RCA when an incident is merged.
-    It uses Celery's task revocation with SIGTERM to gracefully stop the task.
-    
-    Args:
-        incident_id: The incident ID whose RCA should be cancelled
-        user_id: User ID for RLS context
-        
-    Returns:
-        True if a task was found and revoked, False otherwise
-    """
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:CancelRCA]")
-                cursor.execute(
-                    "SELECT rca_celery_task_id, aurora_status FROM incidents WHERE id = %s",
-                    (incident_id,)
-                )
-                row = cursor.fetchone()
-                
-                if not row:
-                    logger.info(f"[RCA-CANCEL] Incident {incident_id} not found")
-                    return False
-                
-                task_id, aurora_status = row[0], row[1]
-                
-                if not task_id:
-                    logger.info(f"[RCA-CANCEL] No Celery task ID found for incident {incident_id}")
-                    return False
-                
-                # Only revoke if RCA is actually running
-                if aurora_status != 'running':
-                    logger.info(
-                        f"[RCA-CANCEL] RCA for incident {incident_id} is not running (status={aurora_status}), skipping revocation"
-                    )
-                    return False
-                
-                # Revoke the task with SIGTERM for graceful shutdown
-                celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
-                logger.info(f"[RCA-CANCEL] Revoked Celery task {task_id} for incident {incident_id}")
-                
-                # Clear the task ID from the database
-                cursor.execute(
-                    "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
-                    (incident_id,)
-                )
-                conn.commit()
-                
-                return True
-                
-    except Exception as e:
-        logger.error(f"[RCA-CANCEL] Failed to cancel RCA for incident {incident_id}: {e}")
-        return False
-
-
 def _extract_tool_calls_for_viz(
     session_id: str,
     user_id: str,
@@ -667,6 +609,19 @@ def run_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to link session to incident: {e}")
 
+            # FUTURE (root-cause dedup, build-order step 4 — needs Noah's sign-off
+            # plus shadow-mode precision data before building): pre-investigation
+            # early exit. This is the single choke point covering all RCA
+            # producers, so the gate belongs here, before
+            # notify_investigation_started. Shape: if the incident's
+            # alert_metadata carries a correlation_hint (stamped by
+            # apply_correlation_outcome in live mode) and a future flag allows,
+            # call run_recurrence_check(..., decision_point="before"); on a fold,
+            # set the child to status='analyzed', aurora_status='complete'
+            # (layer-2 requirement) and early-return like the before_llm_call
+            # hook block below. All plumbing already exists: the
+            # recurrence_verdicts.decision_point column, the before-variant
+            # prompt input block, the shared fold_incident, and the hint.
             if _should_notify_investigation_started:
                 try:
                     from utils.notifications.dispatcher import notify_investigation_started

@@ -610,6 +610,8 @@ def generate_incident_summary(
         logger.warning(f"{_LOG_PREFIX} Hook blocked for user {user_id}: {hook_message}")
         return {"incident_id": incident_id, "status": "hook_blocked", "error": hook_message}
 
+    summary_written = False  # guards the soft-limit handler's error overwrite
+
     try:
         # Build the prompt
         prompt = _build_summary_prompt(
@@ -703,8 +705,13 @@ def generate_incident_summary(
 @celery_app.task(
     bind=True,
     name="chat.background.generate_incident_summary_from_chat",
-    time_limit=180,  # includes transcript fetch/format
-    soft_time_limit=150,
+    # Budget includes transcript fetch/format + the post-summary recurrence
+    # check. Invariant: RECURRENCE_AGENT_TIMEOUT_SECONDS (default 120) must
+    # stay well under soft_time_limit minus the summary-generation work, so
+    # the check's own asyncio.wait_for — not the Celery soft limit — is the
+    # bound that fires.
+    time_limit=420,
+    soft_time_limit=330,
     max_retries=2,
     default_retry_delay=10,
 )
@@ -864,6 +871,26 @@ def generate_incident_summary_from_chat(
             )
 
         _update_incident_summary(incident_id, summary, user_id=user_id)
+        summary_written = True
+
+        # Root-cause recurrence check (dedup layer 1): runs post-summary-write,
+        # pre-notification — fold-then-notify is the ordering Slack threading
+        # (layer 3) needs later. run_recurrence_check never raises internally
+        # and is bounded by its own asyncio.wait_for; this guard is belt and
+        # braces so notifications stay guaranteed. On task retry the existing
+        # verdict row makes the re-run a no-op.
+        try:
+            from services.correlation.recurrence_agent import run_recurrence_check
+            run_recurrence_check(
+                incident_id=incident_id,
+                user_id=user_id,
+                session_id=session_id,
+                decision_point="after",
+            )
+        except Exception:
+            logger.exception(
+                f"{_LOG_PREFIX} Recurrence check failed for {incident_id}; proceeding to notify"
+            )
 
         # Send completion notifications via centralized dispatcher
         from utils.notifications.dispatcher import notify_investigation_completed
@@ -880,6 +907,22 @@ def generate_incident_summary_from_chat(
         logger.error(
             f"{_LOG_PREFIX} Timeout generating chat-based summary for incident {incident_id}"
         )
+        if summary_written:
+            # The summary itself completed; the soft limit fired during the
+            # post-summary work (recurrence check / notifications). Do NOT
+            # overwrite the good summary with an error — send the completion
+            # notification the task guarantees and finish.
+            try:
+                from utils.notifications.dispatcher import notify_investigation_completed
+                notify_investigation_completed(user_id, incident_id, session_id=session_id)
+            except Exception:
+                logger.exception(
+                    f"{_LOG_PREFIX} Failed to notify after soft-limit for {incident_id}"
+                )
+            return {
+                "incident_id": incident_id,
+                "status": "completed_soft_limit",
+            }
         _update_incident_summary(
             incident_id,
             "Summary generation timed out. View investigation chat for details.",
