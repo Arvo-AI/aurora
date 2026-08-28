@@ -66,6 +66,9 @@ class ModelConfig:
     # Email report generation
     EMAIL_REPORT_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
+    # Root-cause recurrence detection agent — falls back to MAIN_MODEL
+    RECURRENCE_AGENT_MODEL = os.getenv("RECURRENCE_AGENT_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+
 
 class LLMManager:
     def __init__(
