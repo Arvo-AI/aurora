@@ -216,17 +216,6 @@ export interface CorrelatedAlert {
   receivedAt: string;
 }
 
-export interface RecentIncident {
-  id: string;
-  alertTitle: string;
-  alertService: string;
-  severity: string;
-  sourceType: AlertSource;
-  status: IncidentStatus;
-  auroraStatus: AuroraStatus;
-  createdAt: string;
-}
-
 export interface Incident {
   id: string;
   alert: Alert;
@@ -503,34 +492,6 @@ export const incidentsService = {
       );
     } catch (error) {
       console.error('Error applying fix suggestion:', error);
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      return { success: false, error: message };
-    }
-  },
-
-  async getRecentUnlinkedIncidents(excludeId?: string): Promise<RecentIncident[]> {
-    try {
-      const url = excludeId 
-        ? `/api/incidents/recent-unlinked?exclude=${encodeURIComponent(excludeId)}`
-        : '/api/incidents/recent-unlinked';
-
-      const data = await apiGet<{ incidents: RecentIncident[] }>(url);
-      return data.incidents || [];
-    } catch (error) {
-      console.error('Error fetching recent unlinked incidents:', error);
-      return [];
-    }
-  },
-
-  async mergeAlertToIncident(
-    targetIncidentId: string,
-    sourceIncidentId: string
-  ): Promise<{ success: boolean; error?: string }> {
-    try {
-      await apiPost(`/api/incidents/${targetIncidentId}/merge-alert`, { sourceIncidentId });
-      return { success: true };
-    } catch (error) {
-      console.error('Error merging alert:', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
       return { success: false, error: message };
     }

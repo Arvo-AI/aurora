@@ -31,7 +31,6 @@ import SuggestionModal from './SuggestionModal';
 import FixSuggestionModal from './FixSuggestionModal';
 import IncidentFeedback from './IncidentFeedback';
 import CorrelatedAlertsSection from './CorrelatedAlertsSection';
-import RecentAlertsSection from './RecentAlertsSection';
 import PostmortemPanel from './PostmortemPanel';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import IncidentActionRuns from './IncidentActionRuns';
@@ -465,13 +464,6 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           {incident.correlatedAlerts && incident.correlatedAlerts.length > 0 && (
             <CorrelatedAlertsSection alerts={incident.correlatedAlerts} />
           )}
-
-          {/* Other Recent Alerts - for manual correlation */}
-          <RecentAlertsSection
-            currentIncidentId={incident.id}
-            auroraStatus={incident.auroraStatus}
-            onAlertMerged={onRefresh}
-          />
         </div>
       ) : (
         <div className="text-center py-8 text-zinc-500">
