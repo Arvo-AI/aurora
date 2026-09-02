@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { incidentsService, Incident, StreamingThought } from '@/lib/services/incidents';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ArrowLeft, AlertTriangle, GitMerge } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, GitMerge, Repeat } from 'lucide-react';
 import IncidentCard from '../components/IncidentCard';
 import ThoughtsPanel, { PANEL_WIDTH_DEFAULT } from '../components/ThoughtsPanel';
 
@@ -160,6 +160,29 @@ export default function IncidentDetailPage() {
               </p>
               <p className="text-xs text-zinc-600 mt-1">
                 Its RCA investigation has been stopped. View the main incident to see the combined analysis.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Recurrence banner — this incident was folded into an earlier anchor (root-cause dedup) */}
+      {incident.recurrenceOf && (
+        <div className="bg-zinc-900/50 border-b border-zinc-800 px-6 py-4">
+          <div className="max-w-5xl mx-auto flex items-center gap-3 text-zinc-400">
+            <Repeat className="w-5 h-5 text-zinc-500" />
+            <div>
+              <p className="text-sm">
+                Occurrence of{' '}
+                <Link
+                  href={`/incidents/${incident.recurrenceOf}`}
+                  className="text-blue-400 hover:text-blue-300 font-medium"
+                >
+                  &quot;{incident.recurrenceOfTitle || 'an earlier incident'}&quot;
+                </Link>
+              </p>
+              <p className="text-xs text-zinc-600 mt-1">
+                Aurora matched this alert to an earlier root cause. This occurrence&apos;s own investigation is kept below.
               </p>
             </div>
           </div>
