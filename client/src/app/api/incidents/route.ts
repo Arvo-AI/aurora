@@ -1,41 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getAuthenticatedUser } from '@/lib/auth-helper';
+import { NextRequest } from 'next/server';
+import { forwardAuthenticatedGet } from '@/lib/backend-proxy';
 
-const API_BASE_URL = process.env.BACKEND_URL;
-
+// Query string (?groups=1, limit, offset, status) is forwarded to Flask.
 export async function GET(request: NextRequest) {
-  try {
-    if (!API_BASE_URL) {
-      return NextResponse.json(
-        { error: 'BACKEND_URL not configured' },
-        { status: 500 }
-      );
-    }
-
-    const authResult = await getAuthenticatedUser();
-
-    if (authResult instanceof NextResponse) {
-      return authResult;
-    }
-
-    const { headers: authHeaders } = authResult;
-
-    const response = await fetch(`${API_BASE_URL}/api/incidents`, {
-      method: 'GET',
-      headers: authHeaders,
-      credentials: 'include',
-      cache: 'no-store',
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      return NextResponse.json({ error: text || 'Failed to fetch incidents' }, { status: response.status });
-    }
-
-    const data = await response.json();
-    return NextResponse.json(data);
-  } catch (error) {
-    console.error('[api/incidents] Error:', error);
-    return NextResponse.json({ error: 'Failed to load incidents' }, { status: 500 });
-  }
+  return forwardAuthenticatedGet(request, '/api/incidents', 'incidents');
 }
