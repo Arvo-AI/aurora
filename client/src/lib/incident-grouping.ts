@@ -19,8 +19,10 @@ export interface IncidentGroup {
    * whose RCA completed later.
    */
   occurrences: Incident[];
-  /** occurrences.length */
+  /** Full group size: loaded occurrences, or the server's count when the group was capped. */
   occurrenceCount: number;
+  /** Older occurrences the list response did not include (0 unless the group was capped). */
+  notLoaded: number;
   /** Newest fire time across the group (epoch ms). */
   lastFiredAt: number;
   section: IncidentSection;
@@ -59,12 +61,15 @@ function buildGroup(anchor: Incident, members: Incident[]): IncidentGroup {
     section = 'merged';
   }
 
+  const occurrenceCount = Math.max(occurrences.length, anchor.occurrenceTotal ?? 0);
+
   return {
     id: anchor.id,
     anchor,
     occurrences,
-    occurrenceCount: occurrences.length,
-    lastFiredAt: lastFire(occurrences[occurrences.length - 1]),
+    occurrenceCount,
+    notLoaded: occurrenceCount - occurrences.length,
+    lastFiredAt: lastFire(occurrences.at(-1) ?? anchor),
     section,
     investigating: occurrences.some(isInvestigating),
   };

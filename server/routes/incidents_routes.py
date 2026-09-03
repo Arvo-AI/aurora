@@ -288,8 +288,7 @@ def _format_incident_response(
 
 # Column list shared by the list and detail endpoints; the tuple order must
 # match the include_merge_target branch of _format_incident_response.
-_INCIDENT_SELECT = """
-    SELECT
+_INCIDENT_COLUMNS = """
         i.id, i.user_id, i.source_type, i.source_alert_id, i.status, i.severity,
         i.alert_title, i.alert_service, i.alert_environment, i.aurora_status, i.aurora_summary,
         i.aurora_chat_session_id, i.started_at, i.analyzed_at, i.active_tab, i.created_at, i.updated_at,
@@ -297,10 +296,13 @@ _INCIDENT_SELECT = """
         i.alert_metadata, i.correlated_alert_count, i.affected_services,
         i.merged_into_incident_id, target.alert_title AS merged_into_title,
         i.recurrence_of_incident_id, anchor.alert_title AS recurrence_of_title
+"""
+_INCIDENT_FROM = """
     FROM incidents i
     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
     LEFT JOIN incidents anchor ON i.recurrence_of_incident_id = anchor.id
 """
+_INCIDENT_SELECT = "SELECT" + _INCIDENT_COLUMNS + _INCIDENT_FROM
 
 # Upper bound on rows returned by ``groups=1`` completion. Layer 1 caps a group
 # only by 24h idle time, so a flapping alert can fold thousands of members
@@ -349,7 +351,8 @@ def get_incidents(user_id):
                     page_tail += " OFFSET %s"
                     page_params.append(offset)
 
-                if request.args.get("groups") in ("1", "true"):
+                include_groups = request.args.get("groups") in ("1", "true")
+                if include_groups:
                     # Group completion: the page (limit/offset/status) only
                     # decides which recurrence groups are visible; every
                     # non-merged anchor and member of those groups is then
@@ -360,14 +363,19 @@ def get_incidents(user_id):
                     # The writer (recurrence_fold) keeps pointers depth-1 —
                     # only that depth is completed here. Anchors sort first so
                     # the _GROUPS_MAX_ROWS cut drops the oldest members, never
-                    # the group root.
+                    # the group root. group_size is a window count, evaluated
+                    # before the LIMIT, so each row carries the full non-merged
+                    # size of its group and the client can tell when members
+                    # were cut.
                     query = (
                         "WITH roots AS ("
                         "SELECT COALESCE(i.recurrence_of_incident_id, i.id) AS root_id FROM incidents i"
                         + page_where
                         + page_tail
-                        + ")"
-                        + _INCIDENT_SELECT
+                        + ") SELECT"
+                        + _INCIDENT_COLUMNS
+                        + ", COUNT(*) OVER (PARTITION BY COALESCE(i.recurrence_of_incident_id, i.id)) AS group_size"
+                        + _INCIDENT_FROM
                         + """
                     WHERE i.org_id = %s
                       AND i.status != 'merged'
@@ -386,16 +394,23 @@ def get_incidents(user_id):
                 rows = cursor.fetchall()
 
                 source_urls: Dict[str, str] = {}
-                incidents = [
-                    _format_incident_response(
+                incidents = []
+                for row in rows:
+                    group_size = None
+                    if include_groups:
+                        row, group_size = row[:-1], row[-1]
+                    incident = _format_incident_response(
                         row,
                         include_metadata=True,
                         include_correlation=True,
                         include_merge_target=True,
                         source_url_cache=source_urls,
                     )
-                    for row in rows
-                ]
+                    if include_groups:
+                        # Anchor + members in the DB; larger than the rows
+                        # returned when the group was cut at _GROUPS_MAX_ROWS.
+                        incident["occurrenceTotal"] = group_size
+                    incidents.append(incident)
 
                 logger.info(
                     "[INCIDENTS] Retrieved %d incidents for user %s",

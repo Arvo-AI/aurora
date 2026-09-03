@@ -64,6 +64,7 @@ const incidentsFetcher = async (key: string, signal: AbortSignal) => {
     createdAt: inc.createdAt,
     updatedAt: inc.updatedAt,
     recurrenceOf: inc.recurrenceOf ?? null,
+    occurrenceTotal: inc.occurrenceTotal,
   }));
 };
 

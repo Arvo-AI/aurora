@@ -242,6 +242,7 @@ export interface Incident {
   recurrenceOf?: string | null; // Anchor incident id when this is a recurrence (root-cause dedup)
   recurrenceOfTitle?: string; // Anchor's title (detail view only)
   occurrences?: IncidentOccurrence[]; // Recurrences folded into this anchor (detail view only)
+  occurrenceTotal?: number; // Full group size from the server (list ?groups=1 only); exceeds loaded rows when the group was capped
   postMortem?: PostmortemData;
   startedAt: string;
   analyzedAt?: string;
@@ -298,6 +299,7 @@ export const incidentsService = {
         mergedIntoIncidentId: inc.mergedIntoIncidentId,
         mergedIntoTitle: inc.mergedIntoTitle,
         recurrenceOf: inc.recurrenceOf ?? null,
+        occurrenceTotal: inc.occurrenceTotal,
         postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
