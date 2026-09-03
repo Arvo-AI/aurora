@@ -61,7 +61,11 @@ function buildGroup(anchor: Incident, members: Incident[]): IncidentGroup {
     section = 'merged';
   }
 
-  const occurrenceCount = Math.max(occurrences.length, anchor.occurrenceTotal ?? 0);
+  // The server's group size belongs to a real anchor only. An orphan (its anchor
+  // missing from the fetch) carries its original group's total, which is not
+  // this singleton's, so it falls back to the rows actually loaded.
+  const serverTotal = anchor.recurrenceOf ? 0 : (anchor.occurrenceTotal ?? 0);
+  const occurrenceCount = Math.max(occurrences.length, serverTotal);
 
   return {
     id: anchor.id,
