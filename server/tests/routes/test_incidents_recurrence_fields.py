@@ -79,3 +79,25 @@ def test_narrower_branches_default_pointer_to_null(fmt, kwargs, extra_columns):
     assert result["id"] == str(INCIDENT_ID)
     assert result["recurrenceOf"] is None
     assert "recurrenceOfTitle" not in result
+
+
+def test_source_url_cache_is_keyed_by_user(monkeypatch):
+    """Two users on the same provider must each get their own URL — the cache
+    must not hand user A's Datadog site to user B's incident."""
+    from routes import incidents_routes
+
+    calls = []
+    monkeypatch.setattr(
+        incidents_routes, "_build_source_url",
+        lambda source_type, user_id: calls.append((source_type, user_id)) or f"https://{user_id}.example",
+    )
+    cache = {}
+    rows = [
+        tuple(["id-1", "user-a", "datadog"] + _base_row()[3:]),
+        tuple(["id-2", "user-b", "datadog"] + _base_row()[3:]),
+        tuple(["id-3", "user-a", "datadog"] + _base_row()[3:]),
+    ]
+    urls = [incidents_routes._format_incident_response(r, source_url_cache=cache)["alert"]["sourceUrl"] for r in rows]
+
+    assert urls == ["https://user-a.example", "https://user-b.example", "https://user-a.example"]
+    assert calls == [("datadog", "user-a"), ("datadog", "user-b")]  # second user-a row served from cache

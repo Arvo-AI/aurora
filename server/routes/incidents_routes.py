@@ -11,7 +11,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.log_sanitizer import hash_for_log, sanitize
 from chat.background.task import run_background_chat
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from utils.validation import is_valid_uuid
 from chat.background.task import create_background_chat_session, run_background_chat
 
@@ -102,13 +102,14 @@ def _format_incident_response(
     include_metadata: bool = False,
     include_correlation: bool = False,
     include_merge_target: bool = False,
-    source_url_cache: Optional[Dict[str, str]] = None,
+    source_url_cache: Optional[Dict[Tuple[str, str], str]] = None,
 ) -> Dict[str, Any]:
     """Format database row into incident response object.
 
-    ``source_url_cache`` (keyed by source_type) lets a caller formatting many
-    rows resolve each provider's URL once instead of once per row —
-    ``_build_source_url`` opens its own DB connection.
+    ``source_url_cache`` (keyed by ``(source_type, user_id)``) lets a caller
+    formatting many rows resolve each provider URL once per user instead of
+    once per row — ``_build_source_url`` opens its own DB connection and reads
+    that user's integration settings, so the key must include the user.
     """
     if include_merge_target:
         (
@@ -227,12 +228,13 @@ def _format_incident_response(
         recurrence_of_incident_id = None
         recurrence_of_title = None
 
-    if source_url_cache is not None and source_type in source_url_cache:
-        source_url = source_url_cache[source_type]
+    cache_key = (source_type, user_id)
+    if source_url_cache is not None and cache_key in source_url_cache:
+        source_url = source_url_cache[cache_key]
     else:
         source_url = _build_source_url(source_type, user_id)
         if source_url_cache is not None:
-            source_url_cache[source_type] = source_url
+            source_url_cache[cache_key] = source_url
 
     result = {
         "id": str(incident_id),
@@ -393,7 +395,7 @@ def get_incidents(user_id):
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
 
-                source_urls: Dict[str, str] = {}
+                source_urls: Dict[Tuple[str, str], str] = {}
                 incidents = []
                 for row in rows:
                     group_size = None
