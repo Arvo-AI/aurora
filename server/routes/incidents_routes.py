@@ -11,7 +11,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.log_sanitizer import hash_for_log, sanitize
 from chat.background.task import run_background_chat
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 from utils.validation import is_valid_uuid
 from chat.background.task import create_background_chat_session, run_background_chat
 
@@ -102,8 +102,8 @@ def _format_incident_response(
     include_metadata: bool = False,
     include_correlation: bool = False,
     include_merge_target: bool = False,
-    source_url_cache: Optional[Dict[Tuple[str, str], str]] = None,
-) -> Dict[str, Any]:
+    source_url_cache: Optional[dict[tuple[str, str], str]] = None,
+) -> dict[str, Any]:
     """Format database row into incident response object.
 
     ``source_url_cache`` (keyed by ``(source_type, user_id)``) lets a caller
@@ -395,7 +395,7 @@ def get_incidents(user_id):
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
 
-                source_urls: Dict[Tuple[str, str], str] = {}
+                source_urls: dict[tuple[str, str], str] = {}
                 incidents = []
                 for row in rows:
                     group_size = None
