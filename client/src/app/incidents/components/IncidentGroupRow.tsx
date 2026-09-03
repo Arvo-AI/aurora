@@ -22,7 +22,7 @@ function formatFireTime(incident: Incident): string {
     : fired.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
-function OccurrenceStatusIcon({ incident, now }: { incident: Incident; now: number }) {
+function OccurrenceStatusIcon({ incident, now }: Readonly<{ incident: Incident; now: number }>) {
   if (isStalled(incident, now)) {
     return <AlertTriangle className="h-3.5 w-3.5 text-red-400" aria-label="Investigation stalled" />;
   }
@@ -37,7 +37,7 @@ function OccurrenceStatusIcon({ incident, now }: { incident: Incident; now: numb
  * anchor; the chevron expands the chronological occurrence list without
  * navigating.
  */
-export default function IncidentGroupRow({ group, expanded, onToggle }: IncidentGroupRowProps) {
+export default function IncidentGroupRow({ group, expanded, onToggle }: Readonly<IncidentGroupRowProps>) {
   const { anchor } = group;
   const now = Date.now();
   const isActive = group.section === 'investigating';
@@ -115,6 +115,17 @@ export default function IncidentGroupRow({ group, expanded, onToggle }: Incident
               <ChevronRight className="h-4 w-4 text-muted-foreground" />
             </Link>
           ))}
+          {group.notLoaded > 0 && (
+            <Link
+              href={`/incidents/${anchor.id}`}
+              className="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-muted-foreground hover:bg-muted/60 transition-colors"
+            >
+              <span className="flex-1 min-w-0 truncate">
+                {group.notLoaded} older {group.notLoaded === 1 ? 'occurrence' : 'occurrences'} not shown here · open the incident for the full list
+              </span>
+              <ChevronRight className="h-4 w-4" />
+            </Link>
+          )}
         </ExpandablePanel>
       </CardContent>
     </Card>

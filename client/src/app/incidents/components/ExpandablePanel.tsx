@@ -23,7 +23,7 @@ const MAX_STAGGER_INDEX = 8;
  * the accessibility tree (it flips only after the close transition ends).
  * Each direct child staggers in by 50ms.
  */
-export default function ExpandablePanel({ open, children, className = '', contentClassName = '' }: ExpandablePanelProps) {
+export default function ExpandablePanel({ open, children, className = '', contentClassName = '' }: Readonly<ExpandablePanelProps>) {
   return (
     <div
       className={`grid overflow-hidden transition-all duration-300 ease-out ${className}`}
@@ -51,7 +51,7 @@ export default function ExpandablePanel({ open, children, className = '', conten
   );
 }
 
-export function ExpandChevron({ open, className = '' }: { open: boolean; className?: string }) {
+export function ExpandChevron({ open, className = '' }: Readonly<{ open: boolean; className?: string }>) {
   return (
     <ChevronDown
       className={`h-4 w-4 transition-transform duration-300 ease-out ${open ? 'rotate-180' : ''} ${className}`}

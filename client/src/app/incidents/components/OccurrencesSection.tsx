@@ -11,7 +11,7 @@ interface OccurrencesSectionProps {
   occurrences: IncidentOccurrence[];
 }
 
-export default function OccurrencesSection({ occurrences }: OccurrencesSectionProps) {
+export default function OccurrencesSection({ occurrences }: Readonly<OccurrencesSectionProps>) {
   const [isExpanded, setIsExpanded] = useState(false);
   const total = 1 + occurrences.length;
 
