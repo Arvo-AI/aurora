@@ -50,16 +50,19 @@ export function isGroupStalled(group: IncidentGroup, now: number): boolean {
   return group.occurrences.some(i => isStalled(i, now));
 }
 
-function buildGroup(anchor: Incident, members: Incident[]): IncidentGroup {
-  const occurrences = [anchor, ...members].sort((a, b) => lastFire(a) - lastFire(b));
+/** Section for a group, or null when no occurrence has a status the list shows (e.g. 'failed'). */
+function sectionFor(anchor: Incident, members: Incident[], occurrences: Incident[]): IncidentSection | null {
+  if (occurrences.some(i => i.status === 'investigating')) return 'investigating';
+  // Only a standalone can sit in Merged; recurrences are never `merged`.
+  if (members.length === 0 && anchor.status === 'merged') return 'merged';
+  if (occurrences.some(i => i.status === 'analyzed' || i.status === 'resolved')) return 'analyzed';
+  return null;
+}
 
-  let section: IncidentSection = 'analyzed';
-  if (occurrences.some(i => i.status === 'investigating')) {
-    section = 'investigating';
-  } else if (members.length === 0 && anchor.status === 'merged') {
-    // Only a standalone can sit in Merged; recurrences are never `merged`.
-    section = 'merged';
-  }
+function buildGroup(anchor: Incident, members: Incident[]): IncidentGroup | null {
+  const occurrences = [anchor, ...members].sort((a, b) => lastFire(a) - lastFire(b));
+  const section = sectionFor(anchor, members, occurrences);
+  if (!section) return null;
 
   // The server's group size belongs to a real anchor only. An orphan (its anchor
   // missing from the fetch) carries its original group's total, which is not
@@ -98,6 +101,6 @@ export function groupIncidents(incidents: Incident[]): IncidentGroup[] {
   }
 
   return anchors
-    .map(anchor => buildGroup(anchor, membersByAnchor.get(anchor.id) ?? []))
+    .flatMap(anchor => buildGroup(anchor, membersByAnchor.get(anchor.id) ?? []) ?? [])
     .sort((a, b) => b.lastFiredAt - a.lastFiredAt);
 }
