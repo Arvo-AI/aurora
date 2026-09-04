@@ -122,7 +122,7 @@ export default function IncidentGroupRow({ group, expanded, onToggle }: Readonly
         </div>
 
         <ExpandablePanel open={expanded} className="mx-4" contentClassName="py-3 border-t border-border space-y-1">
-          {group.occurrences.slice(0, anchorIndex + 1).map(renderOccurrence)}
+          {group.occurrences.slice(0, anchorIndex + 1).map((occurrence, index) => renderOccurrence(occurrence, index))}
           {group.notLoaded > 0 && (
             <Link
               href={`/incidents/${anchor.id}`}
