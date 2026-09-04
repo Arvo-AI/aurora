@@ -31,6 +31,7 @@ import SuggestionModal from './SuggestionModal';
 import FixSuggestionModal from './FixSuggestionModal';
 import IncidentFeedback from './IncidentFeedback';
 import CorrelatedAlertsSection from './CorrelatedAlertsSection';
+import OccurrencesSection from './OccurrencesSection';
 import PostmortemPanel from './PostmortemPanel';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import IncidentActionRuns from './IncidentActionRuns';
@@ -405,6 +406,14 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             )}
           </div>
         )}
+
+        {/* Recurrences folded into this anchor (root-cause dedup) */}
+        {incident.occurrences?.length ? (
+          <OccurrencesSection
+            occurrences={incident.occurrences}
+            total={incident.occurrencesTotal ?? incident.occurrences.length}
+          />
+        ) : null}
       </div>
 
       {/* Separator */}

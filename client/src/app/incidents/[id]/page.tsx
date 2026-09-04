@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { incidentsService, Incident, StreamingThought } from '@/lib/services/incidents';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ArrowLeft, AlertTriangle, GitMerge } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, GitMerge, Repeat } from 'lucide-react';
 import IncidentCard from '../components/IncidentCard';
 import ThoughtsPanel, { PANEL_WIDTH_DEFAULT } from '../components/ThoughtsPanel';
 
@@ -25,6 +25,8 @@ export default function IncidentDetailPage() {
   const userClosedThoughtsRef = useRef<boolean>(false);
   const pollStartRef = useRef<number>(0);
   const lastUpdatedAtRef = useRef<string>('');
+  // Poll, SSE and manual refresh all call getIncident; only the newest request may apply.
+  const fetchSeqRef = useRef(0);
 
   const applyIncidentData = useCallback((data: Incident) => {
     const newThoughts = data.streamingThoughts || [];
@@ -36,6 +38,7 @@ export default function IncidentDetailPage() {
     if (unseenThoughts.length > 0) {
       setThoughts(prev => [...prev, ...unseenThoughts]);
     }
+    setError(null);
     setIncident(data);
     if (data.status === 'investigating' && !userClosedThoughtsRef.current) {
       setShowThoughts(true);
@@ -51,14 +54,15 @@ export default function IncidentDetailPage() {
 
     const fetchAndSchedule = async (isInitial: boolean) => {
       if (!active || !params.id) return;
+      const seq = ++fetchSeqRef.current;
       try {
         const data = await incidentsService.getIncident(params.id as string);
         if (!active) return;
         if (!data) {
-          if (isInitial) setError('Incident not found');
+          if (isInitial && seq === fetchSeqRef.current) setError('Incident not found');
           return;
         }
-        applyIncidentData(data);
+        if (seq === fetchSeqRef.current) applyIncidentData(data);
 
         const needsPoll = data.status === 'investigating' || data.auroraStatus === 'summarizing';
         if (!needsPoll || !active) { pollStartRef.current = 0; return; }
@@ -76,8 +80,11 @@ export default function IncidentDetailPage() {
       } catch (e) {
         if (!active) return;
         if (isInitial) {
-          setError('Failed to load incident');
-          console.error('Failed to load incident:', e instanceof Error ? e.message : 'Unknown error');
+          // A newer request may already have rendered the page; only the latest may show the error.
+          if (seq === fetchSeqRef.current) {
+            setError('Failed to load incident');
+            console.error('Failed to load incident:', e instanceof Error ? e.message : 'Unknown error');
+          }
         } else {
           if (!pollStartRef.current) pollStartRef.current = Date.now();
           if (Date.now() - pollStartRef.current > STALE_POLL_MS) {
@@ -93,6 +100,27 @@ export default function IncidentDetailPage() {
 
     fetchAndSchedule(true);
     return () => { active = false; clearTimeout(timer); };
+  }, [params.id, applyIncidentData]);
+
+  // A fold lands after the RCA completes, i.e. after the poll loop above has
+  // stopped, so refetch on incident events naming this incident as member or
+  // anchor; this keeps the recurrence banner and the occurrences list current.
+  useEffect(() => {
+    const id = params.id as string;
+    if (!id) return;
+    let active = true;
+    const es = new EventSource('/api/incidents/stream');
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.incident_id !== id && data.recurrence_of_incident_id !== id) return;
+        const seq = ++fetchSeqRef.current;
+        incidentsService.getIncident(id)
+          .then(fresh => { if (active && fresh && seq === fetchSeqRef.current) applyIncidentData(fresh); })
+          .catch(() => { /* the next event or a manual refresh retries */ });
+      } catch { /* ignore malformed messages */ }
+    };
+    return () => { active = false; es.close(); };
   }, [params.id, applyIncidentData]);
 
   if (loading) {
@@ -132,8 +160,9 @@ export default function IncidentDetailPage() {
 
   const refreshIncident = async () => {
     try {
+      const seq = ++fetchSeqRef.current;
       const data = await incidentsService.getIncident(params.id as string);
-      if (data) {
+      if (data && seq === fetchSeqRef.current) {
         setIncident(data);
       }
     } catch (e) {
@@ -160,6 +189,29 @@ export default function IncidentDetailPage() {
               </p>
               <p className="text-xs text-zinc-600 mt-1">
                 Its RCA investigation has been stopped. View the main incident to see the combined analysis.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Recurrence banner — this incident was folded into an earlier anchor (root-cause dedup) */}
+      {incident.recurrenceOf && (
+        <div className="bg-zinc-900/50 border-b border-zinc-800 px-6 py-4">
+          <div className="max-w-5xl mx-auto flex items-center gap-3 text-zinc-400">
+            <Repeat className="w-5 h-5 text-zinc-500" />
+            <div>
+              <p className="text-sm">
+                Occurrence of{' '}
+                <Link
+                  href={`/incidents/${incident.recurrenceOf}`}
+                  className="text-blue-400 hover:text-blue-300 font-medium"
+                >
+                  &quot;{incident.recurrenceOfTitle || 'an earlier incident'}&quot;
+                </Link>
+              </p>
+              <p className="text-xs text-zinc-600 mt-1">
+                Aurora matched this alert to an earlier root cause. This occurrence&apos;s own investigation is kept below.
               </p>
             </div>
           </div>

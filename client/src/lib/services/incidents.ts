@@ -216,6 +216,15 @@ export interface CorrelatedAlert {
   receivedAt: string;
 }
 
+/** A later incident folded into an anchor by the recurrence detector (detail view of the anchor). */
+export interface IncidentOccurrence {
+  id: string;
+  alertTitle: string;
+  status: IncidentStatus;
+  startedAt: string;
+  alertFiredAt?: string;
+}
+
 export interface Incident {
   id: string;
   alert: Alert;
@@ -230,6 +239,11 @@ export interface Incident {
   correlatedAlertCount?: number; // Count of correlated alerts (for list view)
   mergedIntoIncidentId?: string; // ID of incident this was merged into
   mergedIntoTitle?: string; // Title of incident this was merged into
+  recurrenceOf?: string | null; // Anchor incident id when this is a recurrence (root-cause dedup)
+  recurrenceOfTitle?: string; // Anchor's title (detail view only)
+  occurrences?: IncidentOccurrence[]; // Recurrences folded into this anchor (detail view only)
+  occurrenceTotal?: number; // Full group size from the server (list ?groups=1 only); exceeds loaded rows when the group was capped
+  occurrencesTotal?: number; // Full member count (detail view); exceeds occurrences.length when the detail list was capped
   postMortem?: PostmortemData;
   startedAt: string;
   analyzedAt?: string;
@@ -285,6 +299,8 @@ export const incidentsService = {
         correlatedAlertCount: inc.correlatedAlertCount || 0,
         mergedIntoIncidentId: inc.mergedIntoIncidentId,
         mergedIntoTitle: inc.mergedIntoTitle,
+        recurrenceOf: inc.recurrenceOf ?? null,
+        occurrenceTotal: inc.occurrenceTotal,
         postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
@@ -371,6 +387,16 @@ export const incidentsService = {
         })),
         mergedIntoIncidentId: inc.mergedIntoIncidentId,
         mergedIntoTitle: inc.mergedIntoTitle,
+        recurrenceOf: inc.recurrenceOf ?? null,
+        recurrenceOfTitle: inc.recurrenceOfTitle,
+        occurrences: (inc.occurrences || []).map((o: any): IncidentOccurrence => ({
+          id: o.id,
+          alertTitle: o.alertTitle,
+          status: o.status as IncidentStatus,
+          startedAt: o.startedAt,
+          alertFiredAt: o.alertFiredAt ?? undefined,
+        })),
+        occurrencesTotal: inc.occurrencesTotal,
         postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
@@ -403,7 +429,8 @@ export const incidentsService = {
   formatDuration(startTime: string): string {
     const start = new Date(startTime).getTime();
     const end = Date.now();
-    const diffMs = end - start;
+    // Provider fire times can run slightly ahead of this clock; never print "-1m".
+    const diffMs = Math.max(0, end - start);
     const diffMins = Math.floor(diffMs / 60000);
     const hours = Math.floor(diffMins / 60);
     const days = Math.floor(hours / 24);
@@ -421,7 +448,7 @@ export const incidentsService = {
   },
 
   formatTimeAgo(timestamp: string): string {
-    const diffMs = Date.now() - new Date(timestamp).getTime();
+    const diffMs = Math.max(0, Date.now() - new Date(timestamp).getTime());
     const diffMins = Math.floor(diffMs / 60000);
     const hours = Math.floor(diffMins / 60);
     const days = Math.floor(hours / 24);
