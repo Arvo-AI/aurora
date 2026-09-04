@@ -38,6 +38,7 @@ export default function IncidentDetailPage() {
     if (unseenThoughts.length > 0) {
       setThoughts(prev => [...prev, ...unseenThoughts]);
     }
+    setError(null);
     setIncident(data);
     if (data.status === 'investigating' && !userClosedThoughtsRef.current) {
       setShowThoughts(true);
@@ -53,12 +54,12 @@ export default function IncidentDetailPage() {
 
     const fetchAndSchedule = async (isInitial: boolean) => {
       if (!active || !params.id) return;
+      const seq = ++fetchSeqRef.current;
       try {
-        const seq = ++fetchSeqRef.current;
         const data = await incidentsService.getIncident(params.id as string);
         if (!active) return;
         if (!data) {
-          if (isInitial) setError('Incident not found');
+          if (isInitial && seq === fetchSeqRef.current) setError('Incident not found');
           return;
         }
         if (seq === fetchSeqRef.current) applyIncidentData(data);
@@ -79,8 +80,11 @@ export default function IncidentDetailPage() {
       } catch (e) {
         if (!active) return;
         if (isInitial) {
-          setError('Failed to load incident');
-          console.error('Failed to load incident:', e instanceof Error ? e.message : 'Unknown error');
+          // A newer request may already have rendered the page; only the latest may show the error.
+          if (seq === fetchSeqRef.current) {
+            setError('Failed to load incident');
+            console.error('Failed to load incident:', e instanceof Error ? e.message : 'Unknown error');
+          }
         } else {
           if (!pollStartRef.current) pollStartRef.current = Date.now();
           if (Date.now() - pollStartRef.current > STALE_POLL_MS) {
