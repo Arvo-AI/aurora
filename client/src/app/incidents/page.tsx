@@ -32,6 +32,10 @@ const ALERT_PROVIDERS = new Set([
   'aws',
 ]);
 
+// SSE refetch coalescing: wait for a burst to settle, but never longer than MAX_WAIT.
+const REFETCH_DEBOUNCE_MS = 300;
+const REFETCH_MAX_WAIT_MS = 2000;
+
 interface IncidentsResponse { incidents: any[] }
 
 const incidentsFetcher = async (key: string, signal: AbortSignal) => {
@@ -91,31 +95,30 @@ export default function IncidentsPage() {
     let es: EventSource | null = null;
 
     // Coalesce bursts (a fold emits incident_update + recurrence_folded per
-    // alert) into one refetch; each mutate() aborts and restarts the request.
+    // alert) into one refetch. Each mutate() aborts and restarts the request,
+    // so under a sustained stream the deferral is capped at MAX_WAIT to let a
+    // refetch land instead of resetting forever.
     let refetchTimer: ReturnType<typeof setTimeout> | null = null;
+    let firstPendingAt = 0;
     const scheduleRefetch = () => {
+      const now = Date.now();
+      if (!firstPendingAt) firstPendingAt = now;
       if (refetchTimer) clearTimeout(refetchTimer);
+      const wait = Math.min(REFETCH_DEBOUNCE_MS, Math.max(0, firstPendingAt + REFETCH_MAX_WAIT_MS - now));
       refetchTimer = setTimeout(() => {
         refetchTimer = null;
+        firstPendingAt = 0;
         mutateRef.current();
-      }, 300);
+      }, wait);
     };
 
     const connect = () => {
       es?.close();
       es = new EventSource('/api/incidents/stream');
-      es.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (
-            data.type === 'incident_update' ||
-            data.type === 'recurrence_folded' ||
-            data.type === 'recurrence_unfolded'
-          ) {
-            scheduleRefetch();
-          }
-        } catch { /* ignore malformed messages */ }
-      };
+      // Every message on this stream (incident_update, alert_correlated,
+      // recurrence_folded) changes what the list shows; keepalives are SSE
+      // comments and never reach onmessage.
+      es.onmessage = () => scheduleRefetch();
       es.onerror = () => { /* EventSource reconnects automatically */ };
     };
 

@@ -95,6 +95,26 @@ export default function IncidentDetailPage() {
     return () => { active = false; clearTimeout(timer); };
   }, [params.id, applyIncidentData]);
 
+  // A fold lands after the RCA completes, i.e. after the poll loop above has
+  // stopped, so refetch on incident events naming this incident as member or
+  // anchor; this keeps the recurrence banner and the occurrences list current.
+  useEffect(() => {
+    const id = params.id as string;
+    if (!id) return;
+    let active = true;
+    const es = new EventSource('/api/incidents/stream');
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.incident_id !== id && data.recurrence_of_incident_id !== id) return;
+        incidentsService.getIncident(id)
+          .then(fresh => { if (active && fresh) applyIncidentData(fresh); })
+          .catch(() => { /* the next event or a manual refresh retries */ });
+      } catch { /* ignore malformed messages */ }
+    };
+    return () => { active = false; es.close(); };
+  }, [params.id, applyIncidentData]);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-background p-6">
