@@ -59,6 +59,24 @@ function sectionFor(anchor: Incident, members: Incident[], occurrences: Incident
   return null;
 }
 
+/**
+ * Where the members the server did not send sit in `occurrences`: the server
+ * cuts the oldest members on this same fire timeline, so the gap is just before
+ * the oldest loaded member (the anchor may be on either side of it). -1 when
+ * nothing was cut; occurrences.length when only the anchor was loaded.
+ */
+export function omittedGapIndex(group: IncidentGroup): number {
+  if (group.notLoaded === 0) return -1;
+  const firstMember = group.occurrences.findIndex(o => o.id !== group.anchor.id);
+  return firstMember === -1 ? group.occurrences.length : firstMember;
+}
+
+/** 1-based chronological ordinal of `occurrences[index]`, counting the omitted members. */
+export function occurrenceOrdinal(group: IncidentGroup, index: number): number {
+  const gap = omittedGapIndex(group);
+  return index + 1 + (gap !== -1 && index >= gap ? group.notLoaded : 0);
+}
+
 function buildGroup(anchor: Incident, members: Incident[]): IncidentGroup | null {
   const occurrences = [anchor, ...members].sort((a, b) => lastFire(a) - lastFire(b));
   const section = sectionFor(anchor, members, occurrences);

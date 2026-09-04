@@ -1,11 +1,20 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { AlertTriangle, CheckCircle2, ChevronRight, Clock, Loader2, Repeat } from 'lucide-react';
 import { Incident, incidentsService } from '@/lib/services/incidents';
-import { IncidentGroup, isGroupStalled, isInvestigating, isStalled, lastFire } from '@/lib/incident-grouping';
+import {
+  IncidentGroup,
+  isGroupStalled,
+  isInvestigating,
+  isStalled,
+  lastFire,
+  occurrenceOrdinal,
+  omittedGapIndex,
+} from '@/lib/incident-grouping';
 import ExpandablePanel, { ExpandChevron } from './ExpandablePanel';
 
 interface IncidentGroupRowProps {
@@ -45,25 +54,43 @@ export default function IncidentGroupRow({ group, expanded, onToggle }: Readonly
   // Severity is typed as a closed union but the API can still send 'unknown'.
   const severity: string = anchor.alert.severity;
   const showSeverity = (severity && severity !== 'unknown') || anchor.status === 'analyzed';
-  // Members the server cut are the oldest, so they sit between the anchor and
-  // the first loaded member: ordinals after the anchor skip them, and the
-  // "not shown" row is rendered in that gap.
-  const anchorIndex = group.occurrences.findIndex(o => o.id === anchor.id);
-  const renderOccurrence = (occurrence: Incident, index: number) => (
+  // Members the server cut are the oldest on the fire timeline, so the "not
+  // shown" row goes just before the oldest loaded member and later ordinals
+  // skip the cut ones (both computed by the grouping helper).
+  const gapIndex = omittedGapIndex(group);
+  const notShownRow = (
     <Link
-      key={occurrence.id}
-      href={`/incidents/${occurrence.id}`}
-      className="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm hover:bg-muted/60 transition-colors"
+      key="not-shown"
+      href={`/incidents/${anchor.id}`}
+      className="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-muted-foreground hover:bg-muted/60 transition-colors"
     >
-      <span className="w-32 shrink-0 tabular-nums text-muted-foreground whitespace-nowrap">{formatFireTime(occurrence)}</span>
       <span className="flex-1 min-w-0 truncate">
-        occurrence {index + 1 + (index > anchorIndex ? group.notLoaded : 0)}
-        {index === 0 && <span className="text-muted-foreground"> · first</span>}
+        {group.notLoaded} {group.notLoaded === 1 ? 'occurrence' : 'occurrences'} not shown here · open the incident for the full list
       </span>
-      <OccurrenceStatusIcon incident={occurrence} now={now} />
-      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+      <ChevronRight className="h-4 w-4" />
     </Link>
   );
+  const rows: ReactNode[] = [];
+  group.occurrences.forEach((occurrence, index) => {
+    if (index === gapIndex) rows.push(notShownRow);
+    const ordinal = occurrenceOrdinal(group, index);
+    rows.push(
+      <Link
+        key={occurrence.id}
+        href={`/incidents/${occurrence.id}`}
+        className="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm hover:bg-muted/60 transition-colors"
+      >
+        <span className="w-32 shrink-0 tabular-nums text-muted-foreground whitespace-nowrap">{formatFireTime(occurrence)}</span>
+        <span className="flex-1 min-w-0 truncate">
+          occurrence {ordinal}
+          {ordinal === 1 && <span className="text-muted-foreground"> · first</span>}
+        </span>
+        <OccurrenceStatusIcon incident={occurrence} now={now} />
+        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+      </Link>,
+    );
+  });
+  if (gapIndex === group.occurrences.length) rows.push(notShownRow);
 
   return (
     <Card className={`hover:border-primary/50 transition-colors ${isActive ? 'border-l-4 border-l-muted-foreground' : ''}`}>
@@ -122,19 +149,7 @@ export default function IncidentGroupRow({ group, expanded, onToggle }: Readonly
         </div>
 
         <ExpandablePanel open={expanded} className="mx-4" contentClassName="py-3 border-t border-border space-y-1">
-          {group.occurrences.slice(0, anchorIndex + 1).map((occurrence, index) => renderOccurrence(occurrence, index))}
-          {group.notLoaded > 0 && (
-            <Link
-              href={`/incidents/${anchor.id}`}
-              className="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-muted-foreground hover:bg-muted/60 transition-colors"
-            >
-              <span className="flex-1 min-w-0 truncate">
-                {group.notLoaded} {group.notLoaded === 1 ? 'occurrence' : 'occurrences'} not shown here · open the incident for the full list
-              </span>
-              <ChevronRight className="h-4 w-4" />
-            </Link>
-          )}
-          {group.occurrences.slice(anchorIndex + 1).map((occurrence, i) => renderOccurrence(occurrence, anchorIndex + 1 + i))}
+          {rows}
         </ExpandablePanel>
       </CardContent>
     </Card>

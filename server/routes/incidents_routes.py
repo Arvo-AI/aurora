@@ -375,9 +375,11 @@ def get_incidents(user_id):
                     # The writer (recurrence_fold) keeps pointers depth-1 —
                     # only that depth is completed here; UNION (not UNION ALL)
                     # keeps a depth-2 node from coming back twice. Anchors sort
-                    # first, then members by rank within their group, so the
-                    # _GROUPS_MAX_ROWS cut trims the largest groups' oldest
-                    # members first and never a group root or a small group.
+                    # first, then members by rank within their group on the
+                    # fire timeline the client sorts by (alert_fired_at, else
+                    # started_at), so the _GROUPS_MAX_ROWS cut trims the largest
+                    # groups' oldest members first and never a group root or a
+                    # small group.
                     # group_size is a window count, evaluated before the LIMIT,
                     # so each row carries the full non-merged size of its group
                     # and the client can tell when members were cut.
@@ -403,8 +405,8 @@ def get_incidents(user_id):
                       AND i.status != 'merged'
                     ORDER BY (i.recurrence_of_incident_id IS NULL) DESC,
                              ROW_NUMBER() OVER (PARTITION BY COALESCE(i.recurrence_of_incident_id, i.id)
-                                                ORDER BY i.started_at DESC),
-                             i.started_at DESC
+                                                ORDER BY COALESCE(i.alert_fired_at, i.started_at) DESC),
+                             COALESCE(i.alert_fired_at, i.started_at) DESC
                     LIMIT %s
                         """
                     )
