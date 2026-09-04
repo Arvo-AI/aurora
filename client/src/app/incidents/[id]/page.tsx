@@ -25,6 +25,8 @@ export default function IncidentDetailPage() {
   const userClosedThoughtsRef = useRef<boolean>(false);
   const pollStartRef = useRef<number>(0);
   const lastUpdatedAtRef = useRef<string>('');
+  // Poll, SSE and manual refresh all call getIncident; only the newest request may apply.
+  const fetchSeqRef = useRef(0);
 
   const applyIncidentData = useCallback((data: Incident) => {
     const newThoughts = data.streamingThoughts || [];
@@ -52,13 +54,14 @@ export default function IncidentDetailPage() {
     const fetchAndSchedule = async (isInitial: boolean) => {
       if (!active || !params.id) return;
       try {
+        const seq = ++fetchSeqRef.current;
         const data = await incidentsService.getIncident(params.id as string);
         if (!active) return;
         if (!data) {
           if (isInitial) setError('Incident not found');
           return;
         }
-        applyIncidentData(data);
+        if (seq === fetchSeqRef.current) applyIncidentData(data);
 
         const needsPoll = data.status === 'investigating' || data.auroraStatus === 'summarizing';
         if (!needsPoll || !active) { pollStartRef.current = 0; return; }
@@ -107,8 +110,9 @@ export default function IncidentDetailPage() {
       try {
         const data = JSON.parse(event.data);
         if (data.incident_id !== id && data.recurrence_of_incident_id !== id) return;
+        const seq = ++fetchSeqRef.current;
         incidentsService.getIncident(id)
-          .then(fresh => { if (active && fresh) applyIncidentData(fresh); })
+          .then(fresh => { if (active && fresh && seq === fetchSeqRef.current) applyIncidentData(fresh); })
           .catch(() => { /* the next event or a manual refresh retries */ });
       } catch { /* ignore malformed messages */ }
     };
@@ -152,8 +156,9 @@ export default function IncidentDetailPage() {
 
   const refreshIncident = async () => {
     try {
+      const seq = ++fetchSeqRef.current;
       const data = await incidentsService.getIncident(params.id as string);
-      if (data) {
+      if (data && seq === fetchSeqRef.current) {
         setIncident(data);
       }
     } catch (e) {
