@@ -111,6 +111,7 @@ def _format_incident_response(
     once per row — ``_build_source_url`` opens its own DB connection and reads
     that user's integration settings, so the key must include the user.
     """
+    recurrence_of_incident_id = recurrence_of_title = None  # only the merge-target row carries them
     if include_merge_target:
         (
             incident_id,
@@ -167,8 +168,6 @@ def _format_incident_response(
         ) = row
         merged_into_incident_id = None
         merged_into_title = None
-        recurrence_of_incident_id = None
-        recurrence_of_title = None
     elif include_metadata:
         (
             incident_id,
@@ -196,8 +195,6 @@ def _format_incident_response(
         affected_services = None
         merged_into_incident_id = None
         merged_into_title = None
-        recurrence_of_incident_id = None
-        recurrence_of_title = None
     else:
         (
             incident_id,
@@ -225,16 +222,12 @@ def _format_incident_response(
         affected_services = None
         merged_into_incident_id = None
         merged_into_title = None
-        recurrence_of_incident_id = None
-        recurrence_of_title = None
 
+    cache = source_url_cache if source_url_cache is not None else {}
     cache_key = (source_type, user_id)
-    if source_url_cache is not None and cache_key in source_url_cache:
-        source_url = source_url_cache[cache_key]
-    else:
-        source_url = _build_source_url(source_type, user_id)
-        if source_url_cache is not None:
-            source_url_cache[cache_key] = source_url
+    if cache_key not in cache:
+        cache[cache_key] = _build_source_url(source_type, user_id)
+    source_url = cache[cache_key]
 
     result = {
         "id": str(incident_id),
@@ -299,17 +292,29 @@ _INCIDENT_COLUMNS = """
         i.merged_into_incident_id, target.alert_title AS merged_into_title,
         i.recurrence_of_incident_id, anchor.alert_title AS recurrence_of_title
 """
-_INCIDENT_FROM = """
-    FROM incidents i
+_INCIDENT_JOINS = """
     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
     LEFT JOIN incidents anchor ON i.recurrence_of_incident_id = anchor.id
 """
+_INCIDENT_FROM = "\n    FROM incidents i" + _INCIDENT_JOINS
 _INCIDENT_SELECT = "SELECT" + _INCIDENT_COLUMNS + _INCIDENT_FROM
+
+# ``groups=1`` feeds only the list page, which never renders the RCA summary or
+# the raw alert payload; a completed response can hold _GROUPS_MAX_ROWS rows,
+# so those two columns are left NULL there (tuple order unchanged).
+_GROUP_LIST_COLUMNS = _INCIDENT_COLUMNS.replace("i.aurora_summary,", "NULL AS aurora_summary,").replace(
+    "i.alert_metadata,", "NULL AS alert_metadata,"
+)
 
 # Upper bound on rows returned by ``groups=1`` completion. Layer 1 caps a group
 # only by 24h idle time, so a flapping alert can fold thousands of members
 # under one anchor; without this the list response is unbounded.
 _GROUPS_MAX_ROWS = 1000
+
+# Upper bound on ``occurrences`` returned by the anchor detail (newest first);
+# the response also carries ``occurrencesTotal`` so the page can say how many
+# were cut.
+_OCCURRENCES_MAX_ROWS = 200
 
 
 @incidents_bp.route("/api/incidents", methods=["GET"])
@@ -323,8 +328,9 @@ def get_incidents(user_id):
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
-                # Filters for the page of newest incidents. In `groups` mode the
-                # same page is used only to pick which recurrence groups to load.
+                # Filters shared by the page and its total. In `groups` mode the
+                # page is a page of recurrence groups (roots), not incidents.
+                include_groups = request.args.get("groups") in ("1", "true")
                 page_where = """
                     WHERE i.org_id = %s
                       AND i.status != 'merged'
@@ -337,59 +343,74 @@ def get_incidents(user_id):
                     page_params.append(status_filter)
 
                 # Total for pagination: same predicate as the page, before LIMIT/OFFSET.
-                cursor.execute("SELECT COUNT(*) FROM incidents i" + page_where, tuple(page_params))
+                # In groups mode it counts groups, matching what limit/offset page over.
+                count_expr = (
+                    "COUNT(DISTINCT COALESCE(i.recurrence_of_incident_id, i.id))" if include_groups else "COUNT(*)"
+                )
+                cursor.execute("SELECT " + count_expr + " FROM incidents i" + page_where, tuple(page_params))
                 total_count = cursor.fetchone()[0]
 
-                page_tail = " ORDER BY i.started_at DESC"
+                # groups mode: one row per group, newest fire first (same key the
+                # client sorts groups by), so a flapping group cannot fill the page.
+                order_sql = " GROUP BY 1 ORDER BY 2 DESC" if include_groups else " ORDER BY i.started_at DESC"
 
                 limit = request.args.get("limit", 100, type=int)
                 limit = max(1, min(limit, 100))
-                page_tail += " LIMIT %s"
+                order_sql += " LIMIT %s"
                 page_params.append(limit)
 
                 offset = request.args.get("offset", 0, type=int)
                 offset = max(0, offset)
                 if offset > 0:
-                    page_tail += " OFFSET %s"
+                    order_sql += " OFFSET %s"
                     page_params.append(offset)
 
-                include_groups = request.args.get("groups") in ("1", "true")
                 if include_groups:
-                    # Group completion: the page (limit/offset/status) only
-                    # decides which recurrence groups are visible; every
-                    # non-merged anchor and member of those groups is then
-                    # returned so a group never straddles the LIMIT. Result
-                    # stays a flat list. Contract consequences: rows of other
-                    # statuses can appear, consecutive offsets can repeat a
-                    # group, and `total` still counts page-eligible incidents.
+                    # Group completion: limit/offset/status pick a page of
+                    # recurrence groups (roots); every non-merged anchor and
+                    # member of those groups is then returned so a group never
+                    # straddles the page. Result stays a flat list. Contract
+                    # consequences: rows of other statuses can appear inside a
+                    # selected group, and limit/offset/total count groups.
                     # The writer (recurrence_fold) keeps pointers depth-1 —
-                    # only that depth is completed here. Anchors sort first so
-                    # the _GROUPS_MAX_ROWS cut drops the oldest members, never
-                    # the group root. group_size is a window count, evaluated
-                    # before the LIMIT, so each row carries the full non-merged
-                    # size of its group and the client can tell when members
-                    # were cut.
+                    # only that depth is completed here; UNION (not UNION ALL)
+                    # keeps a depth-2 node from coming back twice. Anchors sort
+                    # first, then members by rank within their group, so the
+                    # _GROUPS_MAX_ROWS cut trims the largest groups' oldest
+                    # members first and never a group root or a small group.
+                    # group_size is a window count, evaluated before the LIMIT,
+                    # so each row carries the full non-merged size of its group
+                    # and the client can tell when members were cut.
                     query = (
                         "WITH roots AS ("
-                        "SELECT COALESCE(i.recurrence_of_incident_id, i.id) AS root_id FROM incidents i"
+                        "SELECT COALESCE(i.recurrence_of_incident_id, i.id) AS root_id,"
+                        " MAX(COALESCE(i.alert_fired_at, i.started_at)) AS last_fired FROM incidents i"
                         + page_where
-                        + page_tail
-                        + ") SELECT"
-                        + _INCIDENT_COLUMNS
+                        + order_sql
+                        # Completion as two index joins (pkey, idx_incidents_recurrence);
+                        # an OR of two IN-subqueries here scans the whole org.
+                        + "), members AS ("
+                        "SELECT i.* FROM roots r JOIN incidents i ON i.id = r.root_id"
+                        " UNION "
+                        "SELECT i.* FROM roots r JOIN incidents i ON i.recurrence_of_incident_id = r.root_id"
+                        ") SELECT"
+                        + _GROUP_LIST_COLUMNS
                         + ", COUNT(*) OVER (PARTITION BY COALESCE(i.recurrence_of_incident_id, i.id)) AS group_size"
-                        + _INCIDENT_FROM
+                        + " FROM members i"
+                        + _INCIDENT_JOINS
                         + """
                     WHERE i.org_id = %s
                       AND i.status != 'merged'
-                      AND (i.id IN (SELECT root_id FROM roots)
-                           OR i.recurrence_of_incident_id IN (SELECT root_id FROM roots))
-                    ORDER BY (i.recurrence_of_incident_id IS NULL) DESC, i.started_at DESC
+                    ORDER BY (i.recurrence_of_incident_id IS NULL) DESC,
+                             ROW_NUMBER() OVER (PARTITION BY COALESCE(i.recurrence_of_incident_id, i.id)
+                                                ORDER BY i.started_at DESC),
+                             i.started_at DESC
                     LIMIT %s
                         """
                     )
                     params = page_params + [org_id, _GROUPS_MAX_ROWS]
                 else:
-                    query = _INCIDENT_SELECT + page_where + page_tail
+                    query = _INCIDENT_SELECT + page_where + order_sql
                     params = page_params
 
                 cursor.execute(query, tuple(params))
@@ -723,13 +744,19 @@ def get_incident(user_id, incident_id: str):
                 # Later occurrences folded into this incident (root-cause dedup).
                 # Only anchors carry the list; members link back via recurrenceOf.
                 if incident["recurrenceOf"] is None:
+                    # Newest _OCCURRENCES_MAX_ROWS members; the window count runs
+                    # before the LIMIT so occurrencesTotal is the full member count.
                     cursor.execute(
-                        """SELECT id, alert_title, status, started_at, alert_fired_at
+                        """SELECT id, alert_title, status, started_at, alert_fired_at,
+                                  COUNT(*) OVER () AS total
                            FROM incidents
                            WHERE recurrence_of_incident_id = %s AND org_id = %s
-                           ORDER BY COALESCE(alert_fired_at, started_at) ASC""",
-                        (incident_id, org_id),
+                           ORDER BY COALESCE(alert_fired_at, started_at) DESC
+                           LIMIT %s""",
+                        (incident_id, org_id, _OCCURRENCES_MAX_ROWS),
                     )
+                    occurrence_rows = cursor.fetchall()
+                    # Emitted oldest-first to match the list card's chronological rows.
                     incident["occurrences"] = [
                         {
                             "id": str(orow[0]),
@@ -738,8 +765,9 @@ def get_incident(user_id, incident_id: str):
                             "startedAt": iso_utc(orow[3]),
                             "alertFiredAt": iso_utc(orow[4]),
                         }
-                        for orow in cursor.fetchall()
+                        for orow in reversed(occurrence_rows)
                     ]
+                    incident["occurrencesTotal"] = occurrence_rows[0][5] if occurrence_rows else 0
 
                 # Get suggestions (including fix-type fields)
                 cursor.execute(
