@@ -409,7 +409,10 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
 
         {/* Recurrences folded into this anchor (root-cause dedup) */}
         {incident.occurrences?.length ? (
-          <OccurrencesSection occurrences={incident.occurrences} />
+          <OccurrencesSection
+            occurrences={incident.occurrences}
+            total={incident.occurrencesTotal ?? incident.occurrences.length}
+          />
         ) : null}
       </div>
 

@@ -35,7 +35,8 @@ export default function ExpandablePanel({ open, children, className = '', conten
     >
       <div className="min-h-0 overflow-hidden">
         <div className={contentClassName}>
-          {Children.map(children, (child, index) => (
+          {/* Children.map also visits `false`/null slots (`{cond && ...}`); skip them so no empty wrapper is rendered. */}
+          {Children.map(children, (child, index) => child == null ? null : (
             <div
               style={{ transitionDelay: open ? `${Math.min(index, MAX_STAGGER_INDEX) * 50}ms` : '0ms' }}
               className={`transition-all duration-300 ease-out ${

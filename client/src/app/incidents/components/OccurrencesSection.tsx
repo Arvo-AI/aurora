@@ -7,13 +7,16 @@ import { IncidentOccurrence, incidentsService } from '@/lib/services/incidents';
 import ExpandablePanel, { ExpandChevron } from './ExpandablePanel';
 
 interface OccurrencesSectionProps {
-  /** Recurrences folded into this anchor; the anchor itself is occurrence 1. */
+  /** Recurrences folded into this anchor (newest N); the anchor itself is occurrence 1. */
   occurrences: IncidentOccurrence[];
+  /** Full member count from the server; larger than occurrences.length when the list was capped. */
+  total: number;
 }
 
-export default function OccurrencesSection({ occurrences }: Readonly<OccurrencesSectionProps>) {
+export default function OccurrencesSection({ occurrences, total }: Readonly<OccurrencesSectionProps>) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const total = 1 + occurrences.length;
+  const notShown = total - occurrences.length;
+  const fired = 1 + total;
 
   return (
     <div className="mt-4">
@@ -30,7 +33,7 @@ export default function OccurrencesSection({ occurrences }: Readonly<Occurrences
             <Repeat className="w-4 h-4 text-zinc-400" />
           </div>
           <div className="text-left">
-            <span className="text-sm font-medium text-zinc-300">Fired {total} times</span>
+            <span className="text-sm font-medium text-zinc-300">Fired {fired} times</span>
             <p className="text-xs text-zinc-500 mt-0.5">Later occurrences of this root cause</p>
           </div>
         </div>
@@ -44,6 +47,12 @@ export default function OccurrencesSection({ occurrences }: Readonly<Occurrences
         className={`border-zinc-800 ${isExpanded ? 'border border-t-0 rounded-b-lg' : ''}`}
         contentClassName="p-3 space-y-1 bg-zinc-900/20"
       >
+        {/* The list is oldest-first and the server cut the oldest members, so the gap precedes the first row. */}
+        {notShown > 0 && (
+          <p className="px-3 py-2 text-xs text-zinc-500">
+            {notShown} older {notShown === 1 ? 'occurrence' : 'occurrences'} not shown
+          </p>
+        )}
         {occurrences.map(occurrence => (
           <Link
             key={occurrence.id}

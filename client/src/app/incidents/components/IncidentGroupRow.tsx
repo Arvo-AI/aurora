@@ -45,6 +45,25 @@ export default function IncidentGroupRow({ group, expanded, onToggle }: Readonly
   // Severity is typed as a closed union but the API can still send 'unknown'.
   const severity: string = anchor.alert.severity;
   const showSeverity = (severity && severity !== 'unknown') || anchor.status === 'analyzed';
+  // Members the server cut are the oldest, so they sit between the anchor and
+  // the first loaded member: ordinals after the anchor skip them, and the
+  // "not shown" row is rendered in that gap.
+  const anchorIndex = group.occurrences.findIndex(o => o.id === anchor.id);
+  const renderOccurrence = (occurrence: Incident, index: number) => (
+    <Link
+      key={occurrence.id}
+      href={`/incidents/${occurrence.id}`}
+      className="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm hover:bg-muted/60 transition-colors"
+    >
+      <span className="w-32 shrink-0 tabular-nums text-muted-foreground whitespace-nowrap">{formatFireTime(occurrence)}</span>
+      <span className="flex-1 min-w-0 truncate">
+        occurrence {index + 1 + (index > anchorIndex ? group.notLoaded : 0)}
+        {index === 0 && <span className="text-muted-foreground"> · first</span>}
+      </span>
+      <OccurrenceStatusIcon incident={occurrence} now={now} />
+      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+    </Link>
+  );
 
   return (
     <Card className={`hover:border-primary/50 transition-colors ${isActive ? 'border-l-4 border-l-muted-foreground' : ''}`}>
@@ -70,6 +89,9 @@ export default function IncidentGroupRow({ group, expanded, onToggle }: Readonly
                   <Repeat className="h-3 w-3" />
                   fired {group.occurrenceCount} times
                 </span>
+                {/* Time since the newest fire. No "N related" here: correlatedAlertCount is the
+                    old correlator's counter and folds bump it, so it would double as a second
+                    occurrence count (design doc: do not show it on the group header). */}
                 <span className="flex items-center gap-1">
                   <Clock className="h-3 w-3" />
                   {incidentsService.formatDuration(new Date(group.lastFiredAt).toISOString())}
@@ -100,32 +122,19 @@ export default function IncidentGroupRow({ group, expanded, onToggle }: Readonly
         </div>
 
         <ExpandablePanel open={expanded} className="mx-4" contentClassName="py-3 border-t border-border space-y-1">
-          {group.occurrences.map((occurrence, index) => (
-            <Link
-              key={occurrence.id}
-              href={`/incidents/${occurrence.id}`}
-              className="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm hover:bg-muted/60 transition-colors"
-            >
-              <span className="w-32 shrink-0 tabular-nums text-muted-foreground whitespace-nowrap">{formatFireTime(occurrence)}</span>
-              <span className="flex-1 min-w-0 truncate">
-                occurrence {index + 1}
-                {index === 0 && <span className="text-muted-foreground"> · first</span>}
-              </span>
-              <OccurrenceStatusIcon incident={occurrence} now={now} />
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            </Link>
-          ))}
+          {group.occurrences.slice(0, anchorIndex + 1).map(renderOccurrence)}
           {group.notLoaded > 0 && (
             <Link
               href={`/incidents/${anchor.id}`}
               className="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-muted-foreground hover:bg-muted/60 transition-colors"
             >
               <span className="flex-1 min-w-0 truncate">
-                {group.notLoaded} older {group.notLoaded === 1 ? 'occurrence' : 'occurrences'} not shown here · open the incident for the full list
+                {group.notLoaded} {group.notLoaded === 1 ? 'occurrence' : 'occurrences'} not shown here · open the incident for the full list
               </span>
               <ChevronRight className="h-4 w-4" />
             </Link>
           )}
+          {group.occurrences.slice(anchorIndex + 1).map((occurrence, i) => renderOccurrence(occurrence, anchorIndex + 1 + i))}
         </ExpandablePanel>
       </CardContent>
     </Card>

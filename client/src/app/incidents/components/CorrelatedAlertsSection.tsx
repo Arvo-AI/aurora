@@ -141,8 +141,12 @@ function CorrelatedAlertCard({ alert, isNew }: { alert: CorrelatedAlert; isNew: 
 export default function CorrelatedAlertsSection({ alerts }: CorrelatedAlertsSectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   
-  // Filter out primary alerts (those with strategy 'primary' or score of 1)
-  const correlatedAlerts = alerts.filter(a => a.correlationStrategy !== 'primary');
+  // Filter out primary alerts (those with strategy 'primary' or score of 1) and
+  // the 'recurrence' rows a fold copies onto the anchor — OccurrencesSection
+  // already lists those as occurrences.
+  const correlatedAlerts = alerts.filter(
+    a => a.correlationStrategy !== 'primary' && a.correlationStrategy !== 'recurrence',
+  );
   
   if (correlatedAlerts.length === 0) {
     return null;
