@@ -17,7 +17,8 @@ from routes.slack.slack_events_helpers import (
     get_thread_messages,
     get_channel_context_with_threads,
     get_session_from_thread,
-    send_message_to_aurora
+    send_message_to_aurora,
+    get_workspace_member,
 )
 from utils.secrets.secret_ref_utils import get_user_token_data
 from chat.background.task import run_background_chat
@@ -93,6 +94,7 @@ def slack_events():
                 response_text = None
                 trigger_background = False
                 user_id = None # Aurora user ID
+                asked_by = None  # Slack display name of the sender when using the team identity
 
                 try:
                     # 1. Resolve Identity and Client
@@ -103,19 +105,37 @@ def slack_events():
                         client = get_slack_client_for_user(user_id)
                         if not client:
                             logger.error(f"Failed to create client for user {user_id}")
+                    elif event.get('bot_id') or event.get('subtype') == 'bot_message':
+                        # Never answer other bots (prevents bot-to-bot loops)
+                        logger.info("Ignoring @mention from a bot in team %s", sanitize(team_id))
                     else:
-                        # User not connected. Check if workspace is connected by anyone else.
+                        # Sender has no Aurora account linked to this Slack ID. Fall back to
+                        # the Aurora user who connected this workspace as a shared, read-only
+                        # "team identity" so anyone in the workspace can ask questions.
+                        # Mentions run background chats in "ask" (read-only) mode; button
+                        # actions below keep their own per-user authentication.
                         workspace_user_id = get_user_id_from_slack_team(team_id)
                         if workspace_user_id:
-                            # Use workspace credentials to send a helpful error message
-                            token_data = get_user_token_data(workspace_user_id, "slack")
-                            if token_data:
-                                client = SlackClient(token_data.get('access_token'))
-                                response_text = (
-                                    "You're not authenticated in Aurora.\n\n"
-                                    f"To use Aurora in this Slack workspace, please connect your Aurora account:\n{FRONTEND_URL}/settings/integrations\n\n"
-                                    "Click 'Connect' for Slack and authorize this workspace."
-                                )
+                            client = get_slack_client_for_user(workspace_user_id)
+                            if not client:
+                                logger.error(f"Failed to create client for workspace user {workspace_user_id}")
+                            else:
+                                # Only full members of this workspace may use the team identity.
+                                # Guests, Slack Connect users from other workspaces and bots are refused.
+                                member = get_workspace_member(client, slack_user_id, team_id)
+                                if member:
+                                    user_id = workspace_user_id
+                                    asked_by = member["display_name"]
+                                    logger.info(
+                                        "Slack user %s has no linked Aurora account; answering read-only via workspace team identity",
+                                        sanitize(slack_user_id),
+                                    )
+                                else:
+                                    logger.info(
+                                        "Slack user %s is not a full member of workspace %s; refusing",
+                                        sanitize(slack_user_id), sanitize(team_id),
+                                    )
+                                    response_text = "Aurora is only available to members of this Slack workspace."
                     
                     # 2. Logic processing (if no errors yet and client exists)
                     if client and not response_text:
@@ -132,7 +152,10 @@ def slack_events():
                             response_text = "Thinking..."
                             trigger_background = True
                             # Update text to cleaned version for background task
-                            text = clean_msg 
+                            text = clean_msg
+                            if asked_by:
+                                # Keep attribution visible in the session title and prompt
+                                text = f"Asked by {asked_by}: {clean_msg}"
 
                     # 3. Execution
                     if client:

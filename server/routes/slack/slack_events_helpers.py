@@ -199,6 +199,45 @@ def _get_user_display_name(client, user_id: str) -> str:
         return user_id
 
 
+def get_workspace_member(client, slack_user_id: str, team_id: str) -> Optional[dict]:
+    """
+    Return {"display_name": ...} if slack_user_id is a full member of the Slack
+    workspace team_id, otherwise None.
+
+    "Full member" excludes deleted users, bots, Slack Connect users from other
+    workspaces (team_id mismatch / is_stranger) and guest accounts
+    (is_restricted / is_ultra_restricted). Used before answering an @mention
+    under the shared team identity so that only people who belong to the org
+    can get answers about its infrastructure.
+    """
+    if not slack_user_id or not team_id:
+        return None
+    try:
+        result = client._make_request("GET", "users.info", {"user": slack_user_id}) or {}
+    except Exception as e:
+        logger.warning(f"users.info failed for Slack user {sanitize(slack_user_id)}: {e}")
+        return None
+
+    user = result.get("user") or {}
+    if not result.get("ok") or not user:
+        return None
+    if user.get("team_id") != team_id:
+        return None  # Slack Connect / external workspace
+    if user.get("deleted") or user.get("is_bot") or user.get("id") == "USLACKBOT":
+        return None
+    if user.get("is_stranger") or user.get("is_restricted") or user.get("is_ultra_restricted"):
+        return None  # external user or guest account
+
+    profile = user.get("profile", {})
+    display_name = (
+        profile.get("display_name")
+        or profile.get("real_name")
+        or user.get("name")
+        or slack_user_id
+    )
+    return {"display_name": display_name.strip()}
+
+
 def _resolve_user_display_name(client, user_id: str, is_bot: bool, user_name_cache: dict) -> str:
     """
     Resolve display name for a user with caching.
