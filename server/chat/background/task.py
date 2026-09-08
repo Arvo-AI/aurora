@@ -24,6 +24,7 @@ from connectors.slack_connector.client import get_slack_client_for_user
 from utils.db.connection_pool import db_pool
 from chat.background.visualization_generator import update_visualization
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
+from chat.backend.agent.utils.message_content import extract_text_from_content
 
 
 logger = logging.getLogger(__name__)
@@ -1895,21 +1896,7 @@ Respond with ONLY ONE WORD: critical, high, medium, or low"""
                 # Safely extract content from response - handle both AIMessage and dict responses
                 # Also handle Gemini thinking model responses (list with thinking/text blocks)
                 if hasattr(response, 'content'):
-                    content = response.content
-                    if isinstance(content, list):
-                        text_parts = []
-                        for part in content:
-                            if isinstance(part, dict):
-                                part_type = part.get("type", "")
-                                if part_type not in ("thinking", "reasoning"):
-                                    text = part.get("text", "")
-                                    if text:
-                                        text_parts.append(str(text))
-                            elif isinstance(part, str):
-                                text_parts.append(part)
-                        severity_raw = "".join(text_parts).strip().lower()
-                    else:
-                        severity_raw = str(content).strip().lower()
+                    severity_raw = extract_text_from_content(response.content).strip().lower()
                 elif isinstance(response, dict):
                     severity_raw = str(response.get('content', '')).strip().lower()
                 else:

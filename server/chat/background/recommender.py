@@ -23,6 +23,7 @@ from langchain_core.messages import HumanMessage
 
 from chat.background.citation_extractor import Citation
 from chat.background.suggestion_extractor import Suggestion, is_command_safe
+from chat.backend.agent.utils.message_content import extract_text_from_content
 
 from chat.background.citation_extractor import _TOOL_NAME_MAPPING
 
@@ -762,23 +763,6 @@ def _is_redundant(suggestion: Suggestion, executed_commands: set) -> bool:
     return False
 
 
-def _extract_text_part(part: Any) -> str:
-    """Extract text from a single content block, filtering out thinking blocks."""
-    if isinstance(part, str):
-        return part
-    if isinstance(part, dict) and part.get("type") not in ("thinking", "reasoning"):
-        text = part.get("text", "")
-        return str(text) if text else ""
-    return ""
-
-
-def _extract_text_from_content(content: Any) -> str:
-    """Extract plain text from LLM response content (handles Gemini thinking blocks)."""
-    if isinstance(content, list):
-        return "".join(_extract_text_part(part) for part in content).strip()
-    return str(content).strip()
-
-
 def _parse_item_to_suggestion(item: dict) -> Optional[Suggestion]:
     """Convert a single parsed JSON item into a validated Suggestion."""
     if not isinstance(item, dict):
@@ -841,7 +825,7 @@ def _parse_recommendations(content: Any, executed_commands: set) -> List[Suggest
     if not content:
         return []
 
-    text = _strip_code_fences(_extract_text_from_content(content))
+    text = _strip_code_fences(extract_text_from_content(content).strip())
 
     try:
         data = json.loads(text)

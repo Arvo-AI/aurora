@@ -220,7 +220,7 @@ def _generate_summary(user_id: str, context: str) -> str:
     from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
     from langchain_core.messages import HumanMessage
     from utils.hooks import get_hook
-    from chat.background.summarization import _extract_text_from_response
+    from chat.backend.agent.utils.message_content import extract_text_from_content
 
     # Hook: check if LLM call is allowed
     from utils.auth.stateless_auth import get_org_id_for_user
@@ -243,8 +243,8 @@ def _generate_summary(user_id: str, context: str) -> str:
         request_type="repo_metadata",
     )
     # Gemini thinking models return content as a list of thinking/text blocks;
-    # the helper drops the thinking blocks and returns the text (str content passes through).
-    summary = _extract_text_from_response(response.content) if response.content else ""
+    # the shared helper drops the thinking blocks and returns the text (str content passes through).
+    summary = extract_text_from_content(response.content).strip()
     return summary or "No summary generated"
 
 

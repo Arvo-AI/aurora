@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from celery_config import celery_app
@@ -14,39 +14,9 @@ from langchain_core.messages import HumanMessage
 from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.llm import ModelConfig
 from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
+from chat.backend.agent.utils.message_content import extract_text_from_content
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
-
-
-def _extract_text_from_response(content: Union[str, List[Any]]) -> str:
-    """Extract text content from LLM response, filtering out thinking blocks.
-
-    Gemini thinking models return content as a list with thinking and text blocks.
-    This extracts only the actual response text.
-    """
-    if isinstance(content, str):
-        return content.strip()
-
-    if isinstance(content, list):
-        text_parts = []
-        for part in content:
-            if isinstance(part, dict):
-                part_type = part.get("type", "")
-                if part_type in ("thinking", "reasoning"):
-                    continue
-                elif part_type == "text":
-                    text = part.get("text", "")
-                    if text:
-                        text_parts.append(str(text))
-                else:
-                    text = part.get("text", "")
-                    if text:
-                        text_parts.append(str(text))
-            elif isinstance(part, str):
-                text_parts.append(part)
-        return "".join(text_parts).strip()
-
-    return str(content).strip()
 
 
 from chat.background.citation_extractor import (
@@ -638,11 +608,7 @@ def generate_incident_summary(
             request_type="incident_initial_summary",
         )
 
-        summary = (
-            _extract_text_from_response(response.content)
-            if response.content
-            else "No summary generated"
-        )
+        summary = extract_text_from_content(response.content).strip() or "No summary generated"
 
         logger.info(
             f"{_LOG_PREFIX} Generated summary for incident {incident_id} ({len(summary)} chars)"
@@ -811,11 +777,7 @@ def generate_incident_summary_from_chat(
             model_name=ModelConfig.EMAIL_REPORT_MODEL,
             request_type="incident_rca_summary",
         )
-        summary = (
-            _extract_text_from_response(response.content)
-            if response.content
-            else "No summary generated"
-        )
+        summary = extract_text_from_content(response.content).strip() or "No summary generated"
 
         logger.info(
             f"{_LOG_PREFIX} Generated chat-based summary for incident {incident_id} ({len(summary)} chars)"
