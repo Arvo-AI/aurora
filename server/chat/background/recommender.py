@@ -289,7 +289,7 @@ Return ONLY the JSON object."""
     try:
         llm = create_chat_model(ModelConfig.SUGGESTION_MODEL, temperature=0.1)
         response = llm.invoke([HumanMessage(content=prompt)])
-        text = _strip_code_fences(str(response.content).strip())
+        text = _strip_code_fences(extract_text_from_content(response.content).strip())
 
         data = json.loads(text)
 
@@ -553,7 +553,7 @@ Return ONLY the JSON array."""
     try:
         llm = create_chat_model(ModelConfig.SUGGESTION_MODEL, temperature=0.1)
         response = llm.invoke([HumanMessage(content=prompt)])
-        commands_to_run = _parse_json_list_response(str(response.content))
+        commands_to_run = _parse_json_list_response(extract_text_from_content(response.content))
     except Exception as e:
         logger.warning("[Recommender] Self-exec planning failed: %s", e)
         return []
@@ -914,7 +914,7 @@ Return in this exact format (one block per suggestion):
             model_name=_ENRICHMENT_MODEL,
             request_type="suggestion_enrichment",
         )
-        _apply_enrichment_response(str(response.content).strip(), suggestions)
+        _apply_enrichment_response(extract_text_from_content(response.content).strip(), suggestions)
     except Exception as e:
         logger.warning("[Recommender] Validated fix enrichment failed (non-fatal): %s", e)
         _generate_summaries(suggestions, user_id, session_id)
@@ -977,7 +977,7 @@ Return one summary per line, numbered:"""
             model_name=_ENRICHMENT_MODEL,
             request_type="suggestion_summary",
         )
-        text = str(response.content).strip()
+        text = extract_text_from_content(response.content).strip()
         lines = [l.strip() for l in text.split("\n") if l.strip()]
 
         for line in lines:
