@@ -59,6 +59,7 @@ def test_standalone_row_keeps_existing_keys(patched_db):
     assert data['service'] == "api"
 
 
-def test_no_row_returns_none(patched_db):
+def test_no_row_returns_none(patched_db, caplog):
     fake_pool = patched_db
     assert _fetch(None, A, fake_pool) is None
+    assert not [r for r in caplog.records if r.exc_info]

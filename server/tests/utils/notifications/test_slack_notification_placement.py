@@ -89,7 +89,8 @@ class TestStandalone:
         client = make_client()
         assert run(standalone(alert_title="<!channel> down", service="<a|b>"), client) is True
         section = _section_text(client.sent[0]["blocks"])
-        assert "<!channel>" not in section and "&lt;!channel&gt; down" in section
+        assert "<!channel>" not in section
+        assert "&lt;!channel&gt; down" in section
         assert "&lt;a|b&gt;" in section
         assert "<!channel>" not in client.sent[0]["text"]
 
@@ -110,7 +111,8 @@ class TestFoldedChild:
         assert client.deleted == [(CHAN, CHILD_TS)]
         assert len(patched_db.updates) == 1
         sql, params = patched_db.updates[0]
-        assert "SET slack_message_ts = NULL" in sql and "recurrence_of_incident_id = %s" in sql
+        assert "SET slack_message_ts = NULL" in sql
+        assert "recurrence_of_incident_id = %s" in sql
         assert params == (CHILD_ID, CHILD_TS, ANCHOR_ID)
         slack_helpers_stub.get_incident_suggestions.assert_not_called()
 
@@ -128,7 +130,8 @@ class TestFoldedChild:
         assert client.sent[0]["thread_ts"] == ANCHOR_TS
         pointer = client.sent[1]
         assert pointer["thread_ts"] == CHILD_TS
-        assert "Folded into" in pointer["text"] and f"/incidents/{ANCHOR_ID}|" in pointer["text"]
+        assert "Folded into" in pointer["text"]
+        assert f"/incidents/{ANCHOR_ID}|" in pointer["text"]
         assert client.deleted == []
         assert patched_db.updates == []
 
@@ -247,7 +250,8 @@ class TestFailed:
         assert client.sent[0]["thread_ts"] == ANCHOR_TS
         assert _header(client.sent[0]["blocks"]) == ["Investigation Failed"]
         section = _section_text(client.sent[0]["blocks"])
-        assert "boom &lt;here&gt;" in section and "<here>" not in section
+        assert "boom &lt;here&gt;" in section
+        assert "<here>" not in section
         assert patched_db.updates == []
 
     def test_standalone_without_ts_backfills(self, run, make_client, patched_db, standalone):
@@ -302,4 +306,5 @@ class TestStarted:
         client = make_client()
         assert run(standalone(slack_message_ts=None, alert_title="<!channel> down"), client, kind="started") is True
         section = _section_text(client.sent[0]["blocks"])
-        assert "<!channel>" not in section and "&lt;!channel&gt; down" in section
+        assert "<!channel>" not in section
+        assert "&lt;!channel&gt; down" in section

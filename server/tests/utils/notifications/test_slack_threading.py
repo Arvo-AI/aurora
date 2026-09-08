@@ -50,7 +50,8 @@ class TestBuildRecurrenceReply:
             folded(alert_title="<!channel> down", service="<a|b>"), incident_url="u", anchor_url="a",
             error_text="boom <here>")
         section = blocks[0]["text"]["text"]
-        assert "<!channel>" not in section and "&lt;!channel&gt; down" in section
+        assert "<!channel>" not in section
+        assert "&lt;!channel&gt; down" in section
         assert "&lt;a|b&gt;" in section
         assert "&lt;here&gt;" in blocks[1]["text"]["text"]
         assert "<!channel>" not in text

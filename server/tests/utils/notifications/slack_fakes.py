@@ -77,6 +77,8 @@ class FakeSlackClient:
         self.deleted.append((channel, ts))
 
     def get_message(self, channel, ts):
+        if self.transport_error:
+            raise ValueError("Failed to communicate with Slack: read timeout")
         if ts in self.missing:
             return None
         message = {"ts": ts}
