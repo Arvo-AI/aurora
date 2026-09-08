@@ -75,11 +75,13 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
     """Fetch incident data from database.
 
     Also carries the recurrence-group context Slack threading (dedup layer 3)
-    needs: the anchor's Slack ts/title and this incident's position in its
-    group. Group membership mirrors _group_is_stale (recurrence_fold.py) and
-    the detail-view occurrences query (pointer-only); ordering mirrors
-    lastFire in the client so "occurrence N" agrees with the UI. The group
-    always contains the incident itself, so a standalone incident gets
+    needs: the anchor's Slack ts/title, this incident's position in its
+    group and when the group last fired. Group membership mirrors
+    _group_is_stale (recurrence_fold.py) and the detail-view occurrences
+    query (pointer-only; 'merged' cannot occur inside a group — the fold
+    rejects merged members and the status has no writer left); ordering
+    mirrors lastFire in the client so "occurrence N" agrees with the UI. The
+    group always contains the incident itself, so a standalone incident gets
     recurrence_of=None, occurrence_number=1, group_size=1.
     """
     try:
@@ -97,7 +99,8 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                                ROW_NUMBER() OVER (
                                    ORDER BY COALESCE(g.alert_fired_at, g.started_at), g.started_at, g.id
                                ) AS occurrence_number,
-                               COUNT(*) OVER () AS group_size
+                               COUNT(*) OVER () AS group_size,
+                               MAX(COALESCE(g.alert_fired_at, g.started_at)) OVER () AS last_fired_at
                         FROM incidents g
                         JOIN me ON g.id = me.root_id OR g.recurrence_of_incident_id = me.root_id
                     )
@@ -105,7 +108,7 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                            i.alert_service, i.aurora_status, i.aurora_summary, i.started_at,
                            i.analyzed_at, i.created_at, i.slack_message_ts, i.google_chat_message_name,
                            i.recurrence_of_incident_id, anchor.slack_message_ts, anchor.alert_title,
-                           grp.occurrence_number, grp.group_size
+                           grp.occurrence_number, grp.group_size, grp.last_fired_at
                     FROM incidents i
                     LEFT JOIN incidents anchor ON anchor.id = i.recurrence_of_incident_id
                     JOIN grp ON grp.id = i.id
@@ -135,6 +138,7 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                         'anchor_alert_title': result[16],
                         'occurrence_number': int(result[17]),
                         'group_size': int(result[18]),
+                        'group_last_fired_at': result[19],
                     }
         return None
     except Exception:
@@ -410,8 +414,14 @@ def notify_investigation_started(user_id: str, incident_id: str) -> None:
         logger.exception("[Dispatcher] Error in notify_investigation_started")
 
 
-def notify_investigation_completed(user_id: str, incident_id: str, session_id: Optional[str] = None) -> None:
-    """Send notifications for investigation completed event across all enabled channels."""
+def notify_investigation_completed(user_id: str, incident_id: str, session_id: Optional[str] = None,
+                                   refresh_only: bool = False) -> None:
+    """Send notifications for investigation completed event across all enabled channels.
+
+    refresh_only: the completion was already announced (a follow-up chat
+    re-summarized the incident): no email, no Slack post; only the Google
+    Chat card, which is edited in place, is refreshed to match the summary.
+    """
     try:
         org_id = get_org_id_for_user(user_id)
         if not org_id:
@@ -427,12 +437,12 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
 
         # --- Email ---
         email_enabled = bool(get_org_preference(org_id, 'rca_email_notifications', default=False))
-        if email_enabled:
+        if email_enabled and not refresh_only:
             _send_emails(org_id, user_id, 'send_investigation_completed_email', incident_data)
 
         # --- Slack ---
         slack_enabled = bool(get_org_preference(org_id, 'slack_investigation_complete_notifications', default=True))
-        if slack_enabled and _has_slack_connected(user_id):
+        if slack_enabled and not refresh_only and _has_slack_connected(user_id):
             try:
                 from utils.notifications.slack_notification_service import (
                     send_slack_investigation_completed_notification,
@@ -441,14 +451,18 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
             except Exception:
                 logger.exception("[Dispatcher] Slack completed notification failed")
 
-        # --- Google Chat ---
+        # --- Google Chat --- (edited in place: a refresh needs an existing card)
         google_chat_enabled = bool(get_org_preference(org_id, 'google_chat_investigation_notifications', default=True))
+        if refresh_only and not incident_data.get('google_chat_message_name'):
+            google_chat_enabled = False
         if google_chat_enabled and _has_google_chat_connected(user_id):
             try:
                 from utils.notifications.google_chat_notification_service import (
                     send_google_chat_investigation_completed_notification,
                 )
-                send_google_chat_investigation_completed_notification(user_id, incident_data)
+                send_google_chat_investigation_completed_notification(
+                    user_id, incident_data, allow_new_message=not refresh_only,
+                )
             except Exception:
                 logger.exception("[Dispatcher] Google Chat completed notification failed")
 

@@ -2,13 +2,14 @@
 
 import html
 import json
+from datetime import datetime
 
 import pytest
 
 from connectors.slack_connector.client import SlackAPIError
 from utils.notifications import slack_threading as st
 
-from .slack_fakes import ANCHOR_ID, ANCHOR_TS, CHAN, CHILD_ID, CHILD_TS, FIRST_POSTED_TS
+from .slack_fakes import ANCHOR_ID, ANCHOR_TS, CHAN, CHILD_ID, CHILD_TS, FIRST_POSTED_TS, folded_incident
 
 
 class TestIsFoldedChild:
@@ -73,6 +74,24 @@ class TestBuildFoldPointer:
         text = st.build_fold_pointer(folded(anchor_alert_title="<!channel> CPU"), anchor_url="http://a")
         assert "<http://a|&lt;!channel&gt; CPU>" in text
         assert "<!channel>" not in text
+
+
+class TestLookupMessage:
+    def test_failure_is_distinguishable_from_gone(self, make_client):
+        client = make_client()
+        client.get_message = lambda channel, ts: (_ for _ in ()).throw(ValueError("Slack API error: ratelimited"))
+        assert st.lookup_message(client, channel=CHAN, ts=ANCHOR_TS) is st.LOOKUP_FAILED
+        assert st.lookup_message(make_client(missing={ANCHOR_TS}), channel=CHAN, ts=ANCHOR_TS) is None
+        assert st.lookup_message(make_client(), channel=CHAN, ts=ANCHOR_TS)["ts"] == ANCHOR_TS
+
+
+class TestEscapedFields:
+    def test_defaults_escaping_and_caps(self):
+        title, severity, service = st.escaped_fields({"alert_title": None, "severity": None, "service": "<a|b>"})
+        assert (title, severity, service) == ("Unknown Alert", "Unknown", "&lt;a|b&gt;")
+        title, _, service = st.escaped_fields({"alert_title": "x" * 5000, "service": "y" * 5000})
+        assert len(title) == st._ALERT_TITLE_MAX + 1 and title.endswith("…")
+        assert len(service) == st._SERVICE_MAX + 1 and service.endswith("…")
 
 
 class TestMessageIsGone:
@@ -147,6 +166,92 @@ class TestTryPostThreaded:
         assert result is not None
         assert st.placed_thread_ts(result) is None
         assert len(client.sent) == 1
+
+
+class TestRecurrenceFooterAndStub:
+    def test_footer_counts_and_dates(self):
+        block = st.build_recurrence_footer(folded_incident(started_at=datetime(2026, 9, 8, 16, 48, 49)))
+        assert block["block_id"] == st.RECURRENCE_FOOTER_BLOCK_ID
+        text = block["elements"][0]["text"]
+        assert "3 occurrences" in text
+        assert "<!date^" in text
+        assert "2026-09-08 16:48 UTC" in text
+
+    def test_footer_without_time(self):
+        text = st.build_recurrence_footer(folded_incident(started_at=None, group_size=None))["elements"][0]["text"]
+        assert "1 occurrence," not in text and "1 occurrence" in text
+        assert "last" not in text
+
+    def test_footer_uses_group_last_fired_over_own_started_at(self):
+        # Siblings complete out of order: the footer must not regress to an older occurrence.
+        text = st.build_recurrence_footer(folded_incident(
+            started_at=datetime(2026, 9, 8, 9, 0), group_last_fired_at=datetime(2026, 9, 8, 10, 0),
+        ))["elements"][0]["text"]
+        assert "2026-09-08 10:00 UTC" in text
+        assert "09:00" not in text
+
+    def test_update_anchor_footer_takes_a_prefetched_message(self, make_client):
+        client = make_client()
+        message = client.get_message(CHAN, ANCHOR_TS)
+        client.lookups.clear()
+        assert st.update_anchor_recurrence_footer(client, channel=CHAN, anchor_ts=ANCHOR_TS, incident_data=folded_incident(), message=message) is True
+        assert client.lookups == []
+        assert client.updated[-1]["blocks"][-1]["block_id"] == st.RECURRENCE_FOOTER_BLOCK_ID
+
+    def test_update_anchor_footer_preserves_card_and_replaces_footer(self, make_client):
+        client = make_client()
+        assert st.update_anchor_recurrence_footer(client, channel=CHAN, anchor_ts=ANCHOR_TS, incident_data=folded_incident()) is True
+        assert st.update_anchor_recurrence_footer(client, channel=CHAN, anchor_ts=ANCHOR_TS, incident_data=folded_incident(group_size=4)) is True
+        blocks = client.updated[-1]["blocks"]
+        assert blocks[0]["type"] == "header"
+        assert [b for b in blocks if b.get("block_id") == st.RECURRENCE_FOOTER_BLOCK_ID][0]["elements"][0]["text"].startswith(":repeat: *Still firing* — 4 occurrences")
+        assert sum(1 for b in blocks if b.get("block_id") == st.RECURRENCE_FOOTER_BLOCK_ID) == 1
+
+    def test_update_anchor_footer_never_raises(self, make_client):
+        assert st.update_anchor_recurrence_footer(make_client(missing={ANCHOR_TS}), channel=CHAN, anchor_ts=ANCHOR_TS, incident_data=folded_incident()) is False
+        assert st.update_anchor_recurrence_footer(make_client(transport_error=True), channel=CHAN, anchor_ts=ANCHOR_TS, incident_data=folded_incident()) is False
+        assert st.update_anchor_recurrence_footer(make_client(fail_all=True, reject_with="not_in_channel"), channel=CHAN, anchor_ts=ANCHOR_TS, incident_data=folded_incident()) is False
+
+    def test_folded_stub_shape_and_escaping(self):
+        text, blocks = st.build_folded_stub(
+            folded_incident(alert_title="<!channel> down", anchor_alert_title="a & b"),
+            incident_url="http://f/incidents/" + CHILD_ID, anchor_url="http://f/incidents/" + ANCHOR_ID, error_text="boom <x>")
+        json.dumps(blocks)
+        section = blocks[0]["text"]["text"]
+        assert f"Folded into <http://f/incidents/{ANCHOR_ID}|a &amp; b>" in section
+        assert "occurrence 2 of 3" in section
+        assert "&lt;!channel&gt; down" in section
+        assert "<!channel>" not in section
+        assert blocks[0]["accessory"]["url"].endswith(CHILD_ID)
+        assert ":x: *Error:* boom &lt;x&gt;" in blocks[1]["text"]["text"]
+        assert text.startswith("Folded into a &amp; b — occurrence 2 of 3")
+
+
+class TestTryUpdateInPlace:
+    def test_updates_and_returns_result(self, make_client):
+        client = make_client()
+        result = st.try_update_in_place(client, channel=CHAN, ts=ANCHOR_TS, text="t", blocks=[{"type": "divider"}])
+        assert result["ts"] == ANCHOR_TS
+        assert client.updated == [{"channel": CHAN, "ts": ANCHOR_TS, "text": "t", "blocks": [{"type": "divider"}]}]
+
+    def test_plain_text_clears_old_blocks(self, make_client):
+        client = make_client()
+        st.try_update_in_place(client, channel=CHAN, ts=ANCHOR_TS, text="t", blocks=None)
+        assert client.updated[0]["blocks"] == []
+
+    def test_uneditable_message_returns_none(self, make_client):
+        assert st.try_update_in_place(make_client(fail_update=True), channel=CHAN, ts=ANCHOR_TS, text="t", blocks=None) is None
+        assert st.try_update_in_place(make_client(missing={ANCHOR_TS}), channel=CHAN, ts=ANCHOR_TS, text="t", blocks=None) is None
+
+    def test_other_rejection_propagates(self, make_client):
+        client = make_client(fail_all=True, reject_with="not_in_channel")
+        with pytest.raises(SlackAPIError):
+            st.try_update_in_place(client, channel=CHAN, ts=ANCHOR_TS, text="t", blocks=None)
+
+    def test_transport_error_propagates(self, make_client):
+        client = make_client(transport_error=True)
+        with pytest.raises(ValueError):
+            st.try_update_in_place(client, channel=CHAN, ts=ANCHOR_TS, text="t", blocks=None)
 
 
 class TestPostWithThreadFallback:

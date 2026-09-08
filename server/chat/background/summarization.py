@@ -718,15 +718,25 @@ def generate_incident_summary_from_chat(
     incident_id: str,
     user_id: str,
     session_id: str,
-    send_notifications: bool = True,
+    announce_completion: bool = True,
 ) -> Dict[str, Any]:
     """Regenerate incident summary after RCA using the RCA chat transcript with citations.
 
-    send_notifications: False for follow-up chats (Slack/Google Chat replies on
-    an existing incident) so re-summarizing does not re-announce completion —
-    for a folded recurrence that would post another "Still firing" reply.
+    announce_completion: False when the summary is being regenerated after a
+    follow-up chat (Slack/Google Chat reply on an existing incident). The
+    summary is still written; the "investigation completed" announcement
+    (email, Slack card) is skipped since the investigation already completed
+    once — for a folded recurrence it would otherwise post another "Still
+    firing" reply — and only the Google Chat card, which is edited in place,
+    is refreshed to match the new summary.
     """
     from celery.exceptions import SoftTimeLimitExceeded
+
+    def _notify_completed() -> None:
+        from utils.notifications.dispatcher import notify_investigation_completed
+        if not announce_completion:
+            logger.info(f"{_LOG_PREFIX} Follow-up summary for {incident_id}; completion already announced, refreshing cards only")
+        notify_investigation_completed(user_id, incident_id, session_id=session_id, refresh_only=not announce_completion)
 
     logger.info(
         f"{_LOG_PREFIX} Regenerating summary from chat for incident {incident_id} (user={user_id}, session={session_id})"
@@ -899,11 +909,7 @@ def generate_incident_summary_from_chat(
             )
 
         # Send completion notifications via centralized dispatcher
-        if send_notifications:
-            from utils.notifications.dispatcher import notify_investigation_completed
-            notify_investigation_completed(user_id, incident_id, session_id=session_id)
-        else:
-            logger.info(f"{_LOG_PREFIX} Follow-up summary for {incident_id}; completion notifications skipped")
+        _notify_completed()
 
         return {
             "incident_id": incident_id,
@@ -922,9 +928,7 @@ def generate_incident_summary_from_chat(
             # overwrite the good summary with an error — send the completion
             # notification the task guarantees and finish.
             try:
-                if send_notifications:
-                    from utils.notifications.dispatcher import notify_investigation_completed
-                    notify_investigation_completed(user_id, incident_id, session_id=session_id)
+                _notify_completed()
             except Exception:
                 logger.exception(
                     f"{_LOG_PREFIX} Failed to notify after soft-limit for {incident_id}"

@@ -766,7 +766,7 @@ def run_background_chat(
                         incident_id=incident_id,
                         user_id=user_id,
                         session_id=session_id,
-                        send_notifications=send_notifications,
+                        announce_completion=send_notifications,
                     )
                 except Exception:
                     logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization for incident %s", incident_id)
@@ -841,11 +841,12 @@ def run_background_chat(
         if incident_id and not is_action_source:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
             _mark_inflight_findings_failed(incident_id, user_id, "parent task timed out after 30 minutes")
-            try:
-                from utils.notifications.dispatcher import notify_investigation_failed
-                notify_investigation_failed(user_id, incident_id, error_message="Investigation timed out after 30 minutes")
-            except Exception:
-                logger.debug("[BackgroundChat] Failed to send investigation failed notification after timeout")
+            if send_notifications:  # a follow-up chat failing is not the investigation failing
+                try:
+                    from utils.notifications.dispatcher import notify_investigation_failed
+                    notify_investigation_failed(user_id, incident_id, error_message="Investigation timed out after 30 minutes")
+                except Exception:
+                    logger.debug("[BackgroundChat] Failed to send investigation failed notification after timeout")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
@@ -870,11 +871,12 @@ def run_background_chat(
         if incident_id and not is_action_source:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
             _mark_inflight_findings_failed(incident_id, user_id, f"parent task failed: {e}")
-            try:
-                from utils.notifications.dispatcher import notify_investigation_failed
-                notify_investigation_failed(user_id, incident_id, error_message=str(e))
-            except Exception:
-                logger.debug("[BackgroundChat] Failed to send investigation failed notification")
+            if send_notifications:  # a follow-up chat failing is not the investigation failing
+                try:
+                    from utils.notifications.dispatcher import notify_investigation_failed
+                    notify_investigation_failed(user_id, incident_id, error_message=str(e))
+                except Exception:
+                    logger.debug("[BackgroundChat] Failed to send investigation failed notification")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
@@ -1516,7 +1518,7 @@ async def _execute_background_chat(
                     incident_id=incident_id,
                     user_id=user_id,
                     session_id=session_id,
-                    send_notifications=send_notifications,
+                    announce_completion=send_notifications,
                 )
             except Exception as e:
                 logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization")

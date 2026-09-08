@@ -59,7 +59,12 @@ class SlackClient:
         if result.get('ok', False):
             return result
         error = result.get('error', 'unknown_error')
-        if not (error == 'name_taken' and endpoint == 'conversations.create'):
+        # Answers the caller expects and handles itself: not an ERROR line.
+        expected = (
+            (error == 'name_taken' and endpoint == 'conversations.create')
+            or (error == 'thread_not_found' and endpoint == 'conversations.replies')
+        )
+        if not expected:
             logger.error("Slack API error on %s: %s", endpoint, error)
         raise SlackAPIError(error)
 
@@ -106,9 +111,11 @@ class SlackClient:
         return result
     
     def update_message(self, channel: str, ts: str, text: str, blocks: Optional[List[Dict]] = None) -> Dict[str, Any]:
-        """Update an existing message in a Slack channel."""
+        """Update an existing message in a Slack channel. Pass blocks=[] to
+        replace a Block Kit message with plain text (omitting blocks keeps the
+        old ones)."""
         data = {"channel": channel, "ts": ts, "text": text}
-        if blocks:
+        if blocks is not None:
             data["blocks"] = blocks
         return self._make_request("POST", "chat.update", data)
 
@@ -119,8 +126,9 @@ class SlackClient:
 
     def get_message(self, channel: str, ts: str) -> Optional[Dict[str, Any]]:
         """The message `ts` in `channel` (via conversations.replies, so a thread
-        parent carries `reply_count`), or None when Slack no longer has it.
-        Other failures raise ValueError. Short budget: callers treat a failed
+        parent carries `reply_count`), or None when Slack no longer has it —
+        including the tombstone Slack leaves at the same ts for a deleted
+        parent that had replies. Other failures raise ValueError. Short budget: callers treat a failed
         lookup as "still present" and move on."""
         try:
             result = self._make_request(
@@ -132,7 +140,10 @@ class SlackClient:
                 return None
             raise
         messages = result.get('messages') or []
-        return messages[0] if messages and messages[0].get('ts') == ts else None
+        message = messages[0] if messages and messages[0].get('ts') == ts else None
+        if message is None or message.get('subtype') == 'tombstone':
+            return None
+        return message
     
     def set_channel_topic(self, channel: str, topic: str) -> Dict[str, Any]:
         """Set channel topic/description."""

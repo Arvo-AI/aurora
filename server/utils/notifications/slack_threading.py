@@ -19,6 +19,7 @@ occurrence_number, group_size) come from dispatcher._get_incident_data.
 
 import html
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from connectors.slack_connector.client import SlackAPIError, SlackClient
@@ -40,6 +41,33 @@ _THREAD_ONLY_ERRORS = frozenset({
     "restricted_action_non_threadable_channel",
 })
 
+# chat.update rejections that mean "this message cannot be edited" (gone, not
+# ours, too old), where posting instead is the right move. Anything else
+# (not_in_channel, invalid_auth, msg_too_long, invalid_blocks, ...) would fail
+# the same way as a post.
+_UPDATE_ONLY_ERRORS = frozenset({
+    "message_not_found",
+    "cant_update_message",
+    "edit_window_closed",
+})
+
+# The anchor card carries one marked context block summarising its recurrences;
+# it is replaced (not appended) on every fold. Only cards made of these block
+# types are edited — a plain-text message comes back from Slack as rich_text,
+# which is not ours to rebuild, and image blocks come back with read-only
+# fields (image_width, image_bytes, ...) that chat.update rejects.
+RECURRENCE_FOOTER_BLOCK_ID = "aurora_recurrence_footer"
+_EDITABLE_BLOCK_TYPES = frozenset({"header", "section", "divider", "context", "actions"})
+
+# Caps for webhook-sourced fields that share one Block Kit section (3000
+# chars): past that Slack rejects the whole post as invalid_blocks.
+_ALERT_TITLE_MAX = 1500
+_SERVICE_MAX = 300
+
+# lookup_message: Slack could not be asked (transport error, rate limit, ...).
+LOOKUP_FAILED = object()
+_SLACK_MAX_BLOCKS = 50
+
 # clear_child_started_message outcomes
 RELEASED = "released"          # stored ts cleared (message deleted or already gone)
 KEPT_REPLIES = "kept_replies"  # message has replies: kept, still the thread key
@@ -58,20 +86,42 @@ def escape_mrkdwn(text: Any) -> str:
     return html.escape(str(text), quote=False)
 
 
+def escaped_fields(incident_data: Dict[str, Any]) -> Tuple[str, str, str]:
+    """(alert_title, severity, service) escaped for mrkdwn and capped — the one
+    place every card and reply gets these fields, with one default each."""
+    alert_title = escape_mrkdwn(truncate(incident_data.get('alert_title') or 'Unknown Alert', _ALERT_TITLE_MAX, "…"))
+    severity = escape_mrkdwn((incident_data.get('severity') or 'unknown').title())
+    service = escape_mrkdwn(truncate(incident_data.get('service') or 'unknown', _SERVICE_MAX, "…"))
+    return alert_title, severity, service
+
+
+def occurrence_label(incident_data: Dict[str, Any]) -> str:
+    return f"occurrence {incident_data.get('occurrence_number') or 1} of {incident_data.get('group_size') or 1}"
+
+
+def error_block(error_text: str) -> Dict[str, Any]:
+    return {"type": "section", "text": {"type": "mrkdwn", "text": f":x: *Error:* {escape_mrkdwn(error_text)}"}}
+
+
 def placed_thread_ts(result: Dict[str, Any]) -> Optional[str]:
     """Parent ts of a chat.postMessage response, or None for a top-level post."""
     return (result.get('message') or {}).get('thread_ts') or None
 
 
-def message_is_gone(client: SlackClient, *, channel: str, ts: str) -> bool:
-    """True only when Slack confirms `ts` is no longer in `channel`. A failed
-    lookup counts as present so a stored parent is never dropped on a
-    transient error."""
+def lookup_message(client: SlackClient, *, channel: str, ts: str) -> Any:
+    """The message at `ts`, None when Slack confirms it is gone, or
+    LOOKUP_FAILED when Slack could not be asked. Callers treat LOOKUP_FAILED as
+    "still present" so a stored parent is never dropped on a transient error."""
     try:
-        return client.get_message(channel=channel, ts=ts) is None
+        return client.get_message(channel=channel, ts=ts)
     except ValueError as e:
         logger.warning(f"{_LOG_PREFIX} Could not look up message {ts}: {e}")
-        return False
+        return LOOKUP_FAILED
+
+
+def message_is_gone(client: SlackClient, *, channel: str, ts: str) -> bool:
+    """True only when Slack confirms `ts` is no longer in `channel`."""
+    return lookup_message(client, channel=channel, ts=ts) is None
 
 
 def try_post_threaded(client: SlackClient, *, channel: str, text: str,
@@ -116,6 +166,27 @@ def try_post_threaded(client: SlackClient, *, channel: str, text: str,
     return result
 
 
+def try_update_in_place(client: SlackClient, *, channel: str, ts: str, text: str,
+                        blocks: Optional[List[Dict]]) -> Optional[Dict[str, Any]]:
+    """chat.update the incident's own "Investigation Started" message into its
+    final Complete/Failed card, so the one top-level message always shows the
+    outcome and the thread (and its ts, the @mention key) is preserved for
+    recurrences. blocks=None means plain text: the old blocks are cleared.
+
+    Returns None when Slack says the message cannot be edited
+    (_UPDATE_ONLY_ERRORS) so the caller can post the card instead. Any other
+    rejection propagates, and so does a transport failure — the edit may
+    already have landed, and posting as well would show the outcome twice.
+    """
+    try:
+        return client.update_message(channel=channel, ts=ts, text=text, blocks=blocks if blocks is not None else [])
+    except SlackAPIError as e:
+        if e.error not in _UPDATE_ONLY_ERRORS:
+            raise
+        logger.warning(f"{_LOG_PREFIX} Could not update Started message {ts} in place ({e.error}); posting instead")
+        return None
+
+
 def post_with_thread_fallback(client: SlackClient, *, channel: str, text: str,
                               blocks: Optional[List[Dict]] = None,
                               thread_ts: Optional[str] = None) -> Dict[str, Any]:
@@ -143,10 +214,8 @@ def build_recurrence_reply(incident_data: Dict[str, Any], *, incident_url: str, 
 
     Returns (fallback_text, blocks).
     """
-    alert_title = escape_mrkdwn(incident_data.get('alert_title') or 'Unknown Alert')
-    severity = escape_mrkdwn((incident_data.get('severity') or 'unknown').title())
-    service = escape_mrkdwn(incident_data.get('service') or 'unknown')
-    label = f"occurrence {incident_data.get('occurrence_number') or 1} of {incident_data.get('group_size') or 1}"
+    alert_title, severity, service = escaped_fields(incident_data)
+    label = occurrence_label(incident_data)
     anchor_title = _anchor_title(incident_data)
 
     blocks: List[Dict] = [
@@ -167,10 +236,7 @@ def build_recurrence_reply(incident_data: Dict[str, Any], *, incident_url: str, 
         },
     ]
     if error_text:
-        blocks.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": f":x: *Error:* {escape_mrkdwn(error_text)}"},
-        })
+        blocks.append(error_block(error_text))
     blocks.append({
         "type": "context",
         "elements": [
@@ -184,6 +250,96 @@ def build_recurrence_reply(incident_data: Dict[str, Any], *, incident_url: str, 
     return text, blocks
 
 
+def _slack_date(value: Any) -> str:
+    """Viewer-local timestamp via Slack's date token, with a UTC fallback."""
+    if not isinstance(value, datetime):
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    epoch = int(value.timestamp())
+    return f"<!date^{epoch}^{{date_short_pretty}} at {{time}}|{value.astimezone(timezone.utc):%Y-%m-%d %H:%M} UTC>"
+
+
+def build_recurrence_footer(incident_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Context block for the anchor card: how many times this root cause has
+    fired and when the group last did (group_last_fired_at from the
+    dispatcher — not this occurrence's own time, which regresses when
+    siblings complete out of order). Marked so the next fold replaces it."""
+    size = incident_data.get('group_size') or 1
+    when = _slack_date(incident_data.get('group_last_fired_at') or incident_data.get('started_at'))
+    text = f":repeat: *Still firing* — {size} occurrence{'s' if size != 1 else ''}"
+    if when:
+        text += f", last {when}"
+    text += " · each occurrence is a reply in this thread"
+    return {
+        "type": "context",
+        "block_id": RECURRENCE_FOOTER_BLOCK_ID,
+        "elements": [{"type": "mrkdwn", "text": text}],
+    }
+
+
+def update_anchor_recurrence_footer(client: SlackClient, *, channel: str, anchor_ts: str,
+                                    incident_data: Dict[str, Any],
+                                    message: Optional[Dict[str, Any]] = None) -> bool:
+    """After a recurrence reply landed under the anchor, mark the anchor card
+    itself so the channel view shows the group is still firing (the replies
+    alone are collapsed). Reads the card (or takes `message`, when the caller
+    has just fetched it), swaps in the footer, writes it back. Best effort:
+    never raises, and leaves the card alone when it is not a Block Kit card
+    we built."""
+    try:
+        if message is None:
+            message = client.get_message(channel=channel, ts=anchor_ts)
+        if not message:
+            return False
+        blocks = message.get('blocks') or []
+        if not blocks or any(b.get('type') not in _EDITABLE_BLOCK_TYPES for b in blocks):
+            logger.info(f"{_LOG_PREFIX} Anchor card {anchor_ts} is not an editable Block Kit card; no recurrence footer")
+            return False
+        blocks = [b for b in blocks if b.get('block_id') != RECURRENCE_FOOTER_BLOCK_ID]
+        blocks.append(build_recurrence_footer(incident_data))
+        if len(blocks) > _SLACK_MAX_BLOCKS:
+            return False
+        client.update_message(channel=channel, ts=anchor_ts, text=message.get('text') or "", blocks=blocks)
+        logger.info(f"{_LOG_PREFIX} Updated recurrence footer on anchor card {anchor_ts}")
+        return True
+    except Exception as e:
+        logger.warning(f"{_LOG_PREFIX} Could not update recurrence footer on anchor card {anchor_ts}: {e}")
+        return False
+
+
+def build_folded_stub(incident_data: Dict[str, Any], *, incident_url: str, anchor_url: str,
+                      error_text: Optional[str] = None) -> Tuple[str, List[Dict]]:
+    """Replacement for a folded child's own Started card when that card is
+    kept (its thread has replies): says where the outcome went instead of
+    reading "In Progress" forever. Returns (fallback_text, blocks)."""
+    alert_title, severity, service = escaped_fields(incident_data)
+    label = occurrence_label(incident_data)
+    anchor_title = _anchor_title(incident_data)
+    blocks: List[Dict] = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f":repeat: *Folded into <{anchor_url}|{anchor_title}>* — {label}\n"
+                    f"*Alert:* {alert_title}\n*Severity:* {severity}\n*Service:* {service}\n"
+                    "_The analysis for this occurrence is in that incident's thread._"
+                ),
+            },
+            "accessory": {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "View Occurrence"},
+                "url": incident_url,
+            },
+        },
+    ]
+    if error_text:
+        blocks.append(error_block(error_text))
+    text = f"Folded into {anchor_title} — {label}: {alert_title}"
+    return text, blocks
+
+
 def build_fold_pointer(incident_data: Dict[str, Any], *, anchor_url: str) -> str:
     """One-line reply for a folded child's own Started thread when that
     thread is kept (it has replies): tells the people talking there where
@@ -194,21 +350,21 @@ def build_fold_pointer(incident_data: Dict[str, Any], *, anchor_url: str) -> str
     )
 
 
-def _write_slack_message_ts(user_id: str, incident_id: str, sql: str, params: tuple, *, what: str) -> int:
-    """One guarded UPDATE of incidents.slack_message_ts under RLS. Returns the
-    number of rows changed (0 when the guard did not match or the write
-    failed). Never raises."""
+def _write_slack_message_ts(user_id: str, incident_id: str, sql: str, params: tuple, *, what: str) -> bool:
+    """One guarded UPDATE of incidents.slack_message_ts under RLS. True when a
+    row changed; False when the guard did not match or the write failed.
+    Never raises."""
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix=f"[SlackNotification:{what}]")
                 cursor.execute(sql, params)
-                changed = int(cursor.rowcount or 0)
+                changed = cursor.rowcount > 0
                 conn.commit()
-                return max(changed, 0)
+                return changed
     except Exception as e:
         logger.warning(f"{_LOG_PREFIX} Failed to {what} slack_message_ts for incident {incident_id}: {e}")
-        return 0
+        return False
 
 
 def clear_child_started_message(client: SlackClient, *, channel: str, user_id: str,
@@ -285,11 +441,11 @@ def backfill_thread_parent_ts(user_id: str, incident_id: str, message_ts: str, *
     row changed."""
     if not message_ts:
         return False
-    return bool(_write_slack_message_ts(
+    return _write_slack_message_ts(
         user_id, incident_id,
         "UPDATE incidents SET slack_message_ts = %s WHERE id = %s AND slack_message_ts IS NOT DISTINCT FROM %s",
         (message_ts, incident_id, replacing), what="backfill",
-    ))
+    )
 
 
 def record_thread_parent(client: SlackClient, *, channel: str, user_id: str, incident_id: str,

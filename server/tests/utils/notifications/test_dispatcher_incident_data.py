@@ -16,11 +16,14 @@ _EXISTING_KEYS = (
 )
 
 
-def _row(incident_id, *, recurrence_of=None, anchor_ts=None, anchor_title=None, n=1, size=1):
+_T1 = datetime(2026, 9, 1, 14, 0, 0)
+
+
+def _row(incident_id, *, recurrence_of=None, anchor_ts=None, anchor_title=None, n=1, size=1, last_fired=_T0):
     return (
         uuid.UUID(incident_id), "u1", "datadog", "investigating", "critical", "High CPU",
         "api", "completed", "summary text", _T0, _T0, _T0, "1700000000.000100", None,
-        uuid.UUID(recurrence_of) if recurrence_of else None, anchor_ts, anchor_title, n, size,
+        uuid.UUID(recurrence_of) if recurrence_of else None, anchor_ts, anchor_title, n, size, last_fired,
     )
 
 
@@ -31,15 +34,17 @@ def _fetch(row, incident_id, fake_pool):
 
 def test_folded_row_populates_group_fields(patched_db):
     fake_pool = patched_db
-    data = _fetch(_row(B, recurrence_of=A, anchor_ts="1700000000.000001", anchor_title="High CPU", n=2, size=3), B, fake_pool)
+    data = _fetch(_row(B, recurrence_of=A, anchor_ts="1700000000.000001", anchor_title="High CPU", n=2, size=3, last_fired=_T1), B, fake_pool)
     assert data['recurrence_of'] == A
     assert data['anchor_slack_message_ts'] == "1700000000.000001"
     assert data['anchor_alert_title'] == "High CPU"
     assert data['occurrence_number'] == 2
     assert data['group_size'] == 3
+    assert data['group_last_fired_at'] == _T1
     sql, params = fake_pool.executes[0]
     assert params == (B, B)
     assert "ROW_NUMBER() OVER" in sql
+    assert "MAX(COALESCE(g.alert_fired_at, g.started_at)) OVER ()" in sql
     assert "LEFT JOIN incidents anchor" in sql
     assert "JOIN grp ON grp.id = i.id" in sql  # the group always contains the incident itself
     assert "g.id = me.root_id OR g.recurrence_of_incident_id = me.root_id" in sql

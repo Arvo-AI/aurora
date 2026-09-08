@@ -12,25 +12,30 @@ from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 from utils.notifications.slack_threading import (
     KEPT_REPLIES,
-    backfill_thread_parent_ts,
+    LOOKUP_FAILED,
     build_fold_pointer,
+    build_folded_stub,
+    build_recurrence_footer,
     build_recurrence_reply,
     clear_anchor_message_ts,
     clear_child_started_message,
+    error_block,
     escape_mrkdwn,
+    escaped_fields,
     is_folded_child,
-    message_is_gone,
+    lookup_message,
     placed_thread_ts,
     post_with_thread_fallback,
     record_thread_parent,
     try_post_threaded,
+    try_update_in_place,
+    update_anchor_recurrence_footer,
 )
 
 logger = logging.getLogger(__name__)
 
 SLACK_MAX_BLOCKS = 50
 FRONTEND_URL = os.getenv("FRONTEND_URL")
-_DEFAULT_ALERT_TITLE = "Unknown Alert"
 
 
 def _get_incidents_channel_id(user_id: str, client: SlackClient) -> Optional[str]:
@@ -101,9 +106,7 @@ def send_slack_investigation_started_notification(user_id: str, incident_data: D
         
         # Extract incident data (mrkdwn-escaped: titles come from webhooks)
         incident_id = incident_data.get('incident_id', 'unknown')
-        alert_title = escape_mrkdwn(incident_data.get('alert_title', _DEFAULT_ALERT_TITLE))
-        severity = escape_mrkdwn((incident_data.get('severity') or 'unknown').title())
-        service = escape_mrkdwn(incident_data.get('service', 'unknown'))
+        alert_title, severity, service = escaped_fields(incident_data)
         source_type = escape_mrkdwn(incident_data.get('source_type', 'monitoring platform'))
         started_at = incident_data.get('started_at')
         
@@ -193,12 +196,12 @@ def _post_recurrence_reply(client: SlackClient, channel_id: str, user_id: str, i
         return False
     incident_id = incident_data.get('incident_id')
     anchor_id = incident_data['recurrence_of']
-    if message_is_gone(client, channel=channel_id, ts=thread_ts):
-        # Forget it so later siblings stop trying, and so the next top-level
-        # card can seed a new parent (see _post_incident_card).
+    anchor_message = lookup_message(client, channel=channel_id, ts=thread_ts)
+    if anchor_message is None:
+        # Forget it so later siblings stop trying; this incident is then
+        # placed like a standalone one (_post_incident_card).
         logger.info(f"[SlackNotification] Anchor {anchor_id} thread parent {thread_ts} is gone; forgetting it")
         clear_anchor_message_ts(user_id, anchor_id, thread_ts)
-        incident_data['anchor_slack_message_ts'] = None
         return False
     from routes.slack.slack_events_helpers import validate_slack_blocks
     anchor_url = _get_incident_url(anchor_id)
@@ -228,27 +231,53 @@ def _post_recurrence_reply(client: SlackClient, channel_id: str, user_id: str, i
         f"[SlackNotification] Posted {'failed' if error_text else 'completed'} as recurrence reply for "
         f"{incident_id} under anchor {anchor_id}"
     )
+    # The channel view only shows the anchor card: mark it as still firing
+    # (reusing the lookup above instead of fetching the card again).
+    update_anchor_recurrence_footer(
+        client, channel=channel_id, anchor_ts=thread_ts, incident_data=incident_data,
+        message=None if anchor_message is LOOKUP_FAILED else anchor_message,
+    )
     outcome = clear_child_started_message(client, channel=channel_id, user_id=user_id, incident_data=incident_data)
     if outcome == KEPT_REPLIES:
-        # People are talking in the child's own thread: tell them where the
-        # outcome went instead of leaving that card "In Progress" forever.
-        try_post_threaded(
-            client, channel=channel_id, text=build_fold_pointer(incident_data, anchor_url=anchor_url),
-            blocks=None, thread_ts=incident_data['slack_message_ts'], require_threaded=True,
+        # People are talking in the child's own thread: turn its card into a
+        # pointer to the anchor instead of leaving it "In Progress" forever,
+        # and post one line in the thread so its followers are told.
+        stub_text, stub_blocks = build_folded_stub(
+            incident_data, incident_url=incident_url, anchor_url=anchor_url, error_text=error_text,
         )
+        try:
+            try_update_in_place(
+                client, channel=channel_id, ts=incident_data['slack_message_ts'], text=stub_text,
+                blocks=stub_blocks if validate_slack_blocks(stub_blocks) else None,
+            )
+            try_post_threaded(
+                client, channel=channel_id, text=build_fold_pointer(incident_data, anchor_url=anchor_url),
+                blocks=None, thread_ts=incident_data['slack_message_ts'], require_threaded=True,
+            )
+        except Exception as e:
+            # Best effort: the outcome already landed in the anchor's thread.
+            logger.warning(f"[SlackNotification] Could not mark kept Started card for {incident_id} as folded: {e}")
     return True
 
 
 def _post_incident_card(client: SlackClient, channel_id: str, user_id: str, incident_data: Dict[str, Any], *,
                         kind: str, blocks: list, error_text: Optional[str] = None) -> bool:
-    """Full Complete/Failed card under the incident's own Started message,
-    or top-level when there is none or Slack no longer has it. A top-level
-    post becomes the incident's thread parent for later recurrences — or,
-    for a folded child whose anchor has no thread parent, the anchor's, so
-    the group consolidates from here on."""
+    """Full Complete/Failed card for the incident. The incident's own Started
+    message is updated in place into the final card when Slack still has it
+    (thread and ts preserved), otherwise the card is posted under it, or
+    top-level when there is no Started message at all. A Failed card never
+    replaces the card of an investigation that already produced a result
+    (analyzed_at set — a follow-up chat or the stall sweep failing after the
+    RCA completed): it is threaded under it instead. A group root's card
+    keeps its recurrence footer. A top-level post becomes the incident's own
+    thread parent — never another incident's, since slack_message_ts also
+    routes @mentions to the incident it belongs to."""
     incident_id = incident_data.get('incident_id', 'unknown')
-    alert_title = escape_mrkdwn(incident_data.get('alert_title', _DEFAULT_ALERT_TITLE))
+    alert_title = escaped_fields(incident_data)[0]
     incident_url = _get_incident_url(incident_id)
+    if not is_folded_child(incident_data) and (incident_data.get('group_size') or 1) > 1:
+        # Rebuilding the anchor's card must not drop what its recurrences added.
+        blocks = [*blocks, build_recurrence_footer(incident_data)]
     if kind == "failed":
         text = f"Investigation Failed: {alert_title}"
         simple_text = (
@@ -263,15 +292,14 @@ def _post_incident_card(client: SlackClient, channel_id: str, user_id: str, inci
         logger.error(f"[SlackNotification] Block validation failed for incident {incident_id}")
         text, blocks = simple_text, None
     stored_ts = incident_data.get('slack_message_ts')
+    replace_in_place = kind == "completed" or not incident_data.get('analyzed_at')
+    if stored_ts and replace_in_place and try_update_in_place(client, channel=channel_id, ts=stored_ts, text=text, blocks=blocks):
+        logger.info(f"[SlackNotification] Replaced Started message {stored_ts} with the '{kind}' card for incident {incident_id}")
+        return True
     result = post_with_thread_fallback(client, channel=channel_id, text=text, blocks=blocks, thread_ts=stored_ts)
     placed_in = placed_thread_ts(result)
-    if not placed_in:
-        if is_folded_child(incident_data):
-            if not incident_data.get('anchor_slack_message_ts'):
-                backfill_thread_parent_ts(user_id, incident_data['recurrence_of'], result.get('ts'), replacing=None)
-        else:
-            record_thread_parent(client, channel=channel_id, user_id=user_id, incident_id=incident_id,
-                                 result=result, stored=stored_ts)
+    record_thread_parent(client, channel=channel_id, user_id=user_id, incident_id=incident_id,
+                         result=result, stored=stored_ts)
     logger.info(
         f"[SlackNotification] Sent '{kind}' notification for incident {incident_id}"
         + (f" in thread {placed_in}" if placed_in else " top-level")
@@ -332,9 +360,7 @@ def send_slack_investigation_completed_notification(
         # the full card under this incident's own Started message.
 
         # Extract incident data (mrkdwn-escaped: titles come from webhooks)
-        alert_title = escape_mrkdwn(incident_data.get('alert_title', _DEFAULT_ALERT_TITLE))
-        severity = escape_mrkdwn((incident_data.get('severity') or 'unknown').title())
-        service = escape_mrkdwn(incident_data.get('service', 'unknown'))
+        alert_title, severity, service = escaped_fields(incident_data)
         aurora_summary = incident_data.get('aurora_summary') or 'Analysis in progress...'
         
         # Extract summary section (before "Suggested Next Steps") and format for Slack
@@ -495,9 +521,7 @@ def send_slack_investigation_failed_notification(
                                   incident_url=incident_url, error_text=error_text):
             return True
 
-        alert_title = escape_mrkdwn(incident_data.get('alert_title', _DEFAULT_ALERT_TITLE))
-        severity = escape_mrkdwn((incident_data.get('severity') or 'unknown').title())
-        service = escape_mrkdwn(incident_data.get('service', 'unknown'))
+        alert_title, severity, service = escaped_fields(incident_data)
 
         blocks = [
             {
@@ -533,13 +557,7 @@ def send_slack_investigation_failed_notification(
             {
                 "type": "divider"
             },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f":x: *Error:* {escape_mrkdwn(error_text)}"
-                }
-            }
+            error_block(error_text),
         ]
 
         return _post_incident_card(client, channel_id, user_id, incident_data, kind="failed", blocks=blocks,

@@ -159,9 +159,13 @@ def send_google_chat_investigation_started_notification(user_id: str, incident_d
 
 
 def send_google_chat_investigation_completed_notification(
-    user_id: str, incident_data: Dict[str, Any],
+    user_id: str, incident_data: Dict[str, Any], *, allow_new_message: bool = True,
 ) -> bool:
-    """Send Google Chat notification when RCA investigation completes."""
+    """Send Google Chat notification when RCA investigation completes.
+
+    The existing card (google_chat_message_name) is edited in place; a new
+    message is posted only when there is none or the edit failed, and only
+    when allow_new_message (False for a refresh after a follow-up chat)."""
     try:
         client = _get_chat_client(user_id)
         if not client:
@@ -266,6 +270,10 @@ def send_google_chat_investigation_completed_notification(
                     return True
             except Exception as e:
                 logger.warning(f"[GChatNotification] Failed to update message, sending new: {e}")
+
+        if not allow_new_message:
+            logger.info(f"[GChatNotification] No card refreshed for incident {incident_id}; not posting a new one")
+            return False
 
         try:
             result = client.send_message(

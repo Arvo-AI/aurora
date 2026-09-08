@@ -43,18 +43,26 @@ class FakeSlackClient:
     its options; raises SlackAPIError the way SlackClient does on ok=false."""
 
     def __init__(self, *, fail_thread=False, fail_delete=False, fail_all=False, transport_error=False,
-                 ignore_thread=False, missing=(), replies=None, reject_with="cannot_reply_to_message"):
+                 ignore_thread=False, missing=(), replies=None, reject_with="cannot_reply_to_message",
+                 fail_update=False, cards=None):
         self.fail_thread = fail_thread  # ok=false on any threaded post
         self.fail_delete = fail_delete
+        self.fail_update = fail_update  # chat.update rejected with cant_update_message
         self.fail_all = fail_all  # ok=false on any post
         self.reject_with = reject_with  # the ok=false error code for fail_thread / fail_all
         self.transport_error = transport_error  # network failure: SlackClient wraps it in a plain ValueError
         self.ignore_thread = ignore_thread  # parent vanished after the lookup (race): replies land top-level
         self.missing = set(missing)  # ts values Slack no longer has: lookups return None, replies land top-level
         self.replies = dict(replies or {})  # ts -> reply_count of stored thread parents
+        # ts -> {"blocks", "text"} of existing messages; unknown ts get a default Started card.
+        # update_message writes back here so a later lookup sees the edited card.
+        self.cards = dict(cards or {})
         self.sent = []
         self.deleted = []
+        self.lookups = []  # ts of every get_message call
+        self.updated = []  # chat.update calls that succeeded
         self.attempts = 0  # every chat.postMessage call, including rejected ones
+        self.update_attempts = 0  # every chat.update call, including rejected ones
         self._n = 0
 
     def send_message(self, channel, text, thread_ts=None, blocks=None):
@@ -71,17 +79,39 @@ class FakeSlackClient:
             message["thread_ts"] = thread_ts
         return {"ok": True, "channel": channel, "ts": ts, "message": message}
 
+    def update_message(self, channel, ts, text, blocks=None):
+        self.update_attempts += 1
+        if self.transport_error:
+            raise ValueError("Failed to communicate with Slack: read timeout")
+        if self.fail_all:
+            raise SlackAPIError(self.reject_with)
+        if ts in self.missing:
+            raise SlackAPIError("message_not_found")
+        if self.fail_update:
+            raise SlackAPIError("cant_update_message")
+        self.updated.append({"channel": channel, "ts": ts, "text": text, "blocks": blocks})
+        self.cards[ts] = {"blocks": blocks, "text": text}
+        return {"ok": True, "channel": channel, "ts": ts, "text": text, "message": {"ts": ts}}
+
     def delete_message(self, channel, ts):
         if self.fail_delete:
             raise SlackAPIError("cant_delete_message")
         self.deleted.append((channel, ts))
 
     def get_message(self, channel, ts):
+        self.lookups.append(ts)
         if self.transport_error:
             raise ValueError("Failed to communicate with Slack: read timeout")
         if ts in self.missing:
             return None
-        message = {"ts": ts}
+        card = self.cards.get(ts) or {
+            "blocks": [
+                {"type": "header", "block_id": "hdr", "text": {"type": "plain_text", "text": "Investigation Started", "emoji": True}},
+                {"type": "section", "block_id": "body", "text": {"type": "mrkdwn", "text": "*Alert:* High CPU"}},
+            ],
+            "text": "Investigation Started: High CPU",
+        }
+        message = {"ts": ts, "blocks": card["blocks"], "text": card["text"]}
         if self.replies.get(ts):
             message["reply_count"] = self.replies[ts]
         return message
