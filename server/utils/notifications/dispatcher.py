@@ -254,14 +254,8 @@ One-line summary:"""
         )
 
         if response and response.content:
-            content = response.content
-            if isinstance(content, list):
-                content = " ".join(
-                    str(p.get("text") or "") if isinstance(p, dict) else str(p)
-                    for p in content
-                    if not (isinstance(p, dict) and p.get("type") in ("thinking", "reasoning"))
-                )
-            summary = " ".join(str(content).split())
+            from chat.backend.agent.utils.message_content import extract_text_from_content
+            summary = " ".join(extract_text_from_content(response.content).split())
             if summary:
                 return summary[:300]
         return None
