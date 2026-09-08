@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from services.correlation.recurrence_config import (
+    GROUP_IDLE_HOURS,
     MAX_TURNS,
     MODE_LIVE,
     MODE_OFF,
@@ -41,6 +42,12 @@ from utils.validation import is_valid_uuid
 logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[RECURRENCE]"
+
+# Recent incidents handed to the agent in its input block: the only ones whose
+# group can still be joined (GROUP_IDLE_HOURS). Saves the agent from having to
+# discover them with list_incidents, where a wrong status filter (completed
+# investigations are 'analyzed', not 'resolved') returned nothing.
+RECENT_CANDIDATES_LIMIT = 15
 
 try:  # Celery soft-limit signal must reach the outer handler, not the
     # generic agent-failure catch (SoftTimeLimitExceeded subclasses Exception).
@@ -258,6 +265,7 @@ def _build_input_block(ctx: Dict[str, Any], incident_id: str, decision_point: st
             "",
             ctx.get("summary") or "(no summary available)",
         ]
+    lines += ["", *_recent_incidents_lines(ctx.get("recent"), truncated=bool(ctx.get("recent_truncated")))]
     hint = ctx.get("hint")
     if isinstance(hint, dict) and hint.get("incident_id"):
         lines += [
@@ -271,6 +279,77 @@ def _build_input_block(ctx: Dict[str, Any], incident_id: str, decision_point: st
             ),
         ]
     return "\n".join(lines)
+
+
+def _recent_incidents_lines(recent: Optional[list], *, truncated: bool = False) -> list:
+    """Input-block section listing the incidents eligible to be joined.
+    `truncated` says the window holds more than RECENT_CANDIDATES_LIMIT: the
+    list is then a sample, never presented as the complete set of open groups."""
+    header = f"### Recent incidents in this org (last {GROUP_IDLE_HOURS}h, newest first)"
+    if not recent:
+        return [
+            header,
+            "",
+            "(none) — no group is open to join; unless a tool call surfaces an "
+            f"incident that fired within the last {GROUP_IDLE_HOURS}h, answer new.",
+        ]
+    lines = [
+        header,
+        "",
+        f"Only incidents that fired within the last {GROUP_IDLE_HOURS}h, or the group roots of "
+        f"such incidents, can be claimed. A group with no activity in {GROUP_IDLE_HOURS}h is "
+        "closed and a claim on it is rejected.",
+        "",
+    ]
+    for r in recent:
+        line = (
+            f"- {r['id']} | fired {r.get('fired_at_iso') or '?'} | {r.get('status') or '?'}"
+            f" | {r.get('service') or '(no service)'} | {r.get('title') or '(no title)'}"
+        )
+        if r.get("recurrence_of"):
+            line += f" | recurrence of {r['recurrence_of']}"
+        lines.append(line)
+    if truncated:
+        lines.append(
+            f"- (more incidents fired in the last {GROUP_IDLE_HOURS}h than shown here — use "
+            "list_incidents without a status filter to see them; any of them, or their "
+            "group roots, can also be claimed)"
+        )
+    return lines
+
+
+def _fetch_recent_incidents(cursor, incident_id: str) -> Tuple[list, bool]:
+    """Incidents in the caller's org (RLS) that fired within GROUP_IDLE_HOURS,
+    newest first, excluding the one under examination, capped at
+    RECENT_CANDIDATES_LIMIT — plus whether the window held more than that.
+    Same window and clock as recurrence_fold._group_is_stale so what the agent
+    sees is what the fold will accept."""
+    cursor.execute(
+        """SELECT id, alert_title, alert_service, status,
+                  COALESCE(alert_fired_at, started_at) AS fired_at,
+                  recurrence_of_incident_id
+           FROM incidents
+           WHERE id <> %s
+             AND status <> 'merged'
+             AND COALESCE(alert_fired_at, started_at)
+                 >= (NOW() AT TIME ZONE 'UTC') - make_interval(hours => %s)
+           ORDER BY COALESCE(alert_fired_at, started_at) DESC
+           LIMIT %s""",
+        (incident_id, GROUP_IDLE_HOURS, RECENT_CANDIDATES_LIMIT + 1),
+    )
+    rows = cursor.fetchall()
+    truncated = len(rows) > RECENT_CANDIDATES_LIMIT
+    return [
+        {
+            "id": str(r[0]),
+            "title": r[1] or "",
+            "service": r[2] or "",
+            "status": r[3] or "",
+            "fired_at_iso": iso_utc(r[4]),
+            "recurrence_of": str(r[5]) if r[5] else None,
+        }
+        for r in rows[:RECENT_CANDIDATES_LIMIT]
+    ], truncated
 
 
 def _fetch_incident_context(incident_id: str, user_id: str) -> Optional[Dict[str, Any]]:
@@ -305,6 +384,7 @@ def _fetch_incident_context(incident_id: str, user_id: str) -> Optional[Dict[str
                         meta = {}
                 hint = meta.get("correlation_hint") if isinstance(meta, dict) else None
                 started_at, fired_at = row[4], row[5] or row[4]
+                recent, recent_truncated = _fetch_recent_incidents(cursor, incident_id)
                 return {
                     "org_id": org_id,
                     "title": row[0] or "",
@@ -315,6 +395,8 @@ def _fetch_incident_context(incident_id: str, user_id: str) -> Optional[Dict[str
                     "fired_at_iso": iso_utc(fired_at),
                     "summary": row[6] or "",
                     "hint": hint if isinstance(hint, dict) else None,
+                    "recent": recent,
+                    "recent_truncated": recent_truncated,
                 }
     except Exception:
         logger.exception(

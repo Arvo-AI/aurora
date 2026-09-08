@@ -101,7 +101,10 @@ def _require_uuid(value: Optional[str], field: str = "id") -> str:
 class ListIncidentsArgs(BaseModel):
     status: Optional[str] = Field(
         default=None,
-        description="Filter by incident status: investigating, analyzed, merged, or resolved.",
+        description=(
+            "Filter by incident status: investigating (RCA running), analyzed (RCA finished), "
+            "resolved (closed by a user), or merged. Omit to list every non-merged incident."
+        ),
     )
     limit: int = Field(default=20, description="Max incidents to return (1–100, default 20).")
     offset: int = Field(default=0, description="Paging offset (>= 0, default 0).")
