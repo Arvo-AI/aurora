@@ -72,20 +72,46 @@ def _has_google_chat_connected(user_id: str) -> bool:
 
 
 def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any]]:
-    """Fetch incident data from database."""
+    """Fetch incident data from database.
+
+    Also carries the recurrence-group context Slack threading (dedup layer 3)
+    needs: the anchor's Slack ts/title and this incident's position in its
+    group. Group membership mirrors _group_is_stale (recurrence_fold.py) and
+    the detail-view occurrences query (pointer-only); ordering mirrors
+    lastFire in the client so "occurrence N" agrees with the UI. The group
+    always contains the incident itself, so a standalone incident gets
+    recurrence_of=None, occurrence_number=1, group_size=1.
+    """
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[Dispatcher:GetIncident]")
                 cursor.execute(
                     """
-                    SELECT id, user_id, source_type, status, severity, alert_title,
-                           alert_service, aurora_status, aurora_summary, started_at,
-                           analyzed_at, created_at, slack_message_ts, google_chat_message_name
-                    FROM incidents
-                    WHERE id = %s
+                    WITH me AS (
+                        SELECT COALESCE(recurrence_of_incident_id, id) AS root_id
+                        FROM incidents WHERE id = %s
+                    ),
+                    grp AS (
+                        SELECT g.id,
+                               ROW_NUMBER() OVER (
+                                   ORDER BY COALESCE(g.alert_fired_at, g.started_at), g.started_at, g.id
+                               ) AS occurrence_number,
+                               COUNT(*) OVER () AS group_size
+                        FROM incidents g
+                        JOIN me ON g.id = me.root_id OR g.recurrence_of_incident_id = me.root_id
+                    )
+                    SELECT i.id, i.user_id, i.source_type, i.status, i.severity, i.alert_title,
+                           i.alert_service, i.aurora_status, i.aurora_summary, i.started_at,
+                           i.analyzed_at, i.created_at, i.slack_message_ts, i.google_chat_message_name,
+                           i.recurrence_of_incident_id, anchor.slack_message_ts, anchor.alert_title,
+                           grp.occurrence_number, grp.group_size
+                    FROM incidents i
+                    LEFT JOIN incidents anchor ON anchor.id = i.recurrence_of_incident_id
+                    JOIN grp ON grp.id = i.id
+                    WHERE i.id = %s
                     """,
-                    (incident_id,),
+                    (incident_id, incident_id),
                 )
                 result = cursor.fetchone()
                 if result:
@@ -104,6 +130,11 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                         'created_at': result[11],
                         'slack_message_ts': result[12],
                         'google_chat_message_name': result[13],
+                        'recurrence_of': str(result[14]) if result[14] else None,
+                        'anchor_slack_message_ts': result[15],
+                        'anchor_alert_title': result[16],
+                        'occurrence_number': int(result[17]),
+                        'group_size': int(result[18]),
                     }
         return None
     except Exception:
