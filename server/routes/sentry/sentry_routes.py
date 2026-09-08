@@ -23,7 +23,7 @@ from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
+from utils.auth.stateless_auth import get_org_id_from_request, resolve_org_id, set_rls_context
 from utils.secrets.secret_ref_utils import delete_user_secret
 from routes.sentry.tasks import extract_sentry_title, process_sentry_event
 
@@ -43,7 +43,10 @@ def _get_stored_sentry_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         if data:
             return data
 
-        org_id = get_org_id_from_request()
+        # resolve_org_id() works in and out of request context (DB fallback);
+        # get_org_id_from_request() raises "working outside of application
+        # context" when called from Celery tasks.
+        org_id = resolve_org_id(user_id)
         if not org_id:
             return None
 

@@ -360,6 +360,35 @@ class AlertCorrelator:
 # ---------------------------------------------------------------------------
 
 
+def bump_incident_alert_stats(
+    cursor, incident_id: str, alert_service: Optional[str] = None
+) -> None:
+    """Increment an incident's correlated_alert_count and merge *alert_service*
+    into affected_services (NULL-safe on both columns). Shared by the rule
+    correlator's attach path and the recurrence fold."""
+    if alert_service:
+        cursor.execute(
+            """UPDATE incidents
+               SET correlated_alert_count = COALESCE(correlated_alert_count, 0) + 1,
+                   affected_services = CASE
+                       WHEN affected_services IS NULL THEN ARRAY[%s]
+                       WHEN NOT (%s = ANY(affected_services)) THEN array_append(affected_services, %s)
+                       ELSE affected_services
+                   END,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = %s""",
+            (alert_service, alert_service, alert_service, incident_id),
+        )
+    else:
+        cursor.execute(
+            """UPDATE incidents
+               SET correlated_alert_count = COALESCE(correlated_alert_count, 0) + 1,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = %s""",
+            (incident_id,),
+        )
+
+
 def handle_correlated_alert(
     cursor,
     user_id: str,
@@ -417,17 +446,7 @@ def handle_correlated_alert(
     )
 
     # 2. Update incident (increment count, add service to affected_services)
-    cursor.execute(
-        """UPDATE incidents
-           SET correlated_alert_count = correlated_alert_count + 1,
-               affected_services = CASE
-                   WHEN NOT (%s = ANY(affected_services)) THEN array_append(affected_services, %s)
-                   ELSE affected_services
-               END,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE id = %s""",
-        (alert_service, alert_service, incident_id),
-    )
+    bump_incident_alert_stats(cursor, incident_id, alert_service)
 
     # 3. Broadcast SSE notification
     try:
@@ -486,3 +505,89 @@ def handle_correlated_alert(
         correlation_result.score,
         correlation_result.strategy,
     )
+
+
+# ---------------------------------------------------------------------------
+# Recurrence-detection integration (root-cause dedup layer 1)
+# ---------------------------------------------------------------------------
+
+
+def attach_correlation_hint(
+    alert_metadata: Dict[str, Any], result: CorrelationResult
+) -> None:
+    """Stamp the rule correlator's decision onto alert_metadata as a hint.
+
+    In live recurrence mode the correlator no longer attaches alerts; its
+    score survives as ``alert_metadata["correlation_hint"]``, flows into
+    ``incidents.alert_metadata`` via the existing INSERT, and is later read by
+    the recurrence agent (and stored as recurrence_verdicts.correlator_score).
+    """
+    alert_metadata["correlation_hint"] = {
+        "incident_id": str(result.incident_id) if result.incident_id else None,
+        "score": result.score,
+        "strategy": result.strategy,
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def apply_correlation_outcome(
+    cursor,
+    user_id: str,
+    incident_id: str,
+    source_type: str,
+    source_alert_id: int,
+    alert_title: str,
+    alert_service: str,
+    alert_severity: str,
+    correlation_result: CorrelationResult,
+    alert_metadata: Dict[str, Any],
+    raw_payload: Dict[str, Any],
+    org_id: Optional[str] = None,
+    hint_only_eligible: bool = True,
+) -> bool:
+    """Apply a positive correlation according to RECURRENCE_DETECTION_MODE.
+
+    off/shadow: legacy behavior — attach the alert to the existing incident
+    (handle_correlated_alert) and return True (caller commits and skips
+    incident creation).
+
+    live: the rule correlator becomes hint-only — stamp the hint onto
+    alert_metadata and return False (caller falls through to normal incident
+    creation; the mutated dict reaches incidents.alert_metadata via the
+    existing INSERT). The recurrence agent decides grouping after the
+    investigation completes.
+
+    hint_only_eligible: pass False when the caller's fall-through path would
+    NOT create an incident for this event (RCA disabled, result/status outside
+    the incident-creation gate). Hint-only mode is meaningless without a
+    subsequent investigation, so such events keep the legacy attach even in
+    live mode — otherwise a correlated alert would be dropped entirely.
+    """
+    from services.correlation.recurrence_config import is_live
+
+    if not is_live() or not hint_only_eligible:
+        handle_correlated_alert(
+            cursor=cursor,
+            user_id=user_id,
+            incident_id=incident_id,
+            source_type=source_type,
+            source_alert_id=source_alert_id,
+            alert_title=alert_title,
+            alert_service=alert_service,
+            alert_severity=alert_severity,
+            correlation_result=correlation_result,
+            alert_metadata=alert_metadata,
+            raw_payload=raw_payload,
+            org_id=org_id,
+        )
+        return True
+
+    attach_correlation_hint(alert_metadata, correlation_result)
+    logger.info(
+        "[CORRELATION] Live recurrence mode: hint-only for alert '%s' "
+        "(would have attached to incident %s, score=%.2f)",
+        alert_title,
+        incident_id,
+        correlation_result.score,
+    )
+    return False

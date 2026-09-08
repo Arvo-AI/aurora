@@ -100,6 +100,8 @@ def list_repos(user_id, workspace):
             return jsonify({"error": "Bitbucket not connected"}), 401
 
         repos = client.get_repositories(workspace)
+        if isinstance(repos, dict) and repos.get("error"):
+            return jsonify({"error": "Failed to list repositories"}), 502
 
         # Optional project filter
         project_key = request.args.get("project")

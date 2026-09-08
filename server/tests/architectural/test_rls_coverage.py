@@ -24,6 +24,8 @@ RLS_EXCLUSIONS: Set[str] = {
                                   # across users; webhook handlers and the install callback
                                   # both need to query it without an established org_id
                                   # (callback runs before login, webhook has no user ctx)
+    "onboarding_selections",      # written once during onboarding via admin connection;
+                                  # org_id is explicit from the authenticated user lookup
 }
 
 

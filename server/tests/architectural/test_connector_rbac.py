@@ -61,6 +61,7 @@ EXEMPT_FUNCTIONS: Set[str] = {
     # Webhooks (external service push — HMAC/secret validates sender)
     "webhook",
     "github_webhook",
+    "bitbucket_webhook",
     "alert_webhook",
     "cloudwatch_alarm_webhook",
     "deployment_webhook",

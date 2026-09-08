@@ -21,6 +21,7 @@ interface OrgData {
   slug: string;
   createdBy: string;
   createdAt: string;
+  planTier?: string;
   members: OrgMember[];
 }
 
@@ -189,10 +190,10 @@ export function OrgSettings() {
         </div>
 
         <TabsContent value="overview">
-          <OrgOverview org={org} isAdmin={isAdmin} />
+          <OrgOverview org={org} isAdmin={isAdmin} planTier={org.planTier} />
         </TabsContent>
         <TabsContent value="members">
-          <OrgMembers org={org} currentUserId={user?.id || ""} isAdmin={isAdmin} onMembersChanged={fetchOrg} />
+          <OrgMembers org={org} currentUserId={user?.id || ""} isAdmin={isAdmin} planTier={org.planTier} onMembersChanged={fetchOrg} />
         </TabsContent>
         <TabsContent value="invitations">
           <OrgInvitations />

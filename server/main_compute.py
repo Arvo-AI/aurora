@@ -207,6 +207,9 @@ _OPEN_PREFIXES = (
     # at runtime.
     "/github/callback",
     "/bitbucket/callback",
+    # Bitbucket Incident Prevention webhook — verified via per-org HMAC
+    # (X-Hub-Signature), not session.
+    "/bitbucket/webhook/",
     "/slack/callback",
     "/slack/events",
     "/slack/interactions",
@@ -226,6 +229,7 @@ _OPEN_PREFIXES = (
     "/jenkins/webhook/",
     "/cloudbees/webhook/",
     "/spinnaker/webhook/",
+    "/jira/webhook/",
     "/incidentio/alerts/webhook/",
     "/ovh_api/ovh/oauth2/callback",
     "/azure/callback",
@@ -508,9 +512,11 @@ app.register_blueprint(notion_bp, url_prefix="/notion")
 from routes.bitbucket.bitbucket import bitbucket_bp
 from routes.bitbucket.bitbucket_browsing import bitbucket_browsing_bp
 from routes.bitbucket.bitbucket_selection import bitbucket_selection_bp
+from routes.bitbucket.bitbucket_webhook import bitbucket_webhook_bp
 app.register_blueprint(bitbucket_bp, url_prefix="/bitbucket")
 app.register_blueprint(bitbucket_browsing_bp, url_prefix="/bitbucket")
 app.register_blueprint(bitbucket_selection_bp, url_prefix="/bitbucket")
+app.register_blueprint(bitbucket_webhook_bp, url_prefix="/bitbucket")
 
 # --- Incidents Routes ---
 from routes.incidents_routes import incidents_bp
@@ -639,6 +645,10 @@ app.register_blueprint(prediscovery_bp, url_prefix="/api/prediscovery")
 # ---- Debug Routes ----
 from routes.debug import bp as debug_bp
 app.register_blueprint(debug_bp)
+
+# --- Onboarding Routes ---
+from routes.onboarding_routes import onboarding_bp
+app.register_blueprint(onboarding_bp, url_prefix="/api/onboarding")
 
 # ============================================================================
 # Global Error Handlers

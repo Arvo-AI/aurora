@@ -1,0 +1,124 @@
+import type { Incident } from '@/lib/services/incidents';
+
+/**
+ * Root-cause dedup, layer 2: fold recurrences (incidents whose `recurrenceOf`
+ * points at an anchor) into one group per anchor for the /incidents list.
+ * Pure — no React, no fetch. Mirrors the "Grouping formula" in the design doc
+ * root-cause-dedup/02-grouping-ui.md (design-docs repo; not checked in here).
+ */
+
+export type IncidentSection = 'investigating' | 'analyzed' | 'merged';
+
+export interface IncidentGroup {
+  /** Anchor id (or the incident's own id for a standalone / orphan). */
+  id: string;
+  anchor: Incident;
+  /**
+   * Anchor + members, chronological by lastFire. The anchor is usually — not
+   * always — first: a member can fire earlier and still fold into a root
+   * whose RCA completed later.
+   */
+  occurrences: Incident[];
+  /** Full group size: loaded occurrences, or the server's count when the group was capped. */
+  occurrenceCount: number;
+  /** Older occurrences the list response did not include (0 unless the group was capped). */
+  notLoaded: number;
+  /** Newest fire time across the group (epoch ms). */
+  lastFiredAt: number;
+  section: IncidentSection;
+  /** Any occurrence has auroraStatus running/summarizing. */
+  investigating: boolean;
+}
+
+const STALL_MS = 30 * 60 * 1000;
+
+export function lastFire(incident: Incident): number {
+  const t = Date.parse(incident.alertFiredAt ?? incident.startedAt);
+  return Number.isNaN(t) ? 0 : t;
+}
+
+export function isInvestigating(incident: Incident): boolean {
+  return incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing';
+}
+
+export function isStalled(incident: Incident, now: number): boolean {
+  return incident.status === 'investigating' && now - Date.parse(incident.startedAt) > STALL_MS;
+}
+
+/** Time-dependent, so evaluated at render time rather than baked into the group. */
+export function isGroupStalled(group: IncidentGroup, now: number): boolean {
+  return group.occurrences.some(i => isStalled(i, now));
+}
+
+/** Section for a group, or null when no occurrence has a status the list shows (e.g. 'failed'). */
+function sectionFor(anchor: Incident, members: Incident[], occurrences: Incident[]): IncidentSection | null {
+  if (occurrences.some(i => i.status === 'investigating')) return 'investigating';
+  // Only a standalone can sit in Merged; recurrences are never `merged`.
+  if (members.length === 0 && anchor.status === 'merged') return 'merged';
+  if (occurrences.some(i => i.status === 'analyzed' || i.status === 'resolved')) return 'analyzed';
+  return null;
+}
+
+/**
+ * Where the members the server did not send sit in `occurrences`: the server
+ * cuts the oldest members on this same fire timeline, so the gap is just before
+ * the oldest loaded member (the anchor may be on either side of it). -1 when
+ * nothing was cut; occurrences.length when only the anchor was loaded.
+ */
+export function omittedGapIndex(group: IncidentGroup): number {
+  if (group.notLoaded === 0) return -1;
+  const firstMember = group.occurrences.findIndex(o => o.id !== group.anchor.id);
+  return firstMember === -1 ? group.occurrences.length : firstMember;
+}
+
+/** 1-based chronological ordinal of `occurrences[index]`, counting the omitted members. */
+export function occurrenceOrdinal(group: IncidentGroup, index: number): number {
+  const gap = omittedGapIndex(group);
+  return index + 1 + (gap !== -1 && index >= gap ? group.notLoaded : 0);
+}
+
+function buildGroup(anchor: Incident, members: Incident[]): IncidentGroup | null {
+  const occurrences = [anchor, ...members].sort((a, b) => lastFire(a) - lastFire(b));
+  const section = sectionFor(anchor, members, occurrences);
+  if (!section) return null;
+
+  // The server's group size belongs to a real anchor only. An orphan (its anchor
+  // missing from the fetch) carries its original group's total, which is not
+  // this singleton's, so it falls back to the rows actually loaded.
+  const serverTotal = anchor.recurrenceOf ? 0 : (anchor.occurrenceTotal ?? 0);
+  const occurrenceCount = Math.max(occurrences.length, serverTotal);
+
+  return {
+    id: anchor.id,
+    anchor,
+    occurrences,
+    occurrenceCount,
+    notLoaded: occurrenceCount - occurrences.length,
+    lastFiredAt: lastFire(occurrences.at(-1) ?? anchor),
+    section,
+    investigating: occurrences.some(isInvestigating),
+  };
+}
+
+export function groupIncidents(incidents: Incident[]): IncidentGroup[] {
+  const byId = new Map(incidents.map(i => [i.id, i]));
+  const membersByAnchor = new Map<string, Incident[]>();
+  const anchors: Incident[] = [];
+
+  for (const incident of incidents) {
+    const anchor = incident.recurrenceOf ? byId.get(incident.recurrenceOf) : undefined;
+    // A member joins its anchor only when the anchor is in the fetch and is
+    // itself top-level; anything else becomes its own row so nothing is hidden.
+    if (anchor && !anchor.recurrenceOf) {
+      const list = membersByAnchor.get(anchor.id) ?? [];
+      list.push(incident);
+      membersByAnchor.set(anchor.id, list);
+    } else {
+      anchors.push(incident);
+    }
+  }
+
+  return anchors
+    .flatMap(anchor => buildGroup(anchor, membersByAnchor.get(anchor.id) ?? []) ?? [])
+    .sort((a, b) => b.lastFiredAt - a.lastFiredAt);
+}

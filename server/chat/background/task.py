@@ -24,6 +24,7 @@ from connectors.slack_connector.client import get_slack_client_for_user
 from utils.db.connection_pool import db_pool
 from chat.background.visualization_generator import update_visualization
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
+from chat.backend.agent.utils.message_content import extract_text_from_content
 
 
 logger = logging.getLogger(__name__)
@@ -75,64 +76,6 @@ def _resolve_permitted_tools(user_id: str) -> Optional[set]:
     except Exception as e:
         logger.warning("[BackgroundChat] Failed to fetch tool permissions: %s", e)
         return None
-
-
-def cancel_rca_for_incident(incident_id: str, user_id: str) -> bool:
-    """Cancel a running RCA for an incident by revoking its Celery task.
-    
-    This is the proper way to stop an RCA when an incident is merged.
-    It uses Celery's task revocation with SIGTERM to gracefully stop the task.
-    
-    Args:
-        incident_id: The incident ID whose RCA should be cancelled
-        user_id: User ID for RLS context
-        
-    Returns:
-        True if a task was found and revoked, False otherwise
-    """
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:CancelRCA]")
-                cursor.execute(
-                    "SELECT rca_celery_task_id, aurora_status FROM incidents WHERE id = %s",
-                    (incident_id,)
-                )
-                row = cursor.fetchone()
-                
-                if not row:
-                    logger.info(f"[RCA-CANCEL] Incident {incident_id} not found")
-                    return False
-                
-                task_id, aurora_status = row[0], row[1]
-                
-                if not task_id:
-                    logger.info(f"[RCA-CANCEL] No Celery task ID found for incident {incident_id}")
-                    return False
-                
-                # Only revoke if RCA is actually running
-                if aurora_status != 'running':
-                    logger.info(
-                        f"[RCA-CANCEL] RCA for incident {incident_id} is not running (status={aurora_status}), skipping revocation"
-                    )
-                    return False
-                
-                # Revoke the task with SIGTERM for graceful shutdown
-                celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
-                logger.info(f"[RCA-CANCEL] Revoked Celery task {task_id} for incident {incident_id}")
-                
-                # Clear the task ID from the database
-                cursor.execute(
-                    "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
-                    (incident_id,)
-                )
-                conn.commit()
-                
-                return True
-                
-    except Exception as e:
-        logger.error(f"[RCA-CANCEL] Failed to cancel RCA for incident {incident_id}: {e}")
-        return False
 
 
 def _extract_tool_calls_for_viz(
@@ -313,7 +256,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'action'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'jira', 'action'}
 
 _GUARDRAIL_BLOCKED_MSG = 'Action blocked by safety guardrails'
 _GUARDRAIL_USER_MSG = (
@@ -664,6 +607,19 @@ def run_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to link session to incident: {e}")
 
+            # FUTURE (root-cause dedup, build-order step 4 — needs Noah's sign-off
+            # plus shadow-mode precision data before building): pre-investigation
+            # early exit. This is the single choke point covering all RCA
+            # producers, so the gate belongs here, before
+            # notify_investigation_started. Shape: if the incident's
+            # alert_metadata carries a correlation_hint (stamped by
+            # apply_correlation_outcome in live mode) and a future flag allows,
+            # call run_recurrence_check(..., decision_point="before"); on a fold,
+            # set the child to status='analyzed', aurora_status='complete'
+            # (layer-2 requirement) and early-return like the before_llm_call
+            # hook block below. All plumbing already exists: the
+            # recurrence_verdicts.decision_point column, the before-variant
+            # prompt input block, the shared fold_incident, and the hint.
             if _should_notify_investigation_started:
                 try:
                     from utils.notifications.dispatcher import notify_investigation_started
@@ -808,6 +764,7 @@ def run_background_chat(
                         incident_id=incident_id,
                         user_id=user_id,
                         session_id=session_id,
+                        announce_completion=send_notifications,
                     )
                 except Exception:
                     logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization for incident %s", incident_id)
@@ -815,17 +772,20 @@ def run_background_chat(
             
             # Generate final complete visualization
             try:
-                tool_calls = result.get('tool_calls', [])
-                logger.info(f"[BackgroundChat] Using {len(tool_calls)} tool calls from result for final visualization")
-                
-                update_visualization.apply_async(kwargs={
-                    'incident_id': incident_id,
-                    'user_id': user_id,
-                    'session_id': session_id,
-                    'force_full': True,
-                    'tool_calls_json': json.dumps(tool_calls) if tool_calls else None
-                })
-                logger.info(f"[BackgroundChat] Queued final visualization for incident {incident_id}")
+                if os.getenv("VISUALIZATION_ENABLED", "false").lower() != "true":
+                    logger.info(f"[BackgroundChat] Visualization disabled; skipping final visualization for incident {incident_id}")
+                else:
+                    tool_calls = result.get('tool_calls', [])
+                    logger.info(f"[BackgroundChat] Using {len(tool_calls)} tool calls from result for final visualization")
+
+                    update_visualization.apply_async(kwargs={
+                        'incident_id': incident_id,
+                        'user_id': user_id,
+                        'session_id': session_id,
+                        'force_full': True,
+                        'tool_calls_json': json.dumps(tool_calls) if tool_calls else None
+                    })
+                    logger.info(f"[BackgroundChat] Queued final visualization for incident {incident_id}")
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to generate final visualization: {e}")
         
@@ -879,11 +839,12 @@ def run_background_chat(
         if incident_id and not is_action_source:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
             _mark_inflight_findings_failed(incident_id, user_id, "parent task timed out after 30 minutes")
-            try:
-                from utils.notifications.dispatcher import notify_investigation_failed
-                notify_investigation_failed(user_id, incident_id, error_message="Investigation timed out after 30 minutes")
-            except Exception:
-                logger.debug("[BackgroundChat] Failed to send investigation failed notification after timeout")
+            if send_notifications:  # a follow-up chat failing is not the investigation failing
+                try:
+                    from utils.notifications.dispatcher import notify_investigation_failed
+                    notify_investigation_failed(user_id, incident_id, error_message="Investigation timed out after 30 minutes")
+                except Exception:
+                    logger.debug("[BackgroundChat] Failed to send investigation failed notification after timeout")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
@@ -908,11 +869,12 @@ def run_background_chat(
         if incident_id and not is_action_source:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
             _mark_inflight_findings_failed(incident_id, user_id, f"parent task failed: {e}")
-            try:
-                from utils.notifications.dispatcher import notify_investigation_failed
-                notify_investigation_failed(user_id, incident_id, error_message=str(e))
-            except Exception:
-                logger.debug("[BackgroundChat] Failed to send investigation failed notification")
+            if send_notifications:  # a follow-up chat failing is not the investigation failing
+                try:
+                    from utils.notifications.dispatcher import notify_investigation_failed
+                    notify_investigation_failed(user_id, incident_id, error_message=str(e))
+                except Exception:
+                    logger.debug("[BackgroundChat] Failed to send investigation failed notification")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
@@ -1284,22 +1246,33 @@ async def _run_jira_action(
     logger.info(f"[JiraAction] Completed for {session_id}")
 
 
-def _action_is_generate_postmortem(action_id: Optional[str], user_id: Optional[str] = None) -> bool:
-    """Return True when action_id belongs to the built-in 'generate_postmortem' system action."""
+def _action_has_system_key(action_id: Optional[str], system_key: str,
+                           user_id: Optional[str] = None) -> bool:
+    """Whether action_id is the built-in system action with this system_key.
+
+    Used to scope a write tool to the one action that should have it, rather than
+    to every background run. Fails closed: an unknown action_id or a failed lookup
+    returns False, so the tool is withheld rather than handed out by accident.
+    """
     if not action_id:
         return False
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[BackgroundChat:PostmortemCheck]")
+                set_rls_context(cur, conn, user_id, log_prefix="[BackgroundChat:SystemKeyCheck]")
                 cur.execute(
-                    "SELECT 1 FROM actions WHERE id = %s AND system_key = 'generate_postmortem'",
-                    (action_id,),
+                    "SELECT 1 FROM actions WHERE id = %s AND system_key = %s",
+                    (action_id, system_key),
                 )
                 return cur.fetchone() is not None
     except Exception as e:
-        logger.warning("[BackgroundChat] _action_is_generate_postmortem lookup failed: %s", e)
+        logger.warning("[BackgroundChat] _action_has_system_key(%s) lookup failed: %s", system_key, e)
         return False
+
+
+def _action_is_generate_postmortem(action_id: Optional[str], user_id: Optional[str] = None) -> bool:
+    """Return True when action_id belongs to the built-in 'generate_postmortem' system action."""
+    return _action_has_system_key(action_id, "generate_postmortem", user_id)
 
 
 async def _execute_background_chat(
@@ -1411,6 +1384,12 @@ async def _execute_background_chat(
             and _action_is_generate_postmortem((trigger_metadata or {}).get("action_id"), user_id)
         )
 
+        # True only for the built-in right-sizing action; gates the Slack card
+        # write tool so an ordinary chat cannot post a recommendation card.
+        _is_hpa_vpa_action = _tm_source == "action" and _action_has_system_key(
+            (trigger_metadata or {}).get("action_id"), "hpa_vpa_rightsizing", user_id
+        )
+
         # Create state with is_background=True and rca_context for system prompt
         # Use centralized model configuration for RCA with provider mode awareness
         _is_pr_review = _tm_source == "change_gating"
@@ -1428,6 +1407,7 @@ async def _execute_background_chat(
             mode=mode,
             is_background=True,
             is_postmortem_action=_is_postmortem_action,
+            is_hpa_vpa_action=_is_hpa_vpa_action,
             is_pr_review=_is_pr_review,
             rca_context=rca_context,
             permitted_tools=_resolve_permitted_tools(user_id),
@@ -1458,9 +1438,12 @@ async def _execute_background_chat(
         if trigger_metadata:
             wf._trigger_metadata = trigger_metadata
             wf._ui_state["triggerMetadata"] = trigger_metadata
-        
+
+        # Determine early so it can gate the incident_id passed to process_workflow_async.
+        is_action_source = (trigger_metadata or {}).get('source') == 'action'
+
         # Run the workflow - this is the same function used by regular chats
-        await process_workflow_async(wf, state, background_ws, user_id, incident_id=incident_id)
+        await process_workflow_async(wf, state, background_ws, user_id, incident_id=None if is_action_source else incident_id)
         
         # CRITICAL: Wait for any ongoing tool calls to complete before marking as done
         # The workflow stream might complete, but tool calls could still be running
@@ -1511,7 +1494,6 @@ async def _execute_background_chat(
 
         # Also finalize the incident and enqueue post-RCA tasks here (inside the
         # async function) because asyncio.run() may never return to the caller.
-        is_action_source = (trigger_metadata or {}).get('source') == 'action'
         if incident_id and not is_action_source:
             try:
                 with db_pool.get_admin_connection() as conn:
@@ -1533,6 +1515,7 @@ async def _execute_background_chat(
                     incident_id=incident_id,
                     user_id=user_id,
                     session_id=session_id,
+                    announce_completion=send_notifications,
                 )
             except Exception as e:
                 logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization")
@@ -1923,21 +1906,7 @@ Respond with ONLY ONE WORD: critical, high, medium, or low"""
                 # Safely extract content from response - handle both AIMessage and dict responses
                 # Also handle Gemini thinking model responses (list with thinking/text blocks)
                 if hasattr(response, 'content'):
-                    content = response.content
-                    if isinstance(content, list):
-                        text_parts = []
-                        for part in content:
-                            if isinstance(part, dict):
-                                part_type = part.get("type", "")
-                                if part_type not in ("thinking", "reasoning"):
-                                    text = part.get("text", "")
-                                    if text:
-                                        text_parts.append(str(text))
-                            elif isinstance(part, str):
-                                text_parts.append(part)
-                        severity_raw = "".join(text_parts).strip().lower()
-                    else:
-                        severity_raw = str(content).strip().lower()
+                    severity_raw = extract_text_from_content(response.content).strip().lower()
                 elif isinstance(response, dict):
                     severity_raw = str(response.get('content', '')).strip().lower()
                 else:

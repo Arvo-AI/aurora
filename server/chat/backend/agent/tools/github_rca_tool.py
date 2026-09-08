@@ -163,11 +163,13 @@ def _call_github_api(
 ):
     """Call GitHub REST API for a user/repo using the auth router.
 
-    Bypasses the MCP github server (which spawns a Docker container and
-    therefore cannot run in Aurora's chatbot service, which deliberately
-    has no docker socket). The auth router transparently picks App or
-    OAuth credentials per the hybrid mode rules and returns a token that
-    works with the standard ``Authorization: token <value>`` header.
+    A direct REST call rather than going through the MCP github server: for
+    simple reads it avoids the cost of spawning a subprocess per call. (The MCP
+    server itself is a native Go binary baked into the image and spawned over
+    stdio -- it does *not* need a Docker socket, and it runs fine in the chatbot
+    and Celery containers.) The auth router transparently picks App or OAuth
+    credentials per the hybrid mode rules and returns a token that works with
+    the standard ``Authorization: token <value>`` header.
 
     Returns the parsed JSON body on success (list or dict, matching
     GitHub's native shape so existing downstream parsers keep working),

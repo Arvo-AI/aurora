@@ -4,6 +4,8 @@ Wraps the Bitbucket 2.0 REST API with authentication and pagination support.
 """
 import base64
 import logging
+import re
+import time
 from urllib.parse import quote, unquote, urlsplit
 
 import requests
@@ -12,6 +14,9 @@ logger = logging.getLogger(__name__)
 
 BITBUCKET_API_BASE = "https://api.bitbucket.org/2.0"
 _BITBUCKET_ALLOWED_HOSTS = frozenset({"api.bitbucket.org", "bitbucket.org"})
+# Bitbucket Cloud /src/{ref}/ rejects branch names containing "/" (even %2F-encoded).
+# Always put a commit hash in that path segment. See BCLOUD-14674 / Atlassian forums.
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
 
 
 def _validate_bitbucket_url(url: str) -> None:
@@ -108,11 +113,36 @@ class BitbucketAPIClient:
     def _get(self, url, params=None):
         """Single-resource GET. Returns response JSON or error dict."""
         _validate_bitbucket_url(url)
-        response = requests.get(url, headers=self._get_headers(), params=params, timeout=self.REQUEST_TIMEOUT)
+        delay = 1
+        response = None
+        for attempt in range(6):
+            response = requests.get(
+                url, headers=self._get_headers(), params=params, timeout=self.REQUEST_TIMEOUT
+            )
+            if response.status_code != 429 or attempt == 5:
+                break
+            time.sleep(delay)
+            delay = min(delay * 2, 16)
         if response.status_code != 200:
-            logger.error(f"Bitbucket GET {_sanitize_url(url)} failed: {response.status_code}")
+            if response.status_code != 404:
+                logger.error(f"Bitbucket GET {_sanitize_url(url)} failed: {response.status_code}")
             return self._handle_error(response)
         return response.json()
+
+    @staticmethod
+    def _default_to_utf8(response):
+        """Default an undeclared response charset to UTF-8.
+
+        Bitbucket serves file/diff bytes as ``text/plain`` with NO charset;
+        ``requests`` then falls back to ISO-8859-1 (the HTTP default), which
+        mojibakes UTF-8 content — and a subsequent write would re-encode the
+        mojibake, corrupting every non-ASCII character. Repo files are
+        conventionally UTF-8, so decode them as such unless the response
+        explicitly declares a charset.
+        """
+        content_type = response.headers.get("Content-Type", "")
+        if "charset" not in content_type.lower():
+            response.encoding = "utf-8"
 
     def _get_raw(self, url, params=None):
         """GET that returns raw text (for diffs, logs). Returns string or error dict."""
@@ -123,6 +153,7 @@ class BitbucketAPIClient:
         if response.status_code != 200:
             logger.error(f"Bitbucket GET (raw) {_sanitize_url(url)} failed: {response.status_code}")
             return self._handle_error(response)
+        self._default_to_utf8(response)
         return response.text
 
     def _post(self, url, json_data=None, data=None, files=None):
@@ -186,9 +217,19 @@ class BitbucketAPIClient:
                     "status": None,
                     "message": "Pagination halted: next URL failed validation",
                 }
-            response = requests.get(url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT)
+            delay = 1
+            response = None
+            for attempt in range(6):
+                response = requests.get(
+                    url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT
+                )
+                if response.status_code != 429 or attempt == 5:
+                    break
+                time.sleep(delay)
+                delay = min(delay * 2, 16)
             if response.status_code != 200:
-                logger.error(f"Bitbucket API error {response.status_code} at {_sanitize_url(url)}")
+                if response.status_code != 404:
+                    logger.error(f"Bitbucket API error {response.status_code} at {_sanitize_url(url)}")
                 if not all_values:
                     return self._handle_error(response)
                 logger.warning("Returning partial results due to mid-pagination error")
@@ -249,7 +290,8 @@ class BitbucketAPIClient:
     def get_repositories(self, workspace):
         """List repositories in a workspace."""
         return self._paginated_get(
-            f"{BITBUCKET_API_BASE}/repositories/{quote(workspace, safe='')}"
+            f"{BITBUCKET_API_BASE}/repositories/{quote(workspace, safe='')}",
+            params={"pagelen": 100},
         )
 
     def get_repository(self, workspace, repo_slug):
@@ -264,31 +306,35 @@ class BitbucketAPIClient:
     # ------------------------------------------------------------------
 
     def _resolve_commit(self, workspace, repo_slug, ref):
-        """Resolve a branch/tag name to a commit hash. Returns the ref unchanged if resolution fails."""
-        # "HEAD" isn't a valid ref in Bitbucket's API — resolve to the repo's default branch
+        """Resolve HEAD / branch / tag to a commit hash for /src/{commit}/ paths.
+
+        Returns *ref* unchanged if resolution fails (caller gets a normal API error).
+        """
         if ref == "HEAD":
             repo_info = self._get(
                 f"{BITBUCKET_API_BASE}/repositories/"
                 f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
             )
-            if isinstance(repo_info, dict) and not repo_info.get("error"):
-                main_branch = repo_info.get("mainbranch", {}).get("name")
-                if main_branch:
-                    return main_branch
+            if not isinstance(repo_info, dict) or repo_info.get("error"):
+                return ref
+            ref = (repo_info.get("mainbranch") or {}).get("name") or ref
+            if ref == "HEAD":
+                return ref
+
+        if _COMMIT_SHA_RE.fullmatch(ref):
             return ref
-        # Already a commit SHA — no resolution needed
-        if len(ref) >= 12 and ref.isalnum():
-            return ref
-        # Branch/tag name — resolve to its commit hash
-        result = self._get(
-            f"{BITBUCKET_API_BASE}/repositories/"
-            f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
-            f"/refs/branches/{quote(ref, safe='')}"
-        )
-        if isinstance(result, dict) and not result.get("error"):
-            target_hash = result.get("target", {}).get("hash")
-            if target_hash:
-                return target_hash
+
+        # Prefer branch, then tag. /refs/... accepts URL-encoded "/" in the name.
+        for kind in ("branches", "tags"):
+            result = self._get(
+                f"{BITBUCKET_API_BASE}/repositories/"
+                f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
+                f"/refs/{kind}/{quote(ref, safe='')}"
+            )
+            if isinstance(result, dict) and not result.get("error"):
+                target_hash = (result.get("target") or {}).get("hash")
+                if target_hash:
+                    return target_hash
         return ref
 
     def get_file_contents(self, workspace, repo_slug, path, commit="HEAD"):
@@ -297,21 +343,52 @@ class BitbucketAPIClient:
         url = (
             f"{BITBUCKET_API_BASE}/repositories/"
             f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
-            f"/src/{commit}/{quote(path, safe='/')}"
+            f"/src/{quote(commit, safe='')}/{quote(path, safe='/')}"
         )
         _validate_bitbucket_url(url)
         headers = self._get_headers()
-        response = requests.get(url, headers=headers, timeout=self.REQUEST_TIMEOUT)
+        delay = 1
+        response = None
+        for attempt in range(6):
+            response = requests.get(url, headers=headers, timeout=self.REQUEST_TIMEOUT)
+            if response.status_code != 429 or attempt == 5:
+                break
+            time.sleep(delay)
+            delay = min(delay * 2, 16)
         if response.status_code != 200:
-            logger.error(f"Failed to get file {path}: {response.status_code}")
+            if response.status_code != 404:
+                logger.error(f"Failed to get file {path}: {response.status_code}")
             return self._handle_error(response)
         content_type = response.headers.get("Content-Type", "")
         if "application/json" in content_type:
-            return response.json()
+            # /src answers with JSON for a DIRECTORY listing — but also for a
+            # .json FILE, whose parsed body has no "content" key and would look
+            # like a nonexistent file to callers. Only pass through an actual
+            # paginated directory listing: top-level "values"+"pagelen" AND
+            # every entry typed commit_file/commit_directory (so a stored
+            # pagination fixture of, say, PRs is still treated as file text).
+            try:
+                parsed = response.json()
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict) and "values" in parsed and "pagelen" in parsed:
+                values = parsed.get("values")
+                if isinstance(values, list) and all(
+                    isinstance(v, dict) and str(v.get("type", "")).startswith("commit_")
+                    for v in values
+                ):
+                    return parsed
+        self._default_to_utf8(response)
         return {"content": response.text, "path": path, "commit": commit}
 
-    def create_or_update_file(self, workspace, repo_slug, path, content, message, branch, author=None):
-        """Create or update a file via multipart form POST to /src."""
+    def create_or_update_file(self, workspace, repo_slug, path, content, message, branch, author=None, parents=None):
+        """Create or update a file via multipart form POST to /src.
+
+        ``parents`` (a commit hash) makes the write a compare-and-swap:
+        Bitbucket rejects the commit (400, "parent commit ... is not the
+        head of branch") if ``branch`` no longer points at that commit,
+        instead of silently clobbering newer work.
+        """
         url = (
             f"{BITBUCKET_API_BASE}/repositories/"
             f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}/src"
@@ -322,6 +399,8 @@ class BitbucketAPIClient:
         }
         if author:
             form_data["author"] = author
+        if parents:
+            form_data["parents"] = parents
         files = {path: (path, content)}
         return self._post(url, data=form_data, files=files)
 
@@ -344,10 +423,10 @@ class BitbucketAPIClient:
         url = (
             f"{BITBUCKET_API_BASE}/repositories/"
             f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
-            f"/src/{commit}/{quote(path, safe='/')}"
+            f"/src/{quote(commit, safe='')}/{quote(path, safe='/')}"
         )
         # format=meta returns directory metadata; omitting it returns the file listing
-        params = None if list_files else {"format": "meta"}
+        params = {"pagelen": 100} if list_files else {"format": "meta"}
         return self._get(url, params=params)
 
     def search_code(self, workspace, query):
@@ -521,6 +600,21 @@ class BitbucketAPIClient:
             json_data={"content": {"raw": content}},
         )
 
+    def update_pr_comment(self, workspace, repo_slug, pr_id, comment_id, content):
+        """Update an existing pull request comment's content."""
+        return self._put(
+            f"{self._pr_base(workspace, repo_slug, pr_id)}/comments/"
+            f"{quote(str(comment_id), safe='')}",
+            json_data={"content": {"raw": content}},
+        )
+
+    def delete_pr_comment(self, workspace, repo_slug, pr_id, comment_id):
+        """Delete a pull request comment."""
+        return self._delete(
+            f"{self._pr_base(workspace, repo_slug, pr_id)}/comments/"
+            f"{quote(str(comment_id), safe='')}"
+        )
+
     def get_pr_diff(self, workspace, repo_slug, pr_id):
         """Get the diff for a pull request."""
         return self._get_raw(f"{self._pr_base(workspace, repo_slug, pr_id)}/diff")
@@ -528,6 +622,46 @@ class BitbucketAPIClient:
     def get_pr_activity(self, workspace, repo_slug, pr_id):
         """Get activity log for a pull request."""
         return self._paginated_get(f"{self._pr_base(workspace, repo_slug, pr_id)}/activity")
+
+    # ------------------------------------------------------------------
+    # Repository webhooks
+    # ------------------------------------------------------------------
+
+    def _hook_base(self, workspace, repo_slug, hook_uuid=None):
+        base = (
+            f"{BITBUCKET_API_BASE}/repositories/"
+            f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}/hooks"
+        )
+        if hook_uuid is not None:
+            return f"{base}/{quote(str(hook_uuid), safe='')}"
+        return base
+
+    def list_webhooks(self, workspace, repo_slug):
+        """List webhooks configured on a repository."""
+        return self._paginated_get(self._hook_base(workspace, repo_slug))
+
+    def create_webhook(self, workspace, repo_slug, url, events, description="", secret=None, active=True):
+        """Create a repository webhook. Requires repo admin.
+
+        Args:
+            url: Delivery URL.
+            events: List of event keys (e.g. ``["pullrequest:created", "pullrequest:updated"]``).
+            secret: Optional HMAC signing secret (Bitbucket signs with
+                SHA-256 in the ``X-Hub-Signature`` header).
+        """
+        payload = {
+            "description": description or "Aurora Incident Prevention",
+            "url": url,
+            "active": active,
+            "events": events,
+        }
+        if secret:
+            payload["secret"] = secret
+        return self._post(self._hook_base(workspace, repo_slug), json_data=payload)
+
+    def delete_webhook(self, workspace, repo_slug, hook_uuid):
+        """Delete a repository webhook by its UUID."""
+        return self._delete(self._hook_base(workspace, repo_slug, hook_uuid))
 
     # ------------------------------------------------------------------
     # Issues

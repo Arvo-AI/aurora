@@ -10,19 +10,6 @@ class ConnectorRegistry {
   }
 
   private registerDefaultConnectors() {
-    // Infrastructure - register onprem first
-    this.register({
-      id: "onprem",
-      name: "Instances SSH Access",
-      description: "Manage SSH keys and configure virtual machines for on-premises and cloud infrastructure access.",
-      icon: Server,
-      iconColor: "text-foreground",
-      iconBgColor: "bg-muted",
-      category: "Infrastructure",
-      path: "/vm-config",
-      storageKey: "isOnPremConnected",
-    });
-
     this.register({
       id: "grafana",
       name: "Grafana",
@@ -402,6 +389,18 @@ class ConnectorRegistry {
       category: "Infrastructure",
       path: "/flyio/auth",
       storageKey: "isFlyioConnected",
+    });
+
+    this.register({
+      id: "onprem",
+      name: "Instances SSH Access",
+      description: "Manage SSH keys and configure virtual machines for on-premises and cloud infrastructure access.",
+      icon: Server,
+      iconColor: "text-foreground",
+      iconBgColor: "bg-muted",
+      category: "Infrastructure",
+      path: "/vm-config",
+      storageKey: "isOnPremConnected",
     });
 
     this.register({

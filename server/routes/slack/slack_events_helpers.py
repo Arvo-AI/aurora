@@ -9,6 +9,7 @@ import hashlib
 import time
 from typing import Optional
 from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import sanitize
 import re
 from datetime import datetime
@@ -197,6 +198,45 @@ def _get_user_display_name(client, user_id: str) -> str:
     except Exception as e:
         logger.debug(f"Could not fetch user info for {user_id}: {e}")
         return user_id
+
+
+def get_workspace_member(client, slack_user_id: str, team_id: str) -> Optional[dict]:
+    """
+    Return {"display_name": ...} if slack_user_id is a full member of the Slack
+    workspace team_id, otherwise None.
+
+    "Full member" excludes deleted users, bots, Slack Connect users from other
+    workspaces (team_id mismatch / is_stranger) and guest accounts
+    (is_restricted / is_ultra_restricted). Used before answering an @mention
+    under the shared team identity so that only people who belong to the org
+    can get answers about its infrastructure.
+    """
+    if not slack_user_id or not team_id:
+        return None
+    try:
+        result = client._make_request("GET", "users.info", {"user": slack_user_id}) or {}
+    except Exception as e:
+        logger.warning(f"users.info failed for Slack user {sanitize(slack_user_id)}: {e}")
+        return None
+
+    user = result.get("user") or {}
+    if not result.get("ok") or not user:
+        return None
+    if user.get("team_id") != team_id:
+        return None  # Slack Connect / external workspace
+    if user.get("deleted") or user.get("is_bot") or user.get("id") == "USLACKBOT":
+        return None
+    if user.get("is_stranger") or user.get("is_restricted") or user.get("is_ultra_restricted"):
+        return None  # external user or guest account
+
+    profile = user.get("profile", {})
+    display_name = (
+        profile.get("display_name")
+        or profile.get("real_name")
+        or user.get("name")
+        or slack_user_id
+    )
+    return {"display_name": display_name.strip()}
 
 
 def _resolve_user_display_name(client, user_id: str, is_bot: bool, user_name_cache: dict) -> str:
@@ -534,28 +574,36 @@ def get_incident_by_slack_message(user_id: str, slack_message_ts: str):
     """
     Find an incident by its Slack notification message timestamp.
     Returns (incident_id, session_id) or (None, None) if not found.
+
+    The lookup is org-wide: the incidents channel is shared by the org and a
+    recurrence's completion lands in its anchor's thread, which may belong to
+    another member. It is scoped to the caller's org twice — by RLS and by an
+    explicit org_id predicate — because a Slack ts is only unique within a
+    channel, so two workspaces can hold the same value. The incident's RCA
+    session is only reused for its owner; anyone else gets a fresh session
+    linked to the incident.
     """
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(
-                    "SET myapp.current_org_id = (SELECT org_id FROM users WHERE id = %s)",
-                    (user_id,)
-                )
+                org_id = set_rls_context(cursor, conn, user_id, log_prefix="[SlackEvents:incident_by_ts]")
+                if not org_id:
+                    return None, None
                 cursor.execute(
                     """
-                    SELECT id, aurora_chat_session_id
+                    SELECT id, aurora_chat_session_id, user_id
                     FROM incidents
-                    WHERE user_id = %s AND slack_message_ts = %s
+                    WHERE slack_message_ts = %s AND org_id = %s
                     LIMIT 1
                     """,
-                    (user_id, slack_message_ts)
+                    (slack_message_ts, org_id)
                 )
                 result = cursor.fetchone()
-                
+
                 if result:
                     incident_id = str(result[0])
-                    session_id = str(result[1]) if result[1] else None
+                    is_owner = str(result[2]) == str(user_id)
+                    session_id = str(result[1]) if result[1] and is_owner else None
                     logger.info(f"Found incident {incident_id} (session: {session_id}) from slack_message_ts {slack_message_ts}")
                     return incident_id, session_id
                 
@@ -569,23 +617,26 @@ def get_incident_by_slack_message(user_id: str, slack_message_ts: str):
 def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
     """
     Find the session_id associated with a Slack thread.
-    First checks if thread_ts matches an incident notification message.
-    Then looks up chat sessions by thread_ts in trigger_metadata.
-    Returns (session_id, incident_id) or (None, None) if not found.
+    First checks if thread_ts matches an incident notification message; its
+    RCA session is reused only by the incident's owner. Otherwise looks up
+    this user's own earlier chat session in the thread (a plain Slack chat,
+    or their Q&A on someone else's incident).
+    Returns (session_id, incident_id), where incident_id is set only when
+    session_id is that incident's RCA session — so a non-owner's first
+    mention on an incident thread returns (None, incident_id) and the caller
+    starts a Q&A session about it. (None, None) if nothing matches.
     """
     try:
         # First, check if this thread is from an incident notification
         incident_id, session_id = get_incident_by_slack_message(user_id, thread_ts)
-        if incident_id:
+        if session_id:
             return session_id, incident_id
         
         # Otherwise, look up by thread_ts in chat session metadata
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(
-                    "SET myapp.current_org_id = (SELECT org_id FROM users WHERE id = %s)",
-                    (user_id,)
-                )
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[SlackEvents:session_by_thread]"):
+                    return None, incident_id
                 cursor.execute(
                     """
                     SELECT id, ui_state
@@ -603,6 +654,9 @@ def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
                 
                 if result:
                     session_id = str(result[0])
+                    if incident_id:
+                        # This user's Q&A session on an incident they do not own.
+                        return session_id, None
                     
                     cursor.execute(
                         """
@@ -618,7 +672,7 @@ def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
                     
                     return session_id, incident_id
                 
-                return None, None
+                return None, incident_id
                 
     except Exception as e:
         logger.error(f"Error looking up session from thread: {e}", exc_info=True)
@@ -637,6 +691,12 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
     from chat.background.task import run_background_chat, create_background_chat_session
     
     try:
+        # Only the incident's own RCA session (its owner continuing it) runs as
+        # the incident's investigation. A fresh session is a Q&A about the
+        # incident: linked for context through chat_sessions.incident_id like
+        # the incident chat in the UI, but it must not re-run the RCA lifecycle
+        # (re-link aurora_chat_session_id, re-summarize, re-dispatch actions).
+        rca_incident_id = incident_id if session_id else None
         # Create session if not exists
         if not session_id:
             # Generate a title from the message (first TITLE_MAX_LENGTH chars)
@@ -653,7 +713,8 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
             session_id = create_background_chat_session(
                 user_id=user_id,
                 title=title,
-                trigger_metadata=trigger_metadata
+                trigger_metadata=trigger_metadata,
+                incident_id=incident_id,
             )
         
         # Build context from thread messages or channel messages
@@ -696,7 +757,7 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
             initial_message=full_message,
             trigger_metadata=trigger_metadata,
             provider_preference=None,  # Use default providers
-            incident_id=incident_id,
+            incident_id=rca_incident_id,
             send_notifications=False  # Don't send investigation started notifications for Slack @mentions
         )
         

@@ -356,3 +356,78 @@ def disconnect(user_id):
     except Exception as exc:
         logger.exception("[JIRA] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Jira"}), 500
+
+
+# ------------------------------------------------------------------
+# POST /jira/webhook/<user_id> — Jira automation webhook receiver
+# ------------------------------------------------------------------
+
+@jira_bp.route("/webhook/<user_id>", methods=["POST"])
+def webhook(user_id: str):
+    """Receive a Jira webhook and trigger Aurora's RCA pipeline.
+
+    Configure in Jira under Settings > System > Webhooks, or via
+    Jira Automation rules that POST to this URL on issue creation.
+    Accepts standard Jira webhook payloads (issue_created, issue_updated).
+    """
+    if not user_id:
+        return jsonify({"error": "user_id is required"}), 400
+
+    # Guard: only accept webhooks for users who actually have Jira connected.
+    # Without this, any POST to /jira/webhook/<user_id> would enqueue Celery
+    # work and dispatch an LLM-backed RCA for any (guessable) user_id — the
+    # same connector-existence check the PagerDuty/OpsGenie handlers enforce.
+    if not get_token_data(user_id, "jira"):
+        logger.warning("[JIRA][WEBHOOK] Webhook for user %s with no Jira connection", sanitize(user_id))
+        return jsonify({"error": "Jira not connected for this user"}), 404
+
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jsonify({"error": "Invalid or missing JSON payload"}), 400
+
+    issue = payload.get("issue", {})
+
+    if not issue:
+        return jsonify({"status": "ignored", "reason": "no issue in payload"}), 200
+
+    issue_type = (issue.get("fields", {}).get("issuetype") or {}).get("name", "").lower()
+    if issue_type not in ("bug", "incident", "problem", "defect", "production issue"):
+        logger.info("[JIRA][WEBHOOK] Ignored issue type '%s' (key=%s)", sanitize(issue_type), sanitize(issue.get("key", "?")))
+        return jsonify({"status": "ignored", "reason": "issue type not configured for RCA"}), 200
+
+    from routes.jira.tasks import process_jira_webhook
+    try:
+        process_jira_webhook.delay(payload=payload, user_id=user_id)
+    except Exception:
+        # Broker/registration failure is on our side, not the sender's — return
+        # 503 so Jira retries rather than treating it as a malformed webhook (500).
+        logger.exception("[JIRA][WEBHOOK] Failed to enqueue task for user %s (issue=%s)",
+                         sanitize(user_id), sanitize(issue.get("key", "?")))
+        return jsonify({"status": "error", "reason": "could not enqueue webhook for processing"}), 503
+
+    return jsonify({"status": "accepted", "issue": issue.get("key", "unknown")}), 202
+
+
+# ------------------------------------------------------------------
+# GET /jira/webhook-url — returns the webhook URL for this user
+# ------------------------------------------------------------------
+
+@jira_bp.route("/webhook-url", methods=["GET"])
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
+    """Return the Jira webhook URL for the authenticated user."""
+    import os
+    # NEXT_PUBLIC_BACKEND_URL can be a cluster-internal address (e.g.
+    # http://aurora-server:5080) that Jira can't reach. Prefer NGROK_URL in
+    # local dev, then a public URL, matching the PagerDuty handler.
+    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
+    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "http://localhost:5080").rstrip("/")
+    public_url = os.getenv("PUBLIC_API_URL", "").rstrip("/")
+    if ngrok_url and backend_url.startswith("http://localhost"):
+        base_url = ngrok_url
+    else:
+        base_url = public_url or backend_url
+    url = f"{base_url}/jira/webhook/{user_id}"
+    # These are the recommended Jira events to subscribe the webhook to — not a
+    # server-enforced allowlist. The handler filters by issue type, not event name.
+    return jsonify({"webhook_url": url, "recommended_events": ["jira:issue_created", "jira:issue_updated"]})

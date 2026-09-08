@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional, Tuple
+import os
 import threading
 import json
 import asyncio
@@ -402,7 +403,7 @@ def send_tool_completion(tool_name: str, output: str, status: str = "completed",
         
         # Trigger visualization update every 30s for incident RCAs
         incident_id = getattr(state_context, 'incident_id', None) if state_context else None
-        if incident_id:
+        if incident_id and os.getenv("VISUALIZATION_ENABLED", "false").lower() == "true":
             try:
                 global _viz_triggers
                 
@@ -685,45 +686,52 @@ def with_user_context(func):
     return wrapper
 
 def with_forced_context(func):
-    """Decorator that ALWAYS injects user_id and session_id from context, 
+    """Decorator that ALWAYS injects user_id and session_id from context,
     completely removing them from the AI's view to prevent mixups.
-    
+
     This is the preferred decorator for tools that should never have their
     user_id/session_id parameters mixed up by the AI.
+    Only injects parameters that the wrapped function actually accepts.
     """
+    import inspect
+    func_params = set(inspect.signature(func).parameters.keys())
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         # ALWAYS get user_id from context, never from AI
         context = get_user_context()
         context_user_id = context.get('user_id') if isinstance(context, dict) else context
         if context_user_id:
-            kwargs['user_id'] = context_user_id
-            logging.info(f"with_forced_context: Forced user_id from context: {context_user_id} for {func.__name__}")
+            if 'user_id' in func_params:
+                kwargs['user_id'] = context_user_id
+                logging.info(f"with_forced_context: Forced user_id from context: {context_user_id} for {func.__name__}")
         else:
             logging.error(f"with_forced_context: No user_id in context for {func.__name__}")
             raise ValueError(f"No user_id available in context for {func.__name__}")
-        
+
         # ALWAYS get session_id from context, never from AI
         context_state = get_state_context()
         context_session_id = context_state.session_id if context_state and hasattr(context_state, 'session_id') else None
         if context_session_id:
-            kwargs['session_id'] = context_session_id
-            logging.info(f"with_forced_context: Forced session_id from context: {context_session_id} for {func.__name__}")
+            if 'session_id' in func_params:
+                kwargs['session_id'] = context_session_id
+                logging.info(f"with_forced_context: Forced session_id from context: {context_session_id} for {func.__name__}")
         else:
             logging.error(f"with_forced_context: No session_id in context for {func.__name__}")
             raise ValueError(f"No session_id available in context for {func.__name__}")
-        
+
         # Inject incident_id if available (for RCA sessions)
         context_incident_id = context_state.incident_id if context_state and hasattr(context_state, 'incident_id') else None
-        if context_incident_id:
+        if context_incident_id and 'incident_id' in func_params:
             kwargs['incident_id'] = context_incident_id
             logging.info(f"with_forced_context: Forced incident_id from context: {context_incident_id} for {func.__name__}")
-        
+
         # Validate user_id format
-        user_id = kwargs['user_id']
-        from utils.auth.stateless_auth import is_valid_user_id
-        if not is_valid_user_id(user_id):
-            logging.warning(f"with_forced_context: user_id '{user_id}' is invalid (empty or not a string) for {func.__name__}")
+        user_id = kwargs.get('user_id')
+        if user_id:
+            from utils.auth.stateless_auth import is_valid_user_id
+            if not is_valid_user_id(user_id):
+                logging.warning(f"with_forced_context: user_id '{user_id}' is invalid (empty or not a string) for {func.__name__}")
 
         return func(*args, **kwargs)
     return wrapper
@@ -996,6 +1004,40 @@ def _is_background_rca(state_context, is_background: bool) -> bool:
     return bool(rca_source) and rca_source not in _NON_RCA_SOURCES
 
 
+# Bitbucket tool actions that mutate state. Read-only sessions (PR change-
+# gating reviews, background RCA) hard-reject these at the tool FUNCTION
+# level — not just via descriptions — so a prompt-injected diff can't talk
+# the agent into merging/approving/pushing.
+_BB_WRITE_ACTIONS = frozenset({
+    "create_or_update_file", "edit_file", "delete_file",
+    "create_branch", "delete_branch",
+    "create_pr", "update_pr", "merge_pr", "approve_pr",
+    "unapprove_pr", "decline_pr", "add_pr_comment",
+    "create_issue", "update_issue", "add_issue_comment",
+    "trigger_pipeline", "stop_pipeline",
+})
+
+
+def _bb_read_only_gate(func, tool_name, reason):
+    """Wrap a Bitbucket tool so write actions are rejected during read-only
+    sessions. ``reason`` names the session type in the error ("PR review",
+    "RCA")."""
+    def gated(*args, **kwargs):
+        _action = kwargs.get("action") or (args[0] if args else None)
+        if _action in _BB_WRITE_ACTIONS:
+            return json.dumps({
+                "error": True,
+                "message": (
+                    f"Action '{_action}' is not permitted: {reason} "
+                    "sessions are read-only on Bitbucket."
+                ),
+            })
+        return func(*args, **kwargs)
+    gated.__name__ = getattr(func, "__name__", tool_name)
+    gated.__doc__ = func.__doc__
+    return gated
+
+
 def get_cloud_tools():
     """Get all cloud management tools including both Aurora native tools and REAL MCP tools."""
     # Import required classes at function start to avoid scope issues
@@ -1026,12 +1068,16 @@ def get_cloud_tools():
     rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
     is_background = getattr(state_context, 'is_background', False) if state_context else False
     is_postmortem_action = getattr(state_context, 'is_postmortem_action', False) if state_context else False
+    is_hpa_vpa_action = getattr(state_context, 'is_hpa_vpa_action', False) if state_context else False
     is_pr_review = getattr(state_context, 'is_pr_review', False) if state_context else False
     is_rca_context = _is_background_rca(state_context, is_background)
     _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
     _incident_id = getattr(state_context, 'incident_id', None) if state_context else None
     capture_tag = "capture" if tool_capture else "nocapture"
-    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}"
+    # hpa_vpa is part of the key for the same reason postmortem is: it changes
+    # which tools are returned, so sharing a cache entry across contexts would
+    # leak the card tool into an ordinary chat (or withhold it from the action).
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}"
     
     current_time = time.time()
     if (
@@ -1567,8 +1613,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "'blue_ocean_run' (Blue Ocean API: run data with changeSet and commit info), "
                     "'blue_ocean_steps' (Blue Ocean API: step-level detail for a pipeline node), "
                     "'flag_changes' (Feature Management flag changes; params: app_id), "
-                    "'cross_controller_deployments' (query builds across all OC-managed controllers), "
-                    "'controller_list' (list discovered controllers from Operations Center). "
+                    "'cross_controller_deployments' (query builds across all controllers — OC-managed or a manually-registered fleet), "
+                    "'controller_list' (list controllers — from Operations Center or a manually-registered fleet). "
                     "Required params vary by action: job_path+build_number for Core/wfapi, "
                     "pipeline_name+run_number for Blue Ocean. service is optional for recent_deployments."
                 ),
@@ -2217,10 +2263,15 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             func=final_dd_func,
             name="query_datadog",
             description=(
-                "Query Datadog for logs, metrics, monitors, events, traces, hosts, or incidents. "
-                "Set resource_type to 'logs', 'metrics', 'monitors', 'events', 'traces', 'hosts', or 'incidents'. "
+                "Query Datadog for logs, metrics, metric_stats, monitors, events, traces, hosts, or incidents. "
+                "Set resource_type to 'logs', 'metrics', 'metric_stats', 'monitors', 'events', 'traces', "
+                "'hosts', or 'incidents'. Use 'metric_stats' for p50/p95/p99/max per series over long "
+                "windows (capacity and right-sizing questions) -- Datadog cannot compute a time-percentile "
+                "in a query, so 'metrics' plus a percentile rollup does not work. "
                 "Examples: query_datadog(resource_type='logs', query='service:web status:error', time_from='-1h') "
-                "or query_datadog(resource_type='metrics', query='avg:system.cpu.user{*}', time_from='-2h')"
+                "or query_datadog(resource_type='metrics', query='avg:system.cpu.user{*}', time_from='-2h') "
+                "or query_datadog(resource_type='metric_stats', "
+                "query='sum:kubernetes.memory.usage{env:production} by {kube_deployment}', time_from='-30d')"
             ),
             args_schema=QueryDatadogArgs,
         ))
@@ -2327,33 +2378,49 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             )
 
             _is_rca_background = _is_background_rca(state_context, is_background)
+            _bb_read_only = _is_rca_background or is_pr_review
+            _ro_reason = "PR review" if is_pr_review else "RCA"
 
-            if _is_rca_background:
+            # PR change-gating reviews AND background RCA are both hard
+            # read-only for Bitbucket writes: the agent must never
+            # merge/approve/decline PRs, push files, or trigger pipelines.
+            # The shared read-only descriptor set below (minus bitbucket_fix,
+            # which is RCA-card-only — see below) is backed by the
+            # _bb_read_only_gate function-level rejection in both modes.
+            if _bb_read_only:
                 _bb_tools = [
                     (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
-                     "Query Bitbucket repositories and files (READ-ONLY during RCA). "
-                     "Actions: list_repos, get_repo, get_file_contents, get_directory_tree, "
-                     "search_code, list_workspaces, get_workspace. "
-                     "Do NOT use create_or_update_file — use bitbucket_fix to propose code changes instead."),
+                     f"Query Bitbucket repositories and files (READ-ONLY during {_ro_reason}). "
+                     "Actions: list_repos, get_repo, get_file_contents, find_in_file, "
+                     "get_directory_tree, search_code, list_workspaces, get_workspace. "
+                     "Large files come back in verbatim pages — follow the start_line "
+                     "continue hint in the page header; use find_in_file to locate lines. "
+                     "Do NOT use edit_file, create_or_update_file, or delete_file."),
                     (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
-                     "Query Bitbucket branches and commits (READ-ONLY during RCA). "
+                     f"Query Bitbucket branches and commits (READ-ONLY during {_ro_reason}). "
                      "Actions: list_branches, list_commits, get_commit, get_diff, compare. "
-                     "Do NOT create branches manually — use bitbucket_fix to propose code changes instead."),
+                     "Do NOT create or delete branches."),
                     (bitbucket_pull_requests, "bitbucket_pull_requests", BitbucketPullRequestsArgs,
-                     "Query Bitbucket pull requests (READ-ONLY during RCA). "
+                     f"Query Bitbucket pull requests (READ-ONLY during {_ro_reason}). "
                      "Actions: list_prs, get_pr, list_pr_comments, get_pr_diff, get_pr_activity. "
-                     "Do NOT create PRs manually — use bitbucket_fix to propose code changes instead."),
+                     "Do NOT create, merge, approve, decline, or comment on PRs."),
                     (bitbucket_pipelines, "bitbucket_pipelines", BitbucketPipelinesArgs,
-                     "Query Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
-                     "list_pipeline_steps, get_step_log, get_pipeline_step."),
+                     "Query Bitbucket Pipelines CI/CD (READ-ONLY). Actions: list_pipelines, "
+                     "get_pipeline, list_pipeline_steps, get_step_log, get_pipeline_step. "
+                     "Do NOT trigger or stop pipelines."),
                 ]
             else:
                 _bb_tools = [
                     (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
                      "Manage Bitbucket repositories, files, and code. Actions: list_repos, get_repo, "
-                     "get_file_contents, create_or_update_file, delete_file, get_directory_tree, "
-                     "search_code, list_workspaces, get_workspace. Workspace and repo auto-resolve "
-                     "from saved selection if not specified."),
+                     "get_file_contents, find_in_file, edit_file, create_or_update_file, delete_file, "
+                     "get_directory_tree, search_code, list_workspaces, get_workspace. "
+                     "Prefer edit_file (anchored old_string/new_string edits applied server-side "
+                     "against the current file) for existing files; use create_or_update_file only "
+                     "for brand-new files. Large files come back in verbatim pages — follow the "
+                     "start_line/start_char continue hint in the page header; use find_in_file to "
+                     "locate lines, then get_file_contents with start_line to read that region. "
+                     "Workspace and repo auto-resolve from saved selection if not specified."),
                     (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
                      "Manage Bitbucket branches and view commits/diffs. Actions: list_branches, create_branch, "
                      "delete_branch, list_commits, get_commit, get_diff, compare."),
@@ -2368,36 +2435,52 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                      "Manage Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
                      "trigger_pipeline, stop_pipeline, list_pipeline_steps, get_step_log, get_pipeline_step."),
                 ]
+            # Hard gate (not just descriptions): during a PR review or a
+            # background RCA the tool FUNCTIONS reject Bitbucket write
+            # actions (_bb_read_only_gate / _BB_WRITE_ACTIONS, module level).
             for _func, _name, _schema, _desc in _bb_tools:
+                if _bb_read_only:
+                    _func = _bb_read_only_gate(_func, _name, _ro_reason)
                 _ctx = with_user_context(_func)
                 _notif = with_completion_notification(_ctx)
                 _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
                 tools.append(StructuredTool.from_function(
                     func=_final, name=_name, description=_desc, args_schema=_schema))
 
-            # bitbucket_fix needs forced context (incident_id injection) like github_fix
-            _bb_fix_ctx = with_forced_context(bitbucket_fix)
-            _bb_fix_notif = with_completion_notification(_bb_fix_ctx)
-            _bb_fix_final = wrap_func_with_capture(_bb_fix_notif, "bitbucket_fix") if tool_capture else _bb_fix_notif
-            tools.append(StructuredTool.from_function(
-                func=_bb_fix_final,
-                name="bitbucket_fix",
-                description=(
-                    "Suggest a code fix or create a new file for an identified issue during RCA. "
-                    "Use this when you identify a specific code change that would fix the root cause "
-                    "and the repository is on Bitbucket. "
-                    "The fix is stored for user review before being applied as a PR. "
-                    "Parameters: file_path (path in repo), "
-                    "edits (list of anchored search-and-replace edits: each has old_string + new_string; "
-                    "old_string must match the current file exactly, with enough surrounding context to be unique; "
-                    "set replace_all=true if you want every occurrence replaced; "
-                    "to CREATE a new file, use old_string='' with the full content in new_string), "
-                    "fix_description (what this fix does), root_cause_summary (why this change is needed). "
-                    "Optional: repo (workspace/repo_slug format), commit_message, branch."
-                ),
-                args_schema=BitbucketFixArgs,
-            ))
-            logging.info(f"Added {len(_bb_tools) + 1} Bitbucket tools for user {user_id} (rca_background={_is_rca_background})")
+            # bitbucket_fix needs forced context (incident_id injection) like
+            # github_fix, and like github_fix it is RCA-card-only: outside a
+            # background RCA there is no incident card to review the fix in.
+            # The explicit `not is_pr_review` is defense in depth — the
+            # read-only review surface must never see a write-capable tool
+            # even if a future trigger path sets both flags.
+            _bb_fix_registered = _is_rca_background and not is_pr_review
+            if _bb_fix_registered:
+                _bb_fix_ctx = with_forced_context(bitbucket_fix)
+                _bb_fix_notif = with_completion_notification(_bb_fix_ctx)
+                _bb_fix_final = wrap_func_with_capture(_bb_fix_notif, "bitbucket_fix") if tool_capture else _bb_fix_notif
+                tools.append(StructuredTool.from_function(
+                    func=_bb_fix_final,
+                    name="bitbucket_fix",
+                    description=(
+                        "Suggest a code fix or create a new file for an identified issue during RCA. "
+                        "Use this when you identify a specific code change that would fix the root cause "
+                        "and the repository is on Bitbucket. "
+                        "The fix is stored for user review before being applied as a PR. "
+                        "Parameters: file_path (path in repo), "
+                        "edits (list of anchored search-and-replace edits: each has old_string + new_string; "
+                        "old_string must match the current file exactly, with enough surrounding context to be unique; "
+                        "set replace_all=true if you want every occurrence replaced; "
+                        "to CREATE a new file, use old_string='' with the full content in new_string), "
+                        "fix_description (what this fix does), root_cause_summary (why this change is needed). "
+                        "Optional: repo (workspace/repo_slug format), commit_message, branch."
+                    ),
+                    args_schema=BitbucketFixArgs,
+                ))
+            logging.info(
+                "Added %s Bitbucket tools for user %s (rca_background=%s, pr_review=%s)",
+                len(_bb_tools) + (1 if _bb_fix_registered else 0),
+                user_id, _is_rca_background, is_pr_review,
+            )
     except Exception as e:
         logging.warning(f"Failed to add Bitbucket tools: {e}")
 
@@ -2474,6 +2557,71 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             logging.info(f"Added {len(specs)} Notion tools for user {user_id} (background={is_background})")
     except Exception as e:
         logging.warning(f"Failed to add Notion tools: {e}")
+
+    # Add HPA/VPA right-sizing card tools -- scoped to the built-in Right-Sizing
+    # Audit action, and additionally requiring Slack (to post the card) and GitHub
+    # (the PR the card links to).
+    #
+    # is_hpa_vpa_action is resolved in chat/background/task.py from the run's
+    # trigger_metadata action_id via a system_key lookup, mirroring
+    # is_postmortem_action/save_postmortem. It fails closed, so an ordinary chat
+    # -- which has no action_id -- never sees a tool that writes to a customer
+    # Slack channel. Excluded from PR review, which is read-only.
+    try:
+        # Imported here rather than relying on the Slack block ~1000 lines above:
+        # that name is only bound if this function reached that try block without
+        # raising, so depending on it would fail with UnboundLocalError.
+        from .slack_tool import is_slack_connected as _is_slack_connected
+        from .hpa_vpa_card_tool import HPA_VPA_TOOL_SPECS
+        if not is_hpa_vpa_action:
+            # Not the right-sizing action: say so at debug level only. This is the
+            # overwhelmingly common case (every chat, every other action), so a
+            # warning here would be noise that trains people to ignore the real one.
+            # The connectivity probes are deliberately NOT run in this branch: each
+            # one is a Vault + DB round trip, and paying for both on every chat turn
+            # and every other action just to log a debug line is pure overhead.
+            logging.debug(
+                "HPA/VPA right-sizing card tools withheld for user %s: not the "
+                "Right-Sizing Audit action", user_id,
+            )
+        elif is_pr_review:
+            # Read-only surface: nothing to register and nothing to warn about.
+            logging.debug(
+                "HPA/VPA right-sizing card tools withheld for user %s: PR review is "
+                "read-only", user_id,
+            )
+        else:
+            _slack_ok = _safe_connected(_is_slack_connected, "Slack")
+            _github_ok = _safe_connected(is_github_connected, "GitHub")
+            if _slack_ok and _github_ok:
+                for _func, _name, _schema, _desc in HPA_VPA_TOOL_SPECS:
+                    _ctx = with_user_context(_func)
+                    _notif = with_completion_notification(_ctx)
+                    _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                    tools.append(StructuredTool.from_function(
+                        func=_final,
+                        name=_name,
+                        description=_desc,
+                        args_schema=_schema,
+                    ))
+                logging.info(f"Added {len(HPA_VPA_TOOL_SPECS)} HPA/VPA right-sizing tools for user {user_id}")
+            else:
+                # Say WHY the tools are absent. Silence here is indistinguishable from
+                # "the agent chose not to notify": the right-sizing prompt treats a
+                # missing card tool as an acceptable outcome and still opens the PR, so
+                # a dropped tool surfaces to the user as a PR that never reached Slack
+                # with nothing in the logs to explain it. _safe_connected also returns
+                # False on an exception (Vault blip, token refresh failure), which looks
+                # identical to "not connected" -- hence logging the pair, not a guess.
+                _missing = [n for n, ok in (("Slack", _slack_ok), ("GitHub", _github_ok)) if not ok]
+                logging.warning(
+                    "HPA/VPA right-sizing card tools NOT registered for user %s: %s "
+                    "not connected (or its connectivity check failed). The right-sizing "
+                    "action will still open PRs but cannot post the review card.",
+                    user_id, " and ".join(_missing),
+                )
+    except Exception as e:
+        logging.warning(f"Failed to add HPA/VPA right-sizing tools: {e}")
 
     # Add Jira tools if enabled
     try:
@@ -2778,8 +2926,25 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             real_mcp_tools = []
         
         if real_mcp_tools:
+            # PR risk reviews are strictly read-only: destructive MCP tools
+            # (create/merge/push/delete across GitHub etc.) normally rely on
+            # an interactive human confirmation gate, which an unattended
+            # review session cannot provide — withhold them entirely.
+            if is_pr_review:
+                from .mcp_tools import is_destructive_mcp_tool
+                before = len(real_mcp_tools)
+                real_mcp_tools = [
+                    t for t in real_mcp_tools
+                    if not is_destructive_mcp_tool(
+                        t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
+                    )
+                ]
+                logging.info(
+                    "PR review: withheld %s destructive MCP tools for user %s",
+                    before - len(real_mcp_tools), user_id,
+                )
             mcp_tools = create_mcp_langchain_tools(
-                real_mcp_tools, 
+                real_mcp_tools,
                 tool_capture=tool_capture,
                 send_tool_start=send_tool_start,
                 send_tool_completion=send_tool_completion,

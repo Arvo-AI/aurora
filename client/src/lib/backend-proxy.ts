@@ -73,6 +73,26 @@ function formatSuccessResponse(response: Response, errorLabel: string): Promise<
   );
 }
 
+async function errorResponseFromBackend(response: Response, errorLabel: string): Promise<NextResponse> {
+  const text = await response.text();
+  const ct = response.headers.get('content-type') || '';
+  if (ct.includes('text/html')) {
+    return NextResponse.json(
+      { error: `Unexpected HTML response from ${errorLabel}` },
+      { status: 502 },
+    );
+  }
+  if (ct.includes('application/json')) {
+    try {
+      return NextResponse.json(JSON.parse(text), { status: response.status });
+    } catch { /* fall through */ }
+  }
+  return NextResponse.json(
+    { error: text || `Failed to fetch ${errorLabel}` },
+    { status: response.status },
+  );
+}
+
 // Proxy a Next.js API-route request to the Python backend with auth, timeout, and error normalisation.
 export async function forwardRequest(
   request: NextRequest,
@@ -126,11 +146,7 @@ export async function forwardRequest(
     }
 
     if (!response.ok) {
-      const text = await response.text();
-      return NextResponse.json(
-        { error: text || `Failed to fetch ${errorLabel}` },
-        { status: response.status },
-      );
+      return await errorResponseFromBackend(response, errorLabel);
     }
 
     return await formatSuccessResponse(response, errorLabel);

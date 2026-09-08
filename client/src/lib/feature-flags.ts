@@ -29,10 +29,21 @@ export const isNotionEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_NOTION') === 'true';
 };
 
+// Default-ON flag (matches the backend's is_incident_prevention_enabled):
+// only an explicit "false" disables it, so an unset env in dev keeps parity.
+export const isIncidentPreventionEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION') !== 'false';
+};
+
 export const isCloudBeesEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_CLOUDBEES') === 'true';
 };
 
 export const isBitbucketOAuthEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH') === 'true';
+};
+
+// Off unless explicitly enabled, mirroring the backend VISUALIZATION_ENABLED default.
+export const isVisualizationEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_VISUALIZATION') === 'true';
 };

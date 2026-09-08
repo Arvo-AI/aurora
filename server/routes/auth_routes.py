@@ -6,6 +6,8 @@ import logging
 from routes.audit_routes import record_audit_event
 import hashlib
 import re
+import secrets
+from datetime import datetime, timedelta
 import bcrypt
 from flask import Blueprint, request, jsonify
 from utils.db.db_utils import connect_to_db_as_user
@@ -19,6 +21,10 @@ _DUMMY_BCRYPT_HASH = bcrypt.hashpw(os.urandom(16), bcrypt.gensalt()).decode('utf
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
+VERIFICATION_CODE_EXPIRY_MINUTES = 15
+RESEND_COOLDOWN_MINUTES = 1
+_SERVER_ERROR = "Server error"
+
 SLUG_REGEX = re.compile(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$')
 ORG_NAME_REGEX = re.compile(r"^[\w\s\-\.,'&()]+$", re.UNICODE)
 ORG_NAME_ERROR = "Organization name can only contain letters, numbers, spaces, hyphens, periods, commas, apostrophes, ampersands, and parentheses"
@@ -28,6 +34,43 @@ def _name_to_slug(name: str) -> str:
     if len(slug) < 2:
         slug = slug + '-org'
     return slug
+
+
+def send_verification_email(user_id: str, email: str) -> bool:
+    """Generate a verification code, store it, and email it to the user.
+
+    If SMTP is not configured (ValueError from email service), auto-verifies
+    the user so they aren't locked out.
+
+    Returns True if the email was sent (or user was auto-verified), False on failure.
+    """
+    from utils.notifications.email_service import get_email_service
+
+    try:
+        email_svc = get_email_service()
+    except ValueError:
+        with db_pool.get_admin_connection() as c:
+            with c.cursor() as cur:
+                cur.execute("UPDATE users SET email_verified = TRUE WHERE id = %s", (user_id,))
+                c.commit()
+        return True
+
+    code = f"{secrets.randbelow(1000000):06d}"
+    code_hash = hashlib.sha256(code.encode()).hexdigest()
+    expires = datetime.now() + timedelta(minutes=VERIFICATION_CODE_EXPIRY_MINUTES)
+
+    with db_pool.get_admin_connection() as c:
+        with c.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET email_verification_code = %s, "
+                "email_verification_code_expires_at = %s, email_verification_attempts = 0 "
+                "WHERE id = %s",
+                (code_hash, expires, user_id),
+            )
+            c.commit()
+
+    return email_svc.send_account_verification_email(email, code)
+
 
 @auth_bp.after_request
 def add_cors_headers(response):
@@ -154,6 +197,11 @@ def register():
 
                 record_audit_event(org_id, user_id, "register", "organization", org_id,
                                    {"email": email}, request)
+
+                try:
+                    send_verification_email(user_id, email)
+                except Exception:  # noqa: BLE001 — don't block registration if verification email fails
+                    logging.warning("Failed to send verification email for %s", user_id)
 
                 return jsonify({
                     "id": user_id,
@@ -313,7 +361,7 @@ def login():
                 # No RLS needed — users not RLS-protected
                 cursor.execute(
                     "SELECT u.id, u.email, u.name, u.password_hash, u.role, u.org_id, o.name, "
-                    "COALESCE(u.must_change_password, FALSE) "
+                    "COALESCE(u.must_change_password, FALSE), COALESCE(u.email_verified, FALSE) "
                     "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
                     "WHERE u.email = %s",
                     (email,)
@@ -323,7 +371,7 @@ def login():
                 # Always perform password check to prevent timing attacks
                 # Use dummy hash if user doesn't exist
                 if user:
-                    user_id, user_email, user_name, password_hash, user_role, user_org_id, user_org_name, must_change_pw = user
+                    user_id, user_email, user_name, password_hash, user_role, user_org_id, user_org_name, must_change_pw, email_verified = user
                 else:
                     # Dummy hash to maintain consistent timing
                     password_hash = _DUMMY_BCRYPT_HASH
@@ -363,6 +411,7 @@ def login():
                     "orgId": user_org_id,
                     "orgName": user_org_name,
                     "mustChangePassword": bool(must_change_pw),
+                    "emailVerified": bool(email_verified),
                 }), 200
         finally:
             conn.close()
@@ -396,7 +445,7 @@ def change_password(user_id):
             with conn.cursor() as cursor:
                 # No RLS needed — users not RLS-protected
                 cursor.execute(
-                    "SELECT password_hash FROM users WHERE id = %s",
+                    "SELECT password_hash, email, COALESCE(must_change_password, FALSE), COALESCE(email_verified, FALSE) FROM users WHERE id = %s",
                     (user_id,)
                 )
                 result = cursor.fetchone()
@@ -404,7 +453,7 @@ def change_password(user_id):
                 if not result:
                     return jsonify({"error": "User not found"}), 404
                 
-                password_hash = result[0]
+                password_hash, user_email, was_must_change, was_verified = result
                 
                 from utils.auth.stateless_auth import resolve_org_id
                 org_id = resolve_org_id(user_id) or ""
@@ -429,6 +478,9 @@ def change_password(user_id):
 
                 record_audit_event(org_id, user_id, "change_password", "user", user_id, {}, request)
 
+                if was_must_change and not was_verified:
+                    send_verification_email(user_id, user_email)
+
                 return jsonify({"message": "Password changed successfully"}), 200
         finally:
             conn.close()
@@ -451,7 +503,8 @@ def get_current_user(user_id):
             with conn.cursor() as cursor:
                 # No RLS needed — users, organizations not RLS-protected
                 cursor.execute(
-                    "SELECT u.role, u.org_id, o.name, COALESCE(u.must_change_password, FALSE) "
+                    "SELECT u.role, u.org_id, o.name, COALESCE(u.must_change_password, FALSE), "
+                    "COALESCE(u.email_verified, FALSE) "
                     "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
                     "WHERE u.id = %s",
                     (user_id,),
@@ -465,10 +518,96 @@ def get_current_user(user_id):
                     "orgId": row[1],
                     "orgName": row[2],
                     "mustChangePassword": bool(row[3]),
+                    "emailVerified": bool(row[4]),
                 }), 200
     except Exception:
         logging.exception("Error in /me")
-        return jsonify({"error": "Server error"}), 500
+        return jsonify({"error": _SERVER_ERROR}), 500
+
+
+@auth_bp.route('/verify-email', methods=['POST'])
+@require_auth_only
+def verify_email(user_id):
+    """Verify user's email with a 6-digit code."""
+    data = request.get_json()
+    code = (data.get('code') or '').strip() if data else ''
+
+    if len(code) != 6 or not code.isdigit():
+        return jsonify({"error": "Invalid code format"}), 400
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT email_verification_code, email_verification_code_expires_at, "
+                    "email_verified, email_verification_attempts "
+                    "FROM users WHERE id = %s",
+                    (user_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return jsonify({"error": "User not found"}), 404
+
+                stored_code, expires_at, already_verified, attempts = row
+
+                if already_verified:
+                    return jsonify({"error": "Email already verified"}), 400
+                if (attempts or 0) >= 5:
+                    return jsonify({"error": "Too many attempts. Please resend a new code."}), 429
+                if expires_at and datetime.now() > expires_at:
+                    return jsonify({"error": "Code expired"}), 400
+
+                code_hash = hashlib.sha256(code.encode()).hexdigest()
+                if not stored_code or stored_code != code_hash:
+                    cursor.execute(
+                        "UPDATE users SET email_verification_attempts = "
+                        "COALESCE(email_verification_attempts, 0) + 1 WHERE id = %s",
+                        (user_id,),
+                    )
+                    conn.commit()
+                    return jsonify({"error": "Invalid verification code"}), 400
+
+                cursor.execute(
+                    "UPDATE users SET email_verified = TRUE, "
+                    "email_verification_code = NULL, email_verification_code_expires_at = NULL, "
+                    "email_verification_attempts = 0 WHERE id = %s",
+                    (user_id,),
+                )
+                conn.commit()
+
+        return jsonify({"status": "success"})
+    except Exception:
+        logging.exception("Error in /verify-email")
+        return jsonify({"error": _SERVER_ERROR}), 500
+
+
+@auth_bp.route('/resend-verification', methods=['POST'])
+@require_auth_only
+def resend_verification(user_id):
+    """Resend email verification code."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT email, email_verified, email_verification_code_expires_at "
+                    "FROM users WHERE id = %s", (user_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return jsonify({"error": "User not found"}), 404
+                if row[1]:
+                    return jsonify({"error": "Email already verified"}), 400
+                if row[2]:
+                    earliest_resend = row[2] - timedelta(minutes=VERIFICATION_CODE_EXPIRY_MINUTES - RESEND_COOLDOWN_MINUTES)
+                    if datetime.now() < earliest_resend:
+                        return jsonify({"error": "Please wait before requesting a new code"}), 429
+
+        if not send_verification_email(user_id, row[0]):
+            return jsonify({"error": "Failed to send verification email"}), 500
+        return jsonify({"status": "success"})
+    except Exception:
+        logging.exception("Error in /resend-verification")
+        return jsonify({"error": _SERVER_ERROR}), 500
 
 
 @auth_bp.route('/admins', methods=['GET'])

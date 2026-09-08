@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from celery_config import celery_app
@@ -14,39 +14,9 @@ from langchain_core.messages import HumanMessage
 from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.llm import ModelConfig
 from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
+from chat.backend.agent.utils.message_content import extract_text_from_content
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
-
-
-def _extract_text_from_response(content: Union[str, List[Any]]) -> str:
-    """Extract text content from LLM response, filtering out thinking blocks.
-
-    Gemini thinking models return content as a list with thinking and text blocks.
-    This extracts only the actual response text.
-    """
-    if isinstance(content, str):
-        return content.strip()
-
-    if isinstance(content, list):
-        text_parts = []
-        for part in content:
-            if isinstance(part, dict):
-                part_type = part.get("type", "")
-                if part_type in ("thinking", "reasoning"):
-                    continue
-                elif part_type == "text":
-                    text = part.get("text", "")
-                    if text:
-                        text_parts.append(str(text))
-                else:
-                    text = part.get("text", "")
-                    if text:
-                        text_parts.append(str(text))
-            elif isinstance(part, str):
-                text_parts.append(part)
-        return "".join(text_parts).strip()
-
-    return str(content).strip()
 
 
 from chat.background.citation_extractor import (
@@ -54,10 +24,8 @@ from chat.background.citation_extractor import (
     CitationExtractor,
     save_incident_citations,
 )
-from chat.background.suggestion_extractor import (
-    SuggestionExtractor,
-    save_incident_suggestions,
-)
+from chat.background.recommender import generate_recommendations
+from chat.background.suggestion_extractor import save_incident_suggestions
 
 logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[IncidentSummary]"
@@ -279,9 +247,11 @@ PARAGRAPH 1 — What Happened:
 State what occurred, when, and what was affected, using only facts present in the provided sections. Report as known facts, not as an investigation log.
 
 PARAGRAPH 2 — Root Cause:
-- If the numbered evidence clearly supports a specific root cause, state it and cite the supporting evidence with numeric markers like [3], [7].
+- If the investigator notes classify the finding as CONFIRMED: state the root cause confidently and cite the supporting evidence with numeric markers like [3], [7].
   Example: "The root cause was a ConfigMap change that increased BATCH_SIZE from 1000 to 10000 [7], causing memory usage to exceed the 128Mi limit [9, 11]."
-- Otherwise the paragraph MUST begin with "Root cause undetermined." and describe what is and isn't known. Do not invent a cause to fill the paragraph.
+- If the investigator notes classify the finding as LIKELY: begin with "The most likely cause is..." or "Evidence suggests..." and present as hypothesis, NOT as confirmed fact. Include what could not be verified.
+  Example: "The most likely cause is a stale client bundle sending requests to deprecated Server Action IDs after the 12:59 UTC deployment [7, 11], though direct confirmation that users are currently unable to log in was not obtained during the investigation."
+- If the investigator notes classify the finding as INCONCLUSIVE, or indicate the investigation was inconclusive: the paragraph MUST begin with "Root cause undetermined." and describe what is and isn't known. Do not invent a cause to fill the paragraph.
 
 PARAGRAPH 3 (if significant) — Impact & Timeline:
 Only the scope and timeline actually present in the alert or evidence.
@@ -292,6 +262,7 @@ ANTI-HALLUCINATION RULES (non-negotiable):
 - Never fabricate a [n] citation — every marker MUST reference a real numbered evidence row above.
 - Treat purely temporal correlations as correlations, not causations.
 - If the investigator notes indicate the investigation was inconclusive, the Root Cause paragraph MUST start with "Root cause undetermined."
+- If the investigator notes classify the finding as LIKELY, do NOT state the root cause as confirmed fact. Use hedged language ("most likely", "evidence suggests") and note what remains unverified.
 
 CITATION RULES (non-negotiable):
 - ONLY cite numbered evidence items using their numeric index: [1], [3, 5], [7].
@@ -302,7 +273,7 @@ WRITING RULES:
 - Never describe investigation process or tool failures ("Investigation revealed...", "Attempts to query...", "The investigation was unable...").
 - Tone: professional, factual, incident-record style. Calibrated certainty: state facts where supported, state uncertainty where not.
 
-After the report, add a "## Suggested Next Steps" paragraph with 2-4 concrete diagnostic actions (specific logs/metrics/configs/components). When the root cause is undetermined, these MUST be the precise checks an engineer would run to determine it — not generic advice.
+After the report, add a "## Ruled Out" section as a bullet list — each bullet is a hypothesis that was eliminated, with the evidence that killed it after an em dash. Do NOT use a markdown table. Finally add a "## Not Checked" section as a bullet list — each bullet is an area not examined and why (no symptoms pointed there, tool access unavailable, etc.).
 {fix_suggestions_block}"""
     else:
         # Transcript fallback — same anti-hallucination contract.
@@ -326,19 +297,28 @@ ALERT INFORMATION:
 INVESTIGATION TRANSCRIPT (chat log):
 {transcript}
 
-Write a concise 2–3 paragraph summary covering what triggered the alert, the severity and observed impact (only if explicitly present), the affected service, and the best-known root cause. If the root cause is not explicit, the Root Cause paragraph MUST begin with "Root cause undetermined." and describe what is and isn't known.
+Write a concise 2–3 paragraph summary covering what triggered the alert, the severity and observed impact (only if explicitly present), the affected service, and the best-known root cause. If the root cause is not explicit or the investigator notes classify it as INCONCLUSIVE, the Root Cause paragraph MUST begin with "Root cause undetermined." and describe what is and isn't known. If classified as LIKELY, use hedged language ("most likely", "evidence suggests") and note what remains unverified.
 
 ANTI-HALLUCINATION RULES (non-negotiable):
 - Use only facts present in the provided sections — do not introduce services, hosts, configs, error messages, or metrics that aren't there.
 - Empty or missing output from a generic probe is NOT evidence of a specific failure mode.
 - Treat purely temporal correlations as correlations, not causations.
 - If the investigator notes indicate the investigation was inconclusive, the Root Cause paragraph MUST start with "Root cause undetermined."
+- If the investigator notes classify the finding as LIKELY, do NOT state the root cause as confirmed fact.
 
 Tone: neutral, factual, incident-record style. Descriptive, not advisory. Do not address any audience.
 
-After the summary, add a "## Suggested Next Steps" paragraph with 2-4 concrete diagnostic actions. When the root cause is undetermined, these MUST be the precise checks an engineer would run to determine it — not generic advice.
+After the summary, add these sections:
+
+## Ruled Out
+List hypotheses that were investigated and eliminated, with the evidence that ruled them out.
+
+## Not Checked
+List paths that were not investigated and briefly explain why (e.g., access denied, out of scope, insufficient data).
 {fix_suggestions_block}"""
     return prompt
+
+
 
 
 def _fetch_fix_suggestions(incident_id: str, _retries: int = 2) -> List[Dict[str, Any]]:
@@ -428,7 +408,11 @@ def _fetch_incident_basics(incident_id: str, user_id: str) -> Optional[Dict[str,
         return None
 
 
-_REASONING_MAX_TOTAL_CHARS = 8000
+# Budget for agent reasoning (incident_thoughts) fed into the summary prompt and
+# the recommender's hypothesis extractor. Both run on a 200k-context model, so
+# the old 8k tail cap needlessly dropped early reasoning (hypothesis formation,
+# ruled-out evidence). When over budget we keep BOTH ends rather than tail-only.
+_REASONING_MAX_TOTAL_CHARS = 24000
 
 
 def _fetch_agent_reasoning(user_id: str, incident_id: str) -> str:
@@ -469,10 +453,14 @@ def _fetch_agent_reasoning(user_id: str, incident_id: str) -> str:
 
     text = "\n\n".join(r[0] for r in rows if r and r[0])
     if len(text) > _REASONING_MAX_TOTAL_CHARS:
-        # Keep the most recent reasoning — that's where the synthesis lands.
+        # Keep BOTH ends: early reasoning holds hypothesis formation and
+        # ruled-out evidence, the tail holds the synthesis/confirmed root cause.
+        head = _REASONING_MAX_TOTAL_CHARS // 2
+        tail = _REASONING_MAX_TOTAL_CHARS - head
         text = (
-            "...[earlier reasoning truncated to fit prompt budget]\n\n"
-            + text[-_REASONING_MAX_TOTAL_CHARS:]
+            text[:head]
+            + "\n\n...[middle of reasoning truncated to fit prompt budget]...\n\n"
+            + text[-tail:]
         )
     return text
 
@@ -620,11 +608,7 @@ def generate_incident_summary(
             request_type="incident_initial_summary",
         )
 
-        summary = (
-            _extract_text_from_response(response.content)
-            if response.content
-            else "No summary generated"
-        )
+        summary = extract_text_from_content(response.content).strip() or "No summary generated"
 
         logger.info(
             f"{_LOG_PREFIX} Generated summary for incident {incident_id} ({len(summary)} chars)"
@@ -685,8 +669,13 @@ def generate_incident_summary(
 @celery_app.task(
     bind=True,
     name="chat.background.generate_incident_summary_from_chat",
-    time_limit=180,  # includes transcript fetch/format
-    soft_time_limit=150,
+    # Budget includes transcript fetch/format + the post-summary recurrence
+    # check. Invariant: RECURRENCE_AGENT_TIMEOUT_SECONDS (default 120) must
+    # stay well under soft_time_limit minus the summary-generation work, so
+    # the check's own asyncio.wait_for — not the Celery soft limit — is the
+    # bound that fires.
+    time_limit=420,
+    soft_time_limit=330,
     max_retries=2,
     default_retry_delay=10,
 )
@@ -695,9 +684,25 @@ def generate_incident_summary_from_chat(
     incident_id: str,
     user_id: str,
     session_id: str,
+    announce_completion: bool = True,
 ) -> Dict[str, Any]:
-    """Regenerate incident summary after RCA using the RCA chat transcript with citations."""
+    """Regenerate incident summary after RCA using the RCA chat transcript with citations.
+
+    announce_completion: False when the summary is being regenerated after a
+    follow-up chat (Slack/Google Chat reply on an existing incident). The
+    summary is still written; the "investigation completed" announcement
+    (email, Slack card) is skipped since the investigation already completed
+    once — for a folded recurrence it would otherwise post another "Still
+    firing" reply — and only the Google Chat card, which is edited in place,
+    is refreshed to match the new summary.
+    """
     from celery.exceptions import SoftTimeLimitExceeded
+
+    def _notify_completed() -> None:
+        from utils.notifications.dispatcher import notify_investigation_completed
+        if not announce_completion:
+            logger.info(f"{_LOG_PREFIX} Follow-up summary for {incident_id}; completion already announced, refreshing cards only")
+        notify_investigation_completed(user_id, incident_id, session_id=session_id, refresh_only=not announce_completion)
 
     logger.info(
         f"{_LOG_PREFIX} Regenerating summary from chat for incident {incident_id} (user={user_id}, session={session_id})"
@@ -710,6 +715,8 @@ def generate_incident_summary_from_chat(
     if not hook_allowed:
         logger.warning(f"{_LOG_PREFIX} Hook blocked for user {user_id}: {hook_message}")
         return {"incident_id": incident_id, "status": "hook_blocked", "error": hook_message}
+
+    summary_written = False  # guards the soft-limit handler's error overwrite
 
     try:
         basics = _fetch_incident_basics(incident_id, user_id=user_id)
@@ -786,11 +793,7 @@ def generate_incident_summary_from_chat(
             model_name=ModelConfig.EMAIL_REPORT_MODEL,
             request_type="incident_rca_summary",
         )
-        summary = (
-            _extract_text_from_response(response.content)
-            if response.content
-            else "No summary generated"
-        )
+        summary = extract_text_from_content(response.content).strip() or "No summary generated"
 
         logger.info(
             f"{_LOG_PREFIX} Generated chat-based summary for incident {incident_id} ({len(summary)} chars)"
@@ -815,18 +818,26 @@ def generate_incident_summary_from_chat(
                     f"{_LOG_PREFIX} Saved {len(used_citations)} used citations for incident {incident_id}"
                 )
 
-        # Extract and save structured suggestions with commands
+        # Generate next steps from the investigation trace (v3 recommender).
+        # Falls back to summary-based extraction if the trace is empty.
         try:
-            suggestion_extractor = SuggestionExtractor()
-            suggestions = suggestion_extractor.extract_suggestions(
-                incident_id=incident_id,
-                summary=summary,
-                citations=used_citations if used_citations else all_citations,
-                service=basics["service"],
-                alert_title=basics["alert_title"],
-                user_id=user_id,
-                session_id=session_id,
-            )
+            trace_citations = used_citations if used_citations else all_citations
+            if trace_citations:
+                suggestions = generate_recommendations(
+                    incident_id=incident_id,
+                    citations=trace_citations,
+                    agent_reasoning=agent_reasoning or "",
+                    service=basics["service"],
+                    alert_title=basics["alert_title"],
+                    severity=basics.get("severity", "unknown"),
+                    user_id=user_id,
+                    session_id=session_id,
+                    existing_fixes=fix_suggestions or [],
+                    rca_summary=summary or "",
+                )
+            else:
+                suggestions = []
+
             if suggestions:
                 save_incident_suggestions(incident_id, suggestions)
                 logger.info(
@@ -834,14 +845,33 @@ def generate_incident_summary_from_chat(
                 )
         except Exception as e:
             logger.exception(
-                f"{_LOG_PREFIX} Failed to extract suggestions for incident {incident_id}: {e}"
+                f"{_LOG_PREFIX} Failed to generate recommendations for incident {incident_id}: {e}"
             )
 
         _update_incident_summary(incident_id, summary, user_id=user_id)
+        summary_written = True
+
+        # Root-cause recurrence check (dedup layer 1): runs post-summary-write,
+        # pre-notification — fold-then-notify is the ordering that Slack threading
+        # (layer 3) reads. run_recurrence_check never raises internally
+        # and is bounded by its own asyncio.wait_for; this guard is belt and
+        # braces so notifications stay guaranteed. On task retry the existing
+        # verdict row makes the re-run a no-op.
+        try:
+            from services.correlation.recurrence_agent import run_recurrence_check
+            run_recurrence_check(
+                incident_id=incident_id,
+                user_id=user_id,
+                session_id=session_id,
+                decision_point="after",
+            )
+        except Exception:
+            logger.exception(
+                f"{_LOG_PREFIX} Recurrence check failed for {incident_id}; proceeding to notify"
+            )
 
         # Send completion notifications via centralized dispatcher
-        from utils.notifications.dispatcher import notify_investigation_completed
-        notify_investigation_completed(user_id, incident_id, session_id=session_id)
+        _notify_completed()
 
         return {
             "incident_id": incident_id,
@@ -854,6 +884,21 @@ def generate_incident_summary_from_chat(
         logger.error(
             f"{_LOG_PREFIX} Timeout generating chat-based summary for incident {incident_id}"
         )
+        if summary_written:
+            # The summary itself completed; the soft limit fired during the
+            # post-summary work (recurrence check / notifications). Do NOT
+            # overwrite the good summary with an error — send the completion
+            # notification the task guarantees and finish.
+            try:
+                _notify_completed()
+            except Exception:
+                logger.exception(
+                    f"{_LOG_PREFIX} Failed to notify after soft-limit for {incident_id}"
+                )
+            return {
+                "incident_id": incident_id,
+                "status": "completed_soft_limit",
+            }
         _update_incident_summary(
             incident_id,
             "Summary generation timed out. View investigation chat for details.",

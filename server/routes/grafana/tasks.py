@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional
 from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
-from services.correlation import handle_correlated_alert
+from services.correlation import apply_correlation_outcome
 
 logger = logging.getLogger(__name__)
 
@@ -395,7 +395,7 @@ def process_grafana_alert(
                             if correlation_result and correlation_result.is_correlated:
                                 try:
                                     cursor.execute("SAVEPOINT sp_handle_correlated")
-                                    handle_correlated_alert(
+                                    applied = apply_correlation_outcome(
                                         cursor=cursor, user_id=user_id,
                                         incident_id=correlation_result.incident_id,
                                         source_type="grafana", source_alert_id=per_alert_source_id,
@@ -406,11 +406,12 @@ def process_grafana_alert(
                                         org_id=org_id,
                                     )
                                     cursor.execute("RELEASE SAVEPOINT sp_handle_correlated")
-                                    conn.commit()
-                                    continue
+                                    if applied:
+                                        conn.commit()
+                                        continue
                                 except Exception as exc:
                                     cursor.execute("ROLLBACK TO SAVEPOINT sp_handle_correlated")
-                                    logger.warning("[GRAFANA] handle_correlated_alert failed: %s", exc)
+                                    logger.warning("[GRAFANA] apply_correlation_outcome failed: %s", exc)
 
                             # No correlation found — create a new incident.
                             # `xmax = 0` is true only for freshly inserted rows (not ON CONFLICT

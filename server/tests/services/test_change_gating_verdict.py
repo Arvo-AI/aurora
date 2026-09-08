@@ -3,12 +3,14 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from services.change_gating.github_adapter import decode_marker
+from services.change_gating.markers import (
+    decode_marker,
+    extract_inline_fingerprint,
+    finding_fingerprint,
+)
 from services.change_gating.verdict import (
     build_review_prompt,
-    extract_inline_fingerprint,
     extract_verdict_with_llm,
-    finding_fingerprint,
     parse_verdict,
     render_inline_comment,
     render_review_body,

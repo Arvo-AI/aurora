@@ -25,7 +25,7 @@ export function getSourceIconBgColor(source: string): string {
 export type IncidentStatus = 'investigating' | 'analyzed' | 'merged' | 'resolved';
 export type AuroraStatus = 'running' | 'summarizing' | 'complete' | 'error';
 export type SuggestionRisk = 'safe' | 'low' | 'medium' | 'high';
-export type SuggestionType = 'diagnostic' | 'mitigation' | 'communication' | 'fix';
+export type SuggestionType = 'diagnostic' | 'mitigation' | 'remediate' | 'prevent' | 'communication' | 'fix';
 
 export interface AlertMetadata {
   // Common fields
@@ -87,7 +87,10 @@ export interface Suggestion {
   description: string;
   type: SuggestionType;
   risk: SuggestionRisk;
-  command?: string; // Optional command to run
+  command?: string;
+  rationale?: string;
+  undo?: string;
+  summary?: string;
   // Execution tracking
   executedAt?: string;
   executionSessionId?: string;
@@ -213,15 +216,13 @@ export interface CorrelatedAlert {
   receivedAt: string;
 }
 
-export interface RecentIncident {
+/** A later incident folded into an anchor by the recurrence detector (detail view of the anchor). */
+export interface IncidentOccurrence {
   id: string;
   alertTitle: string;
-  alertService: string;
-  severity: string;
-  sourceType: AlertSource;
   status: IncidentStatus;
-  auroraStatus: AuroraStatus;
-  createdAt: string;
+  startedAt: string;
+  alertFiredAt?: string;
 }
 
 export interface Incident {
@@ -233,11 +234,16 @@ export interface Incident {
   streamingThoughts: StreamingThought[];
   suggestions: Suggestion[];
   citations?: Citation[]; // Evidence citations for the summary
-  chatSessions?: ChatSession[]; // All chat sessions linked to this incident
+  chatSessions?: ChatSession[];
   correlatedAlerts?: CorrelatedAlert[]; // Alerts correlated to this incident
   correlatedAlertCount?: number; // Count of correlated alerts (for list view)
   mergedIntoIncidentId?: string; // ID of incident this was merged into
   mergedIntoTitle?: string; // Title of incident this was merged into
+  recurrenceOf?: string | null; // Anchor incident id when this is a recurrence (root-cause dedup)
+  recurrenceOfTitle?: string; // Anchor's title (detail view only)
+  occurrences?: IncidentOccurrence[]; // Recurrences folded into this anchor (detail view only)
+  occurrenceTotal?: number; // Full group size from the server (list ?groups=1 only); exceeds loaded rows when the group was capped
+  occurrencesTotal?: number; // Full member count (detail view); exceeds occurrences.length when the detail list was capped
   postMortem?: PostmortemData;
   startedAt: string;
   analyzedAt?: string;
@@ -245,8 +251,7 @@ export interface Incident {
   alertFiredAt?: string;
   createdAt?: string;
   updatedAt?: string;
-  chatSessionId?: string; // RCA chat session ID
-  activeTab?: 'thoughts' | 'chat'; // Currently active tab in the UI
+  chatSessionId?: string;
   tokenUsage?: {
     requestCount: number;
     totalInputTokens: number;
@@ -294,6 +299,8 @@ export const incidentsService = {
         correlatedAlertCount: inc.correlatedAlertCount || 0,
         mergedIntoIncidentId: inc.mergedIntoIncidentId,
         mergedIntoTitle: inc.mergedIntoTitle,
+        recurrenceOf: inc.recurrenceOf ?? null,
+        occurrenceTotal: inc.occurrenceTotal,
         postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
@@ -301,7 +308,6 @@ export const incidentsService = {
         alertFiredAt: inc.alertFiredAt,
         createdAt: inc.createdAt,
         updatedAt: inc.updatedAt,
-        activeTab: inc.activeTab || 'thoughts',
       }));
     } catch (error) {
       console.error('Error fetching incidents:', error);
@@ -342,6 +348,9 @@ export const incidentsService = {
           type: s.type || 'diagnostic',
           risk: s.risk || 'safe',
           command: s.command,
+          rationale: s.rationale,
+          undo: s.undo,
+          summary: s.summary,
           filePath: s.filePath,
           originalContent: s.originalContent,
           suggestedContent: s.suggestedContent,
@@ -364,14 +373,7 @@ export const incidentsService = {
           executedAt: c.executedAt,
           createdAt: c.createdAt,
         })),
-        chatSessions: (inc.chatSessions || []).map((cs: any) => ({
-          id: cs.id,
-          title: cs.title,
-          messages: cs.messages || [],
-          status: cs.status || 'active',
-          createdAt: cs.createdAt,
-          updatedAt: cs.updatedAt,
-        })),
+        chatSessions: inc.chatSessions,
         correlatedAlerts: (inc.correlatedAlerts || []).map((ca: any) => ({
           id: ca.id,
           sourceType: ca.sourceType as AlertSource,
@@ -385,6 +387,16 @@ export const incidentsService = {
         })),
         mergedIntoIncidentId: inc.mergedIntoIncidentId,
         mergedIntoTitle: inc.mergedIntoTitle,
+        recurrenceOf: inc.recurrenceOf ?? null,
+        recurrenceOfTitle: inc.recurrenceOfTitle,
+        occurrences: (inc.occurrences || []).map((o: any): IncidentOccurrence => ({
+          id: o.id,
+          alertTitle: o.alertTitle,
+          status: o.status as IncidentStatus,
+          startedAt: o.startedAt,
+          alertFiredAt: o.alertFiredAt ?? undefined,
+        })),
+        occurrencesTotal: inc.occurrencesTotal,
         postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
@@ -393,7 +405,6 @@ export const incidentsService = {
         createdAt: inc.createdAt,
         updatedAt: inc.updatedAt,
         chatSessionId: inc.chatSessionId,
-        activeTab: inc.activeTab || 'thoughts',
         tokenUsage: inc.tokenUsage || null,
       };
     } catch (error) {
@@ -415,21 +426,11 @@ export const incidentsService = {
     }
   },
 
-  async updateActiveTab(incidentId: string, activeTab: 'thoughts' | 'chat'): Promise<void> {
-    try {
-      await apiRequest(`/api/incidents/${incidentId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ activeTab }),
-      });
-    } catch (error) {
-      console.error('Error updating active tab:', error);
-    }
-  },
-
   formatDuration(startTime: string): string {
     const start = new Date(startTime).getTime();
     const end = Date.now();
-    const diffMs = end - start;
+    // Provider fire times can run slightly ahead of this clock; never print "-1m".
+    const diffMs = Math.max(0, end - start);
     const diffMins = Math.floor(diffMs / 60000);
     const hours = Math.floor(diffMins / 60);
     const days = Math.floor(hours / 24);
@@ -447,7 +448,7 @@ export const incidentsService = {
   },
 
   formatTimeAgo(timestamp: string): string {
-    const diffMs = Date.now() - new Date(timestamp).getTime();
+    const diffMs = Math.max(0, Date.now() - new Date(timestamp).getTime());
     const diffMins = Math.floor(diffMs / 60000);
     const hours = Math.floor(diffMins / 60);
     const days = Math.floor(hours / 24);
@@ -518,34 +519,6 @@ export const incidentsService = {
       );
     } catch (error) {
       console.error('Error applying fix suggestion:', error);
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      return { success: false, error: message };
-    }
-  },
-
-  async getRecentUnlinkedIncidents(excludeId?: string): Promise<RecentIncident[]> {
-    try {
-      const url = excludeId 
-        ? `/api/incidents/recent-unlinked?exclude=${encodeURIComponent(excludeId)}`
-        : '/api/incidents/recent-unlinked';
-
-      const data = await apiGet<{ incidents: RecentIncident[] }>(url);
-      return data.incidents || [];
-    } catch (error) {
-      console.error('Error fetching recent unlinked incidents:', error);
-      return [];
-    }
-  },
-
-  async mergeAlertToIncident(
-    targetIncidentId: string,
-    sourceIncidentId: string
-  ): Promise<{ success: boolean; error?: string }> {
-    try {
-      await apiPost(`/api/incidents/${targetIncidentId}/merge-alert`, { sourceIncidentId });
-      return { success: true };
-    } catch (error) {
-      console.error('Error merging alert:', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
       return { success: false, error: message };
     }

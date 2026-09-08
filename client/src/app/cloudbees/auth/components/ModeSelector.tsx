@@ -2,7 +2,7 @@
 
 import { ChevronRight } from "lucide-react";
 
-type ConnectionMode = "oc" | "single" | "pat";
+type ConnectionMode = "oc" | "fleet" | "pat";
 
 interface ModeSelectorProps {
   onSelect: (mode: ConnectionMode) => void;
@@ -33,13 +33,13 @@ export function ModeSelector({ onSelect }: Readonly<ModeSelectorProps>) {
 
         <button
           type="button"
-          onClick={() => onSelect("single")}
+          onClick={() => onSelect("fleet")}
           className="group w-full p-6 rounded-2xl border border-white/[0.06] hover:border-white/[0.12] bg-white/[0.01] hover:bg-white/[0.02] transition-all text-left flex items-center justify-between"
         >
           <div>
-            <p className="text-[15px] font-medium mb-1">Single Controller</p>
+            <p className="text-[15px] font-medium mb-1">Controller(s)</p>
             <p className="text-[13px] text-[#777] leading-relaxed">
-              Connect directly to one CloudBees CI or Jenkins instance.
+              Connect one or more standalone CloudBees CI / Jenkins controllers directly. Add them one at a time or bulk-import — you can always add more later.
             </p>
           </div>
           <ChevronRight className="h-4 w-4 text-[#555] flex-shrink-0 ml-4 group-hover:translate-x-1 transition-transform" />

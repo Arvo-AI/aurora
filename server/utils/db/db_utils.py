@@ -123,6 +123,11 @@ def initialize_tables():
             # back into the connection pool.
             cursor.execute("SELECT pg_advisory_xact_lock(1234567890);")
 
+            # Set a lock_timeout for all DDL in this function so that startup
+            # doesn't hang indefinitely if a stale transaction holds a conflicting
+            # lock on a table we need to ALTER.
+            cursor.execute("SET lock_timeout = '5s';")
+
             # Define table creation scripts.
             create_tables = {
                 "k8s_pods": """
@@ -1128,11 +1133,24 @@ def initialize_tables():
                         name VARCHAR(255) NOT NULL,
                         slug VARCHAR(255) NOT NULL UNIQUE,
                         created_by VARCHAR(255) REFERENCES users(id),
+                        onboarding_completed BOOLEAN DEFAULT FALSE,
                         created_at TIMESTAMP DEFAULT NOW(),
                         updated_at TIMESTAMP DEFAULT NOW()
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
+                """,
+                "onboarding_selections": """
+                    CREATE TABLE IF NOT EXISTS onboarding_selections (
+                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        user_id VARCHAR(255) NOT NULL REFERENCES users(id),
+                        selected_connectors TEXT[] NOT NULL DEFAULT '{}',
+                        created_at TIMESTAMP DEFAULT NOW()
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_onboarding_selections_org
+                        ON onboarding_selections(org_id);
                 """,
                 "org_command_policies": """
                     CREATE TABLE IF NOT EXISTS org_command_policies (
@@ -1319,6 +1337,35 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_rca_findings_org_started
                     ON rca_findings(org_id, started_at DESC);
                 """,
+                # One row per recurrence-detection check (root-cause dedup layer 1).
+                # claimed_recurrence_of is the agent's verbatim claim (may be garbage,
+                # kept for audit); accepted_recurrence_of is the server-validated id.
+                # The unique (incident_id, decision_point) index makes Celery retries
+                # idempotent: a re-run sees the existing row and skips the check.
+                "recurrence_verdicts": """
+                    CREATE TABLE IF NOT EXISTS recurrence_verdicts (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        decision_point VARCHAR(10) NOT NULL DEFAULT 'after',
+                        mode VARCHAR(10) NOT NULL,
+                        claimed_recurrence_of TEXT,
+                        accepted_recurrence_of UUID REFERENCES incidents(id) ON DELETE SET NULL,
+                        reasoning TEXT,
+                        correlator_score FLOAT,
+                        folded BOOLEAN NOT NULL DEFAULT FALSE,
+                        reject_reason VARCHAR(30),
+                        elapsed_ms INTEGER,
+                        model VARCHAR(100),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_recurrence_verdicts_incident_point
+                        ON recurrence_verdicts(incident_id, decision_point);
+                    CREATE INDEX IF NOT EXISTS idx_recurrence_verdicts_org_created
+                        ON recurrence_verdicts(org_id, created_at DESC);
+                """,
                 "audit_log": """
                     CREATE TABLE IF NOT EXISTS audit_log (
                         id SERIAL PRIMARY KEY,
@@ -1373,6 +1420,76 @@ def initialize_tables():
                     );
                     CREATE INDEX IF NOT EXISTS idx_action_runs_action ON action_runs(action_id);
                     CREATE INDEX IF NOT EXISTS idx_action_runs_status ON action_runs(org_id, status);
+                """,
+                # Right-sizing recommendations proposed by the hpa_vpa_rightsizing action.
+                # One live row per (org, workload) while a PR is open; dismissal starts a
+                # cooldown so the action does not re-propose a change a human rejected.
+                #
+                # status values (VARCHAR + documented set, not an ENUM -- there are zero
+                # ENUMs in this module and ALTER TYPE ADD VALUE is transaction-hostile):
+                #   proposed   -- card posted, PR open (at most one per workload)
+                #   dismissed  -- human clicked Dismiss; cooldown_until is running
+                #   merged     -- human merged the PR; accepted, NO cooldown
+                #   closed     -- closed on the VCS by hand, no cooldown
+                #   superseded -- mis-size materially worsened, or a newer rec took over
+                "hpa_vpa_recommendations": """
+                    CREATE TABLE IF NOT EXISTS hpa_vpa_recommendations (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        workload_key VARCHAR(512) NOT NULL,
+                        workload VARCHAR(255) NOT NULL,
+                        environment VARCHAR(128),
+                        service VARCHAR(255),
+                        autoscaler VARCHAR(64),
+                        metrics_source VARCHAR(32),
+                        vcs_provider VARCHAR(32) NOT NULL DEFAULT 'github',
+                        repo_full_name VARCHAR(512),
+                        pr_number INTEGER,
+                        pr_url TEXT,
+                        status VARCHAR(32) NOT NULL DEFAULT 'proposed',
+                        recommendation JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        severity_score NUMERIC,
+                        slack_channel_id VARCHAR(64),
+                        slack_message_ts VARCHAR(64),
+                        action_run_id UUID,
+                        dismissed_by VARCHAR(255),
+                        -- TIMESTAMPTZ, not TIMESTAMP: these are written as
+                        -- aware UTC from Python but compared against NOW() in
+                        -- SQL. A naive column discards the offset on write, so
+                        -- on any session whose TimeZone is not UTC the 30-day
+                        -- cooldown silently drifts by the offset -- long enough
+                        -- to re-nag a workload a human dismissed, or to suppress
+                        -- one for too long.
+                        dismissed_at TIMESTAMPTZ,
+                        cooldown_until TIMESTAMPTZ,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+
+                    -- Legacy naive columns are converted by a separate, guarded
+                    -- migration below (see "hpa_vpa_recommendations timestamp
+                    -- migration"): an unconditional ALTER COLUMN TYPE here would
+                    -- re-run every boot and, on a session whose TimeZone is not
+                    -- UTC, shift every stored cooldown by the offset each time.
+
+                    CREATE INDEX IF NOT EXISTS idx_hpa_vpa_recs_org_workload
+                        ON hpa_vpa_recommendations(org_id, workload_key, created_at DESC);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_hpa_vpa_recs_live
+                        ON hpa_vpa_recommendations(org_id, workload_key) WHERE status = 'proposed';
+                    CREATE INDEX IF NOT EXISTS idx_hpa_vpa_recs_cooldown
+                        ON hpa_vpa_recommendations(org_id, workload_key, cooldown_until)
+                        WHERE cooldown_until IS NOT NULL;
+                    -- Superseded by idx_hpa_vpa_recs_live_pr below. Its predicate
+                    -- covered every status, so a re-proposal pointing at a PR that
+                    -- an earlier dismissal failed to close (a tolerated degraded
+                    -- path) hit a unique violation and lost the whole card post.
+                    -- CREATE ... IF NOT EXISTS cannot redefine an existing index,
+                    -- hence the explicit drop; it is a no-op after the first boot.
+                    DROP INDEX IF EXISTS idx_hpa_vpa_recs_pr;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_hpa_vpa_recs_live_pr
+                        ON hpa_vpa_recommendations(org_id, repo_full_name, pr_number)
+                        WHERE pr_number IS NOT NULL AND status = 'proposed';
                 """,
             }
 
@@ -1449,6 +1566,8 @@ def initialize_tables():
             rls_tables.append("postmortem_versions")
             rls_tables.append("artifacts")
             rls_tables.append("artifact_versions")
+            rls_tables.append("hpa_vpa_recommendations")
+            rls_tables.append("recurrence_verdicts")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
@@ -1542,6 +1661,41 @@ def initialize_tables():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
 
+            # Migration: hpa_vpa_recommendations timestamp migration. The table
+            # shipped with naive TIMESTAMPs but Python writes aware UTC and SQL
+            # compares against NOW(), so a naive column drifts the 30-day cooldown
+            # by the session offset. Guarded on the current column type: an
+            # unconditional ALTER ... TYPE TIMESTAMPTZ USING x AT TIME ZONE 'UTC'
+            # is NOT idempotent -- re-running it on an already-converted column
+            # re-interprets the local rendering as UTC and shifts every stored
+            # cooldown by the offset on every boot.
+            try:
+                cursor.execute("""
+                    DO $$
+                    DECLARE col text;
+                    BEGIN
+                        FOR col IN
+                            SELECT column_name FROM information_schema.columns
+                             WHERE table_schema = current_schema()
+                               AND table_name = 'hpa_vpa_recommendations'
+                               AND column_name IN ('dismissed_at', 'cooldown_until',
+                                                   'created_at', 'updated_at')
+                               AND data_type = 'timestamp without time zone'
+                        LOOP
+                            EXECUTE format(
+                                'ALTER TABLE hpa_vpa_recommendations '
+                                'ALTER COLUMN %I TYPE TIMESTAMPTZ '
+                                'USING %I AT TIME ZONE ''UTC''', col, col);
+                        END LOOP;
+                    END $$;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error converting hpa_vpa_recommendations timestamps to TIMESTAMPTZ: {e}"
+                )
+                conn.rollback()
+
             try:
                 cursor.execute(
                     "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS installation_id BIGINT NULL;"
@@ -1596,6 +1750,47 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Migration: Bitbucket Incident Prevention (DEV-1439).
+            # - webhook_hook_uuid: the Bitbucket repo hook UUID (when Aurora
+            #   managed to create the hook via API) so disable/disconnect can
+            #   delete it.
+            # - organizations.bitbucket_webhook_secret_ref: secrets-backend
+            #   reference for the org's webhook HMAC secret (one secret shared
+            #   by every repo hook in the org).
+            # - webhook_verified_at: when a delivery for this repo last passed
+            #   HMAC validation. Proof the hook is live that needs no API
+            #   scopes, unlike webhook_hook_uuid which only exists when Aurora
+            #   created the hook itself (requires repo admin).
+            # - webhook_verified_url: the delivery URL that verification was
+            #   for. When Aurora's public URL changes the old hook is dead, so
+            #   comparing against it turns a stale hook into a visible error
+            #   instead of a green badge that silently never fires.
+            try:
+                cursor.execute(
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS webhook_hook_uuid VARCHAR(64);"
+                )
+                cursor.execute(
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS webhook_verified_at TIMESTAMPTZ;"
+                )
+                cursor.execute(
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS webhook_verified_url TEXT;"
+                )
+                cursor.execute(
+                    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS bitbucket_webhook_secret_ref TEXT;"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured Bitbucket Incident Prevention columns exist "
+                    "(connected_repos.webhook_hook_uuid, connected_repos.webhook_verified_at, "
+                    "connected_repos.webhook_verified_url, "
+                    "organizations.bitbucket_webhook_secret_ref)."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding Bitbucket Incident Prevention columns: {e}"
+                )
+                conn.rollback()
+
             # Migration: Add disconnected_at to user_github_installations so
             # Aurora-side disconnect can soft-delete the link instead of
             # dropping the row. Reconnects (which often don't re-fire GitHub's
@@ -1631,6 +1826,20 @@ def initialize_tables():
             except Exception as e:
                 conn.rollback()
                 logging.warning(f"Migration for actions system columns: {e}")
+
+            # Migration: add plan_tier to organizations.
+            # Inert in OSS — defaults to 'free' and is only enforced when a
+            # deployment activates a paywall (see AURORA_HOOKS_MODULE / the
+            # before_add_member hook). Plain OSS never enforces on this column.
+            try:
+                cursor.execute(
+                    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan_tier VARCHAR(20) DEFAULT 'free';"
+                )
+                conn.commit()
+                logging.info("Ensured plan_tier column exists on organizations table.")
+            except Exception as e:
+                conn.rollback()
+                logging.warning(f"Migration for organizations.plan_tier: {e}")
 
             # Migration: ensure incident_alerts.user_id exists and is backfilled
             try:
@@ -2200,6 +2409,29 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Add recurrence_of_incident_id column to incidents table
+            # (root-cause dedup layer 1: pointer to the anchor incident this one
+            # is a recurrence of; index name/shape consumed verbatim by layer 2)
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS recurrence_of_incident_id UUID REFERENCES incidents(id) ON DELETE SET NULL;
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_incidents_recurrence
+                        ON incidents(recurrence_of_incident_id)
+                        WHERE recurrence_of_incident_id IS NOT NULL;
+                """)
+                logging.info(
+                    "Added recurrence_of_incident_id column to incidents table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error adding recurrence_of_incident_id column to incidents: {e}"
+                )
+                conn.rollback()
+
             # Add visualization columns to incidents table
             try:
                 cursor.execute("""
@@ -2263,9 +2495,41 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Add rationale and undo columns to incident_suggestions (Next Steps v3)
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incident_suggestions
+                    ADD COLUMN IF NOT EXISTS rationale TEXT,
+                    ADD COLUMN IF NOT EXISTS undo TEXT;
+                    """
+                )
+                logging.info(
+                    "Added rationale/undo columns to incident_suggestions table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error adding rationale/undo columns to incident_suggestions: {e}"
+                )
+                conn.rollback()
+
+            # Migration: Add summary column to incident_suggestions
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incident_suggestions
+                    ADD COLUMN IF NOT EXISTS summary TEXT;
+                    """
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding summary column to incident_suggestions: {e}")
+                conn.rollback()
+
             # Migration: Create postmortems table if it doesn't exist
             # Note: 'resolved' is now a valid incident status value.
-            # The incidents.status column is VARCHAR so no ALTER TABLE is needed.
+            # The incidents.status column is VARCHAR so no ALTER Table is needed.
             try:
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS postmortems (
@@ -2503,7 +2767,10 @@ def initialize_tables():
             # View creation moved to after org_id migration (see below)
 
             # Early migration: ensure org_id column exists on all tables
-            # before RLS policies try to reference it
+            # before RLS policies try to reference it.
+            # Commit per-table to avoid holding ACCESS EXCLUSIVE locks across
+            # the entire loop (the session-level lock_timeout set above still
+            # applies to each individual ALTER).
             _org_id_tables = list(set(rls_tables + [
                 "users", "workspaces", "aurora_deployments",
                 "cloud_feed_metadata", "cloud_ingestion_state",
@@ -2515,10 +2782,10 @@ def initialize_tables():
                     cursor.execute(
                         f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS org_id VARCHAR(255);"
                     )
+                    conn.commit()
                 except Exception as e:
                     logging.warning(f"Early org_id migration for {tbl}: {e}")
                     conn.rollback()
-            conn.commit()
 
             # Create org_id-dependent indexes after the migration above
             org_id_indexes = [
@@ -2537,65 +2804,70 @@ def initialize_tables():
             # DO NOT add k8s_clusters to RLS tables as views don't support RLS
             # Apply RLS policies to tables only
             for table_name in rls_tables:
-                cursor.execute(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY;")
-                logging.info(f"RLS enabled on table '{table_name}'.")
-                cursor.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY;")
-                logging.info(f"RLS forced on table '{table_name}'.")
+                try:
+                    cursor.execute(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY;")
+                    logging.info(f"RLS enabled on table '{table_name}'.")
+                    cursor.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY;")
+                    logging.info(f"RLS forced on table '{table_name}'.")
 
-                # RLS condition: deny access when org_id context is not set (default-deny).
-                # All code paths must SET myapp.current_org_id before querying.
-                _rls_using = f"""
-                    org_id IS NOT NULL
-                    AND COALESCE(current_setting('myapp.current_org_id', true), '') != ''
-                    AND org_id = current_setting('myapp.current_org_id', true)::text
-                """
+                    # RLS condition: deny access when org_id context is not set (default-deny).
+                    # All code paths must SET myapp.current_org_id before querying.
+                    _rls_using = f"""
+                        org_id IS NOT NULL
+                        AND COALESCE(current_setting('myapp.current_org_id', true), '') != ''
+                        AND org_id = current_setting('myapp.current_org_id', true)::text
+                    """
 
-                # SELECT policy
-                cursor.execute(f"""
-                    DO $$ BEGIN
-                        DROP POLICY IF EXISTS select_by_org ON {table_name};
-                        CREATE POLICY select_by_org ON {table_name}
-                        FOR SELECT USING ({_rls_using});
-                    END $$;
-                """)
-
-                # Drop legacy user-based policies if they exist
-                for old_policy in ['select_by_user', 'insert_by_user', 'update_by_user', 'delete_by_user']:
+                    # SELECT policy
                     cursor.execute(f"""
                         DO $$ BEGIN
-                            DROP POLICY IF EXISTS {old_policy} ON {table_name};
-                        EXCEPTION WHEN undefined_object THEN NULL;
+                            DROP POLICY IF EXISTS select_by_org ON {table_name};
+                            CREATE POLICY select_by_org ON {table_name}
+                            FOR SELECT USING ({_rls_using});
                         END $$;
                     """)
 
-                # CRUD policies for ALL rls_tables (not just a subset)
-                cursor.execute(f"""
-                    DO $$ BEGIN
-                        DROP POLICY IF EXISTS insert_by_org ON {table_name};
-                        CREATE POLICY insert_by_org ON {table_name}
-                        FOR INSERT WITH CHECK ({_rls_using});
-                    END $$;
-                """)
-                cursor.execute(f"""
-                    DO $$ BEGIN
-                        DROP POLICY IF EXISTS update_by_org ON {table_name};
-                        CREATE POLICY update_by_org ON {table_name}
-                        FOR UPDATE USING ({_rls_using});
-                    END $$;
-                """)
-                cursor.execute(f"""
-                    DO $$ BEGIN
-                        DROP POLICY IF EXISTS delete_by_org ON {table_name};
-                        CREATE POLICY delete_by_org ON {table_name}
-                        FOR DELETE USING ({_rls_using});
-                    END $$;
-                """)
+                    # Drop legacy user-based policies if they exist
+                    for old_policy in ['select_by_user', 'insert_by_user', 'update_by_user', 'delete_by_user']:
+                        cursor.execute(f"""
+                            DO $$ BEGIN
+                                DROP POLICY IF EXISTS {old_policy} ON {table_name};
+                            EXCEPTION WHEN undefined_object THEN NULL;
+                            END $$;
+                        """)
 
-                cursor.execute(
-                    f"SELECT policyname, qual FROM pg_policies WHERE tablename = '{table_name}';"
-                )
-                policies = cursor.fetchall()
-                logging.info(f"RLS policies for table '{table_name}': {policies}")
+                    # CRUD policies for ALL rls_tables (not just a subset)
+                    cursor.execute(f"""
+                        DO $$ BEGIN
+                            DROP POLICY IF EXISTS insert_by_org ON {table_name};
+                            CREATE POLICY insert_by_org ON {table_name}
+                            FOR INSERT WITH CHECK ({_rls_using});
+                        END $$;
+                    """)
+                    cursor.execute(f"""
+                        DO $$ BEGIN
+                            DROP POLICY IF EXISTS update_by_org ON {table_name};
+                            CREATE POLICY update_by_org ON {table_name}
+                            FOR UPDATE USING ({_rls_using});
+                        END $$;
+                    """)
+                    cursor.execute(f"""
+                        DO $$ BEGIN
+                            DROP POLICY IF EXISTS delete_by_org ON {table_name};
+                            CREATE POLICY delete_by_org ON {table_name}
+                            FOR DELETE USING ({_rls_using});
+                        END $$;
+                    """)
+
+                    cursor.execute(
+                        f"SELECT policyname, qual FROM pg_policies WHERE tablename = '{table_name}';"
+                    )
+                    policies = cursor.fetchall()
+                    logging.info(f"RLS policies for table '{table_name}': {policies}")
+                    conn.commit()
+                except Exception as e:
+                    logging.warning(f"RLS setup for table '{table_name}' deferred (will retry on next restart): {e}")
+                    conn.rollback()
 
             # Commit table creation and RLS before running migrations
             conn.commit()
@@ -2967,6 +3239,42 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(f"Error adding expires_at to org_invitations: {e}")
                 conn.rollback()
+
+            # Migration: Add onboarding_completed column to organizations table
+            try:
+                cursor.execute(
+                    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN DEFAULT FALSE;"
+                )
+                conn.commit()
+                logging.info("Ensured onboarding_completed column exists on organizations table.")
+            except Exception as e:
+                logging.warning("Error adding onboarding_completed to organizations: %s", e)
+                conn.rollback()
+
+            # Migration: Add email verification columns to users table
+            try:
+                cursor.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'users' AND column_name = 'email_verified'"
+                )
+                column_existed = cursor.fetchone() is not None
+
+                cursor.execute("""
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_code VARCHAR(64);
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_code_expires_at TIMESTAMP;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_attempts INTEGER DEFAULT 0;
+                """)
+
+                if not column_existed:
+                    cursor.execute("UPDATE users SET email_verified = TRUE;")
+                    logging.info("Backfilled email_verified=TRUE for existing users.")
+
+                conn.commit()
+                logging.info("Ensured email verification columns exist on users table.")
+            except Exception as e:
+                conn.rollback()
+                raise RuntimeError("Required email verification migration failed") from e
 
             # Create k8s_clusters view (after org_id migration so the column exists)
             # DROP first because CREATE OR REPLACE VIEW cannot remove columns from an existing view

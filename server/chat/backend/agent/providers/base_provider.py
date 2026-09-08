@@ -47,6 +47,8 @@ def apply_gemini_thinking_config(config: dict, model_name: str) -> None:
         return
 
     name_lower = model_name.lower()
+    if "flash-lite" in name_lower:
+        return
     is_thinking_model = any(
         indicator in name_lower for indicator in _GEMINI_THINKING_INDICATORS
     )
