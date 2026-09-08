@@ -534,6 +534,11 @@ def get_incident_by_slack_message(user_id: str, slack_message_ts: str):
     """
     Find an incident by its Slack notification message timestamp.
     Returns (incident_id, session_id) or (None, None) if not found.
+
+    The lookup is org-wide (RLS below): the incidents channel is shared by
+    the org and a recurrence's completion lands in its anchor's thread, which
+    may belong to another member. The incident's RCA session is only reused
+    for its owner; anyone else gets a fresh session linked to the incident.
     """
     try:
         with db_pool.get_admin_connection() as conn:
@@ -544,18 +549,19 @@ def get_incident_by_slack_message(user_id: str, slack_message_ts: str):
                 )
                 cursor.execute(
                     """
-                    SELECT id, aurora_chat_session_id
+                    SELECT id, aurora_chat_session_id, user_id
                     FROM incidents
-                    WHERE user_id = %s AND slack_message_ts = %s
+                    WHERE slack_message_ts = %s
                     LIMIT 1
                     """,
-                    (user_id, slack_message_ts)
+                    (slack_message_ts,)
                 )
                 result = cursor.fetchone()
-                
+
                 if result:
                     incident_id = str(result[0])
-                    session_id = str(result[1]) if result[1] else None
+                    is_owner = str(result[2]) == str(user_id)
+                    session_id = str(result[1]) if result[1] and is_owner else None
                     logger.info(f"Found incident {incident_id} (session: {session_id}) from slack_message_ts {slack_message_ts}")
                     return incident_id, session_id
                 
