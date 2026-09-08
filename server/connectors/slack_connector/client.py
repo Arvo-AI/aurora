@@ -13,6 +13,21 @@ logger = logging.getLogger(__name__)
 SLACK_API_BASE = "https://slack.com/api"
 
 
+class SlackAPIError(ValueError):
+    """Slack answered ok=false; `error` is the API error code (e.g. not_in_channel).
+    Transport failures stay plain ValueError so callers can tell "Slack rejected
+    it" (safe to retry differently) from "the request may have gone through"."""
+
+    def __init__(self, error: str):
+        # args holds the bare code so cls(*args) (pickle, copy, Celery's
+        # exception reconstruction) rebuilds the same instance.
+        super().__init__(error)
+        self.error = error
+
+    def __str__(self) -> str:
+        return f"Slack API error: {self.error}"
+
+
 class SlackClient:
     """
     Slack API client for Aurora integration.
@@ -46,7 +61,7 @@ class SlackClient:
         error = result.get('error', 'unknown_error')
         if not (error == 'name_taken' and endpoint == 'conversations.create'):
             logger.error("Slack API error on %s: %s", endpoint, error)
-        raise ValueError(f"Slack API error: {error}")
+        raise SlackAPIError(error)
 
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, timeout: int = 30, max_retries: int = 3) -> Dict[str, Any]:
         """Make a request to Slack API with retry on 429 rate limits."""
@@ -98,8 +113,26 @@ class SlackClient:
         return self._make_request("POST", "chat.update", data)
 
     def delete_message(self, channel: str, ts: str) -> None:
-        """Delete a message from a Slack channel. Raises ValueError on failure."""
-        self._make_request("POST", "chat.delete", {"channel": channel, "ts": ts})
+        """Delete a message from a Slack channel. Raises ValueError on failure.
+        Best-effort housekeeping for callers, so it gets a short budget."""
+        self._make_request("POST", "chat.delete", {"channel": channel, "ts": ts}, timeout=10, max_retries=1)
+
+    def get_message(self, channel: str, ts: str) -> Optional[Dict[str, Any]]:
+        """The message `ts` in `channel` (via conversations.replies, so a thread
+        parent carries `reply_count`), or None when Slack no longer has it.
+        Other failures raise ValueError. Short budget: callers treat a failed
+        lookup as "still present" and move on."""
+        try:
+            result = self._make_request(
+                "GET", "conversations.replies", {"channel": channel, "ts": ts, "limit": 1},
+                timeout=10, max_retries=1,
+            )
+        except SlackAPIError as e:
+            if e.error == "thread_not_found":
+                return None
+            raise
+        messages = result.get('messages') or []
+        return messages[0] if messages and messages[0].get('ts') == ts else None
     
     def set_channel_topic(self, channel: str, topic: str) -> Dict[str, Any]:
         """Set channel topic/description."""
