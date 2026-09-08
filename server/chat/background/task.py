@@ -766,6 +766,7 @@ def run_background_chat(
                         incident_id=incident_id,
                         user_id=user_id,
                         session_id=session_id,
+                        send_notifications=send_notifications,
                     )
                 except Exception:
                     logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization for incident %s", incident_id)
@@ -1515,6 +1516,7 @@ async def _execute_background_chat(
                     incident_id=incident_id,
                     user_id=user_id,
                     session_id=session_id,
+                    send_notifications=send_notifications,
                 )
             except Exception as e:
                 logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization")
