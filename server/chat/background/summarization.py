@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from celery_config import celery_app
@@ -18,35 +18,8 @@ from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
 
 
-def _extract_text_from_response(content: Union[str, List[Any]]) -> str:
-    """Extract text content from LLM response, filtering out thinking blocks.
-
-    Gemini thinking models return content as a list with thinking and text blocks.
-    This extracts only the actual response text.
-    """
-    if isinstance(content, str):
-        return content.strip()
-
-    if isinstance(content, list):
-        text_parts = []
-        for part in content:
-            if isinstance(part, dict):
-                part_type = part.get("type", "")
-                if part_type in ("thinking", "reasoning"):
-                    continue
-                elif part_type == "text":
-                    text = part.get("text", "")
-                    if text:
-                        text_parts.append(str(text))
-                else:
-                    text = part.get("text", "")
-                    if text:
-                        text_parts.append(str(text))
-            elif isinstance(part, str):
-                text_parts.append(part)
-        return "".join(text_parts).strip()
-
-    return str(content).strip()
+# Re-exported for backwards compatibility; other modules import this name from here.
+from utils.llm_response import extract_text_from_response as _extract_text_from_response
 
 
 from chat.background.citation_extractor import (

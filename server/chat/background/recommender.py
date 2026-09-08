@@ -26,6 +26,8 @@ from chat.background.suggestion_extractor import Suggestion, is_command_safe
 
 from chat.background.citation_extractor import _TOOL_NAME_MAPPING
 
+from utils.llm_response import extract_text_from_response
+
 logger = logging.getLogger(__name__)
 
 _MAX_TRACE_CHARS = 30_000
@@ -288,7 +290,9 @@ Return ONLY the JSON object."""
     try:
         llm = create_chat_model(ModelConfig.SUGGESTION_MODEL, temperature=0.1)
         response = llm.invoke([HumanMessage(content=prompt)])
-        text = _strip_code_fences(str(response.content).strip())
+        # Gemini thinking models return content as a list of blocks; extract the text
+        # (and drop thinking blocks) before parsing, or json.loads gets a stringified list.
+        text = _strip_code_fences(_extract_text_from_content(response.content))
 
         data = json.loads(text)
 
@@ -552,7 +556,8 @@ Return ONLY the JSON array."""
     try:
         llm = create_chat_model(ModelConfig.SUGGESTION_MODEL, temperature=0.1)
         response = llm.invoke([HumanMessage(content=prompt)])
-        commands_to_run = _parse_json_list_response(str(response.content))
+        # Extract text from (possibly list) content before JSON parsing — see note above.
+        commands_to_run = _parse_json_list_response(_extract_text_from_content(response.content))
     except Exception as e:
         logger.warning("[Recommender] Self-exec planning failed: %s", e)
         return []
@@ -762,21 +767,10 @@ def _is_redundant(suggestion: Suggestion, executed_commands: set) -> bool:
     return False
 
 
-def _extract_text_part(part: Any) -> str:
-    """Extract text from a single content block, filtering out thinking blocks."""
-    if isinstance(part, str):
-        return part
-    if isinstance(part, dict) and part.get("type") not in ("thinking", "reasoning"):
-        text = part.get("text", "")
-        return str(text) if text else ""
-    return ""
-
-
 def _extract_text_from_content(content: Any) -> str:
     """Extract plain text from LLM response content (handles Gemini thinking blocks)."""
-    if isinstance(content, list):
-        return "".join(_extract_text_part(part) for part in content).strip()
-    return str(content).strip()
+    # Delegates to the shared helper; kept as a thin wrapper for local call sites.
+    return extract_text_from_response(content)
 
 
 def _parse_item_to_suggestion(item: dict) -> Optional[Suggestion]:
@@ -930,7 +924,7 @@ Return in this exact format (one block per suggestion):
             model_name=_ENRICHMENT_MODEL,
             request_type="suggestion_enrichment",
         )
-        _apply_enrichment_response(str(response.content).strip(), suggestions)
+        _apply_enrichment_response(_extract_text_from_content(response.content), suggestions)
     except Exception as e:
         logger.warning("[Recommender] Validated fix enrichment failed (non-fatal): %s", e)
         _generate_summaries(suggestions, user_id, session_id)
@@ -993,7 +987,7 @@ Return one summary per line, numbered:"""
             model_name=_ENRICHMENT_MODEL,
             request_type="suggestion_summary",
         )
-        text = str(response.content).strip()
+        text = _extract_text_from_content(response.content)
         lines = [l.strip() for l in text.split("\n") if l.strip()]
 
         for line in lines:
