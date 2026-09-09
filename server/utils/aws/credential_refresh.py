@@ -39,8 +39,6 @@ def refresh_aws_credentials():
         logger.debug("No AWS credentials need proactive refresh")
         return {"refreshed": 0, "skipped": 0}
 
-    expiring_role_arns = {k.split(":")[0] for k in expiring_cache_keys}
-
     from utils.db.connection_pool import db_pool
     from utils.auth.stateless_auth import set_rls_context
 
@@ -72,7 +70,11 @@ def refresh_aws_credentials():
         return {"refreshed": 0, "error": str(e)}
 
     for user_id, role_arn, region, workspace_id, external_id in rows:
-        if role_arn not in expiring_role_arns:
+        cache_key_prefix = f"{user_id}:{role_arn}:{external_id}:"
+        if not any(
+            cache_key.startswith(cache_key_prefix)
+            for cache_key in expiring_cache_keys
+        ):
             skipped += 1
             continue
         region = region or "us-east-1"
