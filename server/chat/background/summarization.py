@@ -857,9 +857,10 @@ def generate_incident_summary_from_chat(
         # and is bounded by its own asyncio.wait_for; this guard is belt and
         # braces so notifications stay guaranteed. On task retry the existing
         # verdict row makes the re-run a no-op.
+        recurrence_outcome = None
         try:
             from services.correlation.recurrence_agent import run_recurrence_check
-            run_recurrence_check(
+            recurrence_outcome = run_recurrence_check(
                 incident_id=incident_id,
                 user_id=user_id,
                 session_id=session_id,
@@ -870,27 +871,55 @@ def generate_incident_summary_from_chat(
                 f"{_LOG_PREFIX} Recurrence check failed for {incident_id}; proceeding to notify"
             )
 
-        # Incident Index maintenance (recurrence discovery map): append this
-        # incident's compact, id-keyed line AFTER the recurrence check, so the
-        # current incident is never a candidate for its own check but is
-        # available to future ones. Best-effort — never blocks notify.
+        # Incident Index maintenance (recurrence discovery map). Runs AFTER the
+        # recurrence check so the current incident is never a candidate for its
+        # own check. Fold-aware and best-effort — never blocks notify:
+        #   • folded into a root  → roll up under the ROOT's existing line (no
+        #     sibling line the next check could wrongly fold into).
+        #   • new incident        → generate a cause-focused synopsis (one cheap
+        #     LLM call) and append a fresh root line.
         try:
-            from services.memory.incident_index import append_incident_line
+            from services.memory.incident_index import (
+                append_incident_line,
+                generate_root_cause_synopsis,
+                record_recurrence,
+            )
 
             date_iso = (basics.get("triggered_at") or "")[:10]
-            append_incident_line(
-                user_id=user_id,
-                incident_id=incident_id,
-                date_iso=date_iso,
-                service=basics.get("service") or "",
-                status="resolved",
-                alert_title=basics.get("alert_title") or "",
-                summary=summary or "",
-                session_id=session_id,
-            )
+            folded = bool(recurrence_outcome and recurrence_outcome.get("folded"))
+            root_id = recurrence_outcome.get("root_id") if recurrence_outcome else None
+
+            # Recurrence: extend the root's roll-up rather than add a new line.
+            if folded and root_id:
+                record_recurrence(
+                    user_id=user_id,
+                    root_id=str(root_id),
+                    recurred_id=incident_id,
+                    date_iso=date_iso,
+                )
+            # New root (or shadow/off/no-check): add a fresh, richly-described line.
+            else:
+                synopsis = generate_root_cause_synopsis(
+                    user_id=user_id,
+                    session_id=session_id,
+                    alert_title=basics.get("alert_title") or "",
+                    service=basics.get("service") or "",
+                    summary=summary or "",
+                )
+                append_incident_line(
+                    user_id=user_id,
+                    incident_id=incident_id,
+                    date_iso=date_iso,
+                    service=basics.get("service") or "",
+                    status="resolved",
+                    alert_title=basics.get("alert_title") or "",
+                    summary=summary or "",
+                    synopsis=synopsis,
+                    session_id=session_id,
+                )
         except Exception:
             logger.exception(
-                f"{_LOG_PREFIX} Incident Index append failed for {incident_id}; proceeding to notify"
+                f"{_LOG_PREFIX} Incident Index maintenance failed for {incident_id}; proceeding to notify"
             )
 
         # Send completion notifications via centralized dispatcher

@@ -586,8 +586,14 @@ def _apply_verdict_outcome(
     correlator_score: Optional[float],
     elapsed_ms: int,
     model: Optional[str],
-) -> None:
-    """Clamp the claim, then fold (live) or persist the verdict row."""
+) -> Dict[str, Any]:
+    """Clamp the claim, then fold (live) or persist the verdict row.
+
+    Returns the fold outcome so the caller (summarization) can maintain the
+    Incident Index: {"folded": bool, "root_id": Optional[str]}. Only a live,
+    accepted, successfully-folded claim yields folded=True with the resolved
+    group root; every other path (shadow, new, reject) returns folded=False.
+    """
     claimed = verdict.recurrence_of if verdict else None
     reasoning = verdict.reasoning if verdict else None
 
@@ -614,7 +620,8 @@ def _apply_verdict_outcome(
             _LOG_PREFIX, incident_id, result.folded, result.root_id,
             result.reject_reason, elapsed_ms,
         )
-        return
+        # Surface the resolved root so the index rolls up under it, not a child.
+        return {"folded": bool(result.folded), "root_id": result.root_id}
 
     if accepted:
         # Same convention the rule correlator uses for its shadow decisions.
@@ -636,6 +643,7 @@ def _apply_verdict_outcome(
         elapsed_ms=elapsed_ms,
         model=model,
     )
+    return {"folded": False, "root_id": None}
 
 
 def run_recurrence_check(
@@ -644,30 +652,34 @@ def run_recurrence_check(
     user_id: str,
     session_id: Optional[str] = None,
     decision_point: str = "after",
-) -> None:
+) -> Optional[Dict[str, Any]]:
     """Run one recurrence check. Sync, never raises.
 
     off: no-op. shadow: verdict row only ("Would fold" logged, nothing folds).
     live: an accepted claim folds via fold_incident. Every completed check
     persists exactly one verdict row; every failure path degrades to today's
     behavior.
+
+    Returns the fold outcome ({"folded": bool, "root_id": Optional[str]}) so the
+    caller can maintain the Incident Index, or None when no check ran (off,
+    idempotent skip, no context, or a degraded failure path).
     """
     started = time.monotonic()
     try:
         mode = get_recurrence_mode()
         if mode == MODE_OFF:
-            return
+            return None
 
         if get_existing_verdict(incident_id, user_id, decision_point):
             logger.info(
                 "%s Verdict already exists for incident %s (%s); skipping re-run",
                 _LOG_PREFIX, incident_id, decision_point,
             )
-            return
+            return None
 
         ctx = _fetch_incident_context(incident_id, user_id)
         if not ctx:
-            return
+            return None
 
         from chat.backend.agent.llm import ModelConfig
 
@@ -678,7 +690,7 @@ def run_recurrence_check(
             ctx=ctx,
             decision_point=decision_point,
         )
-        _apply_verdict_outcome(
+        return _apply_verdict_outcome(
             incident_id=str(incident_id),
             user_id=user_id,
             mode=mode,
@@ -697,14 +709,16 @@ def run_recurrence_check(
             "%s Recurrence check cancelled for incident %s; degrading to standalone",
             _LOG_PREFIX, incident_id,
         )
+        return None
     except Exception as exc:
         if _SoftTimeLimit is not None and isinstance(exc, _SoftTimeLimit):
             logger.error(
                 "%s Soft time limit hit during recurrence check for %s; degrading to standalone",
                 _LOG_PREFIX, incident_id,
             )
-            return
+            return None
         logger.exception(
             "%s Recurrence check failed for incident %s; degrading to standalone",
             _LOG_PREFIX, incident_id,
         )
+        return None

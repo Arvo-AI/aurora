@@ -14,7 +14,7 @@ if os.path.abspath(_server_dir) not in sys.path:
     sys.path.insert(0, os.path.abspath(_server_dir))
 
 import services.correlation.recurrence_agent as ra  # noqa: E402
-from services.correlation.recurrence_fold import RecurrenceVerdict  # noqa: E402
+from services.correlation.recurrence_fold import RecurrenceVerdict, FoldResult  # noqa: E402
 
 INCIDENT = str(uuid.uuid4())
 ANCHOR = str(uuid.uuid4())
@@ -48,7 +48,7 @@ def harness(monkeypatch):
         get_existing_verdict=MagicMock(return_value=None),
         fetch_ctx=MagicMock(return_value=_ctx()),
         persist_verdict=MagicMock(return_value=True),
-        fold_incident=MagicMock(),
+        fold_incident=MagicMock(return_value=FoldResult(folded=True, root_id=ANCHOR)),
         clamp=MagicMock(return_value=(ANCHOR, None)),
     )
     monkeypatch.setattr(ra, "get_existing_verdict", mocks.get_existing_verdict)
@@ -71,7 +71,7 @@ def _stub_agent(monkeypatch, verdict=None, delay=0.0):
 
 def _run(monkeypatch, mode):
     monkeypatch.setenv("RECURRENCE_DETECTION_MODE", mode)
-    ra.run_recurrence_check(
+    return ra.run_recurrence_check(
         incident_id=INCIDENT, user_id="u1", session_id="s1", decision_point="after"
     )
 
@@ -79,7 +79,8 @@ def _run(monkeypatch, mode):
 class TestModeGating:
     def test_off_does_nothing(self, harness, monkeypatch):
         _stub_agent(monkeypatch, verdict=RecurrenceVerdict(recurrence_of=ANCHOR, reasoning="r"))
-        _run(monkeypatch, "off")
+        outcome = _run(monkeypatch, "off")
+        assert outcome is None
         harness.get_existing_verdict.assert_not_called()
         harness.fetch_ctx.assert_not_called()
         harness.persist_verdict.assert_not_called()
@@ -100,7 +101,7 @@ class TestModeGating:
 
     def test_live_folds_accepted_claim(self, harness, monkeypatch):
         _stub_agent(monkeypatch, verdict=RecurrenceVerdict(recurrence_of=ANCHOR, reasoning="same cause"))
-        _run(monkeypatch, "live")
+        outcome = _run(monkeypatch, "live")
         harness.fold_incident.assert_called_once()
         kwargs = harness.fold_incident.call_args.kwargs
         assert kwargs["incident_id"] == INCIDENT
@@ -108,14 +109,18 @@ class TestModeGating:
         assert kwargs["mode"] == "live"
         # fold_incident writes the verdict row itself on this path
         harness.persist_verdict.assert_not_called()
+        # Outcome surfaces the resolved root so the index rolls up under it.
+        assert outcome == {"folded": True, "root_id": ANCHOR}
 
     def test_live_new_verdict_persists_without_folding(self, harness, monkeypatch):
         _stub_agent(monkeypatch, verdict=RecurrenceVerdict(recurrence_of=None, reasoning="new failure"))
-        _run(monkeypatch, "live")
+        outcome = _run(monkeypatch, "live")
         harness.fold_incident.assert_not_called()
         kwargs = harness.persist_verdict.call_args.kwargs
         assert kwargs["accepted_recurrence_of"] is None
         assert kwargs["folded"] is False
+        # New incident → not folded → summarization adds a fresh root line.
+        assert outcome == {"folded": False, "root_id": None}
 
 
 class TestFailurePaths:

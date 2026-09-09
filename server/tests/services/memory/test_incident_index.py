@@ -123,3 +123,94 @@ class TestReadIndex:
     def test_never_raises(self):
         with patch.object(ii, "read_memory", side_effect=RuntimeError("boom")):
             assert ii.read_index("u1") == ""
+
+
+ROOT = str(uuid.uuid4())
+REC1 = str(uuid.uuid4())
+REC2 = str(uuid.uuid4())
+
+
+class TestRecordRecurrence:
+    def _index(self, *lines):
+        return json.dumps({"status": "ok", "content": "\n".join(lines)})
+
+    def test_creates_rollup_under_root_when_none_exists(self):
+        root_line = f"- [INC {ROOT} | 2026-09-08 | api | resolved] pool exhaustion"
+        with patch.object(ii, "read_memory", return_value=self._index(root_line)), \
+                patch.object(ii, "edit_memory", return_value=json.dumps({"status": "ok"})) as em:
+            ok = ii.record_recurrence(user_id="u1", root_id=ROOT, recurred_id=REC1, date_iso="2026-09-09")
+        assert ok is True
+        new_text = em.call_args.kwargs["new_text"]
+        assert f"↳ recurrences: {REC1}" in new_text
+        assert "(2 total, last 2026-09-09)" in new_text
+        # The root line itself is preserved in the replacement block.
+        assert root_line in new_text
+
+    def test_extends_existing_rollup_and_counts_total(self):
+        root_line = f"- [INC {ROOT} | 2026-09-08 | api | resolved] pool exhaustion"
+        rollup = f"  ↳ recurrences: {REC1} (2 total, last 2026-09-08)"
+        with patch.object(ii, "read_memory", return_value=self._index(root_line, rollup)), \
+                patch.object(ii, "edit_memory", return_value=json.dumps({"status": "ok"})) as em:
+            ok = ii.record_recurrence(user_id="u1", root_id=ROOT, recurred_id=REC2, date_iso="2026-09-10")
+        assert ok is True
+        new_text = em.call_args.kwargs["new_text"]
+        assert REC1 in new_text and REC2 in new_text
+        assert "(3 total, last 2026-09-10)" in new_text
+
+    def test_idempotent_when_recurrence_already_recorded(self):
+        root_line = f"- [INC {ROOT} | 2026-09-08 | api | resolved] pool exhaustion"
+        rollup = f"  ↳ recurrences: {REC1} (2 total, last 2026-09-08)"
+        with patch.object(ii, "read_memory", return_value=self._index(root_line, rollup)), \
+                patch.object(ii, "edit_memory") as em:
+            ok = ii.record_recurrence(user_id="u1", root_id=ROOT, recurred_id=REC1, date_iso="2026-09-10")
+        assert ok is True
+        em.assert_not_called()  # already present → no write
+
+    def test_falls_back_to_standalone_line_when_root_absent(self):
+        # Root not in the index (cold start / trimmed) → append standalone line.
+        with patch.object(ii, "read_memory", return_value=self._index("- [INC other | d | s | resolved] x")), \
+                patch.object(ii, "append_to_memory", return_value=json.dumps({"status": "ok"})) as am, \
+                patch.object(ii, "edit_memory") as em:
+            ok = ii.record_recurrence(user_id="u1", root_id=ROOT, recurred_id=REC1, date_iso="2026-09-09")
+        assert ok is True
+        em.assert_not_called()
+        appended = am.call_args.kwargs["content"]
+        assert f"INC {REC1}" in appended
+        assert ROOT in appended  # references the root it recurred from
+
+    def test_never_raises(self):
+        with patch.object(ii, "read_memory", side_effect=RuntimeError("boom")):
+            assert ii.record_recurrence(user_id="u1", root_id=ROOT, recurred_id=REC1, date_iso="d") is False
+
+
+class TestGenerateRootCauseSynopsis:
+    def test_empty_summary_uses_deterministic_fallback(self):
+        # No report → no LLM call, deterministic fallback (alert title).
+        s = ii.generate_root_cause_synopsis(
+            user_id="u1", session_id="s1", alert_title="High CPU", service="api", summary="",
+        )
+        assert s == "High CPU"
+
+    def test_llm_failure_falls_back_to_title(self):
+        # Force the lazy LLM import path to raise → fallback to alert title.
+        with patch("chat.backend.agent.providers.create_chat_model", side_effect=RuntimeError("no llm")):
+            s = ii.generate_root_cause_synopsis(
+                user_id="u1", session_id="s1", alert_title="High CPU",
+                service="api", summary="Root cause: bad deploy.",
+            )
+        assert s == "High CPU"
+
+    def test_uses_llm_output_when_available(self):
+        from unittest.mock import MagicMock
+
+        fake_resp = MagicMock()
+        fake_resp.content = "Connection pool exhaustion in payments-db under load"
+        with patch("chat.backend.agent.providers.create_chat_model", return_value=MagicMock()), \
+                patch("chat.backend.agent.utils.llm_usage_tracker.tracked_invoke", return_value=fake_resp), \
+                patch("chat.backend.agent.utils.message_content.extract_text_from_content",
+                      return_value="Connection pool exhaustion in payments-db under load"):
+            s = ii.generate_root_cause_synopsis(
+                user_id="u1", session_id="s1", alert_title="High CPU",
+                service="payments-api", summary="A long RCA report body.",
+            )
+        assert s == "Connection pool exhaustion in payments-db under load"
