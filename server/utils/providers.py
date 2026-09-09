@@ -36,6 +36,7 @@ CONNECTOR_DIRS: frozenset = frozenset({
     "opsgenie",
     "ovh",
     "pagerduty",
+    "prometheus",
     "scaleway",
     "sentry",
     "sharepoint",
