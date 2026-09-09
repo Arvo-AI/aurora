@@ -47,6 +47,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "pagerduty", # PagerDuty connector tokens
     "opsgenie",  # OpsGenie connector tokens
     "splunk",    # Splunk connector tokens
+    "opensearch", # OpenSearch connector tokens
     "ovh",      # OVH Cloud
     "scaleway", # Scaleway Cloud
     "tailscale", # Tailscale VPN
@@ -71,6 +72,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "incidentio",  # incident.io connector tokens
     "flyio",    # Fly.io connector tokens
     "kubeconfig", # Kubernetes kubeconfig uploads
+    "victorops",   # Splunk On-Call (VictorOps) connector tokens
 }
 
 
