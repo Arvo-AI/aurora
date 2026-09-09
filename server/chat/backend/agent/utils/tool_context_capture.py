@@ -5,7 +5,7 @@ This module provides automatic summarization of tool results to reduce token usa
 while preserving full output visibility for users.
 
 Key Features:
-1. **Automatic Summarization**: Tool outputs exceeding 10,000 tokens are automatically summarized
+1. **Automatic Summarization**: Tool outputs exceeding the configured token threshold are summarized
 2. **Dual Message System**: 
    - Frontend receives full output via WebSocket (unchanged user experience)
    - LLM context receives summarized version to save tokens
@@ -16,14 +16,14 @@ Key Features:
 Architecture:
 - Tool decorators send full output to frontend via WebSocket
 - ToolContextCapture intercepts tool results for LLM context  
-- Content over 10k tokens triggers summarization via LLMManager.summarize()
+- Content over TOOL_CONTEXT_SUMMARIZATION_THRESHOLD_TOKENS triggers summarization
 - Summarized content marked as "internal" and hidden from UI
 - LLM gets concise summaries while users see complete data
 
 Usage:
 - Completely automatic and transparent
 - No changes needed to existing tools
-- Threshold configurable via SUMMARIZATION_THRESHOLD_TOKENS constant
+- Thresholds are configurable through TOOL_CONTEXT_* and TOOL_OUTPUT_* environment variables
 """
 
 import json
@@ -36,6 +36,10 @@ from .llm_usage_tracker import LLMUsageTracker
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 from chat.backend.agent.utils.tool_call_history import OUTPUT_EXCERPT_MAX_CHARS
+from chat.backend.agent.utils.tool_output_cap import (
+    MAX_SUMMARIZATION_INPUT_CHARS,
+    _positive_int_env,
+)
 from utils.text.text_utils import truncate
 # Import langchain components - direct imports for LangChain 1.2.6+
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
@@ -52,6 +56,10 @@ class InternalToolMessage(ToolMessage):
         self.additional_kwargs["internal"] = True
 
 logger = logging.getLogger(__name__)
+
+TOOL_CONTEXT_SUMMARIZATION_THRESHOLD_TOKENS = _positive_int_env(
+    "TOOL_CONTEXT_SUMMARIZATION_THRESHOLD_TOKENS", 10_000
+)
 
 # --------------------------------------------------------------------------------------
 # Token counting utility (delegates to LLMUsageTracker for context management only)
@@ -310,19 +318,15 @@ class ToolContextCapture:
         # Store original content for potential summarization
         original_content = output
         
-        # Set threshold to 20k tokens (roughly equivalent to 80k characters)
-        SUMMARIZATION_THRESHOLD_TOKENS = 10000
-        
         # Store summarized content separately - DON'T create InternalToolMessage for agent flow
         content_tokens = count_tokens(original_content)
-        if content_tokens > SUMMARIZATION_THRESHOLD_TOKENS:
-            logger.info(f" Tool output length {content_tokens} tokens exceeds {SUMMARIZATION_THRESHOLD_TOKENS} token threshold, summarizing for LLM context")
+        if content_tokens > TOOL_CONTEXT_SUMMARIZATION_THRESHOLD_TOKENS:
+            logger.info(f" Tool output length {content_tokens} tokens exceeds {TOOL_CONTEXT_SUMMARIZATION_THRESHOLD_TOKENS} token threshold, summarizing for LLM context")
             try:
                 from ..llm import ModelConfig
                 # Cap content before sending to summarization to prevent context overflow.
                 # LLMManager.summarize() also caps internally, but truncating here avoids
                 # passing multi-MB strings through the call stack unnecessarily.
-                MAX_SUMMARIZATION_INPUT_CHARS = 400_000  # ~100K tokens
                 content_to_summarize = original_content
                 if len(content_to_summarize) > MAX_SUMMARIZATION_INPUT_CHARS:
                     logger.warning(f"Truncating tool output from {len(content_to_summarize)} to {MAX_SUMMARIZATION_INPUT_CHARS} chars before summarization")

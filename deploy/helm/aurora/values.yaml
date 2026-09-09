@@ -224,6 +224,11 @@ config:
   # --- LLM Configuration ---
   LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
   AGENT_RECURSION_LIMIT: "240" #Maximum number of steps an agent can take
+  # Tool-output context budgets. Values must be positive integers and the
+  # pass-through limit must remain smaller than the summarization-input limit.
+  TOOL_OUTPUT_PASS_THROUGH_CHARS: "40000"
+  TOOL_OUTPUT_MAX_SUMMARIZATION_INPUT_CHARS: "400000"
+  TOOL_CONTEXT_SUMMARIZATION_THRESHOLD_TOKENS: "10000"
 
   # --- AI Safety Guardrails ---
   # Input rail + signature matcher + LLM safety judge. All three activate with
