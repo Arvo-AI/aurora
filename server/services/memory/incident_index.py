@@ -1,7 +1,7 @@
 """
 Incident Index — the recurrence discovery map.
 
-One self-maintaining memory artifact per org (category=incident_index,
+One self-maintaining memory artifact per org (category="artifact",
 title="Incident Index") holding a compact, id-keyed line per incident. The
 recurrence agent scans it to find candidate anchors, then drills into a
 specific incident via get_incident. Written deterministically at RCA completion
