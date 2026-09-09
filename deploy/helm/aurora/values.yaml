@@ -148,6 +148,18 @@ replicaCounts:
   postgres: 1        # Database - single instance, replication requires additional config
 
 # ------------------------------------------------------------------------------
+# Server-specific configuration
+# ------------------------------------------------------------------------------
+server:
+  livenessProbe:
+    # Number of consecutive liveness probe failures before kubelet kills the pod.
+    # Default 6 × 20s periodSeconds = 120s tolerance window.
+    # Weaviate rescheduling after GKE OPTIMIZE_UTILIZATION eviction takes ~60–90s;
+    # 120s tolerance ensures the server pod survives the eviction window without
+    # being killed by the liveness probe.
+    failureThreshold: 6
+
+# ------------------------------------------------------------------------------
 # Application configuration (non-sensitive)
 # ------------------------------------------------------------------------------
 config:
@@ -237,8 +249,13 @@ config:
   GUARDRAILS_LLM_MODEL: ""
 
   # --- Concurrency & Pool Sizing ---
-  GUNICORN_WORKERS: "2"
-  GUNICORN_THREADS: "4"
+  # Increased from 2 workers × 4 threads (8 slots) to 4 workers × 8 threads (32 slots).
+  # Rationale: GKE OPTIMIZE_UTILIZATION evictions of Weaviate cause TCP connection
+  # timeouts (5s) that exhaust all gunicorn thread slots, starving the liveness probe
+  # and triggering SIGKILL. 32 slots provide 4× headroom to absorb Weaviate-blocked
+  # requests while keeping the liveness probe serviceable.
+  GUNICORN_WORKERS: "4"
+  GUNICORN_THREADS: "8"
   CELERY_CONCURRENCY: "4"
   DB_POOL_MIN: "2"
   DB_POOL_MAX: "20"
