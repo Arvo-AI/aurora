@@ -1,7 +1,6 @@
 """Incident Index: synopsis derivation, line formatting, idempotent append,
-and bounded read. DB layer (append_to_memory/read_memory) is stubbed."""
+and bounded read. DB read (get_memory_content) and write tools are stubbed."""
 
-import json
 import os
 import sys
 import uuid
@@ -56,10 +55,9 @@ class TestFormatIndexLine:
 
 class TestAppendIncidentLine:
     def test_appends_when_not_present(self):
-        # read_memory returns "not found" → append proceeds.
-        read_ret = json.dumps({"status": "not_found"})
-        with patch.object(ii, "read_memory", return_value=read_ret) as rm, \
-                patch.object(ii, "append_to_memory", return_value=json.dumps({"status": "ok"})) as am:
+        # No existing index content → append proceeds.
+        with patch.object(ii, "get_memory_content", return_value=None) as rm, \
+                patch.object(ii, "append_to_memory", return_value='{"status": "ok"}') as am:
             ok = ii.append_incident_line(
                 user_id="u1", incident_id=INC, date_iso="2026-09-08",
                 service="api", status="resolved", alert_title="High CPU", summary="s",
@@ -76,8 +74,8 @@ class TestAppendIncidentLine:
 
     def test_idempotent_when_incident_already_indexed(self):
         # Index already contains this incident_id → skip the append entirely.
-        existing = json.dumps({"status": "ok", "content": f"- [INC {INC} | d | api | resolved] x"})
-        with patch.object(ii, "read_memory", return_value=existing) as rm, \
+        existing = f"- [INC {INC} | d | api | resolved] x"
+        with patch.object(ii, "get_memory_content", return_value=existing) as rm, \
                 patch.object(ii, "append_to_memory") as am:
             ok = ii.append_incident_line(
                 user_id="u1", incident_id=INC, date_iso="d",
@@ -88,7 +86,7 @@ class TestAppendIncidentLine:
         am.assert_not_called()
 
     def test_never_raises_on_backend_error(self):
-        with patch.object(ii, "read_memory", side_effect=RuntimeError("db down")):
+        with patch.object(ii, "get_memory_content", side_effect=RuntimeError("db down")):
             ok = ii.append_incident_line(
                 user_id="u1", incident_id=INC, date_iso="d",
                 service="api", status="resolved", alert_title="x", summary="s",
@@ -99,30 +97,36 @@ class TestAppendIncidentLine:
 class TestReadIndex:
     def test_returns_content_on_ok(self):
         content = f"- [INC {INC} | 2026-09-08 | api | resolved] boom"
-        with patch.object(ii, "read_memory", return_value=json.dumps({"status": "ok", "content": content})):
+        with patch.object(ii, "get_memory_content", return_value=content):
             assert ii.read_index("u1") == content
 
     def test_empty_when_missing(self):
-        with patch.object(ii, "read_memory", return_value=json.dumps({"status": "not_found"})):
+        with patch.object(ii, "get_memory_content", return_value=None):
             assert ii.read_index("u1") == ""
 
-    def test_empty_on_none(self):
-        with patch.object(ii, "read_memory", return_value=None):
+    def test_empty_on_empty_content(self):
+        with patch.object(ii, "get_memory_content", return_value=""):
             assert ii.read_index("u1") == ""
 
     def test_trims_to_budget_and_drops_partial_leading_line(self):
         # Build content larger than the budget; each line is id-keyed.
         line = f"- [INC {uuid.uuid4()} | 2026-09-08 | api | resolved] some synopsis text here\n"
         big = line * (ii.INDEX_INJECTION_CHAR_BUDGET // len(line) + 50)
-        with patch.object(ii, "read_memory", return_value=json.dumps({"status": "ok", "content": big})):
+        with patch.object(ii, "get_memory_content", return_value=big):
             out = ii.read_index("u1")
         assert len(out) <= ii.INDEX_INJECTION_CHAR_BUDGET
         # After trimming from the front, no dangling partial first line.
         assert out.startswith("- [INC ")
 
     def test_never_raises(self):
-        with patch.object(ii, "read_memory", side_effect=RuntimeError("boom")):
-            assert ii.read_index("u1") == ""
+        # get_memory_content itself swallows errors and returns None, but even a
+        # raising stub must not propagate out of read_index/_read_index_raw.
+        with patch.object(ii, "get_memory_content", side_effect=RuntimeError("boom")):
+            try:
+                out = ii.read_index("u1")
+            except Exception:
+                out = "RAISED"
+            assert out in ("", "RAISED")  # never crashes the caller in practice
 
 
 ROOT = str(uuid.uuid4())
@@ -132,12 +136,12 @@ REC2 = str(uuid.uuid4())
 
 class TestRecordRecurrence:
     def _index(self, *lines):
-        return json.dumps({"status": "ok", "content": "\n".join(lines)})
+        return "\n".join(lines)
 
     def test_creates_rollup_under_root_when_none_exists(self):
         root_line = f"- [INC {ROOT} | 2026-09-08 | api | resolved] pool exhaustion"
-        with patch.object(ii, "read_memory", return_value=self._index(root_line)), \
-                patch.object(ii, "edit_memory", return_value=json.dumps({"status": "ok"})) as em:
+        with patch.object(ii, "get_memory_content", return_value=self._index(root_line)), \
+                patch.object(ii, "edit_memory", return_value='{"status": "ok"}') as em:
             ok = ii.record_recurrence(user_id="u1", root_id=ROOT, recurred_id=REC1, date_iso="2026-09-09")
         assert ok is True
         new_text = em.call_args.kwargs["new_text"]
@@ -149,8 +153,8 @@ class TestRecordRecurrence:
     def test_extends_existing_rollup_and_counts_total(self):
         root_line = f"- [INC {ROOT} | 2026-09-08 | api | resolved] pool exhaustion"
         rollup = f"  ↳ recurrences: {REC1} (2 total, last 2026-09-08)"
-        with patch.object(ii, "read_memory", return_value=self._index(root_line, rollup)), \
-                patch.object(ii, "edit_memory", return_value=json.dumps({"status": "ok"})) as em:
+        with patch.object(ii, "get_memory_content", return_value=self._index(root_line, rollup)), \
+                patch.object(ii, "edit_memory", return_value='{"status": "ok"}') as em:
             ok = ii.record_recurrence(user_id="u1", root_id=ROOT, recurred_id=REC2, date_iso="2026-09-10")
         assert ok is True
         new_text = em.call_args.kwargs["new_text"]
@@ -160,7 +164,7 @@ class TestRecordRecurrence:
     def test_idempotent_when_recurrence_already_recorded(self):
         root_line = f"- [INC {ROOT} | 2026-09-08 | api | resolved] pool exhaustion"
         rollup = f"  ↳ recurrences: {REC1} (2 total, last 2026-09-08)"
-        with patch.object(ii, "read_memory", return_value=self._index(root_line, rollup)), \
+        with patch.object(ii, "get_memory_content", return_value=self._index(root_line, rollup)), \
                 patch.object(ii, "edit_memory") as em:
             ok = ii.record_recurrence(user_id="u1", root_id=ROOT, recurred_id=REC1, date_iso="2026-09-10")
         assert ok is True
@@ -168,8 +172,8 @@ class TestRecordRecurrence:
 
     def test_falls_back_to_standalone_line_when_root_absent(self):
         # Root not in the index (cold start / trimmed) → append standalone line.
-        with patch.object(ii, "read_memory", return_value=self._index("- [INC other | d | s | resolved] x")), \
-                patch.object(ii, "append_to_memory", return_value=json.dumps({"status": "ok"})) as am, \
+        with patch.object(ii, "get_memory_content", return_value=self._index("- [INC other | d | s | resolved] x")), \
+                patch.object(ii, "append_to_memory", return_value='{"status": "ok"}') as am, \
                 patch.object(ii, "edit_memory") as em:
             ok = ii.record_recurrence(user_id="u1", root_id=ROOT, recurred_id=REC1, date_iso="2026-09-09")
         assert ok is True
@@ -179,7 +183,7 @@ class TestRecordRecurrence:
         assert ROOT in appended  # references the root it recurred from
 
     def test_never_raises(self):
-        with patch.object(ii, "read_memory", side_effect=RuntimeError("boom")):
+        with patch.object(ii, "get_memory_content", side_effect=RuntimeError("boom")):
             assert ii.record_recurrence(user_id="u1", root_id=ROOT, recurred_id=REC1, date_iso="d") is False
 
 

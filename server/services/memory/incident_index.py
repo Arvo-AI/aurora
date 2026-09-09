@@ -13,10 +13,10 @@ import re
 from typing import Optional
 
 from services.memory import INCIDENT_INDEX_CATEGORY, INCIDENT_INDEX_TITLE
+from services.memory.queries import get_memory_content
 from chat.backend.agent.tools.memory_tool import (
     append_to_memory,
     edit_memory,
-    read_memory,
 )
 
 logger = logging.getLogger(__name__)
@@ -190,11 +190,7 @@ def append_incident_line(
 
         # Idempotency: don't re-append if this incident_id is already indexed.
         # Read is cheap (single artifact) and avoids duplicate lines on retry.
-        existing = read_memory(
-            category=INCIDENT_INDEX_CATEGORY,
-            title=INCIDENT_INDEX_TITLE,
-            user_id=user_id,
-        )
+        existing = get_memory_content(user_id, INCIDENT_INDEX_CATEGORY, INCIDENT_INDEX_TITLE)
         if existing and f"INC {incident_id}" in existing:
             logger.info(
                 "%s Incident %s already in index; skipping append",
@@ -225,23 +221,7 @@ def _read_index_raw(user_id: str) -> str:
     must operate on the full artifact so a trimmed-off root line isn't lost.
     Returns "" on any failure/absence.
     """
-    try:
-        import json
-
-        raw = read_memory(
-            category=INCIDENT_INDEX_CATEGORY,
-            title=INCIDENT_INDEX_TITLE,
-            user_id=user_id,
-        )
-        if not raw:
-            return ""
-        data = json.loads(raw)
-        if data.get("status") != "ok":
-            return ""
-        return data.get("content") or ""
-    except Exception:
-        logger.exception("%s Failed to read raw index for user %s", _LOG_PREFIX, user_id)
-        return ""
+    return get_memory_content(user_id, INCIDENT_INDEX_CATEGORY, INCIDENT_INDEX_TITLE) or ""
 
 
 # Matches the roll-up continuation line beneath a root line, capturing the
@@ -365,34 +345,20 @@ def record_recurrence(
 
 
 def read_index(user_id: str) -> str:
-    """Return the raw Incident Index content (empty string if none/absent),
-    trimmed to INDEX_INJECTION_CHAR_BUDGET so callers can inject it safely."""
-    try:
-        import json
-
-        raw = read_memory(
-            category=INCIDENT_INDEX_CATEGORY,
-            title=INCIDENT_INDEX_TITLE,
-            user_id=user_id,
-        )
-        if not raw:
-            return ""
-        data = json.loads(raw)
-        if data.get("status") != "ok":
-            return ""
-        content = data.get("content") or ""
-        # Keep the most recent lines: appends go to the end, so trim from the
-        # front when over budget (grooming normally keeps this well under).
-        if len(content) > INDEX_INJECTION_CHAR_BUDGET:
-            content = content[-INDEX_INJECTION_CHAR_BUDGET:]
-            # Drop a partial leading line after trimming.
-            nl = content.find("\n")
-            if nl != -1:
-                content = content[nl + 1:]
-        return content
-    except Exception:
-        logger.exception("%s Failed to read index for user %s", _LOG_PREFIX, user_id)
+    """Return the Incident Index content trimmed to INDEX_INJECTION_CHAR_BUDGET
+    so callers can inject it into a prompt safely. Empty string if none/absent."""
+    content = _read_index_raw(user_id)
+    if not content:
         return ""
+    # Keep the most recent lines: appends go to the end, so trim from the
+    # front when over budget (grooming normally keeps this well under).
+    if len(content) > INDEX_INJECTION_CHAR_BUDGET:
+        content = content[-INDEX_INJECTION_CHAR_BUDGET:]
+        # Drop a partial leading line after trimming.
+        nl = content.find("\n")
+        if nl != -1:
+            content = content[nl + 1:]
+    return content
 
 
 def _clip(text: str) -> str:
