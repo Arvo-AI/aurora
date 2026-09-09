@@ -871,13 +871,7 @@ def generate_incident_summary_from_chat(
                 f"{_LOG_PREFIX} Recurrence check failed for {incident_id}; proceeding to notify"
             )
 
-        # Incident Index maintenance (recurrence discovery map). Runs AFTER the
-        # recurrence check so the current incident is never a candidate for its
-        # own check. Fold-aware and best-effort — never blocks notify:
-        #   • folded into a root  → roll up under the ROOT's existing line (no
-        #     sibling line the next check could wrongly fold into).
-        #   • new incident        → generate a cause-focused synopsis (one cheap
-        #     LLM call) and append a fresh root line.
+        # Record this incident in the Incident Index (fold-aware, best-effort).
         try:
             from services.memory.incident_index import (
                 append_incident_line,
