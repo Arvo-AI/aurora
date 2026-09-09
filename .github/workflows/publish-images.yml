@@ -25,6 +25,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -140,6 +141,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -218,6 +220,18 @@ jobs:
           echo "Platforms: $PLATFORMS"
           echo "$PLATFORMS" | grep -q 'linux/amd64' || { echo "Missing linux/amd64 in manifest list"; exit 1; }
           echo "$PLATFORMS" | grep -q 'linux/arm64' || { echo "Missing linux/arm64 in manifest list"; exit 1; }
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb # v3.8.2
+
+      - name: Sign image
+        env:
+          IMAGE_NAME: ghcr.io/arvo-ai/aurora-${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          TAG=$(jq -cr '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          echo "Signing $TAG"
+          cosign sign --yes "$TAG"
 
   publish-summary:
     name: Publish Summary
