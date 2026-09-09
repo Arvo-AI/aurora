@@ -186,153 +186,6 @@ def make_submit_verdict_tool(captured: Dict[str, Any]):
     )
 
 
-def _search_similar_rcas_impl(
-    user_id: str,
-    query_title: str,
-    query_service: str = "",
-    source_type: str = "",
-    limit: int = 5,
-    min_score: float = 0.5,
-) -> list:
-    """Semantic search over this org's completed incident RCAs.
-
-    Replaces the deleted weaviate store (search_similar_good_rcas): reads
-    candidate incidents under RLS from the incidents table, then ranks them by
-    similarity of the query against each candidate's title/service using the
-    shared embedding client, with a Jaccard token fallback when EMBEDDING_MODEL
-    is unconfigured. Only incidents that actually completed an RCA
-    (aurora_summary present) are considered — that mirrors the old
-    "good RCA" corpus without needing a separate feedback store.
-    """
-    from services.correlation.strategies.similarity import SimilarityStrategy
-
-    limit = max(1, min(int(limit), 10))
-    strategy = SimilarityStrategy()
-
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                org_id = set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
-                # No org context under RLS — return nothing rather than leak
-                # cross-tenant rows or error the whole recurrence check.
-                if not org_id:
-                    logger.warning(
-                        "%s[RLS-MISS] No org for user %s; skipping RCA search",
-                        _LOG_PREFIX, user_id,
-                    )
-                    return []
-
-                # Only incidents with a written conclusion are useful matches;
-                # merged incidents are excluded (their content lives on the root).
-                sql = """
-                    SELECT id, alert_title, alert_service, source_type, severity,
-                           aurora_summary
-                      FROM incidents
-                     WHERE status <> 'merged'
-                       AND aurora_summary IS NOT NULL
-                       AND aurora_summary <> ''
-                """
-                params: list = []
-                # Optional source_type narrowing keeps the candidate set cheap
-                # when the caller knows the alert source.
-                if source_type:
-                    sql += " AND source_type = %s"
-                    params.append(source_type)
-                sql += " ORDER BY COALESCE(analyzed_at, started_at) DESC LIMIT 200"
-                cursor.execute(sql, params)
-                rows = cursor.fetchall()
-    except Exception:
-        logger.exception("%s RCA search DB query failed", _LOG_PREFIX)
-        return []
-
-    scored = []
-    for r in rows:
-        cand_id, cand_title, cand_service, cand_source, cand_sev, cand_summary = r
-        if not cand_title:
-            continue
-        # Reuse the correlation SimilarityStrategy so RCA search and alert
-        # correlation score titles/services identically (embedding + fallback).
-        score = strategy.score(
-            alert_title=query_title,
-            alert_service=query_service or "",
-            incident_title=cand_title,
-            incident_services=[cand_service] if cand_service else [],
-        )
-        if score < min_score:
-            continue
-        scored.append({
-            "incident_id": str(cand_id),
-            "alert_title": cand_title or "",
-            "alert_service": cand_service or "",
-            "source_type": cand_source or "",
-            "severity": cand_sev or "",
-            "aurora_summary": cand_summary or "",
-            "similarity": round(float(score), 3),
-        })
-
-    scored.sort(key=lambda x: x["similarity"], reverse=True)
-    return scored[:limit]
-
-
-def make_search_similar_rcas_tool(user_id: str):
-    """StructuredTool over past-incident RCA search: semantic search across the
-    org's past investigations, returning incident_id + similarity."""
-    from langchain_core.tools import StructuredTool
-    from pydantic import BaseModel, Field
-
-    class SearchSimilarRCAsArgs(BaseModel):
-        query_title: str = Field(
-            description="Alert title or failure description to search for."
-        )
-        query_service: str = Field(default="", description="Service name (optional).")
-        source_type: str = Field(
-            default="", description="Alert source, e.g. 'datadog' (optional)."
-        )
-        limit: int = Field(default=5, description="Max results (1-10).")
-
-    def search_similar_rcas(
-        query_title: str,
-        query_service: str = "",
-        source_type: str = "",
-        limit: int = 5,
-    ) -> str:
-        try:
-            results = _search_similar_rcas_impl(
-                user_id,
-                query_title,
-                query_service,
-                source_type,
-                limit=limit,
-                min_score=0.5,
-            )
-            # Trim summaries to keep the agent's context small; it can call
-            # get_incident for the full conclusion of any candidate.
-            out = [
-                {
-                    "incident_id": r.get("incident_id", ""),
-                    "alert_title": r.get("alert_title", ""),
-                    "alert_service": r.get("alert_service", ""),
-                    "similarity": r.get("similarity"),
-                    "summary": (r.get("aurora_summary") or "")[:600],
-                }
-                for r in results
-            ]
-            return json.dumps({"results": out})
-        except Exception as e:
-            return json.dumps({"error": f"search failed: {e}"})
-
-    return StructuredTool.from_function(
-        func=search_similar_rcas,
-        name="search_similar_rcas",
-        description=(
-            "Semantic search over this org's past incident investigations. "
-            "Returns candidate incident ids with similarity scores and summary "
-            "snippets. Use get_incident to read a candidate's full conclusion."
-        ),
-        args_schema=SearchSimilarRCAsArgs,
-    )
-
-
 def _build_input_block(ctx: Dict[str, Any], incident_id: str, decision_point: str) -> str:
     lines = [
         "## Incident under examination",
@@ -351,6 +204,11 @@ def _build_input_block(ctx: Dict[str, Any], incident_id: str, decision_point: st
             "",
             ctx.get("summary") or "(no summary available)",
         ]
+    # Primary candidate map: the org's Incident Index (compact, id-keyed history).
+    # The agent scans this for anchors, then drills in via get_incident.
+    lines += ["", *_incident_index_lines(ctx.get("incident_index"))]
+    # Bounded fallback / joinability guard: the incidents whose group can still
+    # be joined right now (last GROUP_IDLE_HOURS, capped at RECENT_CANDIDATES_LIMIT).
     lines += ["", *_recent_incidents_lines(ctx.get("recent"), truncated=bool(ctx.get("recent_truncated")))]
     hint = ctx.get("hint")
     if isinstance(hint, dict) and hint.get("incident_id"):
@@ -365,6 +223,34 @@ def _build_input_block(ctx: Dict[str, Any], incident_id: str, decision_point: st
             ),
         ]
     return "\n".join(lines)
+
+
+def _incident_index_lines(index_content: Optional[str]) -> list:
+    """Input-block section presenting the Incident Index as the candidate map.
+
+    This is the primary recurrence-discovery surface: a compact, id-keyed list
+    of past incidents the agent scans to find an anchor, then confirms with
+    get_incident. Bounded by INDEX_INJECTION_CHAR_BUDGET at read time. Empty on
+    cold start — the recent-incidents section below is then the only candidate
+    source (graceful fallback)."""
+    header = "### Incident Index (past incidents, newest last — the recurrence candidate map)"
+    if not index_content or not index_content.strip():
+        return [
+            header,
+            "",
+            "(empty) — no index yet. Use the recent-incidents list below and "
+            "list_incidents/get_incident to find any prior related incident.",
+        ]
+    return [
+        header,
+        "",
+        "Each line is `- [INC <id> | <date> | <service> | <status>] <synopsis>`. "
+        "To confirm a candidate, call get_incident(<id>) for its full conclusion "
+        "before claiming a recurrence. Same monitor or service is NOT enough — "
+        "the root cause must match.",
+        "",
+        index_content.strip(),
+    ]
 
 
 def _recent_incidents_lines(recent: Optional[list], *, truncated: bool = False) -> list:
@@ -471,6 +357,11 @@ def _fetch_incident_context(incident_id: str, user_id: str) -> Optional[Dict[str
                 hint = meta.get("correlation_hint") if isinstance(meta, dict) else None
                 started_at, fired_at = row[4], row[5] or row[4]
                 recent, recent_truncated = _fetch_recent_incidents(cursor, incident_id)
+                # Incident Index = primary candidate map. Read here (same RLS
+                # connection semantics via its own helper) so it's injected into
+                # the input block deterministically — no embeddings, one artifact.
+                from services.memory.incident_index import read_index
+                incident_index = read_index(user_id)
                 return {
                     "org_id": org_id,
                     "title": row[0] or "",
@@ -483,6 +374,7 @@ def _fetch_incident_context(incident_id: str, user_id: str) -> Optional[Dict[str
                     "hint": hint if isinstance(hint, dict) else None,
                     "recent": recent,
                     "recent_truncated": recent_truncated,
+                    "incident_index": incident_index,
                 }
     except Exception:
         logger.exception(
@@ -602,14 +494,14 @@ async def _run_agent(
         _LOG_PREFIX, incident_id, len(tools), len(all_tools),
     )
     tools = tools + [
-        make_search_similar_rcas_tool(user_id),
         make_submit_verdict_tool(captured),
     ]
 
     postgres_client = PostgreSQLClient()
-    # NOTE: Agent takes postgres only on this branch — the weaviate store was
-    # removed; RCA similarity search now runs via _search_similar_rcas_impl
-    # (incidents table + embedding_client) exposed as make_search_similar_rcas_tool.
+    # NOTE: Agent takes postgres only on this branch — the weaviate RCA-similarity
+    # store was removed. Recurrence candidates now come from the Incident Index
+    # (injected into the input block) plus the recent-incidents fallback; the
+    # agent confirms anchors with the read-only get_incident/list_incidents tools.
     try:
         agent = Agent(
             postgres_client=postgres_client,

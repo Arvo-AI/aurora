@@ -870,6 +870,29 @@ def generate_incident_summary_from_chat(
                 f"{_LOG_PREFIX} Recurrence check failed for {incident_id}; proceeding to notify"
             )
 
+        # Incident Index maintenance (recurrence discovery map): append this
+        # incident's compact, id-keyed line AFTER the recurrence check, so the
+        # current incident is never a candidate for its own check but is
+        # available to future ones. Best-effort — never blocks notify.
+        try:
+            from services.memory.incident_index import append_incident_line
+
+            date_iso = (basics.get("triggered_at") or "")[:10]
+            append_incident_line(
+                user_id=user_id,
+                incident_id=incident_id,
+                date_iso=date_iso,
+                service=basics.get("service") or "",
+                status="resolved",
+                alert_title=basics.get("alert_title") or "",
+                summary=summary or "",
+                session_id=session_id,
+            )
+        except Exception:
+            logger.exception(
+                f"{_LOG_PREFIX} Incident Index append failed for {incident_id}; proceeding to notify"
+            )
+
         # Send completion notifications via centralized dispatcher
         _notify_completed()
 

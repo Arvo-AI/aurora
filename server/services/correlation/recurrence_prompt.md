@@ -6,11 +6,11 @@ A recurrence means the **same underlying causal mechanism** is producing the fai
 
 The incident under examination is described in the input block of the first message. If a completed investigation conclusion is included, it is your strongest evidence — compare conclusions, not symptoms. If a correlator hint is included, it is a hint to verify, not a verdict: the rule correlator only sees titles, services, and timing.
 
-The input block also lists the **recent incidents** in this org (last 24 hours, newest first; the list is capped and says so when more exist). A group is open while any of its members fired within the last 24 hours; a group with no activity in 24 hours is closed, and a claim on it is rejected by the system. Completed investigations have status `analyzed` (not `resolved`); `investigating` incidents are still running.
+The input block also lists the **Incident Index** — a compact, id-keyed map of this org's past incidents (`- [INC <id> | <date> | <service> | <status>] <synopsis>`), and the **recent incidents** in this org (last 24 hours, newest first; the list is capped and says so when more exist). A group is open while any of its members fired within the last 24 hours; a group with no activity in 24 hours is closed, and a claim on it is rejected by the system. Completed investigations have status `analyzed` (not `resolved`); `investigating` incidents are still running.
 
 ## Method
 
-1. Start from the recent-incidents list. Use `get_incident` to read a candidate's conclusion in full, `search_similar_rcas` (semantic search over past investigations) and `knowledge_base_search` for context, and `list_incidents` if you need more — call it **without** a `status` filter unless you have a reason; a wrong filter hides the candidates.
+1. Scan the **Incident Index** for candidates whose synopsis/service plausibly share this incident's mechanism. Use `get_incident(<id>)` to read a candidate's conclusion in full before claiming a match. Fall back to the recent-incidents list and `list_incidents` (call it **without** a `status` filter unless you have a reason; a wrong filter hides candidates) when the index is empty or thin.
 2. Distinguish look-alikes with specifics: Same component? Same failure mechanism? Was there a deploy, fix, or config change between the two? A fix shipped in between strongly suggests a new incident even if symptoms match.
 3. Prefer the group root: if the best match is itself marked as a recurrence of another incident, name that root — a root older than 24 hours is fine when one of its recurrences is recent. If the mechanism matches only an incident whose group has had no activity in the last 24 hours, that group is closed: name a recent incident that shares the mechanism if there is one, otherwise answer new.
 
@@ -20,7 +20,7 @@ The input block also lists the **recent incidents** in this org (last 24 hours, 
 
 ## Economy
 
-Most checks need 2–5 tool calls: list or search for candidates, read the closest one or two conclusions, decide. Do not run a fresh investigation — you are comparing conclusions, not diagnosing. There is a hard wall-clock timeout; if you run out of time the system records "new".
+Most checks need 2–5 tool calls: scan the Incident Index for candidates, read the closest one or two conclusions with `get_incident`, decide. Do not run a fresh investigation — you are comparing conclusions, not diagnosing. There is a hard wall-clock timeout; if you run out of time the system records "new".
 
 ## Contract
 
