@@ -3,11 +3,9 @@ MEMORY_CATEGORIES = ("context", "runbook", "infrastructure", "learned", "postmor
 # Agent-only categories — not exposed via user-facing memory routes.
 AGENT_CATEGORIES = ()
 
-# Canonical identity of the single Incident Index artifact (one per org).
-# It lives in the shared, agent-maintained "artifact" category (same as the
-# scheduled-action living documents): visible read-only in the user memory UI
-# (excluded from USER_WRITABLE_CATEGORIES on the client) and discoverable by
-# agents via list_memories. Identified by its exact title.
+# The single Incident Index artifact (one per org), identified by its title.
+# Stored in the shared "artifact" category so it's discoverable via list_memories
+# and read-only in the user memory UI — no dedicated category needed.
 INCIDENT_INDEX_CATEGORY = "artifact"
 INCIDENT_INDEX_TITLE = "Incident Index"
 
