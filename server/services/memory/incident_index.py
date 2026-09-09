@@ -6,8 +6,6 @@ title="Incident Index") holding a compact, id-keyed line per incident. The
 recurrence agent scans it to find candidate anchors, then drills into a
 specific incident via get_incident. Written deterministically at RCA completion
 (append_incident_line) and groomed by the nightly memory_consolidation action.
-
-Design: docs/design/recurrence-incident-index.md
 """
 
 import logging
