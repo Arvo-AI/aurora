@@ -40,6 +40,11 @@ _TOOL_METADATA: dict = {
     "search_splunk": {"capability_tags": ["logs", "observability"], "mutates": False, "cacheable": True},
     "list_splunk_indexes": {"capability_tags": ["logs"], "mutates": False, "cacheable": True},
     "list_splunk_sourcetypes": {"capability_tags": ["logs"], "mutates": False, "cacheable": True},
+    "elastic_list_indices": {"capability_tags": ["logs", "observability"], "mutates": False, "cacheable": True},
+    "elastic_get_fields": {"capability_tags": ["logs", "observability"], "mutates": False, "cacheable": True},
+    "elastic_search_logs": {"capability_tags": ["logs", "observability"], "mutates": False, "cacheable": True},
+    "elastic_esql": {"capability_tags": ["logs", "observability"], "mutates": False, "cacheable": True},
+    "elastic_get_alerts": {"capability_tags": ["logs", "observability", "error_tracking"], "mutates": False, "cacheable": True},
     "spinnaker_rca": {"capability_tags": ["ci_cd"], "mutates": False, "cacheable": True},
     # Source control — read-only
     "github_rca": {"capability_tags": ["source_control_read", "ci_cd"], "mutates": False, "cacheable": True},
