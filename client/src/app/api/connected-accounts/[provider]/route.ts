@@ -25,7 +25,7 @@ export async function DELETE(
     const { provider } = await context.params
 
     // Validate provider
-    if (!['gcp', 'azure', 'aws', 'github', 'gitlab', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'google_chat', 'splunk', 'dynatrace', 'confluence', 'jira', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker', 'newrelic', 'opsgenie', 'incidentio', 'sentry'].includes(provider)) {
+    if (!['gcp', 'azure', 'aws', 'github', 'gitlab', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'google_chat', 'splunk', 'dynatrace', 'confluence', 'jira', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker', 'newrelic', 'opsgenie', 'incidentio', 'sentry', 'elastic'].includes(provider)) {
       return NextResponse.json(
         { error: 'Invalid provider' },
         { status: 400 }
@@ -480,6 +480,26 @@ export async function DELETE(
         console.error('Backend error disconnecting Sentry:', errorText)
         return NextResponse.json(
           { error: 'Failed to disconnect Sentry' },
+          { status: response.status }
+        )
+      }
+
+      const data = await response.json()
+      return NextResponse.json(data)
+    }
+
+    // Special handling for Elastic
+    if (provider === 'elastic') {
+      const response = await fetch(`${API_BASE_URL}/elastic/disconnect`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Backend error disconnecting Elastic:', errorText)
+        return NextResponse.json(
+          { error: 'Failed to disconnect Elastic' },
           { status: response.status }
         )
       }

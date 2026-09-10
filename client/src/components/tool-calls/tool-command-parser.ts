@@ -501,6 +501,51 @@ export function parseNewRelicCommand(toolInput: string): string {
   }
 }
 
+export function parseElasticCommand(toolName: string, toolInput: string): string {
+  const fallback = toolName.replace(/^elastic_/, "").replace(/_/g, " ")
+  try {
+    let parsed: Record<string, unknown> | null = null
+    try {
+      parsed = JSON.parse(toolInput)
+    } catch {
+      parsed = JSON.parse(toolInput.replace(/'/g, '"'))
+    }
+    const args = ((parsed as Record<string, unknown>)?.kwargs || parsed || {}) as Record<string, unknown>
+    const index = (args.index as string) || ""
+    const timeRange = (args.time_range as string) || ""
+    const window = timeRange ? ` (last ${timeRange})` : ""
+
+    switch (toolName) {
+      case "elastic_list_indices": {
+        const pattern = (args.pattern as string) || "*"
+        return `Elastic: List indices matching ${pattern}`
+      }
+      case "elastic_get_fields": {
+        const prefix = (args.prefix as string) || ""
+        return `Elastic: Get fields for ${index || "logs-*"}${prefix ? ` (${prefix}*)` : ""}`
+      }
+      case "elastic_search_logs": {
+        const query = (args.query as string) || "*"
+        return `Elastic: Search ${index || "logs-*"} for "${query}"${window}`
+      }
+      case "elastic_esql": {
+        const query = ((args.query as string) || "").replace(/\s+/g, " ").trim()
+        const short = query.length > 80 ? `${query.slice(0, 77)}…` : query
+        return `Elastic: ES|QL ${short}${window}`
+      }
+      case "elastic_get_alerts": {
+        const status = (args.status as string) || "active"
+        const hours = args.hours ? ` (last ${args.hours}h)` : ""
+        return `Elastic: Get ${status} Kibana alerts${hours}`
+      }
+      default:
+        return `Elastic: ${fallback}`
+    }
+  } catch {
+    return `Elastic: ${fallback}`
+  }
+}
+
 export function parseCloudflareCommand(toolName: string, toolInput: string): string {
   const args = (() => {
     try {

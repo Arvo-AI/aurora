@@ -25,6 +25,10 @@ export const isSpinnakerEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_SPINNAKER') === 'true';
 };
 
+export const isElasticEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_ELASTIC') === 'true';
+};
+
 export const isNotionEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_NOTION') === 'true';
 };
