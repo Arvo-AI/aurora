@@ -8,6 +8,7 @@ from typing import Optional, List, Dict
 from utils.db.db_utils import connect_to_db_as_user, connect_to_db_as_admin
 from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import sanitize, safe_provider, hash_for_log
+from utils.secrets.secret_ref_utils import SecretRefManager
 
 logger = logging.getLogger(__name__)
 
@@ -351,23 +352,28 @@ def delete_connection_secret(
                 return False
 
             if provider in ['gcp', 'azure', 'github']:
+                # secret_ref is optional across schemas, but a failed SELECT aborts
+                # the whole transaction in PostgreSQL, which silently skipped the
+                # UPDATE below and left connections reporting as active forever.
+                # The savepoint scopes that failure to just this probe.
+                cur.execute("SAVEPOINT secret_ref_probe")
                 try:
-                    from utils.secrets.secret_ref_utils import SecretRefManager
-                    # Try to get secret_ref if column exists (may not for all schemas)
+                    cur.execute(
+                        "SELECT secret_ref FROM user_connections "
+                        "WHERE user_id = %s AND provider = %s AND account_id = %s",
+                        (user_id, provider, account_id),
+                    )
+                    secret_row = cur.fetchone()
+                    cur.execute("RELEASE SAVEPOINT secret_ref_probe")
+                except Exception:
+                    cur.execute("ROLLBACK TO SAVEPOINT secret_ref_probe")
+                    secret_row = None
+
+                if secret_row and secret_row[0]:
                     try:
-                        cur.execute(
-                            "SELECT secret_ref FROM user_connections WHERE user_id = %s AND provider = %s AND account_id = %s",
-                            (user_id, provider, account_id)
-                        )
-                        secret_row = cur.fetchone()
-                        if secret_row and secret_row[0]:
-                            srm = SecretRefManager()
-                            srm.delete_secret(secret_row[0])
-                    except Exception:
-                        # Column doesn't exist or no secret_ref - that's fine
-                        pass
-                except Exception as e:
-                    logger.warning("[CONN-META] Vault secret deletion skipped for user=%s provider=%s account=%s: %s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id), e)
+                        SecretRefManager().delete_secret(secret_row[0])
+                    except Exception as e:
+                        logger.warning("[CONN-META] Vault secret deletion skipped for user=%s provider=%s account=%s: %s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id), e)
 
             cur.execute(
                 sql_update,

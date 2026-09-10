@@ -403,3 +403,57 @@ def test_credential_reads_are_not_read_only(helpers, command):
 ])
 def test_investigation_reads_stay_allowed(helpers, command):
     assert helpers["is_read_only_command"](command) is True, command
+
+
+# ---------------------------------------------------------------------------
+# Disconnect must mark connections inactive even without a secret_ref column.
+#
+# secret_ref is optional across schemas, but in PostgreSQL a failed SELECT
+# aborts the entire transaction, so the UPDATE that follows was silently
+# skipped and Azure kept reporting as connected after a disconnect. The probe
+# has to be wrapped in a savepoint.
+# ---------------------------------------------------------------------------
+
+def test_disconnect_marks_inactive_when_secret_ref_column_missing(monkeypatch):
+    import utils.db.connection_utils as cu
+
+    executed = []
+
+    class Cursor:
+        aborted = False
+
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def fetchone(self): return self._row
+
+        def execute(self, sql, params=None):
+            stmt = sql.strip().split("\n")[0]
+            executed.append(stmt)
+            # Mimic Postgres: the failed probe poisons the transaction, and every
+            # later statement fails until the savepoint is rolled back.
+            if sql.startswith("ROLLBACK TO SAVEPOINT"):
+                Cursor.aborted = False
+                return
+            if sql.startswith(("SAVEPOINT", "RELEASE SAVEPOINT")):
+                return
+            if Cursor.aborted:
+                raise RuntimeError("current transaction is aborted")
+            if "secret_ref" in sql:
+                Cursor.aborted = True
+                raise RuntimeError('column "secret_ref" does not exist')
+            self._row = ("arn",) if sql.startswith("SELECT role_arn") else None
+
+    conn = type("Conn", (), {
+        "cursor": lambda self: Cursor(),
+        "commit": lambda self: executed.append("COMMIT"),
+        "rollback": lambda self: executed.append("ROLLBACK"),
+        "close": lambda self: None,
+    })()
+
+    monkeypatch.setattr(cu, "connect_to_db_as_admin", lambda: conn)
+    monkeypatch.setattr(cu, "set_rls_context", lambda *a, **k: "org")
+
+    assert cu.delete_connection_secret("u", "azure", "sub-1") is True
+    assert any("ROLLBACK TO SAVEPOINT" in s for s in executed), "probe must be rolled back, not left aborted"
+    assert any(s.startswith("UPDATE user_connections") for s in executed), "UPDATE must still run"
+    assert "COMMIT" in executed
