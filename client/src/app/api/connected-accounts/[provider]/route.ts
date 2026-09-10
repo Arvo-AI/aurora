@@ -490,22 +490,7 @@ export async function DELETE(
 
     // Special handling for Elastic
     if (provider === 'elastic') {
-      const response = await fetch(`${API_BASE_URL}/elastic/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Elastic:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Elastic' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
+      return forwardRequest(request, 'DELETE', '/elastic/disconnect', 'elastic-disconnect')
     }
 
     // Special handling for BigPanda

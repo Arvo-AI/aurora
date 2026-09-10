@@ -48,7 +48,7 @@ Works with Elastic Cloud Hosted, Elastic Cloud Serverless and self-managed clust
 - Use `fields=['@timestamp','message','host.name']` to keep responses small.
 
 ### ES|QL cheat sheet for `elastic_esql`
-- Errors by service: `FROM logs-* | WHERE log.level == "error" | STATS count() BY service.name | SORT `count()` DESC`
+- Errors by service: ``FROM logs-* | WHERE log.level == "error" | STATS count() BY service.name | SORT `count()` DESC``
 - Errors by host: `FROM logs-* | WHERE log.level IN ("error","critical") | STATS errors = COUNT(*) BY host.name | SORT errors DESC`
 - Timeline (5-min buckets): `FROM logs-* | WHERE log.level == "error" | STATS c = COUNT(*) BY bucket = BUCKET(@timestamp, 5 minutes) | SORT bucket`
 - Top messages: `FROM logs-* | WHERE log.level == "error" | STATS c = COUNT(*) BY message | SORT c DESC | LIMIT 20`

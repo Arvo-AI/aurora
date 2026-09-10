@@ -95,8 +95,10 @@ def _build_summary_prompt(
             key_details.append(f"Kibana Rule: {alert_metadata['ruleName']}")
         if alert_metadata.get("reason"):
             key_details.append(f"Reason: {alert_metadata['reason']}")
-        if alert_metadata.get("value") is not None and alert_metadata.get("threshold") is not None:
-            key_details.append(f"Value / Threshold: {alert_metadata['value']} / {alert_metadata['threshold']}")
+        if alert_metadata.get("value") is not None:
+            key_details.append(f"Value: {alert_metadata['value']}")
+        if alert_metadata.get("threshold") is not None:
+            key_details.append(f"Threshold: {alert_metadata['threshold']}")
         if alert_metadata.get("tags"):
             key_details.append(f"Tags: {json.dumps(alert_metadata['tags'])}")
         if alert_metadata.get("viewInAppUrl"):

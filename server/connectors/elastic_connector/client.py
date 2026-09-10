@@ -453,7 +453,7 @@ class ElasticClient:
 
             if response.status_code == 429 and attempt < retries:
                 retry_after = _int_header(response.headers.get("Retry-After"), 2)
-                time.sleep(min(retry_after, 15))
+                time.sleep(max(0, min(retry_after, 15)))
                 continue
 
             return self._handle_response(response, method, path, service)

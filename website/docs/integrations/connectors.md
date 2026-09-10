@@ -1292,7 +1292,7 @@ The Webhook connector is a **Gold+** feature on self-managed clusters (a Basic l
 | Kibana alerts | `POST /.alerts-*/_search` |
 | Kibana rules | `GET {kibana}/api/alerting/rules/_find` (header `kbn-xsrf: true`) |
 
-All calls use `Authorization: ApiKey <encoded>` over HTTPS. Aurora never calls `_cluster/health`, node or snapshot APIs, so it works unchanged on Serverless.
+All calls send `Authorization: ApiKey <encoded>` to the endpoint you configured (Elastic Cloud is always HTTPS; a self-managed `http://` URL is used as entered). Aurora never calls `_cluster/health`, node or snapshot APIs, so it works unchanged on Serverless.
 
 #### Troubleshooting
 

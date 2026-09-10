@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,6 +26,10 @@ function stateBadge(state?: string) {
   return "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200";
 }
 
+function isHttpUrl(value?: string) {
+  return typeof value === "string" && /^https?:\/\//i.test(value);
+}
+
 function formatDate(dateStr?: string) {
   if (!dateStr) return "N/A";
   try {
@@ -44,20 +48,25 @@ export default function ElasticAlertsPage() {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [stateFilter, setStateFilter] = useState<string>("");
+  // Filter/page clicks can overlap; only the newest request may update state.
+  const requestSeq = useRef(0);
 
   const loadAlerts = async (newOffset = 0, state = stateFilter) => {
+    const seq = ++requestSeq.current;
     try {
       setLoading(true);
       setError(null);
       const response = await elasticService.getAlerts(PAGE_SIZE, newOffset, state || undefined);
+      if (seq !== requestSeq.current) return;
       setAlerts(response.alerts);
       setTotal(response.total);
       setOffset(newOffset);
     } catch (err: unknown) {
+      if (seq !== requestSeq.current) return;
       console.error("Failed to load alerts", err);
       setError(err instanceof Error ? err.message : "Failed to load alerts");
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
   };
 
@@ -116,7 +125,7 @@ export default function ElasticAlertsPage() {
                     )}
                     {alert.reason && <CardDescription className="mt-1">{alert.reason}</CardDescription>}
                   </div>
-                  {alert.viewInAppUrl && (
+                  {isHttpUrl(alert.viewInAppUrl) && (
                     <a
                       href={alert.viewInAppUrl}
                       target="_blank"

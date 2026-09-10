@@ -215,9 +215,10 @@ def _insert_alert_row(cursor, user_id, org_id, normalized, severity, payload, re
     return row[0] if row else None
 
 
-def _find_open_incident_for_alert(cursor, org_id: str, alert_uuid: str) -> Optional[tuple]:
-    """Return ``(elastic_alert_id, incident_id)`` for an active alert already linked to an OPEN incident.
+def _find_active_alert_row(cursor, org_id: str, alert_uuid: str) -> Optional[tuple]:
+    """Return ``(elastic_alert_id, incident_id)`` for the newest active row of this alert.
 
+    ``incident_id`` is ``None`` when the row is not linked to an OPEN incident.
     Resolved (and recurrence-folded ``merged``) incidents are excluded so a
     re-fire after a human resolved the incident starts a new investigation
     instead of silently bumping the closed one — mirrors the status gate the
@@ -225,14 +226,14 @@ def _find_open_incident_for_alert(cursor, org_id: str, alert_uuid: str) -> Optio
     """
     cursor.execute(
         """
-        SELECT ea.id, ia.incident_id
+        SELECT ea.id, i.id
         FROM elastic_alerts ea
-        JOIN incident_alerts ia
+        LEFT JOIN incident_alerts ia
           ON ia.source_type = %s AND ia.source_alert_id = ea.id
-        JOIN incidents i
+        LEFT JOIN incidents i
           ON i.id = ia.incident_id AND i.status NOT IN ('resolved', 'merged')
         WHERE ea.org_id = %s AND ea.alert_uuid = %s AND ea.alert_state = 'active'
-        ORDER BY ea.received_at DESC
+        ORDER BY ea.received_at DESC, i.id DESC NULLS LAST
         LIMIT 1
         """,
         (SOURCE, org_id, alert_uuid),
@@ -314,18 +315,25 @@ def _process_with_cursor(cursor, conn, user_id: str, org_id: str, normalized: Di
         logger.info("[ELASTIC][ALERT] Recorded recovery for %s (row %s)", alert_uuid, alert_db_id)
         return
 
+    rca_enabled = _should_trigger_background_chat(user_id)
+
     # --- Dedupe: Kibana re-fires every interval while the alert stays active ---
-    existing = _find_open_incident_for_alert(cursor, org_id, alert_uuid) if alert_uuid else None
-    if existing:
+    # Refresh the stored row when it is already linked to an open incident, or
+    # when RCA is off (no incident will be created for it anyway). An active row
+    # without an open incident falls through while RCA is on so the alert gets
+    # its investigation.
+    existing = _find_active_alert_row(cursor, org_id, alert_uuid) if alert_uuid else None
+    if existing and (existing[1] or not rca_enabled):
         existing_alert_id, incident_id = existing
         cursor.execute(
             "UPDATE elastic_alerts SET payload = %s, received_at = %s WHERE id = %s",
             (json.dumps(payload, default=str), received_at, existing_alert_id),
         )
-        cursor.execute("UPDATE incidents SET updated_at = CURRENT_TIMESTAMP WHERE id = %s", (incident_id,))
+        if incident_id:
+            cursor.execute("UPDATE incidents SET updated_at = CURRENT_TIMESTAMP WHERE id = %s", (incident_id,))
         conn.commit()
         logger.info(
-            "[ELASTIC][ALERT] Re-fire for active alert %s → refreshed row %s / incident %s (no new incident)",
+            "[ELASTIC][ALERT] Re-fire for active alert %s → refreshed row %s / incident %s (no new row)",
             alert_uuid, existing_alert_id, incident_id,
         )
         return
@@ -338,8 +346,10 @@ def _process_with_cursor(cursor, conn, user_id: str, org_id: str, normalized: Di
 
     service = _extract_service(normalized)
     alert_metadata = _build_alert_metadata(normalized)
-    rca_enabled = _should_trigger_background_chat(user_id)
 
+    # A failed correlation query would otherwise abort the transaction and
+    # lose the alert row inserted above.
+    cursor.execute("SAVEPOINT elastic_correlation")
     try:
         correlator = AlertCorrelator()
         correlation_result = correlator.correlate(
@@ -371,6 +381,7 @@ def _process_with_cursor(cursor, conn, user_id: str, org_id: str, normalized: Di
             conn.commit()
             return
     except Exception as corr_exc:
+        cursor.execute("ROLLBACK TO SAVEPOINT elastic_correlation")
         logger.warning("[ELASTIC] Correlation check failed, proceeding with normal flow: %s", corr_exc)
 
     if not rca_enabled:
