@@ -65,6 +65,9 @@ def _build_source_url(source_type: str, user_id: str) -> str:
         elif source_type in ("jenkins", "cloudbees"):
             creds = get_token_data(user_id, source_type)
             return (creds or {}).get("base_url", "")
+        elif source_type == "elastic":
+            # client_id holds the Kibana URL (falls back to the ES URL at connect time)
+            return client_id or ""
     except Exception as e:
         logger.error(f"[INCIDENTS] Failed to build source URL for {source_type}: {e}")
     return ""
@@ -613,6 +616,24 @@ def get_incident(user_id, incident_id: str):
                     except (ValueError, TypeError):
                         logger.debug(
                             "[INCIDENTS] Skipping payload fetch for splunk alert_id: %s",
+                            source_alert_id,
+                        )
+                elif source_type == "elastic":
+                    # For Elastic, source_alert_id is the elastic_alerts table id (integer).
+                    # Rows are inserted under the webhook owner's user_id, so scope by org
+                    # (like the incident itself) so org-mates can see the payload.
+                    try:
+                        alert_id_int = int(source_alert_id)
+                        cursor.execute(
+                            "SELECT payload FROM elastic_alerts WHERE id = %s AND org_id = %s",
+                            (alert_id_int, org_id),
+                        )
+                        alert_row = cursor.fetchone()
+                        if alert_row and alert_row[0] is not None:
+                            raw_payload = alert_row[0]
+                    except (ValueError, TypeError):
+                        logger.debug(
+                            "[INCIDENTS] Skipping payload fetch for elastic alert_id: %s",
                             source_alert_id,
                         )
                 elif source_type == "jenkins" or source_type == "cloudbees":

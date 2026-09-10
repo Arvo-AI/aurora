@@ -90,6 +90,18 @@ def _build_summary_prompt(
         if raw_payload.get("Tags"):
             key_details.append(f"Tags: {raw_payload['Tags']}")
 
+    elif source_type == "elastic":
+        if alert_metadata.get("ruleName"):
+            key_details.append(f"Kibana Rule: {alert_metadata['ruleName']}")
+        if alert_metadata.get("reason"):
+            key_details.append(f"Reason: {alert_metadata['reason']}")
+        if alert_metadata.get("value") is not None and alert_metadata.get("threshold") is not None:
+            key_details.append(f"Value / Threshold: {alert_metadata['value']} / {alert_metadata['threshold']}")
+        if alert_metadata.get("tags"):
+            key_details.append(f"Tags: {json.dumps(alert_metadata['tags'])}")
+        if alert_metadata.get("viewInAppUrl"):
+            key_details.append(f"View in Kibana: {alert_metadata['viewInAppUrl']}")
+
     elif source_type == "pagerduty":
         if alert_metadata.get("incidentId"):
             key_details.append(f"Incident ID: {alert_metadata['incidentId']}")
