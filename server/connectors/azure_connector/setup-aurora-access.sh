@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Aurora Azure access setup. Designed to run in Azure Cloud Shell, which already
-# provides az/jq/kubectl and an authenticated session.
+# provides az/jq/python3/kubectl and an authenticated session.
 #
 # Grants Aurora two service principals:
 #   agent    - Contributor (no authorization writes) + AKS RBAC Writer
@@ -19,7 +19,7 @@ note() { echo "  $*"; }
 
 # --- Preflight ------------------------------------------------------------
 # Fail before mutating anything, with the exact remedy for each blocker.
-for tool in az jq; do
+for tool in az jq python3; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool not found. Run this script in Azure Cloud Shell (https://shell.azure.com)."
 done
 

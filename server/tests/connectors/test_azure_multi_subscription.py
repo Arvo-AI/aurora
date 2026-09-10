@@ -3,9 +3,12 @@
 Covers the logic that silently breaks without a test: the read-only command
 classifier, per-subscription command pinning, and Resource Graph paging.
 """
+import json
 import os
 import re
 import shlex
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -30,6 +33,7 @@ def _load(fn_names, path):
 
 
 CLOUD_EXEC = "chat/backend/agent/tools/cloud_exec_tool.py"
+SETUP_SCRIPT = "connectors/azure_connector/setup-aurora-access.sh"
 
 
 @pytest.fixture(scope="module")
@@ -314,3 +318,48 @@ def test_setup_azure_environment_allocates_a_distinct_config_dir_each_call():
     finally:
         for d in dirs:
             __import__("shutil").rmtree(d, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Management-group subscription enumeration.
+#
+# Assignments at MG scope only inherit to descendants, so reporting
+# tenant-wide subscription ids here would store ids Aurora has no rights on.
+# The Azure response nests child management groups, and a flat filter would
+# silently drop every subscription below the first level.
+# ---------------------------------------------------------------------------
+
+def _walk_mg(payload):
+    """Run the walker embedded in setup-aurora-access.sh against a payload."""
+    src = open(SETUP_SCRIPT).read()
+    body = re.search(r"list_mg_subscriptions\(\) \{.*?\n\}", src, re.S).group(0)
+    snippet = re.search(r"python3 -c '(.*?)'\n", body, re.S).group(1)
+    out = subprocess.run(
+        [sys.executable, "-c", snippet],
+        input=json.dumps(payload), capture_output=True, text=True, timeout=30,
+    )
+    assert out.returncode == 0, out.stderr
+    return [line for line in out.stdout.split("\n") if line]
+
+
+def _sub(name):
+    return {"name": name, "type": "/subscriptions", "children": None}
+
+
+def _mg(name, children):
+    return {"name": name, "type": "Microsoft.Management/managementGroups",
+            "children": children}
+
+
+def test_mg_walker_finds_nested_subscriptions():
+    # Verified against real Azure: a subscription in a child MG still inherits
+    # roles assigned at the grandparent, so it must be reported.
+    payload = _mg("root", [_sub("flat"), _mg("child", [_sub("nested")]),
+                           _mg("mid", [_mg("deep", [_sub("deeper")])])])
+    assert sorted(_walk_mg(payload)) == ["deeper", "flat", "nested"]
+
+
+def test_mg_walker_handles_empty_and_malformed():
+    assert _walk_mg(_mg("root", [])) == []
+    assert _walk_mg({"name": "root"}) == []          # children key absent
+    assert _walk_mg(_mg("root", [_mg("empty", None)])) == []
