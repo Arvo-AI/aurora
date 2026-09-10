@@ -151,6 +151,11 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
             "AZURE_CLIENT_SECRET": str(client_secret),
             "AZURE_TENANT_ID": str(tenant_id),
             "AZURE_CONFIG_DIR": config_dir,
+            # kubelogin reads these when converting an Entra AKS kubeconfig to
+            # service-principal auth; without them it falls back to devicecode,
+            # which is interactive and cannot work headless.
+            "AAD_SERVICE_PRINCIPAL_CLIENT_ID": str(client_id),
+            "AAD_SERVICE_PRINCIPAL_CLIENT_SECRET": str(client_secret),
         }
         
         # Store auth command for chaining with user commands (NEVER log the secret!)
@@ -1149,6 +1154,11 @@ def is_read_only_command(command: str) -> bool:
         'list', 'describe', 'get', 'show', 'config', 'version', 'info', 'status',
         'read', 'view', 'help', 'logs', 'log', 'top', 'explain', 'diff', 'search',
         'query', 'export', 'devices', 'keys', 'routes', 'settings',
+        # Hyphenated subcommands are single tokens, so they need listing outright.
+        # `aks get-credentials` only writes a local kubeconfig and is the required
+        # first step of AKS investigation, so Ask mode must allow it.
+        'get-credentials', 'list-keys', 'show-connection-string', 'get-versions',
+        'list-deleted', 'check-name', 'show-usage',
     })
     WRITE_VERBS = frozenset({
         'delete', 'destroy', 'remove', 'rm', 'create', 'apply', 'update', 'set',
@@ -1160,6 +1170,23 @@ def is_read_only_command(command: str) -> bool:
     try:
         tokens = [t.lower() for t in shlex.split(command) if not t.startswith('-')]
     except ValueError:
+        return False
+
+    # Some reads return credentials. They pass a verb check ("list", "show") but
+    # hand back keys, secrets or connection strings, so Ask mode must refuse them
+    # even though they mutate nothing.
+    CREDENTIAL_READS = (
+        ('storage', 'account', 'keys'), ('storage', 'account', 'show-connection-string'),
+        ('keyvault', 'secret'), ('keyvault', 'key'), ('keyvault', 'certificate'),
+        ('ad', 'sp', 'credential'), ('ad', 'app', 'credential'),
+        ('redis', 'list-keys'), ('cosmosdb', 'keys'),
+        ('servicebus', 'namespace', 'authorization-rule', 'keys'),
+        ('eventhubs', 'namespace', 'authorization-rule', 'keys'),
+        ('acr', 'credential'), ('batch', 'account', 'keys'),
+        ('secrets', 'get'), ('secrets', 'versions'),   # gcloud
+        ('secretsmanager', 'get-secret-value'), ('iam', 'create-access-key'),  # aws
+    )
+    if any(all(part in tokens for part in combo) for combo in CREDENTIAL_READS):
         return False
 
     # Any write verb anywhere disqualifies the command outright.
@@ -2051,6 +2078,24 @@ Security & Compliance
                 env=isolated_env  # Use ISOLATED environment - NO global state!
             )
             logger.info(f"TIME: cloud command execution took {time.perf_counter() - exec_start:.2f}s")
+            # Entra-integrated AKS writes a kubeconfig whose exec plugin defaults to
+            # devicecode, which is interactive. Convert it to service-principal auth
+            # so subsequent kubectl calls work headless. Non-Entra clusters get a
+            # token-based kubeconfig that kubelogin leaves alone, so this is a no-op.
+            if (provider.lower() in ('azure', 'az') and result.returncode == 0
+                    and 'get-credentials' in command):
+                try:
+                    conv = terminal_run(
+                        ["kubelogin", "convert-kubeconfig", "-l", "azurecli"],
+                        capture_output=True, text=True, timeout=30,
+                        env=isolated_env, trusted=True,
+                    )
+                    if conv.returncode != 0:
+                        logger.warning("kubelogin convert-kubeconfig failed (rc=%s); kubectl may prompt for devicecode", conv.returncode)
+                except FileNotFoundError:
+                    logger.warning("kubelogin not found; kubectl against Entra-integrated AKS will fail")
+                except Exception as conv_error:
+                    logger.warning("kubelogin convert-kubeconfig error: %s", type(conv_error).__name__)
         except FileNotFoundError as e:
             logger.error(f"CLI tool '{cli_tool}' not found: {e}")
             return json.dumps({

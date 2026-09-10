@@ -237,6 +237,25 @@ RUN ARCH=$(uname -m) && \
       -o /usr/local/bin/kubectl && \
     chmod +x /usr/local/bin/kubectl
 
+# kubelogin: Entra-integrated AKS writes a kubeconfig whose exec plugin shells
+# out to `kubelogin`, so kubectl fails outright without it. `-l azurecli` is
+# what makes it reuse the service principal's token instead of the default
+# devicecode flow, which is interactive and cannot work headless.
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        KUBELOGIN_ARCH="amd64"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        KUBELOGIN_ARCH="arm64"; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    curl -fsSL --retry 5 --retry-delay 3 \
+      "https://github.com/Azure/kubelogin/releases/latest/download/kubelogin-linux-${KUBELOGIN_ARCH}.zip" \
+      -o /tmp/kubelogin.zip && \
+    unzip -j -o /tmp/kubelogin.zip "bin/linux_${KUBELOGIN_ARCH}/kubelogin" -d /usr/local/bin && \
+    chmod +x /usr/local/bin/kubelogin && \
+    rm /tmp/kubelogin.zip
+
 # Upgrade pip & install base deps
 RUN --mount=type=cache,target=/root/.cache/pip \
     uv pip install --upgrade pip setuptools wheel --system

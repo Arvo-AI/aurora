@@ -363,3 +363,43 @@ def test_mg_walker_handles_empty_and_malformed():
     assert _walk_mg(_mg("root", [])) == []
     assert _walk_mg({"name": "root"}) == []          # children key absent
     assert _walk_mg(_mg("root", [_mg("empty", None)])) == []
+
+
+# ---------------------------------------------------------------------------
+# Ask mode must refuse credential reads.
+#
+# These pass a verb check ("list", "show") and mutate nothing, but return keys,
+# secrets or connection strings, so allowing them would let Ask mode exfiltrate
+# standing credentials. There is no second allowlist gate behind this function.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("command", [
+    "az storage account keys list --account-name x",
+    "az storage account show-connection-string --name x",
+    "az keyvault secret show --name s --vault-name v",
+    "az keyvault secret list --vault-name v",
+    "az keyvault key list --vault-name v",
+    "az ad sp credential list --id x",
+    "az redis list-keys --name r",
+    "az cosmosdb keys list --name c --resource-group g",
+    "az acr credential show --name r",
+    "aws secretsmanager get-secret-value --secret-id s",
+    "gcloud secrets versions access latest --secret=s",
+])
+def test_credential_reads_are_not_read_only(helpers, command):
+    assert helpers["is_read_only_command"](command) is False, command
+
+
+@pytest.mark.parametrize("command", [
+    # Hyphenated subcommands are single tokens and match no bare verb, so they
+    # fell through to the default deny. `aks get-credentials` only writes a local
+    # kubeconfig and is the required first step of AKS investigation.
+    "az aks get-credentials --name c --resource-group r",
+    "az aks list",
+    "az storage account list",
+    "az keyvault list",
+    "az monitor metrics list --resource x",
+    "kubectl logs pod-x --tail=100",
+])
+def test_investigation_reads_stay_allowed(helpers, command):
+    assert helpers["is_read_only_command"](command) is True, command
