@@ -272,15 +272,15 @@ def process_elastic_alert(
         from utils.auth.stateless_auth import set_rls_context
         from utils.db.connection_pool import db_pool
 
-        try:
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cursor:
-                    org_id = set_rls_context(cursor, conn, user_id, log_prefix="[ELASTIC][ALERT]")
-                    if not org_id:
-                        return
-                    _process_with_cursor(cursor, conn, user_id, org_id, normalized, payload)
-        except Exception as db_exc:
-            logger.exception("[ELASTIC][ALERT] Failed to store alert in database: %s", db_exc)
+        # DB errors propagate to the retry below: the webhook already answered
+        # Kibana with 200, so a transient failure would otherwise drop the alert.
+        # Retries are safe because re-fires dedupe on alert_uuid.
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                org_id = set_rls_context(cursor, conn, user_id, log_prefix="[ELASTIC][ALERT]")
+                if not org_id:
+                    return
+                _process_with_cursor(cursor, conn, user_id, org_id, normalized, payload)
 
     except Exception as exc:
         logger.exception("[ELASTIC][ALERT] Failed to process alert payload")

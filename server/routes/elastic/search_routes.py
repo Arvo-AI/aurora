@@ -13,6 +13,7 @@ from connectors.elastic_connector.client import (
     ElasticClient,
     build_log_query,
     compact_hits,
+    contains_script_clause,
     resolve_window,
 )
 from utils.auth.rbac_decorators import require_permission
@@ -262,6 +263,8 @@ def search(user_id):
 
     if query_dsl is not None and not isinstance(query_dsl, dict):
         return jsonify({"error": "queryDsl must be a Query DSL object"}), 400
+    if query_dsl and contains_script_clause(query_dsl):
+        return jsonify({"error": "queryDsl must not contain script clauses"}), 400
     if query_dsl:
         query_body = {"bool": {"must": [query_dsl], "filter": [{"range": {timestamp_field: {"gte": start, "lte": end}}}]}}
     else:

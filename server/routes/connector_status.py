@@ -142,14 +142,20 @@ def _check_elastic(creds: Dict[str, Any]) -> Dict[str, Any]:
         # _authenticate works with any valid key; GET / needs cluster 'monitor'.
         r = requests.get(
             f"{es_url.rstrip('/')}/_security/_authenticate",
-            headers=headers, timeout=HTTP_TIMEOUT, verify=ELASTIC_SSL_VERIFY,
+            headers=headers, timeout=HTTP_TIMEOUT, verify=ELASTIC_SSL_VERIFY, allow_redirects=False,
         )
         if r.status_code in (403, 404):
-            r = requests.get(f"{es_url.rstrip('/')}/", headers=headers, timeout=HTTP_TIMEOUT, verify=ELASTIC_SSL_VERIFY)
+            r = requests.get(
+                f"{es_url.rstrip('/')}/",
+                headers=headers, timeout=HTTP_TIMEOUT, verify=ELASTIC_SSL_VERIFY, allow_redirects=False,
+            )
         r.raise_for_status()
         info: Dict[str, Any] = {}
         try:
-            probe = requests.get(f"{es_url.rstrip('/')}/", headers=headers, timeout=HTTP_TIMEOUT, verify=ELASTIC_SSL_VERIFY)
+            probe = requests.get(
+                f"{es_url.rstrip('/')}/",
+                headers=headers, timeout=HTTP_TIMEOUT, verify=ELASTIC_SSL_VERIFY, allow_redirects=False,
+            )
             if probe.ok and probe.content:
                 info = probe.json()
         except Exception:

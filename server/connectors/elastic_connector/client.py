@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 20
 CONNECT_TIMEOUT = 10
 SEARCH_TIMEOUT = 60
+SEARCH_SERVER_TIMEOUT = "30s"
 KIBANA_STATUS_TIMEOUT = 5
 MAX_RETRIES = 2
 RETRY_BACKOFF = 1.0
@@ -304,6 +305,18 @@ def _flatten(obj: Any, prefix: str = "", out: Optional[Dict[str, Any]] = None) -
     return out
 
 
+_SCRIPT_CLAUSES = frozenset({"script", "script_score", "script_fields", "runtime_mappings"})
+
+
+def contains_script_clause(node: Any) -> bool:
+    """True when a Query DSL object contains a script-executing clause (rejected: read-only, cheap queries only)."""
+    if isinstance(node, dict):
+        return any(key in _SCRIPT_CLAUSES or contains_script_clause(value) for key, value in node.items())
+    if isinstance(node, list):
+        return any(contains_script_clause(item) for item in node)
+    return False
+
+
 def compact_hits(hits: List[Dict[str, Any]], fields: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """Compact ``_source`` docs: priority fields first, long values truncated.
 
@@ -412,6 +425,7 @@ class ElasticClient:
                     json=json_body,
                     timeout=req_timeout,
                     verify=ELASTIC_SSL_VERIFY,
+                    allow_redirects=False,  # never replay the API key to a redirect target
                 )
             except requests.exceptions.Timeout as exc:
                 last_error = exc
@@ -559,6 +573,7 @@ class ElasticClient:
         except (TypeError, ValueError):
             payload["size"] = 100
         payload.setdefault("track_total_hits", 10000)
+        payload.setdefault("timeout", SEARCH_SERVER_TIMEOUT)  # Elasticsearch stops the search itself
         return self._request(
             "POST",
             f"/{safe}/_search",

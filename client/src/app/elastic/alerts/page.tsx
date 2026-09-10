@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ExternalLink } from "lucide-react";
-import { elasticService, ElasticAlert } from "@/lib/services/elastic";
+import { elasticService, ElasticAlert, isHttpUrl } from "@/lib/services/elastic";
 import { isElasticEnabled } from "@/lib/feature-flags";
 import { ConnectorNotEnabled } from "@/components/elastic/ConnectorNotEnabled";
 
@@ -24,10 +24,6 @@ function stateBadge(state?: string) {
   if (state === "recovered") return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
   if (state === "active") return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
   return "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200";
-}
-
-function isHttpUrl(value?: string) {
-  return typeof value === "string" && /^https?:\/\//i.test(value);
 }
 
 function formatDate(dateStr?: string) {

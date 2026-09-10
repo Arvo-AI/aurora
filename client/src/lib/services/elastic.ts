@@ -70,7 +70,12 @@ const API_BASE = '/api/elastic';
 const CACHE_KEY = 'elastic_connection_status';
 const CONNECTED_FLAG = 'isElasticConnected';
 
-export type CachedElasticStatus = Pick<ElasticStatus, 'connected' | 'deploymentType' | 'clusterName' | 'kibanaUrl'>;
+export type CachedElasticStatus = Pick<ElasticStatus, 'connected'>;
+
+/** Only http(s) URLs may be rendered as links (Kibana URLs arrive from stored status and webhook payloads). */
+export function isHttpUrl(value?: string | null): value is string {
+  return typeof value === 'string' && /^https?:\/\//i.test(value);
+}
 
 function toStatus(data: UnknownRecord | null | undefined, fallbackConnected: boolean): ElasticStatus {
   return {
@@ -147,12 +152,10 @@ export const elasticService = {
 
   cacheStatus(status: ElasticStatus): void {
     if (globalThis.window === undefined) return;
-    const slim: CachedElasticStatus = {
-      connected: status.connected,
-      deploymentType: status.deploymentType,
-      clusterName: status.clusterName,
-      kibanaUrl: status.kibanaUrl,
-    };
+    // Only the flag is cached: cluster details are identity-specific and must
+    // never be served to another user of the same browser before the live
+    // status request completes.
+    const slim: CachedElasticStatus = { connected: status.connected };
     try {
       localStorage.setItem(CACHE_KEY, JSON.stringify(slim));
       if (status.connected) localStorage.setItem(CONNECTED_FLAG, 'true');
