@@ -55,6 +55,7 @@ class ElasticAPIError(Exception):
 
     def __init__(self, message: str, status_code: Optional[int] = None, reason: Optional[str] = None):
         super().__init__(message)
+        self.message = message  # curated, user-facing text (never a traceback)
         self.status_code = status_code
         self.reason = reason
 

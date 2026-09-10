@@ -77,8 +77,11 @@ def _arg(data: Dict[str, Any], *names: str, default: Any = None) -> Any:
     if not isinstance(data, dict):
         return default
     for name in names:
-        if name in data and data[name] is not None:
-            return data[name]
+        if not isinstance(name, str):
+            continue
+        value = data.get(name)
+        if value is not None:
+            return value
     return default
 
 
@@ -204,7 +207,10 @@ def connect(user_id):
         try:
             es_url, kibana_url = parse_cloud_id(cloud_id)
         except ValueError as exc:
-            return jsonify({"error": f"Invalid Cloud ID: {exc}"}), 400
+            logger.warning("[ELASTIC] Invalid Cloud ID from user %s: %s", sanitize(user_id), sanitize(exc))
+            return jsonify({
+                "error": "Invalid Cloud ID. Copy it from Elastic Cloud → Deployment → Manage → Cloud ID."
+            }), 400
     else:
         es_url = normalize_url(raw_es_url)
         if not es_url:
@@ -230,7 +236,7 @@ def connect(user_id):
         auth, info = _validate_key(client)
     except ElasticAPIError as exc:
         logger.warning("[ELASTIC] Connection validation failed for user %s: %s", sanitize(user_id), sanitize(exc))
-        return jsonify({"error": f"Failed to validate Elastic credentials: {exc}"}), _status_for_error(exc)
+        return jsonify({"error": f"Failed to validate Elastic credentials: {exc.message}"}), _status_for_error(exc)
 
     version_info = (info or {}).get("version") or {}
     version = version_info.get("number")

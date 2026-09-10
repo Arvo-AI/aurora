@@ -35,8 +35,11 @@ def _arg(data: Dict[str, Any], *names: str, default: Any = None) -> Any:
     if not isinstance(data, dict):
         return default
     for name in names:
-        if name in data and data[name] is not None:
-            return data[name]
+        if not isinstance(name, str):
+            continue
+        value = data.get(name)
+        if value is not None:
+            return value
     return default
 
 
@@ -54,13 +57,11 @@ def _client_for_user(user_id: str):
 
 
 def _error_response(exc: ElasticAPIError):
-    if exc.status_code == 400:
-        return jsonify({"error": str(exc)}), 400
-    if exc.status_code in (401, 403):
-        return jsonify({"error": str(exc)}), 400
+    if exc.status_code in (400, 401, 403):
+        return jsonify({"error": exc.message}), 400
     if exc.status_code == 404:
-        return jsonify({"error": str(exc)}), 404
-    return jsonify({"error": str(exc)}), 502
+        return jsonify({"error": exc.message}), 404
+    return jsonify({"error": exc.message}), 502
 
 
 def _int(value: Any, default: int, lo: int, hi: int) -> int:
