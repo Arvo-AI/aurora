@@ -46,10 +46,12 @@ REJECT_ERROR = "error"
 def get_recurrence_mode() -> str:
     """Read RECURRENCE_DETECTION_MODE per call, clamped to off|shadow|live.
 
-    Unknown values warn and degrade to 'off' so a typo in a values file can
-    never change behavior or spend tokens.
+    Defaults to 'live' when unset — recurrence folding is on out of the box.
+    A *known* value (off/shadow) still opts out. An *unknown* value warns and
+    degrades to 'off' so a typo in a values file can never silently enable
+    token spend it didn't intend.
     """
-    raw = (os.getenv("RECURRENCE_DETECTION_MODE") or MODE_OFF).strip().lower()
+    raw = (os.getenv("RECURRENCE_DETECTION_MODE") or MODE_LIVE).strip().lower()
     if raw not in _VALID_MODES:
         logger.warning(
             "[RECURRENCE] Unknown RECURRENCE_DETECTION_MODE=%r; treating as 'off'",

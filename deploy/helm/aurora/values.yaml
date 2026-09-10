@@ -267,7 +267,9 @@ config:
   # Model used by the Next Steps enrichment pass (rationale, undo commands, safety labels). Empty = falls back to MAIN_MODEL.
   ENRICHMENT_MODEL: ""
   # Root-cause recurrence detection (dedup layer 1): off | shadow | live.
-  RECURRENCE_DETECTION_MODE: "off"
+  # Defaults to "live" (folding on). Set to "off" to disable, or "shadow" to
+  # log verdicts without folding.
+  RECURRENCE_DETECTION_MODE: "live"
   # Wall-clock budget (seconds) for one recurrence check; keep well under the
   # summarization task's soft time limit (330s) minus summary work.
   RECURRENCE_AGENT_TIMEOUT_SECONDS: "120"
