@@ -224,7 +224,7 @@ export class ProviderPolling {
             };
             if (JSON.stringify(newSplunkState) !== JSON.stringify(provider)) hasChanges = true;
             return newSplunkState;
-          case 'elastic':
+          case 'elastic': {
             const newElasticState = {
               ...provider,
               isConnected: isElasticConnected,
@@ -232,6 +232,7 @@ export class ProviderPolling {
             };
             if (JSON.stringify(newElasticState) !== JSON.stringify(provider)) hasChanges = true;
             return newElasticState;
+          }
 
           case 'dynatrace':
             const newDynatraceState = {

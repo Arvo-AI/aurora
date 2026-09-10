@@ -8,6 +8,7 @@ from flask import Blueprint, jsonify, request
 
 from connectors.elastic_connector.client import (
     MAX_SEARCH_SIZE,
+    TIMESTAMP_FIELD,
     ElasticAPIError,
     ElasticClient,
     build_log_query,
@@ -26,10 +27,13 @@ DEFAULT_INDEX_PATTERN = "logs-*"
 MAX_INDICES_RETURN = 500
 MAX_FIELDS_RETURN = 500
 MAX_ESQL_ROWS = 500
+NOT_CONNECTED_ERROR = "Elastic not connected"
 _LIMIT_RE = re.compile(r"\|\s*limit\s+\d+", re.IGNORECASE)
 
 
 def _arg(data: Dict[str, Any], *names: str, default: Any = None) -> Any:
+    if not isinstance(data, dict):
+        return default
     for name in names:
         if name in data and data[name] is not None:
             return data[name]
@@ -40,8 +44,8 @@ def _client_for_user(user_id: str):
     """Return (client, index_pattern) or (None, None)."""
     try:
         creds = get_token_data(user_id, "elastic")
-    except Exception as exc:
-        logger.error("[ELASTIC-SEARCH] Failed to get credentials for user %s: %s", sanitize(user_id), sanitize(exc))
+    except Exception:
+        logger.exception("[ELASTIC-SEARCH] Failed to get credentials for user %s", sanitize(user_id))
         return None, None
     if not creds or not creds.get("api_key") or not creds.get("elasticsearch_url"):
         return None, None
@@ -162,7 +166,7 @@ def list_indices(user_id):
     """List indices, aliases and data streams matching ``pattern`` (default ``*``)."""
     client, _ = _client_for_user(user_id)
     if not client:
-        return jsonify({"error": "Elastic not connected"}), 400
+        return jsonify({"error": NOT_CONNECTED_ERROR}), 400
     pattern = request.args.get("pattern") or "*"
     include_system = request.args.get("includeSystem", request.args.get("include_system", "false")).lower() == "true"
     try:
@@ -182,7 +186,7 @@ def list_fields(user_id):
     """Field names/types for an index pattern (``_field_caps``)."""
     client, default_index = _client_for_user(user_id)
     if not client:
-        return jsonify({"error": "Elastic not connected"}), 400
+        return jsonify({"error": NOT_CONNECTED_ERROR}), 400
     index = request.args.get("index") or default_index
     prefix = request.args.get("prefix") or ""
     try:
@@ -232,17 +236,18 @@ def search(user_id):
     """
     client, default_index = _client_for_user(user_id)
     if not client:
-        return jsonify({"error": "Elastic not connected"}), 400
+        return jsonify({"error": NOT_CONNECTED_ERROR}), 400
     data = request.get_json(silent=True) or {}
 
-    index = _arg(data, "index") or default_index
+    requested_index = _arg(data, "index")
+    index = requested_index or default_index
     query = _arg(data, "query", "q", default="*")
     query_dsl = _arg(data, "queryDsl", "query_dsl")
     limit = _int(_arg(data, "limit", "size", "maxCount", "max_count", default=100), 100, 1, MAX_SEARCH_SIZE)
     fields = _arg(data, "fields")
     if fields is not None and not isinstance(fields, list):
         return jsonify({"error": "fields must be a list of field names"}), 400
-    timestamp_field = _arg(data, "timestampField", "timestamp_field", default="@timestamp")
+    timestamp_field = _arg(data, "timestampField", "timestamp_field", default=TIMESTAMP_FIELD)
     if not isinstance(timestamp_field, str) or not re.match(r"^[A-Za-z0-9_.@-]{1,128}$", timestamp_field):
         return jsonify({"error": "timestampField is invalid"}), 400
     sort_order = "asc" if str(_arg(data, "sort", "order", default="desc")).lower() == "asc" else "desc"
@@ -270,7 +275,10 @@ def search(user_id):
     if fields:
         body["_source"] = [str(f) for f in fields][:100]
 
-    logger.info("[ELASTIC-SEARCH] User %s search index=%s query=%s", sanitize(user_id), sanitize(index), sanitize(str(query))[:100])
+    logger.info(
+        "[ELASTIC-SEARCH] User %s search index=%s query=%s",
+        sanitize(user_id), sanitize(requested_index or "<default>"), sanitize(query)[:100],
+    )
     try:
         result = client.search(index, body)
     except ElasticAPIError as exc:
@@ -306,7 +314,7 @@ def esql(user_id):
     """Run an ES|QL query (``POST /_query``) with a time pre-filter."""
     client, _ = _client_for_user(user_id)
     if not client:
-        return jsonify({"error": "Elastic not connected"}), 400
+        return jsonify({"error": NOT_CONNECTED_ERROR}), 400
     data = request.get_json(silent=True) or {}
     query = _arg(data, "query", "esql")
     if not query or not isinstance(query, str):
@@ -314,7 +322,7 @@ def esql(user_id):
     query = query.strip()
     if len(query) > 10000:
         return jsonify({"error": "query is too long"}), 400
-    timestamp_field = _arg(data, "timestampField", "timestamp_field", default="@timestamp")
+    timestamp_field = _arg(data, "timestampField", "timestamp_field", default=TIMESTAMP_FIELD)
     if not isinstance(timestamp_field, str) or not re.match(r"^[A-Za-z0-9_.@-]{1,128}$", timestamp_field):
         return jsonify({"error": "timestampField is invalid"}), 400
 
@@ -359,7 +367,7 @@ def active_alerts(user_id):
     """Kibana alert documents from ``.alerts-*`` (status active|recovered|all)."""
     client, _ = _client_for_user(user_id)
     if not client:
-        return jsonify({"error": "Elastic not connected"}), 400
+        return jsonify({"error": NOT_CONNECTED_ERROR}), 400
     status = (request.args.get("status") or "active").lower()
     if status not in ("active", "recovered", "all"):
         return jsonify({"error": "status must be active, recovered or all"}), 400
@@ -388,7 +396,7 @@ def format_alert_hits(result: Dict[str, Any]) -> List[Dict[str, Any]]:
         src = hit.get("_source") or {}
         alerts.append({
             "index": hit.get("_index"),
-            "timestamp": src.get("@timestamp"),
+            "timestamp": src.get(TIMESTAMP_FIELD),
             "uuid": _nested(src, "kibana.alert.uuid"),
             "status": _nested(src, "kibana.alert.status"),
             "start": _nested(src, "kibana.alert.start"),
@@ -428,7 +436,7 @@ def list_rules(user_id):
     """Kibana alerting rules (``/api/alerting/rules/_find``)."""
     client, _ = _client_for_user(user_id)
     if not client:
-        return jsonify({"error": "Elastic not connected"}), 400
+        return jsonify({"error": NOT_CONNECTED_ERROR}), 400
     if not client.kibana_url:
         return jsonify({"error": "No Kibana URL configured for this connection. Reconnect with a Kibana URL or Cloud ID."}), 400
     search_term = request.args.get("search")

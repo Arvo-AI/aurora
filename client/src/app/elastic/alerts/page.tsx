@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -74,6 +74,117 @@ export default function ElasticAlertsPage() {
     loadAlerts(0, state);
   };
 
+  let content: ReactNode;
+  if (loading) {
+    content = (
+      <Card>
+        <CardContent className="pt-6 text-center py-12">
+          <p className="text-muted-foreground">Loading alerts...</p>
+        </CardContent>
+      </Card>
+    );
+  } else if (alerts.length === 0) {
+    content = (
+      <Card>
+        <CardContent className="pt-6 text-center py-12">
+          <p className="text-muted-foreground font-medium">No alerts received yet</p>
+          <p className="text-sm text-muted-foreground mt-2">
+            Attach the Aurora Webhook connector to a Kibana rule to start receiving alerts
+          </p>
+          <Button variant="outline" className="mt-4" onClick={() => router.push("/elastic/auth")}>
+            Configure Webhook
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  } else {
+    content = (
+      <>
+        <div className="space-y-4">
+          {alerts.map((alert) => (
+            <Card key={alert.id}>
+              <CardHeader>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-2 flex-wrap">
+                      <CardTitle className="text-lg">{alert.title || alert.ruleName || "Untitled Alert"}</CardTitle>
+                      <span className={`px-2 py-1 rounded text-xs font-medium ${stateBadge(alert.state)}`}>{alert.state || "unknown"}</span>
+                      <span className={`px-2 py-1 rounded text-xs font-medium ${severityBadge(alert.severity)}`}>{alert.severity || "unknown"}</span>
+                    </div>
+                    {alert.ruleName && alert.ruleName !== alert.title && (
+                      <CardDescription>Rule: {alert.ruleName}</CardDescription>
+                    )}
+                    {alert.reason && <CardDescription className="mt-1">{alert.reason}</CardDescription>}
+                  </div>
+                  {alert.viewInAppUrl && (
+                    <a
+                      href={alert.viewInAppUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline shrink-0"
+                    >
+                      Open in Kibana <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">Received:</span>
+                    <span className="ml-2">{formatDate(alert.receivedAt)}</span>
+                  </div>
+                  {alert.ruleType && (
+                    <div className="min-w-0">
+                      <span className="text-muted-foreground">Rule type:</span>
+                      <span className="ml-2 font-mono text-xs">{alert.ruleType}</span>
+                    </div>
+                  )}
+                  {alert.actionGroup && (
+                    <div>
+                      <span className="text-muted-foreground">Action group:</span>
+                      <span className="ml-2 font-mono text-xs">{alert.actionGroup}</span>
+                    </div>
+                  )}
+                  {alert.alertUuid && (
+                    <div className="min-w-0 overflow-hidden">
+                      <span className="text-muted-foreground">Alert UUID:</span>
+                      <span className="ml-2 font-mono text-xs truncate block" title={alert.alertUuid}>{alert.alertUuid}</span>
+                    </div>
+                  )}
+                </div>
+                {alert.payload && Object.keys(alert.payload).length > 0 && (
+                  <details className="mt-4">
+                    <summary className="cursor-pointer text-sm font-medium hover:underline">View full payload</summary>
+                    <pre className="mt-2 p-3 bg-muted rounded text-xs overflow-auto max-h-64">
+                      {JSON.stringify(alert.payload, null, 2)}
+                    </pre>
+                  </details>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        {total > PAGE_SIZE && (
+          <div className="flex items-center justify-between mt-6">
+            <p className="text-sm text-muted-foreground">
+              Showing {offset + 1} to {Math.min(offset + PAGE_SIZE, total)} of {total} alerts
+            </p>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => loadAlerts(Math.max(0, offset - PAGE_SIZE))} disabled={offset === 0}>
+                Previous
+              </Button>
+              <Button variant="outline" onClick={() => loadAlerts(offset + PAGE_SIZE)} disabled={offset + PAGE_SIZE >= total}>
+                Next
+              </Button>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }
+
   return (
     <div className="container mx-auto py-8 px-4 max-w-7xl">
       <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
@@ -112,109 +223,7 @@ export default function ElasticAlertsPage() {
         </Card>
       )}
 
-      {loading ? (
-        <Card>
-          <CardContent className="pt-6 text-center py-12">
-            <p className="text-muted-foreground">Loading alerts...</p>
-          </CardContent>
-        </Card>
-      ) : alerts.length === 0 ? (
-        <Card>
-          <CardContent className="pt-6 text-center py-12">
-            <p className="text-muted-foreground font-medium">No alerts received yet</p>
-            <p className="text-sm text-muted-foreground mt-2">
-              Attach the Aurora Webhook connector to a Kibana rule to start receiving alerts
-            </p>
-            <Button variant="outline" className="mt-4" onClick={() => router.push("/elastic/auth")}>
-              Configure Webhook
-            </Button>
-          </CardContent>
-        </Card>
-      ) : (
-        <>
-          <div className="space-y-4">
-            {alerts.map((alert) => (
-              <Card key={alert.id}>
-                <CardHeader>
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-2 flex-wrap">
-                        <CardTitle className="text-lg">{alert.title || alert.ruleName || "Untitled Alert"}</CardTitle>
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${stateBadge(alert.state)}`}>{alert.state || "unknown"}</span>
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${severityBadge(alert.severity)}`}>{alert.severity || "unknown"}</span>
-                      </div>
-                      {alert.ruleName && alert.ruleName !== alert.title && (
-                        <CardDescription>Rule: {alert.ruleName}</CardDescription>
-                      )}
-                      {alert.reason && <CardDescription className="mt-1">{alert.reason}</CardDescription>}
-                    </div>
-                    {alert.viewInAppUrl && (
-                      <a
-                        href={alert.viewInAppUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline shrink-0"
-                      >
-                        Open in Kibana <ExternalLink className="h-3 w-3" />
-                      </a>
-                    )}
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                    <div>
-                      <span className="text-muted-foreground">Received:</span>
-                      <span className="ml-2">{formatDate(alert.receivedAt)}</span>
-                    </div>
-                    {alert.ruleType && (
-                      <div className="min-w-0">
-                        <span className="text-muted-foreground">Rule type:</span>
-                        <span className="ml-2 font-mono text-xs">{alert.ruleType}</span>
-                      </div>
-                    )}
-                    {alert.actionGroup && (
-                      <div>
-                        <span className="text-muted-foreground">Action group:</span>
-                        <span className="ml-2 font-mono text-xs">{alert.actionGroup}</span>
-                      </div>
-                    )}
-                    {alert.alertUuid && (
-                      <div className="min-w-0 overflow-hidden">
-                        <span className="text-muted-foreground">Alert UUID:</span>
-                        <span className="ml-2 font-mono text-xs truncate block" title={alert.alertUuid}>{alert.alertUuid}</span>
-                      </div>
-                    )}
-                  </div>
-                  {alert.payload && Object.keys(alert.payload).length > 0 && (
-                    <details className="mt-4">
-                      <summary className="cursor-pointer text-sm font-medium hover:underline">View full payload</summary>
-                      <pre className="mt-2 p-3 bg-muted rounded text-xs overflow-auto max-h-64">
-                        {JSON.stringify(alert.payload, null, 2)}
-                      </pre>
-                    </details>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-
-          {total > PAGE_SIZE && (
-            <div className="flex items-center justify-between mt-6">
-              <p className="text-sm text-muted-foreground">
-                Showing {offset + 1} to {Math.min(offset + PAGE_SIZE, total)} of {total} alerts
-              </p>
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => loadAlerts(Math.max(0, offset - PAGE_SIZE))} disabled={offset === 0}>
-                  Previous
-                </Button>
-                <Button variant="outline" onClick={() => loadAlerts(offset + PAGE_SIZE)} disabled={offset + PAGE_SIZE >= total}>
-                  Next
-                </Button>
-              </div>
-            </div>
-          )}
-        </>
-      )}
+      {content}
     </div>
   );
 }

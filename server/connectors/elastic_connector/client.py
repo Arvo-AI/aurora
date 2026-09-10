@@ -12,14 +12,13 @@ the same key is sent to Kibana together with the mandatory ``kbn-xsrf`` header.
 from __future__ import annotations
 
 import base64
-import binascii
 import json
 import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -36,10 +35,11 @@ RETRY_BACKOFF = 1.0
 MAX_SEARCH_SIZE = 500
 MAX_ERROR_REASON_LEN = 300
 MAX_FIELD_VALUE_LENGTH = 1000
+TIMESTAMP_FIELD = "@timestamp"
 
 # Fields surfaced first (and always) in compacted log hits.
 PRIORITY_FIELDS: Tuple[str, ...] = (
-    "@timestamp",
+    TIMESTAMP_FIELD,
     "message",
     "log.level",
     "service.name",
@@ -47,7 +47,7 @@ PRIORITY_FIELDS: Tuple[str, ...] = (
 )
 PRIORITY_PREFIXES: Tuple[str, ...] = ("kubernetes.", "event.", "error.")
 
-_HOST_RE = re.compile(r"^[A-Za-z0-9._-]+(:[0-9]{2,5})?$")
+_HOST_RE = re.compile(r"^[A-Za-z0-9._-]+(:\d{2,5})?$")
 
 
 class ElasticAPIError(Exception):
@@ -95,7 +95,7 @@ def parse_cloud_id(cloud_id: str) -> Tuple[str, Optional[str]]:
         # Tolerate missing padding.
         padded = encoded + "=" * (-len(encoded) % 4)
         decoded = base64.b64decode(padded, validate=False).decode("utf-8")
-    except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
+    except ValueError as exc:
         raise ValueError("Cloud ID is not valid base64") from exc
 
     parts = decoded.split("$")
@@ -188,7 +188,7 @@ def normalize_api_key(raw: Optional[str]) -> Optional[str]:
         return base64.b64encode(f"{key_id}:{secret}".encode("utf-8")).decode("ascii")
     try:
         base64.b64decode(value, validate=True)
-    except (binascii.Error, ValueError):
+    except ValueError:
         return None
     return value
 
@@ -259,7 +259,7 @@ def build_log_query(
     start: str,
     end: str,
     extra_filter: Optional[Dict[str, Any]] = None,
-    timestamp_field: str = "@timestamp",
+    timestamp_field: str = TIMESTAMP_FIELD,
 ) -> Dict[str, Any]:
     """Build a Query DSL body: ``query_string`` + time range (+ optional filter)."""
     must: List[Dict[str, Any]] = []
@@ -428,7 +428,7 @@ class ElasticClient:
                 ) from exc
             except requests.exceptions.SSLError as exc:
                 # SSLError is a ConnectionError subclass — must be handled first.
-                logger.error("[ELASTIC] %s %s SSL error: %s", method, _safe_path(path), type(exc).__name__)
+                logger.error("[ELASTIC] %s %s SSL error", method, _safe_path(path))
                 raise ElasticAPIError(
                     "SSL/TLS error — check the certificate or set ELASTIC_SSL_VERIFY"
                 ) from exc
@@ -437,7 +437,7 @@ class ElasticClient:
                 if attempt < retries:
                     time.sleep(RETRY_BACKOFF * (2 ** attempt))
                     continue
-                logger.error("[ELASTIC] %s %s connection error: %s", method, _safe_path(path), type(exc).__name__)
+                logger.error("[ELASTIC] %s %s connection error", method, _safe_path(path))
                 lowered = str(exc).lower()
                 if "name or service not known" in lowered or "nodename nor servname" in lowered or "name resolution" in lowered:
                     raise ElasticAPIError("DNS resolution failed. Check the endpoint URL or Cloud ID.") from exc
@@ -447,7 +447,7 @@ class ElasticClient:
                     f"Unable to connect. Ensure Aurora has network access to your {service} endpoint."
                 ) from exc
             except requests.RequestException as exc:
-                logger.error("[ELASTIC] %s %s request error: %s", method, _safe_path(path), type(exc).__name__)
+                logger.error("[ELASTIC] %s %s request error", method, _safe_path(path))
                 raise ElasticAPIError(f"Unable to reach {service}") from exc
 
             if response.status_code == 429 and attempt < retries:
@@ -505,7 +505,7 @@ class ElasticClient:
 
     def resolve_indices(self, pattern: str = "*") -> Dict[str, Any]:
         """``GET /_resolve/index/{pattern}`` — indices, aliases and data streams."""
-        safe = _safe_index(pattern)
+        safe = _path_segment(pattern)
         return self._request(
             "GET",
             f"/_resolve/index/{safe}",
@@ -514,7 +514,7 @@ class ElasticClient:
 
     def cat_indices(self, pattern: str = "*") -> Optional[List[Dict[str, Any]]]:
         """``GET /_cat/indices`` (needs cluster ``monitor``). Returns None on 403."""
-        safe = _safe_index(pattern)
+        safe = _path_segment(pattern)
         try:
             data = self._request(
                 "GET",
@@ -534,7 +534,7 @@ class ElasticClient:
 
     def field_caps(self, index: str, fields: str = "*") -> Dict[str, Any]:
         """``GET /{index}/_field_caps?fields=...``."""
-        safe = _safe_index(index)
+        safe = _path_segment(index)
         return self._request(
             "GET",
             f"/{safe}/_field_caps",
@@ -550,7 +550,7 @@ class ElasticClient:
 
     def search(self, index: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """``POST /{index}/_search`` with a Query DSL body. ``size`` clamped to 500."""
-        safe = _safe_index(index)
+        safe = _path_segment(index)
         payload = dict(body)
         size = payload.get("size", 100)
         try:
@@ -596,7 +596,7 @@ class ElasticClient:
         now = datetime.now(timezone.utc)
         start = (now - timedelta(hours=hours_int)).isoformat()
         filters: List[Dict[str, Any]] = [
-            {"range": {"@timestamp": {"gte": start, "lte": now.isoformat()}}}
+            {"range": {TIMESTAMP_FIELD: {"gte": start, "lte": now.isoformat()}}}
         ]
         if status and status != "all":
             filters.append({"term": {"kibana.alert.status": status}})
@@ -613,10 +613,10 @@ class ElasticClient:
             })
         body = {
             "size": max(1, min(int(size or 50), MAX_SEARCH_SIZE)),
-            "sort": [{"@timestamp": {"order": "desc"}}],
+            "sort": [{TIMESTAMP_FIELD: {"order": "desc"}}],
             "query": {"bool": {"filter": filters}},
             "_source": [
-                "@timestamp",
+                TIMESTAMP_FIELD,
                 "kibana.alert.uuid",
                 "kibana.alert.status",
                 "kibana.alert.start",
@@ -698,7 +698,7 @@ class ElasticClient:
         if search:
             params["search"] = search
             params["search_fields"] = "name"
-        prefix = f"/s/{_safe_space(space)}" if space else ""
+        prefix = f"/s/{quote(_safe_space(space), safe='')}" if space else ""
         try:
             return self._request(
                 "GET",
@@ -736,14 +736,35 @@ def _safe_index(value: Optional[str]) -> str:
     return pattern
 
 
+def _path_segment(index: Optional[str]) -> str:
+    """Validate an index pattern and percent-encode it for use as a URL path segment."""
+    return quote(_safe_index(index), safe="*,")
+
+
 def _safe_space(value: str) -> str:
     if not re.match(r"^[A-Za-z0-9_-]{1,64}$", value or ""):
         raise ElasticAPIError("Invalid Kibana space id", status_code=400)
     return value
 
 
+_KNOWN_OPERATIONS: Tuple[str, ...] = (
+    "_security/_authenticate",
+    "_resolve/index",
+    "_cat/indices",
+    "_field_caps",
+    "_search",
+    "_query",
+    "/api/alerting/rules/_find",
+    "/api/status",
+)
+
+
 def _safe_path(path: str) -> str:
-    return path.split("?", 1)[0][:120]
+    """Return the API operation for logs; never the index/space segment, which is user-supplied."""
+    for operation in _KNOWN_OPERATIONS:
+        if operation in path:
+            return operation
+    return "/"
 
 
 def _int_header(value: Optional[str], default: int) -> int:

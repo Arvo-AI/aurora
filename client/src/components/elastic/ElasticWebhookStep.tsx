@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,7 +27,31 @@ const DEPLOYMENT_LABELS: Record<string, string> = {
 
 type CopyKey = "url" | "secret" | "body";
 
-export function ElasticWebhookStep({ status, onDisconnect, loading }: ElasticWebhookStepProps) {
+interface CopyButtonProps {
+  k: CopyKey;
+  value?: string;
+  label: string;
+  copied: CopyKey | null;
+  onCopy: (key: CopyKey, value: string | undefined, label: string) => void;
+}
+
+function CopyButton({ k, value, label, copied, onCopy }: Readonly<CopyButtonProps>) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="icon"
+      onClick={() => onCopy(k, value, label)}
+      disabled={!value}
+      aria-label={copied === k ? `${label} copied` : `Copy ${label}`}
+      className="shrink-0"
+    >
+      {copied === k ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+    </Button>
+  );
+}
+
+export function ElasticWebhookStep({ status, onDisconnect, loading }: Readonly<ElasticWebhookStepProps>) {
   const router = useRouter();
   const { toast } = useToast();
   const [webhook, setWebhook] = useState<ElasticWebhookInfo | null>(null);
@@ -93,21 +117,83 @@ export function ElasticWebhookStep({ status, onDisconnect, loading }: ElasticWeb
     }
   };
 
-  const CopyButton = ({ k, value, label }: { k: CopyKey; value?: string; label: string }) => (
-    <Button
-      type="button"
-      variant="outline"
-      size="icon"
-      onClick={() => copy(k, value, label)}
-      disabled={!value}
-      aria-label={copied === k ? `${label} copied` : `Copy ${label}`}
-      className="shrink-0"
-    >
-      {copied === k ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-    </Button>
-  );
-
   const maskedSecret = webhook?.webhookSecret ? "•".repeat(Math.min(webhook.webhookSecret.length, 32)) : "";
+
+  let webhookContent: ReactNode;
+  if (loadingWebhook) {
+    webhookContent = (
+      <div className="flex items-center gap-2 text-muted-foreground text-sm">
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading webhook configuration…
+      </div>
+    );
+  } else if (webhook) {
+    webhookContent = (
+      <div className="space-y-4">
+        <div className="space-y-1">
+          <span className="text-sm font-medium">Webhook URL</span>
+          <div className="flex gap-2">
+            <code className="flex-1 p-2 bg-muted rounded text-xs break-all">{webhook.webhookUrl}</code>
+            <CopyButton k="url" value={webhook.webhookUrl} label="Webhook URL" copied={copied} onCopy={copy} />
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <span className="text-sm font-medium">Webhook secret</span>
+          <div className="flex gap-2">
+            <code className="flex-1 p-2 bg-muted rounded text-xs break-all font-mono">
+              {secretVisible ? webhook.webhookSecret : maskedSecret}
+            </code>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => setSecretVisible((v) => !v)}
+              aria-label={secretVisible ? "Hide webhook secret" : "Reveal webhook secret"}
+              className="shrink-0"
+            >
+              {secretVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </Button>
+            <CopyButton k="secret" value={webhook.webhookSecret} label="Webhook secret" copied={copied} onCopy={copy} />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Use it as the <strong>Basic auth</strong> password with username <code>{webhook.basicAuthUsername}</code>, or as the value of a <code>{webhook.headerName}</code> header.
+            Disconnecting deletes this secret; after reconnecting, update the Kibana connector with the new one.
+          </p>
+        </div>
+
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium">Action body (paste into the rule action)</span>
+            <CopyButton k="body" value={webhook.actionBodyTemplate} label="Action body" copied={copied} onCopy={copy} />
+          </div>
+          <pre className="p-3 bg-muted rounded text-[11px] leading-snug overflow-auto max-h-64">{webhook.actionBodyTemplate}</pre>
+        </div>
+
+        <div className="bg-muted/50 rounded-lg p-4">
+          <p className="font-medium text-sm mb-3">Setup steps</p>
+          <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
+            {webhook.instructions.map((instruction) => (
+              <li key={instruction}>{instruction.replace(/^\d+\.\s*/, "")}</li>
+            ))}
+          </ol>
+          <p className="text-xs text-muted-foreground mt-3">
+            The Webhook connector requires a Gold+ license on self-managed clusters; Elastic Cloud subscriptions include it.
+          </p>
+        </div>
+
+        <a
+          href={ELASTIC_DOCS_WEBHOOK}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
+        >
+          Kibana Webhook connector documentation <ExternalLink className="h-3 w-3" />
+        </a>
+      </div>
+    );
+  } else {
+    webhookContent = <p className="text-sm text-muted-foreground">Failed to load webhook configuration.</p>;
+  }
 
   return (
     <Card>
@@ -199,76 +285,7 @@ export function ElasticWebhookStep({ status, onDisconnect, loading }: ElasticWeb
             <p className="text-sm text-muted-foreground">Create one Webhook connector in Kibana and attach it to any rule you want Aurora to see.</p>
           </div>
 
-          {loadingWebhook ? (
-            <div className="flex items-center gap-2 text-muted-foreground text-sm">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading webhook configuration…
-            </div>
-          ) : webhook ? (
-            <div className="space-y-4">
-              <div className="space-y-1">
-                <span className="text-sm font-medium">Webhook URL</span>
-                <div className="flex gap-2">
-                  <code className="flex-1 p-2 bg-muted rounded text-xs break-all">{webhook.webhookUrl}</code>
-                  <CopyButton k="url" value={webhook.webhookUrl} label="Webhook URL" />
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <span className="text-sm font-medium">Webhook secret</span>
-                <div className="flex gap-2">
-                  <code className="flex-1 p-2 bg-muted rounded text-xs break-all font-mono">
-                    {secretVisible ? webhook.webhookSecret : maskedSecret}
-                  </code>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    onClick={() => setSecretVisible((v) => !v)}
-                    aria-label={secretVisible ? "Hide webhook secret" : "Reveal webhook secret"}
-                    className="shrink-0"
-                  >
-                    {secretVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </Button>
-                  <CopyButton k="secret" value={webhook.webhookSecret} label="Webhook secret" />
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Use it as the <strong>Basic auth</strong> password with username <code>{webhook.basicAuthUsername}</code>, or as the value of a <code>{webhook.headerName}</code> header.
-                  Disconnecting deletes this secret; after reconnecting, update the Kibana connector with the new one.
-                </p>
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Action body (paste into the rule action)</span>
-                  <CopyButton k="body" value={webhook.actionBodyTemplate} label="Action body" />
-                </div>
-                <pre className="p-3 bg-muted rounded text-[11px] leading-snug overflow-auto max-h-64">{webhook.actionBodyTemplate}</pre>
-              </div>
-
-              <div className="bg-muted/50 rounded-lg p-4">
-                <p className="font-medium text-sm mb-3">Setup steps</p>
-                <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
-                  {webhook.instructions.map((instruction) => (
-                    <li key={instruction}>{instruction.replace(/^\d+\.\s*/, "")}</li>
-                  ))}
-                </ol>
-                <p className="text-xs text-muted-foreground mt-3">
-                  The Webhook connector requires a Gold+ license on self-managed clusters; Elastic Cloud subscriptions include it.
-                </p>
-              </div>
-
-              <a
-                href={ELASTIC_DOCS_WEBHOOK}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
-              >
-                Kibana Webhook connector documentation <ExternalLink className="h-3 w-3" />
-              </a>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">Failed to load webhook configuration.</p>
-          )}
+          {webhookContent}
         </div>
 
         {/* Disconnect */}

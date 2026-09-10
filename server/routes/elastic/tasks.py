@@ -64,7 +64,7 @@ def _parse_tags(raw: Any) -> List[str]:
             if isinstance(parsed, list):
                 return [str(t).strip() for t in parsed if str(t).strip()]
         except ValueError:
-            pass
+            pass  # not a JSON array: fall through to comma-separated parsing
     return [t.strip() for t in text.split(",") if t.strip()]
 
 

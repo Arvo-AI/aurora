@@ -137,7 +137,7 @@ def _check_elastic(creds: Dict[str, Any]) -> Dict[str, Any]:
     es_url = creds.get("elasticsearch_url")
     if not api_key or not es_url:
         return {"connected": False}
-    headers = {"Authorization": f"ApiKey {api_key}", "Accept": "application/json"}
+    headers = {"Authorization": f"ApiKey {api_key}"}
     try:
         # _authenticate works with any valid key; GET / needs cluster 'monitor'.
         r = requests.get(

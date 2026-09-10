@@ -74,6 +74,8 @@ KIBANA_ACTION_BODY_TEMPLATE: Dict[str, str] = {
 
 def _arg(data: Dict[str, Any], *names: str, default: Any = None) -> Any:
     """Return the first present key (camelCase from the UI, snake_case from MCP)."""
+    if not isinstance(data, dict):
+        return default
     for name in names:
         if name in data and data[name] is not None:
             return data[name]
@@ -83,8 +85,8 @@ def _arg(data: Dict[str, Any], *names: str, default: Any = None) -> Any:
 def _get_stored_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         return get_token_data(user_id, "elastic")
-    except Exception as exc:
-        logger.error("[ELASTIC] Failed to retrieve credentials for user %s: %s", sanitize(user_id), sanitize(exc))
+    except Exception:
+        logger.exception("[ELASTIC] Failed to retrieve credentials for user %s", sanitize(user_id))
         return None
 
 
@@ -330,7 +332,7 @@ def disconnect(user_id):
         if not success:
             logger.warning("[ELASTIC] Failed to clean up secrets during disconnect")
             return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
-        logger.info("[ELASTIC] Disconnected provider (deleted %s token entries)", deleted_count)
+        logger.info("[ELASTIC] Disconnected provider")
         return jsonify({"success": True, "message": "Elastic disconnected successfully", "deleted": deleted_count})
     except Exception:
         logger.exception("[ELASTIC] Failed to disconnect provider")
@@ -404,7 +406,7 @@ def alert_webhook(user_id: str):
 
     sensitive_headers = {"authorization", "cookie", "set-cookie", "proxy-authorization", "x-api-key", "x-csrf-token"}
     sanitized_headers = {}
-    for key, value in request.headers:
+    for key, value in request.headers.items():
         key_lower = key.lower()
         if key_lower in sensitive_headers or "token" in key_lower or "secret" in key_lower:
             sanitized_headers[key] = "<REDACTED>"
@@ -505,12 +507,11 @@ def get_webhook_url(user_id):
         "actionBodyTemplate": json.dumps(KIBANA_ACTION_BODY_TEMPLATE, indent=2),
         "instructions": [
             "1. In Kibana go to Stack Management → Connectors → Create connector → Webhook.",
-            f"2. Name it 'Aurora', method POST, URL = the webhook URL above.",
+            "2. Name it 'Aurora', method POST, URL = the webhook URL above.",
             f"3. Authentication: choose Basic, username '{WEBHOOK_BASIC_USER}', password = the webhook secret "
             f"(or add a header '{WEBHOOK_HEADER_NAME}' with the secret as its value).",
             "4. Save the connector, then open the rule you want Aurora to investigate (Observability → Alerts → Manage rules).",
-            "5. Add an action using the Aurora connector, set 'Run when' to the alert action group and "
-            "action frequency to 'On status changes', and paste the action body template below into the Body.",
+            "5. Add an action using the Aurora connector, set 'Run when' to the alert action group and action frequency to 'On status changes', and paste the action body template below into the Body.",
             "6. Add a second action row with the same connector and body, with 'Run when' = 'Recovered', so Aurora can close the loop.",
             "7. Save the rule. Turn on 'Enable Alert RCA' in Aurora to create incidents from these alerts.",
         ],
@@ -540,5 +541,5 @@ def update_rca_settings(user_id):
     if not isinstance(rca_enabled, bool):
         return jsonify({"error": "rcaEnabled must be a boolean"}), 400
     store_user_preference(user_id, RCA_PREFERENCE_KEY, rca_enabled)
-    logger.info("[ELASTIC] Updated RCA settings for user %s: rcaEnabled=%s", sanitize(user_id), rca_enabled)
+    logger.info("[ELASTIC] Updated RCA settings for user %s: rcaEnabled=%s", sanitize(user_id), "true" if rca_enabled else "false")
     return jsonify({"success": True, "rcaEnabled": rca_enabled})

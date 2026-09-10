@@ -522,7 +522,8 @@ export function parseElasticCommand(toolName: string, toolInput: string): string
       }
       case "elastic_get_fields": {
         const prefix = (args.prefix as string) || ""
-        return `Elastic: Get fields for ${index || "logs-*"}${prefix ? ` (${prefix}*)` : ""}`
+        const prefixNote = prefix ? ` (${prefix}*)` : ""
+        return `Elastic: Get fields for ${index || "logs-*"}${prefixNote}`
       }
       case "elastic_search_logs": {
         const query = (args.query as string) || "*"
@@ -535,7 +536,8 @@ export function parseElasticCommand(toolName: string, toolInput: string): string
       }
       case "elastic_get_alerts": {
         const status = (args.status as string) || "active"
-        const hours = args.hours ? ` (last ${args.hours}h)` : ""
+        const hoursValue = typeof args.hours === "number" || typeof args.hours === "string" ? String(args.hours) : ""
+        const hours = hoursValue ? ` (last ${hoursValue}h)` : ""
         return `Elastic: Get ${status} Kibana alerts${hours}`
       }
       default:

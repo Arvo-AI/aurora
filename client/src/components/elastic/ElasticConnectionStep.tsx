@@ -65,7 +65,7 @@ export function ElasticConnectionStep({
   loading,
   errorMessage,
   onConnect,
-}: ElasticConnectionStepProps) {
+}: Readonly<ElasticConnectionStepProps>) {
   const [showKeyHelp, setShowKeyHelp] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -93,7 +93,7 @@ export function ElasticConnectionStep({
             <div className="p-4 pt-0 space-y-4 text-sm border-t">
               <div className="space-y-2 pt-3">
                 <Label id="elastic-mode-label">Connect using</Label>
-                <div className="inline-flex rounded-md border overflow-hidden" role="group" aria-labelledby="elastic-mode-label">
+                <fieldset className="inline-flex rounded-md border overflow-hidden" aria-labelledby="elastic-mode-label">
                   {MODES.map((m) => (
                     <button
                       type="button"
@@ -108,7 +108,7 @@ export function ElasticConnectionStep({
                       {m.label}
                     </button>
                   ))}
-                </div>
+                </fieldset>
                 <p className="text-xs text-muted-foreground">
                   {mode === "cloud_id"
                     ? "Easiest for Elastic Cloud Hosted deployments. Aurora derives the Elasticsearch and Kibana endpoints from the Cloud ID."

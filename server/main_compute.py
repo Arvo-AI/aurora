@@ -443,7 +443,6 @@ app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
 from utils.flags.feature_flags import is_elastic_enabled
 if is_elastic_enabled():
     from routes.elastic import bp as elastic_bp, search_bp as elastic_search_bp
-    import routes.elastic.tasks  # noqa: F401
     app.register_blueprint(elastic_bp, url_prefix="/elastic")
     app.register_blueprint(elastic_search_bp, url_prefix="/elastic")
 

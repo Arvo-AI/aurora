@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from connectors.elastic_connector.client import (
+    TIMESTAMP_FIELD,
     ElasticAPIError,
     ElasticClient,
     build_log_query,
@@ -59,14 +60,14 @@ class ElasticSearchLogsArgs(BaseModel):
     limit: int = Field(default=100, description="Max documents (≤500). Newest first.")
     fields: Optional[List[str]] = Field(default=None, description="Only return these dotted fields, e.g. ['@timestamp','message','host.name']")
     query_dsl: Optional[Dict[str, Any]] = Field(default=None, description="Raw Elasticsearch Query DSL object used instead of `query` (advanced)")
-    timestamp_field: str = Field(default="@timestamp", description="Date field used for the time window and sort. Change it for indices that do not use @timestamp (e.g. 'timestamp', 'event_time'); check with elastic_get_fields.")
+    timestamp_field: str = Field(default=TIMESTAMP_FIELD, description="Date field used for the time window and sort. Change it for indices that do not use @timestamp (e.g. 'timestamp', 'event_time'); check with elastic_get_fields.")
 
 
 class ElasticEsqlArgs(BaseModel):
     """Arguments for elastic_esql."""
     query: str = Field(description="ES|QL query, e.g. 'FROM logs-* | WHERE log.level == \"error\" | STATS count() BY service.name | SORT `count()` DESC'")
     time_range: Optional[str] = Field(default="1h", description="Relative time pre-filter on timestamp_field: '15m', '1h', '24h', '7d'. Pass 'all' to disable it (required for indices without a date field, e.g. lookup/config indices).")
-    timestamp_field: str = Field(default="@timestamp", description="Timestamp field for the time pre-filter")
+    timestamp_field: str = Field(default=TIMESTAMP_FIELD, description="Timestamp field for the time pre-filter")
 
 
 class ElasticGetAlertsArgs(BaseModel):
@@ -93,8 +94,8 @@ def _get_elastic_credentials(user_id: Optional[str]) -> Optional[Dict[str, Any]]
             logger.warning("[ELASTIC-TOOL] Credentials exist but missing api_key or elasticsearch_url")
             return None
         return creds
-    except Exception as exc:
-        logger.error("[ELASTIC-TOOL] Failed to get credentials: %s", exc)
+    except Exception:
+        logger.exception("[ELASTIC-TOOL] Failed to get credentials")
         return None
 
 
@@ -187,9 +188,10 @@ def elastic_get_fields(index: str, prefix: Optional[str] = None, user_id: Option
         return _not_connected()
     from routes.elastic.search_routes import summarize_field_caps
 
-    index = (index or creds.get("index_pattern") or DEFAULT_INDEX_PATTERN).strip()
+    requested_index = (index or "").strip()
+    index = requested_index or creds.get("index_pattern") or DEFAULT_INDEX_PATTERN
     prefix = (prefix or "").strip()
-    logger.info("[ELASTIC-TOOL] get_fields user=%s index=%s prefix=%s", user_id, index[:80], prefix[:40])
+    logger.info("[ELASTIC-TOOL] get_fields user=%s index=%s prefix=%s", user_id, requested_index[:80] or "<default>", prefix[:40])
     try:
         caps = _client(creds).field_caps(index, f"{prefix}*" if prefix else "*")
     except Exception as exc:
@@ -218,7 +220,7 @@ def elastic_search_logs(
     limit: int = 100,
     fields: Optional[List[str]] = None,
     query_dsl: Optional[Dict[str, Any]] = None,
-    timestamp_field: str = "@timestamp",
+    timestamp_field: str = TIMESTAMP_FIELD,
     user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
@@ -227,9 +229,10 @@ def elastic_search_logs(
     if not creds:
         return _not_connected()
 
-    index = (index or creds.get("index_pattern") or DEFAULT_INDEX_PATTERN).strip()
+    requested_index = (index or "").strip()
+    index = requested_index or creds.get("index_pattern") or DEFAULT_INDEX_PATTERN
     limit = _int(limit, 100, 1, MAX_SEARCH_HITS)
-    timestamp_field = (timestamp_field or "@timestamp").strip()
+    timestamp_field = (timestamp_field or TIMESTAMP_FIELD).strip()
     if not _TS_FIELD_RE.match(timestamp_field):
         return json.dumps({"error": "timestamp_field is invalid"})
     start, end = resolve_window(time_range=time_range, start_time=start_time, end_time=end_time)
@@ -254,7 +257,7 @@ def elastic_search_logs(
     if fields:
         body["_source"] = [str(f) for f in fields][:100]
 
-    logger.info("[ELASTIC-TOOL] search user=%s index=%s query=%s", user_id, index[:80], (query or "")[:100])
+    logger.info("[ELASTIC-TOOL] search user=%s index=%s query=%s", user_id, requested_index[:80] or "<default>", (query or "")[:100])
     try:
         result = _client(creds).search(index, body)
     except Exception as exc:
@@ -295,7 +298,7 @@ def elastic_search_logs(
 def elastic_esql(
     query: str,
     time_range: Optional[str] = "1h",
-    timestamp_field: str = "@timestamp",
+    timestamp_field: str = TIMESTAMP_FIELD,
     user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
