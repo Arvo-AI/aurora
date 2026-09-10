@@ -47,6 +47,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "pagerduty", # PagerDuty connector tokens
     "opsgenie",  # OpsGenie connector tokens
     "splunk",    # Splunk connector tokens
+    "elastic",   # Elastic Cloud connector tokens
     "ovh",      # OVH Cloud
     "scaleway", # Scaleway Cloud
     "tailscale", # Tailscale VPN

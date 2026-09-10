@@ -88,6 +88,7 @@ celery_app.conf.update(
         'routes.datadog.tasks',
         'routes.netdata.tasks',
         'routes.splunk.tasks',
+        'routes.elastic.tasks',
         'routes.dynatrace.tasks',
         'routes.bigpanda.tasks',
         'routes.pagerduty.tasks',
