@@ -29,6 +29,7 @@ Backend configuration guides for Aurora connectors.
 | **New Relic** | User API Key (NerdGraph) | [Setup](./newrelic_connector/README.md) |
 | **Netdata** | API Token | [Setup](./netdata_connector/README.md) |
 | **Splunk** | API Token (`search` capability) | [Setup](./splunk_connector/README.md) |
+| **Elastic Cloud** | Elasticsearch API key (read-only) | [Setup](./elastic_connector/README.md) |
 
 ## CI/CD
 

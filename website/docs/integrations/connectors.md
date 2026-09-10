@@ -1205,6 +1205,111 @@ All calls use Bearer token auth over HTTPS on port 8089.
 
 ---
 
+### Elastic Cloud
+
+API-key authentication for Elasticsearch + Kibana. Works with **Elastic Cloud Hosted** (Cloud ID), **Elastic Cloud Serverless** (endpoint URLs) and **self-managed** clusters. Aurora is read-only against Elastic: it searches logs, reads Kibana alert documents and lists alerting rules, and it never writes.
+
+:::note Feature flag
+The connector is behind a feature flag that is **off by default**. Set `NEXT_PUBLIC_ENABLE_ELASTIC=true` in your `.env` (or Helm `values.yaml`) and restart the stack. With the flag off the connector card, the `/elastic/*` API routes, the agent tools and the MCP tools are all hidden.
+:::
+
+#### 1. Create a read-only API key
+
+**Option A (recommended): an admin creates a restricted key.**
+
+1. In Kibana, as an admin, go to **Stack Management > API keys > Create API key**.
+2. Name it `aurora`, turn on **Restrict privileges**, and paste the role descriptor below.
+3. Create the key and copy the **Encoded** value. It is shown once. (An `id:api_key` pair is also accepted.)
+
+**Option B: a dedicated read-only user creates its own key.** The built-in **Viewer** role has no cluster privileges, so a Viewer cannot create API keys on its own. Give the user two roles: **Viewer** plus a small custom role whose only cluster privilege is `manage_own_api_key` (Stack Management > Roles). Sign in as that user, create the key with *Restrict privileges* off, and it inherits the Viewer's read-only access to indices and Kibana.
+
+Role descriptor for Option A:
+
+```json
+{
+  "aurora_read": {
+    "cluster": ["monitor"],
+    "indices": [
+      {
+        "names": ["logs-*", "filebeat-*", "metrics-*", ".alerts-*"],
+        "privileges": ["read", "view_index_metadata"]
+      }
+    ],
+    "applications": [
+      { "application": "kibana-.kibana", "privileges": ["read"], "resources": ["*"] }
+    ]
+  }
+}
+```
+
+- `read` + `view_index_metadata` cover `_search`, `_count`, `_field_caps` and `_resolve/index`.
+- `.alerts-*` is where Kibana stores alert documents; without it `elastic_get_alerts` returns a privilege error.
+- The `kibana-.kibana` **application** privilege is what lets Aurora list Kibana rules. A bare index-only key gets a Kibana 403.
+- Cluster `monitor` is optional but recommended. It enables `GET /` (cluster name and version shown in Aurora) and `_cat/indices` (document counts and index sizes). Without it Aurora validates the key through `_security/_authenticate` and still lists indices, just without stats or version info.
+
+#### 2. Find your endpoint
+
+| Deployment | What to enter |
+|------------|---------------|
+| Elastic Cloud **Hosted** | The **Cloud ID** (Elastic Cloud > Deployments > your deployment > Manage). Aurora derives the Elasticsearch and Kibana URLs from it. |
+| Elastic Cloud **Serverless** | Endpoint URLs: `https://<project>.es.<region>.<csp>.elastic.cloud` and `https://<project>.kb.<region>.<csp>.elastic.cloud`. Serverless projects have no Cloud ID. |
+| **Self-managed** | Your Elasticsearch URL (e.g. `https://es.internal:9200`) and, optionally, the Kibana URL. Set `ELASTIC_SSL_VERIFY=false` or point it at a CA bundle if you use private certificates. |
+
+The Kibana URL is optional. Without it Aurora still searches logs and reads alert documents, but it cannot list Kibana rules or deep-link incidents into Kibana.
+
+#### 3. Connect via Aurora UI
+
+1. Navigate to **Connectors > Elastic Cloud**.
+2. Choose **Cloud ID** or **Endpoint URLs** and fill in the endpoint.
+3. Paste the API key (**Encoded** value).
+4. Optionally set a default index pattern (default `logs-*`).
+5. Click **Connect**. Aurora validates the key against Elasticsearch; Kibana is checked best-effort and never blocks the connection.
+
+#### 4. Send Kibana alerts to Aurora (optional)
+
+Aurora exposes a per-user webhook URL and a secret on the connector page. In Kibana:
+
+1. **Stack Management > Connectors > Create connector > Webhook**. Name it `Aurora`, method `POST`, URL = the webhook URL from Aurora.
+2. Authentication: **Basic**, username `aurora`, password = the webhook secret. (Alternatively add a header `X-Aurora-Webhook-Secret` with the secret as its value.)
+3. Open the rule you want Aurora to see (**Observability > Alerts > Manage rules**) and add an action using the `Aurora` connector.
+4. Set the action frequency to **On status changes** (otherwise Kibana re-sends the alert on every rule interval; Aurora dedupes these, but the extra traffic is unnecessary).
+5. Paste the **action body** template shown in Aurora into the Body field. It maps Kibana's Mustache variables (`rule.name`, `alert.uuid`, `context.reason`, `context.viewInAppUrl`, ...) to the fields Aurora reads.
+6. Add a second action row with the same connector and body and **Run when: Recovered**, so Aurora marks the alert recovered.
+
+The Webhook connector is a **Gold+** feature on self-managed clusters (a Basic license returns a license error). Elastic Cloud subscriptions include it.
+
+**Enable Alert RCA.** Webhook alerts are always stored and visible under **View Alerts**. Incidents and automatic investigations are only created when the **Enable Alert RCA** switch on the connector page is on (it is off by default, for teams whose incidents already come from another source such as incident.io).
+
+#### What Aurora Queries
+
+| Purpose | Endpoint |
+|---------|----------|
+| Validate the connection | `GET /_security/_authenticate` (required), `GET /` (best-effort, needs `monitor`) |
+| List indices, aliases, data streams | `GET /_resolve/index/{pattern}` (+ `GET /_cat/indices` when the key has `monitor`) |
+| Field names and types | `GET /{index}/_field_caps` |
+| Search logs | `POST /{index}/_search` (Query DSL, `size <= 500`) |
+| ES\|QL queries | `POST /_query` |
+| Kibana alerts | `POST /.alerts-*/_search` |
+| Kibana rules | `GET {kibana}/api/alerting/rules/_find` (header `kbn-xsrf: true`) |
+
+All calls use `Authorization: ApiKey <encoded>` over HTTPS. Aurora never calls `_cluster/health`, node or snapshot APIs, so it works unchanged on Serverless.
+
+#### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Invalid API key" (401) | The key is wrong, expired or invalidated. Re-create it and paste the **Encoded** value. |
+| "API key lacks privileges" (403) on search | Grant `read` and `view_index_metadata` on the index pattern (and on `.alerts-*` for alerts). |
+| "API key lacks Kibana privileges" when listing rules | The key has no Kibana application privilege. Create it as a Viewer, or add the `kibana-.kibana` read privilege. |
+| Index sizes / doc counts / version missing | Expected without cluster `monitor`. Add it to the role descriptor if you want them. |
+| "unauthorized ... manage_own_api_key" when a Viewer creates a key | Viewer cannot create API keys. Use Option A, or add a custom role with `manage_own_api_key` to that user. |
+| Kibana "license" error when saving the Webhook connector | Self-managed Basic license. Start a trial or upgrade; Elastic Cloud includes the connector. |
+| Kibana shows "not verified" after connecting | Aurora could not reach the Kibana URL. Logs and alerts still work; check the URL or network path if you need rule listing. |
+| Alerts arrive but no incident is created | Turn on **Enable Alert RCA** on the connector page. Recovery events never create incidents. |
+| Kibana action fails with `[401] UNAUTHORIZED` | The webhook secret changed (disconnecting deletes it; reconnecting generates a new one). Copy the current secret from Aurora into the Kibana connector. |
+
+---
+
 ## Kubernetes
 
 Aurora can connect to Kubernetes clusters via the kubectl agent.
