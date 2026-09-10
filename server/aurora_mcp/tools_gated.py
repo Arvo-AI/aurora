@@ -108,6 +108,7 @@ _ALERTS_PATH_BY_SOURCE: Dict[str, str] = {
     "opsgenie": "/opsgenie/events/ingested",
     "incidentio": "/incidentio/alerts",
     "splunk": "/splunk/alerts",
+    "elastic": "/elastic/alerts",
 }
 
 # Fail fast at import if someone extends query_alerts' enabling_skills without
@@ -146,6 +147,12 @@ async def _do_query_logs(
         }
         return truncate_payload(
             await api_call("POST", "/splunk/search", body=body),
+            tool_name="query_logs",
+        )
+    if chosen == "elastic":
+        body = {"query": query, "timeRangeMinutes": clamped_minutes, "limit": clamped_limit}
+        return truncate_payload(
+            await api_call("POST", "/elastic/search", body=body),
             tool_name="query_logs",
         )
     # Unreachable today — fires only if TIER2_TOOLS["query_logs"].enabling_skills
@@ -301,7 +308,7 @@ def register_tier2_tools(
         time_range_minutes: int = 60,
         limit: int = 50,
     ) -> Dict[str, Any]:
-        """Query logs. Pass `source` to pin a backend (datadog/splunk); omit to
+        """Query logs. Pass `source` to pin a backend (datadog/splunk/elastic); omit to
         let Aurora pick the first connected one."""
         return await _do_query_logs(
             api_call, _user_id(), query, source, time_range_minutes, limit,
@@ -325,7 +332,7 @@ def register_tier2_tools(
         limit: int = 20,
     ) -> Dict[str, Any]:
         """Read alerts from a connected alerting source. Pass `source` to pin
-        one of: datadog, newrelic, dynatrace, opsgenie, incidentio, splunk."""
+        one of: datadog, newrelic, dynatrace, opsgenie, incidentio, splunk, elastic."""
         return await _do_query_alerts(api_call, _user_id(), source, limit)
 
     @mcp.tool()
