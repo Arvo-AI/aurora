@@ -139,6 +139,10 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
             raise ValueError("Incomplete Azure credentials for CLI authentication")
         
         # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
+        # AZURE_CONFIG_DIR must be per-invocation: `az login` writes auth state to disk,
+        # so a shared dir would race when fanning out across subscriptions in parallel.
+        # ponytail: caller owns the tempdir and must remove it (see _cloud_exec_azure_multi_subscription).
+        config_dir = tempfile.mkdtemp(prefix="aurora-az-")
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": _ISOLATED_HOME,
@@ -146,7 +150,7 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
             "AZURE_CLIENT_ID": str(client_id),
             "AZURE_CLIENT_SECRET": str(client_secret),
             "AZURE_TENANT_ID": str(tenant_id),
-            "AZURE_CONFIG_DIR": f"{_ISOLATED_HOME}/.azure",
+            "AZURE_CONFIG_DIR": config_dir,
         }
         
         # Store auth command for chaining with user commands (NEVER log the secret!)
@@ -1135,29 +1139,35 @@ def setup_flyio_environment_isolated(user_id: str, selected_org: str | None = No
 
 
 def is_read_only_command(command: str) -> bool:
-    """Check if a cloud command is read-only (list, describe, get, etc.)."""
-    read_only_verbs = ['list', 'describe', 'get', 'show', 'config', 'version', 'info', 'status', 'read', 'view', 'help', 'logs', 'top']
+    """Check if a cloud command is read-only (list, describe, get, etc.).
 
-    # Check if any read-only verb is in the command
-    for verb in read_only_verbs:
-        if verb in command.lower():
-            return True
+    Matches on the command's verb tokens, not a substring scan: a bare
+    `verb in command` test classifies `az group delete --name my-logs-rg` as
+    read-only because "logs" appears in the resource name. Defaults to False.
+    """
+    READ_ONLY_VERBS = frozenset({
+        'list', 'describe', 'get', 'show', 'config', 'version', 'info', 'status',
+        'read', 'view', 'help', 'logs', 'log', 'top', 'explain', 'diff', 'search',
+        'query', 'export', 'devices', 'keys', 'routes', 'settings',
+    })
+    WRITE_VERBS = frozenset({
+        'delete', 'destroy', 'remove', 'rm', 'create', 'apply', 'update', 'set',
+        'patch', 'replace', 'edit', 'scale', 'drain', 'cordon', 'uncordon', 'exec',
+        'attach', 'port-forward', 'cp', 'run', 'restart', 'start', 'stop', 'add',
+        'put', 'write', 'invoke', 'rollout', 'taint', 'label', 'annotate', 'login',
+    })
 
-    # Additional check for common read-only patterns
-    read_only_patterns = [
-        '--filter', '--output=json', '--query',
-        'status:running', '--dry-run', 'explain', 'diff',
-        'logging read', 'logging list', 'logs read', 'logs list',
-        # Tailscale-specific read operations
-        'dns nameservers', 'dns searchpaths', 'dns preferences',
-        'routes', 'settings', 'acl get', 'acl show', 'devices', 'keys'
-    ]
-    if any(pattern in command.lower() for pattern in read_only_patterns):
+    try:
+        tokens = [t.lower() for t in shlex.split(command) if not t.startswith('-')]
+    except ValueError:
+        return False
+
+    # Any write verb anywhere disqualifies the command outright.
+    if any(t in WRITE_VERBS for t in tokens):
+        return False
+    if any(t in READ_ONLY_VERBS for t in tokens):
         return True
-
-    # Additional heuristics/patterns – mostly for legacy support.
-    lowered = command.lower()
-    if any(p in lowered for p in ["--filter", "status:running"]):
+    if '--dry-run' in command.lower():
         return True
 
     # Default to **not** read-only to err on the side of caution.
@@ -1292,6 +1302,114 @@ def _cloud_exec_aws_multi_account(
     })
 
 
+def _is_azure_cli_command(command: str) -> bool:
+    """True when the command targets the `az` CLI (not kubectl/helm/terraform)."""
+    try:
+        first = shlex.split(command)[0].lower() if command.strip() else ''
+    except ValueError:
+        return False
+    return first not in ('kubectl', 'helm', 'terraform')
+
+
+def _azure_can_fan_out(command: str) -> bool:
+    """True when a command is safe to run across every subscription at once.
+
+    `aks get-credentials` writes the shared kubeconfig, so running it in parallel
+    would race and leave a context from an arbitrary subscription. It must target
+    one subscription explicitly.
+    """
+    return _is_azure_cli_command(command) and "get-credentials" not in command
+
+
+def _apply_azure_subscription(command: str, subscription_id: str) -> str:
+    """Pin an `az` command to one subscription.
+
+    `az graph query` takes --subscriptions (plural) and is scoped by the caller,
+    so it is left alone.
+    """
+    cmd = command if command.startswith("az ") else f"az {command}"
+    if "--subscription" in cmd or cmd.startswith("az graph"):
+        return cmd
+    return f"{cmd} --subscription {shlex.quote(subscription_id)}"
+
+
+def _cloud_exec_azure_multi_subscription(
+    user_id: str,
+    connections: list,
+    command: str,
+    provider_preference: Optional[str] = None,
+    timeout: Optional[int] = None,
+    output_file: Optional[str] = None,
+    fn_start: float = 0,
+) -> str:
+    """Execute an Azure CLI command across all connected subscriptions and merge results.
+
+    Mirrors _cloud_exec_aws_multi_account. Each subscription gets its own
+    AZURE_CONFIG_DIR (az login writes auth state to disk, so a shared dir would
+    race across threads). Results are keyed by subscription id.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import shutil as _shutil
+
+    current_mode = get_mode_from_context()
+    allowed, read_only_message = ModeAccessController.ensure_cloud_command_allowed(
+        current_mode, is_read_only_command(command), command,
+    )
+    if not allowed:
+        return json.dumps({
+            "error": read_only_message,
+            "multi_subscription": True,
+            "command": command,
+            "provider": "azure",
+        })
+
+    def _run_on_subscription(conn: dict) -> dict:
+        sub_id = conn.get("account_id", "unknown")
+        config_dir = None
+        try:
+            success, _sub, _auth, isolated_env, auth_command = setup_azure_environment_isolated(user_id, sub_id)
+            if not success:
+                return {"subscription_id": sub_id, "success": False, "error": "Failed to authenticate"}
+            config_dir = isolated_env.get("AZURE_CONFIG_DIR")
+
+            cmd = _apply_azure_subscription(command.strip(), sub_id)
+            result = terminal_run(
+                ["bash", "-lc", f"{auth_command} && {cmd}"],
+                capture_output=True, text=True,
+                timeout=get_command_timeout(cmd, timeout), env=isolated_env,
+            )
+            return {
+                "subscription_id": sub_id,
+                "success": result.returncode == 0,
+                "output": result.stdout.strip() if result.returncode == 0 else result.stderr.strip(),
+                "return_code": result.returncode,
+            }
+        except Exception as e:
+            logger.error("Multi-subscription exec failed for %s: %s", sub_id, e)
+            return {"subscription_id": sub_id, "success": False, "error": str(e)[:300]}
+        finally:
+            if config_dir:
+                _shutil.rmtree(config_dir, ignore_errors=True)
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=min(len(connections), 10)) as pool:
+        futures = [pool.submit(_run_on_subscription, c) for c in connections]
+        for future in as_completed(futures):
+            res = future.result()
+            results[res.pop("subscription_id")] = res
+
+    elapsed = time.perf_counter() - fn_start if fn_start else 0
+    logger.info("TIME: cloud_exec Azure multi-subscription (%d subs) completed in %.2fs",
+                len(connections), elapsed)
+    return json.dumps({
+        "success": all(r.get("success") for r in results.values()),
+        "multi_subscription": True,
+        "command": command,
+        "provider": "azure",
+        "results_by_subscription": results,
+    })
+
+
 def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None, account_id: Optional[str] = None) -> str:
     """Run arbitrary command against *provider* (gcloud/kubectl/gsutil for GCP, aws/kubectl for AWS).
 
@@ -1422,8 +1540,24 @@ Security & Compliance
         isolated_env = None
         auth_command = None
         if normalized_provider == 'azure':
-            # Azure isolated setup
-            success, subscription_id, auth_method, isolated_env, auth_command = setup_azure_environment_isolated(user_id, selected_project_id)
+            # Azure multi-subscription: fan out only for `az` commands when no
+            # specific subscription was requested. kubectl/helm inherit their
+            # context from `aks get-credentials` and must not fan out.
+            target_subscription = account_id or selected_project_id
+            if not target_subscription and _azure_can_fan_out(original_command):
+                from utils.db.connection_utils import get_all_user_connections
+                all_subs = get_all_user_connections(user_id, "azure") if user_id else []
+                if len(all_subs) > 1:
+                    return _cloud_exec_azure_multi_subscription(
+                        user_id=user_id,
+                        connections=all_subs,
+                        command=original_command,
+                        provider_preference=provider_preference,
+                        timeout=timeout,
+                        output_file=output_file,
+                        fn_start=fn_start,
+                    )
+            success, subscription_id, auth_method, isolated_env, auth_command = setup_azure_environment_isolated(user_id, target_subscription)
             if not success:
                 return json.dumps({"error": f"Failed to setup Azure environment with {provider_preference} authentication", "final_command": command})
             resource_id = subscription_id
@@ -1762,7 +1896,10 @@ Security & Compliance
 
                 
         elif provider.lower() in ['azure', 'az'] and cli_tool == 'az':
-            # Azure: do not auto-append --subscription; rely on default set via 'az account set' or user-provided flags
+            # Pin to the resolved subscription so multi-subscription tenants never
+            # rely on whichever subscription the service principal defaults to.
+            if region_or_project:
+                command = _apply_azure_subscription(command, region_or_project)
             if '--output' not in command and '-o' not in command and ('list' in command or 'show' in command):
                 command += " --output=json"
 

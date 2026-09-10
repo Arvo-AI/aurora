@@ -3,6 +3,7 @@ import os, logging
 from dotenv import load_dotenv
 from connectors.azure_connector.billing import fetch_subscriptions
 from utils.auth.token_management import store_tokens_in_db
+from utils.db.connection_utils import save_connection_metadata
 from azure.identity import ClientSecretCredential
 
 load_dotenv()
@@ -119,13 +120,27 @@ def azure_login(data=None):
                 subscription_id=stored_subscription_id
             )
 
+            # Persist every enabled subscription as a user_connections row so the
+            # agent and discovery can fan out across all of them (DEV-1499). The
+            # subscription_id above stays the display default.
+            enabled = [s for s in subscriptions if s.get("state") == "Enabled"]
+            for sub in enabled:
+                save_connection_metadata(
+                    user_id,
+                    "azure",
+                    sub["subscriptionId"],
+                    connection_method="service_principal",
+                )
+            logging.info("Persisted %d enabled Azure subscriptions for user", len(enabled))
+
             # Credentials are stored in database as single source of truth
             # Session storage removed to prevent stale credential issues
 
             return jsonify({
                 "message": "Successfully logged in to Azure",
                 "subscription_id": subscription["subscriptionId"],
-                "subscription_name": subscription["displayName"]
+                "subscription_name": subscription["displayName"],
+                "subscription_count": len(enabled)
             })
 
         except Exception as e:

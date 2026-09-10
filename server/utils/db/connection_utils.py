@@ -228,39 +228,40 @@ def get_user_aws_connection(user_id: str) -> Optional[Dict]:
             conn.close()
 
 
-def get_all_user_aws_connections(user_id: str) -> List[Dict]:
-    """Get all active AWS connections for a user (including org-shared).
+def get_all_user_connections(user_id: str, provider: str = "aws") -> List[Dict]:
+    """Get all active connections for a user and provider (including org-shared).
 
-    Returns a list of connection dicts, one per connected AWS account.
+    Returns a list of connection dicts, one per connected account/subscription.
     Each dict includes account_id, role_arn, read_only_role_arn, region,
-    connection_method, and last_verified_at.
+    connection_method, and last_verified_at. The role_arn columns are
+    AWS-specific and are NULL for other providers.
     """
     org_id = _resolve_org_id(user_id)
     if org_id:
         sql = """
             SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
             FROM user_connections
-            WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
+            WHERE (user_id = %s OR org_id = %s) AND provider = %s AND status = 'active'
             ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END, account_id;
         """
-        params = (user_id, org_id, user_id)
+        params = (user_id, org_id, provider, user_id)
     else:
         sql = """
             SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
             FROM user_connections
-            WHERE user_id = %s AND provider = 'aws' AND status = 'active'
+            WHERE user_id = %s AND provider = %s AND status = 'active'
             ORDER BY account_id;
         """
-        params = (user_id,)
+        params = (user_id, provider)
     conn = None
     try:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:allAws]")
+            set_rls_context(cur, conn, user_id, log_prefix=f"[CONN-META:all:{provider}]")
             cur.execute(sql, params)
             rows = cur.fetchall()
 
-        logger.info("[CONN-META] Fetched %d active AWS connections for user %s", len(rows), user_id)
+        logger.info("[CONN-META] Fetched %d active %s connections for user %s", len(rows), provider, user_id)
         return [
             {
                 "account_id": row[0],
@@ -273,11 +274,16 @@ def get_all_user_aws_connections(user_id: str) -> List[Dict]:
             for row in rows
         ]
     except Exception as e:
-        logger.error("Error getting AWS connections for user %s: %s", user_id, e)
+        logger.error("Error getting %s connections for user %s: %s", provider, user_id, e)
         return []
     finally:
         if conn:
             conn.close()
+
+
+def get_all_user_aws_connections(user_id: str) -> List[Dict]:
+    """Back-compat alias for the AWS call sites."""
+    return get_all_user_connections(user_id, "aws")
 
 
 # ---------------------------------------------------------------------------

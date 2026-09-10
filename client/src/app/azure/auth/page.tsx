@@ -482,32 +482,7 @@ export default function AzureAuthPage() {
     }
   };
 
-  const downloadPowerShellScript = async () => {
-    try {
-      const response = await fetch(`/api/proxy/azure/setup-script-ps1`, {
-        method: 'GET',
-      });
 
-      if (!response.ok) {
-        throw new Error('Failed to download PowerShell setup script');
-      }
-
-      const scriptContent = await response.text();
-      const blob = new Blob([scriptContent], { type: 'text/plain' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.style.display = 'none';
-      a.href = url;
-      a.download = 'setup-aurora-access.ps1';
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (error) {
-      console.error('Error downloading PowerShell setup script:', error);
-      setError('Failed to download PowerShell setup script. Please try again.');
-    }
-  };
 
 
 
@@ -709,46 +684,27 @@ export default function AzureAuthPage() {
                 <div className="space-y-6">
                 <h3 className="text-lg font-medium text-foreground">Download Setup Script</h3>
                 <p className="text-muted-foreground">
-                  Choose the appropriate script for your operating system:
+                  Run this in Azure Cloud Shell, which already has the Azure CLI, jq and kubectl available.
                 </p>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="bg-muted rounded-lg p-4">
-                    <h4 className="font-medium text-foreground mb-2">Linux / macOS</h4>
-                    <p className="text-sm text-muted-foreground mb-3">
-                      Bash script with automatic Azure CLI installation
-                    </p>
-                    <Button
-                      onClick={downloadSetupScript}
-                      variant="outline"
-                      className="flex items-center space-x-2 w-full"
-                    >
-                      <Download className="w-4 h-4" />
-                      <span>Download Bash Script</span>
-                    </Button>
-                    <div className="mt-3 bg-muted rounded-md p-3">
-                      <p className="text-xs text-muted-foreground mb-1">After downloading, run:</p>
-                      <code className="text-foreground text-xs">chmod +x setup-aurora-access.sh && ./setup-aurora-access.sh</code>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-muted rounded-lg p-4">
-                    <h4 className="font-medium text-foreground mb-2">Windows</h4>
-                    <p className="text-sm text-muted-foreground mb-3">
-                      PowerShell script with automatic Azure CLI installation
-                    </p>
-                    <Button
-                      onClick={downloadPowerShellScript}
-                      variant="outline"
-                      className="flex items-center space-x-2 w-full"
-                    >
-                      <Download className="w-4 h-4" />
-                      <span>Download PowerShell Script</span>
-                    </Button>
-                    <div className="mt-3 bg-muted rounded-md p-3">
-                      <p className="text-xs text-muted-foreground mb-1">Run as Administrator:</p>
-                      <code className="text-foreground text-xs">.\setup-aurora-access.ps1</code>
-                    </div>
+
+                <div className="bg-muted rounded-lg p-4">
+                  <h4 className="font-medium text-foreground mb-2">Azure Cloud Shell</h4>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Grants Aurora least-privilege access across every enabled subscription.
+                  </p>
+                  <Button
+                    onClick={downloadSetupScript}
+                    variant="outline"
+                    className="flex items-center space-x-2 w-full"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download Setup Script</span>
+                  </Button>
+                  <div className="mt-3 bg-muted rounded-md p-3">
+                    <p className="text-xs text-muted-foreground mb-1">Upload it to Cloud Shell, then run:</p>
+                    <code className="text-foreground text-xs">bash setup-aurora-access.sh</code>
+                    <p className="text-xs text-muted-foreground mt-2 mb-1">To scope to a management group instead:</p>
+                    <code className="text-foreground text-xs">bash setup-aurora-access.sh &lt;management-group-id&gt;</code>
                   </div>
                 </div>
               </div>

@@ -25,7 +25,7 @@ On-prem Kubernetes cluster integration for running kubectl commands on connected
 
 **IMPORTANT:** Always call `get_connected_clusters` first to discover available clusters and their `cluster_id` before running any kubectl commands.
 
-**Note:** For cloud-managed clusters (GCP GKE, AWS EKS, Azure AKS), use `terminal_exec` with kubectl commands instead.
+**Note:** For cloud-managed clusters (GCP GKE, AWS EKS, Azure AKS), use `terminal_exec` with kubectl commands instead. Exception: private AKS clusters (no public API endpoint) are unreachable from `cloud_exec`, so use this tool when the cluster appears in `get_connected_clusters`.
 
 ## Instructions
 
@@ -66,6 +66,6 @@ Specify the cluster using the `cluster_id` returned by `get_connected_clusters`.
 
 ### Important Rules
 - Always specify `cluster_id` to target the correct cluster.
-- For cloud-managed clusters (GCP GKE, AWS EKS, Azure AKS), use `terminal_exec` with kubectl commands.
+- For cloud-managed clusters (GCP GKE, AWS EKS, Azure AKS), use `terminal_exec` with kubectl commands. Exception: private AKS clusters, which `cloud_exec` cannot reach; use this tool if they are connected via the agent.
 - This tool is for on-prem/self-managed clusters connected via the Aurora kubectl agent or uploaded kubeconfigs.
 - Check pod status and events before diving into logs.

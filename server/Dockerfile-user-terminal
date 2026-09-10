@@ -68,7 +68,9 @@ RUN ARCH=$(uname -m) && \
     curl -fsSL "https://aka.ms/InstallAzureCLIDeb" -o azure-cli-install.sh && \
     chmod +x azure-cli-install.sh && \
     ./azure-cli-install.sh && \
-    rm azure-cli-install.sh
+    rm azure-cli-install.sh && \
+    # resource-graph is needed for the agent's cross-subscription `az graph query`.
+    az extension add --name resource-graph --only-show-errors
 
 # Install kubectl (multi-arch support) - matches chatbot exactly
 RUN ARCH=$(uname -m) && \
