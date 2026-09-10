@@ -10,6 +10,10 @@ from connectors.azure_connector.k8s_client import (
 )
 from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data
+from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.cloud_auth import generate_azure_access_token
+from utils.db.connection_utils import get_all_user_connections
+from connectors.azure_connector.billing import fetch_subscriptions
 from utils.log_sanitizer import sanitize
 import json
 
@@ -93,8 +97,18 @@ def fetch_data(user_id):
         if not subscription_id:
             return jsonify({"error": "No subscription ID found."}), 401
 
+        # The token row holds only the display default; the full set of connected
+        # subscriptions lives in user_connections. The UI needs the count to say
+        # "N subscriptions" instead of naming just this one.
+        subscription_count = len(get_all_user_connections(user_id, "azure")) or 1
+
         # Additional processing (billing & k8s data) left as exercise or existing utils
-        return jsonify({"status": "success", "subscription_id": subscription_id, "subscription_name": subscription_name})
+        return jsonify({
+            "status": "success",
+            "subscription_id": subscription_id,
+            "subscription_name": subscription_name,
+            "subscription_count": subscription_count,
+        })
     except Exception as e:
         logging.error("Error in Azure fetch_data", exc_info=e)
         return jsonify({"error": "Failed to fetch Azure data"}), 500
@@ -145,8 +159,6 @@ def azure_clusters(user_id):
 @require_permission("connectors", "read")
 def azure_subscriptions_get(user_id):
     try:
-        from utils.auth.stateless_auth import get_org_id_from_request
-        from utils.db.connection_utils import get_all_user_connections
         org_id = get_org_id_from_request()
         token_data = get_token_data(user_id, "azure", org_id=org_id)
         if not token_data:
@@ -163,10 +175,25 @@ def azure_subscriptions_get(user_id):
             logging.warning("[AZURE API] No Azure subscription found for user %s", sanitize(user_id))
             return jsonify({"error": "No Azure subscription found. Please configure your Azure subscription."}), 401
 
+        # ARM is the only place subscription display names live; we persist just
+        # ids in user_connections. Go through generate_azure_access_token so an
+        # expired stored token is refreshed rather than silently degrading every
+        # name to a raw GUID. Fall back to the id if the lookup fails so the list
+        # still renders. ponytail: one ARM call per page load, no caching.
+        names = {}
+        try:
+            token = generate_azure_access_token(user_id).get("access_token")
+            if token:
+                names = {s["subscriptionId"]: s["displayName"] for s in fetch_subscriptions(token)}
+        except Exception:
+            logging.warning("[AZURE API] Could not resolve subscription names; falling back to ids")
+        if default_id and default_name:
+            names.setdefault(default_id, default_name)
+
         projects = [
             {
                 "projectId": sub_id,
-                "name": default_name if sub_id == default_id else sub_id,
+                "name": names.get(sub_id, sub_id),
                 "enabled": True,
                 "isDefault": sub_id == default_id,
             }

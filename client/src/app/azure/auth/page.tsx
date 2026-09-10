@@ -16,7 +16,6 @@ const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 export default function AzureAuthPage() {
   const [isLoading, setIsLoading] = useState(false);
-  const [isLoadingCredentials, setIsLoadingCredentials] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [authMethod, setAuthMethod] = useState<'script_setup' | 'manual_credentials' | 'cloud_shell'>('cloud_shell');
   const [subscriptionId, setSubscriptionId] = useState("");
@@ -45,36 +44,12 @@ export default function AzureAuthPage() {
     resourceGroup: string;
     subscriptionId: string;
   }>>([]);
-  const [storedCredentials, setStoredCredentials] = useState<Array<{
-    subscriptionId: string;
-    subscriptionName: string;
-    tenantId: string;
-    clientId: string;
-    clientSecret: string;
-  }>>([]);
   const [error, setError] = useState<string | null>(null);
-  const [storedCredentialsError, setStoredCredentialsError] = useState<string | null>(null);
   const [copyButtonText, setCopyButtonText] = useState("Copy Command");
 
   const router = useRouter();
   const PROPAGATION_NOTE =
     " If you just generated these credentials in Cloud Shell, it can take 1–2 minutes for Azure permissions to propagate. Please wait a moment and try again.";
-
-  const handleSubscriptionSelect = (
-    subscriptionId: string, 
-    subscriptionName: string, 
-    tenantId: string, 
-    clientId: string, 
-    clientSecret: string
-  ) => {
-    setSubscriptionId(subscriptionId);
-    setSubscriptionName(subscriptionName);
-    setCredentials({
-      tenantId: tenantId,
-      appId: clientId,
-      password: clientSecret
-    });
-  };
 
   const handleJsonPaste = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
@@ -510,47 +485,6 @@ export default function AzureAuthPage() {
           )}
         </Button>
   );
-
-  const fetchStoredCredentials = async () => {
-    setIsLoadingCredentials(true);
-    setStoredCredentialsError(null);
-    try {
-      const response = await fetch(`/api/proxy/user/tokens`, {
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch stored credentials');
-      }
-      
-      const data = await response.json();
-      // console.log('Fetched tokens:', data);
-      
-      const azureTokens = data.tokens
-        .filter((token: any) => token.provider === 'azure')
-        .map((token: any) => ({
-          subscriptionId: token.subscription_id,
-          subscriptionName: token.subscription_name,
-          tenantId: token.tenant_id,
-          clientId: token.client_id,
-          clientSecret: token.client_secret
-        }))
-        .filter((token: any) => token.subscriptionId && token.subscriptionName);
-      
-      setStoredCredentials(azureTokens);
-    } catch (error) {
-      console.error('Error fetching stored credentials:', error);
-      setStoredCredentialsError('Failed to fetch stored credentials');
-    } finally {
-      setIsLoadingCredentials(false);
-    }
-  };
-
-  useEffect(() => {
-    if (currentStep === 2) {
-      fetchStoredCredentials();
-    }
-  }, [currentStep]);
-
 
   return (
     <ConnectorAuthGuard connectorName="Azure">

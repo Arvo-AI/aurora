@@ -457,3 +457,45 @@ def test_disconnect_marks_inactive_when_secret_ref_column_missing(monkeypatch):
     assert any("ROLLBACK TO SAVEPOINT" in s for s in executed), "probe must be rolled back, not left aborted"
     assert any(s.startswith("UPDATE user_connections") for s in executed), "UPDATE must still run"
     assert "COMMIT" in executed
+
+
+# --- UI display of multiple subscriptions (DEV-1499) -------------------------
+# Two live render paths named only the default subscription, so a user with two
+# connected subscriptions saw "Subscription 1" and no sign of the second.
+
+AZURE_ROUTES = "routes/azure/azure_routes.py"
+
+
+def test_fetch_data_returns_subscription_count():
+    """The connect banner branches on subscription_count, which fetch_data omitted.
+
+    Without it the count is always falsy, so the UI always took the singular
+    branch and named just the default subscription. Asserting on the jsonify
+    payload, not just the local: computing the count but not returning it is
+    exactly the bug.
+    """
+    src = open(AZURE_ROUTES).read()
+    match = re.search(r"^def fetch_data\(.*?(?=^@azure_bp)", src, re.S | re.M)
+    assert match, "fetch_data not found"
+    body = match.group(0)
+    assert "get_all_user_connections" in body, "count must come from user_connections, not the token row"
+    payloads = re.findall(r"return jsonify\(\{(.*?)\}\)", body, re.S)
+    assert payloads, "fetch_data must return a jsonify payload"
+    assert any("subscription_count" in p for p in payloads), \
+        "subscription_count must be in the response body, not just computed locally"
+
+
+def test_subscription_list_resolves_real_names():
+    """Every subscription needs its real name; the list used to show raw GUIDs.
+
+    Previously: name = default_name if sub_id == default_id else sub_id, so only
+    the default was named and the rest rendered as bare subscription GUIDs.
+    """
+    src = open(AZURE_ROUTES).read()
+    match = re.search(r"^def azure_subscriptions_get\(.*?(?=^@azure_bp)", src, re.S | re.M)
+    assert match, "azure_subscriptions_get not found"
+    body = match.group(0)
+    assert "default_name if sub_id == default_id else sub_id" not in body, \
+        "non-default subscriptions must not fall back to showing their GUID as the name"
+    assert "fetch_subscriptions" in body, "names must be resolved from ARM"
+    assert "names.get(sub_id, sub_id)" in body, "GUID stays only as a last-resort fallback"
