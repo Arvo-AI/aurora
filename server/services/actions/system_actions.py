@@ -41,6 +41,28 @@ RULES:
 - Use the updated_at timestamps from list_memories to judge staleness — bias toward keeping recently modified entries over older conflicting ones
 - NEVER merge or delete postmortem entries — each one documents a unique incident. Only fix formatting within them.
 
+INCIDENT INDEX GROOMING:
+There is a special artifact — category "artifact", title "Incident Index" — that
+is the recurrence engine's candidate map (it shows up in list_memories alongside
+other artifacts). One compact line per incident, formatted
+`- [INC <id> | <date> | <service> | <status>] <synopsis>`. It is appended to
+deterministically after every incident, so it grows and needs grooming.
+Read it with read_memory(category="artifact", title="Incident Index"), then use
+edit_memory / write_memory(overwrite=true) to keep it lean:
+- CLUSTER recurrences: collapse lines that are the same underlying incident/cause into a
+  single line, appending a recurrence roll-up, e.g.
+  `↳ recurrences: <id>, <id> (N total, last <date>)`. Keep the ROOT incident's line.
+- MARK solved/closed groups so the recurrence agent can deprioritize them.
+- TRIM stale entries: drop incidents older than ~90 days that have no recent recurrences.
+- CAP the total at ~150 lines, keeping the most recent and the most frequently-recurring
+  clusters. When over cap, drop the oldest non-recurring singletons first.
+- PRESERVE the `INC <id>` token on every retained line — it is the join key back to the
+  database; a line without it is useless. Never invent ids.
+- One line per incident/cluster. No multi-paragraph entries here. This is the ONLY
+  artifact you should reshape this aggressively — treat other artifacts as normal
+  documents (formatting fixes only).
+If the index is absent or already lean (≤ ~150 lines, no obvious duplicate clusters), leave it alone.
+
 If the memory bank looks clean, just respond "DONE: no changes needed" without making any modifications."""
 
 SYSTEM_ACTIONS = [

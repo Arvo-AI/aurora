@@ -15,7 +15,7 @@ from pypdf import PdfReader
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
-from services.memory import MEMORY_CATEGORIES
+from services.memory import MEMORY_CATEGORIES, USER_WRITABLE_CATEGORIES, SYSTEM_CATEGORY
 from services.artifacts.store import create_version
 from utils.validation import strip_nul
 
@@ -101,8 +101,10 @@ def create_entry(user_id):
     content = data.get("content", "").strip()
     description = data.get("description", "").strip()
 
-    if not category or category not in MEMORY_CATEGORIES:
-        return jsonify({"error": f"category must be one of: {', '.join(MEMORY_CATEGORIES)}"}), 400
+    # Users may only create into writable categories — "artifact" is
+    # system-maintained (e.g. the Incident Index).
+    if not category or category not in USER_WRITABLE_CATEGORIES:
+        return jsonify({"error": f"category must be one of: {', '.join(USER_WRITABLE_CATEGORIES)}"}), 400
     if not title:
         return jsonify({"error": "title is required"}), 400
     if not content:
@@ -194,9 +196,23 @@ def delete_entry(user_id, entry_id):
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
 
+            # Look up the category first so we can distinguish "not found" from
+            # "reserved system entry" and return an accurate status/message.
+            cursor.execute(
+                "SELECT category FROM artifacts WHERE id = %s AND org_id = %s AND category = ANY(%s)",
+                (entry_id, org_id, list(MEMORY_CATEGORIES)),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return jsonify({"error": "Memory entry not found"}), 404
+
+            # System-maintained entries (e.g. the Incident Index) are read-only.
+            if row[0] == SYSTEM_CATEGORY:
+                return jsonify({"error": "This entry is system-managed and cannot be deleted."}), 403
+
             cursor.execute(
                 "DELETE FROM artifacts WHERE id = %s AND org_id = %s AND category = ANY(%s)",
-                (entry_id, org_id, list(MEMORY_CATEGORIES)),
+                (entry_id, org_id, list(USER_WRITABLE_CATEGORIES)),
             )
             if cursor.rowcount == 0:
                 return jsonify({"error": "Memory entry not found"}), 404
@@ -217,19 +233,36 @@ def update_entry(user_id, entry_id):
     data = request.get_json(silent=True) or {}
     category = data.get("category", "").strip()
 
-    if not category or category not in MEMORY_CATEGORIES:
-        return jsonify({"error": f"Invalid category. Must be one of: {', '.join(MEMORY_CATEGORIES)}"}), 400
+    # Target category must be user-writable — users can't move entries into the
+    # system-maintained "artifact" category.
+    if not category or category not in USER_WRITABLE_CATEGORIES:
+        return jsonify({"error": f"Invalid category. Must be one of: {', '.join(USER_WRITABLE_CATEGORIES)}"}), 400
 
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
 
+            # Look up the current category so we can block recategorizing a
+            # system-managed entry (e.g. the Incident Index), which would break
+            # the id-keyed lookups in services/memory.
+            cursor.execute(
+                "SELECT category FROM artifacts WHERE id = %s AND org_id = %s AND category = ANY(%s)",
+                (entry_id, org_id, list(MEMORY_CATEGORIES)),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return jsonify({"error": "Memory entry not found"}), 404
+
+            # System-maintained entries are read-only for users.
+            if row[0] == SYSTEM_CATEGORY:
+                return jsonify({"error": "This entry is system-managed and cannot be modified."}), 403
+
             cursor.execute(
                 """UPDATE artifacts
                    SET category = %s, last_edited_by = 'user', updated_at = CURRENT_TIMESTAMP
                    WHERE id = %s AND org_id = %s AND category = ANY(%s)""",
-                (category, entry_id, org_id, list(MEMORY_CATEGORIES)),
+                (category, entry_id, org_id, list(USER_WRITABLE_CATEGORIES)),
             )
             if cursor.rowcount == 0:
                 return jsonify({"error": "Memory entry not found"}), 404
@@ -260,8 +293,8 @@ def upload_file(user_id):
         return jsonify({"error": f"File type not allowed. Supported: {', '.join(ALLOWED_EXTENSIONS)}"}), 400
 
     category = request.form.get("category", "runbook").strip()
-    if category not in MEMORY_CATEGORIES:
-        return jsonify({"error": f"category must be one of: {', '.join(MEMORY_CATEGORIES)}"}), 400
+    if category not in USER_WRITABLE_CATEGORIES:
+        return jsonify({"error": f"category must be one of: {', '.join(USER_WRITABLE_CATEGORIES)}"}), 400
 
     try:
         # Check Content-Length header to reject oversized uploads before reading
