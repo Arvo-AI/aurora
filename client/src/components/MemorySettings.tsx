@@ -19,6 +19,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useUserId } from "@/hooks/use-user-id";
 import {
@@ -33,6 +41,7 @@ import {
   Lightbulb,
   ScrollText,
   Package,
+  Pencil,
 } from "lucide-react";
 import { useUser } from "@/hooks/useAuthHooks";
 import { DiscoverySettings } from "@/components/DiscoverySettings";
@@ -93,6 +102,15 @@ export function MemorySettings() {
   // Upload state
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Edit dialog state
+  const [editingEntry, setEditingEntry] = useState<MemoryEntry | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editCategory, setEditCategory] = useState<MemoryCategory>("context");
+  const [editDescription, setEditDescription] = useState("");
+  const [editContent, setEditContent] = useState("");
+  const [isLoadingContent, setIsLoadingContent] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const fetchEntries = useCallback(async () => {
     if (!userId) {
@@ -313,6 +331,79 @@ export function MemorySettings() {
         description: "An error occurred",
         variant: "destructive",
       });
+    }
+  };
+
+  const openEditDialog = async (entry: MemoryEntry) => {
+    // Seed the form with what we already have so the dialog opens instantly...
+    setEditingEntry(entry);
+    setEditTitle(entry.title);
+    setEditCategory(entry.category);
+    setEditDescription(entry.description || "");
+    setEditContent("");
+    setIsLoadingContent(true);
+
+    // ...then fetch the full content (the list endpoint omits it).
+    try {
+      const res = await fetch(`/api/proxy/memory/entries/${entry.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setEditContent(data.content || "");
+        setEditTitle(data.title ?? entry.title);
+        setEditCategory((data.category as MemoryCategory) ?? entry.category);
+        setEditDescription(data.description || "");
+      } else {
+        const text = await res.text();
+        let msg = "Failed to load memory content";
+        try { msg = JSON.parse(text).error || msg; } catch {}
+        throw new Error(msg);
+      }
+    } catch (error) {
+      toast({
+        title: "Failed to load entry",
+        description: error instanceof Error ? error.message : "An error occurred",
+        variant: "destructive",
+      });
+      setEditingEntry(null);
+    } finally {
+      setIsLoadingContent(false);
+    }
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingEntry) return;
+
+    setIsSaving(true);
+    try {
+      const res = await fetch(`/api/proxy/memory/entries/${editingEntry.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: editTitle.trim(),
+          category: editCategory,
+          description: editDescription.trim(),
+          content: editContent,
+        }),
+      });
+
+      if (res.ok) {
+        toast({ title: "Memory entry updated" });
+        setEditingEntry(null);
+        await fetchEntries();
+      } else {
+        const text = await res.text();
+        let msg = "Failed to update entry";
+        try { msg = JSON.parse(text).error || msg; } catch {}
+        throw new Error(msg);
+      }
+    } catch (error) {
+      toast({
+        title: "Failed to update",
+        description: error instanceof Error ? error.message : "An error occurred",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -537,18 +628,29 @@ export function MemorySettings() {
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       {canWrite && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleDelete(entry.id, entry.title)}
-                          disabled={deletingId === entry.id}
-                        >
-                          {deletingId === entry.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
-                          )}
-                        </Button>
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openEditDialog(entry)}
+                            title="Edit memory entry"
+                          >
+                            <Pencil className="h-4 w-4 text-muted-foreground hover:text-primary" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDelete(entry.id, entry.title)}
+                            disabled={deletingId === entry.id}
+                            title="Delete memory entry"
+                          >
+                            {deletingId === entry.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                            )}
+                          </Button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -558,6 +660,90 @@ export function MemorySettings() {
           )}
         </CardContent>
       </Card>
+
+      {/* Edit Memory Dialog */}
+      <Dialog open={!!editingEntry} onOpenChange={(open) => { if (!open) setEditingEntry(null); }}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Memory Entry</DialogTitle>
+            <DialogDescription>
+              Review and modify this entry&apos;s content. Changes are versioned.
+            </DialogDescription>
+          </DialogHeader>
+
+          {isLoadingContent ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label htmlFor="edit-memory-title" className="text-sm font-medium">Title</label>
+                  <Input
+                    id="edit-memory-title"
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    placeholder="Title"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="edit-memory-category" className="text-sm font-medium">Category</label>
+                  <Select value={editCategory} onValueChange={(v) => setEditCategory(v as MemoryCategory)}>
+                    <SelectTrigger id="edit-memory-category">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {USER_WRITABLE_CATEGORIES.map((cat) => (
+                        <SelectItem key={cat} value={cat}>
+                          {CATEGORY_META[cat].label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label htmlFor="edit-memory-description" className="text-sm font-medium">Description (optional)</label>
+                <Input
+                  id="edit-memory-description"
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  placeholder="Brief summary of what this contains"
+                />
+              </div>
+              <div className="space-y-1">
+                <label htmlFor="edit-memory-content" className="text-sm font-medium">Content (Markdown)</label>
+                <Textarea
+                  id="edit-memory-content"
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  className="min-h-[300px] font-mono text-sm"
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setEditingEntry(null)} disabled={isSaving}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSaveEdit}
+              disabled={isSaving || isLoadingContent || !editTitle.trim() || !editContent.trim()}
+            >
+              {isSaving ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save Changes"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <DiscoverySettings />
     </div>
