@@ -78,7 +78,7 @@ URI-fetched reference data — costs zero tokens until requested:
 | `aurora://catalog/skills` | All skills, with per-user connection status |
 | `aurora://incidents/recent` | Last 20 incidents (titles only, no full bodies) |
 | `aurora://runbooks/index` | Runbook index per connected doc connector |
-| `aurora://health` | Live system health: database, Redis, Weaviate, Celery |
+| `aurora://health` | Live system health: database, Redis, Celery |
 
 ## Prompts
 

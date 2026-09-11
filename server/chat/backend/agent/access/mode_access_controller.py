@@ -55,7 +55,6 @@ class ModeAccessController:
         safe_tool_names=(
             "web_search",
             "analyze_zip_file",
-            "rag_index_zip",
         ),
         blocked_tool_prefixes=("mcp_",),  # Block MCP tools by default
         iac_safe_actions=(

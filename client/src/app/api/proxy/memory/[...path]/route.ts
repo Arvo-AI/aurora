@@ -6,8 +6,8 @@ async function handler(
   { params }: { params: Promise<{ path: string[] }> },
 ) {
   const { path } = await params;
-  const backendPath = '/api/knowledge-base/' + path.join('/');
-  return forwardRequest(request, request.method, backendPath, 'knowledge-base');
+  const backendPath = '/api/memory/' + path.join('/');
+  return forwardRequest(request, request.method, backendPath, 'memory');
 }
 
 export { handler as GET, handler as POST, handler as PUT, handler as DELETE };

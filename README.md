@@ -271,7 +271,6 @@ aurora/
 | Backend | Python, Flask, Celery |
 | Frontend | Next.js, TypeScript |
 | Graph DB | Memgraph |
-| Vector Store | Weaviate |
 | Secrets | HashiCorp Vault, AWS Secrets Manager |
 | Storage | PostgreSQL, Redis, S3-compatible |
 

@@ -40,7 +40,7 @@ def app():
         del sys.modules[_mod]
 
     for heavy in (
-        "celery_config", "celery", "weaviate", "openai", "anthropic",
+        "celery_config", "celery", "openai", "anthropic",
         "chat.background.task", "chat.background.summarization",
         "routes.audit_routes",
     ):

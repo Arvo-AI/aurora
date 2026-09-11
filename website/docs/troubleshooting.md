@@ -108,7 +108,6 @@ Ensure these are free:
 - 5006 (Chatbot)
 - 5432 (PostgreSQL)
 - 6379 (Redis)
-- 8080 (Weaviate)
 - 8200 (Vault)
 - 8333 (SeaweedFS)
 

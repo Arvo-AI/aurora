@@ -2,8 +2,8 @@
 Postmortem Tools
 
 Agent-callable tools for reading and writing postmortem documents.
-Used by the built-in "Generate Postmortem" action and available
-during regular chat for postmortem-related queries.
+Postmortems are stored as artifacts with category='postmortem' and an
+incident_id linking them to the originating incident.
 """
 
 import json
@@ -11,7 +11,10 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from utils.validation import is_valid_uuid
+from utils.validation import is_valid_uuid, strip_nul
+from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
+from services.artifacts.store import create_version
 
 logger = logging.getLogger(__name__)
 
@@ -52,16 +55,13 @@ def get_postmortem(
         })
 
     try:
-        from utils.db.connection_pool import db_pool
-        from utils.auth.stateless_auth import set_rls_context
-
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[PostmortemTool]")
                 cursor.execute(
-                    """SELECT content, generated_at, updated_at
-                       FROM postmortems
-                       WHERE incident_id = %s""",
+                    """SELECT content, created_at, updated_at
+                       FROM artifacts
+                       WHERE incident_id = %s AND category = 'postmortem'""",
                     (incident_id,),
                 )
                 row = cursor.fetchone()
@@ -119,66 +119,62 @@ def save_postmortem(
     if len(content) > 100000:
         return json.dumps({"error": "Content exceeds maximum length (100000 chars)."})
 
-    try:
-        from utils.db.connection_pool import db_pool
-        from utils.auth.stateless_auth import set_rls_context
+    content = strip_nul(content)
 
+    try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[PostmortemTool:save]")
 
-                # Resolve org_id from the incident (under RLS) to prevent cross-tenant writes
-                cursor.execute("SELECT org_id FROM incidents WHERE id = %s", (incident_id,))
+                # Resolve org_id and alert_title from the incident
+                cursor.execute(
+                    "SELECT org_id, alert_title FROM incidents WHERE id = %s",
+                    (incident_id,),
+                )
                 incident_row = cursor.fetchone()
-                org_id = incident_row[0] if incident_row else None
-
-                if not org_id:
+                if not incident_row:
                     return json.dumps({"error": "Incident not found or not accessible."})
 
-                # Upsert the postmortem
+                org_id = incident_row[0]
+                alert_title = incident_row[1]
+                short_id = str(incident_id)[:8]
+                title = f"Postmortem: {alert_title} [{short_id}]" if alert_title else f"Postmortem ({incident_id})"
+
+                # Upsert the artifact with incident_id linkage
                 cursor.execute(
-                    """INSERT INTO postmortems (incident_id, user_id, org_id, content,
-                                               generation_session_id, generated_at, updated_at)
-                       VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                       ON CONFLICT (incident_id)
+                    """INSERT INTO artifacts
+                           (org_id, user_id, title, content, category, description,
+                            incident_id, generation_session_id, last_edited_by, updated_at)
+                       VALUES (%s, %s, %s, %s, 'postmortem', %s,
+                               %s, %s, 'agent', CURRENT_TIMESTAMP)
+                       ON CONFLICT (incident_id) WHERE incident_id IS NOT NULL
                        DO UPDATE SET content = EXCLUDED.content,
+                                     title = EXCLUDED.title,
+                                     description = EXCLUDED.description,
                                      generation_session_id = EXCLUDED.generation_session_id,
+                                     last_edited_by = 'agent',
                                      updated_at = CURRENT_TIMESTAMP
                        RETURNING id""",
-                    (incident_id, user_id, org_id, content, session_id),
+                    (org_id, user_id, title, content,
+                     f"Postmortem for incident: {alert_title or incident_id}",
+                     incident_id, session_id),
                 )
-                postmortem_row = cursor.fetchone()
-                if not postmortem_row:
+                row = cursor.fetchone()
+                if not row:
                     conn.rollback()
                     return json.dumps({"error": "Failed to save postmortem — access denied or conflict."})
-                postmortem_id = str(postmortem_row[0])
+                artifact_id = str(row[0])
 
-                # Create a version row (atomic with a subquery to prevent race conditions)
-                cursor.execute(
-                    """INSERT INTO postmortem_versions
-                       (postmortem_id, org_id, user_id, content, version_number, source, generation_session_id)
-                       VALUES (%s, %s, %s, %s,
-                               (SELECT COALESCE(MAX(version_number), 0) + 1
-                                FROM postmortem_versions WHERE postmortem_id = %s),
-                               %s, %s)
-                       RETURNING id, version_number""",
-                    (postmortem_id, org_id, user_id, content, postmortem_id, "agent", session_id),
+                version = create_version(
+                    cursor, artifact_id, org_id, user_id, content,
+                    source="agent", session_id=session_id,
                 )
-                version_row = cursor.fetchone()
-                version_id, next_version = str(version_row[0]), version_row[1]
-
-                # Update the current version pointer
-                cursor.execute(
-                    "UPDATE postmortems SET current_version_id = %s WHERE id = %s",
-                    (version_id, postmortem_id),
-                )
-
                 conn.commit()
 
         return json.dumps({
             "status": "ok",
-            "message": f"Postmortem saved (version {next_version}).",
-            "version": next_version,
+            "message": f"Postmortem saved (version {version}).",
+            "version": version,
         })
 
     except Exception:

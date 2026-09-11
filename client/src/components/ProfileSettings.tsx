@@ -21,7 +21,7 @@ const ROLE_INFO = {
     label: "Editor",
     color: "text-amber-500",
     badgeClass: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200",
-    description: "Everything a Viewer can do, plus connect integrations, manage documents and knowledge base, edit incidents and postmortems, and manage SSH keys and VMs.",
+    description: "Everything a Viewer can do, plus connect integrations, manage memory and documents, edit incidents and postmortems, and manage SSH keys and VMs.",
   },
   admin: {
     icon: Crown,

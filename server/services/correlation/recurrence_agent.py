@@ -208,32 +208,19 @@ def make_search_similar_rcas_tool(user_id: str):
         source_type: str = "",
         limit: int = 5,
     ) -> str:
-        try:
-            from routes.incident_feedback.weaviate_client import (
-                search_similar_good_rcas,
-            )
-
-            results = search_similar_good_rcas(
-                user_id,
-                query_title,
-                query_service,
-                source_type,
-                limit=max(1, min(int(limit), 10)),
-                min_score=0.5,
-            )
-            out = [
-                {
-                    "incident_id": r.get("incident_id", ""),
-                    "alert_title": r.get("alert_title", ""),
-                    "alert_service": r.get("alert_service", ""),
-                    "similarity": r.get("similarity"),
-                    "summary": (r.get("aurora_summary") or "")[:600],
-                }
-                for r in results
-            ]
-            return json.dumps({"results": out})
-        except Exception as e:
-            return json.dumps({"error": f"search failed: {e}"})
+        # TODO(memory-system merge): semantic RCA search was backed by the
+        # deleted weaviate store (routes.incident_feedback.weaviate_client
+        # .search_similar_good_rcas). Re-implement on top of services/memory
+        # + services.correlation.embedding_client, then restore real results.
+        # Until then return an empty, well-formed result: the recurrence agent
+        # still runs (fold/clamp/verdict logic is intact) and falls back to
+        # list_incidents/get_incident, it just loses semantic similarity search.
+        logger.warning(
+            "%s search_similar_rcas is stubbed (weaviate removed in "
+            "memory-system merge); returning no results",
+            _LOG_PREFIX,
+        )
+        return json.dumps({"results": []})
 
     return StructuredTool.from_function(
         func=search_similar_rcas,
@@ -453,7 +440,6 @@ async def _run_agent(
     from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
     from chat.backend.agent.agent import Agent
     from chat.backend.agent.db import PostgreSQLClient
-    from chat.backend.agent.weaviate_client import WeaviateClient
     from chat.backend.agent.utils.state import State
     from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.tools.cloud_tools import get_cloud_tools
@@ -522,10 +508,10 @@ async def _run_agent(
     ]
 
     postgres_client = PostgreSQLClient()
-    weaviate_client = WeaviateClient(postgres_client)
+    # NOTE(memory-system merge): Agent no longer takes a weaviate_client — the
+    # weaviate store was removed on this branch. Constructed with postgres only.
     try:
         agent = Agent(
-            weaviate_client=weaviate_client,
             postgres_client=postgres_client,
         )
         agent.set_tool_capture(tool_capture)
@@ -536,10 +522,6 @@ async def _run_agent(
             max_turns=MAX_TURNS,
         )
     finally:
-        try:
-            weaviate_client.close()
-        except Exception:
-            logger.exception("%s Failed to close weaviate client", _LOG_PREFIX)
         try:
             postgres_client.close()
         except Exception:

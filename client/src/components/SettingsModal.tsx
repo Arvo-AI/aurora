@@ -3,12 +3,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Settings, User, BookOpen, FileText, Building2, Shield, DollarSign } from "lucide-react";
+import { Settings, User, BookOpen, Building2, Shield, DollarSign } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneralSettings } from "@/components/GeneralSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
-import { KnowledgeBaseSettings } from "@/components/KnowledgeBaseSettings";
-import { PostmortemsSettings } from "@/components/PostmortemsSettings";
+import { MemorySettings } from "@/components/MemorySettings";
 import { OrgSettings } from "@/components/OrgSettings";
 import { SecuritySettings } from "@/components/SecuritySettings";
 import { useUser, useAuth } from "@/hooks/useAuthHooks";
@@ -21,7 +20,7 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'organization' | 'general' | 'profile' | 'knowledge-base' | 'postmortems' | 'security' | 'usage';
+type SettingsTab = 'organization' | 'general' | 'profile' | 'memory' | 'security' | 'usage';
 
 const UsageTab = React.lazy(() => import('@/app/monitor/components/usage-tab'));
 
@@ -51,16 +50,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       description: 'Update your profile information'
     },
     {
-      id: 'knowledge-base' as SettingsTab,
-      label: 'Knowledge Base',
+      id: 'memory' as SettingsTab,
+      label: 'Memory',
       icon: BookOpen,
-      description: 'Manage documentation and context'
-    },
-    {
-      id: 'postmortems' as SettingsTab,
-      label: 'Postmortems',
-      icon: FileText,
-      description: 'View generated postmortems'
+      description: 'Manage knowledge and context'
     },
     {
       id: 'security' as SettingsTab,
@@ -110,11 +103,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </div>
         );
       
-      case 'knowledge-base':
+      case 'memory':
         return (
           <div className="p-6 h-full overflow-y-auto flex flex-col min-h-0">
             <div className="flex-1 overflow-y-auto min-h-0">
-              <KnowledgeBaseSettings />
+              <MemorySettings />
             </div>
           </div>
         );
@@ -126,13 +119,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             <div className="flex-1 overflow-y-auto min-h-0">
               <ProfileSettings />
             </div>
-          </div>
-        );
-
-      case 'postmortems':
-        return (
-          <div className="h-full overflow-y-auto">
-            <PostmortemsSettings />
           </div>
         );
 

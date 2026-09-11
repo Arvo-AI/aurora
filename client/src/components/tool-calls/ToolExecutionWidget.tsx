@@ -81,8 +81,18 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   let command: string = tool.command || normalizedInput || defaultCliCommand
 
   // Special display names for specific tools
-  if (tool.tool_name === "knowledge_base_search") {
-    command = "Knowledge Base"
+  if (tool.tool_name === "list_memories") {
+    command = "List Memories"
+  } else if (tool.tool_name === "read_memory") {
+    command = "Read Memory"
+  } else if (tool.tool_name === "write_memory") {
+    command = "Write Memory"
+  } else if (tool.tool_name === "append_to_memory") {
+    command = "Append to Memory"
+  } else if (tool.tool_name === "edit_memory") {
+    command = "Edit Memory"
+  } else if (tool.tool_name === "grep_memories") {
+    command = "Search Memory"
   }
 
   if (tool.tool_name === "load_skill") {

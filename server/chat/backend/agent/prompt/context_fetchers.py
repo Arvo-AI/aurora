@@ -6,6 +6,8 @@ import re
 from typing import Optional
 
 from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
+from utils.db.org_scope import resolve_org, org_read_predicate
 
 
 def build_manual_vm_access_segment(user_id: Optional[str]) -> str:
@@ -14,8 +16,6 @@ def build_manual_vm_access_segment(user_id: Optional[str]) -> str:
         return ""
 
     try:
-        from utils.auth.stateless_auth import set_rls_context
-        from utils.db.org_scope import resolve_org, org_read_predicate
         org_id = resolve_org(user_id)
         _, pred_params = org_read_predicate(user_id, org_id)
         vm_predicate = "(mv.user_id = %s OR mv.org_id = %s)" if org_id else "mv.user_id = %s"
@@ -72,56 +72,3 @@ def build_manual_vm_access_segment(user_id: Optional[str]) -> str:
         lines.append(f"- {name}{label_str}: {base_cmd} {user_display}@{ip} -p {port} \"<command>\"")
 
     return "\n".join(lines) + "\n"
-
-
-def build_knowledge_base_memory_segment(user_id: Optional[str]) -> str:
-    """Build knowledge base memory segment for system prompt.
-
-    Fetches the org's knowledge base memory content and formats it for injection
-    into the system prompt. This content is always included for authenticated users.
-    """
-    if not user_id:
-        return ""
-
-    kb_logger = logging.getLogger(__name__)
-
-    try:
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            # No RLS needed — users, knowledge_base_memory not RLS-protected
-            cursor.execute(
-                "SELECT org_id FROM users WHERE id = %s", (user_id,)
-            )
-            user_row = cursor.fetchone()
-            org_id = user_row[0] if user_row else None
-
-            if org_id:
-                cursor.execute(
-                    "SELECT content FROM knowledge_base_memory WHERE org_id = %s ORDER BY updated_at DESC LIMIT 1",
-                    (org_id,)
-                )
-            else:
-                cursor.execute(
-                    "SELECT content FROM knowledge_base_memory WHERE user_id = %s ORDER BY updated_at DESC LIMIT 1",
-                    (user_id,)
-                )
-            row = cursor.fetchone()
-
-        if row and row[0] and row[0].strip():
-            content = row[0].strip()
-            # Escape curly braces for LangChain template compatibility
-            content = content.replace("{", "{{").replace("}", "}}")
-
-            return (
-                "=" * 40 + "\n"
-                "USER-PROVIDED CONTEXT (Knowledge Base Memory)\n"
-                "=" * 40 + "\n"
-                "The user has provided the following context that should inform your analysis:\n\n"
-                f"{content}\n\n"
-                "Consider this context when investigating issues and making recommendations.\n"
-                "=" * 40 + "\n"
-            )
-    except Exception as e:
-        kb_logger.warning(f"[KB] Error fetching knowledge base memory for user {user_id}: {e}")
-
-    return ""

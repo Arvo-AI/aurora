@@ -75,7 +75,7 @@ eksctl create cluster \
 
 ## Step 2: Install EBS CSI Driver
 
-EKS does **not** ship with a working storage driver. Without this, all database pods (Postgres, Redis, Vault, Weaviate) will be stuck in `Pending`.
+EKS does **not** ship with a working storage driver. Without this, all database pods (Postgres, Redis, Vault) will be stuck in `Pending`.
 
 ```bash
 export AWS_REGION="us-east-1"

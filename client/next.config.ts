@@ -23,6 +23,12 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "50mb",
+    },
+    middlewareClientMaxBodySize: "50mb",
+  },
   cacheMaxMemorySize: 0,
   poweredByHeader: false,
   webpack: (config, { isServer, dev }) => {

@@ -82,7 +82,7 @@ eksctl create iamserviceaccount \
 
 ### 2. Install the EBS CSI Driver
 
-Aurora's stateful services (Postgres, Redis, Weaviate) require persistent volumes. A fresh EKS cluster needs the EBS CSI driver and a default StorageClass:
+Aurora's stateful services (Postgres, Redis) require persistent volumes. A fresh EKS cluster needs the EBS CSI driver and a default StorageClass:
 
 ```bash
 # Create IRSA for the driver

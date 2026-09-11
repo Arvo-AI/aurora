@@ -17,8 +17,8 @@ RLS_EXCLUSIONS: Set[str] = {
     "users",                      # queried during login before org context is set
     "audit_log",                  # written with explicit org_id outside RLS session scope
     "org_invitations",            # queried during invite/join flows before org context
-    "knowledge_base_documents",   # Celery cleanup_stale_documents runs cross-org sweeps
-    "knowledge_base_memory",      # same Celery task dependency as knowledge_base_documents
+    "knowledge_base_documents",   # Legacy KB tables kept as migration source data
+    "knowledge_base_memory",      # Legacy KB tables kept as migration source data
     "infrastructure_context",     # org_id is the PK; single row per org, queried directly
     "user_github_installations",  # join table — installations are system-wide and shared
                                   # across users; webhook handlers and the install callback
