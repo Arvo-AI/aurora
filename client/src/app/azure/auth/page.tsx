@@ -13,6 +13,13 @@ import { copyToClipboard } from '@/lib/utils';
 
 const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
+type AzureCredentialSet = {
+  tenantId: string;
+  appId: string;
+  password: string;
+  subscriptionId: string;
+};
+
 
 export default function AzureAuthPage() {
   const [isLoading, setIsLoading] = useState(false);
@@ -93,16 +100,23 @@ export default function AzureAuthPage() {
     }
   };
 
-  const buildReadOnlyPayload = (fallbackTenantId: string, fallbackSubscriptionId: string) => {
-    if (!readOnlyCredentials.appId || !readOnlyCredentials.password) {
+  // Takes creds explicitly rather than reading readOnlyCredentials state: the
+  // caller parses and setState()s them in the same tick, so the state value is
+  // still empty here and the read-only identity would be silently dropped.
+  const buildReadOnlyPayload = (
+    creds: AzureCredentialSet,
+    fallbackTenantId: string,
+    fallbackSubscriptionId: string,
+  ) => {
+    if (!creds.appId || !creds.password) {
       return undefined;
     }
 
     return {
-      tenantId: readOnlyCredentials.tenantId || fallbackTenantId,
-      clientId: readOnlyCredentials.appId,
-      clientSecret: readOnlyCredentials.password,
-      subscriptionId: readOnlyCredentials.subscriptionId || fallbackSubscriptionId,
+      tenantId: creds.tenantId || fallbackTenantId,
+      clientId: creds.appId,
+      clientSecret: creds.password,
+      subscriptionId: creds.subscriptionId || fallbackSubscriptionId,
     };
   };
 
@@ -131,6 +145,9 @@ export default function AzureAuthPage() {
       }
 
       let currentCredentials = credentials;
+      // Local, not state: setReadOnlyCredentials below does not apply until the
+      // next render, and the payload is built before then.
+      let currentReadOnly: AzureCredentialSet = { ...readOnlyCredentials };
 
       // Parse JSON if provided
       if (jsonInput) {
@@ -162,12 +179,13 @@ export default function AzureAuthPage() {
 
             // Set read-only credentials if valid
             if (readOnlyCreds.clientId && readOnlyCreds.clientSecret) {
-              setReadOnlyCredentials({
+              currentReadOnly = {
                 tenantId: readOnlyCreds.tenantId || agentCreds.tenantId,
                 appId: readOnlyCreds.clientId,
                 password: readOnlyCreds.clientSecret,
                 subscriptionId: readOnlyCreds.subscriptionId || agentCreds.subscriptionId
-              });
+              };
+              setReadOnlyCredentials(currentReadOnly);
               setShowReadOnlyCredentialsPreview(true);
             }
 
@@ -205,15 +223,16 @@ export default function AzureAuthPage() {
         return;
       }
 
-      if (readOnlyJsonInput.trim() && !readOnlyCredentials.appId) {
+      if (readOnlyJsonInput.trim() && !currentReadOnly.appId) {
         setError("Please fix the read-only credentials JSON before continuing");
         setIsLoading(false);
         return;
       }
 
       const readOnlyPayload = buildReadOnlyPayload(
+        currentReadOnly,
         currentCredentials.tenantId,
-        subscriptionId || readOnlyCredentials.subscriptionId || "",
+        subscriptionId || currentReadOnly.subscriptionId || "",
       );
 
       const requestBody: Record<string, any> = {
@@ -312,120 +331,6 @@ export default function AzureAuthPage() {
       localStorage.setItem("isAzureConnected", "false");
       // Clear connecting flag on error
       localStorage.removeItem("isAzureConnecting");
-    } finally {
-      setIsLoading(false);
-      // Ensure connecting flag is always cleared
-      localStorage.removeItem("isAzureConnecting");
-      // Dispatch event to notify state changes
-      window.dispatchEvent(new CustomEvent('providerStateChanged'));
-    }
-  };
-
-  const handleConnect = async () => {
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      // Get userId from API
-      let userId = "";
-      try {
-        const userResponse = await fetch("/api/getUserId");
-        const userData = await userResponse.json();
-        if (userData.userId) {
-          userId = userData.userId;
-        }
-      } catch (error) {
-        console.error("Error fetching user ID from API:", error);
-      }
-
-      if (readOnlyJsonInput.trim() && !readOnlyCredentials.appId) {
-        setError("Please fix the read-only credentials JSON before continuing");
-        setIsLoading(false);
-        return;
-      }
-
-      const readOnlyPayload = buildReadOnlyPayload(
-        credentials.tenantId,
-        subscriptionId || readOnlyCredentials.subscriptionId || "",
-      );
-
-      const requestBody: Record<string, any> = {
-        userId,
-        tenantId: credentials.tenantId,
-        clientId: credentials.appId,
-        clientSecret: credentials.password,
-        subscriptionId: subscriptionId,
-        subscriptionName: subscription_name,
-        authMethod: "service_principal",
-      };
-
-      if (readOnlyPayload) {
-        requestBody.readOnlyCredentials = readOnlyPayload;
-      }
-
-      // Make request to backend login
-      const response = await fetch(`/api/proxy/azure/login`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error("Azure login response error:", errorData);
-        throw new Error(errorData.error || "Failed to login to Azure");
-      }
-
-      // After successful login, fetch data
-      const fetchResponse = await fetch(`/api/proxy/azure/fetch_data?userId=${encodeURIComponent(userId)}`, {
-        method: "GET",
-      });
-
-      if (!fetchResponse.ok) {
-        throw new Error("Failed to fetch Azure data");
-      }
-
-      const fetchData = await fetchResponse.json();
-
-      
-      localStorage.setItem("isAzureConnected", "true");
-      localStorage.setItem("cloudProvider", "azure");
-      localStorage.setItem("isAzureFetched", "true"); // Data already fetched during connection
-      localStorage.setItem("isLoggedAurora", "true");
-      
-      // Auto-select Azure provider when connection succeeds (legitimate connection)
-      const { providerPreferencesService } = await import('@/lib/services/providerPreferences');
-      await providerPreferencesService.smartAutoSelect('azure', true);
-      
-      // Clear connecting flag and dispatch event to notify other components of state change
-      localStorage.removeItem("isAzureConnecting");
-      localStorage.removeItem("isAzureConnecting_timestamp");
-      window.dispatchEvent(new CustomEvent('providerStateChanged'));
-      
-      setIsConnected(true);
-
-      setSubscriptionCount(fetchData.subscription_count || 0);
-
-      if (fetchData.clusters && fetchData.clusters.length > 0) {
-        setBackendClusters(fetchData.clusters);
-      }
-      
-      // Redirect to chat after successful Azure authentication
-      setTimeout(() => {
-        router.replace('/chat');
-      }, 200);
-
-    } catch (error: any) {
-      console.error("Error connecting to Azure:", error);
-      const message = (typeof error?.message === 'string' ? error.message : 'Failed to connect to Azure').trim();
-      setError(message.includes('permissions to propagate') ? message : `${message}${/[.!?]$/.test(message) ? '' : '.'}${PROPAGATION_NOTE}`);
-      localStorage.setItem("isAzureConnected", "false");
-      // Clear connecting flag on error
-      localStorage.removeItem("isAzureConnecting");
-      localStorage.removeItem("isAzureConnecting_timestamp");
-      window.dispatchEvent(new CustomEvent('providerStateChanged'));
     } finally {
       setIsLoading(false);
       // Ensure connecting flag is always cleared
