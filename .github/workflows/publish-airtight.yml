@@ -18,7 +18,7 @@ jobs:
   airtight:
     name: Airtight ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
-    if: github.repository == 'Arvo-AI/aurora'
+    if: github.repository == 'Arvo-AI/aurora' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: read
       id-token: write
@@ -32,15 +32,16 @@ jobs:
           - arch: amd64
             platform: linux/amd64
             runner: ubuntu-24.04
-            bucket: gs://aurora-airtight-bucket
-            bucket_url: https://storage.googleapis.com/aurora-airtight-bucket
+            prefix: amd64
           - arch: arm64
             platform: linux/arm64
             runner: ubuntu-24.04-arm
-            bucket: gs://aurora-airtight-bucket-arm64
-            bucket_url: https://storage.googleapis.com/aurora-airtight-bucket-arm64
+            prefix: arm64
 
     env:
+      AWS_REGION: us-east-1
+      AIRTIGHT_BUCKET: arvo-aurora-airtight
+      AIRTIGHT_BUCKET_URL: https://arvo-aurora-airtight.s3.us-east-1.amazonaws.com
       AURORA_IMAGES: "aurora_server:latest aurora_celery-worker:latest aurora_celery-beat:latest aurora_chatbot:latest aurora_mcp:latest aurora_frontend:latest"
       THIRD_PARTY_IMAGES: >-
         postgres:15-alpine
@@ -68,13 +69,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+          role-to-assume: arn:aws:iam::390403884122:role/aurora-github-airtight
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 7200
 
       - name: Compute version tag
         id: version
@@ -124,39 +124,49 @@ jobs:
           echo "filename=$FILENAME" >> "$GITHUB_OUTPUT"
           echo "Bundle: $FILENAME ($(du -h "$FILENAME" | cut -f1))"
 
-      - name: Upload to GCS
+      - name: Upload to S3
         run: |
           FILENAME="${{ steps.tarball.outputs.filename }}"
-          gcloud storage cp "$FILENAME" "${{ matrix.bucket }}/"
-          gcloud storage cp "${FILENAME}.sha256" "${{ matrix.bucket }}/"
-          echo "Uploaded to ${{ matrix.bucket }}/$FILENAME"
+          PREFIX="${{ matrix.prefix }}"
+          aws s3 cp "$FILENAME" "s3://${AIRTIGHT_BUCKET}/${PREFIX}/${FILENAME}"
+          aws s3 cp "${FILENAME}.sha256" "s3://${AIRTIGHT_BUCKET}/${PREFIX}/${FILENAME}.sha256"
+          echo "Uploaded to s3://${AIRTIGHT_BUCKET}/${PREFIX}/${FILENAME}"
 
       - name: Regenerate bucket index
         env:
-          BUCKET_NAME: ${{ matrix.bucket }}
+          PREFIX: ${{ matrix.prefix }}
           ARCH: ${{ matrix.arch }}
         run: |
-          BNAME="${BUCKET_NAME#gs://}"
-          export BNAME ARCH
           python3 -c '
-          import json, urllib.request, os
-          b, arch = os.environ["BNAME"], os.environ["ARCH"]
-          url = f"https://storage.googleapis.com/{b}"
-          data = json.load(urllib.request.urlopen(f"https://storage.googleapis.com/storage/v1/b/{b}/o?fields=items(name,size,updated)"))
+          import json, os, subprocess
+
+          bucket, prefix, arch = os.environ["AIRTIGHT_BUCKET"], os.environ["PREFIX"], os.environ["ARCH"]
+          url = os.environ["AIRTIGHT_BUCKET_URL"] + "/" + prefix
+          items, token = [], None
+          while True:
+              cmd = ["aws", "s3api", "list-objects-v2", "--bucket", bucket, "--prefix", f"{prefix}/", "--output", "json"]
+              if token:
+                  cmd += ["--continuation-token", token]
+              data = json.loads(subprocess.check_output(cmd))
+              items.extend(data.get("Contents") or [])
+              token = data.get("NextContinuationToken")
+              if not token:
+                  break
           rows = []
-          for i in sorted(data.get("items",[]), key=lambda x: x["updated"], reverse=True):
-              n = i["name"]
-              if n == "index.html" or (not n.endswith(".tar.gz") and not n.endswith(".tar.gz.sha256")): continue
-              sz = int(i["size"])
+          for i in sorted(items, key=lambda x: x["LastModified"], reverse=True):
+              n = i["Key"].rsplit("/", 1)[-1]
+              if n == "index.html" or (not n.endswith(".tar.gz") and not n.endswith(".tar.gz.sha256")):
+                  continue
+              sz = int(i["Size"])
               s = f"{sz/1073741824:.1f} GB" if sz > 1e9 else f"{sz/1048576:.0f} MB" if sz > 1e6 else f"{sz} B"
-              d = i["updated"][:10]
+              d = str(i["LastModified"])[:10]
               rows.append(f"<tr><td><a href={url}/{n}>{n}</a></td><td class=m>{s}</td><td class=m>{d}</td></tr>")
           css="body{font-family:-apple-system,system-ui,sans-serif;max-width:900px;margin:40px auto;padding:0 20px;color:#e6e6e6;background:#0d1117}h1{font-size:1.4em;border-bottom:1px solid #30363d;padding-bottom:12px}table{width:100%;border-collapse:collapse}th{text-align:left;padding:8px 12px;border-bottom:2px solid #30363d;font-size:.85em;color:#8b949e}td{padding:8px 12px;border-bottom:1px solid #21262d;font-size:.9em}a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}.m{color:#8b949e}"
           link="https://arvo-ai.github.io/aurora/docs/deployment/vm-deployment#secure-deployment-air-tight"
           r = "".join(rows)
           print(f"<!DOCTYPE html><html lang=en><head><meta charset=utf-8><title>Aurora Airtight Bundles ({arch})</title><style>{css}</style></head><body><h1>Aurora Airtight Bundles ({arch})</h1><p>Each bundle contains all Docker images needed to run Aurora without internet access.</p><table><tr><th>File</th><th>Size</th><th>Date</th></tr>{r}</table><p style=margin-top:24px;font-size:.8em;color:#8b949e>See the <a href={link}>deployment guide</a> for full instructions.</p></body></html>")
           ' > /tmp/index.html
-          gcloud storage cp /tmp/index.html "${BUCKET_NAME}/index.html" --content-type="text/html"
+          aws s3 cp /tmp/index.html "s3://${AIRTIGHT_BUCKET}/${PREFIX}/index.html" --content-type "text/html" --cache-control "no-cache"
 
       - name: Attest build provenance
         id: attest
@@ -171,17 +181,17 @@ jobs:
           FILENAME="${{ steps.tarball.outputs.filename }}"
           DIGEST="sha256:$(cut -d' ' -f1 "${FILENAME}.sha256")"
           VERSION="${{ steps.version.outputs.tag }}"
-          ARTIFACT_URL="${{ matrix.bucket_url }}/${FILENAME}"
+          ARTIFACT_URL="${AIRTIGHT_BUCKET_URL}/${{ matrix.prefix }}/${FILENAME}"
 
           if ! gh api -X POST /orgs/Arvo-AI/artifacts/metadata/storage-record \
             -f name="aurora-airtight-${{ matrix.arch }}" \
             -f digest="$DIGEST" \
             -f version="$VERSION" \
             -f artifact_url="$ARTIFACT_URL" \
-            -f registry_url="${{ matrix.bucket_url }}/" \
+            -f registry_url="${AIRTIGHT_BUCKET_URL}/${{ matrix.prefix }}/" \
             -f status="active" \
             -f github_repository="aurora"; then
-            echo "::warning::Failed to register linked artifact -- GCS upload succeeded, but the artifact won't appear on the GitHub linked artifacts page"
+            echo "::warning::Failed to register linked artifact -- S3 upload succeeded, but the artifact won't appear on the GitHub linked artifacts page"
           fi
 
   publish-summary:

@@ -345,23 +345,21 @@ Use this path when the target VM has restricted or no outbound internet access (
 
 ### 1. Download the Bundle
 
-Prebuilt airtight bundles are published to Google Cloud Storage on every release and push to `main`. Download on a machine with internet access.
+Prebuilt airtight bundles are published to Amazon S3 on every release and push to `main`. Download on a machine with internet access.
 
 **Browse available bundles:**
-- [amd64 bundles](https://storage.googleapis.com/aurora-airtight-bucket/index.html)
-- [arm64 bundles](https://storage.googleapis.com/aurora-airtight-bucket-arm64/index.html)
+- [amd64 bundles](https://arvo-aurora-airtight.s3.us-east-1.amazonaws.com/amd64/index.html)
+- [arm64 bundles](https://arvo-aurora-airtight.s3.us-east-1.amazonaws.com/arm64/index.html)
 
 **Download** — set your version and architecture, then download:
 
 ```bash
 VERSION=v1.2.3   # replace with your target version (or commit SHA, e.g. 4c92267)
 ARCH=amd64       # or arm64
+BASE="https://arvo-aurora-airtight.s3.us-east-1.amazonaws.com/${ARCH}"
 
-# amd64 bundles are in aurora-airtight-bucket, arm64 in aurora-airtight-bucket-arm64
-BUCKET="aurora-airtight-bucket$([ "$ARCH" = "arm64" ] && echo "-arm64")"
-
-curl -LO "https://storage.googleapis.com/${BUCKET}/aurora-airtight-${VERSION}-${ARCH}.tar.gz"
-curl -LO "https://storage.googleapis.com/${BUCKET}/aurora-airtight-${VERSION}-${ARCH}.tar.gz.sha256"
+curl -LO "${BASE}/aurora-airtight-${VERSION}-${ARCH}.tar.gz"
+curl -LO "${BASE}/aurora-airtight-${VERSION}-${ARCH}.tar.gz.sha256"
 ```
 
 Version tags (e.g. `v1.2.3`) are published on releases. Commit-based bundles (e.g. `4c92267`) are published on every push to `main`.
@@ -519,9 +517,9 @@ Each new Aurora release requires a fresh bundle. On a machine with internet acce
 ```bash
 VERSION=<new-version>  # replace with the new release tag or commit SHA
 ARCH=amd64             # or arm64
-BUCKET="aurora-airtight-bucket$([ "$ARCH" = "arm64" ] && echo "-arm64")"
+BASE="https://arvo-aurora-airtight.s3.us-east-1.amazonaws.com/${ARCH}"
 
-curl -LO "https://storage.googleapis.com/${BUCKET}/aurora-airtight-${VERSION}-${ARCH}.tar.gz"
+curl -LO "${BASE}/aurora-airtight-${VERSION}-${ARCH}.tar.gz"
 ```
 
 Transfer the new tarball to the VM, then:
