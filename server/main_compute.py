@@ -232,7 +232,6 @@ _OPEN_PREFIXES = (
     "/jira/webhook/",
     "/incidentio/alerts/webhook/",
     "/ovh_api/ovh/oauth2/callback",
-    "/azure/callback",
     "/azure/setup-script",
     "/azure/setup-script-ps1",
     "/aws/setup-script",

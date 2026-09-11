@@ -7,7 +7,9 @@ from typing import Optional, List, Dict
 
 from utils.db.db_utils import connect_to_db_as_user, connect_to_db_as_admin
 from utils.auth.stateless_auth import set_rls_context
+from utils.db.org_scope import org_read_predicate
 from utils.log_sanitizer import sanitize, safe_provider, hash_for_log
+from utils.secrets.secret_ref_utils import SecretRefManager
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +43,29 @@ def save_connection_metadata(
 
     Uses an UPSERT so callers can invoke freely.
     Returns True on success, False otherwise.
+
+    Connectors are org-shared and reads match on (user_id OR org_id), but the
+    unique constraint is (user_id, provider, account_id). So an org member
+    writing an account someone else connected would insert a second, competing
+    row rather than update the existing one -- leaving a disabled subscription
+    still visible as active, and duplicating it in cloud_exec fan-out. Update
+    any existing row for this org first, and only insert when there is none.
     """
     org_id = _resolve_org_id(user_id)
+    predicate, pred_params = org_read_predicate(user_id, org_id)
+
+    sql_update_existing = f"""
+        UPDATE user_connections SET
+            role_arn = %s,
+            read_only_role_arn = %s,
+            connection_method = %s,
+            region = COALESCE(%s, region),
+            workspace_id = COALESCE(%s, workspace_id),
+            status = %s,
+            last_verified_at = %s
+        WHERE {predicate} AND provider = %s AND account_id = %s;
+    """
+
     sql = """
         INSERT INTO user_connections (
             user_id, org_id, provider, account_id, role_arn, read_only_role_arn,
@@ -64,22 +87,39 @@ def save_connection_metadata(
         conn = connect_to_db_as_admin()
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:save]")
+            now = datetime.now(timezone.utc)
             cur.execute(
-                sql,
+                sql_update_existing,
                 (
-                    user_id,
-                    org_id,
-                    provider,
-                    account_id,
                     role_arn,
                     read_only_role_arn,
                     connection_method,
                     region,
                     workspace_id,
                     status,
-                    datetime.now(timezone.utc),
+                    now,
+                    *pred_params,
+                    provider,
+                    account_id,
                 ),
             )
+            if cur.rowcount == 0:
+                cur.execute(
+                    sql,
+                    (
+                        user_id,
+                        org_id,
+                        provider,
+                        account_id,
+                        role_arn,
+                        read_only_role_arn,
+                        connection_method,
+                        region,
+                        workspace_id,
+                        status,
+                        now,
+                    ),
+                )
         conn.commit()
         logger.info("[CONN-META] Upsert successful user=%s provider=%s account=%s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id))
         return True
@@ -228,39 +268,40 @@ def get_user_aws_connection(user_id: str) -> Optional[Dict]:
             conn.close()
 
 
-def get_all_user_aws_connections(user_id: str) -> List[Dict]:
-    """Get all active AWS connections for a user (including org-shared).
+def get_all_user_connections(user_id: str, provider: str = "aws") -> List[Dict]:
+    """Get all active connections for a user and provider (including org-shared).
 
-    Returns a list of connection dicts, one per connected AWS account.
+    Returns a list of connection dicts, one per connected account/subscription.
     Each dict includes account_id, role_arn, read_only_role_arn, region,
-    connection_method, and last_verified_at.
+    connection_method, and last_verified_at. The role_arn columns are
+    AWS-specific and are NULL for other providers.
     """
     org_id = _resolve_org_id(user_id)
     if org_id:
         sql = """
             SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
             FROM user_connections
-            WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
+            WHERE (user_id = %s OR org_id = %s) AND provider = %s AND status = 'active'
             ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END, account_id;
         """
-        params = (user_id, org_id, user_id)
+        params = (user_id, org_id, provider, user_id)
     else:
         sql = """
             SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
             FROM user_connections
-            WHERE user_id = %s AND provider = 'aws' AND status = 'active'
+            WHERE user_id = %s AND provider = %s AND status = 'active'
             ORDER BY account_id;
         """
-        params = (user_id,)
+        params = (user_id, provider)
     conn = None
     try:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:allAws]")
+            set_rls_context(cur, conn, user_id, log_prefix=f"[CONN-META:all:{provider}]")
             cur.execute(sql, params)
             rows = cur.fetchall()
 
-        logger.info("[CONN-META] Fetched %d active AWS connections for user %s", len(rows), user_id)
+        logger.info("[CONN-META] Fetched %d active %s connections for user %s", len(rows), provider, user_id)
         return [
             {
                 "account_id": row[0],
@@ -273,11 +314,16 @@ def get_all_user_aws_connections(user_id: str) -> List[Dict]:
             for row in rows
         ]
     except Exception as e:
-        logger.error("Error getting AWS connections for user %s: %s", user_id, e)
+        logger.error("Error getting %s connections for user %s: %s", provider, user_id, e)
         return []
     finally:
         if conn:
             conn.close()
+
+
+def get_all_user_aws_connections(user_id: str) -> List[Dict]:
+    """Back-compat alias for the AWS call sites."""
+    return get_all_user_connections(user_id, "aws")
 
 
 # ---------------------------------------------------------------------------
@@ -317,19 +363,26 @@ def delete_connection_secret(
     the Vault secret. For providers using STS AssumeRole (AWS), it just marks
     the connection inactive.
 
+    Scoped to the caller's org, matching the org-wide reads in
+    get_all_user_connections. Connectors are org-shared: whoever connected the
+    account owns the row, so a user-only predicate here meant any other org
+    member's disconnect silently matched nothing and left the connection
+    reporting as active.
+
     Returns ``True`` when database update succeeds.
     """
+    predicate, pred_params = org_read_predicate(user_id, _resolve_org_id(user_id))
 
     sql_select = (
         "SELECT role_arn "
         "FROM user_connections "
-        "WHERE user_id = %s AND provider = %s AND account_id = %s AND status = 'active' LIMIT 1;"
+        f"WHERE {predicate} AND provider = %s AND account_id = %s AND status = 'active' LIMIT 1;"
     )
 
     sql_update = (
         "UPDATE user_connections "
         "SET status = 'inactive', last_verified_at = %s "
-        "WHERE user_id = %s AND provider = %s AND account_id = %s;"
+        f"WHERE {predicate} AND provider = %s AND account_id = %s;"
     )
 
     conn = None
@@ -337,7 +390,7 @@ def delete_connection_secret(
         conn = connect_to_db_as_admin()
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:deleteSecret]")
-            cur.execute(sql_select, (user_id, provider, account_id))
+            cur.execute(sql_select, (*pred_params, provider, account_id))
             row = cur.fetchone()
             
             if not row:
@@ -345,29 +398,34 @@ def delete_connection_secret(
                 return False
 
             if provider in ['gcp', 'azure', 'github']:
+                # secret_ref is optional across schemas, but a failed SELECT aborts
+                # the whole transaction in PostgreSQL, which silently skipped the
+                # UPDATE below and left connections reporting as active forever.
+                # The savepoint scopes that failure to just this probe.
+                cur.execute("SAVEPOINT secret_ref_probe")
                 try:
-                    from utils.secrets.secret_ref_utils import SecretRefManager
-                    # Try to get secret_ref if column exists (may not for all schemas)
+                    cur.execute(
+                        "SELECT secret_ref FROM user_connections "
+                        f"WHERE {predicate} AND provider = %s AND account_id = %s",
+                        (*pred_params, provider, account_id),
+                    )
+                    secret_row = cur.fetchone()
+                    cur.execute("RELEASE SAVEPOINT secret_ref_probe")
+                except Exception:
+                    cur.execute("ROLLBACK TO SAVEPOINT secret_ref_probe")
+                    secret_row = None
+
+                if secret_row and secret_row[0]:
                     try:
-                        cur.execute(
-                            "SELECT secret_ref FROM user_connections WHERE user_id = %s AND provider = %s AND account_id = %s",
-                            (user_id, provider, account_id)
-                        )
-                        secret_row = cur.fetchone()
-                        if secret_row and secret_row[0]:
-                            srm = SecretRefManager()
-                            srm.delete_secret(secret_row[0])
-                    except Exception:
-                        # Column doesn't exist or no secret_ref - that's fine
-                        pass
-                except Exception as e:
-                    logger.warning("[CONN-META] Vault secret deletion skipped for user=%s provider=%s account=%s: %s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id), e)
+                        SecretRefManager().delete_secret(secret_row[0])
+                    except Exception as e:
+                        logger.warning("[CONN-META] Vault secret deletion skipped for user=%s provider=%s account=%s: %s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id), e)
 
             cur.execute(
                 sql_update,
                 (
                     datetime.now(timezone.utc),
-                    user_id,
+                    *pred_params,
                     provider,
                     account_id,
                 ),

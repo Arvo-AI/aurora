@@ -13,14 +13,21 @@ import { copyToClipboard } from '@/lib/utils';
 
 const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
+type AzureCredentialSet = {
+  tenantId: string;
+  appId: string;
+  password: string;
+  subscriptionId: string;
+};
+
 
 export default function AzureAuthPage() {
   const [isLoading, setIsLoading] = useState(false);
-  const [isLoadingCredentials, setIsLoadingCredentials] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [authMethod, setAuthMethod] = useState<'script_setup' | 'manual_credentials' | 'cloud_shell'>('cloud_shell');
   const [subscriptionId, setSubscriptionId] = useState("");
   const [subscription_name, setSubscriptionName] = useState("");
+  const [subscriptionCount, setSubscriptionCount] = useState(0);
   const [credentials, setCredentials] = useState({
     tenantId: "",
     appId: "",
@@ -44,36 +51,12 @@ export default function AzureAuthPage() {
     resourceGroup: string;
     subscriptionId: string;
   }>>([]);
-  const [storedCredentials, setStoredCredentials] = useState<Array<{
-    subscriptionId: string;
-    subscriptionName: string;
-    tenantId: string;
-    clientId: string;
-    clientSecret: string;
-  }>>([]);
   const [error, setError] = useState<string | null>(null);
-  const [storedCredentialsError, setStoredCredentialsError] = useState<string | null>(null);
   const [copyButtonText, setCopyButtonText] = useState("Copy Command");
 
   const router = useRouter();
   const PROPAGATION_NOTE =
     " If you just generated these credentials in Cloud Shell, it can take 1–2 minutes for Azure permissions to propagate. Please wait a moment and try again.";
-
-  const handleSubscriptionSelect = (
-    subscriptionId: string, 
-    subscriptionName: string, 
-    tenantId: string, 
-    clientId: string, 
-    clientSecret: string
-  ) => {
-    setSubscriptionId(subscriptionId);
-    setSubscriptionName(subscriptionName);
-    setCredentials({
-      tenantId: tenantId,
-      appId: clientId,
-      password: clientSecret
-    });
-  };
 
   const handleJsonPaste = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
@@ -117,16 +100,23 @@ export default function AzureAuthPage() {
     }
   };
 
-  const buildReadOnlyPayload = (fallbackTenantId: string, fallbackSubscriptionId: string) => {
-    if (!readOnlyCredentials.appId || !readOnlyCredentials.password) {
+  // Takes creds explicitly rather than reading readOnlyCredentials state: the
+  // caller parses and setState()s them in the same tick, so the state value is
+  // still empty here and the read-only identity would be silently dropped.
+  const buildReadOnlyPayload = (
+    creds: AzureCredentialSet,
+    fallbackTenantId: string,
+    fallbackSubscriptionId: string,
+  ) => {
+    if (!creds.appId || !creds.password) {
       return undefined;
     }
 
     return {
-      tenantId: readOnlyCredentials.tenantId || fallbackTenantId,
-      clientId: readOnlyCredentials.appId,
-      clientSecret: readOnlyCredentials.password,
-      subscriptionId: readOnlyCredentials.subscriptionId || fallbackSubscriptionId,
+      tenantId: creds.tenantId || fallbackTenantId,
+      clientId: creds.appId,
+      clientSecret: creds.password,
+      subscriptionId: creds.subscriptionId || fallbackSubscriptionId,
     };
   };
 
@@ -155,6 +145,9 @@ export default function AzureAuthPage() {
       }
 
       let currentCredentials = credentials;
+      // Local, not state: setReadOnlyCredentials below does not apply until the
+      // next render, and the payload is built before then.
+      let currentReadOnly: AzureCredentialSet = { ...readOnlyCredentials };
 
       // Parse JSON if provided
       if (jsonInput) {
@@ -186,12 +179,13 @@ export default function AzureAuthPage() {
 
             // Set read-only credentials if valid
             if (readOnlyCreds.clientId && readOnlyCreds.clientSecret) {
-              setReadOnlyCredentials({
+              currentReadOnly = {
                 tenantId: readOnlyCreds.tenantId || agentCreds.tenantId,
                 appId: readOnlyCreds.clientId,
                 password: readOnlyCreds.clientSecret,
                 subscriptionId: readOnlyCreds.subscriptionId || agentCreds.subscriptionId
-              });
+              };
+              setReadOnlyCredentials(currentReadOnly);
               setShowReadOnlyCredentialsPreview(true);
             }
 
@@ -229,15 +223,16 @@ export default function AzureAuthPage() {
         return;
       }
 
-      if (readOnlyJsonInput.trim() && !readOnlyCredentials.appId) {
+      if (readOnlyJsonInput.trim() && !currentReadOnly.appId) {
         setError("Please fix the read-only credentials JSON before continuing");
         setIsLoading(false);
         return;
       }
 
       const readOnlyPayload = buildReadOnlyPayload(
+        currentReadOnly,
         currentCredentials.tenantId,
-        subscriptionId || readOnlyCredentials.subscriptionId || "",
+        subscriptionId || currentReadOnly.subscriptionId || "",
       );
 
       const requestBody: Record<string, any> = {
@@ -321,6 +316,8 @@ export default function AzureAuthPage() {
       } else if (fetchData.subscriptionName) {
         setSubscriptionName(fetchData.subscriptionName);
       }
+
+      setSubscriptionCount(fetchData.subscription_count || 0);
       
       // Check if we have clusters data and set them
       if (fetchData.clusters && fetchData.clusters.length > 0) {
@@ -334,118 +331,6 @@ export default function AzureAuthPage() {
       localStorage.setItem("isAzureConnected", "false");
       // Clear connecting flag on error
       localStorage.removeItem("isAzureConnecting");
-    } finally {
-      setIsLoading(false);
-      // Ensure connecting flag is always cleared
-      localStorage.removeItem("isAzureConnecting");
-      // Dispatch event to notify state changes
-      window.dispatchEvent(new CustomEvent('providerStateChanged'));
-    }
-  };
-
-  const handleConnect = async () => {
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      // Get userId from API
-      let userId = "";
-      try {
-        const userResponse = await fetch("/api/getUserId");
-        const userData = await userResponse.json();
-        if (userData.userId) {
-          userId = userData.userId;
-        }
-      } catch (error) {
-        console.error("Error fetching user ID from API:", error);
-      }
-
-      if (readOnlyJsonInput.trim() && !readOnlyCredentials.appId) {
-        setError("Please fix the read-only credentials JSON before continuing");
-        setIsLoading(false);
-        return;
-      }
-
-      const readOnlyPayload = buildReadOnlyPayload(
-        credentials.tenantId,
-        subscriptionId || readOnlyCredentials.subscriptionId || "",
-      );
-
-      const requestBody: Record<string, any> = {
-        userId,
-        tenantId: credentials.tenantId,
-        clientId: credentials.appId,
-        clientSecret: credentials.password,
-        subscriptionId: subscriptionId,
-        subscriptionName: subscription_name,
-        authMethod: "service_principal",
-      };
-
-      if (readOnlyPayload) {
-        requestBody.readOnlyCredentials = readOnlyPayload;
-      }
-
-      // Make request to backend login
-      const response = await fetch(`/api/proxy/azure/login`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error("Azure login response error:", errorData);
-        throw new Error(errorData.error || "Failed to login to Azure");
-      }
-
-      // After successful login, fetch data
-      const fetchResponse = await fetch(`/api/proxy/azure/fetch_data?userId=${encodeURIComponent(userId)}`, {
-        method: "GET",
-      });
-
-      if (!fetchResponse.ok) {
-        throw new Error("Failed to fetch Azure data");
-      }
-
-      const fetchData = await fetchResponse.json();
-
-      
-      localStorage.setItem("isAzureConnected", "true");
-      localStorage.setItem("cloudProvider", "azure");
-      localStorage.setItem("isAzureFetched", "true"); // Data already fetched during connection
-      localStorage.setItem("isLoggedAurora", "true");
-      
-      // Auto-select Azure provider when connection succeeds (legitimate connection)
-      const { providerPreferencesService } = await import('@/lib/services/providerPreferences');
-      await providerPreferencesService.smartAutoSelect('azure', true);
-      
-      // Clear connecting flag and dispatch event to notify other components of state change
-      localStorage.removeItem("isAzureConnecting");
-      localStorage.removeItem("isAzureConnecting_timestamp");
-      window.dispatchEvent(new CustomEvent('providerStateChanged'));
-      
-      setIsConnected(true);
-
-      if (fetchData.clusters && fetchData.clusters.length > 0) {
-        setBackendClusters(fetchData.clusters);
-      }
-      
-      // Redirect to chat after successful Azure authentication
-      setTimeout(() => {
-        router.replace('/chat');
-      }, 200);
-
-    } catch (error: any) {
-      console.error("Error connecting to Azure:", error);
-      const message = (typeof error?.message === 'string' ? error.message : 'Failed to connect to Azure').trim();
-      setError(message.includes('permissions to propagate') ? message : `${message}${/[.!?]$/.test(message) ? '' : '.'}${PROPAGATION_NOTE}`);
-      localStorage.setItem("isAzureConnected", "false");
-      // Clear connecting flag on error
-      localStorage.removeItem("isAzureConnecting");
-      localStorage.removeItem("isAzureConnecting_timestamp");
-      window.dispatchEvent(new CustomEvent('providerStateChanged'));
     } finally {
       setIsLoading(false);
       // Ensure connecting flag is always cleared
@@ -482,32 +367,7 @@ export default function AzureAuthPage() {
     }
   };
 
-  const downloadPowerShellScript = async () => {
-    try {
-      const response = await fetch(`/api/proxy/azure/setup-script-ps1`, {
-        method: 'GET',
-      });
 
-      if (!response.ok) {
-        throw new Error('Failed to download PowerShell setup script');
-      }
-
-      const scriptContent = await response.text();
-      const blob = new Blob([scriptContent], { type: 'text/plain' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.style.display = 'none';
-      a.href = url;
-      a.download = 'setup-aurora-access.ps1';
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (error) {
-      console.error('Error downloading PowerShell setup script:', error);
-      setError('Failed to download PowerShell setup script. Please try again.');
-    }
-  };
 
 
 
@@ -530,56 +390,6 @@ export default function AzureAuthPage() {
           )}
         </Button>
   );
-
-  const fetchStoredCredentials = async () => {
-    setIsLoadingCredentials(true);
-    setStoredCredentialsError(null);
-    try {
-      const response = await fetch(`/api/proxy/user/tokens`, {
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch stored credentials');
-      }
-      
-      const data = await response.json();
-      // console.log('Fetched tokens:', data);
-      
-      const azureTokens = data.tokens
-        .filter((token: any) => token.provider === 'azure')
-        .map((token: any) => ({
-          subscriptionId: token.subscription_id,
-          subscriptionName: token.subscription_name,
-          tenantId: token.tenant_id,
-          clientId: token.client_id,
-          clientSecret: token.client_secret
-        }))
-        .filter((token: any) => token.subscriptionId && token.subscriptionName);
-      
-      setStoredCredentials(azureTokens);
-    } catch (error) {
-      console.error('Error fetching stored credentials:', error);
-      setStoredCredentialsError('Failed to fetch stored credentials');
-    } finally {
-      setIsLoadingCredentials(false);
-    }
-  };
-
-  useEffect(() => {
-    if (currentStep === 2) {
-      fetchStoredCredentials();
-    }
-  }, [currentStep]);
-
-
-  // Call fetchStoredCredentials when clicking "Log In"
-  useEffect(() => {
-    if (authMethod === 'manual_credentials' && currentStep === 2) {
-      fetchStoredCredentials();
-    }
-  }, [authMethod, currentStep]);
-
-
 
   return (
     <ConnectorAuthGuard connectorName="Azure">
@@ -688,7 +498,7 @@ export default function AzureAuthPage() {
                 <div className="bg-muted border border-border rounded-md p-4">
                 <h3 className="text-lg font-medium text-foreground mb-2">Complete Setup in One Script</h3>
                   <p className="text-muted-foreground text-sm">
-                  Our enhanced setup script will automatically create a service principal with comprehensive permissions, detect existing AKS clusters, and provide both service principal credentials and role assignment commands. You'll get a JSON response to paste into Aurora.
+                  Our setup script creates two service principals - one for agent mode, one read-only for ask mode - assigns built-in Azure roles to every subscription in scope, and detects AKS clusters. You&apos;ll get a JSON response to paste into Aurora.
                   </p>
                 </div>
 
@@ -709,46 +519,27 @@ export default function AzureAuthPage() {
                 <div className="space-y-6">
                 <h3 className="text-lg font-medium text-foreground">Download Setup Script</h3>
                 <p className="text-muted-foreground">
-                  Choose the appropriate script for your operating system:
+                  Run this in Azure Cloud Shell, which already has the Azure CLI, jq and kubectl available.
                 </p>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="bg-muted rounded-lg p-4">
-                    <h4 className="font-medium text-foreground mb-2">Linux / macOS</h4>
-                    <p className="text-sm text-muted-foreground mb-3">
-                      Bash script with automatic Azure CLI installation
-                    </p>
-                    <Button
-                      onClick={downloadSetupScript}
-                      variant="outline"
-                      className="flex items-center space-x-2 w-full"
-                    >
-                      <Download className="w-4 h-4" />
-                      <span>Download Bash Script</span>
-                    </Button>
-                    <div className="mt-3 bg-muted rounded-md p-3">
-                      <p className="text-xs text-muted-foreground mb-1">After downloading, run:</p>
-                      <code className="text-foreground text-xs">chmod +x setup-aurora-access.sh && ./setup-aurora-access.sh</code>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-muted rounded-lg p-4">
-                    <h4 className="font-medium text-foreground mb-2">Windows</h4>
-                    <p className="text-sm text-muted-foreground mb-3">
-                      PowerShell script with automatic Azure CLI installation
-                    </p>
-                    <Button
-                      onClick={downloadPowerShellScript}
-                      variant="outline"
-                      className="flex items-center space-x-2 w-full"
-                    >
-                      <Download className="w-4 h-4" />
-                      <span>Download PowerShell Script</span>
-                    </Button>
-                    <div className="mt-3 bg-muted rounded-md p-3">
-                      <p className="text-xs text-muted-foreground mb-1">Run as Administrator:</p>
-                      <code className="text-foreground text-xs">.\setup-aurora-access.ps1</code>
-                    </div>
+
+                <div className="bg-muted rounded-lg p-4">
+                  <h4 className="font-medium text-foreground mb-2">Azure Cloud Shell</h4>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Grants Aurora least-privilege access across every enabled subscription.
+                  </p>
+                  <Button
+                    onClick={downloadSetupScript}
+                    variant="outline"
+                    className="flex items-center space-x-2 w-full"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download Setup Script</span>
+                  </Button>
+                  <div className="mt-3 bg-muted rounded-md p-3">
+                    <p className="text-xs text-muted-foreground mb-1">Upload it to Cloud Shell, then run:</p>
+                    <code className="text-foreground text-xs">bash setup-aurora-access.sh</code>
+                    <p className="text-xs text-muted-foreground mt-2 mb-1">To scope to a management group instead:</p>
+                    <code className="text-foreground text-xs">bash setup-aurora-access.sh &lt;management-group-id&gt;</code>
                   </div>
                 </div>
               </div>
@@ -766,7 +557,7 @@ export default function AzureAuthPage() {
                     value={jsonInput}
                     onChange={handleJsonPaste}
                     className="w-full h-32 p-2 border border-border rounded-md font-mono text-sm bg-card text-foreground placeholder-muted-foreground"
-                    placeholder={'{\n  "tenantId": "your-tenant-id",\n  "clientId": "your-client-id", \n  "clientSecret": "your-client-secret",\n  "subscriptionId": "your-subscription-id"\n}'}
+                    placeholder={'{\n  "agent": { "tenantId": "...", "clientId": "...", "clientSecret": "..." },\n  "readonly": { "tenantId": "...", "clientId": "...", "clientSecret": "..." },\n  "subscriptions": ["...", "..."]\n}'}
                   />
                 </div>
 
@@ -922,7 +713,7 @@ export default function AzureAuthPage() {
                     value={jsonInput}
                     onChange={handleJsonPaste}
                     className="w-full h-32 p-2 border border-border rounded-md font-mono text-sm bg-card text-foreground placeholder-muted-foreground"
-                    placeholder={'{\n  "tenantId": "your-tenant-id",\n  "clientId": "your-client-id", \n  "clientSecret": "your-client-secret",\n  "subscriptionId": "your-subscription-id"\n}'}
+                    placeholder={'{\n  "agent": { "tenantId": "...", "clientId": "...", "clientSecret": "..." },\n  "readonly": { "tenantId": "...", "clientId": "...", "clientSecret": "..." },\n  "subscriptions": ["...", "..."]\n}'}
                   />
                 </div>
 
@@ -971,438 +762,6 @@ export default function AzureAuthPage() {
         )}
 
         {/* Manual Credentials Flow */}
-        {authMethod === 'manual_credentials' && (
-          <div className="bg-card shadow rounded-lg p-6 mb-8">
-            <div className="flex flex-col md:flex-row gap-6">
-              <button
-                type="button"
-                className={`flex-1 p-6 cursor-pointer transition-all duration-200 text-left bg-transparent border-0 ${
-                  currentStep === 2 ? 'ring-2 ring-blue-500 rounded-lg' : 'hover:shadow-lg rounded-lg'
-                }`}
-                onClick={() => {
-                  setCurrentStep(2);
-                  fetchStoredCredentials();
-                }}
-              >
-                <h3 className="text-lg font-medium mb-4 text-foreground">Log In</h3>
-                <p className="text-muted-foreground">
-                  If you already have Aurora service principal credentials, you can enter them directly.
-                </p>
-              </button>
-
-              <button
-                type="button"
-                className={`flex-1 p-6 cursor-pointer transition-all duration-200 text-left bg-transparent border-0 ${
-                  currentStep === 1 ? 'ring-2 ring-blue-500 rounded-lg' : 'hover:shadow-lg rounded-lg'
-                }`}
-                onClick={() => setCurrentStep(1)}
-              >
-                <h3 className="text-lg font-medium mb-4 text-foreground">First Time Connecting?</h3>
-                <p className="text-muted-foreground">
-                  If this is your first time connecting Aurora to Azure, follow the steps below to create a new service principal.
-                </p>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {authMethod === 'manual_credentials' && currentStep === 1 && (
-          <div className="bg-card shadow rounded-lg p-6 mb-8">
-            <h2 className="text-xl font-semibold mb-4 text-foreground">Create an Azure Service Principal</h2>
-            <p className="text-muted-foreground mb-4">
-              Aurora connects to your Azure account by granting read and operational access to a dedicated service principal. 
-              A service principal is created specifically for Aurora and assigned roles that allow it to access billing data 
-              and monitor Kubernetes resources across your Azure subscriptions.
-            </p>
-            <p className="text-muted-foreground mb-4">
-              These instructions use the Azure CLI. If you don't have it installed, please <a href="https://learn.microsoft.com/en-us/cli/azure/install-azure-cli-windows?pivots=winget" target="_blank" rel="noopener noreferrer" className="underline text-blue-600 dark:text-blue-400">install the Azure CLI</a> before proceeding.
-            </p>
-
-            <div className="bg-muted border border-border rounded-md p-4 mb-6">
-              <div className="flex">
-                <div className="ml-3">
-                  <h3 className="text-sm font-medium text-foreground">Important: Administrator permissions required</h3>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    You must have administrator permissions or the ability to assign roles in your Azure subscription for this process to work. If you don't have these permissions, please contact your Azure administrator for assistance.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-8">
-              {/* Step 1: Login */}
-              <div>
-                <h3 className="text-lg font-medium mb-4 text-gray-900 dark:text-white">Step 1: Log in to Azure CLI</h3>
-                <p className="text-gray-600 dark:text-gray-400 mb-4">
-                  If you haven't already logged in to Azure CLI, run the following command in your terminal:
-                </p>
-                <div className="bg-gray-100 dark:bg-gray-700 rounded-md p-4 mb-4">
-                  <code className="text-gray-800 dark:text-gray-200">az login --use-device-code</code>
-                </div>
-                <p className="text-gray-600 dark:text-gray-400 mb-4">
-                  This will open a browser window where you can authenticate with your Azure account. After authentication, you should see a table like this:
-                </p>
-                <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-4 mb-4">
-                  <pre className="text-gray-800 dark:text-gray-200 text-sm">
-{`No     Subscription name     Subscription ID                       Tenant
------  --------------------  ------------------------------------  -------------
-[1] *  Azure subscription 1  7634d823-3d86-498d-9cc2-e0612e906566  Geo Betus`}
-                  </pre>
-                </div>
-                <p className="text-gray-600 dark:text-gray-400 mb-4">
-                  Pick the subscription where your information is located and where your clusters are running.
-                </p>
-              </div>
-
-              {/* Step 2: Create Service Principal */}
-              <div>
-                <h3 className="text-lg font-medium mb-4">Step 2: Create the Aurora Service Principal</h3>
-                <p className="text-gray-600 mb-4">
-                  <span className="underline">Run the following command</span> in your terminal to create an account for Aurora in your subscription:
-                </p>
-                <div className="bg-gray-100 rounded-md p-4 mb-4">
-                  <code className="text-gray-800">az ad sp create-for-rbac -n "aurora"</code>
-                </div>
-                <p className="text-gray-600 mb-4">This command will create a service principal and output credentials similar to the following:</p>
-                <div className="rounded-md p-4 mb-4">
-                  <pre className="text-gray-800 text-sm">
-{'{\n  "appId": "2d2233f5-7ad5-4a12-abc7-bad2889d6407",\n  "displayName": "aurora",\n  "password": "8zkj3~yswKd433fsdf2SHrvp22UoA6tOOOkZ_BYar2",\n  "tenant": "1050a480-ef60-43d7-b8db-2123dcd100b60"\n}'}
-                  </pre>
-                </div>
-                <p className="text-gray-600 mb-4">
-                  Paste the entire JSON output below:
-                </p>
-                <div className="mb-4">
-                  <Label htmlFor="jsonInput" className="text-gray-900 dark:text-white">Service Principal Credentials</Label>
-                  <textarea
-                    id="jsonInput"
-                    value={jsonInput}
-                    onChange={handleJsonPaste}
-                    className="w-full h-32 p-2 border border-gray-300 dark:border-gray-600 rounded-md font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
-                    placeholder="Paste the JSON output here"
-                  />
-                </div>
-
-                {showCredentials && (
-                  <>
-                    <div className="bg-green-50 border border-green-200 rounded-md p-4 mb-4">
-                      <h4 className="font-medium text-green-800 mb-2">Credentials Detected:</h4>
-                      <div className="space-y-2">
-                        <div className="flex items-center">
-                          <span className="text-muted-foreground w-32">Tenant ID:</span>
-                          <span className="font-mono text-sm">{credentials.tenantId}</span>
-                        </div>
-                        <div className="flex items-center">
-                          <span className="text-muted-foreground w-32">App (Client) ID:</span>
-                          <span className="font-mono text-sm">{credentials.appId}</span>
-                        </div>
-                        <div className="flex items-center">
-                          <span className="text-muted-foreground w-32">Client Secret:</span>
-                          <span className="font-mono text-sm">{credentials.password}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                <div className="mt-6 border border-dashed border-gray-300 dark:border-gray-600 rounded-md p-4">
-                  <button
-                    type="button"
-                    onClick={() => setIsReadOnlySectionExpanded(!isReadOnlySectionExpanded)}
-                    className="text-sm font-medium text-blue-600 dark:text-blue-400"
-                  >
-                    {isReadOnlySectionExpanded ? 'Hide optional Ask mode credentials' : 'Add Ask mode (read-only) credentials'}
-                  </button>
-                  {isReadOnlySectionExpanded && (
-                    <div className="mt-4 space-y-3">
-                      <p className="text-sm text-muted-foreground">
-                        Paste JSON for a read-only service principal (Reader + Cost Management Reader roles). Aurora uses this identity when Ask mode is selected.
-                      </p>
-                      <textarea
-                        id="readOnlyJsonInput"
-                        value={readOnlyJsonInput}
-                        onChange={handleReadOnlyJsonPaste}
-                        className="w-full h-28 p-2 border border-gray-300 dark:border-gray-600 rounded-md font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
-                        placeholder={'{\n  "tenantId": "optional-tenant-id",\n  "clientId": "ask-mode-client-id", \n  "clientSecret": "ask-mode-secret",\n  "subscriptionId": "optional-subscription-id"\n}'}
-                      />
-                      {readOnlyError && (
-                        <p className="text-sm text-red-600 dark:text-red-400">{readOnlyError}</p>
-                      )}
-                      {showReadOnlyCredentialsPreview && (
-                        <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-md p-4">
-                          <h4 className="font-medium text-blue-800 dark:text-blue-200 mb-2">Ask Mode Credentials Detected:</h4>
-                          <div className="space-y-2 text-sm">
-                            <div className="flex items-center">
-                              <span className="text-muted-foreground w-40">Tenant ID:</span>
-                              <span className="font-mono text-xs">{readOnlyCredentials.tenantId || credentials.tenantId}</span>
-                            </div>
-                            <div className="flex items-center">
-                              <span className="text-muted-foreground w-40">Client ID:</span>
-                              <span className="font-mono text-xs">{readOnlyCredentials.appId}</span>
-                            </div>
-                            <div className="flex items-center">
-                              <span className="text-muted-foreground w-40">Subscription ID:</span>
-                              <span className="font-mono text-xs">{readOnlyCredentials.subscriptionId || subscriptionId || 'Same as Agent credentials'}</span>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {error && (
-                  <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-4">
-                    <div className="flex">
-                      <div className="flex-shrink-0">
-                        <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                        </svg>
-                      </div>
-                      <div className="ml-3">
-                        <h3 className="text-sm font-medium text-red-800">Error</h3>
-                        <p className="text-sm text-red-700 mt-1">{error}</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div className="mt-4">
-                  {!isConnected && (
-                    <Button
-                      onClick={handleSubmit}
-                      className="w-full bg-blue-600 hover:bg-blue-700"
-                      disabled={isLoading}
-                    >
-                      {isLoading ? (
-                        <div className="flex items-center justify-center">
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                          <span>Connecting, wait a few seconds to authenticate...</span>
-              </div>
-                      ) : (
-                        'Connect to Azure'
-                      )}
-                    </Button>
-                  )}
-                  {isConnected && (
-                    <div className="space-y-4">
-                                              <div className="bg-card border border-border rounded-md p-3">
-                        <div className="flex">
-                          <div className="flex-shrink-0">
-                            <svg className="h-5 w-5 text-green-400 dark:text-green-300" viewBox="0 0 20 20" fill="currentColor">
-                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                            </svg>
-            </div>
-                          <div className="ml-3">
-                            <h3 className="text-sm font-medium text-gray-800 dark:text-gray-200">
-                              Success!
-                            </h3>
-                            <p className="text-sm text-gray-700 dark:text-gray-300">
-                              These credentials have been saved for the following subscription: <strong>{subscription_name || "your subscription"}</strong>
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="bg-card border border-border rounded-md p-4">
-                        <h4 className="text-lg font-medium text-foreground mb-4">
-                          Step 3: Assign Reader and AKS Permissions
-                        </h4>
-                        <div className="bg-blue-50 dark:bg-gray-700 p-2 rounded mb-4">
-                          <span className="text-gray-800 dark:text-gray-300 text-sm font-medium">Clusters found: </span>
-                          <span className="text-blue-700 dark:text-blue-400 text-sm font-medium">
-                            {backendClusters.length > 0 ? backendClusters.map(c => c.name).join(', ') : 'XCLUSTERX'}
-                          </span>
-                        </div>
-                        <p className="text-muted-foreground mb-4">
-                          Copy and run these commands in your terminal to assign the required roles:
-                        </p>
-                        <div className="bg-muted rounded-md p-4 mb-4">
-                          <pre className="text-gray-800 dark:text-gray-200 text-sm whitespace-pre-wrap overflow-x-auto">
-{`az role assignment create --assignee ${credentials.appId} --role Reader --scope "/subscriptions/${subscriptionId}"
-
-az role assignment create --assignee ${credentials.appId} --role "Cost Management Reader" --scope "/subscriptions/${subscriptionId}"
-
-${backendClusters.map(cluster => `az role assignment create --assignee ${credentials.appId} --role "Azure Kubernetes Service Cluster Admin Role" --scope "/subscriptions/${cluster.subscriptionId}/resourceGroups/${cluster.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${cluster.name}"
-
-kubectl create clusterrolebinding aurora-sp-admin-binding --clusterrole=cluster-admin --user=${credentials.appId}`).join('\n\n')}`}
-                          </pre>
-                        </div>
-                      </div>
-
-                      <div className="mt-6">
-                        <Button
-                                                     onClick={async () => {
-                             setIsLoading(true);
-                             try {
-                               // Get userId from API
-                               let userId = "";
-                               try {
-                                 const userResponse = await fetch("/api/getUserId");
-                                 const userData = await userResponse.json();
-                                 if (userData.userId) {
-                                   userId = userData.userId;
-                                 }
-                               } catch (error) {
-                                 console.error("Error fetching user ID from API:", error);
-                               }
-
-                               // Refetch data to ensure permissions were applied
-                               const fetchResponse = await fetch(`/api/proxy/azure/fetch_data?userId=${encodeURIComponent(userId)}`, {
-                                 method: "GET",
-                               });
-
-                              if (!fetchResponse.ok) {
-                                throw new Error("Failed to fetch Azure data");
-                              }
-
-                                    const fetchData = await fetchResponse.json();
-
-                              
-                              // Redirect to chat after successful Azure authentication
-                              // Add small delay to ensure localStorage changes are fully processed
-                              setTimeout(() => {
-                                router.replace('/chat');
-                              }, 200);
-                            } catch (error: any) {
-                              console.error("Error finalizing connection:", error);
-                              setError(error.message || "Failed to finalize connection. Please try again.");
-                            } finally {
-                              setIsLoading(false);
-                            }
-                          }}
-                          className="w-full bg-blue-600 hover:bg-blue-700"
-                          disabled={isLoading}
-                        >
-                          {isLoading ? (
-                            <div className="flex items-center justify-center">
-                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                              <span>Finalizing connection...</span>
-                            </div>
-                          ) : (
-                            'Finalize Connection'
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {authMethod === 'manual_credentials' && currentStep === 2 && (
-                      <div className="bg-card shadow rounded-lg p-6 mb-8">
-              <h2 className="text-xl font-semibold mb-4 text-foreground">Select Your Azure Account</h2>
-              <p className="text-muted-foreground mb-4">
-              Choose an account from your stored connections:
-            </p>
-            
-            {isLoadingCredentials ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-8 w-8 text-blue-500 dark:text-blue-400 animate-spin" />
-                <span className="ml-3 text-muted-foreground">Loading saved accounts...</span>
-              </div>
-            ) : storedCredentials.length > 0 ? (
-              <div className="space-y-4 mb-6">
-                {storedCredentials.map((cred: any, index: number) => (
-                  <button
-                    type="button"
-                    key={cred.subscriptionId || index}
-                    className={`w-full p-4 border rounded-lg cursor-pointer transition-all text-left bg-transparent ${
-                      subscriptionId === cred.subscriptionId
-                        ? 'border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-gray-700'
-                        : 'border-gray-200 dark:border-gray-600 hover:border-blue-300 dark:hover:border-blue-400'
-                    }`}
-                    onClick={() => handleSubscriptionSelect(
-                      cred.subscriptionId,
-                      cred.subscriptionName,
-                      cred.tenantId,
-                      cred.clientId,
-                      cred.clientSecret
-                    )}
-                  >
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <h3 className="font-medium text-foreground">{cred.subscriptionName}</h3>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">Subscription ID: {cred.subscriptionId}</p>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">Tenant ID: {cred.tenantId}</p>
-                      </div>
-                      {subscriptionId === cred.subscriptionId && (
-                        <div className="text-blue-500">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                          </svg>
-                        </div>
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="bg-muted border border-border rounded-md p-4 mb-6">
-                <p className="text-muted-foreground">
-                  No stored credentials found. If this is your first time connecting, please go to the "First Time Connecting?" page.
-                </p>
-              </div>
-            )}
-
-            {storedCredentialsError && (
-              <div className="bg-yellow-50 dark:bg-yellow-900 border border-yellow-200 dark:border-yellow-700 rounded-md p-4 mb-4">
-                <div className="flex">
-                  <div className="flex-shrink-0">
-                    <svg className="h-5 w-5 text-yellow-400 dark:text-yellow-300" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                    </svg>
-                  </div>
-                  <div className="ml-3">
-                    <h3 className="text-sm font-medium text-yellow-800 dark:text-yellow-200">Unable to load stored credentials</h3>
-                    <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
-                      Couldn't fetch previously saved credentials. You can still proceed with manual setup or use the automated script option.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {error && error !== 'Failed to fetch stored credentials' && (
-              <div className="bg-red-50 dark:bg-red-900 border border-red-200 dark:border-red-700 rounded-md p-4 mb-4">
-                <div className="flex">
-                  <div className="flex-shrink-0">
-                    <svg className="h-5 w-5 text-red-400 dark:text-red-300" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                    </svg>
-                  </div>
-                  <div className="ml-3">
-                    <h3 className="text-sm font-medium text-red-800 dark:text-red-200">Error</h3>
-                    <p className="text-sm text-red-700 dark:text-red-300 mt-1">{error}</p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {subscriptionId && (
-              <div className="mt-4">
-                <Button
-                  onClick={handleConnect}
-                  className="w-full bg-blue-600 hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-white"
-                  disabled={isLoading}
-                >
-                  {isLoading ? (
-                    <div className="flex items-center justify-center">
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      <span>Connecting, this may take a few seconds...</span>
-                    </div>
-                  ) : (
-                    'Connect'
-                  )}
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Success Message */}
         {isConnected && (
           <div className="bg-green-50 dark:bg-green-900 border border-green-200 dark:border-green-700 rounded-md p-4">
@@ -1411,8 +770,9 @@ kubectl create clusterrolebinding aurora-sp-admin-binding --clusterrole=cluster-
               <h3 className="ml-3 text-sm font-medium text-green-800 dark:text-green-200">Successfully Connected!</h3>
             </div>
             <p className="mt-2 text-sm text-green-700 dark:text-green-300">
-              Aurora is now connected to your Azure subscription. 
-              {subscription_name && <span> Subscription: <strong>{subscription_name}</strong></span>}
+              {subscriptionCount > 1
+                ? <>Aurora is now connected to <strong>{subscriptionCount} Azure subscriptions</strong>. Aurora investigates across all of them.</>
+                : <>Aurora is now connected to your Azure subscription.{subscription_name && <span> Subscription: <strong>{subscription_name}</strong></span>}</>}
             </p>
             <div className="mt-4">
               <Button

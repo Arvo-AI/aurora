@@ -68,7 +68,9 @@ RUN ARCH=$(uname -m) && \
     curl -fsSL "https://aka.ms/InstallAzureCLIDeb" -o azure-cli-install.sh && \
     chmod +x azure-cli-install.sh && \
     ./azure-cli-install.sh && \
-    rm azure-cli-install.sh
+    rm azure-cli-install.sh && \
+    # resource-graph is needed for the agent's cross-subscription `az graph query`.
+    az extension add --name resource-graph --only-show-errors
 
 # Install kubectl (multi-arch support) - matches chatbot exactly
 RUN ARCH=$(uname -m) && \
@@ -83,6 +85,23 @@ RUN ARCH=$(uname -m) && \
       https://dl.k8s.io/release/$(curl -fsSL --http1.1 --tls-max 1.2 https://dl.k8s.io/release/stable.txt)/bin/linux/${KUBECTL_ARCH}/kubectl \
       -o /usr/local/bin/kubectl && \
     chmod +x /usr/local/bin/kubectl
+
+# kubelogin: Entra-integrated AKS writes a kubeconfig whose exec plugin shells
+# out to `kubelogin`, so kubectl fails outright without it.
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        KUBELOGIN_ARCH="amd64"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        KUBELOGIN_ARCH="arm64"; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    curl -fsSL --retry 5 --retry-delay 3 \
+      "https://github.com/Azure/kubelogin/releases/latest/download/kubelogin-linux-${KUBELOGIN_ARCH}.zip" \
+      -o /tmp/kubelogin.zip && \
+    unzip -j -o /tmp/kubelogin.zip "bin/linux_${KUBELOGIN_ARCH}/kubelogin" -d /usr/local/bin && \
+    chmod +x /usr/local/bin/kubelogin && \
+    rm /tmp/kubelogin.zip
 
 # Install Helm (multi-arch support) - matches chatbot exactly
 RUN ARCH=$(uname -m) && \

@@ -6,10 +6,14 @@ from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 from connectors.azure_connector.auth import azure_login
 from connectors.azure_connector.k8s_client import (
-    get_sp_object_id, get_aks_clusters, extract_resource_group,
+    get_sp_object_id, get_aks_clusters, extract_resource_group, extract_subscription_id,
 )
 from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data
+from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.cloud_auth import generate_azure_access_token
+from utils.db.connection_utils import get_all_user_connections
+from connectors.azure_connector.billing import fetch_subscriptions
 from utils.log_sanitizer import sanitize
 import json
 
@@ -47,25 +51,17 @@ def azure_setup_script():
 
 @azure_bp.route("/azure/setup-script-ps1", methods=["GET", "OPTIONS"])
 def azure_setup_script_ps1():
+    """Removed: setup now runs in Azure Cloud Shell, which is bash-only.
+
+    Kept as an explicit 410 so any cached frontend build gets a clear message
+    instead of a confusing 404.
+    """
     if flask.request.method == 'OPTIONS':
         return create_cors_response()
-    try:
-        script_path = os.path.join(os.path.dirname(__file__), "..", "..", "connectors", "azure_connector", "setup-aurora-access.ps1")
-        if os.path.exists(script_path):
-            with open(script_path, "r", encoding="utf-8") as f:
-                script_content = f.read()
-            resp = Response(script_content, mimetype="text/plain")
-            resp.headers["Content-Disposition"] = "inline; filename=setup-aurora-access.ps1"
-            resp.headers.update({
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0",
-            })
-            return resp
-        return jsonify({"error": "PowerShell setup script not found"}), 404
-    except Exception as e:
-        logging.error("Error serving Azure PS1 setup script", exc_info=e)
-        return jsonify({"error": "Failed to serve PowerShell setup script"}), 500
+    return jsonify({
+        "error": "The PowerShell setup script has been retired. "
+                 "Run the setup script in Azure Cloud Shell instead."
+    }), 410
 
 
 
@@ -101,8 +97,18 @@ def fetch_data(user_id):
         if not subscription_id:
             return jsonify({"error": "No subscription ID found."}), 401
 
+        # The token row holds only the display default; the full set of connected
+        # subscriptions lives in user_connections. The UI needs the count to say
+        # "N subscriptions" instead of naming just this one.
+        subscription_count = len(get_all_user_connections(user_id, "azure")) or 1
+
         # Additional processing (billing & k8s data) left as exercise or existing utils
-        return jsonify({"status": "success", "subscription_id": subscription_id, "subscription_name": subscription_name})
+        return jsonify({
+            "status": "success",
+            "subscription_id": subscription_id,
+            "subscription_name": subscription_name,
+            "subscription_count": subscription_count,
+        })
     except Exception as e:
         logging.error("Error in Azure fetch_data", exc_info=e)
         return jsonify({"error": "Failed to fetch Azure data"}), 500
@@ -127,13 +133,22 @@ def azure_clusters(user_id):
         credential = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
         management_token = credential.get_token("https://management.azure.com/.default").token
         sp_object_id = get_sp_object_id(tenant_id, client_id, client_secret)
-        aks_clusters = get_aks_clusters(management_token, subscription_id, sp_object_id, tenant_id, client_id, client_secret)
+
+        # Enumerate every enabled subscription, not just the default one (DEV-1499).
+        from utils.db.connection_utils import get_all_user_connections
+        sub_ids = [c["account_id"] for c in get_all_user_connections(user_id, "azure")] or [subscription_id]
+
         cluster_info = []
-        for cluster in aks_clusters:
-            name = cluster["name"]
-            resource_group = extract_resource_group(cluster["id"])
-            if resource_group:
-                cluster_info.append({"name": name, "resourceGroup": resource_group, "subscriptionId": subscription_id})
+        for sub_id in sub_ids:
+            for cluster in get_aks_clusters(management_token, sub_id, sp_object_id, tenant_id, client_id, client_secret):
+                resource_group = extract_resource_group(cluster["id"])
+                if resource_group:
+                    cluster_info.append({
+                        "name": cluster["name"],
+                        "resourceGroup": resource_group,
+                        # Derive from the resource id so the value cannot drift from the cluster.
+                        "subscriptionId": extract_subscription_id(cluster["id"]) or sub_id,
+                    })
         return jsonify(cluster_info)
     except Exception as e:
         logging.error("Error fetching AKS clusters", exc_info=e)
@@ -144,18 +159,46 @@ def azure_clusters(user_id):
 @require_permission("connectors", "read")
 def azure_subscriptions_get(user_id):
     try:
-        from utils.auth.stateless_auth import get_org_id_from_request
         org_id = get_org_id_from_request()
         token_data = get_token_data(user_id, "azure", org_id=org_id)
         if not token_data:
             logging.warning("[AZURE API] No Azure token data found for user %s", sanitize(user_id))
             return jsonify({"error": "No Azure credentials found. Please authenticate with Azure."}), 401
-        subscription_id = token_data.get("subscription_id")
-        subscription_name = token_data.get("subscription_name", "Azure Subscription")
-        if not subscription_id:
+
+        default_id = token_data.get("subscription_id")
+        default_name = token_data.get("subscription_name", "Azure Subscription")
+        # Enabled subscriptions live in user_connections; only the default is in the token.
+        enabled = {c["account_id"] for c in get_all_user_connections(user_id, "azure")}
+        if not enabled and default_id:
+            enabled = {default_id}
+        if not enabled:
             logging.warning("[AZURE API] No Azure subscription found for user %s", sanitize(user_id))
             return jsonify({"error": "No Azure subscription found. Please configure your Azure subscription."}), 401
-        projects = [{"projectId": subscription_id, "name": subscription_name, "enabled": True}]
+
+        # ARM is the only place subscription display names live; we persist just
+        # ids in user_connections. Go through generate_azure_access_token so an
+        # expired stored token is refreshed rather than silently degrading every
+        # name to a raw GUID. Fall back to the id if the lookup fails so the list
+        # still renders. ponytail: one ARM call per page load, no caching.
+        names = {}
+        try:
+            token = generate_azure_access_token(user_id).get("access_token")
+            if token:
+                names = {s["subscriptionId"]: s["displayName"] for s in fetch_subscriptions(token)}
+        except Exception:
+            logging.warning("[AZURE API] Could not resolve subscription names; falling back to ids")
+        if default_id and default_name:
+            names.setdefault(default_id, default_name)
+
+        projects = [
+            {
+                "projectId": sub_id,
+                "name": names.get(sub_id, sub_id),
+                "enabled": True,
+                "isDefault": sub_id == default_id,
+            }
+            for sub_id in sorted(enabled)
+        ]
         return jsonify({"projects": projects}), 200
     except Exception as e:
         logging.error("Error in azure_subscriptions_get", exc_info=e)
@@ -166,10 +209,32 @@ def azure_subscriptions_get(user_id):
 @require_permission("connectors", "write")
 def azure_subscriptions_post(user_id):
     try:
+        from utils.db.connection_utils import save_connection_metadata
         data = request.get_json() or {}
         projects = data.get("projects", [])
-        logging.info("Azure subscription selection update received (count=%d)", len(projects))
-        return jsonify({"status": "success"})
+        if not isinstance(projects, list):
+            return jsonify({"error": "projects must be a list"}), 400
+
+        updated = 0
+        for project in projects:
+            if not isinstance(project, dict):
+                continue
+            sub_id = project.get("projectId") or project.get("subscriptionId")
+            if not sub_id:
+                continue
+            # 'inactive' keeps the row so re-enabling does not lose metadata,
+            # while get_all_user_connections filters on status = 'active'.
+            save_connection_metadata(
+                user_id,
+                "azure",
+                sub_id,
+                connection_method="service_principal",
+                status="active" if project.get("enabled", True) else "inactive",
+            )
+            updated += 1
+
+        logging.info("Azure subscription selection updated (count=%d)", updated)
+        return jsonify({"status": "success", "updated": updated})
     except Exception as e:
         logging.error("Error in azure_subscriptions_post", exc_info=e)
         return jsonify({"error": "Failed to process Azure subscriptions"}), 500

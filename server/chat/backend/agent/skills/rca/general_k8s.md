@@ -17,6 +17,6 @@ metadata:
 - Check resource usage: `kubectl top pods -n NAMESPACE`
 - Check persistent volumes: `kubectl get pv,pvc -A`
 - Check config maps: `kubectl get configmaps -n NAMESPACE`
-- Check secrets (names only): `kubectl get secrets -n NAMESPACE`
+- Check secrets (names only): `kubectl get secrets -n NAMESPACE` — denied in Ask mode on Azure AKS, where the read-only role excludes Secrets entirely. Treat a Forbidden here as expected, not as an incident finding, and infer mounted-config problems from the pod spec and events instead.
 - Check ingress: `kubectl get ingress -A`
 - Check network policies: `kubectl get networkpolicies -A`

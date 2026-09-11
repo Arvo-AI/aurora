@@ -369,6 +369,22 @@ def delete_connected_account(user_id, target_user_id, provider):
                                {"provider": provider}, request)
             return jsonify({"success": True, "message": "AWS connection(s) removed"}), 200
 
+        # --------------------------------------------------------------
+        # Azure stores one user_connections row per subscription; mark them all
+        # inactive so a disconnected account does not keep reporting connected
+        # subscriptions to the agent and discovery.
+        # --------------------------------------------------------------
+        if provider_lc == "azure":
+            try:
+                from utils.db.connection_utils import (
+                    get_all_user_connections,
+                    delete_connection_secret,
+                )
+                for azure_conn in get_all_user_connections(user_id, "azure"):
+                    delete_connection_secret(user_id, "azure", azure_conn["account_id"])
+            except Exception as e:
+                logging.warning("Failed to deactivate Azure subscriptions for user %s: %s", user_id, e)
+
         # Clean up Memgraph discovery nodes for all other providers that reach this
         # generic path (GCP, Azure, and any provider that uses Vault-backed tokens).
         try:

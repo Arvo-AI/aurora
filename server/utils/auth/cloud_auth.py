@@ -33,23 +33,25 @@ def _resolve_azure_credentials(token_data: Dict[str, Any], normalized_mode: str,
         "subscription_id": token_data.get("subscription_id"),
     }
 
-    if normalized_mode == READ_ONLY_MODE:
-        read_only_block = token_data.get("read_only") or {}
-        if isinstance(read_only_block, dict):
-            candidate = {
-                "tenant_id": read_only_block.get("tenant_id") or base["tenant_id"],
-                "client_id": read_only_block.get("client_id"),
-                "client_secret": read_only_block.get("client_secret"),
-                "subscription_id": read_only_block.get("subscription_id") or base.get("subscription_id"),
-            }
-            if candidate["client_id"] and candidate["client_secret"]:
-                return candidate
-            logger.warning(
-                "Azure read-only credentials incomplete for user %s; using full-access identity",
-                user_id,
-            )
+    if normalized_mode != READ_ONLY_MODE:
+        return base
 
-    return base
+    # Fail closed: Azure RBAC has no session-policy equivalent, so the separate
+    # read-only identity IS the enforcement boundary. Falling back to the
+    # full-access identity here would silently hand ask mode write credentials.
+    read_only_block = token_data.get("read_only") or {}
+    candidate = {
+        "tenant_id": read_only_block.get("tenant_id") or base["tenant_id"],
+        "client_id": read_only_block.get("client_id"),
+        "client_secret": read_only_block.get("client_secret"),
+        "subscription_id": read_only_block.get("subscription_id") or base.get("subscription_id"),
+    }
+    if not (candidate["client_id"] and candidate["client_secret"]):
+        raise ValueError(
+            "Azure read-only credentials are not configured. Re-run the Azure setup script "
+            "to provision a read-only service principal, or switch out of Ask mode."
+        )
+    return candidate
 
 
 def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = None, force_new: bool = False,
@@ -114,7 +116,10 @@ def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = N
                                 
                                 return {
                                     'access_token': existing_token['access_token'],
-                                    'subscription_id': existing_token.get('subscription_id') or subscription_id,
+                                    # Requested subscription wins: the ARM token is tenant-scoped, so
+                                    # reusing it across subscriptions is valid, but the caller's target
+                                    # must not be overridden by the stored default (multi-subscription).
+                                    'subscription_id': subscription_id or existing_token.get('subscription_id'),
                                     'tenant_id': existing_token.get('tenant_id'),
                                     'client_id': existing_token.get('client_id'),  # Include for CLI auth
                                     'client_secret': existing_token.get('client_secret'),  # Include for CLI auth
@@ -180,11 +185,13 @@ def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = N
         if not token:
             raise ValueError("Failed to get Azure management token")
         
-        # Store the token for reuse (preserve existing metadata such as read-only config)
+        # Store the token for reuse (preserve existing metadata such as read-only config).
+        # Keep the stored subscription_id as the account default: a targeted call for one
+        # subscription must not repoint the default for every later call.
         azure_token_data = dict(token_data)
         azure_token_data.update({
             "access_token": token.token,
-            "subscription_id": target_subscription_id,
+            "subscription_id": stored_subscription_id or target_subscription_id,
             "tenant_id": tenant_id,
             "client_id": client_id,
             "client_secret": client_secret,

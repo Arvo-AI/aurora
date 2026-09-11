@@ -174,7 +174,11 @@ RUN ARCH=$(uname -m) && \
     curl -fsSL "https://aka.ms/InstallAzureCLIDeb" -o azure-cli-install.sh && \
     chmod +x azure-cli-install.sh && \
     ./azure-cli-install.sh && \
-    rm azure-cli-install.sh
+    rm azure-cli-install.sh && \
+    # Bake in resource-graph: discovery and the agent both run `az graph query`.
+    # Without this the CLI dynamic-installs it on first use, which fails in
+    # egress-restricted networks and races across concurrent Celery tasks.
+    az extension add --name resource-graph --only-show-errors
 
 # Install OVHcloud CLI (multi-arch support)
 RUN ARCH=$(uname -m) && \
@@ -232,6 +236,25 @@ RUN ARCH=$(uname -m) && \
       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl" \
       -o /usr/local/bin/kubectl && \
     chmod +x /usr/local/bin/kubectl
+
+# kubelogin: Entra-integrated AKS writes a kubeconfig whose exec plugin shells
+# out to `kubelogin`, so kubectl fails outright without it. `-l azurecli` is
+# what makes it reuse the service principal's token instead of the default
+# devicecode flow, which is interactive and cannot work headless.
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        KUBELOGIN_ARCH="amd64"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        KUBELOGIN_ARCH="arm64"; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    curl -fsSL --retry 5 --retry-delay 3 \
+      "https://github.com/Azure/kubelogin/releases/latest/download/kubelogin-linux-${KUBELOGIN_ARCH}.zip" \
+      -o /tmp/kubelogin.zip && \
+    unzip -j -o /tmp/kubelogin.zip "bin/linux_${KUBELOGIN_ARCH}/kubelogin" -d /usr/local/bin && \
+    chmod +x /usr/local/bin/kubelogin && \
+    rm /tmp/kubelogin.zip
 
 # Upgrade pip & install base deps
 RUN --mount=type=cache,target=/root/.cache/pip \
