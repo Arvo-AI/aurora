@@ -89,10 +89,10 @@ TIER2_TOOLS: Tuple[GatedToolSpec, ...] = (
         name="query_logs",
         description=(
             "Query logs from any connected log source. Currently backed by "
-            "Datadog (/datadog/logs/search) and Splunk (/splunk/search). Use "
-            "this for a direct log read."
+            "Datadog (/datadog/logs/search), Splunk (/splunk/search) and "
+            "Elastic Cloud (/elastic/search). Use this for a direct log read."
         ),
-        enabling_skills=("datadog", "splunk"),
+        enabling_skills=("datadog", "splunk", "elastic"),
         category="logs",
     ),
     GatedToolSpec(
@@ -109,10 +109,10 @@ TIER2_TOOLS: Tuple[GatedToolSpec, ...] = (
         description=(
             "Read alerts and incident webhooks from connected alerting tools "
             "(Datadog monitors, New Relic issues, Dynatrace alerts, OpsGenie, "
-            "incident.io, Splunk)."
+            "incident.io, Splunk, Elastic/Kibana)."
         ),
         enabling_skills=(
-            "datadog", "newrelic", "dynatrace", "opsgenie", "incidentio", "splunk",
+            "datadog", "newrelic", "dynatrace", "opsgenie", "incidentio", "splunk", "elastic",
         ),
         category="alerts",
     ),
@@ -290,6 +290,70 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         method="GET",
         path="/splunk/alerts",
         enabling_skills=("splunk",),
+    ),
+    # ----- Elastic Cloud (prefix: /elastic) -----
+    DispatchEntry(
+        name="elastic_list_indices",
+        description="List Elasticsearch indices, data streams and aliases (pattern, e.g. 'logs-*').",
+        category="logs",
+        method="GET",
+        path="/elastic/indices",
+        enabling_skills=("elastic",),
+        query_keys=("pattern",),
+    ),
+    DispatchEntry(
+        name="elastic_get_fields",
+        description="List field names/types for an Elasticsearch index pattern (_field_caps).",
+        category="logs",
+        method="GET",
+        path="/elastic/fields",
+        enabling_skills=("elastic",),
+        query_keys=("index", "prefix"),
+    ),
+    DispatchEntry(
+        name="elastic_search",
+        description="Search Elastic logs with a Lucene query_string (or query_dsl) over a time window.",
+        category="logs",
+        method="POST",
+        path="/elastic/search",
+        enabling_skills=("elastic",),
+        body_keys=("index", "query", "query_dsl", "time_range_minutes", "limit", "fields", "timestamp_field"),
+    ),
+    DispatchEntry(
+        name="elastic_esql",
+        description="Run an ES|QL query (aggregations, top-N, timelines) against Elastic.",
+        category="logs",
+        method="POST",
+        path="/elastic/esql",
+        enabling_skills=("elastic",),
+        body_keys=("query", "time_range_minutes", "timestamp_field"),
+    ),
+    DispatchEntry(
+        name="elastic_active_alerts",
+        description="Kibana alert documents from .alerts-* (status active|recovered|all).",
+        category="alerts",
+        method="GET",
+        path="/elastic/alerts/active",
+        enabling_skills=("elastic",),
+        query_keys=("status", "hours", "limit", "rule_name"),
+    ),
+    DispatchEntry(
+        name="elastic_list_rules",
+        description="List Kibana alerting rules (/api/alerting/rules/_find).",
+        category="alerts",
+        method="GET",
+        path="/elastic/rules",
+        enabling_skills=("elastic",),
+        query_keys=("search", "per_page"),
+    ),
+    DispatchEntry(
+        name="elastic_list_alerts",
+        description="List Kibana alerts ingested by Aurora via the Elastic webhook.",
+        category="alerts",
+        method="GET",
+        path="/elastic/alerts",
+        enabling_skills=("elastic",),
+        query_keys=("limit", "offset", "state"),
     ),
     # ----- New Relic / Dynatrace / OpsGenie / incident.io alerts (DB events) -----
     DispatchEntry(

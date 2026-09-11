@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[ConnectorStatus]"
 
 from utils.splunk_config import SPLUNK_SSL_VERIFY
+from utils.elastic_config import ELASTIC_SSL_VERIFY
+from utils.flags.feature_flags import is_elastic_enabled
 
 connector_status_bp = Blueprint("connector_status", __name__)
 
@@ -124,6 +126,48 @@ def _check_splunk(creds: Dict[str, Any]) -> Dict[str, Any]:
         )
         r.raise_for_status()
         return {"connected": True, "baseUrl": base_url}
+    except Exception:
+        return {"connected": False}
+
+
+def _check_elastic(creds: Dict[str, Any]) -> Dict[str, Any]:
+    if not is_elastic_enabled():
+        return {"connected": False}
+    api_key = creds.get("api_key")
+    es_url = creds.get("elasticsearch_url")
+    if not api_key or not es_url:
+        return {"connected": False}
+    headers = {"Authorization": f"ApiKey {api_key}"}
+    try:
+        # _authenticate works with any valid key; GET / needs cluster 'monitor'.
+        r = requests.get(
+            f"{es_url.rstrip('/')}/_security/_authenticate",
+            headers=headers, timeout=HTTP_TIMEOUT, verify=ELASTIC_SSL_VERIFY, allow_redirects=False,
+        )
+        if r.status_code in (403, 404):
+            r = requests.get(
+                f"{es_url.rstrip('/')}/",
+                headers=headers, timeout=HTTP_TIMEOUT, verify=ELASTIC_SSL_VERIFY, allow_redirects=False,
+            )
+        r.raise_for_status()
+        info: Dict[str, Any] = {}
+        try:
+            probe = requests.get(
+                f"{es_url.rstrip('/')}/",
+                headers=headers, timeout=HTTP_TIMEOUT, verify=ELASTIC_SSL_VERIFY, allow_redirects=False,
+            )
+            if probe.ok and probe.content:
+                info = probe.json()
+        except Exception:
+            info = {}
+        return {
+            "connected": True,
+            "elasticsearchUrl": es_url,
+            "kibanaUrl": creds.get("kibana_url"),
+            "deploymentType": creds.get("deployment_type"),
+            "clusterName": info.get("cluster_name") or creds.get("cluster_name"),
+            "version": (info.get("version") or {}).get("number") or creds.get("version"),
+        }
     except Exception:
         return {"connected": False}
 
@@ -767,6 +811,7 @@ PROVIDER_CHECKERS = {
     "jenkins": _check_ci_provider,
     "cloudbees": _check_ci_provider,
     "splunk": _check_splunk,
+    "elastic": _check_elastic,
     "coroot": _check_coroot,
     "confluence": _check_confluence,
     "jira": _check_jira,

@@ -23,6 +23,7 @@ _SOURCE_TABLE_MAP = {
     "opsgenie": "opsgenie_events",
     "sentry": "sentry_events",
     "splunk": "splunk_alerts",
+    "elastic": "elastic_alerts",
     "dynatrace": "dynatrace_problems",
     "bigpanda": "bigpanda_events",
     "netdata": "netdata_alerts",

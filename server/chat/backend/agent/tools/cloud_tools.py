@@ -81,6 +81,19 @@ from .splunk_tool import (
     SplunkListIndexesArgs,
     SplunkListSourcetypesArgs,
 )
+from .elastic_tool import (
+    elastic_list_indices,
+    elastic_get_fields,
+    elastic_search_logs,
+    elastic_esql,
+    elastic_get_alerts,
+    is_elastic_connected,
+    ElasticListIndicesArgs,
+    ElasticGetFieldsArgs,
+    ElasticSearchLogsArgs,
+    ElasticEsqlArgs,
+    ElasticGetAlertsArgs,
+)
 from .incidentio_tool import (
     list_incidentio_incidents,
     get_incidentio_incident,
@@ -2169,6 +2182,59 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added 3 Splunk tools for user {user_id}")
     else:
         logging.debug(f"Splunk tools not added - user {user_id} not connected to Splunk")
+
+    # Add Elastic Cloud tools if connected (feature-flagged via is_elastic_connected)
+    if is_elastic_connected(user_id):
+        _elastic_tool_specs = [
+            (
+                elastic_list_indices, "elastic_list_indices", ElasticListIndicesArgs,
+                "List Elasticsearch indices, data streams and aliases in the connected Elastic Cloud deployment "
+                "(remote service — never look on the local filesystem). Call this FIRST to discover which log "
+                "streams exist (e.g. logs-nginx.access-default, filebeat-*), then elastic_get_fields, then "
+                "elastic_search_logs / elastic_esql. Example: elastic_list_indices(pattern='logs-*')",
+            ),
+            (
+                elastic_get_fields, "elastic_get_fields", ElasticGetFieldsArgs,
+                "List field names and types for an Elasticsearch index pattern (via _field_caps). Use it before "
+                "writing a query so you filter on real ECS fields (log.level, service.name, host.name, "
+                "kubernetes.pod.name, error.message). Example: elastic_get_fields(index='logs-*', prefix='kubernetes.')",
+            ),
+            (
+                elastic_search_logs, "elastic_search_logs", ElasticSearchLogsArgs,
+                "Search log documents in Elastic Cloud with a Lucene query_string over a time window (newest first). "
+                "Use for raw log lines around an incident. Example: elastic_search_logs(query='log.level:error AND "
+                "service.name:\"checkout\"', index='logs-*', time_range='30m', limit=50). Use `fields` to keep results "
+                "compact; use elastic_esql for aggregations. If an index does not use @timestamp, pass "
+                "timestamp_field (e.g. 'timestamp') or results will be empty.",
+            ),
+            (
+                elastic_esql, "elastic_esql", ElasticEsqlArgs,
+                "Run an ES|QL query against Elastic Cloud for aggregations, top-N and timelines. A time pre-filter "
+                "on timestamp_field (default @timestamp) is added from time_range — pass time_range='all' to disable "
+                "it for indices without a date field — and `| LIMIT 100` is appended if missing. Example: "
+                "elastic_esql(query='FROM logs-* | WHERE log.level == \"error\" | STATS c = COUNT(*) BY service.name "
+                "| SORT c DESC', time_range='1h')",
+            ),
+            (
+                elastic_get_alerts, "elastic_get_alerts", ElasticGetAlertsArgs,
+                "List Kibana alerts (from the .alerts-* indices): which rules are firing, their reason text, "
+                "start/end time, value vs threshold and the affected instance (host/service). "
+                "Example: elastic_get_alerts(status='active', hours=24)",
+            ),
+        ]
+        for _fn, _name, _schema, _desc in _elastic_tool_specs:
+            _ctx = with_user_context(_fn)
+            _notified = with_completion_notification(_ctx)
+            _final = wrap_func_with_capture(_notified, _name) if tool_capture else _notified
+            tools.append(StructuredTool.from_function(
+                func=_final,
+                name=_name,
+                description=_desc,
+                args_schema=_schema,
+            ))
+        logging.info(f"Added {len(_elastic_tool_specs)} Elastic tools for user {user_id}")
+    else:
+        logging.debug(f"Elastic tools not added - user {user_id} not connected to Elastic")
 
     # Add incident.io tools if connected
     if is_incidentio_connected(user_id):

@@ -26,6 +26,7 @@ import {
   parseCorootCommand,
   parseNewRelicCommand,
   parseCloudflareCommand,
+  parseElasticCommand,
   parseSlackCommand,
   parseGitLabToolCommand,
 } from "./tool-command-parser"
@@ -187,6 +188,10 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   }
   else if (tool.tool_name === "query_cloudflare" || tool.tool_name === "cloudflare_list_zones" || tool.tool_name === "cloudflare_action") {
     command = parseCloudflareCommand(tool.tool_name, normalizedInput)
+  }
+  // Elastic tools parsing
+  else if (tool.tool_name?.startsWith("elastic_")) {
+    command = parseElasticCommand(tool.tool_name, normalizedInput)
   }
   // Notion tools: humanize the label (actual output rendering stays generic via RenderOutput)
   else if (tool.tool_name?.startsWith("notion_")) {

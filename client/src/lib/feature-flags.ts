@@ -25,6 +25,11 @@ export const isSpinnakerEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_SPINNAKER') === 'true';
 };
 
+export const isElasticEnabled = () => {
+  // Case-insensitive to match the backend's is_elastic_enabled().
+  return getEnv('NEXT_PUBLIC_ENABLE_ELASTIC')?.toLowerCase() === 'true';
+};
+
 export const isNotionEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_NOTION') === 'true';
 };
