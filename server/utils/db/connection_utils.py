@@ -7,6 +7,7 @@ from typing import Optional, List, Dict
 
 from utils.db.db_utils import connect_to_db_as_user, connect_to_db_as_admin
 from utils.auth.stateless_auth import set_rls_context
+from utils.db.org_scope import org_read_predicate
 from utils.log_sanitizer import sanitize, safe_provider, hash_for_log
 from utils.secrets.secret_ref_utils import SecretRefManager
 
@@ -42,8 +43,29 @@ def save_connection_metadata(
 
     Uses an UPSERT so callers can invoke freely.
     Returns True on success, False otherwise.
+
+    Connectors are org-shared and reads match on (user_id OR org_id), but the
+    unique constraint is (user_id, provider, account_id). So an org member
+    writing an account someone else connected would insert a second, competing
+    row rather than update the existing one -- leaving a disabled subscription
+    still visible as active, and duplicating it in cloud_exec fan-out. Update
+    any existing row for this org first, and only insert when there is none.
     """
     org_id = _resolve_org_id(user_id)
+    predicate, pred_params = org_read_predicate(user_id, org_id)
+
+    sql_update_existing = f"""
+        UPDATE user_connections SET
+            role_arn = %s,
+            read_only_role_arn = %s,
+            connection_method = %s,
+            region = COALESCE(%s, region),
+            workspace_id = COALESCE(%s, workspace_id),
+            status = %s,
+            last_verified_at = %s
+        WHERE {predicate} AND provider = %s AND account_id = %s;
+    """
+
     sql = """
         INSERT INTO user_connections (
             user_id, org_id, provider, account_id, role_arn, read_only_role_arn,
@@ -65,22 +87,39 @@ def save_connection_metadata(
         conn = connect_to_db_as_admin()
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:save]")
+            now = datetime.now(timezone.utc)
             cur.execute(
-                sql,
+                sql_update_existing,
                 (
-                    user_id,
-                    org_id,
-                    provider,
-                    account_id,
                     role_arn,
                     read_only_role_arn,
                     connection_method,
                     region,
                     workspace_id,
                     status,
-                    datetime.now(timezone.utc),
+                    now,
+                    *pred_params,
+                    provider,
+                    account_id,
                 ),
             )
+            if cur.rowcount == 0:
+                cur.execute(
+                    sql,
+                    (
+                        user_id,
+                        org_id,
+                        provider,
+                        account_id,
+                        role_arn,
+                        read_only_role_arn,
+                        connection_method,
+                        region,
+                        workspace_id,
+                        status,
+                        now,
+                    ),
+                )
         conn.commit()
         logger.info("[CONN-META] Upsert successful user=%s provider=%s account=%s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id))
         return True
@@ -324,19 +363,26 @@ def delete_connection_secret(
     the Vault secret. For providers using STS AssumeRole (AWS), it just marks
     the connection inactive.
 
+    Scoped to the caller's org, matching the org-wide reads in
+    get_all_user_connections. Connectors are org-shared: whoever connected the
+    account owns the row, so a user-only predicate here meant any other org
+    member's disconnect silently matched nothing and left the connection
+    reporting as active.
+
     Returns ``True`` when database update succeeds.
     """
+    predicate, pred_params = org_read_predicate(user_id, _resolve_org_id(user_id))
 
     sql_select = (
         "SELECT role_arn "
         "FROM user_connections "
-        "WHERE user_id = %s AND provider = %s AND account_id = %s AND status = 'active' LIMIT 1;"
+        f"WHERE {predicate} AND provider = %s AND account_id = %s AND status = 'active' LIMIT 1;"
     )
 
     sql_update = (
         "UPDATE user_connections "
         "SET status = 'inactive', last_verified_at = %s "
-        "WHERE user_id = %s AND provider = %s AND account_id = %s;"
+        f"WHERE {predicate} AND provider = %s AND account_id = %s;"
     )
 
     conn = None
@@ -344,7 +390,7 @@ def delete_connection_secret(
         conn = connect_to_db_as_admin()
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:deleteSecret]")
-            cur.execute(sql_select, (user_id, provider, account_id))
+            cur.execute(sql_select, (*pred_params, provider, account_id))
             row = cur.fetchone()
             
             if not row:
@@ -360,8 +406,8 @@ def delete_connection_secret(
                 try:
                     cur.execute(
                         "SELECT secret_ref FROM user_connections "
-                        "WHERE user_id = %s AND provider = %s AND account_id = %s",
-                        (user_id, provider, account_id),
+                        f"WHERE {predicate} AND provider = %s AND account_id = %s",
+                        (*pred_params, provider, account_id),
                     )
                     secret_row = cur.fetchone()
                     cur.execute("RELEASE SAVEPOINT secret_ref_probe")
@@ -379,7 +425,7 @@ def delete_connection_secret(
                 sql_update,
                 (
                     datetime.now(timezone.utc),
-                    user_id,
+                    *pred_params,
                     provider,
                     account_id,
                 ),

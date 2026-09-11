@@ -454,7 +454,9 @@ def test_disconnect_marks_inactive_when_secret_ref_column_missing(monkeypatch):
     monkeypatch.setattr(cu, "connect_to_db_as_admin", lambda: conn)
     monkeypatch.setattr(cu, "set_rls_context", lambda *a, **k: "org")
 
-    assert cu.delete_connection_secret("u", "azure", "sub-1") is True
+    # Real user ids are UUIDs; org_read_predicate validates them to keep
+    # non-UUID input out of the query params.
+    assert cu.delete_connection_secret(USER_A, "azure", "sub-1") is True
     assert any("ROLLBACK TO SAVEPOINT" in s for s in executed), "probe must be rolled back, not left aborted"
     assert any(s.startswith("UPDATE user_connections") for s in executed), "UPDATE must still run"
     assert "COMMIT" in executed
@@ -542,3 +544,109 @@ def test_both_fan_outs_copy_context():
             assert "copy_context" in first_arg, \
                 f"{fn} submits {first_arg.strip()!r} directly instead of via " \
                 "contextvars.copy_context().run; guardrails will fail closed"
+
+
+# --- Org-scoped writes on user_connections -----------------------------------
+# Reads match (user_id OR org_id) but the unique constraint is per-user, so a
+# teammate's disconnect/toggle used to match zero rows (disconnect silently
+# no-oped) or insert a competing row (toggle shadowed, sub stayed active).
+# Affects every provider in user_connections: azure, aws, ovh.
+
+def _conn_utils_with_fake_db(monkeypatch, rows):
+    """Wire connection_utils to an in-memory user_connections stand-in."""
+    import utils.db.connection_utils as cu
+
+    class Cursor:
+        def __init__(self):
+            self._result = None
+            self.rowcount = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=()):
+            s = " ".join(sql.split())
+            self.rowcount = 0
+            self._result = None
+            if s.startswith("SAVEPOINT") or s.startswith("RELEASE") or s.startswith("ROLLBACK TO"):
+                return
+            # Org predicate carries two ids; user-only carries one.
+            org_scoped = "user_id = %s OR org_id = %s" in s
+            ids = params[:2] if org_scoped else params[:1]
+            if s.startswith("UPDATE user_connections SET status = 'inactive'"):
+                ids = params[1:3] if org_scoped else params[1:2]
+            if s.startswith("UPDATE user_connections SET role_arn"):
+                ids = params[7:9] if org_scoped else params[7:8]
+
+            def visible(r):
+                return r["user_id"] in ids or (org_scoped and r["org_id"] in ids)
+
+            if s.startswith("SELECT role_arn"):
+                hit = [r for r in rows if visible(r) and r["status"] == "active"]
+                self._result = ("arn",) if hit else None
+            elif s.startswith("SELECT secret_ref"):
+                self._result = None
+            elif s.startswith("UPDATE user_connections SET status = 'inactive'"):
+                for r in rows:
+                    if visible(r):
+                        r["status"] = "inactive"
+                        self.rowcount += 1
+            elif s.startswith("UPDATE user_connections SET role_arn"):
+                for r in rows:
+                    if visible(r):
+                        r["status"] = params[5]
+                        self.rowcount += 1
+            elif s.startswith("INSERT INTO user_connections"):
+                rows.append({"user_id": params[0], "org_id": params[1], "status": params[9]})
+                self.rowcount = 1
+
+        def fetchone(self):
+            return self._result
+
+    conn = type("Conn", (), {
+        "cursor": lambda self: Cursor(),
+        "commit": lambda self: None,
+        "rollback": lambda self: None,
+        "close": lambda self: None,
+    })()
+    monkeypatch.setattr(cu, "connect_to_db_as_admin", lambda: conn)
+    monkeypatch.setattr(cu, "set_rls_context", lambda *a, **k: ORG)
+    monkeypatch.setattr(cu, "_resolve_org_id", lambda uid: ORG)
+    return cu
+
+
+ORG = "20ee6a53-a776-4578-8d2c-dfc1afb2fc8c"
+USER_A = "533757ff-de70-4700-a285-7dee94bd93b8"
+USER_B = "00000000-0000-0000-0000-0000000000bb"
+
+
+def test_teammate_can_disconnect_org_shared_connection(monkeypatch):
+    """B disconnecting an account A connected must actually deactivate it."""
+    rows = [{"user_id": USER_A, "org_id": ORG, "status": "active"}]
+    cu = _conn_utils_with_fake_db(monkeypatch, rows)
+
+    assert cu.delete_connection_secret(USER_B, "azure", "sub-1") is True, \
+        "teammate disconnect returned False; the row was not matched"
+    assert rows[0]["status"] == "inactive", "A's connection was left active after B disconnected"
+
+
+def test_teammate_toggle_does_not_create_shadow_row(monkeypatch):
+    """B disabling a subscription must update A's row, not insert a competing one."""
+    rows = [{"user_id": USER_A, "org_id": ORG, "status": "active"}]
+    cu = _conn_utils_with_fake_db(monkeypatch, rows)
+
+    assert cu.save_connection_metadata(USER_B, "azure", "sub-1", status="inactive") is True
+    assert len(rows) == 1, f"expected the existing row to be updated, got {len(rows)} rows (shadow row inserted)"
+    assert rows[0]["status"] == "inactive", "toggle did not take effect on the org-shared row"
+
+
+def test_save_connection_metadata_still_inserts_when_absent(monkeypatch):
+    """The update-first path must not break first-time connects."""
+    rows = []
+    cu = _conn_utils_with_fake_db(monkeypatch, rows)
+
+    assert cu.save_connection_metadata(USER_A, "azure", "sub-1") is True
+    assert len(rows) == 1 and rows[0]["status"] == "active", "first connect did not insert a row"
