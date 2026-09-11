@@ -9,6 +9,7 @@ Supports markdown and PDF upload (PDF → text extraction → markdown).
 import logging
 import io
 
+import psycopg2
 from flask import Blueprint, jsonify, request
 from pypdf import PdfReader
 
@@ -212,31 +213,96 @@ def delete_entry(user_id, entry_id):
 @memory_bp.route("/entries/<entry_id>", methods=["PUT"])
 @require_permission("memory", "write")
 def update_entry(user_id, entry_id):
-    """Update a memory entry's category."""
+    """Update a memory entry's editable fields (category, title, description, content).
+
+    Any subset of fields may be provided. When content changes, a new version is
+    recorded via create_version so edit history stays intact.
+    """
     org_id = get_org_id_from_request()
     data = request.get_json(silent=True) or {}
-    category = data.get("category", "").strip()
 
-    if not category or category not in MEMORY_CATEGORIES:
+    # Only build updates for fields the caller actually sent — everything is optional.
+    has_category = "category" in data
+    has_title = "title" in data
+    has_description = "description" in data
+    has_content = "content" in data
+
+    if not any([has_category, has_title, has_description, has_content]):
+        return jsonify({"error": "No updatable fields provided"}), 400
+
+    category = data.get("category", "").strip() if has_category else None
+    title = data.get("title", "").strip() if has_title else None
+    description = data.get("description", "").strip() if has_description else None
+    content = data.get("content", "") if has_content else None
+
+    # Category must be valid when supplied.
+    if has_category and (not category or category not in MEMORY_CATEGORIES):
         return jsonify({"error": f"Invalid category. Must be one of: {', '.join(MEMORY_CATEGORIES)}"}), 400
+
+    # Title cannot be blanked out.
+    if has_title and not title:
+        return jsonify({"error": "title cannot be empty"}), 400
+
+    # Content, when edited, must be non-empty and within the manual-entry size cap.
+    if has_content:
+        content = strip_nul(content).strip()
+        if not content:
+            return jsonify({"error": "content cannot be empty"}), 400
+        if len(content) > MAX_CONTENT_LENGTH:
+            return jsonify({"error": "Content exceeds 500KB limit"}), 400
 
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
 
+            # Assemble the SET clause dynamically from the provided fields.
+            set_clauses = ["last_edited_by = 'user'", "updated_at = CURRENT_TIMESTAMP"]
+            values = []
+            if has_category:
+                set_clauses.append("category = %s")
+                values.append(category)
+            if has_title:
+                set_clauses.append("title = %s")
+                values.append(title)
+            if has_description:
+                set_clauses.append("description = %s")
+                values.append(description or None)
+            if has_content:
+                set_clauses.append("content = %s")
+                values.append(content)
+
+            values.extend([entry_id, org_id, list(MEMORY_CATEGORIES)])
+
             cursor.execute(
-                """UPDATE artifacts
-                   SET category = %s, last_edited_by = 'user', updated_at = CURRENT_TIMESTAMP
-                   WHERE id = %s AND org_id = %s AND category = ANY(%s)""",
-                (category, entry_id, org_id, list(MEMORY_CATEGORIES)),
+                f"""UPDATE artifacts
+                    SET {', '.join(set_clauses)}
+                    WHERE id = %s AND org_id = %s AND category = ANY(%s)
+                    RETURNING id""",
+                tuple(values),
             )
-            if cursor.rowcount == 0:
+            row = cursor.fetchone()
+            if row is None:
                 return jsonify({"error": "Memory entry not found"}), 404
+
+            # Record a new version whenever the content itself was edited.
+            version = None
+            if has_content:
+                version = create_version(
+                    cursor, str(row[0]), org_id, user_id, content,
+                    source="manual", set_current=True,
+                )
+
             conn.commit()
 
-        return jsonify({"success": True}), 200
+        result = {"success": True}
+        if version is not None:
+            result["version"] = version
+        return jsonify(result), 200
 
+    except psycopg2.errors.UniqueViolation:
+        # Renaming/recategorizing collided with an existing (category, title) entry.
+        return jsonify({"error": "A memory entry with this title already exists in that category"}), 409
     except Exception as e:
         logger.exception(f"[Memory] Error updating entry: {e}")
         return jsonify({"error": "Failed to update memory entry"}), 500
