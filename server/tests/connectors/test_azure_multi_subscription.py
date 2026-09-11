@@ -171,6 +171,7 @@ def _load_fanout(run_command, config_dirs, fail_subs=(), mode="agent"):
     """Exec the real fan-out function with faked module-level dependencies."""
     src = open(CLOUD_EXEC).read()
     ns = {"shlex": shlex, "json": __import__("json"), "time": __import__("time"),
+          "contextvars": __import__("contextvars"),
           "Optional": typing.Optional, "logger": __import__("logging").getLogger("test")}
 
     for fn in ["is_read_only_command", "_apply_azure_subscription",
@@ -499,3 +500,45 @@ def test_subscription_list_resolves_real_names():
         "non-default subscriptions must not fall back to showing their GUID as the name"
     assert "fetch_subscriptions" in body, "names must be resolved from ARM"
     assert "names.get(sub_id, sub_id)" in body, "GUID stays only as a last-resort fallback"
+
+
+# --- Guardrail context must survive the fan-out ------------------------------
+# ThreadPoolExecutor workers start with an EMPTY contextvars context. The safety
+# judge reads user_id/session_id/state from contextvars, so without an explicit
+# copy every fanned-out command was blocked: "missing user context", exit 126.
+
+def test_fan_out_propagates_contextvars_to_workers():
+    """A bare pool.submit loses context; copy_context().run keeps it.
+
+    Models the real failure rather than the real stack: the guardrail reads a
+    contextvar, and the worker must see the value the caller set.
+    """
+    import concurrent.futures
+    import contextvars as cv
+
+    var = cv.ContextVar("user_id", default=None)
+    var.set("user-123")
+
+    def worker():
+        return var.get()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        # The bug: plain submit runs with a fresh, empty context.
+        assert pool.submit(worker).result() is None, \
+            "bare submit unexpectedly saw the caller context; model is invalid"
+        # The fix: copy the context per task.
+        assert pool.submit(cv.copy_context().run, worker).result() == "user-123"
+
+
+def test_both_fan_outs_copy_context():
+    """Both providers must copy context; a bare submit reintroduces exit-126 blocks."""
+    src = open(CLOUD_EXEC).read()
+    for fn in ("_cloud_exec_aws_multi_account", "_cloud_exec_azure_multi_subscription"):
+        match = re.search(r"^def " + fn + r"\(.*?(?=^def )", src, re.S | re.M)
+        assert match, f"{fn} not found"
+        submits = re.findall(r"pool\.submit\(\s*([^,]+)", match.group(0))
+        assert submits, f"{fn} has no pool.submit"
+        for first_arg in submits:
+            assert "copy_context" in first_arg, \
+                f"{fn} submits {first_arg.strip()!r} directly instead of via " \
+                "contextvars.copy_context().run; guardrails will fail closed"

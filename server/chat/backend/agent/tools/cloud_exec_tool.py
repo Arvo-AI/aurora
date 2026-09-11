@@ -5,6 +5,7 @@ import re
 import shlex
 import subprocess
 import tempfile
+import contextvars
 from utils.terminal.terminal_run import terminal_run
 import time
 import requests
@@ -1308,7 +1309,12 @@ def _cloud_exec_aws_multi_account(
 
     account_results = {}
     with ThreadPoolExecutor(max_workers=min(len(connections), 10)) as pool:
-        futures = {pool.submit(_run_on_account, c): c["account_id"] for c in connections}
+        # Same context-copy requirement as the Azure fan-out below: without it the
+        # guardrail judge sees no user context and fails closed with exit 126.
+        futures = {
+            pool.submit(contextvars.copy_context().run, _run_on_account, c): c["account_id"]
+            for c in connections
+        }
         for future in as_completed(futures):
             res = future.result()
             acct = res.pop("account_id")
@@ -1420,7 +1426,15 @@ def _cloud_exec_azure_multi_subscription(
 
     results = {}
     with ThreadPoolExecutor(max_workers=min(len(connections), 10)) as pool:
-        futures = [pool.submit(_run_on_subscription, c) for c in connections]
+        # Worker threads start with an empty context, so user_id/session_id/state/
+        # mode are all invisible inside them. That makes the safety guardrail fail
+        # closed ("missing user context", exit 126) and makes get_mode_from_context()
+        # fall back to "agent". Copy the context per task: a single Context object
+        # cannot be entered by two threads at once.
+        futures = [
+            pool.submit(contextvars.copy_context().run, _run_on_subscription, c)
+            for c in connections
+        ]
         for future in as_completed(futures):
             res = future.result()
             results[res.pop("subscription_id")] = res
