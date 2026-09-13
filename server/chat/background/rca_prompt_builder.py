@@ -435,3 +435,22 @@ def build_rca_prompt(
     rail_text = _extract_rail_text_from_payload(payload)
 
     return prompt, rail_text
+
+
+def build_victorops_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> tuple[str, str]:
+    """Build RCA prompt from a Splunk On-Call (VictorOps) webhook payload."""
+    # `providers` is unused: build_rca_prompt resolves them from user_id.
+    _ = providers
+    incident_number = payload.get("INCIDENT_NUMBER", "unknown")
+    incident_title = (
+        payload.get("INCIDENT_DISPLAY_NAME")
+        or payload.get("ENTITY_DISPLAY_NAME")
+        or payload.get("ENTITY_ID")
+        or "Untitled Incident"
+    )
+    title = f"#{incident_number}: {incident_title}"
+    return build_rca_prompt("victorops", title, payload, user_id=user_id)
