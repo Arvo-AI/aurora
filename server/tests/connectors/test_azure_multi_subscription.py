@@ -633,14 +633,19 @@ def test_teammate_can_disconnect_org_shared_connection(monkeypatch):
     assert rows[0]["status"] == "inactive", "A's connection was left active after B disconnected"
 
 
-def test_teammate_toggle_does_not_create_shadow_row(monkeypatch):
-    """B disabling a subscription must update A's row, not insert a competing one."""
+def test_teammate_write_does_not_create_shadow_row(monkeypatch):
+    """B writing an account A connected must update A's row, not insert a competing one.
+
+    The Azure subscription toggle that first exposed this is retired, but the same
+    path runs on reconnect and for aws/ovh, and a duplicate row would make
+    cloud_exec fan out to the same account twice.
+    """
     rows = [{"user_id": USER_A, "org_id": ORG, "status": "active"}]
     cu = _conn_utils_with_fake_db(monkeypatch, rows)
 
     assert cu.save_connection_metadata(USER_B, "azure", "sub-1", status="inactive") is True
     assert len(rows) == 1, f"expected the existing row to be updated, got {len(rows)} rows (shadow row inserted)"
-    assert rows[0]["status"] == "inactive", "toggle did not take effect on the org-shared row"
+    assert rows[0]["status"] == "inactive", "write did not take effect on the org-shared row"
 
 
 def test_save_connection_metadata_still_inserts_when_absent(monkeypatch):
@@ -650,3 +655,43 @@ def test_save_connection_metadata_still_inserts_when_absent(monkeypatch):
 
     assert cu.save_connection_metadata(USER_A, "azure", "sub-1") is True
     assert len(rows) == 1 and rows[0]["status"] == "active", "first connect did not insert a row"
+
+
+# --- Retired per-subscription toggle -----------------------------------------
+# The toggle looked like an access boundary but was not one: the service
+# principal keeps its Azure role assignments, and any cloud_exec call passing an
+# explicit subscription id skipped the status filter entirely. Scope now lives
+# where Azure enforces it (setup-aurora-access.sh with a management group).
+
+def test_subscription_post_is_retired():
+    """POST /api/azure-subscriptions must not silently persist a selection again."""
+    src = open(AZURE_ROUTES).read()
+    # Last function in the file, so anchor on end-of-string as well as the next def.
+    match = re.search(r"def azure_subscriptions_post\(.*?(?=\n@|\ndef |\Z)", src, re.S)
+    assert match, "azure_subscriptions_post not found"
+    body = match.group(0)
+
+    # Match the actual return, not a bare "410": the docstring mentions the status
+    # too, so a substring check still passes after the return value is changed.
+    assert re.search(r"\)\s*,\s*410\b", body), \
+        "retired endpoint must return 410 Gone so stale clients fail loudly"
+    assert "save_connection_metadata" not in body, \
+        "POST still writes connection metadata; the toggle was supposed to be retired"
+
+
+def test_azure_ui_has_no_subscription_toggle():
+    """The Azure connector UI must not render a per-subscription switch.
+
+    Resolved relative to this file, not the cwd: the server container mounts only
+    server/ at /app, so a cwd-relative path silently misses and the check passes
+    vacuously. Skips explicitly when client/ is genuinely absent.
+    """
+    component = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "../../../client/src/components/azure-provider-integration.tsx",
+    )
+    if not os.path.exists(component):
+        pytest.skip("client/ not present in this checkout")
+    src = open(component).read()
+    assert "showToggle={false}" in src, "Azure subscription toggle is rendered again"
+    assert "saveProjects" not in src, "UI still posts a subscription selection"

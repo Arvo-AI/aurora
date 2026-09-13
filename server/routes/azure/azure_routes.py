@@ -194,6 +194,9 @@ def azure_subscriptions_get(user_id):
             {
                 "projectId": sub_id,
                 "name": names.get(sub_id, sub_id),
+                # Always true: the per-subscription toggle was retired, so every
+                # connected subscription is in use. Kept because Project.enabled is
+                # required by the shared frontend type and drives its row styling.
                 "enabled": True,
                 "isDefault": sub_id == default_id,
             }
@@ -208,33 +211,19 @@ def azure_subscriptions_get(user_id):
 @azure_bp.route("/api/azure-subscriptions", methods=["POST"])
 @require_permission("connectors", "write")
 def azure_subscriptions_post(user_id):
-    try:
-        from utils.db.connection_utils import save_connection_metadata
-        data = request.get_json() or {}
-        projects = data.get("projects", [])
-        if not isinstance(projects, list):
-            return jsonify({"error": "projects must be a list"}), 400
+    """Retired: subscription scope is set in Azure, not here.
 
-        updated = 0
-        for project in projects:
-            if not isinstance(project, dict):
-                continue
-            sub_id = project.get("projectId") or project.get("subscriptionId")
-            if not sub_id:
-                continue
-            # 'inactive' keeps the row so re-enabling does not lose metadata,
-            # while get_all_user_connections filters on status = 'active'.
-            save_connection_metadata(
-                user_id,
-                "azure",
-                sub_id,
-                connection_method="service_principal",
-                status="active" if project.get("enabled", True) else "inactive",
-            )
-            updated += 1
+    This used to flip user_connections.status so the UI could toggle a
+    subscription off. It was never a real boundary -- the service principal keeps
+    its Azure role assignments either way, and any call passing an explicit
+    subscription id bypassed the status filter entirely. Scope belongs where it
+    is enforced: re-run setup-aurora-access.sh with a management group id.
 
-        logging.info("Azure subscription selection updated (count=%d)", updated)
-        return jsonify({"status": "success", "updated": updated})
-    except Exception as e:
-        logging.error("Error in azure_subscriptions_post", exc_info=e)
-        return jsonify({"error": "Failed to process Azure subscriptions"}), 500
+    Kept as an explicit 410 so a stale client fails loudly instead of silently
+    appearing to save. The status column itself is still used by disconnect.
+    """
+    return jsonify({
+        "error": "Subscription selection has been retired. Aurora uses every subscription "
+                 "the setup script granted access to. To narrow it, re-run "
+                 "setup-aurora-access.sh with a management group id.",
+    }), 410
