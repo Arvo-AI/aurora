@@ -240,13 +240,13 @@ The script creates **two** service principals:
 
 Built-in roles only — no custom roles, and no `cluster-admin`. Contributor excludes all `Microsoft.Authorization` writes, so Aurora cannot escalate its own access in either mode.
 
-#### 1. Download the script
+#### 1. Get the script
 
-In Aurora, go to **Integrations > Azure** and click **Download Setup Script**.
+In Aurora, go to **Integrations > Azure**. Either click **Copy Script** to put the whole script on your clipboard, or **Download Setup Script** to save it as a file.
 
 #### 2. Run it in Cloud Shell
 
-Open [Azure Cloud Shell](https://shell.azure.com) (Bash), upload the script, then run:
+Open [Azure Cloud Shell](https://shell.azure.com) (Bash). If you copied the script, paste it and press Enter — it writes itself to `aurora-setup.sh` and runs. If you downloaded it, upload the file and run:
 
 ```bash
 bash setup-aurora-access.sh
@@ -257,7 +257,7 @@ Cloud Shell already has `az`, `jq`, `python3` and `kubectl`, and you are already
 By default this covers **every enabled subscription in your current tenant**. To scope to a management group instead:
 
 ```bash
-bash setup-aurora-access.sh <management-group-name>
+bash aurora-setup.sh <management-group-name>
 ```
 
 :::tip Recommended for multiple subscriptions
@@ -272,7 +272,7 @@ The script prints a JSON block containing both sets of credentials and the list 
 
 #### Multiple subscriptions
 
-All enabled subscriptions in scope are connected, and you can enable or disable individual ones afterward in Aurora. During an investigation the agent queries every enabled subscription and then narrows to whichever one holds the affected resource.
+All enabled subscriptions in scope are connected. During an investigation the agent queries every connected subscription and then narrows to whichever one holds the affected resource. Scope is controlled in Azure — by the roles the script assigns — not in Aurora, so to exclude a subscription, run the script against a management group that omits it.
 
 #### Private AKS clusters
 

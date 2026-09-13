@@ -6,7 +6,8 @@ Service Principal authentication for Microsoft Azure, with multi-subscription su
 
 Run `setup-aurora-access.sh` in [Azure Cloud Shell](https://shell.azure.com), which
 already provides `az`, `jq` and an authenticated session. Aurora serves the script at
-`GET /azure/setup-script`, and the Azure connect page offers it as a download.
+`GET /azure/setup-script`; the Azure connect page can either copy it to the clipboard
+(wrapped in a heredoc that writes and runs it) or offer it as a download.
 
 ```bash
 bash setup-aurora-access.sh                       # all enabled subscriptions
