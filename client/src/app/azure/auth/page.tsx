@@ -7,11 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, Download, Check } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { getEnv } from '@/lib/env';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import { copyToClipboard } from '@/lib/utils';
-
-const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 type AzureCredentialSet = {
   tenantId: string;
@@ -52,7 +49,7 @@ export default function AzureAuthPage() {
     subscriptionId: string;
   }>>([]);
   const [error, setError] = useState<string | null>(null);
-  const [copyButtonText, setCopyButtonText] = useState("Copy Command");
+  const [copyButtonText, setCopyButtonText] = useState("Copy Script");
 
   const router = useRouter();
   const PROPAGATION_NOTE =
@@ -371,6 +368,33 @@ export default function AzureAuthPage() {
 
 
 
+  // Cloud Shell can't be handed a file, and the script is far too long to survive
+  // shell.azure.com's ?command= URL. So copy the script itself, wrapped in a
+  // heredoc that writes it out and runs it. Wrapping matters: pasted bare, the
+  // script's `set -euo pipefail` and `die`'s `exit 1` would apply to the
+  // operator's own shell and close their session on the first failed step, and
+  // `${1:-}` could never receive a management group id.
+  const copyFullScript = async () => {
+    try {
+      const response = await fetch(`/api/proxy/azure/setup-script`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch setup script');
+      }
+      const script = await response.text();
+      // Delimiter must land at the start of its own line, and exactly one newline
+      // before it: the served script already ends with one, so normalize rather
+      // than append blindly. Quoted delimiter keeps $( and ${ from expanding here.
+      await copyToClipboard(
+        `cat > aurora-setup.sh <<'AURORA_SCRIPT_EOF'\n${script.replace(/\n*$/, '\n')}AURORA_SCRIPT_EOF\nbash aurora-setup.sh\n`,
+      );
+      setCopyButtonText('Copied!');
+      setTimeout(() => setCopyButtonText('Copy Script'), 2000);
+    } catch (error) {
+      console.error('Error copying setup script:', error);
+      setError('Failed to copy the setup script. Please use Download Setup Script instead.');
+    }
+  };
+
   const renderActionButton = () => (
         <Button
           onClick={(e) => {
@@ -625,18 +649,17 @@ export default function AzureAuthPage() {
               <div className="bg-muted border border-border rounded-md p-4">
                 <h3 className="text-lg font-medium text-foreground mb-2">Super Easy Setup</h3>
                 <p className="text-muted-foreground text-sm">
-                  Open Azure Cloud Shell and run our comprehensive setup script. 
-                  No downloads, installations, or command-line knowledge required!
+                  Copy our setup script, open Azure Cloud Shell in your browser, and paste it in.
+                  Nothing to install locally.
                 </p>
               </div>
 
               <div className="bg-muted border border-border rounded-md p-4">
                 <h3 className="text-lg font-medium text-foreground mb-2">What This Will Do</h3>
                 <ul className="text-muted-foreground text-sm space-y-1">
-                  <li>• Open Azure Cloud Shell directly in your browser</li>
-                  <li>• Create a custom "Aurora Manager" role with comprehensive permissions</li>
-                  <li>• Create a service principal with the custom role</li>
-                  <li>• Automatically detect and configure AKS cluster permissions</li>
+                  <li>• Create two service principals: one for agent mode, one read-only for ask mode</li>
+                  <li>• Assign built-in Azure roles across every enabled subscription in your tenant</li>
+                  <li>• Detect AKS clusters, and flag any private ones that need the Kubernetes agent</li>
                   <li>• Generate JSON credentials ready to paste into Aurora</li>
                 </ul>
               </div>
@@ -644,19 +667,7 @@ export default function AzureAuthPage() {
               <div className="space-y-4">
                 <div className="flex flex-col sm:flex-row gap-3">
                   <Button
-                     onClick={() => {
-                       // Use GitHub Gist for localhost, deployed frontend proxy for production
-                       const scriptUrl = backendUrl?.includes('localhost') 
-                         ? 'https://gist.githubusercontent.com/isiddharthsingh/45f810e9c82af2855b5b394b84567f21/raw/34a1a32317c14ee2bf4667a82adde4b7b166b226/gistfile1.sh'
-                         : `${backendUrl}/azure/setup-script`;
-                       const command = `curl -s ${scriptUrl} | bash`;
-                       copyToClipboard(command);
-                       
-                       setCopyButtonText(' Copied!');
-                       setTimeout(() => {
-                         setCopyButtonText('Copy Command');
-                       }, 2000);
-                     }}
+                     onClick={copyFullScript}
                     variant="outline"
                     className="flex-1 border-2 border-blue-600 text-blue-600 hover:bg-blue-50 dark:border-blue-400 dark:text-blue-400 dark:hover:bg-blue-950 font-semibold py-3 px-4 rounded-lg transition-all duration-200"
                   >
@@ -667,16 +678,14 @@ export default function AzureAuthPage() {
 
                   <Button
                      onClick={() => {
-                       // Use GitHub Gist for localhost, deployed frontend proxy for production
-                       const scriptUrl = backendUrl?.includes('localhost') 
-                         ? 'https://gist.githubusercontent.com/isiddharthsingh/45f810e9c82af2855b5b394b84567f21/raw/34a1a32317c14ee2bf4667a82adde4b7b166b226/gistfile1.sh'
-                         : `${backendUrl}/azure/setup-script`;
-                       const script = `curl -s ${scriptUrl} | bash`;
-                        
-                        const encodedScript = encodeURIComponent(script);
-                        // Force interactive login for the account the user selects (avoid reusing existing SSO)
-                        const shellUrl = `https://shell.azure.com/bash?command=${encodedScript}&prompt=login%20select_account`;
-                        window.open(shellUrl, '_blank', 'width=1200,height=800');
+                       // Opens a blank Cloud Shell only. The script cannot ride along in
+                       // ?command=: it is thousands of characters, well past what a URL
+                       // holds. Operator pastes the copied script instead.
+                       window.open(
+                         'https://shell.azure.com/bash?prompt=login%20select_account',
+                         '_blank',
+                         'width=1200,height=800',
+                       );
                      }}
                     className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-all duration-200 transform hover:scale-[1.02] shadow-lg"
                   >
@@ -694,7 +703,9 @@ export default function AzureAuthPage() {
                       </svg>
                     </div>
                     <div className="text-sm text-gray-600 dark:text-gray-300">
-                      <strong>How to use:</strong> Click "Copy Command" then paste it into Cloud Shell and press Enter. The automated command will run the full setup script.
+                      <strong>How to use:</strong> Click &quot;Copy Script&quot;, then &quot;Open Cloud Shell&quot;,
+                      paste into the shell and press Enter. To scope to a management group instead of
+                      every subscription, run <code>bash aurora-setup.sh &lt;management-group-id&gt;</code> afterwards.
                     </div>
                   </div>
                 </div>
