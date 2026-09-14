@@ -380,7 +380,10 @@ def delete_connected_account(user_id, target_user_id, provider):
                 delete_connection_secret,
             )
             try:
-                azure_conns = get_all_user_connections(user_id, "azure")
+                # raise_on_error: the default swallows DB errors and returns [], which
+                # is indistinguishable from "no subscriptions" -- the loop would be
+                # skipped and disconnect would report success with rows still active.
+                azure_conns = get_all_user_connections(user_id, "azure", raise_on_error=True)
             except Exception as e:
                 logging.warning("Failed to list Azure subscriptions for user %s: %s", user_id, e)
                 azure_conns = []

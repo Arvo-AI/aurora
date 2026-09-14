@@ -32,7 +32,11 @@ def fetch_subscriptions(management_token):
             if not url:
                 break
         else:
-            logging.warning("Subscription listing hit the page cap; list may be partial")
+            # Fail closed: azure_login deactivates persisted subscriptions absent from
+            # this list, so returning a truncated one would deactivate valid
+            # subscriptions. Raising lands in the handler below, which returns [], and
+            # login's own empty-list guard then aborts before any reconciliation.
+            raise RuntimeError("subscription listing exceeded 50 pages; refusing to return a partial list")
         # Return list of dicts with subscriptionId and displayName
         return [
             {

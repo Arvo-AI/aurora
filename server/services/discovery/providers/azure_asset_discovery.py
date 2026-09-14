@@ -74,6 +74,13 @@ def discover(user_id, credentials, env=None):
             "relationships": [],
             "errors": [str(exc)],
         }
+    except ResourceGraphTruncatedError as exc:
+        logger.error("Azure Resource Graph result truncated: %s", exc)
+        return {
+            "nodes": [],
+            "relationships": [],
+            "errors": [str(exc)],
+        }
     except subprocess.CalledProcessError as exc:
         stderr = exc.stderr or ""
         logger.error("Azure CLI failed (exit %d): %s", exc.returncode, stderr)
@@ -119,6 +126,11 @@ def discover(user_id, credentials, env=None):
 
 class ResourceGraphExtensionError(Exception):
     """Raised when the Azure Resource Graph CLI extension is not installed."""
+    pass
+
+
+class ResourceGraphTruncatedError(Exception):
+    """Raised when paging hits the page cap with a skip token still outstanding."""
     pass
 
 
@@ -189,8 +201,14 @@ def _query_batch(batch):
             return collected
         skip_token = next_token
 
-    logger.warning("Azure Resource Graph paging hit the %d page cap", _MAX_PAGES)
-    return collected
+    # Fail closed rather than returning `collected`: discovery maps whatever comes back
+    # to nodes and the orchestrator writes it as a success, so a truncated batch would
+    # publish a partial inventory and consumers diffing it would read the missing
+    # resources as deleted.
+    raise ResourceGraphTruncatedError(
+        f"Resource Graph paging exceeded {_MAX_PAGES} pages with a skip token outstanding; "
+        "refusing to publish a partial inventory"
+    )
 
 
 def _run_graph_query(cmd):

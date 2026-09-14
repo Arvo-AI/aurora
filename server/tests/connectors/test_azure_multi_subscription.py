@@ -135,8 +135,43 @@ def test_resource_graph_follows_skip_tokens(monkeypatch):
     assert "tok1" in calls[1], "second page used the wrong skip token"
 
 
+def test_resource_graph_truncation_fails_closed(monkeypatch):
+    """Hitting the page cap must raise, not publish a partial inventory.
+
+    Returning the collected rows would make discovery write a partial inventory and
+    report success, so anything diffing against previous state reads the missing
+    resources as deleted.
+    """
+    from services.discovery.providers import azure_asset_discovery as mod
+
+    calls = []
+
+    def never_ends(cmd):
+        calls.append(cmd)
+        return {"data": [{"id": str(len(calls))}], "skipToken": f"tok{len(calls)}"}
+
+    monkeypatch.setattr(mod, "_az_login", lambda creds: None)
+    monkeypatch.setattr(mod, "_run_graph_query", never_ends)
+
+    with pytest.raises(mod.ResourceGraphTruncatedError):
+        mod._query_resource_graph({}, ["S1"])
+    assert len(calls) == mod._MAX_PAGES, "paging was not bounded by the page cap"
+
+
+def test_discover_reports_truncation_instead_of_partial_nodes(monkeypatch):
+    """discover() must surface truncation as an error, not silent partial success."""
+    from services.discovery.providers import azure_asset_discovery as mod
+
+    monkeypatch.setattr(mod, "_query_resource_graph",
+                        lambda *a, **k: (_ for _ in ()).throw(mod.ResourceGraphTruncatedError("capped")))
+    monkeypatch.setattr(mod, "get_all_user_connections", lambda *a, **k: [{"account_id": "S1"}])
+
+    out = mod.discover("u", {"subscription_id": "S1"})
+    assert out["nodes"] == [], "partial inventory was published despite truncation"
+    assert out["errors"], "truncation was not reported to the caller"
+
+
 def test_resource_graph_batches_subscriptions(monkeypatch):
-    """Resource Graph times out at 30s on too many subscriptions, so batch them."""
     from services.discovery.providers import azure_asset_discovery as mod
 
     calls = []
@@ -195,7 +230,11 @@ def _load_fanout(run_command, config_dirs, fail_subs=(), mode="agent"):
             return False, None, None, None, None
         cfg = tempfile.mkdtemp(prefix="aurora-az-test-")
         config_dirs.append(cfg)
-        return True, sub_id, "service_principal", {"AZURE_CONFIG_DIR": cfg}, "az login --x"
+        # argv list, matching setup_azure_environment_isolated's real contract. A
+        # string here would let a regression back into shlex-parsing the secret pass.
+        return True, sub_id, "service_principal", {"AZURE_CONFIG_DIR": cfg}, [
+            "az", "login", "--service-principal", "--password", "s3c ret", "--output", "none",
+        ]
 
     class Result:
         def __init__(self, rc, out, err):
@@ -220,11 +259,13 @@ def test_fanout_across_30_subscriptions_isolates_config_dirs():
     import json as _json
     config_dirs = []
     seen_dirs, seen_cmds, lock = [], [], threading.Lock()
+    seen_argvs = []
 
     def run_command(argv, **kw):
         env = kw["env"]
         with lock:
             seen_dirs.append(env["AZURE_CONFIG_DIR"])
+            seen_argvs.append(list(argv))
             # argv is a list, so join to inspect it. Auth runs as its own
             # invocation now, so both it and the command land here.
             seen_cmds.append(" ".join(argv))
@@ -243,12 +284,20 @@ def test_fanout_across_30_subscriptions_isolates_config_dirs():
     for i in range(30):
         assert any(f"--subscription sub-{i:02d}" in c for c in seen_cmds), \
             f"sub-{i:02d} command was not pinned to its subscription"
-    # No invocation may go through a shell: auth_command interpolates the client
-    # secret unquoted, so `bash -lc` would let a secret with a metacharacter break
-    # out of its argument. This is the regression guard for that.
+    # No invocation may go through a shell. Interpolating the client secret into a
+    # command string and handing it to `bash -lc` would let a secret containing a
+    # shell metacharacter break out of its argument.
     for argv_str in seen_cmds:
         assert not argv_str.startswith("bash -lc"), \
             "command was executed through a shell; secret interpolation is exploitable"
+    # The secret must reach az byte-for-byte. The stub's secret contains a space, so
+    # any re-lexing of the auth argv (e.g. shlex.split on a joined string) truncates
+    # it and this fails.
+    auth_argvs = [a for a in seen_argvs if "login" in a]
+    assert len(auth_argvs) == 30, "each subscription must authenticate exactly once"
+    for argv in auth_argvs:
+        assert argv[argv.index("--password") + 1] == "s3c ret", \
+            "client secret was re-parsed and corrupted before reaching az"
 
 
 def test_fanout_cleans_up_every_temp_dir():
@@ -643,6 +692,38 @@ USER_A = "533757ff-de70-4700-a285-7dee94bd93b8"
 USER_B = "00000000-0000-0000-0000-0000000000bb"
 
 
+def test_disconnect_detects_listing_failure(monkeypatch):
+    """A failed subscription listing must not read as "nothing to disconnect".
+
+    get_all_user_connections swallows DB errors and returns [] by default, which is
+    indistinguishable from having no subscriptions: the loop is skipped, deletion_ok
+    stays True, and disconnect reports success while rows are still active. The
+    disconnect path must therefore opt into raise_on_error.
+    """
+    src = _read("routes/account_management.py")
+    match = re.search(r'if provider_lc == "azure":.*?(?=\n        # Clean up)', src, re.S)
+    assert match, "azure disconnect branch not found"
+    body = match.group(0)
+    assert "raise_on_error=True" in body, \
+        "listing failure is silently treated as an empty list"
+    assert "deletion_ok = False" in body, \
+        "a failed listing does not mark the disconnect as failed"
+
+
+def test_get_all_user_connections_supports_raise_on_error():
+    """The flag must actually re-raise, otherwise the guard above is decorative."""
+    import utils.db.connection_utils as cu
+    import inspect
+
+    sig = inspect.signature(cu.get_all_user_connections)
+    assert "raise_on_error" in sig.parameters, "raise_on_error parameter missing"
+    assert sig.parameters["raise_on_error"].default is False, \
+        "raise_on_error must default to False so existing callers keep swallowing"
+    src = inspect.getsource(cu.get_all_user_connections)
+    assert re.search(r"if raise_on_error:\s*\n\s*raise", src), \
+        "raise_on_error does not re-raise"
+
+
 def test_teammate_can_disconnect_org_shared_connection(monkeypatch):
     """B disconnecting an account A connected must actually deactivate it."""
     rows = [{"user_id": USER_A, "org_id": ORG, "status": "active"}]
@@ -761,6 +842,39 @@ def test_subscription_listing_follows_nextlink():
     assert [s["subscriptionId"] for s in out] == ["s0", "s1", "s2"], \
         "nextLink was not followed; subscription list is truncated"
     assert seen_urls[1].endswith("/next"), "second request did not use nextLink"
+
+
+def test_subscription_listing_fails_closed_at_page_cap():
+    """Hitting the page cap must not return a partial list.
+
+    azure_login deactivates persisted subscriptions absent from this list, so a
+    truncated list would deactivate valid subscriptions. The raise is caught by
+    fetch_subscriptions' own handler and becomes [], which login's empty-list guard
+    rejects before any reconciliation runs.
+    """
+    src = _read(BILLING)
+    match = re.search(r"^def fetch_subscriptions\(.*?(?=^def |\Z)", src, re.S | re.M)
+    calls = []
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            # Always another page: the cap is the only thing that can stop this.
+            return {"value": [{"subscriptionId": f"s{len(calls)}", "state": "Enabled"}],
+                    "nextLink": "https://management.azure.com/next"}
+
+    def _get(url, **_kw):
+        calls.append(url)
+        return _Resp()
+
+    ns = {"requests": typing.cast(typing.Any, types.SimpleNamespace(get=_get)), "logging": logging}
+    exec(match.group(0), ns)
+
+    assert ns["fetch_subscriptions"]("token") == [], \
+        "page cap returned a partial list; login would deactivate the missing subscriptions"
+    assert len(calls) == 50, f"paging was not bounded at 50 pages (made {len(calls)} calls)"
 
 
 def test_subscription_listing_returns_empty_on_failure():

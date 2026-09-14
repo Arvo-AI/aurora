@@ -128,7 +128,7 @@ def _setup_provider_env(provider_name, user_id, credentials):
         elif provider_name == "azure":
             subscription_id = credentials.get("subscription_id")
             result = setup_azure_environment_isolated(auth_user_id, subscription_id=subscription_id)
-            success, resolved_sub, _auth_type, env, auth_command = result
+            success, resolved_sub, _auth_type, env, _auth_argv = result
             if success and env:
                 # Build credentials dict from env so azure_asset_discovery._build_env works
                 creds = {

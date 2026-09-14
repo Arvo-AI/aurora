@@ -268,13 +268,20 @@ def get_user_aws_connection(user_id: str) -> Optional[Dict]:
             conn.close()
 
 
-def get_all_user_connections(user_id: str, provider: str = "aws") -> List[Dict]:
+def get_all_user_connections(
+    user_id: str, provider: str = "aws", *, raise_on_error: bool = False
+) -> List[Dict]:
     """Get all active connections for a user and provider (including org-shared).
 
     Returns a list of connection dicts, one per connected account/subscription.
     Each dict includes account_id, role_arn, read_only_role_arn, region,
     connection_method, and last_verified_at. The role_arn columns are
     AWS-specific and are NULL for other providers.
+
+    By default a query failure is logged and returns [], which is indistinguishable
+    from "no connections". Pass raise_on_error=True when the caller must tell those
+    apart -- e.g. disconnect, where treating a failed listing as "nothing to do"
+    reports success while rows are still active.
     """
     org_id = _resolve_org_id(user_id)
     if org_id:
@@ -315,6 +322,8 @@ def get_all_user_connections(user_id: str, provider: str = "aws") -> List[Dict]:
         ]
     except Exception as e:
         logger.exception("Error getting %s connections for user %s: %s", provider, user_id, e)
+        if raise_on_error:
+            raise
         return []
     finally:
         if conn:

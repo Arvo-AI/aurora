@@ -161,12 +161,20 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
             "AAD_SERVICE_PRINCIPAL_CLIENT_SECRET": str(client_secret),
         }
         
-        # Store auth command for chaining with user commands (NEVER log the secret!)
-        auth_command = f"az login --service-principal --username {client_id} --password {client_secret} --tenant {tenant_id} --output none"
+        # argv, not a string: the secret must never be re-lexed. Interpolating it into
+        # a command string and calling shlex.split() on it later silently truncates a
+        # secret containing a space and raises on one containing a quote.
+        auth_argv = [
+            "az", "login", "--service-principal",
+            "--username", str(client_id),
+            "--password", str(client_secret),
+            "--tenant", str(tenant_id),
+            "--output", "none",
+        ]
 
-        logger.info(f"Azure isolated environment configured for subscription: {subscription_id} (auth_command built with --password [REDACTED])")
+        logger.info(f"Azure isolated environment configured for subscription: {subscription_id} (auth argv built with --password [REDACTED])")
         
-        return True, subscription_id, "service_principal", isolated_env, auth_command
+        return True, subscription_id, "service_principal", isolated_env, auth_argv
         
     except Exception as e:
         logger.error(f"Failed to setup Azure environment: {e}")
@@ -1402,17 +1410,15 @@ def _cloud_exec_azure_multi_subscription(
         sub_id = conn.get("account_id", "unknown")
         config_dir = None
         try:
-            success, _sub, _auth, isolated_env, auth_command = setup_azure_environment_isolated(user_id, sub_id)
+            success, _sub, _auth, isolated_env, auth_argv = setup_azure_environment_isolated(user_id, sub_id)
             if not success:
                 return {"subscription_id": sub_id, "success": False, "error": "Failed to authenticate"}
             config_dir = isolated_env.get("AZURE_CONFIG_DIR")
 
             cmd = _apply_azure_subscription(command.strip(), sub_id)
             # Auth and command run as separate argv invocations, never through a
-            # shell. auth_command interpolates the client secret unquoted, so
-            # handing it to `bash -lc` would let a secret containing a shell
-            # metacharacter break out. The single-subscription path at the bottom
-            # of this file uses shlex.split for the same reason.
+            # shell: the secret would otherwise be exposed to shell metacharacter
+            # parsing. auth_argv is already a list, so the secret is never re-lexed.
             try:
                 cmd_args = shlex.split(cmd)
             except ValueError as e:
@@ -1420,7 +1426,7 @@ def _cloud_exec_azure_multi_subscription(
                         "error": f"Command parsing failed: {e}"}
 
             auth_result = terminal_run(
-                shlex.split(auth_command),
+                auth_argv,
                 capture_output=True, text=True, timeout=30,
                 env=isolated_env, trusted=True,
             )
@@ -1604,7 +1610,7 @@ Security & Compliance
 
         # Set up ISOLATED environment based on provider - NO GLOBAL STATE!
         isolated_env = None
-        auth_command = None
+        auth_argv = None
         if normalized_provider == 'azure':
             # Azure multi-subscription: fan out only for `az` commands when no
             # specific subscription was requested. kubectl/helm inherit their
@@ -1623,7 +1629,7 @@ Security & Compliance
                         output_file=output_file,
                         fn_start=fn_start,
                     )
-            success, subscription_id, auth_method, isolated_env, auth_command = setup_azure_environment_isolated(user_id, target_subscription)
+            success, subscription_id, auth_method, isolated_env, auth_argv = setup_azure_environment_isolated(user_id, target_subscription)
             if not success:
                 return json.dumps({"error": f"Failed to setup Azure environment with {provider_preference} authentication", "final_command": command})
             resource_id = subscription_id
@@ -2071,11 +2077,11 @@ Security & Compliance
         
         # For Azure, we need to handle authentication differently
         # Execute auth and user command sequentially to preserve argument quoting
-        if provider.lower() in ['azure', 'az'] and auth_command:
+        if provider.lower() in ['azure', 'az'] and auth_argv:
             # First, execute the authentication command
             try:
                 auth_result = terminal_run(
-                    shlex.split(auth_command),
+                    auth_argv,
                     capture_output=True,
                     text=True,
                     timeout=30,

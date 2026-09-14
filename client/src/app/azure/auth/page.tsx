@@ -40,6 +40,7 @@ export default function AzureAuthPage() {
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyButtonText, setCopyButtonText] = useState("Copy Script");
+  const [managementGroupId, setManagementGroupId] = useState("");
 
   const router = useRouter();
   const PROPAGATION_NOTE =
@@ -322,12 +323,17 @@ export default function AzureAuthPage() {
         throw new Error('Failed to fetch setup script');
       }
       const script = await response.text();
+      // Scope is baked into the command that runs, because it cannot be changed after
+      // the fact: the script only ever adds role assignments (it never deletes any),
+      // so a tenant-wide run followed by a scoped one leaves the broad grants in place
+      // and creates a second pair of service principals.
       // Normalize to exactly one trailing newline so the delimiter starts its own
       // line. `\n+$` rather than `\n*$` to keep the match linear (no backtracking
       // on an empty match at end-of-input). Quoted delimiter stops $( and ${
       // expanding while the heredoc is being written.
+      const scopeArg = managementGroupId.trim() ? ` ${managementGroupId.trim()}` : '';
       await copyToClipboard(
-        `cat > setup-aurora-access.sh <<'AURORA_SCRIPT_EOF'\n${script.replace(/\n+$/, '')}\nAURORA_SCRIPT_EOF\nbash setup-aurora-access.sh\n`,
+        `cat > setup-aurora-access.sh <<'AURORA_SCRIPT_EOF'\n${script.replace(/\n+$/, '')}\nAURORA_SCRIPT_EOF\nbash setup-aurora-access.sh${scopeArg}\n`,
       );
       setCopyButtonText('Copied!');
       setTimeout(() => setCopyButtonText('Copy Script'), 2000);
@@ -600,13 +606,33 @@ export default function AzureAuthPage() {
                 <h3 className="text-lg font-medium text-foreground mb-2">What This Will Do</h3>
                 <ul className="text-muted-foreground text-sm space-y-1">
                   <li>• Create two service principals: one for agent mode, one read-only for ask mode</li>
-                  <li>• Assign built-in Azure roles across every enabled subscription in your tenant</li>
+                  <li>• Assign built-in Azure roles across the scope you choose below</li>
                   <li>• Detect AKS clusters, and flag any private ones that need the Kubernetes agent</li>
                   <li>• Generate JSON credentials ready to paste into Aurora</li>
                 </ul>
               </div>
 
               <div className="space-y-4">
+                <div className="bg-muted border border-border rounded-md p-4">
+                  <label htmlFor="mgScope" className="block text-sm font-medium text-foreground mb-1">
+                    Management group ID <span className="text-muted-foreground font-normal">(optional)</span>
+                  </label>
+                  <input
+                    id="mgScope"
+                    type="text"
+                    value={managementGroupId}
+                    onChange={(e) => setManagementGroupId(e.target.value)}
+                    placeholder="Leave blank to cover every enabled subscription"
+                    className="w-full px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-muted-foreground text-xs mt-2">
+                    Set this before copying. Roles are granted once at the group scope and every
+                    subscription beneath it inherits them, including ones you add later. Scope cannot
+                    be narrowed after the script runs, so re-running without it grants access to every
+                    subscription in the tenant.
+                  </p>
+                </div>
+
                 <div className="flex flex-col sm:flex-row gap-3">
                   <Button
                      onClick={copyFullScript}
@@ -646,8 +672,8 @@ export default function AzureAuthPage() {
                     </div>
                     <div className="text-sm text-gray-600 dark:text-gray-300">
                       <strong>How to use:</strong> Click &quot;Copy Script&quot;, then &quot;Open Cloud Shell&quot;,
-                      paste into the shell and press Enter. To scope to a management group instead of
-                      every subscription, run <code>bash setup-aurora-access.sh &lt;management-group-id&gt;</code> afterwards.
+                      paste into the shell and press Enter. The copied command already includes the
+                      scope you chose above.
                     </div>
                   </div>
                 </div>

@@ -8,7 +8,8 @@
 # Built-in roles only: AKS RBAC Reader's pods/read already covers `kubectl logs`,
 # since Azure models Kubernetes subresources under the parent resource verb.
 #
-# Re-runnable: role assignments are upserted.
+# Re-runnable: role assignments are upserted. Note that each run creates a new pair
+# of service principals (names are timestamped); the script warns about earlier ones.
 set -euo pipefail
 
 SCOPE_ARG="${1:-}"   # optional: management group id, else all enabled subscriptions
@@ -81,6 +82,18 @@ fi
 # --- Create service principals -------------------------------------------
 # create-for-rbac without --role creates the app with no assignment; roles are
 # added explicitly below so each scope is auditable.
+#
+# Names are timestamped, so re-running creates a NEW pair rather than rotating the
+# existing one. Aurora only stores the credentials you paste last, so earlier pairs
+# keep their role assignments while being untracked. Warn instead of deleting: these
+# are tenant identities and another tool may legitimately own one.
+PRIOR="$(az ad sp list --filter "startswith(displayName,'Aurora-Agent-')" --query "length(@)" -o tsv 2>/dev/null || echo 0)"
+if [[ "${PRIOR:-0}" -gt 0 ]]; then
+  echo "NOTE: $PRIOR existing Aurora-Agent-* service principal(s) found. This run creates a new"
+  echo "      pair; the older ones keep their role assignments. Delete the ones you no longer use:"
+  echo "        az ad sp list --filter \"startswith(displayName,'Aurora-')\" --query \"[].{name:displayName,appId:appId}\" -o table"
+  echo "        az ad app delete --id <appId>"
+fi
 echo "Creating service principals..."
 AGENT_SP="$(az ad sp create-for-rbac --name "Aurora-Agent-$STAMP" \
   --query '{clientId:appId,clientSecret:password,tenantId:tenant}' -o json)"

@@ -254,11 +254,13 @@ bash setup-aurora-access.sh
 
 Cloud Shell already has `az`, `jq`, `python3` and `kubectl`, and you are already authenticated — nothing to install.
 
-By default this covers **every enabled subscription in your current tenant**. To scope to a management group instead, re-run with its name:
+By default this covers **every enabled subscription in your current tenant**. To scope to a management group instead, set the management group ID in Aurora before copying the script, or pass it as an argument:
 
 ```bash
 bash setup-aurora-access.sh <management-group-name>
 ```
+
+Choose the scope **before the first run**. The script only adds role assignments and never removes them, so running it tenant-wide and then re-running it against a management group leaves the tenant-wide grants in place — it does not narrow them. Each run also creates a new pair of service principals; the script tells you when earlier ones exist so you can delete the ones you no longer use.
 
 :::tip Recommended for multiple subscriptions
 With a management group, roles are assigned **once** at the group scope and every subscription beneath it inherits them. Subscriptions you add to the group later are picked up automatically, with no need to re-run the script.

@@ -14,6 +14,9 @@ bash setup-aurora-access.sh                       # all enabled subscriptions
 bash setup-aurora-access.sh <management-group-id> # single grant at MG scope
 ```
 
+Pick the scope on the first run: assignments are only ever added, never removed, so a
+tenant-wide run cannot be narrowed by re-running with a management group.
+
 The script creates two service principals and prints a JSON blob to paste into Aurora:
 
 | Identity   | Roles | Used by |
