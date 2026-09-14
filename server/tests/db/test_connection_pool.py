@@ -41,7 +41,13 @@ from utils.db import connection_pool as cp_module  # noqa: E402
 from utils.db.connection_pool import DatabaseConnectionPool  # noqa: E402
 
 
-_RESET_SQL = "RESET myapp.current_user_id; RESET myapp.current_org_id;"
+_RESET_SQL = (
+    "RESET ROLE; "
+    "RESET myapp.current_user_id; "
+    "RESET myapp.current_org_id; "
+    "RESET myapp.mcp_token_resolve; "
+    "RESET myapp.kubectl_token_resolve;"
+)
 
 
 def _make_conn():
@@ -159,10 +165,13 @@ class TestSetRlsVarsFromRequest:
         assert not any(s.startswith("SET myapp.") for s in sql)
 
     def test_set_failure_does_not_abort_yield(self, fresh_pool, flask_app):
-        """If the SET cursor raises, get_connection still yields the conn."""
+        """If the SET RLS vars cursor raises, get_connection still yields the conn.
+        (SET ROLE succeeds, but SET myapp.* fails)
+        """
         pool, factory = fresh_pool
         connection, cursor = _make_conn()
-        cursor.execute.side_effect = [Exception("set failed"), None, None]
+        # SET ROLE succeeds, then SET myapp.current_user_id raises, then RESET succeeds
+        cursor.execute.side_effect = [None, Exception("set failed"), None, None]
         factory.return_value.getconn.return_value = connection
 
         with flask_app.test_request_context(
@@ -230,7 +239,8 @@ class TestGetConnectionCleanup:
         pool, factory = fresh_pool
         connection, cursor = _make_conn()
         factory.return_value.getconn.return_value = connection
-        cursor.execute.side_effect = [None, None, Exception("conn lost")]
+        # SET ROLE succeeds, SET user_id succeeds, SET org_id succeeds, RESET raises
+        cursor.execute.side_effect = [None, None, None, Exception("conn lost")]
 
         with flask_app.test_request_context(
             "/api/x", headers={"X-User-ID": "u-1", "X-Org-ID": "org-7"},
@@ -238,8 +248,8 @@ class TestGetConnectionCleanup:
             with pool.get_connection() as conn:
                 assert conn is connection
 
-        assert _RESET_SQL in _executed_sql(cursor)
-        factory.return_value.putconn.assert_called_once_with(connection)
+        # Connection should be discarded (closed) since reset failed
+        factory.return_value.putconn.assert_called_once_with(connection, close=True)
 
     def test_putconn_failure_swallowed(self, fresh_pool):
         """``pool.putconn`` raising must be logged, not propagated."""
@@ -361,8 +371,8 @@ class TestRLSContextAdversarial:
         """
         pool, factory = fresh_pool
         connection, cursor = _make_conn()
-        # First execute (SET user_id) raises; subsequent calls (RESET) succeed.
-        cursor.execute.side_effect = [Exception("db gone"), None, None]
+        # SET ROLE succeeds, then SET user_id raises; subsequent calls (RESET) succeed.
+        cursor.execute.side_effect = [None, Exception("db gone"), None, None]
         factory.return_value.getconn.return_value = connection
 
         with (
