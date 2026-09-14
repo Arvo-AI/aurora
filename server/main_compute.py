@@ -231,6 +231,7 @@ _OPEN_PREFIXES = (
     "/spinnaker/webhook/",
     "/jira/webhook/",
     "/incidentio/alerts/webhook/",
+    "/prometheus/webhook/",
     "/ovh_api/ovh/oauth2/callback",
     "/azure/callback",
     "/azure/setup-script",
@@ -461,6 +462,11 @@ app.register_blueprint(bigpanda_bp, url_prefix="/bigpanda")
 from routes.newrelic import bp as newrelic_bp  # noqa: F401
 app.register_blueprint(newrelic_bp, url_prefix="/newrelic")
 import routes.newrelic.tasks  # noqa: F401
+
+# --- Prometheus Integration Routes ---
+from routes.prometheus import bp as prometheus_bp  # noqa: F401
+app.register_blueprint(prometheus_bp, url_prefix="/prometheus")
+from routes.prometheus import tasks as _prometheus_tasks  # noqa: F401
 
 # --- Sentry Integration Routes ---
 from routes.sentry import bp as sentry_bp  # noqa: F401

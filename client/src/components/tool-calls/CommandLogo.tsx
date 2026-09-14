@@ -188,6 +188,14 @@ const logos = {
       onError={(e) => console.error('Failed to load New Relic logo:', e)}
     />
   ),
+  prometheus: (
+    <img
+      src="/prometheus.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Prometheus"
+      onError={(e) => console.error('Failed to load Prometheus logo:', e)}
+    />
+  ),
   thousandeyes: (
     <img
       src="/thousandeyes.svg"
@@ -459,6 +467,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // New Relic tools
   if (tool.includes('newrelic') || tool === 'query_newrelic') {
     return 'newrelic'
+  }
+
+  // Prometheus / Alertmanager tools
+  if (tool.includes('prometheus') || tool === 'query_prometheus' || tool === 'manage_alertmanager') {
+    return 'prometheus'
   }
 
   // ThousandEyes tools

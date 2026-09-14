@@ -28,6 +28,8 @@ import {
   parseCloudflareCommand,
   parseSlackCommand,
   parseGitLabToolCommand,
+  parsePrometheusCommand,
+  parseAlertmanagerCommand,
 } from "./tool-command-parser"
 import { RenderOutput } from "./tool-output-renderer"
 
@@ -184,6 +186,14 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   // New Relic tools parsing
   else if (tool.tool_name === "query_newrelic" && typeof command === "string" && command.trim().startsWith("{")) {
     command = parseNewRelicCommand(normalizedInput)
+  }
+  // Prometheus tools parsing
+  else if (tool.tool_name === "query_prometheus") {
+    command = parsePrometheusCommand(normalizedInput)
+  }
+  // Alertmanager tools parsing
+  else if (tool.tool_name === "manage_alertmanager") {
+    command = parseAlertmanagerCommand(normalizedInput)
   }
   else if (tool.tool_name === "query_cloudflare" || tool.tool_name === "cloudflare_list_zones" || tool.tool_name === "cloudflare_action") {
     command = parseCloudflareCommand(tool.tool_name, normalizedInput)

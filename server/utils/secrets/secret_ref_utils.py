@@ -71,6 +71,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "incidentio",  # incident.io connector tokens
     "flyio",    # Fly.io connector tokens
     "kubeconfig", # Kubernetes kubeconfig uploads
+    "prometheus", # Prometheus/VictoriaMetrics/Thanos connector
 }
 
 

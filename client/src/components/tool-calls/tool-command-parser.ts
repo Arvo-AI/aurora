@@ -580,3 +580,71 @@ export function parseSlackCommand(toolName: string, toolInput: string): string {
 
   return `Slack: ${toolName.replace(/slack_?/g, "").replace(/_/g, " ")}`
 }
+
+export function parsePrometheusCommand(toolInput: string): string {
+  try {
+    let parsed: Record<string, unknown> | null = null
+    try {
+      parsed = JSON.parse(toolInput)
+    } catch {
+      parsed = JSON.parse(toolInput.replace(/'/g, '"'))
+    }
+    const args = ((parsed as Record<string, unknown>)?.kwargs || parsed || {}) as Record<string, unknown>
+    const resourceType = (args.resource_type as string) || ""
+    const query = (args.query as string) || ""
+
+    switch (resourceType.toLowerCase()) {
+      case "metrics":
+      case "instant":
+        return query ? `promql ${query}` : "Prometheus: Query"
+      case "alerts":
+        return "Prometheus: List firing alerts"
+      case "rules":
+        return "Prometheus: List alerting rules"
+      case "targets":
+        return `Prometheus: List targets (${query || "all"})`
+      case "metadata":
+        return query ? `Prometheus: Metadata for ${query}` : "Prometheus: List metric metadata"
+      default:
+        return query || "Prometheus: Query"
+    }
+  } catch {
+    return "Prometheus: Query"
+  }
+}
+
+export function parseAlertmanagerCommand(toolInput: string): string {
+  try {
+    let parsed: Record<string, unknown> | null = null
+    try {
+      parsed = JSON.parse(toolInput)
+    } catch {
+      parsed = JSON.parse(toolInput.replace(/'/g, '"'))
+    }
+    const args = ((parsed as Record<string, unknown>)?.kwargs || parsed || {}) as Record<string, unknown>
+    const action = (args.action as string) || ""
+    const matchers = (args.matchers as string) || ""
+    const duration = args.duration_minutes as number | undefined
+    const silenceId = (args.silence_id as string) || ""
+
+    switch (action.toLowerCase()) {
+      case "list_alerts": {
+        return matchers ? `Alertmanager: Alerts (${matchers})` : "Alertmanager: List firing alerts"
+      }
+      case "list_silences":
+        return "Alertmanager: List active silences"
+      case "create_silence": {
+        const parts: string[] = []
+        if (matchers) parts.push(matchers)
+        if (duration) parts.push(`${duration}min`)
+        return parts.length ? `Alertmanager: Silence (${parts.join(", ")})` : "Alertmanager: Create silence"
+      }
+      case "expire_silence":
+        return silenceId ? `Alertmanager: Expire silence ${silenceId.slice(0, 8)}…` : "Alertmanager: Expire silence"
+      default:
+        return `Alertmanager: ${action.replace(/_/g, " ")}`
+    }
+  } catch {
+    return "Alertmanager: Action"
+  }
+}
