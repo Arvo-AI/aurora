@@ -44,6 +44,11 @@ Because only built-in roles are used, the script needs `User Access Administrato
 or `Owner` to create role assignments, but never permission to create role
 definitions. Re-running is safe: assignments are upserted.
 
+It also needs **directory** permission to register applications, which subscription
+Owner does not grant. If the tenant sets "Users can register applications" to No, the
+operator needs the `Application Developer` role in Entra ID (or an admin flips that
+setting). The script detects this and stops before creating anything.
+
 ## Multi-subscription behaviour
 
 Every enabled subscription is stored as a `user_connections` row (provider `azure`).

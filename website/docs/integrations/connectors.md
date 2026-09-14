@@ -240,6 +240,15 @@ The script creates **two** service principals:
 
 Built-in roles only — no custom roles, and no `cluster-admin`. Contributor excludes all `Microsoft.Authorization` writes, so Aurora cannot escalate its own access in either mode.
 
+#### What you need before starting
+
+Azure keeps subscription access and directory access separate, and the script needs both:
+
+- **Owner** or **User Access Administrator** on the subscriptions you want covered, to assign the roles.
+- Permission to **register applications** in Entra ID, to create the two service principals. Subscription Owner does *not* include this.
+
+If your tenant sets *Users can register applications* to **No**, ask an Entra ID admin to either change that setting or grant you the **Application Developer** role. The script checks this and stops before creating anything, so a missing permission costs you nothing but a re-run.
+
 #### 1. Get the script
 
 In Aurora, go to **Integrations > Azure**. Either click **Copy Script** to put the whole script on your clipboard, or **Download Setup Script** to save it as a file.

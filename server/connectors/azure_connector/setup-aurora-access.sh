@@ -29,11 +29,6 @@ az account show >/dev/null 2>&1 || die "Not logged in. Run: az login"
 TENANT_ID="$(az account show --query tenantId -o tsv)"
 echo "Aurora Azure setup (tenant $TENANT_ID)"
 
-# App registration is commonly restricted by tenant policy; check before we start.
-if ! az ad signed-in-user show >/dev/null 2>&1; then
-  note "Warning: cannot read your directory profile; app creation may fail."
-fi
-
 # --- Resolve target scopes -----------------------------------------------
 # Only subscriptions in the SP's home tenant are usable: a service principal
 # exists in one tenant, so cross-tenant role assignment always fails. Operators
@@ -95,10 +90,40 @@ if [[ "${PRIOR:-0}" -gt 0 ]]; then
   echo "        az ad app delete --id <appId>"
 fi
 echo "Creating service principals..."
-AGENT_SP="$(az ad sp create-for-rbac --name "Aurora-Agent-$STAMP" \
-  --query '{clientId:appId,clientSecret:password,tenantId:tenant}' -o json)"
-RO_SP="$(az ad sp create-for-rbac --name "Aurora-ReadOnly-$STAMP" \
-  --query '{clientId:appId,clientSecret:password,tenantId:tenant}' -o json)"
+
+# Creating an app registration is a directory operation, so subscription Owner grants
+# nothing here and tenants commonly set "Users can register applications" to No. Azure
+# reports that as a bare "Insufficient privileges", which reads like an RBAC problem;
+# translate it into the actual remedy. Probing the tenant policy up front instead would
+# be unreliable: reading it needs Policy.Read.All, which a restricted member also lacks.
+# This is the first mutation in the script, so failing here leaves nothing behind.
+create_sp() {  # create_sp <display-name>
+  local out err rc=0
+  # stderr to a temp file, not 2>&1: az writes deprecation notices there, and folding
+  # them into stdout corrupts the JSON that jq parses below.
+  err="$(mktemp)"
+  out="$(az ad sp create-for-rbac --name "$1" \
+    --query '{clientId:appId,clientSecret:password,tenantId:tenant}' -o json 2>"$err")" || rc=$?
+  if [[ $rc -eq 0 ]]; then
+    rm -f "$err"
+    printf '%s' "$out"
+    return 0
+  fi
+  local msg; msg="$(<"$err")"; rm -f "$err"
+  case "$msg" in
+    *"Insufficient privileges"*|*Authorization_RequestDenied*)
+      die "Not allowed to create app registrations in tenant $TENANT_ID.
+  Subscription Owner does not grant directory permissions. Ask an Entra ID admin for one of:
+    - Entra ID > Users > User settings > 'Users can register applications' = Yes, or
+    - the Application Developer role on your account (Application Administrator also works).
+  Then re-run this script. Nothing was created."
+      ;;
+  esac
+  die "Could not create $1: ${msg%%$'\n'*}"
+}
+
+AGENT_SP="$(create_sp "Aurora-Agent-$STAMP")"
+RO_SP="$(create_sp "Aurora-ReadOnly-$STAMP")"
 
 AGENT_ID="$(jq -r .clientId <<<"$AGENT_SP")"
 AGENT_SECRET="$(jq -r .clientSecret <<<"$AGENT_SP")"

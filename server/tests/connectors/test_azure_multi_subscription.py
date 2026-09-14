@@ -399,6 +399,44 @@ def test_setup_azure_environment_allocates_a_distinct_config_dir_each_call():
 # silently drop every subscription below the first level.
 # ---------------------------------------------------------------------------
 
+def test_app_registration_denial_is_translated():
+    """The Entra denial must name the real remedy, not look like an RBAC problem.
+
+    Subscription Owner grants no directory permissions, so an operator who is Owner on
+    every subscription still cannot create the app registrations when the tenant sets
+    "Users can register applications" to No. Azure reports that as a bare "Insufficient
+    privileges", which sends operators looking at subscription roles.
+    """
+    src = _read(SETUP_SCRIPT)
+    body = re.search(r"create_sp\(\) \{.*?\n\}", src, re.S)
+    assert body, "create_sp wrapper not found; create-for-rbac is unguarded again"
+    body = body.group(0)
+
+    assert "Insufficient privileges" in body, "the Entra denial string is not matched"
+    assert "Authorization_RequestDenied" in body, "the Graph variant is not matched"
+    assert "Users can register applications" in body, "no tenant-setting remedy given"
+    assert "Application Developer" in body, "no directory-role remedy given"
+    # 2>&1 would fold az's deprecation notices into the JSON that jq parses next.
+    # Strip comments first: the line explaining this very hazard mentions 2>&1.
+    code = "\n".join(l for l in body.splitlines() if not l.lstrip().startswith("#"))
+    assert "2>&1" not in code, "stderr merged into stdout; success-path JSON can be corrupted"
+
+
+def test_no_mutation_before_app_registration():
+    """"Nothing was created" must be true: every earlier az call is a read.
+
+    The denial message tells the operator nothing was created, so a future mutation
+    added above this point would turn that into a lie and leave orphaned state.
+    """
+    src = _read(SETUP_SCRIPT)
+    head = src.split("create_sp()")[0]
+    mutating = re.findall(
+        r"az (?:ad (?:sp|app) create\S*|role assignment create|aks (?:create|update)|group create)",
+        head,
+    )
+    assert not mutating, f"mutation before the app-registration guard: {mutating}"
+
+
 def _walk_mg(payload):
     """Run the walker embedded in setup-aurora-access.sh against a payload."""
     src = _read(SETUP_SCRIPT)
