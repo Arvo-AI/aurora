@@ -661,8 +661,10 @@ def run_recurrence_check(
     behavior.
 
     Returns the fold outcome ({"folded": bool, "root_id": Optional[str]}) so the
-    caller can maintain the Incident Index, or None when no check ran (off,
-    idempotent skip, no context, or a degraded failure path).
+    caller can maintain the Incident Index. On a task retry it returns the
+    previously-persisted outcome (not None) so an already-folded incident isn't
+    re-added as a standalone line. Returns None only when no check ran (off, no
+    context, or a degraded failure path).
     """
     started = time.monotonic()
     try:
@@ -670,12 +672,22 @@ def run_recurrence_check(
         if mode == MODE_OFF:
             return None
 
-        if get_existing_verdict(incident_id, user_id, decision_point):
+        # Task retry: a verdict already exists, so don't re-run the check (no
+        # double fold, no double token spend). But we must NOT return None here
+        # — None means "no check ran" and would make the caller append a second,
+        # standalone index line for an incident that was already folded. Return
+        # the persisted fold outcome so the Incident Index stays consistent.
+        existing = get_existing_verdict(incident_id, user_id, decision_point)
+        if existing:
             logger.info(
-                "%s Verdict already exists for incident %s (%s); skipping re-run",
+                "%s Verdict already exists for incident %s (%s); returning persisted outcome",
                 _LOG_PREFIX, incident_id, decision_point,
             )
-            return None
+            folded = bool(existing.get("folded"))
+            return {
+                "folded": folded,
+                "root_id": existing.get("accepted_recurrence_of") if folded else None,
+            }
 
         ctx = _fetch_incident_context(incident_id, user_id)
         if not ctx:

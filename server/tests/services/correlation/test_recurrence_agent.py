@@ -176,7 +176,26 @@ class TestIdempotency:
     def test_existing_verdict_skips_rerun(self, harness, monkeypatch):
         harness.get_existing_verdict.return_value = {"folded": False, "mode": "shadow"}
         _stub_agent(monkeypatch, verdict=RecurrenceVerdict(recurrence_of=ANCHOR, reasoning="r"))
-        _run(monkeypatch, "shadow")
+        outcome = _run(monkeypatch, "shadow")
         harness.fetch_ctx.assert_not_called()
         harness.persist_verdict.assert_not_called()
         harness.fold_incident.assert_not_called()
+        # A non-folded existing verdict must report folded=False (not None), so
+        # the caller treats it as a settled "new root", not a no-check.
+        assert outcome == {"folded": False, "root_id": None}
+
+    def test_existing_folded_verdict_returns_persisted_outcome(self, harness, monkeypatch):
+        # Task retry of an incident that was already folded: the persisted verdict
+        # must resurface as folded=True with its root, so summarization rolls up
+        # under the root instead of appending a duplicate standalone index line.
+        harness.get_existing_verdict.return_value = {
+            "folded": True,
+            "mode": "live",
+            "accepted_recurrence_of": ANCHOR,
+        }
+        _stub_agent(monkeypatch, verdict=RecurrenceVerdict(recurrence_of=ANCHOR, reasoning="r"))
+        outcome = _run(monkeypatch, "live")
+        harness.fetch_ctx.assert_not_called()
+        harness.persist_verdict.assert_not_called()
+        harness.fold_incident.assert_not_called()
+        assert outcome == {"folded": True, "root_id": ANCHOR}

@@ -52,6 +52,16 @@ class TestFormatIndexLine:
         assert "resolved" in line
         assert "?" in line
 
+    def test_collapses_interior_whitespace_in_service(self):
+        # A service value with an embedded newline must not split the index
+        # entry into multiple physical lines (would break line-based parsing).
+        line = ii.format_index_line(
+            incident_id=INC, date_iso="2026-09-08",
+            service="payments\nteam", status="resolved", synopsis="x",
+        )
+        assert "\n" not in line
+        assert "payments team" in line
+
 
 class TestAppendIncidentLine:
     def test_appends_when_not_present(self):
@@ -108,15 +118,34 @@ class TestReadIndex:
         with patch.object(ii, "get_memory_content", return_value=""):
             assert ii.read_index("u1") == ""
 
-    def test_trims_to_budget_and_drops_partial_leading_line(self):
+    def test_trims_to_budget_with_marker_and_whole_lines(self):
         # Build content larger than the budget; each line is id-keyed.
         line = f"- [INC {uuid.uuid4()} | 2026-09-08 | api | resolved] some synopsis text here\n"
         big = line * (ii.INDEX_INJECTION_CHAR_BUDGET // len(line) + 50)
         with patch.object(ii, "get_memory_content", return_value=big):
             out = ii.read_index("u1")
         assert len(out) <= ii.INDEX_INJECTION_CHAR_BUDGET
-        # After trimming from the front, no dangling partial first line.
-        assert out.startswith("- [INC ")
+        # A truncation marker tells the agent the map is partial.
+        assert out.startswith("(older index lines omitted")
+        # Every retained data line is a whole, id-keyed root line (no mid-line cut).
+        data_lines = [ln for ln in out.split("\n")[1:] if ln.strip()]
+        assert all(ln.startswith("- [INC ") for ln in data_lines)
+
+    def test_trim_keeps_root_with_its_rollup_and_drops_no_orphans(self):
+        # Many root+continuation blocks; trimming must never leave a leading
+        # orphan `↳ recurrences:` line (its root cut away).
+        blocks = []
+        for _ in range(400):
+            rid = uuid.uuid4()
+            blocks.append(f"- [INC {rid} | 2026-09-08 | api | resolved] synopsis text here")
+            blocks.append(f"  ↳ recurrences: {uuid.uuid4()} (2 total, last 2026-09-08)")
+        big = "\n".join(blocks)
+        with patch.object(ii, "get_memory_content", return_value=big):
+            out = ii.read_index("u1")
+        assert len(out) <= ii.INDEX_INJECTION_CHAR_BUDGET
+        # First data line after the marker is always a root, never a continuation.
+        first_data = out.split("\n")[1]
+        assert first_data.startswith("- [INC ")
 
     def test_never_raises(self):
         # get_memory_content itself swallows errors and returns None, but even a
@@ -181,6 +210,30 @@ class TestRecordRecurrence:
         appended = am.call_args.kwargs["content"]
         assert f"INC {REC1}" in appended
         assert ROOT in appended  # references the root it recurred from
+
+    def test_retries_on_no_match_then_succeeds(self):
+        # A concurrent rewrite makes the first edit_memory miss (no_match); the
+        # retry re-reads fresh content and succeeds. The roll-up is not lost.
+        root_line = f"- [INC {ROOT} | 2026-09-08 | api | resolved] pool exhaustion"
+        content = self._index(root_line)
+        with patch.object(ii, "get_memory_content", return_value=content), \
+                patch.object(
+                    ii, "edit_memory",
+                    side_effect=['{"status": "no_match"}', '{"status": "ok"}'],
+                ) as em:
+            ok = ii.record_recurrence(user_id="u1", root_id=ROOT, recurred_id=REC1, date_iso="2026-09-09")
+        assert ok is True
+        assert em.call_count == 2  # first missed, retry succeeded
+
+    def test_gives_up_after_max_attempts_on_persistent_no_match(self):
+        # Every attempt races → returns False so the caller can log the loss.
+        root_line = f"- [INC {ROOT} | 2026-09-08 | api | resolved] pool exhaustion"
+        content = self._index(root_line)
+        with patch.object(ii, "get_memory_content", return_value=content), \
+                patch.object(ii, "edit_memory", return_value='{"status": "no_match"}') as em:
+            ok = ii.record_recurrence(user_id="u1", root_id=ROOT, recurred_id=REC1, date_iso="2026-09-09")
+        assert ok is False
+        assert em.call_count == ii._RECORD_RECURRENCE_MAX_ATTEMPTS
 
     def test_never_raises(self):
         with patch.object(ii, "get_memory_content", side_effect=RuntimeError("boom")):

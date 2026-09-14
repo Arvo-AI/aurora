@@ -885,12 +885,18 @@ def generate_incident_summary_from_chat(
 
             # Recurrence: extend the root's roll-up rather than add a new line.
             if folded and root_id:
-                record_recurrence(
+                # Surface a lost roll-up (e.g. edit_memory exhausted its retries
+                # on a concurrent rewrite) instead of dropping the bool silently.
+                if not record_recurrence(
                     user_id=user_id,
                     root_id=str(root_id),
                     recurred_id=incident_id,
                     date_iso=date_iso,
-                )
+                ):
+                    logger.warning(
+                        f"{_LOG_PREFIX} Failed to roll incident {incident_id} "
+                        f"under root {root_id} in Incident Index"
+                    )
             # New root (or shadow/off/no-check): add a fresh, richly-described line.
             else:
                 synopsis = generate_root_cause_synopsis(
@@ -900,7 +906,7 @@ def generate_incident_summary_from_chat(
                     service=basics.get("service") or "",
                     summary=summary or "",
                 )
-                append_incident_line(
+                if not append_incident_line(
                     user_id=user_id,
                     incident_id=incident_id,
                     date_iso=date_iso,
@@ -910,7 +916,11 @@ def generate_incident_summary_from_chat(
                     summary=summary or "",
                     synopsis=synopsis,
                     session_id=session_id,
-                )
+                ):
+                    logger.warning(
+                        f"{_LOG_PREFIX} Failed to append incident {incident_id} "
+                        f"to Incident Index"
+                    )
         except Exception:
             logger.exception(
                 f"{_LOG_PREFIX} Incident Index maintenance failed for {incident_id}; proceeding to notify"

@@ -7,7 +7,8 @@ MEMORY_CATEGORIES = ("context", "runbook", "infrastructure", "learned", "postmor
 SYSTEM_CATEGORY = "artifact"
 USER_WRITABLE_CATEGORIES = tuple(c for c in MEMORY_CATEGORIES if c != SYSTEM_CATEGORY)
 
-# Agent-only categories — not exposed via user-facing memory routes.
+# Agent-only categories — not exposed via user-facing memory routes. Currently
+# none: the Incident Index lives under the system "artifact" category above.
 AGENT_CATEGORIES = ()
 
 # The single Incident Index artifact (one per org), identified by its title.

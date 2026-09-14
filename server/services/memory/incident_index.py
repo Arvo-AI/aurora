@@ -27,11 +27,12 @@ _LOG_PREFIX = "[IncidentIndex]"
 # agent's input block. Titles/summaries are trimmed to this before formatting.
 _MAX_SYNOPSIS_CHARS = 160
 
-# Hard ceiling on how much of the index we ever inject into a prompt. The
-# groomer keeps it well under this; the cap is belt-and-braces so an un-groomed
-# index (e.g. collector ran but consolidation hasn't) can't blow the context
-# window. ~24k chars ≈ 6k tokens.
-INDEX_INJECTION_CHAR_BUDGET = 24000
+# Hard ceiling on how much of the index we ever inject into a prompt. Sized to
+# hold the groomer's ~150-line cap (services/actions/system_actions.py) in full
+# — a line is `- [INC <uuid> | date | svc | status] <synopsis>` at ~200-250
+# chars, so ~150 lines ≈ 30-37k, plus `↳ recurrences:` continuations — with
+# headroom. Belt-and-braces for an un-groomed index. ~40k chars ≈ 10k tokens.
+INDEX_INJECTION_CHAR_BUDGET = 40000
 
 
 def build_synopsis(alert_title: str, service: str, summary: str) -> str:
@@ -120,6 +121,7 @@ def generate_root_cause_synopsis(
             ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
             temperature=0.0,
             streaming=False,
+            timeout=30,
         )
         response = tracked_invoke(
             llm,
@@ -150,7 +152,10 @@ def format_index_line(
 ) -> str:
     """Canonical one-line index entry. The incident_id is the join key back to
     the DB (get_incident / recurrence_fold), so it MUST be present and first."""
-    svc = (service or "unknown").strip() or "unknown"
+    # Collapse interior whitespace/newlines: a service value with an embedded
+    # newline (e.g. a JIRA component name) would otherwise split one incident
+    # into multiple physical index lines and break line-based parsing.
+    svc = " ".join((service or "unknown").split()) or "unknown"
     st = (status or "resolved").strip() or "resolved"
     date = (date_iso or "").strip() or "?"
     return f"- [INC {incident_id} | {date} | {svc} | {st}] {synopsis}"
@@ -228,6 +233,10 @@ def _read_index_raw(user_id: str) -> str:
 # comma-separated recurrence ids so we can extend it idempotently.
 _ROLLUP_RE = re.compile(r"^\s*↳ recurrences: (?P<ids>.*?) \((?P<n>\d+) total")
 
+# How many times record_recurrence re-reads and retries its read-modify-write
+# when a concurrent rewrite (groomer / another roll-up) invalidates the edit.
+_RECORD_RECURRENCE_MAX_ATTEMPTS = 3
+
 
 def record_recurrence(
     *,
@@ -247,95 +256,123 @@ def record_recurrence(
     If the root line isn't in the index (cold start, trimmed, or root predates
     the index), fall back to appending a standalone line for the recurrence so
     it is at least recorded and joinable next groom.
+
+    The read-modify-write can lose to a concurrent rewrite (e.g. the nightly
+    groomer, or another incident's roll-up touching the same line): the captured
+    old_block no longer matches and edit_memory returns no_match. We retry a few
+    times, re-reading the fresh index each attempt, so a race doesn't silently
+    drop the roll-up.
     """
     try:
-        content = _read_index_raw(user_id)
-        root_token = f"INC {root_id}"
+        # Re-read + rebuild on each attempt so a concurrent rewrite between our
+        # read and edit doesn't cause a silent no_match/lost update.
+        for attempt in range(_RECORD_RECURRENCE_MAX_ATTEMPTS):
+            content = _read_index_raw(user_id)
+            root_token = f"INC {root_id}"
 
-        # Idempotency across the whole artifact: if this recurrence is already
-        # recorded (as a roll-up id or a standalone line), do nothing.
-        if content and f"INC {recurred_id}" in content:
-            return True
+            # Idempotency across the whole artifact: if this recurrence is
+            # already recorded (as a roll-up id or a standalone line), do nothing.
+            if content and f"INC {recurred_id}" in content:
+                return True
 
-        # Root not indexed yet — record the recurrence as its own line rather
-        # than silently dropping it; grooming will cluster it later.
-        if not content or root_token not in content:
-            logger.info(
-                "%s Root %s not in index; recording recurrence %s as standalone line",
-                _LOG_PREFIX, root_id, recurred_id,
+            # Root not indexed yet — record the recurrence as its own line
+            # rather than silently dropping it; grooming will cluster it later.
+            if not content or root_token not in content:
+                logger.info(
+                    "%s Root %s not in index; recording recurrence %s as standalone line",
+                    _LOG_PREFIX, root_id, recurred_id,
+                )
+                fallback_line = format_index_line(
+                    incident_id=str(recurred_id),
+                    date_iso=date_iso,
+                    service="",
+                    status="recurrence",
+                    synopsis=f"recurrence of {root_id}",
+                )
+                res = append_to_memory(
+                    category=INCIDENT_INDEX_CATEGORY,
+                    title=INCIDENT_INDEX_TITLE,
+                    content=fallback_line,
+                    user_id=user_id,
+                )
+                return "error" not in (res or "")
+
+            lines = content.split("\n")
+            # Find the root's top-level line and its (optional) roll-up continuation.
+            root_idx = next(
+                (i for i, ln in enumerate(lines)
+                 if ln.lstrip().startswith("- [") and root_token in ln),
+                None,
             )
-            fallback_line = format_index_line(
-                incident_id=str(recurred_id),
-                date_iso=date_iso,
-                service="",
-                status="recurrence",
-                synopsis=f"recurrence of {root_id}",
+            if root_idx is None:
+                return False
+
+            rollup_idx = (
+                root_idx + 1
+                if root_idx + 1 < len(lines) and lines[root_idx + 1].lstrip().startswith("↳ recurrences:")
+                else None
             )
-            res = append_to_memory(
+
+            # Gather current recurrence ids from the existing roll-up (if any).
+            ids: list = []
+            if rollup_idx is not None:
+                m = _ROLLUP_RE.match(lines[rollup_idx])
+                if m:
+                    ids = [t.strip() for t in m.group("ids").split(",") if t.strip()]
+
+            # Idempotency: already rolled up (e.g. task retry) — nothing to do.
+            if str(recurred_id) in ids:
+                return True
+
+            ids.append(str(recurred_id))
+            total = len(ids) + 1  # + the root itself
+            indent = lines[root_idx][: len(lines[root_idx]) - len(lines[root_idx].lstrip())]
+            new_rollup = (
+                f"{indent}  ↳ recurrences: {', '.join(ids)} "
+                f"({total} total, last {date_iso or '?'})"
+            )
+
+            # Replace the existing roll-up, or insert one right under the root line.
+            if rollup_idx is not None:
+                old_block = lines[root_idx] + "\n" + lines[rollup_idx]
+                new_block = lines[root_idx] + "\n" + new_rollup
+            else:
+                old_block = lines[root_idx]
+                new_block = lines[root_idx] + "\n" + new_rollup
+
+            res = edit_memory(
                 category=INCIDENT_INDEX_CATEGORY,
                 title=INCIDENT_INDEX_TITLE,
-                content=fallback_line,
+                old_text=old_block,
+                new_text=new_block,
                 user_id=user_id,
             )
-            return "error" not in (res or "")
 
-        lines = content.split("\n")
-        # Find the root's top-level line and its (optional) roll-up continuation.
-        root_idx = next(
-            (i for i, ln in enumerate(lines)
-             if ln.lstrip().startswith("- [") and root_token in ln),
-            None,
+            # Lost the race to a concurrent rewrite — the block we captured is
+            # gone. Re-read and rebuild against the fresh content.
+            if "no_match" in (res or ""):
+                logger.info(
+                    "%s Roll-up for recurrence %s under root %s hit no_match "
+                    "(concurrent rewrite); retrying (attempt %d)",
+                    _LOG_PREFIX, recurred_id, root_id, attempt + 1,
+                )
+                continue
+
+            ok = "error" not in (res or "")
+            if ok:
+                logger.info(
+                    "%s Rolled recurrence %s under root %s (%d total)",
+                    _LOG_PREFIX, recurred_id, root_id, total,
+                )
+            return ok
+
+        # Exhausted retries — all attempts raced. Report failure so the caller
+        # can log it (rather than silently dropping the roll-up).
+        logger.warning(
+            "%s Gave up rolling recurrence %s under root %s after %d attempts",
+            _LOG_PREFIX, recurred_id, root_id, _RECORD_RECURRENCE_MAX_ATTEMPTS,
         )
-        if root_idx is None:
-            return False
-
-        rollup_idx = (
-            root_idx + 1
-            if root_idx + 1 < len(lines) and lines[root_idx + 1].lstrip().startswith("↳ recurrences:")
-            else None
-        )
-
-        # Gather current recurrence ids from the existing roll-up (if any).
-        ids: list = []
-        if rollup_idx is not None:
-            m = _ROLLUP_RE.match(lines[rollup_idx])
-            if m:
-                ids = [t.strip() for t in m.group("ids").split(",") if t.strip()]
-
-        # Idempotency: already rolled up (e.g. task retry) — nothing to do.
-        if str(recurred_id) in ids:
-            return True
-
-        ids.append(str(recurred_id))
-        total = len(ids) + 1  # + the root itself
-        indent = lines[root_idx][: len(lines[root_idx]) - len(lines[root_idx].lstrip())]
-        new_rollup = (
-            f"{indent}  ↳ recurrences: {', '.join(ids)} "
-            f"({total} total, last {date_iso or '?'})"
-        )
-
-        # Replace the existing roll-up, or insert one right under the root line.
-        if rollup_idx is not None:
-            old_block = lines[root_idx] + "\n" + lines[rollup_idx]
-            new_block = lines[root_idx] + "\n" + new_rollup
-        else:
-            old_block = lines[root_idx]
-            new_block = lines[root_idx] + "\n" + new_rollup
-
-        res = edit_memory(
-            category=INCIDENT_INDEX_CATEGORY,
-            title=INCIDENT_INDEX_TITLE,
-            old_text=old_block,
-            new_text=new_block,
-            user_id=user_id,
-        )
-        ok = "error" not in (res or "") and "no_match" not in (res or "")
-        if ok:
-            logger.info(
-                "%s Rolled recurrence %s under root %s (%d total)",
-                _LOG_PREFIX, recurred_id, root_id, total,
-            )
-        return ok
+        return False
     except Exception:
         logger.exception(
             "%s Failed to record recurrence %s under root %s",
@@ -346,19 +383,67 @@ def record_recurrence(
 
 def read_index(user_id: str) -> str:
     """Return the Incident Index content trimmed to INDEX_INJECTION_CHAR_BUDGET
-    so callers can inject it into a prompt safely. Empty string if none/absent."""
+    so callers can inject it into a prompt safely. Empty string if none/absent.
+
+    Trimming is block-aware: the groomer (an LLM) may reorder lines by frequency
+    and is not guaranteed to keep chronological order, so a naive character slice
+    from the front could cut mid-line or orphan a `↳ recurrences:` continuation
+    from its root. We instead drop whole root+continuation blocks from the front
+    until we're under budget, and prepend a marker so the agent knows the map is
+    partial. In the common (freshly-groomed, in-budget) case nothing is trimmed.
+    """
     content = _read_index_raw(user_id)
     if not content:
         return ""
-    # Keep the most recent lines: appends go to the end, so trim from the
-    # front when over budget (grooming normally keeps this well under).
-    if len(content) > INDEX_INJECTION_CHAR_BUDGET:
-        content = content[-INDEX_INJECTION_CHAR_BUDGET:]
-        # Drop a partial leading line after trimming.
-        nl = content.find("\n")
-        if nl != -1:
-            content = content[nl + 1:]
-    return content
+
+    # Fast path: whole index fits — inject verbatim.
+    if len(content) <= INDEX_INJECTION_CHAR_BUDGET:
+        return content
+
+    # Over budget: group lines into blocks (a root line plus any continuation
+    # lines beneath it) so we never split a root from its roll-up.
+    blocks = _group_index_blocks(content)
+
+    marker = (
+        "(older index lines omitted to fit context — use "
+        "list_incidents/get_incident to reach incidents not shown)"
+    )
+    budget = INDEX_INJECTION_CHAR_BUDGET - len(marker) - 1
+
+    # Keep the most recent blocks: appends land at the end, so retain from the
+    # back and drop whole blocks from the front until under budget.
+    kept: list = []
+    running = 0
+    for block in reversed(blocks):
+        block_text = "\n".join(block)
+        added = len(block_text) + (1 if kept else 0)
+        if running + added > budget:
+            break
+        kept.append(block_text)
+        running += added
+    kept.reverse()
+
+    return marker + "\n" + "\n".join(kept)
+
+
+def _group_index_blocks(content: str) -> list:
+    """Split index content into blocks of [root line, *continuation lines].
+
+    A root line is a top-level `- [` entry; a continuation is its indented
+    `↳ recurrences:` roll-up. Any leading orphan continuations (whose root was
+    trimmed away by a prior operation) attach to the first block so they never
+    stand alone. Guarantees each block trims/keeps as a unit."""
+    lines = content.split("\n")
+    blocks: list = []
+    for ln in lines:
+        is_root = ln.lstrip().startswith("- [")
+        # Start a new block on each root line; everything else (continuations,
+        # stray lines) belongs to the current block.
+        if is_root or not blocks:
+            blocks.append([ln])
+        else:
+            blocks[-1].append(ln)
+    return blocks
 
 
 def _clip(text: str) -> str:
