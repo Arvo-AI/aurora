@@ -246,7 +246,7 @@ In Aurora, go to **Integrations > Azure**. Either click **Copy Script** to put t
 
 #### 2. Run it in Cloud Shell
 
-Open [Azure Cloud Shell](https://shell.azure.com) (Bash). If you copied the script, paste it and press Enter — it writes itself to `aurora-setup.sh` and runs. If you downloaded it, upload the file and run:
+Open [Azure Cloud Shell](https://shell.azure.com) (Bash). If you copied the script, paste it and press Enter — it writes itself to `setup-aurora-access.sh` and runs. If you downloaded it, upload the file and run:
 
 ```bash
 bash setup-aurora-access.sh
@@ -254,10 +254,10 @@ bash setup-aurora-access.sh
 
 Cloud Shell already has `az`, `jq`, `python3` and `kubectl`, and you are already authenticated — nothing to install.
 
-By default this covers **every enabled subscription in your current tenant**. To scope to a management group instead, re-run with its name — using the filename you have (`aurora-setup.sh` if you pasted the script, `setup-aurora-access.sh` if you downloaded it):
+By default this covers **every enabled subscription in your current tenant**. To scope to a management group instead, re-run with its name:
 
 ```bash
-bash aurora-setup.sh <management-group-name>
+bash setup-aurora-access.sh <management-group-name>
 ```
 
 :::tip Recommended for multiple subscriptions

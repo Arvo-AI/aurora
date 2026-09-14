@@ -327,7 +327,7 @@ export default function AzureAuthPage() {
       // on an empty match at end-of-input). Quoted delimiter stops $( and ${
       // expanding while the heredoc is being written.
       await copyToClipboard(
-        `cat > aurora-setup.sh <<'AURORA_SCRIPT_EOF'\n${script.replace(/\n+$/, '')}\nAURORA_SCRIPT_EOF\nbash aurora-setup.sh\n`,
+        `cat > setup-aurora-access.sh <<'AURORA_SCRIPT_EOF'\n${script.replace(/\n+$/, '')}\nAURORA_SCRIPT_EOF\nbash setup-aurora-access.sh\n`,
       );
       setCopyButtonText('Copied!');
       setTimeout(() => setCopyButtonText('Copy Script'), 2000);
@@ -647,7 +647,7 @@ export default function AzureAuthPage() {
                     <div className="text-sm text-gray-600 dark:text-gray-300">
                       <strong>How to use:</strong> Click &quot;Copy Script&quot;, then &quot;Open Cloud Shell&quot;,
                       paste into the shell and press Enter. To scope to a management group instead of
-                      every subscription, run <code>bash aurora-setup.sh &lt;management-group-id&gt;</code> afterwards.
+                      every subscription, run <code>bash setup-aurora-access.sh &lt;management-group-id&gt;</code> afterwards.
                     </div>
                   </div>
                 </div>
