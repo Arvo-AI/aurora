@@ -19,14 +19,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useUserId } from "@/hooks/use-user-id";
 import {
@@ -36,48 +28,18 @@ import {
   FileText,
   Brain,
   Plus,
-  BookOpen,
-  Server,
-  Lightbulb,
-  ScrollText,
-  Package,
   Pencil,
 } from "lucide-react";
 import { useUser } from "@/hooks/useAuthHooks";
 import { DiscoverySettings } from "@/components/DiscoverySettings";
+import { MemoryEditDialog } from "@/components/MemoryEditDialog";
 import { canWrite as checkCanWrite } from "@/lib/roles";
-
-const MEMORY_CATEGORIES = [
-  "context",
-  "runbook",
-  "infrastructure",
-  "learned",
-  "postmortem",
-  "artifact",
-] as const;
-
-// Categories users can manually create/upload and filter by — excludes artifact (internal system category)
-const USER_WRITABLE_CATEGORIES = ["context", "runbook", "infrastructure", "learned", "postmortem"] as const;
-
-type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
-
-const CATEGORY_META: Record<MemoryCategory, { label: string; icon: React.ReactNode; color: string }> = {
-  context: { label: "Context", icon: <Brain className="h-3.5 w-3.5" />, color: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200" },
-  runbook: { label: "Runbook", icon: <BookOpen className="h-3.5 w-3.5" />, color: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" },
-  infrastructure: { label: "Infrastructure", icon: <Server className="h-3.5 w-3.5" />, color: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" },
-  learned: { label: "Learned", icon: <Lightbulb className="h-3.5 w-3.5" />, color: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" },
-  postmortem: { label: "Postmortem", icon: <ScrollText className="h-3.5 w-3.5" />, color: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" },
-  artifact: { label: "Artifact", icon: <Package className="h-3.5 w-3.5" />, color: "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200" },
-};
-
-interface MemoryEntry {
-  id: string;
-  title: string;
-  category: MemoryCategory;
-  description: string | null;
-  last_edited_by: string | null;
-  updated_at: string | null;
-}
+import {
+  type MemoryCategory,
+  type MemoryEntry,
+  USER_WRITABLE_CATEGORIES,
+  CATEGORY_META,
+} from "@/lib/memory-constants";
 
 export function MemorySettings() {
   const { userId, isLoading: userLoading } = useUserId();
@@ -103,14 +65,8 @@ export function MemorySettings() {
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Edit dialog state
+  // Edit dialog state — the entry currently being edited (dialog logic lives in MemoryEditDialog).
   const [editingEntry, setEditingEntry] = useState<MemoryEntry | null>(null);
-  const [editTitle, setEditTitle] = useState("");
-  const [editCategory, setEditCategory] = useState<MemoryCategory>("context");
-  const [editDescription, setEditDescription] = useState("");
-  const [editContent, setEditContent] = useState("");
-  const [isLoadingContent, setIsLoadingContent] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
 
   const fetchEntries = useCallback(async () => {
     if (!userId) {
@@ -331,79 +287,6 @@ export function MemorySettings() {
         description: "An error occurred",
         variant: "destructive",
       });
-    }
-  };
-
-  const openEditDialog = async (entry: MemoryEntry) => {
-    // Seed the form with what we already have so the dialog opens instantly...
-    setEditingEntry(entry);
-    setEditTitle(entry.title);
-    setEditCategory(entry.category);
-    setEditDescription(entry.description || "");
-    setEditContent("");
-    setIsLoadingContent(true);
-
-    // ...then fetch the full content (the list endpoint omits it).
-    try {
-      const res = await fetch(`/api/proxy/memory/entries/${entry.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setEditContent(data.content || "");
-        setEditTitle(data.title ?? entry.title);
-        setEditCategory((data.category as MemoryCategory) ?? entry.category);
-        setEditDescription(data.description || "");
-      } else {
-        const text = await res.text();
-        let msg = "Failed to load memory content";
-        try { msg = JSON.parse(text).error || msg; } catch {}
-        throw new Error(msg);
-      }
-    } catch (error) {
-      toast({
-        title: "Failed to load entry",
-        description: error instanceof Error ? error.message : "An error occurred",
-        variant: "destructive",
-      });
-      setEditingEntry(null);
-    } finally {
-      setIsLoadingContent(false);
-    }
-  };
-
-  const handleSaveEdit = async () => {
-    if (!editingEntry) return;
-
-    setIsSaving(true);
-    try {
-      const res = await fetch(`/api/proxy/memory/entries/${editingEntry.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: editTitle.trim(),
-          category: editCategory,
-          description: editDescription.trim(),
-          content: editContent,
-        }),
-      });
-
-      if (res.ok) {
-        toast({ title: "Memory entry updated" });
-        setEditingEntry(null);
-        await fetchEntries();
-      } else {
-        const text = await res.text();
-        let msg = "Failed to update entry";
-        try { msg = JSON.parse(text).error || msg; } catch {}
-        throw new Error(msg);
-      }
-    } catch (error) {
-      toast({
-        title: "Failed to update",
-        description: error instanceof Error ? error.message : "An error occurred",
-        variant: "destructive",
-      });
-    } finally {
-      setIsSaving(false);
     }
   };
 
@@ -632,7 +515,7 @@ export function MemorySettings() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => openEditDialog(entry)}
+                            onClick={() => setEditingEntry(entry)}
                             title="Edit memory entry"
                           >
                             <Pencil className="h-4 w-4 text-muted-foreground hover:text-primary" />
@@ -662,88 +545,11 @@ export function MemorySettings() {
       </Card>
 
       {/* Edit Memory Dialog */}
-      <Dialog open={!!editingEntry} onOpenChange={(open) => { if (!open) setEditingEntry(null); }}>
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Edit Memory Entry</DialogTitle>
-            <DialogDescription>
-              Review and modify this entry&apos;s content. Changes are versioned.
-            </DialogDescription>
-          </DialogHeader>
-
-          {isLoadingContent ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label htmlFor="edit-memory-title" className="text-sm font-medium">Title</label>
-                  <Input
-                    id="edit-memory-title"
-                    value={editTitle}
-                    onChange={(e) => setEditTitle(e.target.value)}
-                    placeholder="Title"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label htmlFor="edit-memory-category" className="text-sm font-medium">Category</label>
-                  <Select value={editCategory} onValueChange={(v) => setEditCategory(v as MemoryCategory)}>
-                    <SelectTrigger id="edit-memory-category">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {USER_WRITABLE_CATEGORIES.map((cat) => (
-                        <SelectItem key={cat} value={cat}>
-                          {CATEGORY_META[cat].label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="space-y-1">
-                <label htmlFor="edit-memory-description" className="text-sm font-medium">Description (optional)</label>
-                <Input
-                  id="edit-memory-description"
-                  value={editDescription}
-                  onChange={(e) => setEditDescription(e.target.value)}
-                  placeholder="Brief summary of what this contains"
-                />
-              </div>
-              <div className="space-y-1">
-                <label htmlFor="edit-memory-content" className="text-sm font-medium">Content (Markdown)</label>
-                <Textarea
-                  id="edit-memory-content"
-                  value={editContent}
-                  onChange={(e) => setEditContent(e.target.value)}
-                  className="min-h-[300px] font-mono text-sm"
-                />
-              </div>
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setEditingEntry(null)} disabled={isSaving}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSaveEdit}
-              disabled={isSaving || isLoadingContent || !editTitle.trim() || !editContent.trim()}
-            >
-              {isSaving ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                "Save Changes"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <MemoryEditDialog
+        entry={editingEntry}
+        onOpenChange={(open) => { if (!open) setEditingEntry(null); }}
+        onSaved={fetchEntries}
+      />
 
       <DiscoverySettings />
     </div>
