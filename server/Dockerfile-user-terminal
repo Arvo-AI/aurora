@@ -96,7 +96,7 @@ RUN ARCH=$(uname -m) && \
     else \
         echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
-    curl -fsSL --retry 5 --retry-delay 3 \
+    curl -fsSL --proto '=https' --proto-redir '=https' --retry 5 --retry-delay 3 \
       "https://github.com/Azure/kubelogin/releases/latest/download/kubelogin-linux-${KUBELOGIN_ARCH}.zip" \
       -o /tmp/kubelogin.zip && \
     unzip -j -o /tmp/kubelogin.zip "bin/linux_${KUBELOGIN_ARCH}/kubelogin" -d /usr/local/bin && \

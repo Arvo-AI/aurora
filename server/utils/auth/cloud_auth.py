@@ -40,6 +40,14 @@ def _resolve_azure_credentials(token_data: Dict[str, Any], normalized_mode: str,
     # read-only identity IS the enforcement boundary. Falling back to the
     # full-access identity here would silently hand ask mode write credentials.
     read_only_block = token_data.get("read_only") or {}
+    # The block comes from operator-pasted JSON, so a truthy non-dict (string, list)
+    # is plausible and would raise AttributeError on .get below. Fail with the same
+    # explicit error this function raises for missing credentials.
+    if not isinstance(read_only_block, dict):
+        raise ValueError(
+            "Azure read-only credentials are malformed (expected an object). "
+            "Re-run the setup script and paste the full JSON."
+        )
     candidate = {
         "tenant_id": read_only_block.get("tenant_id") or base["tenant_id"],
         "client_id": read_only_block.get("client_id"),

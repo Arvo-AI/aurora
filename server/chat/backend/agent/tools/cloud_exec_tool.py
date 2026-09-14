@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 import contextvars
@@ -142,7 +143,8 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
         # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
         # AZURE_CONFIG_DIR must be per-invocation: `az login` writes auth state to disk,
         # so a shared dir would race when fanning out across subscriptions in parallel.
-        # ponytail: caller owns the tempdir and must remove it (see _cloud_exec_azure_multi_subscription).
+        # ponytail: caller owns the tempdir. The fan-out removes it per subscription;
+        # cloud_exec removes it in its outer finally.
         config_dir = tempfile.mkdtemp(prefix="aurora-az-")
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
@@ -1406,8 +1408,28 @@ def _cloud_exec_azure_multi_subscription(
             config_dir = isolated_env.get("AZURE_CONFIG_DIR")
 
             cmd = _apply_azure_subscription(command.strip(), sub_id)
+            # Auth and command run as separate argv invocations, never through a
+            # shell. auth_command interpolates the client secret unquoted, so
+            # handing it to `bash -lc` would let a secret containing a shell
+            # metacharacter break out. The single-subscription path at the bottom
+            # of this file uses shlex.split for the same reason.
+            try:
+                cmd_args = shlex.split(cmd)
+            except ValueError as e:
+                return {"subscription_id": sub_id, "success": False,
+                        "error": f"Command parsing failed: {e}"}
+
+            auth_result = terminal_run(
+                shlex.split(auth_command),
+                capture_output=True, text=True, timeout=30,
+                env=isolated_env, trusted=True,
+            )
+            if auth_result.returncode != 0:
+                return {"subscription_id": sub_id, "success": False,
+                        "error": "Azure authentication failed"}
+
             result = terminal_run(
-                ["bash", "-lc", f"{auth_command} && {cmd}"],
+                cmd_args,
                 capture_output=True, text=True,
                 timeout=get_command_timeout(cmd, timeout), env=isolated_env,
             )
@@ -1418,7 +1440,7 @@ def _cloud_exec_azure_multi_subscription(
                 "return_code": result.returncode,
             }
         except Exception as e:
-            logger.error("Multi-subscription exec failed for %s: %s", sub_id, e)
+            logger.exception("Multi-subscription exec failed for %s: %s", sub_id, e)
             return {"subscription_id": sub_id, "success": False, "error": str(e)[:300]}
         finally:
             if config_dir:
@@ -1506,6 +1528,9 @@ Security & Compliance
     # but we need original args to match with LangChain's tool call signature
     original_provider = provider
     original_command = command
+    # Bound before the try so the cleanup in finally can always read it, including
+    # on paths that return before the provider setup block below.
+    isolated_env = None
     
     try:
         fn_start = time.perf_counter()  # Start timing for entire execution
@@ -2634,5 +2659,12 @@ Security & Compliance
             tool_capture.capture_tool_end(current_tool_call_id, exception_result, is_error=True)
         
         return exception_result
+    finally:
+        # setup_azure_environment_isolated mkdtemps an AZURE_CONFIG_DIR per call. The
+        # fan-out path removes its own per subscription, but the single-subscription
+        # path returns from ~20 places, so clean up here where every path converges.
+        # Without this the dirs accumulate in /tmp for the life of the worker.
+        if isinstance(isolated_env, dict) and isolated_env.get("AZURE_CONFIG_DIR"):
+            shutil.rmtree(isolated_env["AZURE_CONFIG_DIR"], ignore_errors=True)
 
 cloud_exec_tool = StructuredTool.from_function(cloud_exec) 

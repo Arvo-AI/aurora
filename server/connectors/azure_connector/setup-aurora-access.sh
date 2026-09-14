@@ -96,11 +96,38 @@ RO_SECRET="$(jq -r .clientSecret <<<"$RO_SP")"
 AGENT_OID="$(az ad sp show --id "$AGENT_ID" --query id -o tsv)"
 RO_OID="$(az ad sp show --id "$RO_ID" --query id -o tsv)"
 
+ASSIGN_FAILURES=0
+
+# Retries only PrincipalNotFound: `az role assignment create` fails that way for a
+# few seconds after create-for-rbac returns, because the principal has not
+# replicated through Entra yet, and both principals were just created above. Other
+# errors (notably AuthorizationFailed) are permanent, so retrying them would just
+# hang the operator for minutes. Real failures are counted so the script can refuse
+# to print credentials that carry no permissions.
 assign() {  # assign <object-id> <role> <scope>
-  az role assignment create --assignee-object-id "$1" --assignee-principal-type ServicePrincipal \
-    --role "$2" --scope "$3" >/dev/null 2>&1 \
-    && note "$2 -> ${3##*/}" \
-    || note "$2 -> ${3##*/} (already present or denied)"
+  local oid="$1" role="$2" scope="$3" attempt err
+  for attempt in 1 2 3 4 5; do
+    if err="$(az role assignment create --assignee-object-id "$oid" \
+        --assignee-principal-type ServicePrincipal \
+        --role "$role" --scope "$scope" 2>&1 >/dev/null)"; then
+      note "$role -> ${scope##*/}"
+      return 0
+    fi
+    case "$err" in
+      *RoleAssignmentExists*)
+        note "$role -> ${scope##*/} (already present)"
+        return 0
+        ;;
+      *PrincipalNotFound*)
+        sleep $((attempt * 3))
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+  ASSIGN_FAILURES=$((ASSIGN_FAILURES + 1))
+  note "$role -> ${scope##*/} FAILED: ${err%%$'\n'*}"
 }
 
 echo "Assigning roles..."
@@ -118,6 +145,10 @@ for scope in "${ASSIGN_SCOPES[@]}"; do
   assign "$RO_OID" "Azure Kubernetes Service Cluster User Role" "$scope"
   assign "$RO_OID" "Azure Kubernetes Service RBAC Reader" "$scope"
 done
+
+# Refuse to print credentials that carry no permissions: without this the operator
+# pastes them into Aurora and only discovers the failure during an investigation.
+[[ $ASSIGN_FAILURES -eq 0 ]] || die "$ASSIGN_FAILURES role assignment(s) failed (see above). Grant yourself User Access Administrator or Owner, then re-run; assignments are upserted so re-running is safe."
 
 # --- Private cluster advisory --------------------------------------------
 # Private AKS API servers are unreachable from Cloud Shell and from Aurora's

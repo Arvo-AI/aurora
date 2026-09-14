@@ -17,12 +17,22 @@ def fetch_subscriptions(management_token):
             "Authorization": f"Bearer {management_token}",
             "Content-Type": "application/json"
         }
-        response = requests.get(
-            "https://management.azure.com/subscriptions?api-version=2020-01-01",
-            headers=headers
-        )
-        response.raise_for_status()
-        subscriptions = response.json().get("value", [])
+        # ARM paginates this endpoint via nextLink. Following it matters for tenants
+        # with many subscriptions: callers treat this list as the complete set of
+        # accessible subscriptions, so a truncated first page would silently drop
+        # subscriptions from fan-out and mark them inactive on the next login.
+        url = "https://management.azure.com/subscriptions?api-version=2020-01-01"
+        subscriptions = []
+        for _ in range(50):  # bound the walk; 50 pages is far beyond any real tenant
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            payload = response.json()
+            subscriptions.extend(payload.get("value", []))
+            url = payload.get("nextLink")
+            if not url:
+                break
+        else:
+            logging.warning("Subscription listing hit the page cap; list may be partial")
         # Return list of dicts with subscriptionId and displayName
         return [
             {

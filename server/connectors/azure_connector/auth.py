@@ -3,7 +3,11 @@ import os, logging
 from dotenv import load_dotenv
 from connectors.azure_connector.billing import fetch_subscriptions
 from utils.auth.token_management import store_tokens_in_db
-from utils.db.connection_utils import save_connection_metadata
+from utils.db.connection_utils import (
+    save_connection_metadata,
+    get_all_user_connections,
+    delete_connection_secret,
+)
 from azure.identity import ClientSecretCredential
 
 load_dotenv()
@@ -131,6 +135,16 @@ def azure_login(data=None):
                     sub["subscriptionId"],
                     connection_method="service_principal",
                 )
+
+            # Reconcile removals too. Login is the only writer of these rows, so a
+            # subscription whose role assignment was revoked would stay 'active'
+            # forever: fan-out keeps hitting it and collecting auth errors, and the
+            # UI keeps listing it as connected.
+            enabled_ids = {s["subscriptionId"] for s in enabled}
+            for existing in get_all_user_connections(user_id, "azure"):
+                if existing["account_id"] not in enabled_ids:
+                    delete_connection_secret(user_id, "azure", existing["account_id"])
+                    logging.info("Deactivated Azure subscription no longer accessible")
             logging.info("Persisted %d enabled Azure subscriptions for user", len(enabled))
 
             # Credentials are stored in database as single source of truth

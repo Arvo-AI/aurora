@@ -314,7 +314,7 @@ def get_all_user_connections(user_id: str, provider: str = "aws") -> List[Dict]:
             for row in rows
         ]
     except Exception as e:
-        logger.error("Error getting %s connections for user %s: %s", provider, user_id, e)
+        logger.exception("Error getting %s connections for user %s: %s", provider, user_id, e)
         return []
     finally:
         if conn:

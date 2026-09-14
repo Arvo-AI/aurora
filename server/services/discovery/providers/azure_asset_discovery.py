@@ -11,6 +11,7 @@ import logging
 import subprocess
 
 from services.discovery.resource_mapper import map_azure_resource
+from utils.db.connection_utils import get_all_user_connections
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,9 @@ RESOURCE_GRAPH_QUERY = (
 # batch them rather than relying on paging alone. Recommended group size is <300.
 _SUBSCRIPTION_BATCH_SIZE = 100
 _PAGE_SIZE = 1000
+# 200 pages x 1000 records is far above any real tenant, so hitting this means the
+# service is repeating tokens rather than that a tenant is genuinely that large.
+_MAX_PAGES = 200
 
 
 def discover(user_id, credentials, env=None):
@@ -52,11 +56,14 @@ def discover(user_id, credentials, env=None):
 
     # Discover across every connected subscription, not just the stored default.
     try:
-        from utils.db.connection_utils import get_all_user_connections
         subscription_ids = [c["account_id"] for c in get_all_user_connections(user_id, "azure")]
     except Exception as exc:
         logger.warning("Could not load Azure subscriptions for user %s: %s", user_id, exc)
         subscription_ids = []
+        # Surface it: an empty list falls back to the single default subscription
+        # below, so discovery would otherwise report success with a partial
+        # inventory and every other subscription's resources would look deleted.
+        errors.append(f"Could not load Azure subscriptions; discovery scope may be incomplete: {exc}")
 
     try:
         resources = _query_resource_graph(credentials, subscription_ids)
@@ -147,34 +154,43 @@ def _query_resource_graph(credentials, subscription_ids=None):
 
     resources = []
     for batch in batches:
-        skip_token = None
-        while True:
-            cmd = [
-                "az", "graph", "query",
-                "-q", RESOURCE_GRAPH_QUERY,
-                "--first", str(_PAGE_SIZE),
-                "--output", "json",
-            ]
-            if batch:
-                cmd.append("--subscriptions")
-                cmd.extend(batch)
-            if skip_token:
-                cmd.extend(["--skip-token", skip_token])
-
-            output = _run_graph_query(cmd)
-            if isinstance(output, dict):
-                resources.extend(output.get("data", output.get("Data", [])) or [])
-                skip_token = output.get("skip_token") or output.get("skipToken")
-            elif isinstance(output, list):
-                resources.extend(output)
-                skip_token = None
-            else:
-                skip_token = None
-
-            if not skip_token:
-                break
-
+        resources.extend(_query_batch(batch))
     return resources
+
+
+def _query_batch(batch):
+    """Page through one subscription batch and return its resources."""
+    collected = []
+    skip_token = None
+    # Bounded rather than `while True`: a service that returned the same skip token
+    # twice would otherwise loop forever at one az invocation per iteration.
+    for _ in range(_MAX_PAGES):
+        cmd = [
+            "az", "graph", "query",
+            "-q", RESOURCE_GRAPH_QUERY,
+            "--first", str(_PAGE_SIZE),
+            "--output", "json",
+        ]
+        if batch:
+            cmd.append("--subscriptions")
+            cmd.extend(batch)
+        if skip_token:
+            cmd.extend(["--skip-token", skip_token])
+
+        output = _run_graph_query(cmd)
+        next_token = None
+        if isinstance(output, dict):
+            collected.extend(output.get("data", output.get("Data", [])) or [])
+            next_token = output.get("skip_token") or output.get("skipToken")
+        elif isinstance(output, list):
+            collected.extend(output)
+
+        if not next_token or next_token == skip_token:
+            return collected
+        skip_token = next_token
+
+    logger.warning("Azure Resource Graph paging hit the %d page cap", _MAX_PAGES)
+    return collected
 
 
 def _run_graph_query(cmd):

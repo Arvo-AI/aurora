@@ -4,6 +4,7 @@ Covers the logic that silently breaks without a test: the read-only command
 classifier, per-subscription command pinning, and Resource Graph paging.
 """
 import json
+import logging
 import os
 import re
 import shlex
@@ -12,9 +13,16 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import typing
 
 import pytest
+
+
+def _read(path):
+    """Read a source file, closing the handle deterministically."""
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
 
 
 def _load(fn_names, path):
@@ -23,7 +31,7 @@ def _load(fn_names, path):
     cloud_exec_tool pulls in the whole agent/DB stack at import time, which is
     not available in unit tests.
     """
-    src = open(path).read()
+    src = _read(path)
     ns = {"shlex": shlex}
     for fn in fn_names:
         match = re.search(r"^def " + fn + r"\(.*?(?=^def )", src, re.S | re.M)
@@ -34,6 +42,7 @@ def _load(fn_names, path):
 
 CLOUD_EXEC = "chat/backend/agent/tools/cloud_exec_tool.py"
 SETUP_SCRIPT = "connectors/azure_connector/setup-aurora-access.sh"
+BILLING = "connectors/azure_connector/billing.py"
 
 
 @pytest.fixture(scope="module")
@@ -122,7 +131,8 @@ def test_resource_graph_follows_skip_tokens(monkeypatch):
 
     out = mod._query_resource_graph({"subscription_id": "S1"}, ["S1"])
     assert [r["id"] for r in out] == ["1", "2"]
-    assert "--skip-token" in calls[1] and "tok1" in calls[1]
+    assert "--skip-token" in calls[1], "second page did not pass a skip token"
+    assert "tok1" in calls[1], "second page used the wrong skip token"
 
 
 def test_resource_graph_batches_subscriptions(monkeypatch):
@@ -169,7 +179,7 @@ def test_read_only_mode_fails_closed_without_distinct_identity():
 
 def _load_fanout(run_command, config_dirs, fail_subs=(), mode="agent"):
     """Exec the real fan-out function with faked module-level dependencies."""
-    src = open(CLOUD_EXEC).read()
+    src = _read(CLOUD_EXEC)
     ns = {"shlex": shlex, "json": __import__("json"), "time": __import__("time"),
           "contextvars": __import__("contextvars"),
           "Optional": typing.Optional, "logger": __import__("logging").getLogger("test")}
@@ -215,7 +225,9 @@ def test_fanout_across_30_subscriptions_isolates_config_dirs():
         env = kw["env"]
         with lock:
             seen_dirs.append(env["AZURE_CONFIG_DIR"])
-            seen_cmds.append(argv[-1])
+            # argv is a list, so join to inspect it. Auth runs as its own
+            # invocation now, so both it and the command land here.
+            seen_cmds.append(" ".join(argv))
         time.sleep(0.01)  # widen the window for a real race
         return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
 
@@ -229,7 +241,14 @@ def test_fanout_across_30_subscriptions_isolates_config_dirs():
     assert len(set(seen_dirs)) == 30, "AZURE_CONFIG_DIR was reused across threads"
     # Every command was pinned to its own subscription.
     for i in range(30):
-        assert any(f"--subscription sub-{i:02d}" in c for c in seen_cmds)
+        assert any(f"--subscription sub-{i:02d}" in c for c in seen_cmds), \
+            f"sub-{i:02d} command was not pinned to its subscription"
+    # No invocation may go through a shell: auth_command interpolates the client
+    # secret unquoted, so `bash -lc` would let a secret with a metacharacter break
+    # out of its argument. This is the regression guard for that.
+    for argv_str in seen_cmds:
+        assert not argv_str.startswith("bash -lc"), \
+            "command was executed through a shell; secret interpolation is exploitable"
 
 
 def test_fanout_cleans_up_every_temp_dir():
@@ -281,7 +300,8 @@ def test_fanout_blocks_write_commands_in_ask_mode():
 
     fanout, _ = _load_fanout(run_command, [], mode="ask")
     out = _json.loads(fanout("u", [{"account_id": "s1"}], "group delete --name x"))
-    assert "error" in out and out["multi_subscription"] is True
+    assert "error" in out, "write command was not rejected in ask mode"
+    assert out["multi_subscription"] is True, "result lost its multi-subscription marker"
 
 
 def test_setup_azure_environment_allocates_a_distinct_config_dir_each_call():
@@ -290,7 +310,7 @@ def test_setup_azure_environment_allocates_a_distinct_config_dir_each_call():
     This exercises setup_azure_environment_isolated itself rather than a stub,
     because that is where the directory is actually allocated.
     """
-    src = open(CLOUD_EXEC).read()
+    src = _read(CLOUD_EXEC)
     match = re.search(r"^def setup_azure_environment_isolated\(.*?(?=^def )", src, re.S | re.M)
     ns = {
         "os": os, "tempfile": tempfile,
@@ -332,7 +352,7 @@ def test_setup_azure_environment_allocates_a_distinct_config_dir_each_call():
 
 def _walk_mg(payload):
     """Run the walker embedded in setup-aurora-access.sh against a payload."""
-    src = open(SETUP_SCRIPT).read()
+    src = _read(SETUP_SCRIPT)
     body = re.search(r"list_mg_subscriptions\(\) \{.*?\n\}", src, re.S).group(0)
     snippet = re.search(r"python3 -c '(.*?)'\n", body, re.S).group(1)
     out = subprocess.run(
@@ -477,7 +497,7 @@ def test_fetch_data_returns_subscription_count():
     payload, not just the local: computing the count but not returning it is
     exactly the bug.
     """
-    src = open(AZURE_ROUTES).read()
+    src = _read(AZURE_ROUTES)
     match = re.search(r"^def fetch_data\(.*?(?=^@azure_bp)", src, re.S | re.M)
     assert match, "fetch_data not found"
     body = match.group(0)
@@ -494,7 +514,7 @@ def test_subscription_list_resolves_real_names():
     Previously: name = default_name if sub_id == default_id else sub_id, so only
     the default was named and the rest rendered as bare subscription GUIDs.
     """
-    src = open(AZURE_ROUTES).read()
+    src = _read(AZURE_ROUTES)
     match = re.search(r"^def azure_subscriptions_get\(.*?(?=^@azure_bp)", src, re.S | re.M)
     assert match, "azure_subscriptions_get not found"
     body = match.group(0)
@@ -534,7 +554,7 @@ def test_fan_out_propagates_contextvars_to_workers():
 
 def test_both_fan_outs_copy_context():
     """Both providers must copy context; a bare submit reintroduces exit-126 blocks."""
-    src = open(CLOUD_EXEC).read()
+    src = _read(CLOUD_EXEC)
     for fn in ("_cloud_exec_aws_multi_account", "_cloud_exec_azure_multi_subscription"):
         match = re.search(r"^def " + fn + r"\(.*?(?=^def )", src, re.S | re.M)
         assert match, f"{fn} not found"
@@ -654,7 +674,8 @@ def test_save_connection_metadata_still_inserts_when_absent(monkeypatch):
     cu = _conn_utils_with_fake_db(monkeypatch, rows)
 
     assert cu.save_connection_metadata(USER_A, "azure", "sub-1") is True
-    assert len(rows) == 1 and rows[0]["status"] == "active", "first connect did not insert a row"
+    assert len(rows) == 1, "first connect did not insert exactly one row"
+    assert rows[0]["status"] == "active", "inserted row was not active"
 
 
 # --- Retired per-subscription toggle -----------------------------------------
@@ -665,7 +686,7 @@ def test_save_connection_metadata_still_inserts_when_absent(monkeypatch):
 
 def test_subscription_post_is_retired():
     """POST /api/azure-subscriptions must not silently persist a selection again."""
-    src = open(AZURE_ROUTES).read()
+    src = _read(AZURE_ROUTES)
     # Last function in the file, so anchor on end-of-string as well as the next def.
     match = re.search(r"def azure_subscriptions_post\(.*?(?=\n@|\ndef |\Z)", src, re.S)
     assert match, "azure_subscriptions_post not found"
@@ -692,6 +713,80 @@ def test_azure_ui_has_no_subscription_toggle():
     )
     if not os.path.exists(component):
         pytest.skip("client/ not present in this checkout")
-    src = open(component).read()
+    src = _read(component)
     assert "showToggle={false}" in src, "Azure subscription toggle is rendered again"
     assert "saveProjects" not in src, "UI still posts a subscription selection"
+
+
+# --- Login reconciles removals -----------------------------------------------
+
+def test_subscription_listing_follows_nextlink():
+    """A truncated list would make login deactivate valid subscriptions.
+
+    Login now deactivates any persisted subscription absent from this list, so if
+    ARM paginates and only page one is read, every subscription past the first page
+    is marked inactive and silently drops out of fan-out.
+    """
+    src = _read(BILLING)
+    match = re.search(r"^def fetch_subscriptions\(.*?(?=^def |\Z)", src, re.S | re.M)
+    assert match, "fetch_subscriptions not found"
+    ns = {"requests": None, "logging": logging}
+
+    pages = [
+        {"value": [{"subscriptionId": "s0", "state": "Enabled"},
+                   {"subscriptionId": "s1", "state": "Enabled"}],
+         "nextLink": "https://management.azure.com/next"},
+        {"value": [{"subscriptionId": "s2", "state": "Enabled"}]},
+    ]
+    seen_urls = []
+
+    class _Resp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    def _get(url, **_kw):
+        seen_urls.append(url)
+        return _Resp(pages[len(seen_urls) - 1])
+
+    ns["requests"] = typing.cast(typing.Any, types.SimpleNamespace(get=_get))
+    exec(match.group(0), ns)
+
+    out = ns["fetch_subscriptions"]("token")
+    assert [s["subscriptionId"] for s in out] == ["s0", "s1", "s2"], \
+        "nextLink was not followed; subscription list is truncated"
+    assert seen_urls[1].endswith("/next"), "second request did not use nextLink"
+
+
+def test_subscription_listing_returns_empty_on_failure():
+    """Failure must yield [], which trips login's existing 'no subscriptions' 400.
+
+    Returning a partial list here instead would let the reconcile in azure_login
+    deactivate subscriptions just because ARM was briefly unreachable.
+    """
+    src = _read(BILLING)
+    match = re.search(r"^def fetch_subscriptions\(.*?(?=^def |\Z)", src, re.S | re.M)
+
+    def _boom(_url, **_kw):
+        raise RuntimeError("ARM unreachable")
+
+    ns = {"requests": typing.cast(typing.Any, types.SimpleNamespace(get=_boom)), "logging": logging}
+    exec(match.group(0), ns)
+    assert ns["fetch_subscriptions"]("token") == []
+
+
+def test_login_deactivates_subscriptions_that_lost_access():
+    """Login is the only writer of these rows, so it must reconcile removals."""
+    src = _read("connectors/azure_connector/auth.py")
+    match = re.search(r"enabled_ids\s*=.*?(?=\n            logging\.info)", src, re.S)
+    assert match, "login does not compute the enabled-subscription set"
+    body = match.group(0)
+    assert "delete_connection_secret" in body, \
+        "login never deactivates subscriptions that are no longer accessible"
+    assert "not in enabled_ids" in body, \
+        "deactivation is not keyed on absence from the current enabled set"

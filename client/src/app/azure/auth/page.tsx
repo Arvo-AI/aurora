@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,7 +20,6 @@ type AzureCredentialSet = {
 
 export default function AzureAuthPage() {
   const [isLoading, setIsLoading] = useState(false);
-  const [currentStep, setCurrentStep] = useState(0);
   const [authMethod, setAuthMethod] = useState<'script_setup' | 'manual_credentials' | 'cloud_shell'>('cloud_shell');
   const [subscriptionId, setSubscriptionId] = useState("");
   const [subscription_name, setSubscriptionName] = useState("");
@@ -30,24 +29,15 @@ export default function AzureAuthPage() {
     appId: "",
     password: "",
   });
-  const [readOnlyJsonInput, setReadOnlyJsonInput] = useState("");
   const [readOnlyCredentials, setReadOnlyCredentials] = useState({
     tenantId: "",
     appId: "",
     password: "",
     subscriptionId: "",
   });
-  const [showReadOnlyCredentialsPreview, setShowReadOnlyCredentialsPreview] = useState(false);
-  const [readOnlyError, setReadOnlyError] = useState<string | null>(null);
-  const [isReadOnlySectionExpanded, setIsReadOnlySectionExpanded] = useState(false);
   const [jsonInput, setJsonInput] = useState("");
   const [showCredentials, setShowCredentials] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
-  const [backendClusters, setBackendClusters] = useState<Array<{
-    name: string;
-    resourceGroup: string;
-    subscriptionId: string;
-  }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [copyButtonText, setCopyButtonText] = useState("Copy Script");
 
@@ -58,43 +48,6 @@ export default function AzureAuthPage() {
   const handleJsonPaste = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
     setJsonInput(value);
-  };
-
-  const handleReadOnlyJsonPaste = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value;
-    setReadOnlyJsonInput(value);
-
-    if (!value.trim()) {
-      setReadOnlyCredentials({ tenantId: "", appId: "", password: "", subscriptionId: "" });
-      setShowReadOnlyCredentialsPreview(false);
-      setReadOnlyError(null);
-      return;
-    }
-
-    try {
-      const parsed = JSON.parse(value);
-      const tenant = parsed.tenantId || parsed.tenant || "";
-      const client = parsed.clientId || parsed.appId;
-      const secret = parsed.clientSecret || parsed.password;
-      const subId = parsed.subscriptionId || parsed.subscription_id || "";
-
-      if (!client || !secret) {
-        throw new Error("Missing required fields");
-      }
-
-      setReadOnlyCredentials({
-        tenantId: tenant,
-        appId: client,
-        password: secret,
-        subscriptionId: subId,
-      });
-      setShowReadOnlyCredentialsPreview(true);
-      setReadOnlyError(null);
-    } catch (err) {
-      console.error("Invalid read-only JSON:", err);
-      setReadOnlyError("Please enter valid read-only credentials with tenantId (optional), clientId, and clientSecret fields");
-      setShowReadOnlyCredentialsPreview(false);
-    }
   };
 
   // Takes creds explicitly rather than reading readOnlyCredentials state: the
@@ -183,7 +136,6 @@ export default function AzureAuthPage() {
                 subscriptionId: readOnlyCreds.subscriptionId || agentCreds.subscriptionId
               };
               setReadOnlyCredentials(currentReadOnly);
-              setShowReadOnlyCredentialsPreview(true);
             }
 
             setShowCredentials(true);
@@ -216,12 +168,6 @@ export default function AzureAuthPage() {
       // Validate credentials
       if (!currentCredentials.tenantId || !currentCredentials.appId || !currentCredentials.password) {
         setError("Please provide all required credentials (Tenant ID, Client ID, and Client Secret)");
-        setIsLoading(false);
-        return;
-      }
-
-      if (readOnlyJsonInput.trim() && !currentReadOnly.appId) {
-        setError("Please fix the read-only credentials JSON before continuing");
         setIsLoading(false);
         return;
       }
@@ -315,11 +261,6 @@ export default function AzureAuthPage() {
       }
 
       setSubscriptionCount(fetchData.subscription_count || 0);
-      
-      // Check if we have clusters data and set them
-      if (fetchData.clusters && fetchData.clusters.length > 0) {
-        setBackendClusters(fetchData.clusters);
-      }
 
     } catch (error: any) {
       console.error("Error connecting to Azure:", error);
@@ -381,11 +322,12 @@ export default function AzureAuthPage() {
         throw new Error('Failed to fetch setup script');
       }
       const script = await response.text();
-      // Delimiter must land at the start of its own line, and exactly one newline
-      // before it: the served script already ends with one, so normalize rather
-      // than append blindly. Quoted delimiter keeps $( and ${ from expanding here.
+      // Normalize to exactly one trailing newline so the delimiter starts its own
+      // line. `\n+$` rather than `\n*$` to keep the match linear (no backtracking
+      // on an empty match at end-of-input). Quoted delimiter stops $( and ${
+      // expanding while the heredoc is being written.
       await copyToClipboard(
-        `cat > aurora-setup.sh <<'AURORA_SCRIPT_EOF'\n${script.replace(/\n*$/, '\n')}AURORA_SCRIPT_EOF\nbash aurora-setup.sh\n`,
+        `cat > aurora-setup.sh <<'AURORA_SCRIPT_EOF'\n${script.replace(/\n+$/, '')}\nAURORA_SCRIPT_EOF\nbash aurora-setup.sh\n`,
       );
       setCopyButtonText('Copied!');
       setTimeout(() => setCopyButtonText('Copy Script'), 2000);
@@ -684,7 +626,7 @@ export default function AzureAuthPage() {
                        window.open(
                          'https://shell.azure.com/bash?prompt=login%20select_account',
                          '_blank',
-                         'width=1200,height=800',
+                         'noopener,noreferrer,width=1200,height=800',
                        );
                      }}
                     className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-all duration-200 transform hover:scale-[1.02] shadow-lg"

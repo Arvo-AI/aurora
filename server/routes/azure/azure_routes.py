@@ -185,8 +185,10 @@ def azure_subscriptions_get(user_id):
             token = generate_azure_access_token(user_id).get("access_token")
             if token:
                 names = {s["subscriptionId"]: s["displayName"] for s in fetch_subscriptions(token)}
-        except Exception:
-            logging.warning("[AZURE API] Could not resolve subscription names; falling back to ids")
+        except Exception as exc:
+            logging.warning(
+                "[AZURE API] Could not resolve subscription names; falling back to ids: %s", exc
+            )
         if default_id and default_name:
             names.setdefault(default_id, default_name)
 

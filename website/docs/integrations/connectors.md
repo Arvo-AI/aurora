@@ -254,7 +254,7 @@ bash setup-aurora-access.sh
 
 Cloud Shell already has `az`, `jq`, `python3` and `kubectl`, and you are already authenticated — nothing to install.
 
-By default this covers **every enabled subscription in your current tenant**. To scope to a management group instead:
+By default this covers **every enabled subscription in your current tenant**. To scope to a management group instead, re-run with its name — using the filename you have (`aurora-setup.sh` if you pasted the script, `setup-aurora-access.sh` if you downloaded it):
 
 ```bash
 bash aurora-setup.sh <management-group-name>

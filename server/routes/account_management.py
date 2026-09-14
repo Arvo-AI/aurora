@@ -375,15 +375,29 @@ def delete_connected_account(user_id, target_user_id, provider):
         # subscriptions to the agent and discovery.
         # --------------------------------------------------------------
         if provider_lc == "azure":
+            from utils.db.connection_utils import (
+                get_all_user_connections,
+                delete_connection_secret,
+            )
             try:
-                from utils.db.connection_utils import (
-                    get_all_user_connections,
-                    delete_connection_secret,
-                )
-                for azure_conn in get_all_user_connections(user_id, "azure"):
-                    delete_connection_secret(user_id, "azure", azure_conn["account_id"])
+                azure_conns = get_all_user_connections(user_id, "azure")
             except Exception as e:
-                logging.warning("Failed to deactivate Azure subscriptions for user %s: %s", user_id, e)
+                logging.warning("Failed to list Azure subscriptions for user %s: %s", user_id, e)
+                azure_conns = []
+                deletion_ok = False
+            for azure_conn in azure_conns:
+                # Per-subscription try so one failure does not abandon the rest, and
+                # fold the result into deletion_ok: a discarded failure would return
+                # 200 "removed" while fan-out and discovery still see the account.
+                try:
+                    _ok = delete_connection_secret(user_id, "azure", azure_conn["account_id"])
+                except Exception as e:
+                    logging.warning(
+                        "Failed to deactivate Azure subscription %s for user %s: %s",
+                        azure_conn["account_id"], user_id, e,
+                    )
+                    _ok = False
+                deletion_ok = deletion_ok and _ok
 
         # Clean up Memgraph discovery nodes for all other providers that reach this
         # generic path (GCP, Azure, and any provider that uses Vault-backed tokens).
