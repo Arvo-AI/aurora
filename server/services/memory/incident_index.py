@@ -193,8 +193,10 @@ def append_incident_line(
             synopsis=line_synopsis,
         )
 
-        # Idempotency: don't re-append if this incident_id is already indexed.
-        # Read is cheap (single artifact) and avoids duplicate lines on retry.
+        # Fast-path idempotency: skip the write entirely if this incident is
+        # already indexed (common on task retry). This read is outside the row
+        # lock, so it's advisory only — the authoritative recheck happens under
+        # the lock inside append_to_memory via skip_if_contains below.
         existing = get_memory_content(user_id, INCIDENT_INDEX_CATEGORY, INCIDENT_INDEX_TITLE)
         if existing and f"INC {incident_id}" in existing:
             logger.info(
@@ -210,6 +212,9 @@ def append_incident_line(
             description="Compact, id-keyed map of recent incidents for recurrence detection.",
             user_id=user_id,
             session_id=session_id,
+            # Under-lock dedup: don't duplicate the line if a concurrent task
+            # appended this same incident between our pre-check and the lock.
+            skip_if_contains=f"INC {incident_id}",
         )
         logger.info("%s Appended incident %s to index", _LOG_PREFIX, incident_id)
         return "error" not in (result or "")
@@ -294,6 +299,8 @@ def record_recurrence(
                     title=INCIDENT_INDEX_TITLE,
                     content=fallback_line,
                     user_id=user_id,
+                    # Under-lock dedup against a concurrent write of the same id.
+                    skip_if_contains=f"INC {recurred_id}",
                 )
                 return "error" not in (res or "")
 

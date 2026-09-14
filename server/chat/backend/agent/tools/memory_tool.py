@@ -326,9 +326,17 @@ def append_to_memory(
     description: str = "",
     user_id: str | None = None,
     session_id: str | None = None,
+    skip_if_contains: str | None = None,
     **kwargs,
 ) -> str:
-    """Append content to an existing memory entry. Creates the entry if it doesn't exist."""
+    """Append content to an existing memory entry. Creates the entry if it doesn't exist.
+
+    skip_if_contains: optional idempotency marker. When set, the append is
+    skipped (returning status "skipped") if the marker is already present in the
+    existing content. The check runs *after* the row is locked FOR UPDATE, so
+    concurrent appends can't both pass a pre-lock existence check and duplicate
+    a line. Internal callers only (not exposed in the tool schema).
+    """
     if err := _validate_category(category):
         return err
     if err := _validate_title(title):
@@ -351,6 +359,15 @@ def append_to_memory(
             if row:
                 artifact_id = str(row[0])
                 existing = row[1] or ""
+                # Idempotency recheck under the lock: a concurrent task may have
+                # appended this same marker between our caller's pre-check and
+                # our acquiring the row lock. Bail rather than duplicate.
+                if skip_if_contains and skip_if_contains in existing:
+                    conn.commit()
+                    return json.dumps({
+                        "status": "skipped",
+                        "message": f"Content already present ({skip_if_contains}); append skipped.",
+                    })
                 new_content = existing + "\n" + content if existing else content
             else:
                 new_content = content

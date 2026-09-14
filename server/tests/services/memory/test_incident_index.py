@@ -95,6 +95,28 @@ class TestAppendIncidentLine:
         rm.assert_called_once()
         am.assert_not_called()
 
+    def test_passes_under_lock_dedup_marker(self):
+        # When the fast-path read misses (concurrent race), append_to_memory must
+        # get the incident-id marker so it can recheck under the row lock.
+        with patch.object(ii, "get_memory_content", return_value=None), \
+                patch.object(ii, "append_to_memory", return_value='{"status": "ok"}') as am:
+            ok = ii.append_incident_line(
+                user_id="u1", incident_id=INC, date_iso="d",
+                service="api", status="resolved", alert_title="x", summary="s",
+            )
+        assert ok is True
+        assert am.call_args.kwargs["skip_if_contains"] == f"INC {INC}"
+
+    def test_treats_skipped_result_as_success(self):
+        # A concurrent task won the race; append_to_memory returns "skipped".
+        with patch.object(ii, "get_memory_content", return_value=None), \
+                patch.object(ii, "append_to_memory", return_value='{"status": "skipped"}'):
+            ok = ii.append_incident_line(
+                user_id="u1", incident_id=INC, date_iso="d",
+                service="api", status="resolved", alert_title="x", summary="s",
+            )
+        assert ok is True
+
     def test_never_raises_on_backend_error(self):
         with patch.object(ii, "get_memory_content", side_effect=RuntimeError("db down")):
             ok = ii.append_incident_line(
