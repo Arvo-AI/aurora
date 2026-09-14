@@ -19,6 +19,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useUserId } from "@/hooks/use-user-id";
 import {
@@ -39,6 +47,7 @@ import {
   type MemoryEntry,
   USER_WRITABLE_CATEGORIES,
   CATEGORY_META,
+  formatEditedBy,
 } from "@/lib/memory-constants";
 
 export function MemorySettings() {
@@ -60,6 +69,14 @@ export function MemorySettings() {
   const [newContent, setNewContent] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+  // Holds the attempted create payload when a same-title+category entry already
+  // exists, so we can prompt the user to overwrite or keep both.
+  const [createConflict, setCreateConflict] = useState<{
+    category: MemoryCategory;
+    title: string;
+    content: string;
+    description?: string;
+  } | null>(null);
 
   // Upload state
   const [isUploading, setIsUploading] = useState(false);
@@ -97,39 +114,118 @@ export function MemorySettings() {
     }
   }, [userId, userLoading, fetchEntries]);
 
+  // Core create request. Returns the Response so callers can branch on conflicts.
+  const submitCreate = async (payload: {
+    category: MemoryCategory;
+    title: string;
+    content: string;
+    description?: string;
+    overwrite?: boolean;
+  }) => {
+    return fetch("/api/proxy/memory/entries", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  };
+
+  // Reset the create form and close it after a successful create.
+  const resetCreateForm = () => {
+    setNewTitle("");
+    setNewCategory("context");
+    setNewContent("");
+    setNewDescription("");
+    setShowCreateForm(false);
+  };
+
+  // Build a unique "keep both" title by appending (2), (3), ... within the same
+  // category, so the new entry doesn't collide with the existing one.
+  const buildUniqueTitle = (title: string, category: MemoryCategory) => {
+    const takenInCategory = new Set(
+      entries
+        .filter((e) => e.category === category)
+        .map((e) => e.title.toLowerCase())
+    );
+    let n = 2;
+    let candidate = `${title} (${n})`;
+    while (takenInCategory.has(candidate.toLowerCase())) {
+      n += 1;
+      candidate = `${title} (${n})`;
+    }
+    return candidate;
+  };
+
   const handleCreate = async () => {
     if (!userId) return;
 
+    const payload = {
+      category: newCategory,
+      title: newTitle.trim(),
+      content: newContent.trim(),
+      description: newDescription.trim() || undefined,
+    };
+
     setIsCreating(true);
     try {
-      const res = await fetch("/api/proxy/memory/entries", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          category: newCategory,
-          title: newTitle.trim(),
-          content: newContent.trim(),
-          description: newDescription.trim() || undefined,
-        }),
-      });
+      const res = await submitCreate(payload);
 
       if (res.ok) {
         toast({ title: "Memory entry created" });
-        setNewTitle("");
-        setNewCategory("context");
-        setNewContent("");
-        setNewDescription("");
-        setShowCreateForm(false);
+        resetCreateForm();
+        await fetchEntries();
+        return;
+      }
+
+      // Same title+category already exists — prompt the user to choose.
+      if (res.status === 409) {
+        setCreateConflict(payload);
+        return;
+      }
+
+      const text = await res.text();
+      let msg = "Failed to create entry";
+      try { msg = JSON.parse(text).error || msg; } catch {}
+      throw new Error(msg);
+    } catch (error) {
+      toast({
+        title: "Failed to create",
+        description: error instanceof Error ? error.message : "An error occurred",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  // Resolve a create conflict by either overwriting the existing entry or
+  // creating a second entry under a unique "(2)" title.
+  const resolveConflict = async (mode: "overwrite" | "keep-both") => {
+    if (!createConflict) return;
+
+    const payload =
+      mode === "overwrite"
+        ? { ...createConflict, overwrite: true }
+        : { ...createConflict, title: buildUniqueTitle(createConflict.title, createConflict.category) };
+
+    setIsCreating(true);
+    try {
+      const res = await submitCreate(payload);
+      if (res.ok) {
+        toast({
+          title: mode === "overwrite" ? "Memory entry overwritten" : "Memory entry created",
+        });
+        setCreateConflict(null);
+        resetCreateForm();
         await fetchEntries();
       } else {
         const text = await res.text();
-        let msg = "Failed to create entry";
+        let msg = "Failed to save entry";
         try { msg = JSON.parse(text).error || msg; } catch {}
         throw new Error(msg);
       }
     } catch (error) {
       toast({
-        title: "Failed to create",
+        title: "Failed to save",
         description: error instanceof Error ? error.message : "An error occurred",
         variant: "destructive",
       });
@@ -503,8 +599,8 @@ export function MemorySettings() {
                           {entry.updated_at && (
                             <span>{formatDate(entry.updated_at)}</span>
                           )}
-                          {entry.last_edited_by && (
-                            <span className="capitalize">by {entry.last_edited_by}</span>
+                          {formatEditedBy(entry) && (
+                            <span>by {formatEditedBy(entry)}</span>
                           )}
                         </div>
                       </div>
@@ -550,6 +646,48 @@ export function MemorySettings() {
         onOpenChange={(open) => { if (!open) setEditingEntry(null); }}
         onSaved={fetchEntries}
       />
+
+      {/* Duplicate title conflict — let the user overwrite or keep both */}
+      <Dialog
+        open={!!createConflict}
+        onOpenChange={(open) => { if (!open && !isCreating) setCreateConflict(null); }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Entry already exists</DialogTitle>
+            <DialogDescription>
+              {createConflict && (
+                <>
+                  A memory entry titled &ldquo;{createConflict.title}&rdquo; already exists in the{" "}
+                  {CATEGORY_META[createConflict.category]?.label ?? createConflict.category} category.
+                  Overwrite it, or keep both by saving this as a new entry?
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button variant="ghost" onClick={() => setCreateConflict(null)} disabled={isCreating}>
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => resolveConflict("keep-both")}
+              disabled={isCreating}
+            >
+              {isCreating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Keep both
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => resolveConflict("overwrite")}
+              disabled={isCreating}
+            >
+              {isCreating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Overwrite
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <DiscoverySettings />
     </div>

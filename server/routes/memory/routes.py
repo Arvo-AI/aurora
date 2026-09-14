@@ -15,7 +15,7 @@ from pypdf import PdfReader
 
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context, get_user_display_name
 from services.memory import MEMORY_CATEGORIES
 from services.artifacts.store import create_version
 from utils.validation import strip_nul
@@ -58,14 +58,14 @@ def list_entries(user_id):
 
             if category:
                 cursor.execute(
-                    """SELECT id, title, category, description, last_edited_by, updated_at
+                    """SELECT id, title, category, description, last_edited_by, last_edited_by_name, updated_at
                        FROM artifacts WHERE org_id = %s AND category = %s
                        ORDER BY updated_at DESC""",
                     (org_id, category),
                 )
             else:
                 cursor.execute(
-                    """SELECT id, title, category, description, last_edited_by, updated_at
+                    """SELECT id, title, category, description, last_edited_by, last_edited_by_name, updated_at
                        FROM artifacts WHERE org_id = %s AND category = ANY(%s)
                        ORDER BY category, updated_at DESC""",
                     (org_id, list(MEMORY_CATEGORIES)),
@@ -79,7 +79,8 @@ def list_entries(user_id):
                 "category": row[2],
                 "description": row[3],
                 "last_edited_by": row[4],
-                "updated_at": row[5].isoformat() if row[5] else None,
+                "last_edited_by_name": row[5],
+                "updated_at": row[6].isoformat() if row[6] else None,
             }
             for row in rows
         ]
@@ -101,6 +102,9 @@ def create_entry(user_id):
     title = data.get("title", "").strip()
     content = data.get("content", "").strip()
     description = data.get("description", "").strip()
+    # When true, an existing entry with the same (category, title) is replaced.
+    # When false/absent, a collision returns 409 so the UI can prompt the user.
+    overwrite = bool(data.get("overwrite", False))
 
     if not category or category not in MEMORY_CATEGORIES:
         return jsonify({"error": f"category must be one of: {', '.join(MEMORY_CATEGORIES)}"}), 400
@@ -112,24 +116,45 @@ def create_entry(user_id):
     if len(content) > MAX_CONTENT_LENGTH:
         return jsonify({"error": "Content exceeds 500KB limit"}), 400
 
+    # Resolve the actual person so the entry can show "added by <name>" instead
+    # of a generic "user"; None falls back to the generic label in the UI.
+    editor_name = get_user_display_name(user_id)
+
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
 
-            # Set category and description via direct insert with the upsert
+            # Detect an existing entry with the same (category, title). Without an
+            # explicit overwrite, surface a 409 so the UI can ask the user whether
+            # to overwrite or keep both — never silently clobber existing content.
+            if not overwrite:
+                cursor.execute(
+                    """SELECT id FROM artifacts
+                       WHERE org_id = %s AND category = %s AND title = %s""",
+                    (org_id, category, title),
+                )
+                if cursor.fetchone():
+                    return jsonify({
+                        "error": "A memory entry with this title already exists in that category",
+                        "code": "conflict",
+                    }), 409
+
+            # Upsert: insert new, or (when overwrite=true) replace the existing entry.
             cursor.execute(
                 """INSERT INTO artifacts
                        (org_id, user_id, title, content, category, description,
-                        last_edited_by, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'user', CURRENT_TIMESTAMP)
+                        last_edited_by, last_edited_by_name, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, 'user', %s, CURRENT_TIMESTAMP)
                    ON CONFLICT (org_id, category, title)
                    DO UPDATE SET content = EXCLUDED.content,
                                  description = EXCLUDED.description,
+                                 user_id = EXCLUDED.user_id,
                                  last_edited_by = 'user',
+                                 last_edited_by_name = EXCLUDED.last_edited_by_name,
                                  updated_at = CURRENT_TIMESTAMP
                    RETURNING id""",
-                (org_id, user_id, title, content, category, description or None),
+                (org_id, user_id, title, content, category, description or None, editor_name),
             )
             row = cursor.fetchone()
             artifact_id = str(row[0])
@@ -160,7 +185,7 @@ def get_entry(user_id, entry_id):
 
             cursor.execute(
                 """SELECT id, title, category, description, content,
-                          last_edited_by, updated_at
+                          last_edited_by, last_edited_by_name, updated_at
                    FROM artifacts WHERE id = %s AND org_id = %s AND category = ANY(%s)""",
                 (entry_id, org_id, list(MEMORY_CATEGORIES)),
             )
@@ -176,7 +201,8 @@ def get_entry(user_id, entry_id):
             "description": row[3],
             "content": row[4],
             "last_edited_by": row[5],
-            "updated_at": row[6].isoformat() if row[6] else None,
+            "last_edited_by_name": row[6],
+            "updated_at": row[7].isoformat() if row[7] else None,
         }), 200
 
     except Exception as e:
@@ -256,9 +282,16 @@ def update_entry(user_id, entry_id):
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
 
+            # Stamp the actual editor's name (None → generic label in the UI).
+            editor_name = get_user_display_name(user_id)
+
             # Assemble the SET clause dynamically from the provided fields.
-            set_clauses = ["last_edited_by = 'user'", "updated_at = CURRENT_TIMESTAMP"]
-            values = []
+            set_clauses = [
+                "last_edited_by = 'user'",
+                "last_edited_by_name = %s",
+                "updated_at = CURRENT_TIMESTAMP",
+            ]
+            values = [editor_name]
             if has_category:
                 set_clauses.append("category = %s")
                 values.append(category)
@@ -360,6 +393,9 @@ def upload_file(user_id):
             base_title = file.filename.rsplit(".", 1)[0] if "." in file.filename else file.filename
         description = request.form.get("description", "").strip()
 
+        # Stamp the uploader's actual name (None → generic label in the UI).
+        editor_name = get_user_display_name(user_id)
+
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
@@ -367,15 +403,17 @@ def upload_file(user_id):
             cursor.execute(
                 """INSERT INTO artifacts
                        (org_id, user_id, title, content, category, description,
-                        last_edited_by, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'user', CURRENT_TIMESTAMP)
+                        last_edited_by, last_edited_by_name, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, 'user', %s, CURRENT_TIMESTAMP)
                    ON CONFLICT (org_id, category, title)
                    DO UPDATE SET content = EXCLUDED.content,
                                  description = EXCLUDED.description,
+                                 user_id = EXCLUDED.user_id,
                                  last_edited_by = 'user',
+                                 last_edited_by_name = EXCLUDED.last_edited_by_name,
                                  updated_at = CURRENT_TIMESTAMP
                    RETURNING id""",
-                (org_id, user_id, base_title, content, category, description or None),
+                (org_id, user_id, base_title, content, category, description or None, editor_name),
             )
             row = cursor.fetchone()
             artifact_id = str(row[0])

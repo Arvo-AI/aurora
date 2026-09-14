@@ -1268,6 +1268,7 @@ def initialize_tables():
                         category VARCHAR(50) NOT NULL,
                         description TEXT,
                         last_edited_by VARCHAR(20) NOT NULL DEFAULT 'agent',
+                        last_edited_by_name VARCHAR(255),
                         current_version_id UUID,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -3345,6 +3346,19 @@ def initialize_tables():
                 logging.error(f"CRITICAL: Failed to migrate artifacts table — memory writes will fail: {e}")
                 conn.rollback()
                 raise
+
+            # artifacts: add last_edited_by_name to record the actual person who
+            # last edited an entry (last_edited_by only stores 'user'/'agent').
+            # NULL means an agent edit or a pre-migration human edit — the UI
+            # falls back to the generic 'User'/'Agent' label in that case.
+            try:
+                cursor.execute("""
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS last_edited_by_name VARCHAR(255);
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding last_edited_by_name to artifacts: {e}")
+                conn.rollback()
 
             # artifacts: add incident_id + generation_session_id for postmortem unification
             try:

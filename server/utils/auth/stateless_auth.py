@@ -640,6 +640,28 @@ def get_org_id_for_user(user_id: str) -> Optional[str]:
         return None
 
 
+def get_user_display_name(user_id: str) -> Optional[str]:
+    """Look up a user's display name (users.name) by user_id.
+
+    Used to record the actual person behind a human edit (e.g. "added by
+    Olivier"). Returns None when the user has no name set or lookup fails —
+    callers should fall back to a generic label. users is not RLS-protected.
+    """
+    if not user_id:
+        return None
+    try:
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT name FROM users WHERE id = %s", (user_id,))
+                row = cursor.fetchone()
+                name = row[0] if row and row[0] else None
+                return name.strip() if isinstance(name, str) and name.strip() else None
+    except Exception as e:
+        logger.warning("Error looking up display name for user %s: %s", sanitize(user_id), type(e).__name__)
+        return None
+
+
 def set_rls_context(cursor, conn, user_id: str, *, log_prefix: str = "") -> Optional[str]:
     """Resolve org_id and configure RLS session variables on a DB connection.
 
