@@ -42,7 +42,7 @@ def _load(fn_names, path):
 
 CLOUD_EXEC = "chat/backend/agent/tools/cloud_exec_tool.py"
 SETUP_SCRIPT = "connectors/azure_connector/setup-aurora-access.sh"
-BILLING = "connectors/azure_connector/billing.py"
+SUBSCRIPTIONS_MOD = "connectors/azure_connector/subscriptions.py"
 
 
 @pytest.fixture(scope="module")
@@ -399,6 +399,79 @@ def test_setup_azure_environment_allocates_a_distinct_config_dir_each_call():
 # silently drop every subscription below the first level.
 # ---------------------------------------------------------------------------
 
+def test_resource_graph_repeated_token_fails_closed(monkeypatch):
+    """A repeated skip token means paging stalled, so it must not read as completion.
+
+    Returning the rows collected so far would publish a partial inventory as a success,
+    which is the same hazard the page cap guards against.
+    """
+    from services.discovery.providers import azure_asset_discovery as mod
+
+    calls = []
+
+    def stalled(cmd):
+        calls.append(cmd)
+        # Same token every time: the service is not advancing.
+        return {"data": [{"id": str(len(calls))}], "skipToken": "stuck"}
+
+    monkeypatch.setattr(mod, "_az_login", lambda creds: None)
+    monkeypatch.setattr(mod, "_run_graph_query", stalled)
+
+    with pytest.raises(mod.ResourceGraphTruncatedError):
+        mod._query_resource_graph({}, ["S1"])
+    # Must fail on the repeat, not grind through every page first.
+    assert len(calls) == 2, f"expected to stop on the repeated token, made {len(calls)} calls"
+
+
+def test_partial_sp_creation_is_rolled_back():
+    """A half-created pair must not survive as an orphaned identity.
+
+    If the agent principal is created and the read-only one fails, the agent's secret
+    was never printed, so it cannot be used but still exists in the directory. The
+    denial message also cannot claim nothing was created on that path.
+    """
+    src = _read(SETUP_SCRIPT)
+    match = re.search(r'if ! RO_SP=.*?\nfi', src, re.S)
+    assert match, "read-only creation is unguarded; a failure leaves an orphaned agent SP"
+    body = match.group(0)
+    assert "az ad app delete" in body, "agent principal is not rolled back"
+    assert "$AGENT_ID" in body, "rollback does not target the principal just created"
+    # The denial text must not contradict the rollback that may follow it.
+    assert "Nothing was created" not in src, \
+        "denial still claims nothing was created, which is false on the rollback path"
+
+
+def test_retired_subscription_post_is_gone():
+    """The retired toggle endpoint and its client proxy must both be removed."""
+    assert "azure_subscriptions_post" not in _read(AZURE_ROUTES), \
+        "retired POST handler still registered"
+
+    proxy = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "../../../client/src/app/api/azure-subscriptions/route.ts",
+    )
+    if not os.path.exists(proxy):
+        pytest.skip("client/ not present in this checkout")
+    src = _read(proxy)
+    assert "export async function POST" not in src, "client can still POST a subscription selection"
+    assert "export async function GET" in src, "GET proxy was removed; the list would stop loading"
+
+
+def test_discovery_cleans_up_azure_config_dir():
+    """AZURE_CONFIG_DIR is a per-call mkdtemp, so discovery must remove it.
+
+    cloud_exec cleans up its own in a finally; discovery previously removed only
+    _gcloud_tmpdir, leaking one directory per run.
+    """
+    src = _read("services/discovery/discovery_service.py")
+    assert "AZURE_CONFIG_DIR" in src, "discovery never removes the Azure config dir"
+    # Cleanup must be in a finally, or an exception mid-pipeline still leaks.
+    wrapper = re.search(r"def run_discovery_for_user\(.*?(?=\ndef )", src, re.S)
+    assert wrapper, "run_discovery_for_user not found"
+    assert "finally:" in wrapper.group(0), "cleanup is not in a finally; a raise leaks the dir"
+    assert "rmtree" in wrapper.group(0), "cleanup does not actually remove anything"
+
+
 def test_app_registration_denial_is_translated():
     """The Entra denial must name the real remedy, not look like an RBAC problem.
 
@@ -602,7 +675,9 @@ def test_subscription_list_resolves_real_names():
     the default was named and the rest rendered as bare subscription GUIDs.
     """
     src = _read(AZURE_ROUTES)
-    match = re.search(r"^def azure_subscriptions_get\(.*?(?=^@azure_bp)", src, re.S | re.M)
+    # Anchor on the next decorator or end-of-file: this is now the last function in
+    # the file, since the retired POST handler below it was deleted.
+    match = re.search(r"^def azure_subscriptions_get\(.*?(?=^@azure_bp|\Z)", src, re.S | re.M)
     assert match, "azure_subscriptions_get not found"
     body = match.group(0)
     assert "default_name if sub_id == default_id else sub_id" not in body, \
@@ -730,6 +805,39 @@ USER_A = "533757ff-de70-4700-a285-7dee94bd93b8"
 USER_B = "00000000-0000-0000-0000-0000000000bb"
 
 
+def test_azure_disconnect_clears_credential_cache():
+    """Disconnect must drop cached credentials, not just the DB rows.
+
+    azure_cached_auth caches the SP's client_secret in-process and in Redis with a
+    TTL, so leaving it behind keeps a revoked credential usable until it expires and
+    lets a reconnect inside that window be served stale credentials. GCP already does
+    this via clear_gcp_cache_for_user; Azure had no equivalent.
+    """
+    from chat.backend.agent.tools.auth import azure_cached_auth as mod
+
+    assert hasattr(mod, "clear_azure_cache_for_user"), "no Azure cache-clear function"
+
+    # Local cache must be emptied for this user and left alone for others.
+    mod._local_cache.clear()
+    mod._local_cache["cloud_exec:azure_setup:v1:u1:sub-a:agent"] = (9e9, {"client_secret": "s"})
+    mod._local_cache["cloud_exec:azure_setup:v1:u1:sub-b:readonly"] = (9e9, {"client_secret": "s"})
+    mod._local_cache["cloud_exec:azure_setup:v1:u2:sub-c:agent"] = (9e9, {"client_secret": "s"})
+    mod.clear_azure_cache_for_user("u1")
+
+    left = list(mod._local_cache)
+    assert left == ["cloud_exec:azure_setup:v1:u2:sub-c:agent"], \
+        f"expected only u2's entry to survive, got {left}"
+
+    # And disconnect must actually call it. Assert on the call, not the name: the
+    # import line also contains it, so a substring check passes even if the call
+    # is deleted.
+    src = _read("routes/account_management.py")
+    branch = re.search(r'if provider_lc == "azure":.*?(?=\n        # Clean up)', src, re.S)
+    assert branch, "azure disconnect branch not found"
+    assert re.search(r"clear_azure_cache_for_user\(\s*user_id\s*\)", branch.group(0)), \
+        "disconnect leaves cached Azure credentials in place"
+
+
 def test_disconnect_detects_listing_failure(monkeypatch):
     """A failed subscription listing must not read as "nothing to disconnect".
 
@@ -803,20 +911,19 @@ def test_save_connection_metadata_still_inserts_when_absent(monkeypatch):
 # explicit subscription id skipped the status filter entirely. Scope now lives
 # where Azure enforces it (setup-aurora-access.sh with a management group).
 
-def test_subscription_post_is_retired():
-    """POST /api/azure-subscriptions must not silently persist a selection again."""
-    src = _read(AZURE_ROUTES)
-    # Last function in the file, so anchor on end-of-string as well as the next def.
-    match = re.search(r"def azure_subscriptions_post\(.*?(?=\n@|\ndef |\Z)", src, re.S)
-    assert match, "azure_subscriptions_post not found"
-    body = match.group(0)
+def test_subscription_post_writes_nothing():
+    """No route may persist a subscription selection.
 
-    # Match the actual return, not a bare "410": the docstring mentions the status
-    # too, so a substring check still passes after the return value is changed.
-    assert re.search(r"\)\s*,\s*410\b", body), \
-        "retired endpoint must return 410 Gone so stale clients fail loudly"
-    assert "save_connection_metadata" not in body, \
-        "POST still writes connection metadata; the toggle was supposed to be retired"
+    Replaces an earlier check that the POST returned 410; the handler is now deleted
+    outright, so Flask answers 405 from the GET-only rule. What still matters is that
+    nothing in this file writes connection metadata from a request body.
+    """
+    src = _read(AZURE_ROUTES)
+    assert "azure_subscriptions_post" not in src, "retired POST handler is back"
+    assert "save_connection_metadata" not in src, \
+        "a route writes connection metadata again; scope belongs to the setup script"
+    assert 'route("/api/azure-subscriptions", methods=["POST"])' not in src, \
+        "a POST was registered on the subscriptions rule again"
 
 
 def test_azure_ui_has_no_subscription_toggle():
@@ -846,7 +953,7 @@ def test_subscription_listing_follows_nextlink():
     ARM paginates and only page one is read, every subscription past the first page
     is marked inactive and silently drops out of fan-out.
     """
-    src = _read(BILLING)
+    src = _read(SUBSCRIPTIONS_MOD)
     match = re.search(r"^def fetch_subscriptions\(.*?(?=^def |\Z)", src, re.S | re.M)
     assert match, "fetch_subscriptions not found"
     ns = {"requests": None, "logging": logging}
@@ -890,7 +997,7 @@ def test_subscription_listing_fails_closed_at_page_cap():
     fetch_subscriptions' own handler and becomes [], which login's empty-list guard
     rejects before any reconciliation runs.
     """
-    src = _read(BILLING)
+    src = _read(SUBSCRIPTIONS_MOD)
     match = re.search(r"^def fetch_subscriptions\(.*?(?=^def |\Z)", src, re.S | re.M)
     calls = []
 
@@ -921,7 +1028,7 @@ def test_subscription_listing_returns_empty_on_failure():
     Returning a partial list here instead would let the reconcile in azure_login
     deactivate subscriptions just because ARM was briefly unreachable.
     """
-    src = _read(BILLING)
+    src = _read(SUBSCRIPTIONS_MOD)
     match = re.search(r"^def fetch_subscriptions\(.*?(?=^def |\Z)", src, re.S | re.M)
 
     def _boom(_url, **_kw):

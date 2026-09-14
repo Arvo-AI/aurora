@@ -96,7 +96,7 @@ echo "Creating service principals..."
 # reports that as a bare "Insufficient privileges", which reads like an RBAC problem;
 # translate it into the actual remedy. Probing the tenant policy up front instead would
 # be unreliable: reading it needs Policy.Read.All, which a restricted member also lacks.
-# This is the first mutation in the script, so failing here leaves nothing behind.
+# Nothing is assigned before this point, and a half-created pair is rolled back below.
 create_sp() {  # create_sp <display-name>
   local out err rc=0
   # stderr to a temp file, not 2>&1: az writes deprecation notices there, and folding
@@ -116,16 +116,26 @@ create_sp() {  # create_sp <display-name>
   Subscription Owner does not grant directory permissions. Ask an Entra ID admin for one of:
     - Entra ID > Users > User settings > 'Users can register applications' = Yes, or
     - the Application Developer role on your account (Application Administrator also works).
-  Then re-run this script. Nothing was created."
+  Then re-run this script. No role assignments were changed."
       ;;
   esac
   die "Could not create $1: ${msg%%$'\n'*}"
 }
 
 AGENT_SP="$(create_sp "Aurora-Agent-$STAMP")"
-RO_SP="$(create_sp "Aurora-ReadOnly-$STAMP")"
-
 AGENT_ID="$(jq -r .clientId <<<"$AGENT_SP")"
+
+# Roll the agent principal back if the second creation fails. Otherwise it survives as
+# an untracked identity whose secret was never printed, so it cannot be used and is
+# tedious to find later. Deleting only what this run created keeps earlier pairs and
+# any unrelated Aurora-* app intact.
+if ! RO_SP="$(create_sp "Aurora-ReadOnly-$STAMP")"; then
+  echo "Rolling back: deleting Aurora-Agent-$STAMP" >&2
+  az ad app delete --id "$AGENT_ID" >/dev/null 2>&1 \
+    || echo "  could not delete it; remove manually: az ad app delete --id $AGENT_ID" >&2
+  exit 1
+fi
+
 AGENT_SECRET="$(jq -r .clientSecret <<<"$AGENT_SP")"
 RO_ID="$(jq -r .clientId <<<"$RO_SP")"
 RO_SECRET="$(jq -r .clientSecret <<<"$RO_SP")"

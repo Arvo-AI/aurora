@@ -13,7 +13,7 @@ from utils.auth.token_management import get_token_data
 from utils.auth.stateless_auth import get_org_id_from_request
 from utils.auth.cloud_auth import generate_azure_access_token
 from utils.db.connection_utils import get_all_user_connections
-from connectors.azure_connector.billing import fetch_subscriptions
+from connectors.azure_connector.subscriptions import fetch_subscriptions
 from utils.log_sanitizer import sanitize
 import json
 
@@ -210,22 +210,3 @@ def azure_subscriptions_get(user_id):
         return jsonify({"error": "Failed to process Azure subscriptions"}), 500
 
 
-@azure_bp.route("/api/azure-subscriptions", methods=["POST"])
-@require_permission("connectors", "write")
-def azure_subscriptions_post(user_id):
-    """Retired: subscription scope is set in Azure, not here.
-
-    This used to flip user_connections.status so the UI could toggle a
-    subscription off. It was never a real boundary -- the service principal keeps
-    its Azure role assignments either way, and any call passing an explicit
-    subscription id bypassed the status filter entirely. Scope belongs where it
-    is enforced: re-run setup-aurora-access.sh with a management group id.
-
-    Kept as an explicit 410 so a stale client fails loudly instead of silently
-    appearing to save. The status column itself is still used by disconnect.
-    """
-    return jsonify({
-        "error": "Subscription selection has been retired. Aurora uses every subscription "
-                 "the setup script granted access to. To narrow it, re-run "
-                 "setup-aurora-access.sh with a management group id.",
-    }), 410

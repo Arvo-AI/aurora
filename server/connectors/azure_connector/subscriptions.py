@@ -8,7 +8,7 @@ import requests
 # via generate_azure_access_token(user_id) from utils.auth.cloud_auth.py
 
 
-logging.info("Azure billing connector initialized - uses user-specific credentials via auth_tools")
+logging.info("Azure subscriptions connector initialized - uses user-specific credentials via auth_tools")
 
 def fetch_subscriptions(management_token):
     """Fetch all subscriptions accessible to the service principal (ID and name)."""

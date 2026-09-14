@@ -176,6 +176,21 @@ def _setup_provider_env(provider_name, user_id, credentials):
 
 
 def run_discovery_for_user(user_id, connected_providers):
+    """Run discovery, guaranteeing ephemeral credential dirs are removed.
+
+    Wrapper exists so cleanup also runs when the pipeline raises: Azure's
+    AZURE_CONFIG_DIR is a per-call mkdtemp, so an exception on the happy path would
+    otherwise leak one directory per discovery run.
+    """
+    cleanup = []
+    try:
+        return _run_discovery_for_user(user_id, connected_providers, cleanup)
+    finally:
+        for tmpdir in cleanup:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _run_discovery_for_user(user_id, connected_providers, _cleanup_dirs=None):
     """Run the full 3-phase discovery pipeline for a single user.
 
     Args:
@@ -212,10 +227,18 @@ def run_discovery_for_user(user_id, connected_providers):
     # Build authenticated environments for each provider (sequential — credential
     # setup may involve token refresh, STS calls, etc.)
     provider_envs = {}
+
     for provider_name, credentials in connected_providers.items():
         env, updated_creds = _setup_provider_env(provider_name, user_id, credentials)
         provider_envs[provider_name] = (env, updated_creds)
         connected_providers[provider_name] = updated_creds
+        # Register ephemeral credential dirs as soon as they exist, so the wrapper's
+        # finally removes them even if a later phase raises. Azure's AZURE_CONFIG_DIR
+        # is a per-call mkdtemp, so it would otherwise leak once per discovery run.
+        if isinstance(env, dict) and _cleanup_dirs is not None:
+            for key in ("_gcloud_tmpdir", "AZURE_CONFIG_DIR"):
+                if env.get(key):
+                    _cleanup_dirs.append(env[key])
 
     with ThreadPoolExecutor(max_workers=len(connected_providers)) as executor:
         futures = {}
@@ -406,11 +429,5 @@ def run_discovery_for_user(user_id, connected_providers):
         f"{total_nodes} nodes, {total_edges} edges, "
         f"{len(summary['errors'])} errors, {elapsed:.1f}s"
     )
-
-    # Clean up any ephemeral gcloud temp directories created during this run.
-    for env, _ in provider_envs.values():
-        tmpdir = env.get("_gcloud_tmpdir") if isinstance(env, dict) else None
-        if tmpdir:
-            shutil.rmtree(tmpdir, ignore_errors=True)
 
     return summary

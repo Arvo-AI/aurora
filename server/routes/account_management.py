@@ -375,6 +375,14 @@ def delete_connected_account(user_id, target_user_id, provider):
         # subscriptions to the agent and discovery.
         # --------------------------------------------------------------
         if provider_lc == "azure":
+            # Cached credentials include the client secret, so drop them before the
+            # rows: otherwise the revoked SP stays usable for the cache TTL.
+            try:
+                from chat.backend.agent.tools.auth.azure_cached_auth import clear_azure_cache_for_user
+                clear_azure_cache_for_user(user_id)
+            except Exception as e:
+                logging.warning("Failed to clear Azure credential cache for user %s: %s", user_id, e)
+
             from utils.db.connection_utils import (
                 get_all_user_connections,
                 delete_connection_secret,

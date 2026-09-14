@@ -197,8 +197,17 @@ def _query_batch(batch):
         elif isinstance(output, list):
             collected.extend(output)
 
-        if not next_token or next_token == skip_token:
+        if not next_token:
             return collected
+        # A repeated token means the service is not advancing: the page we just asked
+        # for came back pointing at itself. Treating that as completion would publish a
+        # partial inventory as a success, which is the same failure the cap below
+        # guards against, so fail the same way.
+        if next_token == skip_token:
+            raise ResourceGraphTruncatedError(
+                "Resource Graph returned a repeated skip token, so paging cannot advance; "
+                "refusing to publish a partial inventory"
+            )
         skip_token = next_token
 
     # Fail closed rather than returning `collected`: discovery maps whatever comes back

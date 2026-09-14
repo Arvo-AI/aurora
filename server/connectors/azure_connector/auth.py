@@ -1,7 +1,7 @@
 from flask import request, session, jsonify
 import os, logging
 from dotenv import load_dotenv
-from connectors.azure_connector.billing import fetch_subscriptions
+from connectors.azure_connector.subscriptions import fetch_subscriptions
 from utils.auth.token_management import store_tokens_in_db
 from utils.db.connection_utils import (
     save_connection_metadata,
