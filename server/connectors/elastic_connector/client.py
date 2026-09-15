@@ -306,10 +306,15 @@ def _flatten(obj: Any, prefix: str = "", out: Optional[Dict[str, Any]] = None) -
 
 
 def client_from_credentials(creds: Optional[Dict[str, Any]]) -> Optional["ElasticClient"]:
-    """Build a client from stored connector credentials; None when the record is incomplete."""
-    if not creds or not creds.get("api_key") or not creds.get("elasticsearch_url"):
+    """Build a client from stored connector credentials; None when the record is incomplete or malformed."""
+    if not isinstance(creds, dict):
         return None
-    return ElasticClient(creds["elasticsearch_url"], creds["api_key"], kibana_url=creds.get("kibana_url"))
+    es_url, api_key, kibana_url = creds.get("elasticsearch_url"), creds.get("api_key"), creds.get("kibana_url")
+    if not isinstance(es_url, str) or not es_url or not isinstance(api_key, str) or not api_key:
+        return None
+    if kibana_url is not None and not isinstance(kibana_url, str):
+        return None
+    return ElasticClient(es_url, api_key, kibana_url=kibana_url or None)
 
 
 def get_elastic_client_for_user(user_id: Optional[str]) -> Tuple[Optional["ElasticClient"], Optional[str]]:
