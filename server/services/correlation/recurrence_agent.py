@@ -238,16 +238,12 @@ def _incident_index_lines(index_content: Optional[str]) -> list:
         return [
             header,
             "",
-            "(empty) — no index yet. Use the recent-incidents list below and "
-            "list_incidents/get_incident to find any prior related incident.",
+            "(empty) — no index yet. Use the recent-incidents list below and list_incidents/get_incident to find any prior related incident.",
         ]
     return [
         header,
         "",
-        "Each line is `- [INC <id> | <date> | <service> | <status>] <synopsis>`. "
-        "To confirm a candidate, call get_incident(<id>) for its full conclusion "
-        "before claiming a recurrence. Same monitor or service is NOT enough — "
-        "the root cause must match.",
+        "Each line is `- [INC <id> | <date> | <service> | <status>] <synopsis>`. To confirm a candidate, call get_incident(<id>) for its full conclusion before claiming a recurrence. Same monitor or service is NOT enough — the root cause must match.",
         "",
         index_content.strip(),
     ]
