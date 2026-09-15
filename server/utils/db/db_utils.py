@@ -3318,14 +3318,21 @@ def initialize_tables():
                     ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS category VARCHAR(50);
                     ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS description TEXT;
                 """)
-                # Set default before NOT NULL so new rows inserted mid-migration are safe
+                # Set default before NOT NULL so new rows inserted mid-migration are safe.
+                # Pre-migration rows were all written by the artifact store (system-maintained),
+                # so 'artifact' is the correct default and backfill value — see backfill note below.
                 cursor.execute("""
-                    ALTER TABLE artifacts ALTER COLUMN category SET DEFAULT 'context';
+                    ALTER TABLE artifacts ALTER COLUMN category SET DEFAULT 'artifact';
                 """)
                 # FORCE RLS is already active — temporarily disable so backfill can reach all rows
                 cursor.execute("ALTER TABLE artifacts NO FORCE ROW LEVEL SECURITY")
+                # Backfill legacy rows to 'artifact', NOT 'context': every pre-migration row was
+                # created by services/artifacts/store.py:upsert_artifact_by_title, which inserts
+                # category='artifact' and relies on ON CONFLICT (org_id, category, title) for
+                # idempotency. Stamping them 'context' would make that conflict clause miss on
+                # existing titles, so each subsequent agent/UI write would INSERT a duplicate row.
                 cursor.execute("""
-                    UPDATE artifacts SET category = 'context'
+                    UPDATE artifacts SET category = 'artifact'
                     WHERE category IS NULL OR category = ''
                 """)
                 cursor.execute("ALTER TABLE artifacts FORCE ROW LEVEL SECURITY")
