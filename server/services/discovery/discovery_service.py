@@ -137,6 +137,11 @@ def _setup_provider_env(provider_name, user_id, credentials):
                     "client_secret": env.get("AZURE_CLIENT_SECRET", ""),
                     "subscription_id": resolved_sub or subscription_id,
                 }
+                # The isolated AZURE_CONFIG_DIR is a per-call mkdtemp, but discovery
+                # never uses it: _az_login runs without env=, so it authenticates into
+                # the worker's default ~/.azure. Drop it here or it leaks once per run.
+                if env.get("AZURE_CONFIG_DIR"):
+                    shutil.rmtree(env["AZURE_CONFIG_DIR"], ignore_errors=True)
                 return None, creds  # Azure provider builds its own env from credentials
 
         elif provider_name == "ovh":
@@ -233,12 +238,11 @@ def _run_discovery_for_user(user_id, connected_providers, _cleanup_dirs=None):
         provider_envs[provider_name] = (env, updated_creds)
         connected_providers[provider_name] = updated_creds
         # Register ephemeral credential dirs as soon as they exist, so the wrapper's
-        # finally removes them even if a later phase raises. Azure's AZURE_CONFIG_DIR
-        # is a per-call mkdtemp, so it would otherwise leak once per discovery run.
+        # finally removes them even if a later phase raises. Azure is absent here on
+        # purpose: its branch drops its own mkdtemp before returning creds.
         if isinstance(env, dict) and _cleanup_dirs is not None:
-            for key in ("_gcloud_tmpdir", "AZURE_CONFIG_DIR"):
-                if env.get(key):
-                    _cleanup_dirs.append(env[key])
+            if env.get("_gcloud_tmpdir"):
+                _cleanup_dirs.append(env["_gcloud_tmpdir"])
 
     with ThreadPoolExecutor(max_workers=len(connected_providers)) as executor:
         futures = {}
