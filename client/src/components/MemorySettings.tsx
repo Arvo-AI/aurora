@@ -46,6 +46,7 @@ import {
   type MemoryCategory,
   type MemoryEntry,
   USER_WRITABLE_CATEGORIES,
+  SYSTEM_CATEGORY,
   CATEGORY_META,
   formatEditedBy,
 } from "@/lib/memory-constants";
@@ -560,6 +561,9 @@ export function MemorySettings() {
             <div className="space-y-2">
               {filteredEntries.map((entry) => {
                 const meta = CATEGORY_META[entry.category] || CATEGORY_META.artifact;
+                // System-maintained entries (e.g. the Incident Index) are read-only:
+                // users can view them but can't recategorize or delete them.
+                const isSystem = entry.category === SYSTEM_CATEGORY;
                 return (
                   <div
                     key={entry.id}
@@ -572,7 +576,7 @@ export function MemorySettings() {
                       <div className="min-w-0">
                         <p className="font-medium truncate">{entry.title}</p>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          {canWrite ? (
+                          {canWrite && !isSystem ? (
                             <Select
                               value={entry.category}
                               onValueChange={(v) => handleCategoryChange(entry.id, v as MemoryCategory)}
@@ -591,6 +595,7 @@ export function MemorySettings() {
                           ) : (
                             <Badge variant="secondary" className={`text-xs px-1.5 py-0 ${meta.color}`}>
                               {meta.label}
+                              {isSystem && " · System"}
                             </Badge>
                           )}
                           {entry.description && (
@@ -606,7 +611,7 @@ export function MemorySettings() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
-                      {canWrite && (
+                      {canWrite && !isSystem && (
                         <>
                           <Button
                             variant="ghost"

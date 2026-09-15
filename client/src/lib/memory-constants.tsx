@@ -20,6 +20,9 @@ export const MEMORY_CATEGORIES = [
 // Categories users can manually create/upload and filter by — excludes artifact (internal system category)
 export const USER_WRITABLE_CATEGORIES = ["context", "runbook", "infrastructure", "learned", "postmortem"] as const;
 
+// The system-maintained category — users may view these entries but not edit/delete them.
+export const SYSTEM_CATEGORY = "artifact";
+
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 export const CATEGORY_META: Record<MemoryCategory, { label: string; icon: React.ReactNode; color: string }> = {
