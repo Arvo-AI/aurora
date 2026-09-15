@@ -23,6 +23,34 @@ app.kubernetes.io/part-of: aurora
 {{- end }}
 
 {{/*
+Resolve a fully-qualified image reference for a given Aurora image.
+Pass a dict with "image" (one of: server, frontend) and "global" (top-level context).
+
+Precedence:
+  1. image.digests.<name> set  -> registry/aurora-<name>@sha256:...  (immutable, preferred)
+  2. otherwise                 -> registry/aurora-<name>:<tag|appVersion>
+
+Digest pinning wins over tag so a released chart can only ever run one exact
+binary. CI stamps digests into a generated values file at release time.
+Usage: image: {{ include "aurora.image" (dict "image" "server" "global" $) | quote }}
+*/}}
+{{- define "aurora.image" -}}
+{{- $name := .image -}}
+{{- $ctx := .global -}}
+{{- $registry := $ctx.Values.image.registry -}}
+{{- $digest := "" -}}
+{{- if $ctx.Values.image.digests -}}
+{{- $digest = index $ctx.Values.image.digests $name -}}
+{{- end -}}
+{{- if $digest -}}
+{{- printf "%s/aurora-%s@%s" $registry $name $digest -}}
+{{- else -}}
+{{- $tag := $ctx.Values.image.tag | default $ctx.Chart.AppVersion -}}
+{{- printf "%s/aurora-%s:%s" $registry $name $tag -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Pod scheduling block (tolerations, nodeSelector, affinity).
 Pass a dict with "service" (key into .Values.scheduling) and "global" (top-level context).
 When scheduling.<service> is set, it fully replaces the global defaults for that service.

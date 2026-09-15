@@ -68,8 +68,15 @@ image:
   # Container registry where images are stored
   registry: "your-registry"  #Examples: docker.io/myorg, gcr.io/project-id, ghcr.io/myorg
   
-  # Image tag (version) to deploy
-  tag: "latest"
+  # Image tag to deploy. Empty = track the chart's appVersion (recommended).
+  # Pin a specific tag (e.g. sha-<short>) to override; avoid "latest" (mutable).
+  tag: ""
+
+  # Optional: pin images by immutable digest (takes precedence over tag).
+  # Releases ship these in values.images-<version>.yaml; empty = deploy by tag.
+  digests: {}
+    # server: "sha256:..."
+    # frontend: "sha256:..."
   
   # Optional: Pull secrets for private registries
   # pullSecrets:
