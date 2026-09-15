@@ -129,6 +129,11 @@ def test_new_connector_entries_present_and_gated():
         "sentry_list_issues": "sentry",
         "sentry_list_events": "sentry",
         "grafana_list_alerts": "grafana",
+        "elastic_list_indices": "elastic",
+        "elastic_get_fields": "elastic",
+        "elastic_active_alerts": "elastic",
+        "elastic_list_rules": "elastic",
+        "elastic_list_alerts": "elastic",
     }
     for name, skill in expected.items():
         assert name in by_name, f"{name} missing from allowlist"

@@ -10,12 +10,32 @@ from datetime import datetime
 from connectors.slack_connector.client import SlackClient, get_slack_client_for_user
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
+from utils.notifications.slack_threading import (
+    KEPT_REPLIES,
+    LOOKUP_FAILED,
+    build_fold_pointer,
+    build_folded_stub,
+    build_recurrence_footer,
+    build_recurrence_reply,
+    clear_anchor_message_ts,
+    clear_child_started_message,
+    error_block,
+    escape_mrkdwn,
+    escaped_fields,
+    is_folded_child,
+    lookup_message,
+    placed_thread_ts,
+    post_with_thread_fallback,
+    record_thread_parent,
+    try_post_threaded,
+    try_update_in_place,
+    update_anchor_recurrence_footer,
+)
 
 logger = logging.getLogger(__name__)
 
 SLACK_MAX_BLOCKS = 50
 FRONTEND_URL = os.getenv("FRONTEND_URL")
-_DEFAULT_ALERT_TITLE = "Unknown Alert"
 
 
 def _get_incidents_channel_id(user_id: str, client: SlackClient) -> Optional[str]:
@@ -84,12 +104,10 @@ def send_slack_investigation_started_notification(user_id: str, incident_data: D
             logger.error(f"[SlackNotification] Could not find incidents channel for user {user_id}")
             return False
         
-        # Extract incident data
+        # Extract incident data (mrkdwn-escaped: titles come from webhooks)
         incident_id = incident_data.get('incident_id', 'unknown')
-        alert_title = incident_data.get('alert_title', _DEFAULT_ALERT_TITLE)
-        severity = incident_data.get('severity', 'unknown')
-        service = incident_data.get('service', 'unknown')
-        source_type = incident_data.get('source_type', 'monitoring platform')
+        alert_title, severity, service = escaped_fields(incident_data)
+        source_type = escape_mrkdwn(incident_data.get('source_type', 'monitoring platform'))
         started_at = incident_data.get('started_at')
         
         # Format data
@@ -140,53 +158,155 @@ def send_slack_investigation_started_notification(user_id: str, incident_data: D
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*Alert:* {alert_title}\n*Severity:* {severity.title()}\n*Service:* {service}\n*Status:* In Progress\n\nAurora is analyzing this incident from {source_type}"
+                    "text": f"*Alert:* {alert_title}\n*Severity:* {severity}\n*Service:* {service}\n*Status:* In Progress\n\nAurora is analyzing this incident from {source_type}"
                 }
             }
         ]
         
         # Validate blocks
         from routes.slack.slack_events_helpers import validate_slack_blocks
+        text = f"Investigation Started: {alert_title}"  # Fallback text
         if not validate_slack_blocks(blocks):
-            logger.error(f"[SlackNotification] Block validation failed for 'started' notification")
-            # Fallback to simple text
-            simple_text = f"*Investigation Started*\n\n{alert_title}\n\nView: {incident_url}"
-            result = client.send_message(channel=channel_id, text=simple_text)
-            return result is not None
-        
-        # Send message
-        result = client.send_message(
-            channel=channel_id,
-            text=f"Investigation Started: {alert_title}",  # Fallback text
-            blocks=blocks
-        )
-        
-        if result:
-            # Store message timestamp in database for later updates
-            message_ts = result.get('ts')
-            if message_ts:
-                try:
-                    with db_pool.get_admin_connection() as conn:
-                        with conn.cursor() as cursor:
-                            set_rls_context(cursor, conn, user_id, log_prefix="[SlackNotification:storeTs]")
-                            cursor.execute(
-                                "UPDATE incidents SET slack_message_ts = %s WHERE id = %s",
-                                (message_ts, incident_id)
-                            )
-                            conn.commit()
-                except Exception as e:
-                    logger.warning(f"[SlackNotification] Failed to store message timestamp: {e}", exc_info=True)
-            
-            logger.info(f"[SlackNotification] Sent 'started' notification for incident {incident_id}")
-            return True
-        else:
-            logger.warning(f"[SlackNotification] Failed to send 'started' notification")
-            return False
+            logger.error("[SlackNotification] Block validation failed for 'started' notification")
+            text, blocks = f"*Investigation Started*\n\n{alert_title}\n\nView: {incident_url}", None
+
+        # A late or re-started investigation joins the incident's existing
+        # thread (e.g. a Failed card the stall sweep already posted) instead
+        # of opening a second top-level card. The post becomes the thread
+        # parent only when it landed top-level and no live parent is stored.
+        stored_ts = incident_data.get('slack_message_ts')
+        result = post_with_thread_fallback(client, channel=channel_id, text=text, blocks=blocks, thread_ts=stored_ts)
+        record_thread_parent(client, channel=channel_id, user_id=user_id, incident_id=incident_id,
+                             result=result, stored=stored_ts)
+        logger.info(f"[SlackNotification] Sent 'started' notification for incident {incident_id}")
+        return True
             
     except Exception:
         logger.exception("[SlackNotification] Error sending started notification")
         return False
     
+def _post_recurrence_reply(client: SlackClient, channel_id: str, user_id: str, incident_data: Dict[str, Any], *,
+                           incident_url: str, error_text: Optional[str] = None) -> bool:
+    """Folded child: compact reply under the anchor's Started message, then
+    retire the child's own Started message. False when the incident is not a
+    folded child, the anchor has no live thread parent, or the reply could
+    not be threaded (the caller posts the full card instead)."""
+    thread_ts = incident_data.get('anchor_slack_message_ts')
+    if not is_folded_child(incident_data) or not thread_ts:
+        return False
+    incident_id = incident_data.get('incident_id')
+    anchor_id = incident_data['recurrence_of']
+    anchor_message = lookup_message(client, channel=channel_id, ts=thread_ts)
+    if anchor_message is None:
+        # Forget it so later siblings stop trying; this incident is then
+        # placed like a standalone one (_post_incident_card).
+        logger.info(f"[SlackNotification] Anchor {anchor_id} thread parent {thread_ts} is gone; forgetting it")
+        clear_anchor_message_ts(user_id, anchor_id, thread_ts)
+        return False
+    from routes.slack.slack_events_helpers import validate_slack_blocks
+    anchor_url = _get_incident_url(anchor_id)
+    text, reply_blocks = build_recurrence_reply(
+        incident_data, incident_url=incident_url, anchor_url=anchor_url, error_text=error_text,
+    )
+    result = try_post_threaded(
+        client,
+        channel=channel_id,
+        text=text,
+        blocks=reply_blocks if validate_slack_blocks(reply_blocks) else None,
+        thread_ts=thread_ts,
+        require_threaded=True,
+    )
+    if not result:
+        return False
+    if placed_thread_ts(result) != thread_ts:
+        # A stray top-level compact card that could not be removed: it is
+        # visible, so no second card — but the child's Started message stays
+        # its thread key.
+        logger.warning(
+            f"[SlackNotification] Recurrence reply for {incident_id} landed top-level "
+            f"(anchor {thread_ts} gone); keeping its Started message"
+        )
+        return True
+    logger.info(
+        f"[SlackNotification] Posted {'failed' if error_text else 'completed'} as recurrence reply for "
+        f"{incident_id} under anchor {anchor_id}"
+    )
+    # The channel view only shows the anchor card: mark it as still firing
+    # (reusing the lookup above instead of fetching the card again).
+    update_anchor_recurrence_footer(
+        client, channel=channel_id, anchor_ts=thread_ts, incident_data=incident_data,
+        message=None if anchor_message is LOOKUP_FAILED else anchor_message,
+    )
+    outcome = clear_child_started_message(client, channel=channel_id, user_id=user_id, incident_data=incident_data)
+    if outcome == KEPT_REPLIES:
+        # People are talking in the child's own thread: turn its card into a
+        # pointer to the anchor instead of leaving it "In Progress" forever,
+        # and post one line in the thread so its followers are told.
+        stub_text, stub_blocks = build_folded_stub(
+            incident_data, incident_url=incident_url, anchor_url=anchor_url, error_text=error_text,
+        )
+        try:
+            try_update_in_place(
+                client, channel=channel_id, ts=incident_data['slack_message_ts'], text=stub_text,
+                blocks=stub_blocks if validate_slack_blocks(stub_blocks) else None,
+            )
+            try_post_threaded(
+                client, channel=channel_id, text=build_fold_pointer(incident_data, anchor_url=anchor_url),
+                blocks=None, thread_ts=incident_data['slack_message_ts'], require_threaded=True,
+            )
+        except Exception as e:
+            # Best effort: the outcome already landed in the anchor's thread.
+            logger.warning(f"[SlackNotification] Could not mark kept Started card for {incident_id} as folded: {e}")
+    return True
+
+
+def _post_incident_card(client: SlackClient, channel_id: str, user_id: str, incident_data: Dict[str, Any], *,
+                        kind: str, blocks: list, error_text: Optional[str] = None) -> bool:
+    """Full Complete/Failed card for the incident. The incident's own Started
+    message is updated in place into the final card when Slack still has it
+    (thread and ts preserved), otherwise the card is posted under it, or
+    top-level when there is no Started message at all. A Failed card never
+    replaces the card of an investigation that already produced a result
+    (analyzed_at set — a follow-up chat or the stall sweep failing after the
+    RCA completed): it is threaded under it instead. A group root's card
+    keeps its recurrence footer. A top-level post becomes the incident's own
+    thread parent — never another incident's, since slack_message_ts also
+    routes @mentions to the incident it belongs to."""
+    incident_id = incident_data.get('incident_id', 'unknown')
+    alert_title = escaped_fields(incident_data)[0]
+    incident_url = _get_incident_url(incident_id)
+    if not is_folded_child(incident_data) and (incident_data.get('group_size') or 1) > 1:
+        # Rebuilding the anchor's card must not drop what its recurrences added.
+        blocks = [*blocks, build_recurrence_footer(incident_data)]
+    if kind == "failed":
+        text = f"Investigation Failed: {alert_title}"
+        simple_text = (
+            f"*Investigation Failed*\n\n{alert_title}\n\nError: {escape_mrkdwn(error_text)}"
+            f"\n\nView incident: {incident_url}"
+        )
+    else:
+        text = f"Analysis Complete: {alert_title}"
+        simple_text = f"*Analysis Complete*\n\n{alert_title}\n\nView full report: {incident_url}"
+    from routes.slack.slack_events_helpers import validate_slack_blocks
+    if not validate_slack_blocks(blocks):
+        logger.error(f"[SlackNotification] Block validation failed for incident {incident_id}")
+        text, blocks = simple_text, None
+    stored_ts = incident_data.get('slack_message_ts')
+    replace_in_place = kind == "completed" or not incident_data.get('analyzed_at')
+    if stored_ts and replace_in_place and try_update_in_place(client, channel=channel_id, ts=stored_ts, text=text, blocks=blocks):
+        logger.info(f"[SlackNotification] Replaced Started message {stored_ts} with the '{kind}' card for incident {incident_id}")
+        return True
+    result = post_with_thread_fallback(client, channel=channel_id, text=text, blocks=blocks, thread_ts=stored_ts)
+    placed_in = placed_thread_ts(result)
+    record_thread_parent(client, channel=channel_id, user_id=user_id, incident_id=incident_id,
+                         result=result, stored=stored_ts)
+    logger.info(
+        f"[SlackNotification] Sent '{kind}' notification for incident {incident_id}"
+        + (f" in thread {placed_in}" if placed_in else " top-level")
+    )
+    return True
+
+
 def send_slack_investigation_completed_notification(
     user_id: str,
     incident_data: Dict[str, Any]
@@ -206,6 +326,17 @@ def send_slack_investigation_completed_notification(
             - analyzed_at: Investigation completion timestamp
             - aurora_summary: RCA summary text
             - status: Incident status
+            - slack_message_ts: This incident's "Investigation Started" ts (thread parent)
+            - recurrence_of: Anchor incident id when folded (dedup layer 1), else None
+            - anchor_slack_message_ts: Anchor's "Investigation Started" ts
+            - anchor_alert_title: Anchor's alert title
+            - occurrence_number / group_size: Position in the recurrence group
+
+    Placement (dedup layer 3): standalone → threaded under its own Started
+    message; folded child → compact "Still firing" reply under the anchor's
+    message and the child's own Started message is retired. A child whose
+    anchor thread is unavailable is placed like a standalone incident, and a
+    missing Started message means today's top-level full card.
             
     Returns:
         True if message sent successfully, False otherwise
@@ -220,17 +351,17 @@ def send_slack_investigation_completed_notification(
             logger.error(f"[SlackNotification] Could not find incidents channel for user {user_id}")
             return False
         
-        # Extract incident data
         incident_id = incident_data.get('incident_id', 'unknown')
-        alert_title = incident_data.get('alert_title', _DEFAULT_ALERT_TITLE)
-        severity = incident_data.get('severity', 'unknown')
-        service = incident_data.get('service', 'unknown')
-        started_at = incident_data.get('started_at')
-        analyzed_at = incident_data.get('analyzed_at')
-        aurora_summary = incident_data.get('aurora_summary') or 'Analysis in progress...'
-        
-        # Format data
         incident_url = _get_incident_url(incident_id)
+
+        if _post_recurrence_reply(client, channel_id, user_id, incident_data, incident_url=incident_url):
+            return True
+        # Standalone, or a folded child whose anchor thread is unavailable:
+        # the full card under this incident's own Started message.
+
+        # Extract incident data (mrkdwn-escaped: titles come from webhooks)
+        alert_title, severity, service = escaped_fields(incident_data)
+        aurora_summary = incident_data.get('aurora_summary') or 'Analysis in progress...'
         
         # Extract summary section (before "Suggested Next Steps") and format for Slack
         from routes.slack.slack_events_helpers import (
@@ -305,7 +436,7 @@ def send_slack_investigation_completed_notification(
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*Alert:* {alert_title}\n*Severity:* {severity.title()}\n*Service:* {service}"
+                    "text": f"*Alert:* {alert_title}\n*Severity:* {severity}\n*Service:* {service}"
                 }
             },
             {
@@ -342,29 +473,8 @@ def send_slack_investigation_completed_notification(
             logger.warning(f"[SlackNotification] Truncating blocks from {len(blocks)} to {SLACK_MAX_BLOCKS - 5}")
             blocks = blocks[:SLACK_MAX_BLOCKS - 5]
         
-        # Validate blocks before sending
-        from routes.slack.slack_events_helpers import validate_slack_blocks
-        if not validate_slack_blocks(blocks):
-            logger.error(f"[SlackNotification] Block validation failed for incident {incident_id}")
-            # Fallback to simple text message
-            simple_text = f"*Analysis Complete*\n\n{alert_title}\n\nView full report: {incident_url}"
-            result = client.send_message(
-                channel=channel_id,
-                text=simple_text
-            )
-            return result is not None
-        
-        result = client.send_message(
-            channel=channel_id,
-            text=f"Analysis Complete: {alert_title}",
-            blocks=blocks
-        )
-        
-        if result:
-            return True
-        else:
-            return False
-            
+        return _post_incident_card(client, channel_id, user_id, incident_data, kind="completed", blocks=blocks)
+
     except Exception:
         logger.exception("[SlackNotification] Error sending completed notification")
         return False
@@ -380,8 +490,13 @@ def send_slack_investigation_failed_notification(
 
     Args:
         user_id: User ID
-        incident_data: Dictionary containing incident details
+        incident_data: Dictionary containing incident details (same keys as
+            the completed notification, including the recurrence-group fields)
         error_message: Optional error description
+
+    Placement follows the completed notification: threaded under the
+    incident's own Started message, or a compact failed reply under the
+    anchor's message for a folded child.
 
     Returns:
         True if message sent successfully, False otherwise
@@ -396,15 +511,17 @@ def send_slack_investigation_failed_notification(
             return False
 
         incident_id = incident_data.get('incident_id', 'unknown')
-        alert_title = incident_data.get('alert_title', _DEFAULT_ALERT_TITLE)
-        severity = incident_data.get('severity', 'unknown')
-        service = incident_data.get('service', 'unknown')
-
         incident_url = _get_incident_url(incident_id)
 
         error_text = error_message or "The investigation encountered an error and could not complete."
         if len(error_text) > 300:
             error_text = error_text[:300] + "..."
+
+        if _post_recurrence_reply(client, channel_id, user_id, incident_data,
+                                  incident_url=incident_url, error_text=error_text):
+            return True
+
+        alert_title, severity, service = escaped_fields(incident_data)
 
         blocks = [
             {
@@ -434,37 +551,17 @@ def send_slack_investigation_failed_notification(
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*Alert:* {alert_title}\n*Severity:* {severity.title()}\n*Service:* {service}"
+                    "text": f"*Alert:* {alert_title}\n*Severity:* {severity}\n*Service:* {service}"
                 }
             },
             {
                 "type": "divider"
             },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f":x: *Error:* {error_text}"
-                }
-            }
+            error_block(error_text),
         ]
 
-        from routes.slack.slack_events_helpers import validate_slack_blocks
-        if not validate_slack_blocks(blocks):
-            simple_text = f"*Investigation Failed*\n\n{alert_title}\n\nError: {error_text}\n\nView incident: {incident_url}"
-            result = client.send_message(channel=channel_id, text=simple_text)
-            return result is not None
-
-        result = client.send_message(
-            channel=channel_id,
-            text=f"Investigation Failed: {alert_title}",
-            blocks=blocks
-        )
-
-        if result:
-            logger.info(f"[SlackNotification] Sent 'failed' notification for incident {incident_id}")
-            return True
-        return False
+        return _post_incident_card(client, channel_id, user_id, incident_data, kind="failed", blocks=blocks,
+                                   error_text=error_text)
 
     except Exception:
         logger.exception("[SlackNotification] Error sending failed notification")

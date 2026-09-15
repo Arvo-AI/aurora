@@ -20,7 +20,7 @@ Deploy Aurora on any Kubernetes cluster using Helm.
 - **GCP GKE / Azure AKS:** Create a cluster with default settings
 
 :::note Third-party images
-Aurora deploys several third-party images from public registries. Your nodes must be able to pull: `postgres:15-alpine`, `redis:7-alpine`, `hashicorp/vault:1.15`, `cr.weaviate.io/semitechnologies/weaviate:1.27.6`, `searxng/searxng:*`, `memgraph/memgraph-mage:3.8.1`, `cr.weaviate.io/semitechnologies/transformers-inference:*`. Optional components (e.g. `services.minio.enabled: true`) may pull additional images. For air-gapped clusters, mirror these to a private registry and review enabled services in your `values.yaml`.
+Aurora deploys several third-party images from public registries. Your nodes must be able to pull: `postgres:15-alpine`, `redis:7-alpine`, `hashicorp/vault:1.15`, `searxng/searxng:*`, `memgraph/memgraph-mage:3.8.1`. Optional components (e.g. `services.minio.enabled: true`) may pull additional images. For air-gapped clusters, mirror these to a private registry and review enabled services in your `values.yaml`.
 :::
 
 ### Required tools
@@ -57,8 +57,8 @@ The key values you'll set during deployment:
 config:
   LLM_PROVIDER_MODE: "openrouter"  # or "vertex", "anthropic", "openai", "bedrock"
   # For non-OpenRouter providers, also set:
-  # MAIN_MODEL: "vertex/gemini-2.5-pro"
-  # RCA_MODEL: "vertex/gemini-2.5-flash"
+  # MAIN_MODEL: "vertex/gemini-3.6-flash"
+  # RCA_MODEL: "vertex/gemini-3.6-flash"
 secrets:
   llm:
     OPENROUTER_API_KEY: ""  # or OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
@@ -188,8 +188,8 @@ config:
   STORAGE_REGION: "us-east-1"
   LLM_PROVIDER_MODE: "openrouter"     # see "LLM provider" above
   # For non-OpenRouter providers, uncomment and set:
-  # MAIN_MODEL: "vertex/gemini-2.5-pro"
-  # RCA_MODEL: "vertex/gemini-2.5-flash"
+  # MAIN_MODEL: "vertex/gemini-3.6-flash"
+  # RCA_MODEL: "vertex/gemini-3.6-flash"
 
 secrets:
   db:

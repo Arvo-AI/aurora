@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from celery_config import celery_app
@@ -14,39 +14,9 @@ from langchain_core.messages import HumanMessage
 from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.llm import ModelConfig
 from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
+from chat.backend.agent.utils.message_content import extract_text_from_content
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
-
-
-def _extract_text_from_response(content: Union[str, List[Any]]) -> str:
-    """Extract text content from LLM response, filtering out thinking blocks.
-
-    Gemini thinking models return content as a list with thinking and text blocks.
-    This extracts only the actual response text.
-    """
-    if isinstance(content, str):
-        return content.strip()
-
-    if isinstance(content, list):
-        text_parts = []
-        for part in content:
-            if isinstance(part, dict):
-                part_type = part.get("type", "")
-                if part_type in ("thinking", "reasoning"):
-                    continue
-                elif part_type == "text":
-                    text = part.get("text", "")
-                    if text:
-                        text_parts.append(str(text))
-                else:
-                    text = part.get("text", "")
-                    if text:
-                        text_parts.append(str(text))
-            elif isinstance(part, str):
-                text_parts.append(part)
-        return "".join(text_parts).strip()
-
-    return str(content).strip()
 
 
 from chat.background.citation_extractor import (
@@ -119,6 +89,20 @@ def _build_summary_prompt(
             key_details.append(f"Problem URL: {alert_metadata['problemUrl']}")
         if raw_payload.get("Tags"):
             key_details.append(f"Tags: {raw_payload['Tags']}")
+
+    elif source_type == "elastic":
+        if alert_metadata.get("ruleName"):
+            key_details.append(f"Kibana Rule: {alert_metadata['ruleName']}")
+        if alert_metadata.get("reason"):
+            key_details.append(f"Reason: {alert_metadata['reason']}")
+        if alert_metadata.get("value") is not None:
+            key_details.append(f"Value: {alert_metadata['value']}")
+        if alert_metadata.get("threshold") is not None:
+            key_details.append(f"Threshold: {alert_metadata['threshold']}")
+        if alert_metadata.get("tags"):
+            key_details.append(f"Tags: {json.dumps(alert_metadata['tags'])}")
+        if alert_metadata.get("viewInAppUrl"):
+            key_details.append(f"View in Kibana: {alert_metadata['viewInAppUrl']}")
 
     elif source_type == "pagerduty":
         if alert_metadata.get("incidentId"):
@@ -638,11 +622,7 @@ def generate_incident_summary(
             request_type="incident_initial_summary",
         )
 
-        summary = (
-            _extract_text_from_response(response.content)
-            if response.content
-            else "No summary generated"
-        )
+        summary = extract_text_from_content(response.content).strip() or "No summary generated"
 
         logger.info(
             f"{_LOG_PREFIX} Generated summary for incident {incident_id} ({len(summary)} chars)"
@@ -703,8 +683,13 @@ def generate_incident_summary(
 @celery_app.task(
     bind=True,
     name="chat.background.generate_incident_summary_from_chat",
-    time_limit=180,  # includes transcript fetch/format
-    soft_time_limit=150,
+    # Budget includes transcript fetch/format + the post-summary recurrence
+    # check. Invariant: RECURRENCE_AGENT_TIMEOUT_SECONDS (default 120) must
+    # stay well under soft_time_limit minus the summary-generation work, so
+    # the check's own asyncio.wait_for — not the Celery soft limit — is the
+    # bound that fires.
+    time_limit=420,
+    soft_time_limit=330,
     max_retries=2,
     default_retry_delay=10,
 )
@@ -713,9 +698,25 @@ def generate_incident_summary_from_chat(
     incident_id: str,
     user_id: str,
     session_id: str,
+    announce_completion: bool = True,
 ) -> Dict[str, Any]:
-    """Regenerate incident summary after RCA using the RCA chat transcript with citations."""
+    """Regenerate incident summary after RCA using the RCA chat transcript with citations.
+
+    announce_completion: False when the summary is being regenerated after a
+    follow-up chat (Slack/Google Chat reply on an existing incident). The
+    summary is still written; the "investigation completed" announcement
+    (email, Slack card) is skipped since the investigation already completed
+    once — for a folded recurrence it would otherwise post another "Still
+    firing" reply — and only the Google Chat card, which is edited in place,
+    is refreshed to match the new summary.
+    """
     from celery.exceptions import SoftTimeLimitExceeded
+
+    def _notify_completed() -> None:
+        from utils.notifications.dispatcher import notify_investigation_completed
+        if not announce_completion:
+            logger.info(f"{_LOG_PREFIX} Follow-up summary for {incident_id}; completion already announced, refreshing cards only")
+        notify_investigation_completed(user_id, incident_id, session_id=session_id, refresh_only=not announce_completion)
 
     logger.info(
         f"{_LOG_PREFIX} Regenerating summary from chat for incident {incident_id} (user={user_id}, session={session_id})"
@@ -728,6 +729,8 @@ def generate_incident_summary_from_chat(
     if not hook_allowed:
         logger.warning(f"{_LOG_PREFIX} Hook blocked for user {user_id}: {hook_message}")
         return {"incident_id": incident_id, "status": "hook_blocked", "error": hook_message}
+
+    summary_written = False  # guards the soft-limit handler's error overwrite
 
     try:
         basics = _fetch_incident_basics(incident_id, user_id=user_id)
@@ -804,11 +807,7 @@ def generate_incident_summary_from_chat(
             model_name=ModelConfig.EMAIL_REPORT_MODEL,
             request_type="incident_rca_summary",
         )
-        summary = (
-            _extract_text_from_response(response.content)
-            if response.content
-            else "No summary generated"
-        )
+        summary = extract_text_from_content(response.content).strip() or "No summary generated"
 
         logger.info(
             f"{_LOG_PREFIX} Generated chat-based summary for incident {incident_id} ({len(summary)} chars)"
@@ -864,10 +863,85 @@ def generate_incident_summary_from_chat(
             )
 
         _update_incident_summary(incident_id, summary, user_id=user_id)
+        summary_written = True
+
+        # Root-cause recurrence check (dedup layer 1): runs post-summary-write,
+        # pre-notification — fold-then-notify is the ordering that Slack threading
+        # (layer 3) reads. run_recurrence_check never raises internally
+        # and is bounded by its own asyncio.wait_for; this guard is belt and
+        # braces so notifications stay guaranteed. On task retry the existing
+        # verdict row makes the re-run a no-op.
+        recurrence_outcome = None
+        try:
+            from services.correlation.recurrence_agent import run_recurrence_check
+            recurrence_outcome = run_recurrence_check(
+                incident_id=incident_id,
+                user_id=user_id,
+                session_id=session_id,
+                decision_point="after",
+            )
+        except Exception:
+            logger.exception(
+                f"{_LOG_PREFIX} Recurrence check failed for {incident_id}; proceeding to notify"
+            )
+
+        # Record this incident in the Incident Index (fold-aware, best-effort).
+        try:
+            from services.memory.incident_index import (
+                append_incident_line,
+                generate_root_cause_synopsis,
+                record_recurrence,
+            )
+
+            date_iso = (basics.get("triggered_at") or "")[:10]
+            folded = bool(recurrence_outcome and recurrence_outcome.get("folded"))
+            root_id = recurrence_outcome.get("root_id") if recurrence_outcome else None
+
+            # Recurrence: extend the root's roll-up rather than add a new line.
+            if folded and root_id:
+                # Surface a lost roll-up (e.g. edit_memory exhausted its retries
+                # on a concurrent rewrite) instead of dropping the bool silently.
+                if not record_recurrence(
+                    user_id=user_id,
+                    root_id=str(root_id),
+                    recurred_id=incident_id,
+                    date_iso=date_iso,
+                ):
+                    logger.warning(
+                        f"{_LOG_PREFIX} Failed to roll incident {incident_id} "
+                        f"under root {root_id} in Incident Index"
+                    )
+            # New root (or shadow/off/no-check): add a fresh, richly-described line.
+            else:
+                synopsis = generate_root_cause_synopsis(
+                    user_id=user_id,
+                    session_id=session_id,
+                    alert_title=basics.get("alert_title") or "",
+                    service=basics.get("service") or "",
+                    summary=summary or "",
+                )
+                if not append_incident_line(
+                    user_id=user_id,
+                    incident_id=incident_id,
+                    date_iso=date_iso,
+                    service=basics.get("service") or "",
+                    status="resolved",
+                    alert_title=basics.get("alert_title") or "",
+                    summary=summary or "",
+                    synopsis=synopsis,
+                    session_id=session_id,
+                ):
+                    logger.warning(
+                        f"{_LOG_PREFIX} Failed to append incident {incident_id} "
+                        f"to Incident Index"
+                    )
+        except Exception:
+            logger.exception(
+                f"{_LOG_PREFIX} Incident Index maintenance failed for {incident_id}; proceeding to notify"
+            )
 
         # Send completion notifications via centralized dispatcher
-        from utils.notifications.dispatcher import notify_investigation_completed
-        notify_investigation_completed(user_id, incident_id, session_id=session_id)
+        _notify_completed()
 
         return {
             "incident_id": incident_id,
@@ -880,6 +954,21 @@ def generate_incident_summary_from_chat(
         logger.error(
             f"{_LOG_PREFIX} Timeout generating chat-based summary for incident {incident_id}"
         )
+        if summary_written:
+            # The summary itself completed; the soft limit fired during the
+            # post-summary work (recurrence check / notifications). Do NOT
+            # overwrite the good summary with an error — send the completion
+            # notification the task guarantees and finish.
+            try:
+                _notify_completed()
+            except Exception:
+                logger.exception(
+                    f"{_LOG_PREFIX} Failed to notify after soft-limit for {incident_id}"
+                )
+            return {
+                "incident_id": incident_id,
+                "status": "completed_soft_limit",
+            }
         _update_incident_summary(
             incident_id,
             "Summary generation timed out. View investigation chat for details.",

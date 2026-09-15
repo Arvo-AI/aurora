@@ -132,6 +132,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Splunk logo:', e)}
     />
   ),
+  elastic: (
+    <img
+      src="/elastic.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Elastic"
+      onError={(e) => console.error('Failed to load Elastic logo:', e)}
+    />
+  ),
   jenkins: (
     <img
       src="/jenkins.svg"
@@ -412,8 +420,9 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
     return 'web'
   }
 
-  // Knowledge base tool
-  if (tool === 'knowledge_base_search') {
+  // Memory tools
+  if (tool === 'list_memories' || tool === 'read_memory' || tool === 'write_memory'
+      || tool === 'append_to_memory' || tool === 'edit_memory' || tool === 'grep_memories') {
     return 'knowledgeBase'
   }
 
@@ -425,6 +434,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Splunk tools
   if (tool.includes('splunk') || tool === 'search_splunk' || tool === 'list_splunk_indexes' || tool === 'list_splunk_sourcetypes') {
     return 'splunk'
+  }
+
+  // Elastic tools
+  if (tool.startsWith('elastic_')) {
+    return 'elastic'
   }
 
   // CloudBees tools

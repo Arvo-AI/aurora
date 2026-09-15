@@ -907,6 +907,32 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_state ON splunk_alerts(alert_state);
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_received_at ON splunk_alerts(received_at DESC);
                 """,
+                "elastic_alerts": """
+                    CREATE TABLE IF NOT EXISTS elastic_alerts (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        alert_id VARCHAR(255),
+                        alert_uuid VARCHAR(255),
+                        alert_title TEXT,
+                        alert_state VARCHAR(50),
+                        rule_id VARCHAR(255),
+                        rule_name TEXT,
+                        rule_type VARCHAR(255),
+                        action_group VARCHAR(100),
+                        reason TEXT,
+                        severity VARCHAR(50),
+                        view_in_app_url TEXT,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_elastic_alerts_user_id ON elastic_alerts(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_elastic_alerts_org_uuid_state ON elastic_alerts(org_id, alert_uuid, alert_state);
+                    CREATE INDEX IF NOT EXISTS idx_elastic_alerts_state ON elastic_alerts(alert_state);
+                    CREATE INDEX IF NOT EXISTS idx_elastic_alerts_received_at ON elastic_alerts(received_at DESC);
+                """,
                 "incidentio_alerts": """
                     CREATE TABLE IF NOT EXISTS incidentio_alerts (
                         id SERIAL PRIMARY KEY,
@@ -1234,23 +1260,6 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_kb_documents_user_id ON knowledge_base_documents(user_id);
                     CREATE INDEX IF NOT EXISTS idx_kb_documents_status ON knowledge_base_documents(status);
                 """,
-                "incident_feedback": """
-                    CREATE TABLE IF NOT EXISTS incident_feedback (
-                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                        user_id VARCHAR(255) NOT NULL,
-                        org_id VARCHAR(255),
-                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
-                        feedback_type VARCHAR(20) NOT NULL,
-                        comment TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_incident_feedback_user_incident
-                    ON incident_feedback(user_id, incident_id);
-
-                    CREATE INDEX IF NOT EXISTS idx_incident_feedback_user_id ON incident_feedback(user_id);
-                    CREATE INDEX IF NOT EXISTS idx_incident_feedback_type ON incident_feedback(feedback_type);
-                """,
                 "postmortems": """
                     CREATE TABLE IF NOT EXISTS postmortems (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1282,13 +1291,14 @@ def initialize_tables():
                         user_id VARCHAR(255) NOT NULL,
                         title VARCHAR(500) NOT NULL,
                         content TEXT,
+                        category VARCHAR(50) NOT NULL,
+                        description TEXT,
                         last_edited_by VARCHAR(20) NOT NULL DEFAULT 'agent',
+                        last_edited_by_name VARCHAR(255),
                         current_version_id UUID,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
-
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_org_title ON artifacts(org_id, title);
                 """,
                 "artifact_versions": """
                     CREATE TABLE IF NOT EXISTS artifact_versions (
@@ -1353,6 +1363,35 @@ def initialize_tables():
                     ON rca_findings(incident_id, status);
                     CREATE INDEX IF NOT EXISTS idx_rca_findings_org_started
                     ON rca_findings(org_id, started_at DESC);
+                """,
+                # One row per recurrence-detection check (root-cause dedup layer 1).
+                # claimed_recurrence_of is the agent's verbatim claim (may be garbage,
+                # kept for audit); accepted_recurrence_of is the server-validated id.
+                # The unique (incident_id, decision_point) index makes Celery retries
+                # idempotent: a re-run sees the existing row and skips the check.
+                "recurrence_verdicts": """
+                    CREATE TABLE IF NOT EXISTS recurrence_verdicts (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        decision_point VARCHAR(10) NOT NULL DEFAULT 'after',
+                        mode VARCHAR(10) NOT NULL,
+                        claimed_recurrence_of TEXT,
+                        accepted_recurrence_of UUID REFERENCES incidents(id) ON DELETE SET NULL,
+                        reasoning TEXT,
+                        correlator_score FLOAT,
+                        folded BOOLEAN NOT NULL DEFAULT FALSE,
+                        reject_reason VARCHAR(30),
+                        elapsed_ms INTEGER,
+                        model VARCHAR(100),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_recurrence_verdicts_incident_point
+                        ON recurrence_verdicts(incident_id, decision_point);
+                    CREATE INDEX IF NOT EXISTS idx_recurrence_verdicts_org_created
+                        ON recurrence_verdicts(org_id, created_at DESC);
                 """,
                 "audit_log": """
                     CREATE TABLE IF NOT EXISTS audit_log (
@@ -1529,6 +1568,7 @@ def initialize_tables():
             rls_tables.append("datadog_events")
             rls_tables.append("netdata_alerts")
             rls_tables.append("splunk_alerts")
+            rls_tables.append("elastic_alerts")
             rls_tables.append("incidentio_alerts")
             rls_tables.append("bigpanda_events")
             rls_tables.append("jenkins_deployment_events")
@@ -1541,7 +1581,6 @@ def initialize_tables():
             # so they don't need RLS - incident_alerts is protected separately for safety
             rls_tables.append("incidents")
             rls_tables.append("incident_alerts")
-            rls_tables.append("incident_feedback")
             rls_tables.append("postmortems")
             rls_tables.append("postmortem_exports")
             rls_tables.append("incident_lifecycle_events")
@@ -1556,6 +1595,7 @@ def initialize_tables():
             rls_tables.append("artifacts")
             rls_tables.append("artifact_versions")
             rls_tables.append("hpa_vpa_recommendations")
+            rls_tables.append("recurrence_verdicts")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
@@ -1735,6 +1775,47 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(
                     f"Error adding change_gating_enabled column to connected_repos: {e}"
+                )
+                conn.rollback()
+
+            # Migration: Bitbucket Incident Prevention (DEV-1439).
+            # - webhook_hook_uuid: the Bitbucket repo hook UUID (when Aurora
+            #   managed to create the hook via API) so disable/disconnect can
+            #   delete it.
+            # - organizations.bitbucket_webhook_secret_ref: secrets-backend
+            #   reference for the org's webhook HMAC secret (one secret shared
+            #   by every repo hook in the org).
+            # - webhook_verified_at: when a delivery for this repo last passed
+            #   HMAC validation. Proof the hook is live that needs no API
+            #   scopes, unlike webhook_hook_uuid which only exists when Aurora
+            #   created the hook itself (requires repo admin).
+            # - webhook_verified_url: the delivery URL that verification was
+            #   for. When Aurora's public URL changes the old hook is dead, so
+            #   comparing against it turns a stale hook into a visible error
+            #   instead of a green badge that silently never fires.
+            try:
+                cursor.execute(
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS webhook_hook_uuid VARCHAR(64);"
+                )
+                cursor.execute(
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS webhook_verified_at TIMESTAMPTZ;"
+                )
+                cursor.execute(
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS webhook_verified_url TEXT;"
+                )
+                cursor.execute(
+                    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS bitbucket_webhook_secret_ref TEXT;"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured Bitbucket Incident Prevention columns exist "
+                    "(connected_repos.webhook_hook_uuid, connected_repos.webhook_verified_at, "
+                    "connected_repos.webhook_verified_url, "
+                    "organizations.bitbucket_webhook_secret_ref)."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding Bitbucket Incident Prevention columns: {e}"
                 )
                 conn.rollback()
 
@@ -2356,6 +2437,29 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Add recurrence_of_incident_id column to incidents table
+            # (root-cause dedup layer 1: pointer to the anchor incident this one
+            # is a recurrence of; index name/shape consumed verbatim by layer 2)
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS recurrence_of_incident_id UUID REFERENCES incidents(id) ON DELETE SET NULL;
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_incidents_recurrence
+                        ON incidents(recurrence_of_incident_id)
+                        WHERE recurrence_of_incident_id IS NOT NULL;
+                """)
+                logging.info(
+                    "Added recurrence_of_incident_id column to incidents table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error adding recurrence_of_incident_id column to incidents: {e}"
+                )
+                conn.rollback()
+
             # Add visualization columns to incidents table
             try:
                 cursor.execute("""
@@ -2899,7 +3003,7 @@ def initialize_tables():
                 "llm_usage_tracking", "cloud_feed_metadata", "cloud_ingestion_state",
                 "grafana_alerts", "datadog_events", "netdata_alerts",
                 "pagerduty_events", "opsgenie_events", "incidents", "incident_alerts",
-                "rca_notification_emails", "splunk_alerts",
+                "rca_notification_emails", "splunk_alerts", "elastic_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
                 "bigpanda_events", "kubectl_agent_tokens",
                 "cloudwatch_alarms",
@@ -2909,7 +3013,7 @@ def initialize_tables():
                 "k8s_pod_metrics", "k8s_node_metrics",
                 "cloud_billing_usage", "provider_metrics",
                 "knowledge_base_memory", "knowledge_base_documents",
-                "incident_feedback", "postmortems",
+                "postmortems",
                 "incident_lifecycle_events",
                 "connected_repos",
             ]
@@ -3254,7 +3358,186 @@ def initialize_tables():
                 logging.warning(f"Error de-duplicating organization names: {e}")
                 conn.rollback()
 
+            # artifacts: add category + description columns for memory system
+            try:
+                cursor.execute("""
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS category VARCHAR(50);
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS description TEXT;
+                """)
+                # Set default before NOT NULL so new rows inserted mid-migration are safe.
+                # Pre-migration rows were all written by the artifact store (system-maintained),
+                # so 'artifact' is the correct default and backfill value — see backfill note below.
+                cursor.execute("""
+                    ALTER TABLE artifacts ALTER COLUMN category SET DEFAULT 'artifact';
+                """)
+                # FORCE RLS is already active — temporarily disable so backfill can reach all rows
+                cursor.execute("ALTER TABLE artifacts NO FORCE ROW LEVEL SECURITY")
+                # Backfill legacy rows to 'artifact', NOT 'context': every pre-migration row was
+                # created by services/artifacts/store.py:upsert_artifact_by_title, which inserts
+                # category='artifact' and relies on ON CONFLICT (org_id, category, title) for
+                # idempotency. Stamping them 'context' would make that conflict clause miss on
+                # existing titles, so each subsequent agent/UI write would INSERT a duplicate row.
+                cursor.execute("""
+                    UPDATE artifacts SET category = 'artifact'
+                    WHERE category IS NULL OR category = ''
+                """)
+                cursor.execute("ALTER TABLE artifacts FORCE ROW LEVEL SECURITY")
+                # Now enforce NOT NULL — all existing rows guaranteed non-null
+                cursor.execute("""
+                    ALTER TABLE artifacts ALTER COLUMN category SET NOT NULL;
+                """)
+                # Replace legacy (org_id, title) uniqueness with (org_id, category, title)
+                cursor.execute("""
+                    DROP INDEX IF EXISTS idx_artifacts_org_title;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_org_cat_title
+                        ON artifacts(org_id, category, title);
+                    CREATE INDEX IF NOT EXISTS idx_artifacts_org_category
+                        ON artifacts(org_id, category);
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.error(f"CRITICAL: Failed to migrate artifacts table — memory writes will fail: {e}")
+                conn.rollback()
+                raise
+
+            # artifacts: add last_edited_by_name to record the actual person who
+            # last edited an entry (last_edited_by only stores 'user'/'agent').
+            # NULL means an agent edit or a pre-migration human edit — the UI
+            # falls back to the generic 'User'/'Agent' label in that case.
+            try:
+                cursor.execute("""
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS last_edited_by_name VARCHAR(255);
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding last_edited_by_name to artifacts: {e}")
+                conn.rollback()
+
+            # artifacts: add incident_id + generation_session_id for postmortem unification
+            try:
+                cursor.execute("""
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE;
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_incident_id ON artifacts(incident_id) WHERE incident_id IS NOT NULL;
+                """)
+                # Drop FK constraint on postmortem_exports so it can reference artifact IDs
+                cursor.execute("""
+                    ALTER TABLE postmortem_exports DROP CONSTRAINT IF EXISTS postmortem_exports_postmortem_id_fkey;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding incident_id/generation_session_id to artifacts: {e}")
+                conn.rollback()
+
+            # Migrate postmortem data into artifacts (idempotent)
+            # Temporarily relax RLS on source tables so the migration works on managed Postgres
+            # (where the app user doesn't have BYPASSRLS)
+            try:
+                cursor.execute("ALTER TABLE postmortems DISABLE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE incidents DISABLE ROW LEVEL SECURITY")
+                conn.commit()
+
+                cursor.execute("""
+                    SELECT DISTINCT COALESCE(p.org_id, i.org_id) as org_id
+                    FROM postmortems p
+                    JOIN incidents i ON i.id = p.incident_id
+                    WHERE p.content IS NOT NULL
+                      AND COALESCE(p.org_id, i.org_id) IS NOT NULL
+                """)
+                pm_orgs = [row[0] for row in cursor.fetchall()]
+                conn.commit()
+
+                migrated_count = 0
+                for pm_org_id in pm_orgs:
+                    cursor.execute("SET myapp.current_org_id = %s", (pm_org_id,))
+                    cursor.execute("""
+                        INSERT INTO artifacts (org_id, user_id, title, content, category, description,
+                                              incident_id, generation_session_id, last_edited_by,
+                                              created_at, updated_at)
+                        SELECT COALESCE(p.org_id, i.org_id), p.user_id,
+                               COALESCE('Postmortem: ' || i.alert_title || ' [' || LEFT(p.incident_id::text, 8) || ']',
+                                        'Postmortem (' || p.incident_id || ')'),
+                               p.content, 'postmortem',
+                               'Generated postmortem for incident: ' || COALESCE(i.alert_title, p.incident_id::text),
+                               p.incident_id, p.generation_session_id, 'system',
+                               p.generated_at, p.updated_at
+                        FROM postmortems p
+                        JOIN incidents i ON i.id = p.incident_id
+                        WHERE p.content IS NOT NULL
+                          AND COALESCE(p.org_id, i.org_id) = %s
+                        ON CONFLICT (org_id, category, title) DO NOTHING
+                    """, (pm_org_id,))
+                    migrated_count += cursor.rowcount
+                    conn.commit()
+
+                cursor.execute("RESET myapp.current_org_id")
+                # Re-enable RLS (will be re-forced by the RLS setup if it runs again)
+                cursor.execute("ALTER TABLE postmortems ENABLE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE postmortems FORCE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE incidents ENABLE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE incidents FORCE ROW LEVEL SECURITY")
+                conn.commit()
+                if migrated_count > 0:
+                    logging.info(f"Migrated {migrated_count} postmortems into artifacts table.")
+            except Exception as e:
+                logging.warning(f"Error migrating postmortems to artifacts: {e}")
+                conn.rollback()
+
+            # Auto-trigger memory migration if old KB tables still have data
+            _should_trigger_migration = False
+            try:
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_name = 'knowledge_base_memory'
+                    )
+                """)
+                old_tables_exist = cursor.fetchone()[0]
+
+                if old_tables_exist:
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM knowledge_base_memory
+                            WHERE content IS NOT NULL AND content != ''
+                            LIMIT 1
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM infrastructure_context
+                            WHERE content IS NOT NULL AND content != ''
+                            LIMIT 1
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM knowledge_base_documents
+                            WHERE status IN ('processed', 'ready')
+                              AND storage_path IS NOT NULL
+                            LIMIT 1
+                        )
+                    """)
+                    has_source_data = cursor.fetchone()[0]
+
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM artifacts
+                            WHERE category IN ('context', 'infrastructure', 'runbook')
+                            LIMIT 1
+                        )
+                    """)
+                    already_migrated = cursor.fetchone()[0]
+
+                    if has_source_data and not already_migrated:
+                        _should_trigger_migration = True
+            except Exception as e:
+                logging.warning(f"Error checking/triggering memory migration: {e}")
+                conn.rollback()
+
             conn.commit()
+
+            # Enqueue migration AFTER commit so the worker sees the final schema
+            if _should_trigger_migration:
+                from services.memory.migration_task import migrate_kb_to_memory
+                migrate_kb_to_memory.delay()
+                logging.info("Triggered automatic KB → memory migration task")
+
             logging.info("Database tables initialized successfully.")
             cursor.close()
 

@@ -1,6 +1,8 @@
 # Investigation
 
-Before your first tool call, state your hypothesis and what you will query to test it.
+Start with history — this check is exempt from the hypothesis-first rule below. Spend 1–2 tool calls: `list_incidents` for the affected service, or knowledge base / memory search for the failure signature. If a match looks close, `get_incident` to read its conclusion. A prior conclusion is a hypothesis to disprove with fresh evidence, never a verdict — the same monitor firing twice can have two different causes. Never copy a past root cause without confirming its mechanism is active now.
+
+After the history check, before every subsequent tool call, state your hypothesis and what you will query to test it.
 
 Work from the outside in. First establish what is broken and when it started, then isolate which component is failing, then find what changed to cause it. Something changed. A deploy, a config, a dependency, traffic, resources. Find that change.
 

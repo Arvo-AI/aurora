@@ -66,6 +66,12 @@ class ModelCutoffManager:
 
         # Google / Vertex AI Models
         google_models = {
+            "google/gemini-3.6-flash": ModelInfo(
+                "gemini-3.6-flash", "google", cutoff_date(2026, 3, 1), True, True
+            ),
+            "google/gemini-3.5-flash-lite": ModelInfo(
+                "gemini-3.5-flash-lite", "google", cutoff_date(2025, 4, 1), True, True
+            ),
             "google/gemini-3.5-flash": ModelInfo(
                 "gemini-3.5-flash", "google", cutoff_date(2025, 4, 1), True, True
             ),
@@ -77,6 +83,12 @@ class ModelCutoffManager:
             ),
             "google/gemini-2.5-flash": ModelInfo(
                 "gemini-2.5-flash", "google", cutoff_date(2025, 3, 1), True, True
+            ),
+            "vertex/gemini-3.6-flash": ModelInfo(
+                "gemini-3.6-flash", "vertex", cutoff_date(2026, 3, 1), True, True
+            ),
+            "vertex/gemini-3.5-flash-lite": ModelInfo(
+                "gemini-3.5-flash-lite", "vertex", cutoff_date(2025, 4, 1), True, True
             ),
             "vertex/gemini-3.5-flash": ModelInfo(
                 "gemini-3.5-flash", "vertex", cutoff_date(2025, 4, 1), True, True

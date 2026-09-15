@@ -55,6 +55,28 @@ MODEL_MAPPINGS = {
         "vertex": "gemini-3.1-pro-preview",
         "provider": "vertex",
     },
+    "google/gemini-3.6-flash": {
+        "openrouter": "google/gemini-3.6-flash",
+        "google": "gemini-3.6-flash",
+        "vertex": "gemini-3.6-flash",
+        "provider": "google",
+    },
+    "vertex/gemini-3.6-flash": {
+        "openrouter": "google/gemini-3.6-flash",
+        "vertex": "gemini-3.6-flash",
+        "provider": "vertex",
+    },
+    "google/gemini-3.5-flash-lite": {
+        "openrouter": "google/gemini-3.5-flash-lite",
+        "google": "gemini-3.5-flash-lite",
+        "vertex": "gemini-3.5-flash-lite",
+        "provider": "google",
+    },
+    "vertex/gemini-3.5-flash-lite": {
+        "openrouter": "google/gemini-3.5-flash-lite",
+        "vertex": "gemini-3.5-flash-lite",
+        "provider": "vertex",
+    },
     "google/gemini-3.5-flash": {
         "openrouter": "google/gemini-3.5-flash",
         "google": "gemini-3.5-flash",

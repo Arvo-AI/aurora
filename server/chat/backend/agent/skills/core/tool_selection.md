@@ -47,7 +47,7 @@ AGENT INTELLIGENCE: You decide which approach based on the user's request and co
 SMART DELETION WORKFLOW:
 When asked to delete, remove, stop, or destroy resources:
 1. TERRAFORM-MANAGED RESOURCES: If terraform state exists, use terraform deletion
-   - iac_tool(action="write", path='vm.tf', content='# VM removed')
+   - iac_tool(action="write", path='vm.tf', content='<the file with the VM resource block removed>') - delete the resource block itself; a comments-only config file is never a valid change
    - iac_tool(action="apply") - Terraform will delete the resource using its state
 2. UNMANAGED RESOURCES: Use direct deletion via cloud_exec
    - GCP: cloud_exec('gcp', 'compute instances delete INSTANCE --zone ZONE --quiet')

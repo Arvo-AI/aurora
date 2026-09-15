@@ -6,6 +6,8 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge, Plus, AlertTriangle } from 'lucide-react';
 import { Incident, incidentsService } from '@/lib/services/incidents';
+import { groupIncidents, IncidentGroup, isStalled } from '@/lib/incident-grouping';
+import IncidentGroupRow from './components/IncidentGroupRow';
 import { useConnectedAccounts } from '@/hooks/useConnectedAccounts';
 import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
 import { useQuery } from '@/lib/query';
@@ -29,6 +31,10 @@ const ALERT_PROVIDERS = new Set([
     .map(c => c.id),
   'aws',
 ]);
+
+// SSE refetch coalescing: wait for a burst to settle, but never longer than MAX_WAIT.
+const REFETCH_DEBOUNCE_MS = 300;
+const REFETCH_MAX_WAIT_MS = 2000;
 
 interface IncidentsResponse { incidents: any[] }
 
@@ -58,8 +64,11 @@ const incidentsFetcher = async (key: string, signal: AbortSignal) => {
     postMortem: inc.postMortem ?? undefined,
     startedAt: inc.startedAt,
     analyzedAt: inc.analyzedAt,
+    alertFiredAt: inc.alertFiredAt,
     createdAt: inc.createdAt,
     updatedAt: inc.updatedAt,
+    recurrenceOf: inc.recurrenceOf ?? null,
+    occurrenceTotal: inc.occurrenceTotal,
   }));
 };
 
@@ -71,8 +80,9 @@ export default function IncidentsPage() {
     [providerIds],
   );
 
+  // groups=1: the server completes every recurrence group touched by the page.
   const { data: incidents = [], isLoading, mutate } = useQuery<Incident[]>(
-    '/api/incidents',
+    '/api/incidents?groups=1',
     incidentsFetcher,
     { staleTime: 10_000, revalidateOnFocus: true },
   );
@@ -84,17 +94,31 @@ export default function IncidentsPage() {
   useEffect(() => {
     let es: EventSource | null = null;
 
+    // Coalesce bursts (a fold emits incident_update + recurrence_folded per
+    // alert) into one refetch. Each mutate() aborts and restarts the request,
+    // so under a sustained stream the deferral is capped at MAX_WAIT to let a
+    // refetch land instead of resetting forever.
+    let refetchTimer: ReturnType<typeof setTimeout> | null = null;
+    let firstPendingAt = 0;
+    const scheduleRefetch = () => {
+      const now = Date.now();
+      if (!firstPendingAt) firstPendingAt = now;
+      if (refetchTimer) clearTimeout(refetchTimer);
+      const wait = Math.min(REFETCH_DEBOUNCE_MS, Math.max(0, firstPendingAt + REFETCH_MAX_WAIT_MS - now));
+      refetchTimer = setTimeout(() => {
+        refetchTimer = null;
+        firstPendingAt = 0;
+        mutateRef.current();
+      }, wait);
+    };
+
     const connect = () => {
       es?.close();
       es = new EventSource('/api/incidents/stream');
-      es.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'incident_update') {
-            mutateRef.current();
-          }
-        } catch { /* ignore malformed messages */ }
-      };
+      // Every message on this stream (incident_update, alert_correlated,
+      // recurrence_folded) changes what the list shows; keepalives are SSE
+      // comments and never reach onmessage.
+      es.onmessage = () => scheduleRefetch();
       es.onerror = () => { /* EventSource reconnects automatically */ };
     };
 
@@ -107,14 +131,38 @@ export default function IncidentsPage() {
     window.addEventListener('aurora:connection-stale', onStale);
 
     return () => {
+      if (refetchTimer) clearTimeout(refetchTimer);
       es?.close();
       window.removeEventListener('aurora:connection-stale', onStale);
     };
   }, []);
 
-  const activeIncidents = useMemo(() => incidents.filter(i => i.status === 'investigating'), [incidents]);
-  const analyzedIncidents = useMemo(() => incidents.filter(i => i.status === 'analyzed' || i.status === 'resolved'), [incidents]);
-  const mergedIncidents = useMemo(() => incidents.filter(i => i.status === 'merged'), [incidents]);
+  const groups = useMemo(() => groupIncidents(incidents), [incidents]);
+  const activeGroups = useMemo(() => groups.filter(g => g.section === 'investigating'), [groups]);
+  const analyzedGroups = useMemo(() => groups.filter(g => g.section === 'analyzed'), [groups]);
+  const mergedGroups = useMemo(() => groups.filter(g => g.section === 'merged'), [groups]);
+
+  // Keyed by group (anchor) id so an SSE refetch never collapses an open card.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const toggleExpanded = (groupId: string) =>
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+
+  const renderGroup = (group: IncidentGroup) =>
+    group.occurrenceCount === 1 ? (
+      <IncidentRow key={group.id} incident={group.anchor} />
+    ) : (
+      <IncidentGroupRow
+        key={group.id}
+        group={group}
+        expanded={expanded.has(group.id)}
+        onToggle={() => toggleExpanded(group.id)}
+      />
+    );
 
   return (
     <div className="max-w-4xl mx-auto py-8 px-4">
@@ -135,47 +183,41 @@ export default function IncidentsPage() {
             <DisconnectedBanner />
           )}
 
-          {activeIncidents.length > 0 && (
+          {activeGroups.length > 0 && (
             <div>
               <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-2">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-muted-foreground opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-muted-foreground"></span>
                 </span>
-                Investigating ({activeIncidents.length})
+                Investigating ({activeGroups.length})
               </h2>
               <div className="space-y-2">
-                {activeIncidents.map(incident => (
-                  <IncidentRow key={incident.id} incident={incident} />
-                ))}
+                {activeGroups.map(renderGroup)}
               </div>
             </div>
           )}
 
-          {analyzedIncidents.length > 0 && (
+          {analyzedGroups.length > 0 && (
             <div>
               <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
                 Analyzed
               </h2>
               <div className="space-y-2">
-                {analyzedIncidents.map(incident => (
-                  <IncidentRow key={incident.id} incident={incident} />
-                ))}
+                {analyzedGroups.map(renderGroup)}
               </div>
             </div>
           )}
 
-          {mergedIncidents.length > 0 && (
+          {mergedGroups.length > 0 && (
             <div>
               <h2 className="text-sm font-medium text-zinc-600 uppercase tracking-wide mb-3 flex items-center gap-2">
                 <GitMerge className="h-4 w-4 text-zinc-600" />
                 Merged
               </h2>
               <div className="space-y-2">
-                {mergedIncidents.map(incident => (
-                  <IncidentRow key={incident.id} incident={incident} />
-                ))}
+                {mergedGroups.map(renderGroup)}
               </div>
             </div>
           )}
@@ -236,7 +278,7 @@ function IncidentRow({ incident }: { incident: Incident }) {
                 )}
                 {isActive && (
                   <span className="flex items-center gap-1 text-muted-foreground">
-                    {Date.now() - new Date(incident.startedAt).getTime() > 30 * 60 * 1000 ? (
+                    {isStalled(incident, Date.now()) ? (
                       <><AlertTriangle className="h-3 w-3 text-red-400" /> Investigation stalled</>
                     ) : (
                       <><Loader2 className="h-3 w-3 animate-spin" /> Aurora investigating</>

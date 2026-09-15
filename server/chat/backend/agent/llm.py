@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from chat.backend.agent.model_mapper import ModelMapper
 from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
+from chat.backend.agent.utils.message_content import extract_text_from_content
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,9 @@ class ModelConfig:
 
     # Email report generation
     EMAIL_REPORT_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+
+    # Root-cause recurrence detection agent — falls back to MAIN_MODEL
+    RECURRENCE_AGENT_MODEL = os.getenv("RECURRENCE_AGENT_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
 
 class LLMManager:
@@ -417,22 +421,8 @@ Summary:"""
                 response = isolated_summarizer.invoke(summarization_prompt)
 
             if hasattr(response, "content"):
-                response_content = response.content
-                # Handle Gemini thinking model responses (list with thinking/text blocks)
-                if isinstance(response_content, list):
-                    text_parts = []
-                    for part in response_content:
-                        if isinstance(part, dict):
-                            part_type = part.get("type", "")
-                            if part_type not in ("thinking", "reasoning"):
-                                text = part.get("text", "")
-                                if text:
-                                    text_parts.append(str(text))
-                        elif isinstance(part, str):
-                            text_parts.append(part)
-                    summary = "".join(text_parts)
-                else:
-                    summary = str(response_content)
+                # Gemini thinking models return a list of thinking/text blocks
+                summary = extract_text_from_content(response.content)
             else:
                 summary = str(response)
 

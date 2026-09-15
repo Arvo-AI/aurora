@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional
 from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
-from services.correlation import handle_correlated_alert
+from services.correlation import apply_correlation_outcome
 from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
@@ -300,7 +300,7 @@ def _try_correlate(
         if not correlation_result.is_correlated:
             return False
 
-        handle_correlated_alert(
+        if not apply_correlation_outcome(
             cursor=cursor,
             user_id=user_id,
             incident_id=correlation_result.incident_id,
@@ -313,7 +313,10 @@ def _try_correlate(
             alert_metadata=alert_metadata,
             raw_payload=payload,
             org_id=org_id,
-        )
+        ):
+            # Live recurrence mode: hint stashed on alert_metadata; caller
+            # proceeds with normal incident creation.
+            return False
         conn.commit()
         return True
     except Exception as corr_exc:

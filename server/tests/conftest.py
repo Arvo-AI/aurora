@@ -47,7 +47,7 @@ os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
 # stubbing them with MagicMock would silently mask real failures.
 _OPTIONAL_PACKAGES = (
     "neo4j", "casbin", "casbin_sqlalchemy_adapter", "sqlalchemy",
-    "hvac", "redis", "celery", "weaviate", "flask_socketio",
+    "hvac", "redis", "celery", "flask_socketio",
     "flask_cors", "langchain", "langgraph", "requests", "tiktoken",
     "dotenv", "flask",
     "langchain_core", "langchain_core.tools", "langchain_core.language_models",

@@ -1,4 +1,4 @@
-"""Shared helpers for CI provider routes (Jenkins, CloudBees)."""
+"""Shared route helpers for connectors with a per-user RCA toggle (Jenkins, CloudBees, Spinnaker, Elastic)."""
 
 import logging
 
@@ -11,15 +11,19 @@ from utils.auth.rbac_decorators import require_permission
 logger = logging.getLogger(__name__)
 
 
-def register_rca_settings_routes(blueprint, provider: str, preference_key: str):
-    """Register GET/PUT /rca-settings routes on the given blueprint."""
+def register_rca_settings_routes(blueprint, provider: str, preference_key: str, default: bool = True):
+    """Register GET/PUT /rca-settings routes on the given blueprint.
+
+    ``default`` is what GET reports before the user has set the toggle; keep it equal to
+    the ``default=`` the connector's task passes to ``get_user_preference``.
+    """
     label = provider.upper()
 
     @blueprint.route("/rca-settings", methods=["GET"])
     @require_permission("connectors", "read")
     def get_rca_settings(user_id):
-        rca_enabled = get_user_preference(user_id, preference_key, default=True)
-        return jsonify({"rcaEnabled": rca_enabled})
+        rca_enabled = get_user_preference(user_id, preference_key, default=default)
+        return jsonify({"rcaEnabled": bool(rca_enabled)})
 
     @blueprint.route("/rca-settings", methods=["PUT"])
     @require_permission("connectors", "write")
@@ -28,8 +32,11 @@ def register_rca_settings_routes(blueprint, provider: str, preference_key: str):
             data = request.get_json(force=True, silent=True) or {}
         except Exception:
             data = {}
+        if not isinstance(data, dict):
+            data = {}
 
-        rca_enabled = data.get("rcaEnabled", True)
+        # camelCase from the UI, snake_case from API/MCP callers; the key is required.
+        rca_enabled = data.get("rcaEnabled", data.get("rca_enabled"))
         if not isinstance(rca_enabled, bool):
             return jsonify({"error": "rcaEnabled must be a boolean"}), 400
 

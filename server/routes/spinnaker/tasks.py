@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
-from services.correlation import handle_correlated_alert
+from services.correlation import apply_correlation_outcome
 from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
@@ -208,21 +208,26 @@ def process_spinnaker_deployment(
                             org_id=org_id,
                         )
 
-                        if correlation_result.is_correlated:
-                            handle_correlated_alert(
-                                cursor=cursor,
-                                user_id=user_id,
-                                incident_id=correlation_result.incident_id,
-                                source_type="spinnaker",
-                                source_alert_id=alert_id,
-                                alert_title=alert_title,
-                                alert_service=service,
-                                alert_severity=severity,
-                                correlation_result=correlation_result,
-                                alert_metadata=alert_metadata,
-                                raw_payload=payload,
-                                org_id=org_id,
-                            )
+                        if correlation_result.is_correlated and apply_correlation_outcome(
+                            cursor=cursor,
+                            user_id=user_id,
+                            incident_id=correlation_result.incident_id,
+                            source_type="spinnaker",
+                            source_alert_id=alert_id,
+                            alert_title=alert_title,
+                            alert_service=service,
+                            alert_severity=severity,
+                            correlation_result=correlation_result,
+                            alert_metadata=alert_metadata,
+                            raw_payload=payload,
+                            org_id=org_id,
+                            # Live hint-only mode needs the fall-through to
+                            # actually create an incident; only these
+                            # statuses do (see below), so other correlated
+                            # statuses keep the legacy attach.
+                            hint_only_eligible=status
+                            in ("TERMINAL", "CANCELED", "STOPPED"),
+                        ):
                             conn.commit()
                             logger.info(
                                 "%s Correlated with incident %s",

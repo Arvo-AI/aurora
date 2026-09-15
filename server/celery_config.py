@@ -75,6 +75,11 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,  # Process one task at a time
     broker_connection_retry_on_startup=True,  # Explicitly enable for Celery 6.0+
     result_expires=3600,  # Expire task results after 1 hour (backend= is set above)
+    # ponytail: workers listen `-Q high,celery` (high first). Interactive
+    # Bitbucket Incident Prevention must not sit behind a Save of N metadata jobs.
+    task_routes={
+        "bitbucket.enable_change_gating_bulk": {"queue": "high"},
+    },
     # Explicitly include task modules from their new locations
     include=[
         'connectors.gcp_connector.gcp_post_auth_tasks',
@@ -83,6 +88,7 @@ celery_app.conf.update(
         'routes.datadog.tasks',
         'routes.netdata.tasks',
         'routes.splunk.tasks',
+        'routes.elastic.tasks',
         'routes.dynatrace.tasks',
         'routes.bigpanda.tasks',
         'routes.pagerduty.tasks',
@@ -98,12 +104,15 @@ celery_app.conf.update(
         'chat.background.summarization',
         'chat.background.visualization_generator',
         'chat.background.prediscovery_task',
-        'routes.knowledge_base.tasks',
+        'services.memory.migration_task',
+        'services.memory.collector',
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
         'routes.aws.cloudwatch_tasks',
         'tasks.github_webhook_tasks',
+        'tasks.bitbucket_webhook_tasks',
         'tasks.change_gating',
+        'routes.bitbucket.bitbucket_selection',
         'routes.github.github_repo_metadata',
         'utils.repo_metadata',
         'services.actions.scheduler',
@@ -117,10 +126,6 @@ celery_app.conf.update(
         'cleanup-stale-background-chats': {
             'task': 'chat.background.cleanup_stale_sessions',
             'schedule': 300.0,  # Every 5 minutes
-        },
-        'cleanup-stale-kb-documents': {
-            'task': 'knowledge_base.cleanup_stale_documents',
-            'schedule': 180.0,  # Every 3 minutes
         },
         'run-full-discovery': {
             'task': 'services.discovery.tasks.run_full_discovery',

@@ -47,6 +47,22 @@ def test_query_logs_respects_explicit_source(monkeypatch):
     assert captured[-1][1] == "/splunk/search"
 
 
+def test_query_logs_routes_to_elastic(monkeypatch):
+    tools, captured = _wire(monkeypatch, connected=["elastic"])
+    result = asyncio.run(tools["query_logs"](query="log.level:error", time_range_minutes=30))
+    assert "error" not in result
+    method, path, _params, body = captured[-1]
+    assert (method, path) == ("POST", "/elastic/search")
+    assert body["query"] == "log.level:error"
+    assert body["timeRangeMinutes"] == 30
+
+
+def test_query_logs_respects_explicit_elastic_source(monkeypatch):
+    tools, captured = _wire(monkeypatch, connected=["splunk", "elastic"])
+    asyncio.run(tools["query_logs"](query="error", source="elastic"))
+    assert captured[-1][1] == "/elastic/search"
+
+
 def test_query_jira_action_validation(monkeypatch):
     tools, _ = _wire(monkeypatch, connected=["jira"])
     bad = asyncio.run(tools["query_jira"](action="delete"))
@@ -71,6 +87,7 @@ def test_query_alerts_routes_per_source(monkeypatch):
         "opsgenie": "/opsgenie/events/ingested",
         "incidentio": "/incidentio/alerts",
         "splunk": "/splunk/alerts",
+        "elastic": "/elastic/alerts",
     }
     for src, path in expected.items():
         tools, captured = _wire(monkeypatch, connected=[src])

@@ -229,50 +229,85 @@ Users create this role in their own AWS account:
 
 ### Azure (Microsoft Azure)
 
-Service Principal authentication for Microsoft Azure.
+Service Principal authentication for Microsoft Azure, set up by a script you run in Azure Cloud Shell. Aurora never asks for your Azure password and cannot modify its own permissions.
 
-#### 1. Create App Registration
+The script creates **two** service principals:
 
-1. Go to [Azure Portal > App registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)
-2. Click **+ New registration**
-   - Name: `Aurora`
-   - Supported account types: Single tenant (or multi-tenant if needed)
-   - Redirect URI: **Web** > `http://localhost:5080/azure/callback`
-3. After creation, note down:
-   - **Application (client) ID**
-   - **Directory (tenant) ID**
+| Principal | Roles | Used for |
+|-----------|-------|----------|
+| `Aurora-Agent-*` | Contributor, AKS RBAC Writer, Cost Management Reader | Agent mode (remediation) |
+| `Aurora-ReadOnly-*` | Log Analytics Reader, Cost Management Reader, AKS Cluster User, AKS RBAC Reader | Ask mode (investigation only) |
 
-#### 2. Create Client Secret
+Built-in roles only — no custom roles, and no `cluster-admin`. Contributor excludes all `Microsoft.Authorization` writes, so Aurora cannot escalate its own access in either mode.
 
-1. In the app registration, go to **Certificates & secrets**
-2. Click **+ New client secret**
-   - Description: `Aurora`
-   - Expires: Choose appropriate duration
-3. **Copy the secret Value immediately** (it won't be shown again)
+#### What you need before starting
 
-#### 3. Grant API Permissions
+Azure keeps subscription access and directory access separate, and the script needs both:
 
-1. Go to **API permissions** > **+ Add a permission**
-2. Select **Azure Service Management**
-3. Check **user_impersonation**
-4. Click **Grant admin consent for [your tenant]**
+- **Owner** or **User Access Administrator** on the subscriptions you want covered, to assign the roles.
+- Permission to **register applications** in Entra ID, to create the two service principals. Subscription Owner does *not* include this.
 
-#### 4. Assign Role to Subscription
+If your tenant sets *Users can register applications* to **No**, ask an Entra ID admin to either change that setting or grant you the **Application Developer** role. The script checks this and stops before creating anything, so a missing permission costs you nothing but a re-run.
 
-1. Go to [Subscriptions](https://portal.azure.com/#view/Microsoft_Azure_Billing/SubscriptionsBlade)
-2. Select your subscription
-3. Go to **Access control (IAM)** > **+ Add role assignment**
-4. Role: **Reader** (or **Contributor** for write access)
-5. Members: Select your `Aurora` app
-6. Review + assign
+#### 1. Get the script
+
+In Aurora, go to **Integrations > Azure**. Either click **Copy Script** to put the whole script on your clipboard, or **Download Setup Script** to save it as a file.
+
+#### 2. Run it in Cloud Shell
+
+Open [Azure Cloud Shell](https://shell.azure.com) (Bash). If you copied the script, paste it and press Enter — it writes itself to `setup-aurora-access.sh` and runs. If you downloaded it, upload the file and run:
+
+```bash
+bash setup-aurora-access.sh
+```
+
+Cloud Shell already has `az`, `jq`, `python3` and `kubectl`, and you are already authenticated — nothing to install.
+
+By default this covers **every enabled subscription in your current tenant**. To scope to a management group instead, set the management group ID in Aurora before copying the script, or pass it as an argument:
+
+```bash
+bash setup-aurora-access.sh <management-group-name>
+```
+
+Choose the scope **before the first run**. The script only adds role assignments and never removes them, so running it tenant-wide and then re-running it against a management group leaves the tenant-wide grants in place — it does not narrow them. Each run also creates a new pair of service principals; the script tells you when earlier ones exist so you can delete the ones you no longer use.
+
+:::tip Recommended for multiple subscriptions
+With a management group, roles are assigned **once** at the group scope and every subscription beneath it inherits them. Subscriptions you add to the group later are picked up automatically, with no need to re-run the script.
+
+This requires permission to read the management group; if you get an authorization error, ask an owner to grant you **Management Group Reader**, or omit the argument to use per-subscription scope.
+:::
+
+#### 3. Paste the output into Aurora
+
+The script prints a JSON block containing both sets of credentials and the list of subscriptions. Paste it into Aurora to finish connecting.
+
+#### Multiple subscriptions
+
+All enabled subscriptions in scope are connected. During an investigation the agent queries every connected subscription and then narrows to whichever one holds the affected resource. Scope is controlled in Azure — by the roles the script assigns — not in Aurora, so to exclude a subscription, run the script against a management group that omits it.
+
+#### Private AKS clusters
+
+A private AKS cluster has no public API server endpoint, so it is unreachable from Cloud Shell and from Aurora. RBAC alone is not enough. The script detects these and lists them at the end — connect each one with the [kubectl agent](#installing-the-kubectl-agent), which runs in-cluster and dials out to Aurora.
+
+#### Revoking access
+
+Delete both service principals; the command is printed at the end of the script run.
+
+```bash
+az ad sp delete --id <agent-client-id>
+az ad sp delete --id <readonly-client-id>
+```
 
 #### Troubleshooting
 
 | Error | Solution |
 |-------|----------|
-| "No enabled subscription found" | Assign Reader/Contributor role to the app in subscription IAM |
-| "AADSTS50011: Reply URL mismatch" | Verify redirect URI exactly matches in App Registration |
-| "Insufficient privileges" | Grant admin consent for API permissions |
+| "Insufficient privileges to complete the operation" | Your tenant restricts app registration. Ask a Global Administrator to run the script, or to grant you the **Application Developer** role |
+| "AuthorizationFailed" on `managementGroups/read` | You lack RBAC at the management group. Ask an owner for **Management Group Reader**, or omit the argument to use per-subscription scope |
+| "Management group not found or not readable" | Check the name (not the display name), or omit the argument |
+| "No enabled subscriptions found in tenant" | The script only uses subscriptions in the tenant you are currently logged in to, since a service principal exists in a single tenant. Run `az account set --subscription <id>` for the right tenant first |
+| Authentication fails right after setup | Azure role assignments take 1–2 minutes to propagate. Wait, then retry |
+| `kubectl` commands fail on an AKS cluster | The cluster is likely not Entra-integrated, so Azure RBAC roles do not apply to it. Either enable Entra + Azure RBAC on the cluster, or connect it with the Kubernetes connector |
 
 ---
 
@@ -1205,6 +1240,107 @@ All calls use Bearer token auth over HTTPS on port 8089.
 
 ---
 
+### Elastic Cloud
+
+API-key authentication for Elasticsearch + Kibana. Works with **Elastic Cloud Hosted** (Cloud ID), **Elastic Cloud Serverless** (endpoint URLs) and **self-managed** clusters. Aurora is read-only against Elastic: it searches logs, reads Kibana alert documents and lists alerting rules, and it never writes.
+
+#### 1. Create a read-only API key
+
+**Option A (recommended): an admin creates a restricted key.**
+
+1. In Kibana, as an admin, go to **Stack Management > API keys > Create API key**.
+2. Name it `aurora`, turn on **Restrict privileges**, and paste the role descriptor below.
+3. Create the key and copy the **Encoded** value. It is shown once. (An `id:api_key` pair is also accepted.)
+
+**Option B: a dedicated read-only user creates its own key.** The built-in **Viewer** role has no cluster privileges, so a Viewer cannot create API keys on its own. Give the user two roles: **Viewer** plus a small custom role whose only cluster privilege is `manage_own_api_key` (Stack Management > Roles). Sign in as that user, create the key with *Restrict privileges* off, and it inherits the Viewer's read-only access to indices and Kibana.
+
+Role descriptor for Option A:
+
+```json
+{
+  "aurora_read": {
+    "cluster": ["monitor"],
+    "indices": [
+      {
+        "names": ["logs-*", "filebeat-*", "metrics-*", ".alerts-*"],
+        "privileges": ["read", "view_index_metadata"]
+      }
+    ],
+    "applications": [
+      { "application": "kibana-.kibana", "privileges": ["read"], "resources": ["*"] }
+    ]
+  }
+}
+```
+
+- `read` + `view_index_metadata` cover `_search`, `_count`, `_field_caps` and `_resolve/index`.
+- `.alerts-*` is where Kibana stores alert documents; without it `elastic_get_alerts` returns a privilege error.
+- The `kibana-.kibana` **application** privilege is what lets Aurora list Kibana rules. A bare index-only key gets a Kibana 403.
+- Cluster `monitor` is optional but recommended. It enables `GET /` (cluster name and version shown in Aurora) and `_cat/indices` (document counts and index sizes). Without it Aurora validates the key through `_security/_authenticate` and still lists indices, just without stats or version info.
+
+#### 2. Find your endpoint
+
+| Deployment | What to enter |
+|------------|---------------|
+| Elastic Cloud **Hosted** | The **Cloud ID** (Elastic Cloud > Deployments > your deployment > Manage). Aurora derives the Elasticsearch and Kibana URLs from it. |
+| Elastic Cloud **Serverless** | Endpoint URLs: `https://<project>.es.<region>.<csp>.elastic.cloud` and `https://<project>.kb.<region>.<csp>.elastic.cloud`. Serverless projects have no Cloud ID. |
+| **Self-managed** | Your Elasticsearch URL (e.g. `https://es.internal:9200`) and, optionally, the Kibana URL. Set `ELASTIC_SSL_VERIFY=false` or point it at a CA bundle if you use private certificates. |
+
+The Kibana URL is optional. Without it Aurora still searches logs and reads alert documents, but it cannot list Kibana rules or deep-link incidents into Kibana.
+
+#### 3. Connect via Aurora UI
+
+1. Navigate to **Connectors > Elastic Cloud**.
+2. Choose **Cloud ID** or **Endpoint URLs** and fill in the endpoint.
+3. Paste the API key (**Encoded** value).
+4. Optionally set a default index pattern (default `logs-*`).
+5. Click **Connect**. Aurora validates the key against Elasticsearch; Kibana is checked best-effort and never blocks the connection.
+
+#### 4. Send Kibana alerts to Aurora (optional)
+
+Aurora exposes a per-user webhook URL and a secret on the connector page. In Kibana:
+
+1. **Stack Management > Connectors > Create connector > Webhook**. Name it `Aurora`, method `POST`, URL = the webhook URL from Aurora.
+2. Authentication: **Basic**, username `aurora`, password = the webhook secret. (Alternatively add a header `X-Aurora-Webhook-Secret` with the secret as its value.)
+3. Open the rule you want Aurora to see (**Observability > Alerts > Manage rules**) and add an action using the `Aurora` connector.
+4. Set the action frequency to **On status changes** (otherwise Kibana re-sends the alert on every rule interval; Aurora dedupes these, but the extra traffic is unnecessary).
+5. Paste the **action body** template shown in Aurora into the Body field. It maps Kibana's Mustache variables (`rule.name`, `alert.uuid`, `context.reason`, `context.viewInAppUrl`, ...) to the fields Aurora reads.
+6. Add a second action row with the same connector and body and **Run when: Recovered**, so Aurora marks the alert recovered.
+
+The Webhook connector is a **Gold+** feature on self-managed clusters (a Basic license returns a license error). Elastic Cloud subscriptions include it.
+
+**Enable Alert RCA.** Webhook alerts are always stored and visible under **View Alerts**. With the **Enable Alert RCA** switch on the connector page on (the default), each new alert also creates an incident and starts an automatic investigation. Turn it off if your incidents already come from another source such as incident.io and you only want the alerts stored.
+
+#### What Aurora Queries
+
+| Purpose | Endpoint |
+|---------|----------|
+| Validate the connection | `GET /_security/_authenticate` (required), `GET /` (best-effort, needs `monitor`) |
+| List indices, aliases, data streams | `GET /_resolve/index/{pattern}` (+ `GET /_cat/indices` when the key has `monitor`) |
+| Field names and types | `GET /{index}/_field_caps` |
+| Search logs | `POST /{index}/_search` (Query DSL, `size <= 500`) |
+| ES\|QL queries | `POST /_query` |
+| Kibana alerts | `POST /.alerts-*/_search` |
+| Kibana rules | `GET {kibana}/api/alerting/rules/_find` (header `kbn-xsrf: true`) |
+
+All calls send `Authorization: ApiKey <encoded>` to the endpoint you configured (Elastic Cloud is always HTTPS; a self-managed `http://` URL is used as entered). Aurora never calls `_cluster/health`, node or snapshot APIs, so it works unchanged on Serverless.
+
+#### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Invalid API key" (401) | The key is wrong, expired or invalidated. Re-create it and paste the **Encoded** value. |
+| "API key lacks privileges" (403) on search | Grant `read` and `view_index_metadata` on the index pattern (and on `.alerts-*` for alerts). |
+| "API key lacks Kibana privileges" when listing rules | The key has no Kibana application privilege. Create it as a Viewer, or add the `kibana-.kibana` read privilege. |
+| Index sizes / doc counts / version missing | Expected without cluster `monitor`. Add it to the role descriptor if you want them. |
+| "unauthorized ... manage_own_api_key" when a Viewer creates a key | Viewer cannot create API keys. Use Option A, or add a custom role with `manage_own_api_key` to that user. |
+| Kibana "license" error when saving the Webhook connector | Self-managed Basic license. Start a trial or upgrade; Elastic Cloud includes the connector. |
+| Kibana shows "not verified" after connecting | Aurora could not reach the Kibana URL. Logs and alerts still work; check the URL or network path if you need rule listing. |
+| Alerts arrive but no incident is created | Check that **Enable Alert RCA** on the connector page is on. Recovery events never create incidents. |
+| Kibana action fails with `[401] UNAUTHORIZED` | The webhook secret changed (disconnecting deletes it; reconnecting generates a new one). Copy the current secret from Aurora into the Kibana connector. |
+
+---
+
 ## Kubernetes
 
 Aurora can connect to Kubernetes clusters via the kubectl agent.
@@ -1399,6 +1535,7 @@ Grant these scopes:
 - `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`
 - `read:issue:bitbucket`, `write:issue:bitbucket`
 - `read:pipeline:bitbucket`, `write:pipeline:bitbucket`
+- `read:webhook:bitbucket`, `write:webhook:bitbucket`, `delete:webhook:bitbucket` — only needed for [Incident Prevention](#incident-prevention-pre-merge-pr-review); lets Aurora create and verify the change-gating webhook for you, and remove it when you disable the feature
 
 ##### 2. Connect via Aurora UI
 
@@ -1415,8 +1552,12 @@ Use OAuth if you prefer a per-user consent flow. This path requires both a featu
 1. Go to **Bitbucket workspace settings** > **OAuth consumers** > **Add consumer**
    - Name: `Aurora`
    - Callback URL: `{NEXT_PUBLIC_BACKEND_URL}/bitbucket/callback` (e.g. `https://your-aurora-domain/bitbucket/callback`)
-   - Permissions: **Account** (Read), **Projects** (Read), **Repositories** (Read & Write), **Pull requests** (Read & Write), **Issues** (Read & Write), **Pipelines** (Read & Write)
+   - Permissions: **Account** (Read), **Projects** (Read), **Repositories** (Read & Write), **Pull requests** (Read & Write), **Issues** (Read & Write), **Pipelines** (Read & Write), **Webhooks** (Read & Write)
 2. Copy the **Key** and **Secret**
+
+:::note
+**Webhooks** is only required for [Incident Prevention](#incident-prevention-pre-merge-pr-review). Existing consumers keep working without it; add the permission and re-authorize to let Aurora create and verify change-gating webhooks for you.
+:::
 
 ##### 2. Configure Environment
 
@@ -1431,6 +1572,63 @@ BB_OAUTH_CLIENT_SECRET=your-bitbucket-secret
 
 Restart Aurora after setting these, then connect via **Connectors** > **Bitbucket** > **OAuth**.
 
+#### Incident Prevention (pre-merge PR review)
+
+Aurora can review pull requests that target the default branch of an enrolled Bitbucket Cloud repository and post an advisory review comment before merge — the same feature as GitHub Incident Prevention. The Incident Prevention review never approves (or blocks) a PR: approval stays with human reviewers.
+
+Requirements: a connected Bitbucket account (either auth method above), `NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION=true` (the default) on **both** the server and the Celery worker, and Aurora's API reachable from the public internet (Bitbucket must be able to deliver webhooks to it).
+
+##### Enable per repository
+
+1. Navigate to **Connectors** > **Bitbucket** and connect at least one repository
+2. Flip the **Incident Prevention** switch on a connected repository
+3. Aurora responds with a **webhook URL** (`{API_URL}/bitbucket/webhook/{org_id}`) and a **secret**. It also tries to create the repo webhook for you via the API; if your credentials lack the webhook scopes, add it manually:
+   - In Bitbucket: **Repository settings → Webhooks → Add webhook**
+   - Title: `Aurora Incident Prevention`; URL: the webhook URL from Aurora; Secret: the secret from Aurora
+   - Triggers: **Pull request → Created** and **Pull request → Updated** only (do not add approval/comment triggers — they would loop on Aurora's own activity)
+4. Repeat the webhook setup for each repository you enable, using the **same URL and secret** — the secret is shared across your organization
+
+##### How the webhook gets verified
+
+The repository badge reads **Awaiting first delivery** until Aurora confirms the hook, then **Active**. There are two ways it gets confirmed:
+
+- **Verify webhook** (immediate) — reads the repository's hooks via the API and looks for one pointing at Aurora's URL with both pull request triggers. Requires the `read:webhook:bitbucket` scope on the connected credentials. Without it you get *Verification pending* rather than a failure, because not being able to look is not proof of absence.
+- **First delivery** (automatic) — any pull request event that passes signature validation confirms the hook on its own. This is the stronger check: it proves the hook exists, is enabled, points at the right URL **and** carries the right secret, none of which the API listing can tell you.
+
+Bitbucket sends **no test event** when you save a webhook (unlike GitHub's `ping`), so a manually added hook stays *Awaiting first delivery* until a real PR event arrives. Open or update a pull request to confirm it.
+
+:::note
+Verification is recorded against Aurora's public URL at the time. If that URL changes (a new dev tunnel, a domain migration), the badge turns red with **Webhook URL changed** — the hook still points at the old address and can no longer reach Aurora. Click the badge for the current URL and secret, then update the existing hook in Bitbucket. Aurora cannot rewrite a hook it did not create.
+:::
+
+Notes and limits:
+
+- Reviews run only for PRs targeting the repository's **default branch**; drafts are skipped. A draft marked ready **without new commits** is reviewed on the next push.
+- Reviews post as the **connected Bitbucket account** by default. Both SAFE and RISKY verdicts post as a review comment only — Aurora never approves the PR.
+- Approvals posted by older Aurora versions (which approved on SAFE verdicts) are **not retracted automatically**: Bitbucket approvals are account-level, so unapproving could strip an approval the connected user made themselves — remove legacy Aurora approvals by hand on any still-open PRs. (On GitHub, Aurora dismisses its own legacy approvals the next time it reviews the PR.)
+- Disabling the toggle (or deselecting/disconnecting the repo) deletes the webhook when Aurora created it via API; manually created hooks must be removed manually.
+
+##### Optional: dedicated bot account
+
+To have reviews appear as "Aurora" instead of a team member, create a separate Atlassian account:
+
+1. Create the Atlassian user (e.g. `aurora-bot@yourcompany.com`), invite it to the workspace/repos with **pull request write** access
+2. Create a scoped API token for it with at least `read:pullrequest:bitbucket` and `write:pullrequest:bitbucket`
+3. Store it in the secrets backend as a system secret (no env vars involved):
+
+```bash
+# Vault
+vault kv put aurora/system/bitbucket-bot/credentials \
+  value='{"email": "aurora-bot@yourcompany.com", "api_token": "YOUR_SCOPED_TOKEN"}'
+
+# AWS Secrets Manager
+aws secretsmanager create-secret --name aurora/system/bitbucket-bot/credentials \
+  --secret-string '{"email": "aurora-bot@yourcompany.com", "api_token": "YOUR_SCOPED_TOKEN"}' \
+  --region "$AWS_SM_REGION"
+```
+
+Only **posting** (review comments) uses the bot; investigation reads always use the org's connected account. Bot credentials are never exposed to agent tools.
+
 #### Troubleshooting
 
 | Error | Solution |
@@ -1439,6 +1637,11 @@ Restart Aurora after setting these, then connect via **Connectors** > **Bitbucke
 | "Missing required scopes: ..." | Recreate the API token with all the read+write scopes listed above |
 | "Bitbucket OAuth is not available. Use an API token instead." | `BB_OAUTH_CLIENT_ID`/`BB_OAUTH_CLIENT_SECRET` are not set. Use the API token method, or configure the OAuth consumer |
 | OAuth tab not visible in the UI | `NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH` is not `true`. Set it and restart |
+| Incident Prevention toggle missing | `NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION` is `false`, or Bitbucket is not connected |
+| "Verification pending" when clicking Verify webhook | The token lacks `read:webhook:bitbucket`. Not a failure — open or update a PR and the first delivery confirms the hook automatically |
+| Badge stuck on "Awaiting first delivery" | No PR event has arrived yet. Bitbucket sends no test event on save, so push to a PR. If it still does not flip, check **Repository settings → Webhooks → View requests** for the delivery attempts and their response codes |
+| Badge reads "Webhook URL changed" (red) | Aurora's public URL changed since the hook was verified, so the hook now points at an unreachable address. Click the badge for the current URL and update the existing hook in Bitbucket |
+| PRs never get reviewed | Check the webhook in Bitbucket shows recent 2xx deliveries; confirm the PR targets the default branch and is not a draft; confirm the same org secret was pasted into the repo hook |
 
 ---
 

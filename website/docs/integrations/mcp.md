@@ -45,9 +45,9 @@ These appear in your tool list only when at least one backing integration is con
 
 | Tool | Enabling integrations |
 |------|----------------------|
-| `query_logs` | Datadog · Splunk |
+| `query_logs` | Datadog · Splunk · Elastic |
 | `query_metrics` | Datadog |
-| `query_alerts` | Datadog · New Relic · Dynatrace · OpsGenie · incident.io · Splunk |
+| `query_alerts` | Datadog · New Relic · Dynatrace · OpsGenie · incident.io · Splunk · Elastic |
 | `query_jira` | Jira (search, get issue) |
 | `query_notion` | Notion (list databases, fetch database) |
 | `query_bitbucket` | Bitbucket (workspaces, repos, branches, PRs) |
@@ -78,7 +78,7 @@ URI-fetched reference data — costs zero tokens until requested:
 | `aurora://catalog/skills` | All skills, with per-user connection status |
 | `aurora://incidents/recent` | Last 20 incidents (titles only, no full bodies) |
 | `aurora://runbooks/index` | Runbook index per connected doc connector |
-| `aurora://health` | Live system health: database, Redis, Weaviate, Celery |
+| `aurora://health` | Live system health: database, Redis, Celery |
 
 ## Prompts
 

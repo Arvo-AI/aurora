@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
-from services.correlation import handle_correlated_alert
+from services.correlation import apply_correlation_outcome
 from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
@@ -590,6 +590,14 @@ def process_pagerduty_event(
                 if "customFields" in existing_metadata:
                     alert_metadata["customFields"] = existing_metadata["customFields"]
 
+                # Preserve the live-mode correlation hint stamped at
+                # incident.triggered: later lifecycle events (ack/resolve)
+                # rebuild alert_metadata and the upsert overwrites the row,
+                # which would erase the hint before the recurrence agent
+                # reads it at investigation completion.
+                if "correlation_hint" in existing_metadata:
+                    alert_metadata["correlation_hint"] = existing_metadata["correlation_hint"]
+
                 if event_type == "incident.triggered":
                     try:
                         correlator = AlertCorrelator()
@@ -605,21 +613,20 @@ def process_pagerduty_event(
                             org_id=org_id,
                         )
 
-                        if correlation_result.is_correlated:
-                            handle_correlated_alert(
-                                cursor=cursor,
-                                user_id=user_id,
-                                incident_id=correlation_result.incident_id,
-                                source_type="pagerduty",
-                                source_alert_id=event_db_id,
-                                alert_title=incident_title,
-                                alert_service=service_name,
-                                alert_severity=severity,
-                                correlation_result=correlation_result,
-                                alert_metadata=alert_metadata,
-                                raw_payload=raw_payload,
-                                org_id=org_id,
-                            )
+                        if correlation_result.is_correlated and apply_correlation_outcome(
+                            cursor=cursor,
+                            user_id=user_id,
+                            incident_id=correlation_result.incident_id,
+                            source_type="pagerduty",
+                            source_alert_id=event_db_id,
+                            alert_title=incident_title,
+                            alert_service=service_name,
+                            alert_severity=severity,
+                            correlation_result=correlation_result,
+                            alert_metadata=alert_metadata,
+                            raw_payload=raw_payload,
+                            org_id=org_id,
+                        ):
                             conn.commit()
                             return
                     except Exception as corr_exc:

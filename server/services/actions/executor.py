@@ -193,6 +193,7 @@ def build_action_prompt(
         "## Guidelines",
         "- Use your available tools to complete the task.",
         "- If you need to make infrastructure changes, open a PR rather than applying directly.",
+        "- When editing an existing repo file, use the provider's anchored edit operation where available (Bitbucket: the `edit_file` action); never overwrite a file you already read via a full-content upload.",
         "- Report what you did and any issues encountered.",
     ]
 

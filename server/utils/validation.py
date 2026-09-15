@@ -10,3 +10,8 @@ def is_valid_uuid(value) -> bool:
         return True
     except (ValueError, AttributeError, TypeError):
         return False
+
+
+def strip_nul(text: str) -> str:
+    """Remove NUL (0x00) bytes that PostgreSQL text columns reject."""
+    return text.replace("\x00", "")

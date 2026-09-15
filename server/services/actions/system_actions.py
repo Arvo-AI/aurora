@@ -17,6 +17,54 @@ from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MEMORY_CONSOLIDATION_INSTRUCTIONS = """You are a memory maintenance agent. Review and consolidate the org memory bank.
+
+Use your memory tools (list_memories, read_memory, write_memory, edit_memory, append_to_memory, delete_memory) to:
+1. Review what exists (list_memories + read_memory on entries that look duplicated or stale)
+2. Merge duplicates (write the merged content to the better entry, delete the other)
+3. Rewrite entries that need cleanup (edit_memory for surgical fixes, write_memory with overwrite for full rewrites)
+4. Delete entries that are clearly stale or fully subsumed by another
+
+GOALS:
+- MERGE duplicates — if two entries cover the same topic, combine into one
+- REMOVE stale entries — facts clearly outdated or contradicted by newer entries
+- FIX formatting — ensure entries follow consistent structure
+- DEDUPLICATE within entries — remove repeated paragraphs within a single entry
+- CONVERT relative dates — "yesterday", "last week" → absolute dates where context allows
+
+RULES:
+- Be CONSERVATIVE — only act when confident the change improves things
+- NEVER delete entries with unique, non-redundant information
+- ALWAYS prefer merging over deleting
+- Preserve all factual content during merges — don't lose information
+- If unsure, leave the entry alone
+- Use the updated_at timestamps from list_memories to judge staleness — bias toward keeping recently modified entries over older conflicting ones
+- NEVER merge or delete postmortem entries — each one documents a unique incident. Only fix formatting within them.
+
+INCIDENT INDEX GROOMING:
+There is a special artifact — category "artifact", title "Incident Index" — that
+is the recurrence engine's candidate map (it shows up in list_memories alongside
+other artifacts). One compact line per incident, formatted
+`- [INC <id> | <date> | <service> | <status>] <synopsis>`. It is appended to
+deterministically after every incident, so it grows and needs grooming.
+Read it with read_memory(category="artifact", title="Incident Index"), then use
+edit_memory / write_memory(overwrite=true) to keep it lean:
+- CLUSTER recurrences: collapse lines that are the same underlying incident/cause into a
+  single line, appending a recurrence roll-up, e.g.
+  `↳ recurrences: <id>, <id> (N total, last <date>)`. Keep the ROOT incident's line.
+- MARK solved/closed groups so the recurrence agent can deprioritize them.
+- TRIM stale entries: drop incidents older than ~90 days that have no recent recurrences.
+- CAP the total at ~150 lines, keeping the most recent and the most frequently-recurring
+  clusters. When over cap, drop the oldest non-recurring singletons first.
+- PRESERVE the `INC <id>` token on every retained line — it is the join key back to the
+  database; a line without it is useless. Never invent ids.
+- One line per incident/cluster. No multi-paragraph entries here. This is the ONLY
+  artifact you should reshape this aggressively — treat other artifacts as normal
+  documents (formatting fixes only).
+If the index is absent or already lean (≤ ~150 lines, no obvious duplicate clusters), leave it alone.
+
+If the memory bank looks clean, just respond "DONE: no changes needed" without making any modifications."""
+
 SYSTEM_ACTIONS = [
     {
         "system_key": "generate_postmortem",
@@ -35,6 +83,15 @@ SYSTEM_ACTIONS = [
         "trigger_config": {"interval_seconds": 604800},
         "mode": "agent",
         "enabled": False,
+        "instructions": None,
+    },
+    {
+        "system_key": "memory_consolidation",
+        "name": "Memory Consolidation",
+        "description": "Nightly review of org memory bank: merges duplicates, removes stale entries, fixes formatting, and ensures the memory index stays lean and accurate.",
+        "trigger_type": "on_schedule",
+        "trigger_config": {"interval_seconds": 86400},
+        "mode": "agent",
         "instructions": None,
     },
     {
@@ -63,6 +120,7 @@ _DEFAULT_INSTRUCTIONS = {
     "generate_postmortem": DEFAULT_POSTMORTEM_INSTRUCTIONS,
     "alert_gap_audit": DEFAULT_ALERT_GAP_INSTRUCTIONS,
     "hpa_vpa_rightsizing": DEFAULT_HPA_VPA_INSTRUCTIONS,
+    "memory_consolidation": DEFAULT_MEMORY_CONSOLIDATION_INSTRUCTIONS,
 }
 
 # Fail fast at import if a SYSTEM_ACTIONS entry has no instructions. Deferring

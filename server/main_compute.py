@@ -110,6 +110,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
                        "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/elastic/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                          "Authorization", "X-Provider-Preference"],
+                        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
         r"/incidentio/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                            "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                              "Authorization", "X-Provider-Preference"],
@@ -213,6 +217,9 @@ _OPEN_PREFIXES = (
     # at runtime.
     "/github/callback",
     "/bitbucket/callback",
+    # Bitbucket Incident Prevention webhook — verified via per-org HMAC
+    # (X-Hub-Signature), not session.
+    "/bitbucket/webhook/",
     "/slack/callback",
     "/slack/events",
     "/slack/interactions",
@@ -222,6 +229,7 @@ _OPEN_PREFIXES = (
     "/datadog/webhook/",
     "/grafana/alerts/webhook/",
     "/splunk/alerts/webhook/",
+    "/elastic/alerts/webhook/",
     "/netdata/alerts/webhook/",
     "/bigpanda/webhook/",
     "/dynatrace/webhook/",
@@ -235,7 +243,6 @@ _OPEN_PREFIXES = (
     "/jira/webhook/",
     "/incidentio/alerts/webhook/",
     "/ovh_api/ovh/oauth2/callback",
-    "/azure/callback",
     "/azure/setup-script",
     "/azure/setup-script-ps1",
     "/aws/setup-script",
@@ -439,6 +446,11 @@ import routes.splunk.tasks  # noqa: F401
 app.register_blueprint(splunk_bp, url_prefix="/splunk")
 app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
 
+# --- Elastic Cloud Integration Routes ---
+from routes.elastic import bp as elastic_bp, search_bp as elastic_search_bp
+app.register_blueprint(elastic_bp, url_prefix="/elastic")
+app.register_blueprint(elastic_search_bp, url_prefix="/elastic")
+
 # --- incident.io Integration Routes ---
 from routes.incidentio import bp as incidentio_bp  # noqa: F401
 import routes.incidentio.tasks  # noqa: F401
@@ -481,9 +493,9 @@ from routes.opsgenie import bp as opsgenie_bp  # noqa: F401
 import routes.opsgenie.tasks  # noqa: F401
 app.register_blueprint(opsgenie_bp, url_prefix="/opsgenie")
 
-# --- Knowledge Base Routes ---
-from routes.knowledge_base import bp as knowledge_base_bp  # noqa: F401
-app.register_blueprint(knowledge_base_bp, url_prefix="/api/knowledge-base")
+# --- Memory Routes ---
+from routes.memory import memory_bp  # noqa: F401
+app.register_blueprint(memory_bp, url_prefix="/api/memory")
 
 
 # --- Confluence Integration Routes ---
@@ -517,17 +529,17 @@ app.register_blueprint(notion_bp, url_prefix="/notion")
 from routes.bitbucket.bitbucket import bitbucket_bp
 from routes.bitbucket.bitbucket_browsing import bitbucket_browsing_bp
 from routes.bitbucket.bitbucket_selection import bitbucket_selection_bp
+from routes.bitbucket.bitbucket_webhook import bitbucket_webhook_bp
 app.register_blueprint(bitbucket_bp, url_prefix="/bitbucket")
 app.register_blueprint(bitbucket_browsing_bp, url_prefix="/bitbucket")
 app.register_blueprint(bitbucket_selection_bp, url_prefix="/bitbucket")
+app.register_blueprint(bitbucket_webhook_bp, url_prefix="/bitbucket")
 
 # --- Incidents Routes ---
 from routes.incidents_routes import incidents_bp
 from routes.incidents_sse import incidents_sse_bp
-from routes.incident_feedback import incident_feedback_bp
 app.register_blueprint(incidents_bp)
 app.register_blueprint(incidents_sse_bp)
-app.register_blueprint(incident_feedback_bp)
 from routes.incidents_findings import findings_bp
 app.register_blueprint(findings_bp)
 

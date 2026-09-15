@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
-from services.correlation import handle_correlated_alert
+from services.correlation import apply_correlation_outcome
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +175,7 @@ def process_splunk_alert(
                             alert_metadata["owner"] = payload.get("owner")
 
                         correlation_title = alert_title or "Unknown Alert"
+                        rca_enabled = _should_trigger_background_chat(user_id, payload)
 
                         try:
                             correlator = AlertCorrelator()
@@ -190,21 +191,25 @@ def process_splunk_alert(
                                 org_id=org_id,
                             )
 
-                            if correlation_result.is_correlated:
-                                handle_correlated_alert(
-                                    cursor=cursor,
-                                    user_id=user_id,
-                                    incident_id=correlation_result.incident_id,
-                                    source_type="splunk",
-                                    source_alert_id=alert_db_id,
-                                    alert_title=correlation_title,
-                                    alert_service=service,
-                                    alert_severity=severity,
-                                    correlation_result=correlation_result,
-                                    alert_metadata=alert_metadata,
-                                    raw_payload=payload,
-                                    org_id=org_id,
-                                )
+                            if correlation_result.is_correlated and apply_correlation_outcome(
+                                cursor=cursor,
+                                user_id=user_id,
+                                incident_id=correlation_result.incident_id,
+                                source_type="splunk",
+                                source_alert_id=alert_db_id,
+                                alert_title=correlation_title,
+                                alert_service=service,
+                                alert_severity=severity,
+                                correlation_result=correlation_result,
+                                alert_metadata=alert_metadata,
+                                raw_payload=payload,
+                                org_id=org_id,
+                                # Live hint-only mode needs the fall-through
+                                # to actually create an incident; with RCA
+                                # disabled it would not, so keep the legacy
+                                # attach in that case.
+                                hint_only_eligible=rca_enabled,
+                            ):
                                 conn.commit()
                                 return
                         except Exception as corr_exc:
@@ -214,7 +219,7 @@ def process_splunk_alert(
                             )
 
                         # Check if RCA is enabled before creating incident
-                        if not _should_trigger_background_chat(user_id, payload):
+                        if not rca_enabled:
                             # RCA disabled - just commit the alert and return
                             conn.commit()
                             logger.info(

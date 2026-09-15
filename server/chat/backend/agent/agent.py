@@ -5,7 +5,6 @@ from chat.backend.agent.db import PostgreSQLClient
 from chat.backend.agent.llm import LLMManager, ModelConfig
 from chat.backend.agent.model_mapper import ModelMapper
 from chat.backend.agent.providers import create_chat_model, get_registry
-from chat.backend.agent.weaviate_client import WeaviateClient
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
 from langchain_core.tools import StructuredTool
@@ -15,6 +14,7 @@ from chat.backend.agent.utils.prefix_cache import PrefixCacheManager
 from chat.backend.agent.utils.cache_control import build_cached_system_prompt
 from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, assemble_system_prompt, register_prompt_cache_breakpoints
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker, LLMUsage
+from services.memory.injector import MemoryPrefetch
 import time
 import asyncio
 from datetime import datetime, timezone
@@ -83,13 +83,12 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         return result
 
 class Agent:
-    def __init__(self, weaviate_client: WeaviateClient, postgres_client: PostgreSQLClient, websocket_sender=None, event_loop=None, ctx_len=10):
+    def __init__(self, postgres_client: PostgreSQLClient, websocket_sender=None, event_loop=None, ctx_len=10) -> None:
         self.llm_manager = LLMManager()
         self.postgres_client = postgres_client
-        self.weaviate_client = weaviate_client
         self.ctx_len = ctx_len
-        self.websocket_sender = websocket_sender  # Store websocket_sender directly
-        self.event_loop = event_loop  # Store event loop for thread-safe async calls
+        self.websocket_sender = websocket_sender
+        self.event_loop = event_loop
 
     def set_tool_capture(self, tool_capture):
         """Set the tool capture instance to be used by this agent."""
@@ -347,6 +346,24 @@ class Agent:
                 getattr(state, 'attachments', []),
             )
 
+            # Fire async memory prefetch — runs in parallel with prompt building and tool setup.
+            _memory_prefetch = None
+            if state.user_id and state.session_id:
+                try:
+                    _last_msg_content = ""
+                    if state.messages:
+                        _lm = state.messages[-1]
+                        _last_msg_content = _lm.content if isinstance(getattr(_lm, 'content', ''), str) else str(getattr(_lm, 'content', ''))
+                    if _last_msg_content:
+                        _memory_prefetch = MemoryPrefetch(
+                            user_id=state.user_id,
+                            session_id=state.session_id,
+                            user_message=_last_msg_content,
+                        )
+                        _memory_prefetch.start()
+                except Exception as _mpe:
+                    logging.debug("Failed to start memory prefetch: %s", _mpe)
+
             # Build prompt segments in background while getting tools on main thread
             # (get_cloud_tools needs thread-local context for tool_capture/user resolution)
             from concurrent.futures import ThreadPoolExecutor as _TPE
@@ -360,6 +377,16 @@ class Agent:
                 )
                 tools = get_cloud_tools()
                 segments = _prompt_future.result()
+
+            # Collect prefetch result and append injected memories to the prompt
+            if _memory_prefetch:
+                try:
+                    injected = await _memory_prefetch.get_result_async(timeout=6.0)
+                    if injected:
+                        memory_index = segments.knowledge_base_memory or ""
+                        segments.knowledge_base_memory = (memory_index + "\n\n" + injected) if memory_index else injected
+                except Exception:
+                    logging.debug("Memory prefetch result unavailable")
 
             system_prompt_text = assemble_system_prompt(segments)
             if system_prompt_override is not None:
@@ -379,7 +406,7 @@ class Agent:
                     prompt_text = ' '.join([p['text'] if isinstance(p, dict) and p.get('type') == 'text' else str(p) for p in last_content])
             # Only include zip-related tools if referenced
             if not self._prompt_references_zip(prompt_text, getattr(state, 'attachments', [])):
-                tools = [t for t in tools if getattr(t, 'name', None) not in ('analyze_zip_file', 'rag_index_zip')]
+                tools = [t for t in tools if getattr(t, 'name', None) not in ('analyze_zip_file',)]
 
             # Register canonicalized prefix + tools with cache middleware.
             # Skip for sub-agents: their `system_prompt_override` (the role brief)

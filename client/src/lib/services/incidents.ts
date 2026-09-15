@@ -8,7 +8,7 @@ import { apiGet, apiPost, apiRequest, type ApiError } from '@/lib/services/api-c
 // streaming thoughts, and copy-pasteable post-mortems
 // ============================================================================
 
-export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'dynatrace' | 'coroot' | 'bigpanda' | 'cloudwatch' | 'chat';
+export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'elastic' | 'dynatrace' | 'coroot' | 'bigpanda' | 'cloudwatch' | 'chat';
 
 export function getSourceIconSrc(source: string): string | null {
   if (source === 'chat') return null;
@@ -68,6 +68,17 @@ export interface AlertMetadata {
   incidentUrl?: string;
   urgency?: string;
   customFields?: Record<string, string>;
+
+  // Elastic specific
+  ruleId?: string;
+  ruleName?: string;
+  ruleType?: string;
+  reason?: string;
+  threshold?: string | number;
+  viewInAppUrl?: string;
+  alertDetailsUrl?: string;
+  kibanaUrl?: string;
+  spaceId?: string;
 }
 
 export interface Alert {
@@ -216,15 +227,13 @@ export interface CorrelatedAlert {
   receivedAt: string;
 }
 
-export interface RecentIncident {
+/** A later incident folded into an anchor by the recurrence detector (detail view of the anchor). */
+export interface IncidentOccurrence {
   id: string;
   alertTitle: string;
-  alertService: string;
-  severity: string;
-  sourceType: AlertSource;
   status: IncidentStatus;
-  auroraStatus: AuroraStatus;
-  createdAt: string;
+  startedAt: string;
+  alertFiredAt?: string;
 }
 
 export interface Incident {
@@ -241,6 +250,11 @@ export interface Incident {
   correlatedAlertCount?: number; // Count of correlated alerts (for list view)
   mergedIntoIncidentId?: string; // ID of incident this was merged into
   mergedIntoTitle?: string; // Title of incident this was merged into
+  recurrenceOf?: string | null; // Anchor incident id when this is a recurrence (root-cause dedup)
+  recurrenceOfTitle?: string; // Anchor's title (detail view only)
+  occurrences?: IncidentOccurrence[]; // Recurrences folded into this anchor (detail view only)
+  occurrenceTotal?: number; // Full group size from the server (list ?groups=1 only); exceeds loaded rows when the group was capped
+  occurrencesTotal?: number; // Full member count (detail view); exceeds occurrences.length when the detail list was capped
   postMortem?: PostmortemData;
   startedAt: string;
   analyzedAt?: string;
@@ -296,6 +310,8 @@ export const incidentsService = {
         correlatedAlertCount: inc.correlatedAlertCount || 0,
         mergedIntoIncidentId: inc.mergedIntoIncidentId,
         mergedIntoTitle: inc.mergedIntoTitle,
+        recurrenceOf: inc.recurrenceOf ?? null,
+        occurrenceTotal: inc.occurrenceTotal,
         postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
@@ -382,6 +398,16 @@ export const incidentsService = {
         })),
         mergedIntoIncidentId: inc.mergedIntoIncidentId,
         mergedIntoTitle: inc.mergedIntoTitle,
+        recurrenceOf: inc.recurrenceOf ?? null,
+        recurrenceOfTitle: inc.recurrenceOfTitle,
+        occurrences: (inc.occurrences || []).map((o: any): IncidentOccurrence => ({
+          id: o.id,
+          alertTitle: o.alertTitle,
+          status: o.status as IncidentStatus,
+          startedAt: o.startedAt,
+          alertFiredAt: o.alertFiredAt ?? undefined,
+        })),
+        occurrencesTotal: inc.occurrencesTotal,
         postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
@@ -414,7 +440,8 @@ export const incidentsService = {
   formatDuration(startTime: string): string {
     const start = new Date(startTime).getTime();
     const end = Date.now();
-    const diffMs = end - start;
+    // Provider fire times can run slightly ahead of this clock; never print "-1m".
+    const diffMs = Math.max(0, end - start);
     const diffMins = Math.floor(diffMs / 60000);
     const hours = Math.floor(diffMins / 60);
     const days = Math.floor(hours / 24);
@@ -432,7 +459,7 @@ export const incidentsService = {
   },
 
   formatTimeAgo(timestamp: string): string {
-    const diffMs = Date.now() - new Date(timestamp).getTime();
+    const diffMs = Math.max(0, Date.now() - new Date(timestamp).getTime());
     const diffMins = Math.floor(diffMs / 60000);
     const hours = Math.floor(diffMins / 60);
     const days = Math.floor(hours / 24);
@@ -503,34 +530,6 @@ export const incidentsService = {
       );
     } catch (error) {
       console.error('Error applying fix suggestion:', error);
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      return { success: false, error: message };
-    }
-  },
-
-  async getRecentUnlinkedIncidents(excludeId?: string): Promise<RecentIncident[]> {
-    try {
-      const url = excludeId 
-        ? `/api/incidents/recent-unlinked?exclude=${encodeURIComponent(excludeId)}`
-        : '/api/incidents/recent-unlinked';
-
-      const data = await apiGet<{ incidents: RecentIncident[] }>(url);
-      return data.incidents || [];
-    } catch (error) {
-      console.error('Error fetching recent unlinked incidents:', error);
-      return [];
-    }
-  },
-
-  async mergeAlertToIncident(
-    targetIncidentId: string,
-    sourceIncidentId: string
-  ): Promise<{ success: boolean; error?: string }> {
-    try {
-      await apiPost(`/api/incidents/${targetIncidentId}/merge-alert`, { sourceIncidentId });
-      return { success: true };
-    } catch (error) {
-      console.error('Error merging alert:', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
       return { success: false, error: message };
     }

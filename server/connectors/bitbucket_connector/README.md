@@ -67,3 +67,13 @@ All endpoints are prefixed with `/bitbucket` and require authentication.
 | GET    | `/bitbucket/workspace-selection`            | Get stored selection              |
 | POST   | `/bitbucket/workspace-selection`            | Save selection                    |
 | DELETE | `/bitbucket/workspace-selection`            | Clear selection                   |
+| PUT    | `/bitbucket/repo-selections/<repo>/change-gating` | Toggle Incident Prevention (returns webhook URL + org secret on enable) |
+| POST   | `/bitbucket/webhook/<org_id>`               | Webhook ingress (HMAC-authenticated, no session) |
+
+## Incident Prevention (pre-merge PR review)
+
+Enrolled repos get an advisory Aurora risk review on every PR targeting the
+default branch — see `website/docs/integrations/connectors.md` (Bitbucket →
+Incident Prevention) for setup, webhook details, and the optional dedicated
+bot account (`aurora/system/bitbucket-bot/credentials` system secret; needs
+`read:pullrequest:bitbucket` + `write:pullrequest:bitbucket`).
