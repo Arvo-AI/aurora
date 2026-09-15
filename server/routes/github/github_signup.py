@@ -622,23 +622,18 @@ def github_app_signup_callback():
     started from inside Aurora arrive here too (see module docstring) and
     are dispatched to the authenticated install handler by their state.
     """
-    if not _signup_ready():
-        return _render_error(_ERROR_NOT_AVAILABLE)
-
     installation_id_raw = (request.args.get("installation_id") or "").strip()
     state = (request.args.get("state") or "").strip()
     code = (request.args.get("code") or "").strip()
 
-    if not installation_id_raw or not state:
-        logger.warning("[GITHUB-SIGNUP] callback missing required params")
-        return _render_error(_ERROR_MISSING_PARAMS)
-
-    if not _verify_signup_state(state):
-        # Not a signup state. With OAuth-during-install on, GitHub sends
-        # logged-in users' in-app installs here too (first Callback URL
-        # wins, Setup URL is ignored) — those carry an install-salted state
-        # bound to the Aurora user who clicked Install. Hand them to the
-        # authenticated handler, which re-verifies everything itself.
+    # With OAuth-during-install on, GitHub sends logged-in users' in-app
+    # installs here too (first Callback URL wins, Setup URL is ignored) —
+    # those carry an install-salted state bound to the Aurora user who
+    # clicked Install. Hand them to the authenticated handler, which
+    # re-verifies everything itself. This runs BEFORE the hosted-signup
+    # gate on purpose: flipping HOSTED_SIGNUP_ENABLED off must not break
+    # in-app installs while the App still points at this URL.
+    if state:
         from routes.github.github_app import (
             _verify_install_state,
             github_app_install_callback,
@@ -647,6 +642,15 @@ def github_app_signup_callback():
         if _verify_install_state(state) is not None:
             logger.info("[GITHUB-SIGNUP] install-flow state; delegating to install callback")
             return github_app_install_callback()
+
+    if not _signup_ready():
+        return _render_error(_ERROR_NOT_AVAILABLE)
+
+    if not installation_id_raw or not state:
+        logger.warning("[GITHUB-SIGNUP] callback missing required params")
+        return _render_error(_ERROR_MISSING_PARAMS)
+
+    if not _verify_signup_state(state):
         return _render_error(_ERROR_INVALID_STATE)
 
     if not code:

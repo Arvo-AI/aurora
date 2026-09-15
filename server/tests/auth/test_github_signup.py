@@ -186,6 +186,24 @@ class TestCallbackValidation:
         verify.assert_not_called()
         provision.assert_not_called()
 
+    def test_install_flow_delegation_survives_signup_flag_off(self, signup_app, monkeypatch):
+        # Rollback story: HOSTED_SIGNUP_ENABLED=false while the App still
+        # points at this URL must not strand logged-in users' installs.
+        app, mod = signup_app
+        monkeypatch.setenv("HOSTED_SIGNUP_ENABLED", "false")
+        from itsdangerous import URLSafeTimedSerializer
+
+        install_state = URLSafeTimedSerializer(
+            "test-secret", salt="aurora.github.app.install-state.v1"
+        ).dumps("user-123")
+        with patch("routes.github.github_app.github_app_install_callback",
+                   return_value="DELEGATED") as delegate:
+            resp = app.test_client().get(
+                f"/github/app/signup/callback?installation_id=1&state={install_state}"
+            )
+        assert resp.data == b"DELEGATED"
+        delegate.assert_called_once_with()
+
     def test_forged_state_is_not_delegated(self, signup_app):
         app, mod = signup_app
         with patch("routes.github.github_app.github_app_install_callback") as delegate:
