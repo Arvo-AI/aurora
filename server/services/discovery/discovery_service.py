@@ -128,7 +128,7 @@ def _setup_provider_env(provider_name, user_id, credentials):
         elif provider_name == "azure":
             subscription_id = credentials.get("subscription_id")
             result = setup_azure_environment_isolated(auth_user_id, subscription_id=subscription_id)
-            success, resolved_sub, _auth_type, env, auth_command = result
+            success, resolved_sub, _auth_type, env, _auth_argv = result
             if success and env:
                 # Build credentials dict from env so azure_asset_discovery._build_env works
                 creds = {
@@ -137,6 +137,11 @@ def _setup_provider_env(provider_name, user_id, credentials):
                     "client_secret": env.get("AZURE_CLIENT_SECRET", ""),
                     "subscription_id": resolved_sub or subscription_id,
                 }
+                # The isolated AZURE_CONFIG_DIR is a per-call mkdtemp, but discovery
+                # never uses it: _az_login runs without env=, so it authenticates into
+                # the worker's default ~/.azure. Drop it here or it leaks once per run.
+                if env.get("AZURE_CONFIG_DIR"):
+                    shutil.rmtree(env["AZURE_CONFIG_DIR"], ignore_errors=True)
                 return None, creds  # Azure provider builds its own env from credentials
 
         elif provider_name == "ovh":
@@ -176,6 +181,21 @@ def _setup_provider_env(provider_name, user_id, credentials):
 
 
 def run_discovery_for_user(user_id, connected_providers):
+    """Run discovery, guaranteeing ephemeral credential dirs are removed.
+
+    Wrapper exists so cleanup also runs when the pipeline raises: Azure's
+    AZURE_CONFIG_DIR is a per-call mkdtemp, so an exception on the happy path would
+    otherwise leak one directory per discovery run.
+    """
+    cleanup = []
+    try:
+        return _run_discovery_for_user(user_id, connected_providers, cleanup)
+    finally:
+        for tmpdir in cleanup:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _run_discovery_for_user(user_id, connected_providers, _cleanup_dirs=None):
     """Run the full 3-phase discovery pipeline for a single user.
 
     Args:
@@ -212,10 +232,17 @@ def run_discovery_for_user(user_id, connected_providers):
     # Build authenticated environments for each provider (sequential — credential
     # setup may involve token refresh, STS calls, etc.)
     provider_envs = {}
+
     for provider_name, credentials in connected_providers.items():
         env, updated_creds = _setup_provider_env(provider_name, user_id, credentials)
         provider_envs[provider_name] = (env, updated_creds)
         connected_providers[provider_name] = updated_creds
+        # Register ephemeral credential dirs as soon as they exist, so the wrapper's
+        # finally removes them even if a later phase raises. Azure is absent here on
+        # purpose: its branch drops its own mkdtemp before returning creds.
+        if isinstance(env, dict) and _cleanup_dirs is not None:
+            if env.get("_gcloud_tmpdir"):
+                _cleanup_dirs.append(env["_gcloud_tmpdir"])
 
     with ThreadPoolExecutor(max_workers=len(connected_providers)) as executor:
         futures = {}
@@ -406,11 +433,5 @@ def run_discovery_for_user(user_id, connected_providers):
         f"{total_nodes} nodes, {total_edges} edges, "
         f"{len(summary['errors'])} errors, {elapsed:.1f}s"
     )
-
-    # Clean up any ephemeral gcloud temp directories created during this run.
-    for env, _ in provider_envs.values():
-        tmpdir = env.get("_gcloud_tmpdir") if isinstance(env, dict) else None
-        if tmpdir:
-            shutil.rmtree(tmpdir, ignore_errors=True)
 
     return summary

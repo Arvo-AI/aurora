@@ -64,6 +64,44 @@ def _cache_set(key: str, value: dict) -> None:
             logger.debug(f"Azure cache SET error: {e}")
 
 
+def clear_azure_cache_for_user(user_id: str) -> None:
+    """Drop all cached Azure credentials for a user.
+
+    Called on disconnect. The cached payload contains the service principal's
+    client_secret, so without this the credential stays usable for up to the TTL
+    after the user revoked it, and a reconnect inside that window is served stale
+    credentials. Mirrors clear_gcp_cache_for_user.
+    """
+    cleared_local = 0
+    for key in list(_local_cache.keys()):
+        # Keys are cloud_exec:azure_setup:v1:{user_id}:{sub}:{mode}, so one user has
+        # an entry per subscription and per mode; match on the prefix, not equality.
+        if f":{user_id}:" in key:
+            _local_cache.pop(key, None)
+            cleared_local += 1
+    if cleared_local:
+        logger.info(f"Cleared {cleared_local} entries from local Azure cache for user {user_id}")
+
+    client = _get_cache_client()
+    if client is None:
+        return
+    # SCAN rather than KEYS: KEYS is O(N) over the whole keyspace and blocks Redis.
+    try:
+        cleared_redis = 0
+        batch: list = []
+        for key in client.scan_iter(match=f"cloud_exec:azure_setup:v1:{user_id}:*", count=500):
+            batch.append(key)
+            if len(batch) >= 500:
+                cleared_redis += client.delete(*batch)
+                batch.clear()
+        if batch:
+            cleared_redis += client.delete(*batch)
+        if cleared_redis:
+            logger.info(f"Cleared {cleared_redis} entries from Redis Azure cache for user {user_id}")
+    except Exception as e:
+        logger.warning(f"Error clearing Redis Azure cache for user {user_id}: {e}")
+
+
 def setup_azure_environment_cached(user_id: str, subscription_id: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str], Optional[dict]]:
     """Set up Azure auth with caching.
 

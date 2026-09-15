@@ -10,6 +10,11 @@ def extract_resource_group(resource_id):
     match = re.search(r"/resourceGroups/([^/]+)", resource_id, re.IGNORECASE)
     return match.group(1) if match else None
 
+def extract_subscription_id(resource_id):
+    """Return the subscription id from an ARM resource id, or None."""
+    match = re.search(r"/subscriptions/([^/]+)", resource_id, re.IGNORECASE)
+    return match.group(1) if match else None
+
 def get_aks_clusters(management_token, subscription_id, service_principal_id, tenant_id, client_id, client_secret):
     """
     Fetch all AKS clusters and create a Kubernetes client for each.

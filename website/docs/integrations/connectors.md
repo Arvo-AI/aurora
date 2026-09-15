@@ -229,50 +229,85 @@ Users create this role in their own AWS account:
 
 ### Azure (Microsoft Azure)
 
-Service Principal authentication for Microsoft Azure.
+Service Principal authentication for Microsoft Azure, set up by a script you run in Azure Cloud Shell. Aurora never asks for your Azure password and cannot modify its own permissions.
 
-#### 1. Create App Registration
+The script creates **two** service principals:
 
-1. Go to [Azure Portal > App registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)
-2. Click **+ New registration**
-   - Name: `Aurora`
-   - Supported account types: Single tenant (or multi-tenant if needed)
-   - Redirect URI: **Web** > `http://localhost:5080/azure/callback`
-3. After creation, note down:
-   - **Application (client) ID**
-   - **Directory (tenant) ID**
+| Principal | Roles | Used for |
+|-----------|-------|----------|
+| `Aurora-Agent-*` | Contributor, AKS RBAC Writer, Cost Management Reader | Agent mode (remediation) |
+| `Aurora-ReadOnly-*` | Log Analytics Reader, Cost Management Reader, AKS Cluster User, AKS RBAC Reader | Ask mode (investigation only) |
 
-#### 2. Create Client Secret
+Built-in roles only — no custom roles, and no `cluster-admin`. Contributor excludes all `Microsoft.Authorization` writes, so Aurora cannot escalate its own access in either mode.
 
-1. In the app registration, go to **Certificates & secrets**
-2. Click **+ New client secret**
-   - Description: `Aurora`
-   - Expires: Choose appropriate duration
-3. **Copy the secret Value immediately** (it won't be shown again)
+#### What you need before starting
 
-#### 3. Grant API Permissions
+Azure keeps subscription access and directory access separate, and the script needs both:
 
-1. Go to **API permissions** > **+ Add a permission**
-2. Select **Azure Service Management**
-3. Check **user_impersonation**
-4. Click **Grant admin consent for [your tenant]**
+- **Owner** or **User Access Administrator** on the subscriptions you want covered, to assign the roles.
+- Permission to **register applications** in Entra ID, to create the two service principals. Subscription Owner does *not* include this.
 
-#### 4. Assign Role to Subscription
+If your tenant sets *Users can register applications* to **No**, ask an Entra ID admin to either change that setting or grant you the **Application Developer** role. The script checks this and stops before creating anything, so a missing permission costs you nothing but a re-run.
 
-1. Go to [Subscriptions](https://portal.azure.com/#view/Microsoft_Azure_Billing/SubscriptionsBlade)
-2. Select your subscription
-3. Go to **Access control (IAM)** > **+ Add role assignment**
-4. Role: **Reader** (or **Contributor** for write access)
-5. Members: Select your `Aurora` app
-6. Review + assign
+#### 1. Get the script
+
+In Aurora, go to **Integrations > Azure**. Either click **Copy Script** to put the whole script on your clipboard, or **Download Setup Script** to save it as a file.
+
+#### 2. Run it in Cloud Shell
+
+Open [Azure Cloud Shell](https://shell.azure.com) (Bash). If you copied the script, paste it and press Enter — it writes itself to `setup-aurora-access.sh` and runs. If you downloaded it, upload the file and run:
+
+```bash
+bash setup-aurora-access.sh
+```
+
+Cloud Shell already has `az`, `jq`, `python3` and `kubectl`, and you are already authenticated — nothing to install.
+
+By default this covers **every enabled subscription in your current tenant**. To scope to a management group instead, set the management group ID in Aurora before copying the script, or pass it as an argument:
+
+```bash
+bash setup-aurora-access.sh <management-group-name>
+```
+
+Choose the scope **before the first run**. The script only adds role assignments and never removes them, so running it tenant-wide and then re-running it against a management group leaves the tenant-wide grants in place — it does not narrow them. Each run also creates a new pair of service principals; the script tells you when earlier ones exist so you can delete the ones you no longer use.
+
+:::tip Recommended for multiple subscriptions
+With a management group, roles are assigned **once** at the group scope and every subscription beneath it inherits them. Subscriptions you add to the group later are picked up automatically, with no need to re-run the script.
+
+This requires permission to read the management group; if you get an authorization error, ask an owner to grant you **Management Group Reader**, or omit the argument to use per-subscription scope.
+:::
+
+#### 3. Paste the output into Aurora
+
+The script prints a JSON block containing both sets of credentials and the list of subscriptions. Paste it into Aurora to finish connecting.
+
+#### Multiple subscriptions
+
+All enabled subscriptions in scope are connected. During an investigation the agent queries every connected subscription and then narrows to whichever one holds the affected resource. Scope is controlled in Azure — by the roles the script assigns — not in Aurora, so to exclude a subscription, run the script against a management group that omits it.
+
+#### Private AKS clusters
+
+A private AKS cluster has no public API server endpoint, so it is unreachable from Cloud Shell and from Aurora. RBAC alone is not enough. The script detects these and lists them at the end — connect each one with the [kubectl agent](#installing-the-kubectl-agent), which runs in-cluster and dials out to Aurora.
+
+#### Revoking access
+
+Delete both service principals; the command is printed at the end of the script run.
+
+```bash
+az ad sp delete --id <agent-client-id>
+az ad sp delete --id <readonly-client-id>
+```
 
 #### Troubleshooting
 
 | Error | Solution |
 |-------|----------|
-| "No enabled subscription found" | Assign Reader/Contributor role to the app in subscription IAM |
-| "AADSTS50011: Reply URL mismatch" | Verify redirect URI exactly matches in App Registration |
-| "Insufficient privileges" | Grant admin consent for API permissions |
+| "Insufficient privileges to complete the operation" | Your tenant restricts app registration. Ask a Global Administrator to run the script, or to grant you the **Application Developer** role |
+| "AuthorizationFailed" on `managementGroups/read` | You lack RBAC at the management group. Ask an owner for **Management Group Reader**, or omit the argument to use per-subscription scope |
+| "Management group not found or not readable" | Check the name (not the display name), or omit the argument |
+| "No enabled subscriptions found in tenant" | The script only uses subscriptions in the tenant you are currently logged in to, since a service principal exists in a single tenant. Run `az account set --subscription <id>` for the right tenant first |
+| Authentication fails right after setup | Azure role assignments take 1–2 minutes to propagate. Wait, then retry |
+| `kubectl` commands fail on an AKS cluster | The cluster is likely not Entra-integrated, so Azure RBAC roles do not apply to it. Either enable Entra + Azure RBAC on the cluster, or connect it with the Kubernetes connector |
 
 ---
 
