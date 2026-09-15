@@ -19,6 +19,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useUserId } from "@/hooks/use-user-id";
 import {
@@ -28,50 +36,20 @@ import {
   FileText,
   Brain,
   Plus,
-  BookOpen,
-  Server,
-  Lightbulb,
-  ScrollText,
-  Package,
+  Pencil,
 } from "lucide-react";
 import { useUser } from "@/hooks/useAuthHooks";
 import { DiscoverySettings } from "@/components/DiscoverySettings";
+import { MemoryEditDialog } from "@/components/MemoryEditDialog";
 import { canWrite as checkCanWrite } from "@/lib/roles";
-
-const MEMORY_CATEGORIES = [
-  "context",
-  "runbook",
-  "infrastructure",
-  "learned",
-  "postmortem",
-  "artifact",
-] as const;
-
-// Categories users can manually create/upload and filter by — excludes artifact (internal system category)
-const USER_WRITABLE_CATEGORIES = ["context", "runbook", "infrastructure", "learned", "postmortem"] as const;
-
-// The system-maintained category — users may view these entries but not edit/delete them.
-const SYSTEM_CATEGORY = "artifact";
-
-type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
-
-const CATEGORY_META: Record<MemoryCategory, { label: string; icon: React.ReactNode; color: string }> = {
-  context: { label: "Context", icon: <Brain className="h-3.5 w-3.5" />, color: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200" },
-  runbook: { label: "Runbook", icon: <BookOpen className="h-3.5 w-3.5" />, color: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" },
-  infrastructure: { label: "Infrastructure", icon: <Server className="h-3.5 w-3.5" />, color: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" },
-  learned: { label: "Learned", icon: <Lightbulb className="h-3.5 w-3.5" />, color: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" },
-  postmortem: { label: "Postmortem", icon: <ScrollText className="h-3.5 w-3.5" />, color: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" },
-  artifact: { label: "Artifact", icon: <Package className="h-3.5 w-3.5" />, color: "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200" },
-};
-
-interface MemoryEntry {
-  id: string;
-  title: string;
-  category: MemoryCategory;
-  description: string | null;
-  last_edited_by: string | null;
-  updated_at: string | null;
-}
+import {
+  type MemoryCategory,
+  type MemoryEntry,
+  USER_WRITABLE_CATEGORIES,
+  SYSTEM_CATEGORY,
+  CATEGORY_META,
+  formatEditedBy,
+} from "@/lib/memory-constants";
 
 export function MemorySettings() {
   const { userId, isLoading: userLoading } = useUserId();
@@ -92,10 +70,21 @@ export function MemorySettings() {
   const [newContent, setNewContent] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+  // Holds the attempted create payload when a same-title+category entry already
+  // exists, so we can prompt the user to overwrite or keep both.
+  const [createConflict, setCreateConflict] = useState<{
+    category: MemoryCategory;
+    title: string;
+    content: string;
+    description?: string;
+  } | null>(null);
 
   // Upload state
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Edit dialog state — the entry currently being edited (dialog logic lives in MemoryEditDialog).
+  const [editingEntry, setEditingEntry] = useState<MemoryEntry | null>(null);
 
   const fetchEntries = useCallback(async () => {
     if (!userId) {
@@ -126,39 +115,118 @@ export function MemorySettings() {
     }
   }, [userId, userLoading, fetchEntries]);
 
+  // Core create request. Returns the Response so callers can branch on conflicts.
+  const submitCreate = async (payload: {
+    category: MemoryCategory;
+    title: string;
+    content: string;
+    description?: string;
+    overwrite?: boolean;
+  }) => {
+    return fetch("/api/proxy/memory/entries", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  };
+
+  // Reset the create form and close it after a successful create.
+  const resetCreateForm = () => {
+    setNewTitle("");
+    setNewCategory("context");
+    setNewContent("");
+    setNewDescription("");
+    setShowCreateForm(false);
+  };
+
+  // Build a unique "keep both" title by appending (2), (3), ... within the same
+  // category, so the new entry doesn't collide with the existing one.
+  const buildUniqueTitle = (title: string, category: MemoryCategory) => {
+    const takenInCategory = new Set(
+      entries
+        .filter((e) => e.category === category)
+        .map((e) => e.title.toLowerCase())
+    );
+    let n = 2;
+    let candidate = `${title} (${n})`;
+    while (takenInCategory.has(candidate.toLowerCase())) {
+      n += 1;
+      candidate = `${title} (${n})`;
+    }
+    return candidate;
+  };
+
   const handleCreate = async () => {
     if (!userId) return;
 
+    const payload = {
+      category: newCategory,
+      title: newTitle.trim(),
+      content: newContent.trim(),
+      description: newDescription.trim() || undefined,
+    };
+
     setIsCreating(true);
     try {
-      const res = await fetch("/api/proxy/memory/entries", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          category: newCategory,
-          title: newTitle.trim(),
-          content: newContent.trim(),
-          description: newDescription.trim() || undefined,
-        }),
-      });
+      const res = await submitCreate(payload);
 
       if (res.ok) {
         toast({ title: "Memory entry created" });
-        setNewTitle("");
-        setNewCategory("context");
-        setNewContent("");
-        setNewDescription("");
-        setShowCreateForm(false);
+        resetCreateForm();
+        await fetchEntries();
+        return;
+      }
+
+      // Same title+category already exists — prompt the user to choose.
+      if (res.status === 409) {
+        setCreateConflict(payload);
+        return;
+      }
+
+      const text = await res.text();
+      let msg = "Failed to create entry";
+      try { msg = JSON.parse(text).error || msg; } catch {}
+      throw new Error(msg);
+    } catch (error) {
+      toast({
+        title: "Failed to create",
+        description: error instanceof Error ? error.message : "An error occurred",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  // Resolve a create conflict by either overwriting the existing entry or
+  // creating a second entry under a unique "(2)" title.
+  const resolveConflict = async (mode: "overwrite" | "keep-both") => {
+    if (!createConflict) return;
+
+    const payload =
+      mode === "overwrite"
+        ? { ...createConflict, overwrite: true }
+        : { ...createConflict, title: buildUniqueTitle(createConflict.title, createConflict.category) };
+
+    setIsCreating(true);
+    try {
+      const res = await submitCreate(payload);
+      if (res.ok) {
+        toast({
+          title: mode === "overwrite" ? "Memory entry overwritten" : "Memory entry created",
+        });
+        setCreateConflict(null);
+        resetCreateForm();
         await fetchEntries();
       } else {
         const text = await res.text();
-        let msg = "Failed to create entry";
+        let msg = "Failed to save entry";
         try { msg = JSON.parse(text).error || msg; } catch {}
         throw new Error(msg);
       }
     } catch (error) {
       toast({
-        title: "Failed to create",
+        title: "Failed to save",
         description: error instanceof Error ? error.message : "An error occurred",
         variant: "destructive",
       });
@@ -536,26 +604,37 @@ export function MemorySettings() {
                           {entry.updated_at && (
                             <span>{formatDate(entry.updated_at)}</span>
                           )}
-                          {entry.last_edited_by && (
-                            <span className="capitalize">by {entry.last_edited_by}</span>
+                          {formatEditedBy(entry) && (
+                            <span>by {formatEditedBy(entry)}</span>
                           )}
                         </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       {canWrite && !isSystem && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleDelete(entry.id, entry.title)}
-                          disabled={deletingId === entry.id}
-                        >
-                          {deletingId === entry.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
-                          )}
-                        </Button>
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => setEditingEntry(entry)}
+                            title="Edit memory entry"
+                          >
+                            <Pencil className="h-4 w-4 text-muted-foreground hover:text-primary" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDelete(entry.id, entry.title)}
+                            disabled={deletingId === entry.id}
+                            title="Delete memory entry"
+                          >
+                            {deletingId === entry.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                            )}
+                          </Button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -565,6 +644,55 @@ export function MemorySettings() {
           )}
         </CardContent>
       </Card>
+
+      {/* Edit Memory Dialog */}
+      <MemoryEditDialog
+        entry={editingEntry}
+        onOpenChange={(open) => { if (!open) setEditingEntry(null); }}
+        onSaved={fetchEntries}
+      />
+
+      {/* Duplicate title conflict — let the user overwrite or keep both */}
+      <Dialog
+        open={!!createConflict}
+        onOpenChange={(open) => { if (!open && !isCreating) setCreateConflict(null); }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Entry already exists</DialogTitle>
+            <DialogDescription>
+              {createConflict && (
+                <>
+                  A memory entry titled &ldquo;{createConflict.title}&rdquo; already exists in the{" "}
+                  {CATEGORY_META[createConflict.category]?.label ?? createConflict.category} category.
+                  Overwrite it, or keep both by saving this as a new entry?
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button variant="ghost" onClick={() => setCreateConflict(null)} disabled={isCreating}>
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => resolveConflict("keep-both")}
+              disabled={isCreating}
+            >
+              {isCreating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Keep both
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => resolveConflict("overwrite")}
+              disabled={isCreating}
+            >
+              {isCreating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Overwrite
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <DiscoverySettings />
     </div>
