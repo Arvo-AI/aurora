@@ -401,7 +401,9 @@ def exchange_handoff():
             "id": user_id,
             "email": user_email,
             "name": user_name,
-            "role": user_role or "admin",
+            # Signup always writes role='admin'; if it is ever missing, fail
+            # toward the least privilege the frontend middleware understands.
+            "role": user_role or "viewer",
             "orgId": user_org_id,
             "orgName": org_row[0] if org_row else None,
             "mustChangePassword": bool(must_change_pw),

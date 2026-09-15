@@ -511,7 +511,13 @@ class TestProvisioning:
              patch("utils.auth.command_policy.seed_default_command_policy"), \
              patch("utils.auth.tool_registry.seed_org_tool_permissions"), \
              patch("routes.audit_routes.record_audit_event"):
-            mod._provision_and_handoff(self._IDENTITY, _install_payload())
+            _, user_id, _, created = mod._provision_and_handoff(
+                self._IDENTITY, _install_payload()
+            )
+        # Pin the success path: on the failure path the INSERT is still
+        # recorded, so the hash assertion alone could pass vacuously.
+        assert user_id == "new-user"
+        assert created is True
         insert = next(
             c for c in cur.execute.call_args_list
             if "INSERT INTO users" in c.args[0]
