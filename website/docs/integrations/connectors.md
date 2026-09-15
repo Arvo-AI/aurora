@@ -449,6 +449,27 @@ default Helm ingress that's the `api.<domain>` host (`ingress.hosts.api`, e.g.
 Only the **Homepage URL** uses the frontend hostname (`<FRONTEND_URL>`).
 :::
 
+:::note Hosted deployments only — one-click website signup
+If you run a hosted Aurora and want the marketing site's "Install" CTA to
+provision an account straight from the GitHub install screen
+(`HOSTED_SIGNUP_ENABLED=true`, see [Environment](../configuration/environment.md)),
+configure the App additionally as follows:
+
+| Setting | Value |
+|---|---|
+| Callback URLs | Add `<API_URL>/github/app/signup/callback` and make it the **first** entry. Keep `<API_URL>/github/callback` as a later entry. |
+| Request user authorization (OAuth) during installation | **Checked** |
+| Client secret | Generate one and set `GITHUB_APP_CLIENT_SECRET` on the server |
+| Account permissions → Email addresses | Read-only (lets Aurora use the installer's verified primary email; without it the account gets a `@users.noreply.github.com` address) |
+
+With that checkbox on, GitHub **ignores the Setup URL** and sends every
+install — including logged-in users clicking Install inside Aurora — to the
+first Callback URL, which is why the signup callback must be first. It
+recognises in-app installs by their signed state and hands them to the
+regular install handler, so both flows keep working. Self-hosted installs
+should leave all of this alone.
+:::
+
 **Repository permissions** (set in Permissions & events tab):
 
 | Permission | Access level | Why |

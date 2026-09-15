@@ -378,6 +378,12 @@ app.register_blueprint(github_repo_selection_bp, url_prefix="/github")
 app.register_blueprint(github_webhook_bp, url_prefix="/github")
 app.register_blueprint(github_app_bp, url_prefix="/github")
 app.register_blueprint(github_oauth_bp, url_prefix="/github")
+# Public, unauthenticated entry points: /start mints a signed state per hit and
+# /callback fans out to GitHub + a provisioning transaction, so give them a
+# much tighter per-IP budget than the global default. Applied here (not in the
+# route module) so the blueprint stays importable in the lightweight test env,
+# which has no flask_limiter.
+limiter.limit("10 per minute;30 per hour")(github_signup_bp)
 app.register_blueprint(github_signup_bp, url_prefix="/github")
 
 # --- GitLab Integration Routes ---

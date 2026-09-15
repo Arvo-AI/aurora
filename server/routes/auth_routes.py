@@ -13,6 +13,7 @@ from flask import Blueprint, request, jsonify
 from utils.db.db_utils import connect_to_db_as_user
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_auth_only
+from utils.web.limiter_ext import limiter
 import os
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
@@ -341,6 +342,7 @@ def setup_org(user_id):
 
 
 @auth_bp.route('/handoff', methods=['POST'])
+@limiter.limit("10 per minute;30 per hour")
 def exchange_handoff():
     """Exchange a one-time signup handoff token for a session payload.
 

@@ -34,6 +34,19 @@ Anti-spoofing invariants (mirrors ``github_app.py`` — do NOT relax):
        ``github_user_id`` (previously proven ownership). An email-only
        collision redirects to sign-in instead — a GitHub account whose
        email matches an Aurora account must not become a login bypass.
+    6. The OAuth user MUST be authorized for the ``installation_id`` they
+       present (``GET /user/installations`` with their token lists it).
+       Installation ids are sequential and guessable; without this check a
+       caller could swap in another org's installation and have Aurora link
+       it — and import its repos — under the caller's account.
+
+Interaction with the authenticated in-app install flow: once "Request user
+authorization (OAuth) during installation" is on, GitHub ignores the App's
+Setup URL and sends EVERY install (website signup AND logged-in users
+clicking "Install" inside Aurora) to the App's FIRST registered Callback
+URL. So this callback must be that first URL, and it dispatches on the
+``state`` salt: signup-salted states run the flow below, install-salted
+states are handed to ``github_app.github_app_install_callback`` unchanged.
 """
 
 from __future__ import annotations
@@ -77,7 +90,16 @@ _ERROR_INVALID_STATE = "Signup request could not be verified. Please try again f
 _ERROR_BAD_INSTALL_ID = "GitHub installation could not be verified"
 _ERROR_GITHUB_API = "Could not verify installation with GitHub"
 _ERROR_IDENTITY = "Could not verify your GitHub identity"
+_ERROR_INSTALL_NOT_AUTHORIZED = (
+    "Your GitHub account does not have access to this installation"
+)
 _ERROR_INTERNAL = "An internal error occurred while creating your account"
+
+# GET /user/installations pagination bound. 100 per page is GitHub's max;
+# 10 pages (1,000 installations) is far beyond any real user and keeps a
+# hostile/looping API from turning one callback into unbounded requests.
+_USER_INSTALLATIONS_PER_PAGE = 100
+_USER_INSTALLATIONS_MAX_PAGES = 10
 
 _SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
 
@@ -204,12 +226,15 @@ def _verify_installation(installation_id: int) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _exchange_code_for_identity(code: str) -> dict | None:
+def _exchange_code_for_identity(code: str) -> tuple[dict, str] | None:
     """Exchange the install-time OAuth ``code`` for the GitHub user identity.
 
-    Returns ``{"id": int, "login": str, "name": str|None, "email": str}``
-    or None. The email is GitHub's verified primary when available, else
-    the ``{id}+{login}@users.noreply.github.com`` convention.
+    Returns ``(identity, access_token)`` where identity is
+    ``{"id": int, "login": str, "name": str|None, "email": str}``, or None.
+    The email is GitHub's verified primary when available, else the
+    ``{id}+{login}@users.noreply.github.com`` convention. The user access
+    token is returned so the caller can prove the user is authorized for
+    the installation (invariant #6); it is never persisted.
     """
     from connectors.github_connector.config import load_github_app_config
 
@@ -294,7 +319,58 @@ def _exchange_code_for_identity(code: str) -> dict | None:
         email = f"{gh_id}+{login}@users.noreply.github.com"
 
     name = user.get("name") if isinstance(user.get("name"), str) else None
-    return {"id": gh_id, "login": login, "name": name or login, "email": email}
+    identity = {"id": gh_id, "login": login, "name": name or login, "email": email}
+    return identity, access_token
+
+
+def _user_authorized_for_installation(access_token: str, installation_id: int) -> bool:
+    """True iff ``GET /user/installations`` (as the OAuth user) lists ``installation_id``.
+
+    GitHub only returns installations the token's user can access (owner,
+    collaborator, or org member with permission), so presence here proves
+    the installer is entitled to the installation they presented. Any
+    failure is a rejection — this gate must fail closed.
+    """
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": _GH_JSON_MEDIA_TYPE,
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    for page in range(1, _USER_INSTALLATIONS_MAX_PAGES + 1):
+        try:
+            resp = requests.get(
+                "https://api.github.com/user/installations",
+                headers=headers,
+                params={"per_page": _USER_INSTALLATIONS_PER_PAGE, "page": page},
+                timeout=GITHUB_TIMEOUT,
+            )
+        except requests.RequestException:
+            logger.exception("[GITHUB-SIGNUP] /user/installations request failed")
+            return False
+        if resp.status_code != 200:
+            logger.warning(
+                "[GITHUB-SIGNUP] /user/installations returned status=%d", resp.status_code
+            )
+            return False
+        try:
+            payload = resp.json()
+        except ValueError:
+            return False
+        installations = payload.get("installations") if isinstance(payload, dict) else None
+        if not isinstance(installations, list):
+            return False
+        if any(
+            isinstance(inst, dict) and inst.get("id") == installation_id
+            for inst in installations
+        ):
+            return True
+        if len(installations) < _USER_INSTALLATIONS_PER_PAGE:
+            break
+    logger.warning(
+        "[GITHUB-SIGNUP] OAuth user is not authorized for installation_id=%d",
+        installation_id,
+    )
+    return False
 
 
 def _unique_org_identity(cur, base_name: str) -> tuple[str, str]:
@@ -542,7 +618,9 @@ def github_app_signup_callback():
     """Public callback for the one-click signup install.
 
     GitHub (with request-user-authorization enabled) redirects here with
-    ``code`` + ``installation_id`` + ``setup_action`` + ``state``.
+    ``code`` + ``installation_id`` + ``setup_action`` + ``state``. Installs
+    started from inside Aurora arrive here too (see module docstring) and
+    are dispatched to the authenticated install handler by their state.
     """
     if not _signup_ready():
         return _render_error(_ERROR_NOT_AVAILABLE)
@@ -551,12 +629,29 @@ def github_app_signup_callback():
     state = (request.args.get("state") or "").strip()
     code = (request.args.get("code") or "").strip()
 
-    if not installation_id_raw or not state or not code:
+    if not installation_id_raw or not state:
         logger.warning("[GITHUB-SIGNUP] callback missing required params")
         return _render_error(_ERROR_MISSING_PARAMS)
 
     if not _verify_signup_state(state):
+        # Not a signup state. With OAuth-during-install on, GitHub sends
+        # logged-in users' in-app installs here too (first Callback URL
+        # wins, Setup URL is ignored) — those carry an install-salted state
+        # bound to the Aurora user who clicked Install. Hand them to the
+        # authenticated handler, which re-verifies everything itself.
+        from routes.github.github_app import (
+            _verify_install_state,
+            github_app_install_callback,
+        )
+
+        if _verify_install_state(state) is not None:
+            logger.info("[GITHUB-SIGNUP] install-flow state; delegating to install callback")
+            return github_app_install_callback()
         return _render_error(_ERROR_INVALID_STATE)
+
+    if not code:
+        logger.warning("[GITHUB-SIGNUP] signup callback missing OAuth code")
+        return _render_error(_ERROR_MISSING_PARAMS)
 
     try:
         installation_id = int(installation_id_raw)
@@ -575,9 +670,15 @@ def github_app_signup_callback():
         logger.warning("[GITHUB-SIGNUP] installation metadata failed validation")
         return _render_error(_ERROR_BAD_INSTALL_ID)
 
-    identity = _exchange_code_for_identity(code)
-    if identity is None:
+    exchanged = _exchange_code_for_identity(code)
+    if exchanged is None:
         return _render_error(_ERROR_IDENTITY)
+    identity, access_token = exchanged
+
+    # Invariant #6: the installer must actually have access to the
+    # installation they presented. Checked BEFORE any DB write.
+    if not _user_authorized_for_installation(access_token, installation_id):
+        return _render_error(_ERROR_INSTALL_NOT_AUTHORIZED)
 
     response, user_id, linked_installation_id, created = _provision_and_handoff(
         identity, install_data
