@@ -122,7 +122,7 @@ def elastic_list_indices(pattern: str = "*", user_id: Optional[str] = None, **kw
     from routes.elastic.search_routes import merge_index_listing
 
     pattern = (pattern or "*").strip() or "*"
-    logger.info("[ELASTIC-TOOL] list_indices user=%s pattern=%s", sanitize(user_id), pattern[:80])
+    logger.info("[ELASTIC-TOOL] list_indices user=%s pattern=%s", sanitize(user_id), sanitize(pattern)[:80])
     try:
         resolved = client.resolve_indices(pattern)
         cat = client.cat_indices(pattern)
@@ -160,7 +160,7 @@ def elastic_get_fields(index: str, prefix: Optional[str] = None, user_id: Option
     requested_index = (index or "").strip()
     index = requested_index or default_index
     prefix = (prefix or "").strip()
-    logger.info("[ELASTIC-TOOL] get_fields user=%s index=%s prefix=%s", sanitize(user_id), requested_index[:80] or "<default>", prefix[:40])
+    logger.info("[ELASTIC-TOOL] get_fields user=%s index=%s prefix=%s", sanitize(user_id), sanitize(requested_index)[:80] or "<default>", sanitize(prefix)[:40])
     try:
         caps = client.field_caps(index, f"{prefix}*" if prefix else "*")
     except Exception as exc:
@@ -228,7 +228,7 @@ def elastic_search_logs(
     if fields:
         body["_source"] = [str(f) for f in fields][:100]
 
-    logger.info("[ELASTIC-TOOL] search user=%s index=%s query=%s", sanitize(user_id), requested_index[:80] or "<default>", (query or "")[:100])
+    logger.info("[ELASTIC-TOOL] search user=%s index=%s query=%s", sanitize(user_id), sanitize(requested_index)[:80] or "<default>", sanitize(query or "")[:100])
     try:
         result = client.search(index, body)
     except Exception as exc:
@@ -296,7 +296,7 @@ def elastic_esql(
     else:
         start, end = resolve_window(time_range=time_range)
         filter_dsl = {"range": {timestamp_field: {"gte": start, "lte": end}}}
-    logger.info("[ELASTIC-TOOL] esql user=%s query=%s", sanitize(user_id), query[:120])
+    logger.info("[ELASTIC-TOOL] esql user=%s query=%s", sanitize(user_id), sanitize(query)[:120])
     try:
         result = client.esql(query, filter_dsl)
     except Exception as exc:

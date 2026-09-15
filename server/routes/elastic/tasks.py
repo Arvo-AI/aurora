@@ -435,6 +435,7 @@ def _process_with_cursor(cursor, conn, user_id: str, org_id: str, normalized: Di
         )
         conn.commit()
     except Exception as e:
+        conn.rollback()  # the incident is already committed; keep the connection usable for the RCA bookkeeping below
         logger.warning("[ELASTIC] Failed to record primary alert: %s", e)
 
     if not incident_id:
