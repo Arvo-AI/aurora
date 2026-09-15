@@ -68,11 +68,8 @@ image:
   # Container registry where images are stored
   registry: "your-registry"  #Examples: docker.io/myorg, gcr.io/project-id, ghcr.io/myorg
   
-  # Image tag (version) to deploy.
-  # Leave empty to track the chart's appVersion — the recommended default, so a
-  # `helm upgrade --version X.Y.Z` deploys the matching immutable image tag and
-  # rolls the pods automatically. Only pin this (e.g. a sha-<short> tag) to
-  # override a specific build; avoid "latest" (mutable → stale, no rollout).
+  # Image tag to deploy. Empty = track the chart's appVersion (recommended).
+  # Pin a specific tag (e.g. sha-<short>) to override; avoid "latest" (mutable).
   tag: ""
   
   # Optional: Pull secrets for private registries
