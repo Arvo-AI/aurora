@@ -14,15 +14,14 @@ from pydantic import BaseModel, Field
 from connectors.elastic_connector.client import (
     TIMESTAMP_FIELD,
     ElasticAPIError,
-    ElasticClient,
     build_log_query,
     compact_hits,
     contains_script_clause,
+    get_elastic_client_for_user,
     resolve_window,
 )
-from utils.auth.token_management import get_token_data
-from utils.flags.feature_flags import is_elastic_enabled
 from utils.log_sanitizer import sanitize
+from utils.query_helpers import clamp_int
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,7 @@ MAX_INDICES_RETURN = 300
 MAX_FIELDS_RETURN = 400
 MAX_SEARCH_HITS = 500
 MAX_ESQL_ROWS = 500
-DEFAULT_INDEX_PATTERN = "logs-*"
+_ERR_NOT_CONNECTED = json.dumps({"error": "Elastic not connected. Connect Elastic Cloud in Aurora first."})
 _LIMIT_RE = re.compile(r"\|\s*limit\s+\d+", re.IGNORECASE)
 _TS_FIELD_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,128}$")
 
@@ -85,33 +84,9 @@ class ElasticGetAlertsArgs(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-def _get_elastic_credentials(user_id: Optional[str]) -> Optional[Dict[str, Any]]:
-    if not user_id or not is_elastic_enabled():
-        return None
-    try:
-        creds = get_token_data(user_id, "elastic")
-        if not creds:
-            return None
-        if not creds.get("api_key") or not creds.get("elasticsearch_url"):
-            logger.warning("[ELASTIC-TOOL] Credentials exist but missing api_key or elasticsearch_url")
-            return None
-        return creds
-    except Exception:
-        logger.exception("[ELASTIC-TOOL] Failed to get credentials")
-        return None
-
-
 def is_elastic_connected(user_id: str) -> bool:
-    """True when the feature flag is on and the user has a stored Elastic connection."""
-    return _get_elastic_credentials(user_id) is not None
-
-
-def _client(creds: Dict[str, Any]) -> ElasticClient:
-    return ElasticClient(creds["elasticsearch_url"], creds["api_key"], kibana_url=creds.get("kibana_url"))
-
-
-def _not_connected() -> str:
-    return json.dumps({"error": "Elastic not connected. Connect Elastic Cloud in Aurora first."})
+    """Gate for the agent tools, the skill's connection_check and MCP: True when a usable connection is stored."""
+    return get_elastic_client_for_user(user_id)[0] is not None
 
 
 def _error(exc: Exception, what: str) -> str:
@@ -134,13 +109,6 @@ def _fit_output(items: List[Any], max_size: int = MAX_OUTPUT_SIZE) -> tuple:
     return kept, False
 
 
-def _int(value: Any, default: int, lo: int, hi: int) -> int:
-    try:
-        return max(lo, min(int(value), hi))
-    except (TypeError, ValueError):
-        return default
-
-
 # --------------------------------------------------------------------------- #
 # Tools
 # --------------------------------------------------------------------------- #
@@ -148,15 +116,14 @@ def _int(value: Any, default: int, lo: int, hi: int) -> int:
 
 def elastic_list_indices(pattern: str = "*", user_id: Optional[str] = None, **kwargs) -> str:
     """List indices, data streams and aliases matching a pattern."""
-    creds = _get_elastic_credentials(user_id)
-    if not creds:
-        return _not_connected()
+    client, default_index = get_elastic_client_for_user(user_id)
+    if client is None:
+        return _ERR_NOT_CONNECTED
     from routes.elastic.search_routes import merge_index_listing
 
     pattern = (pattern or "*").strip() or "*"
     logger.info("[ELASTIC-TOOL] list_indices user=%s pattern=%s", sanitize(user_id), pattern[:80])
     try:
-        client = _client(creds)
         resolved = client.resolve_indices(pattern)
         cat = client.cat_indices(pattern)
     except Exception as exc:
@@ -170,7 +137,7 @@ def elastic_list_indices(pattern: str = "*", user_id: Optional[str] = None, **kw
     result: Dict[str, Any] = {
         "success": True,
         "pattern": pattern,
-        "default_index_pattern": creds.get("index_pattern") or DEFAULT_INDEX_PATTERN,
+        "default_index_pattern": default_index,
         "index_count": len(entries),
         "total": total,
         "indices": entries,
@@ -185,17 +152,17 @@ def elastic_list_indices(pattern: str = "*", user_id: Optional[str] = None, **kw
 
 def elastic_get_fields(index: str, prefix: Optional[str] = None, user_id: Optional[str] = None, **kwargs) -> str:
     """List field names and types for an index pattern."""
-    creds = _get_elastic_credentials(user_id)
-    if not creds:
-        return _not_connected()
+    client, default_index = get_elastic_client_for_user(user_id)
+    if client is None:
+        return _ERR_NOT_CONNECTED
     from routes.elastic.search_routes import summarize_field_caps
 
     requested_index = (index or "").strip()
-    index = requested_index or creds.get("index_pattern") or DEFAULT_INDEX_PATTERN
+    index = requested_index or default_index
     prefix = (prefix or "").strip()
     logger.info("[ELASTIC-TOOL] get_fields user=%s index=%s prefix=%s", sanitize(user_id), requested_index[:80] or "<default>", prefix[:40])
     try:
-        caps = _client(creds).field_caps(index, f"{prefix}*" if prefix else "*")
+        caps = client.field_caps(index, f"{prefix}*" if prefix else "*")
     except Exception as exc:
         return _error(exc, "Get fields")
 
@@ -227,13 +194,13 @@ def elastic_search_logs(
     **kwargs,
 ) -> str:
     """Search log documents with a Lucene query_string (or raw Query DSL)."""
-    creds = _get_elastic_credentials(user_id)
-    if not creds:
-        return _not_connected()
+    client, default_index = get_elastic_client_for_user(user_id)
+    if client is None:
+        return _ERR_NOT_CONNECTED
 
     requested_index = (index or "").strip()
-    index = requested_index or creds.get("index_pattern") or DEFAULT_INDEX_PATTERN
-    limit = _int(limit, 100, 1, MAX_SEARCH_HITS)
+    index = requested_index or default_index
+    limit = clamp_int(limit, 100, 1, MAX_SEARCH_HITS)
     timestamp_field = (timestamp_field or TIMESTAMP_FIELD).strip()
     if not _TS_FIELD_RE.match(timestamp_field):
         return json.dumps({"error": "timestamp_field is invalid"})
@@ -263,7 +230,7 @@ def elastic_search_logs(
 
     logger.info("[ELASTIC-TOOL] search user=%s index=%s query=%s", sanitize(user_id), requested_index[:80] or "<default>", (query or "")[:100])
     try:
-        result = _client(creds).search(index, body)
+        result = client.search(index, body)
     except Exception as exc:
         return _error(exc, "Search")
 
@@ -307,9 +274,9 @@ def elastic_esql(
     **kwargs,
 ) -> str:
     """Run an ES|QL query with an optional relative time pre-filter (``time_range='all'`` disables it)."""
-    creds = _get_elastic_credentials(user_id)
-    if not creds:
-        return _not_connected()
+    client, _ = get_elastic_client_for_user(user_id)
+    if client is None:
+        return _ERR_NOT_CONNECTED
     if not query or not isinstance(query, str):
         return json.dumps({"error": "query is required"})
     query = query.strip()
@@ -331,7 +298,7 @@ def elastic_esql(
         filter_dsl = {"range": {timestamp_field: {"gte": start, "lte": end}}}
     logger.info("[ELASTIC-TOOL] esql user=%s query=%s", sanitize(user_id), query[:120])
     try:
-        result = _client(creds).esql(query, filter_dsl)
+        result = client.esql(query, filter_dsl)
     except Exception as exc:
         return _error(exc, "ES|QL query")
 
@@ -363,19 +330,19 @@ def elastic_get_alerts(
     **kwargs,
 ) -> str:
     """List Kibana alert documents from the ``.alerts-*`` indices."""
-    creds = _get_elastic_credentials(user_id)
-    if not creds:
-        return _not_connected()
+    client, _ = get_elastic_client_for_user(user_id)
+    if client is None:
+        return _ERR_NOT_CONNECTED
     from routes.elastic.search_routes import format_alert_hits
 
     status = (status or "active").lower()
     if status not in ("active", "recovered", "all"):
         return json.dumps({"error": "status must be 'active', 'recovered' or 'all'"})
-    hours = _int(hours, 24, 1, 24 * 90)
-    limit = _int(limit, 50, 1, MAX_SEARCH_HITS)
+    hours = clamp_int(hours, 24, 1, 24 * 90)
+    limit = clamp_int(limit, 50, 1, MAX_SEARCH_HITS)
     logger.info("[ELASTIC-TOOL] get_alerts user=%s status=%s hours=%s", sanitize(user_id), status, hours)
     try:
-        result = _client(creds).search_alerts(status=status, hours=hours, size=limit, rule_name=rule_name)
+        result = client.search_alerts(status=status, hours=hours, size=limit, rule_name=rule_name)
     except Exception as exc:
         return _error(exc, "Get alerts")
 

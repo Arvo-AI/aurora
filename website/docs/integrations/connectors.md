@@ -1209,10 +1209,6 @@ All calls use Bearer token auth over HTTPS on port 8089.
 
 API-key authentication for Elasticsearch + Kibana. Works with **Elastic Cloud Hosted** (Cloud ID), **Elastic Cloud Serverless** (endpoint URLs) and **self-managed** clusters. Aurora is read-only against Elastic: it searches logs, reads Kibana alert documents and lists alerting rules, and it never writes.
 
-:::note Feature flag
-The connector is behind a feature flag that is **off by default**. Set `NEXT_PUBLIC_ENABLE_ELASTIC=true` in your `.env` (or Helm `values.yaml`) and restart the stack. With the flag off the connector card, the `/elastic/*` API routes, the agent tools and the MCP tools are all hidden.
-:::
-
 #### 1. Create a read-only API key
 
 **Option A (recommended): an admin creates a restricted key.**
@@ -1278,7 +1274,7 @@ Aurora exposes a per-user webhook URL and a secret on the connector page. In Kib
 
 The Webhook connector is a **Gold+** feature on self-managed clusters (a Basic license returns a license error). Elastic Cloud subscriptions include it.
 
-**Enable Alert RCA.** Webhook alerts are always stored and visible under **View Alerts**. Incidents and automatic investigations are only created when the **Enable Alert RCA** switch on the connector page is on (it is off by default, for teams whose incidents already come from another source such as incident.io).
+**Enable Alert RCA.** Webhook alerts are always stored and visible under **View Alerts**. With the **Enable Alert RCA** switch on the connector page on (the default), each new alert also creates an incident and starts an automatic investigation. Turn it off if your incidents already come from another source such as incident.io and you only want the alerts stored.
 
 #### What Aurora Queries
 
@@ -1305,7 +1301,7 @@ All calls send `Authorization: ApiKey <encoded>` to the endpoint you configured 
 | "unauthorized ... manage_own_api_key" when a Viewer creates a key | Viewer cannot create API keys. Use Option A, or add a custom role with `manage_own_api_key` to that user. |
 | Kibana "license" error when saving the Webhook connector | Self-managed Basic license. Start a trial or upgrade; Elastic Cloud includes the connector. |
 | Kibana shows "not verified" after connecting | Aurora could not reach the Kibana URL. Logs and alerts still work; check the URL or network path if you need rule listing. |
-| Alerts arrive but no incident is created | Turn on **Enable Alert RCA** on the connector page. Recovery events never create incidents. |
+| Alerts arrive but no incident is created | Check that **Enable Alert RCA** on the connector page is on. Recovery events never create incidents. |
 | Kibana action fails with `[401] UNAUTHORIZED` | The webhook secret changed (disconnecting deletes it; reconnecting generates a new one). Copy the current secret from Aurora into the Kibana connector. |
 
 ---

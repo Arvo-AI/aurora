@@ -158,7 +158,7 @@ export function ElasticWebhookStep({ status, onDisconnect, loading }: Readonly<E
   const { toast } = useToast();
   const [webhook, setWebhook] = useState<ElasticWebhookInfo | null>(null);
   const [loadingWebhook, setLoadingWebhook] = useState(true);
-  const [rcaEnabled, setRcaEnabled] = useState(false);
+  const [rcaEnabled, setRcaEnabled] = useState(true);
   const [loadingRca, setLoadingRca] = useState(true);
   const [updatingRca, setUpdatingRca] = useState(false);
 

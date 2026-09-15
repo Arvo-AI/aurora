@@ -6,8 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ExternalLink } from "lucide-react";
 import { elasticService, ElasticAlert, isHttpUrl } from "@/lib/services/elastic";
-import { isElasticEnabled } from "@/lib/feature-flags";
-import { ConnectorNotEnabled } from "@/components/elastic/ConnectorNotEnabled";
 
 const PAGE_SIZE = 20;
 
@@ -37,7 +35,6 @@ function formatDate(dateStr?: string) {
 
 export default function ElasticAlertsPage() {
   const router = useRouter();
-  const enabled = isElasticEnabled();
   const [alerts, setAlerts] = useState<ElasticAlert[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -67,12 +64,9 @@ export default function ElasticAlertsPage() {
   };
 
   useEffect(() => {
-    if (!enabled) return;
     loadAlerts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled]);
-
-  if (!enabled) return <ConnectorNotEnabled />;
+  }, []);
 
   const changeFilter = (state: string) => {
     setStateFilter(state);

@@ -16,13 +16,14 @@ logger = logging.getLogger(__name__)
 
 SOURCE = "elastic"
 RCA_PREFERENCE_KEY = "elastic_rca_enabled"
+DEFAULT_RCA_ENABLED = True  # also what GET /rca-settings reports before the user sets the toggle
 _SEVERITY_WORDS = ("critical", "high", "medium", "low")
 
 
 def _should_trigger_background_chat(user_id: str) -> bool:
     from utils.auth.stateless_auth import get_user_preference
 
-    rca_enabled = get_user_preference(user_id, RCA_PREFERENCE_KEY, default=False)
+    rca_enabled = get_user_preference(user_id, RCA_PREFERENCE_KEY, default=DEFAULT_RCA_ENABLED)
     if not rca_enabled:
         logger.debug("[ELASTIC] Skipping background RCA - %s disabled for user %s", RCA_PREFERENCE_KEY, user_id)
         return False

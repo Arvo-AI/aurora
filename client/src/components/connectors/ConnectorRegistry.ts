@@ -1,5 +1,5 @@
 import { Server } from "lucide-react";
-import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled, isNotionEnabled, isCloudBeesEnabled, isElasticEnabled } from "@/lib/feature-flags";
+import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled, isNotionEnabled, isCloudBeesEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -65,20 +65,18 @@ class ConnectorRegistry {
       alertsLabel: "View Alerts",
     });
 
-    if (isElasticEnabled()) {
-      this.register({
-        id: "elastic",
-        name: "Elastic Cloud",
-        description: "Connect Elasticsearch and Kibana (Elastic Cloud Hosted, Serverless, or self-managed) to search logs, read Kibana alerts, and turn alert rules into Aurora incidents.",
-        iconPath: "/elastic.svg",
-        iconBgColor: "bg-white dark:bg-white",
-        category: "Monitoring",
-        path: "/elastic/auth",
-        storageKey: "isElasticConnected",
-        alertsPath: "/elastic/alerts",
-        alertsLabel: "View Alerts",
-      });
-    }
+    this.register({
+      id: "elastic",
+      name: "Elastic Cloud",
+      description: "Connect Elasticsearch and Kibana (Elastic Cloud Hosted, Serverless, or self-managed) to search logs, read Kibana alerts, and turn alert rules into Aurora incidents.",
+      iconPath: "/elastic.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/elastic/auth",
+      storageKey: "isElasticConnected",
+      alertsPath: "/elastic/alerts",
+      alertsLabel: "View Alerts",
+    });
 
     this.register({
         id: "dynatrace",

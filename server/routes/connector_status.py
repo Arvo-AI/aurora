@@ -32,7 +32,6 @@ _LOG_PREFIX = "[ConnectorStatus]"
 
 from utils.splunk_config import SPLUNK_SSL_VERIFY
 from utils.elastic_config import ELASTIC_SSL_VERIFY
-from utils.flags.feature_flags import is_elastic_enabled
 
 connector_status_bp = Blueprint("connector_status", __name__)
 
@@ -131,8 +130,6 @@ def _check_splunk(creds: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _check_elastic(creds: Dict[str, Any]) -> Dict[str, Any]:
-    if not is_elastic_enabled():
-        return {"connected": False}
     api_key = creds.get("api_key")
     es_url = creds.get("elasticsearch_url")
     if not api_key or not es_url:

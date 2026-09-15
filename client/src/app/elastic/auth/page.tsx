@@ -8,8 +8,6 @@ import { ElasticWebhookStep } from "@/components/elastic/ElasticWebhookStep";
 import { getUserFriendlyError } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import { ELASTIC_TEAL } from "@/components/elastic/constants";
-import { isElasticEnabled } from "@/lib/feature-flags";
-import { ConnectorNotEnabled } from "@/components/elastic/ConnectorNotEnabled";
 
 function broadcastStateChange() {
   if (globalThis.window === undefined) return;
@@ -60,7 +58,6 @@ export default function ElasticAuthPage() {
   };
 
   useEffect(() => {
-    if (!isElasticEnabled()) return;
     loadStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -118,10 +115,6 @@ export default function ElasticAuthPage() {
     }
   };
 
-  if (!isElasticEnabled()) {
-    return <ConnectorNotEnabled />;
-  }
-
   const isConnected = Boolean(status?.connected);
 
   return (
@@ -130,7 +123,7 @@ export default function ElasticAuthPage() {
         <div className="mb-6">
           <h1 className="text-3xl font-bold">Elastic Cloud Integration</h1>
           <p className="text-muted-foreground mt-1">
-            Search Elasticsearch logs and read Kibana alerts during investigations, and turn Kibana alert rules into Aurora incidents.
+            Search Elasticsearch logs and Kibana alerts during investigations. Kibana alert rules can also create Aurora incidents.
           </p>
         </div>
 

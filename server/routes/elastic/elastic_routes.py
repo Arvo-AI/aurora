@@ -12,21 +12,19 @@ from urllib.parse import urlparse
 from flask import Blueprint, jsonify, request
 
 from connectors.elastic_connector.client import (
+    DEFAULT_INDEX_PATTERN,
     ElasticAPIError,
     ElasticClient,
+    client_from_credentials,
     normalize_api_key,
     normalize_index_pattern,
     normalize_url,
     parse_cloud_id,
 )
-from routes.elastic.tasks import process_elastic_alert
+from routes.ci_shared import register_rca_settings_routes
+from routes.elastic.tasks import DEFAULT_RCA_ENABLED, RCA_PREFERENCE_KEY, process_elastic_alert
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import (
-    get_org_id_from_request,
-    get_user_preference,
-    set_rls_context,
-    store_user_preference,
-)
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import hash_for_log, sanitize
@@ -38,8 +36,6 @@ elastic_bp = Blueprint("elastic", __name__)
 
 WEBHOOK_HEADER_NAME = "X-Aurora-Webhook-Secret"
 WEBHOOK_BASIC_USER = "aurora"
-DEFAULT_INDEX_PATTERN = "logs-*"
-RCA_PREFERENCE_KEY = "elastic_rca_enabled"
 
 # Mustache body pasted into the Kibana Webhook connector action. Every key is
 # read by routes/elastic/tasks.py; unknown variables render as "" in Kibana.
@@ -93,14 +89,6 @@ def _get_stored_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _client_from_creds(creds: Dict[str, Any]) -> Optional[ElasticClient]:
-    api_key = creds.get("api_key")
-    es_url = creds.get("elasticsearch_url")
-    if not api_key or not es_url:
-        return None
-    return ElasticClient(es_url, api_key, kibana_url=creds.get("kibana_url"))
-
-
 _SERVERLESS_HOST_RE = re.compile(r"\.es\.[a-z0-9-]+\.(aws|gcp|azure)\.elastic\.cloud$", re.IGNORECASE)
 _HOSTED_HOST_RE = re.compile(r"\.(found\.io|elastic-cloud\.com|cloud\.es\.io)$", re.IGNORECASE)
 
@@ -151,6 +139,7 @@ def _validate_key(client: ElasticClient):
 
 
 def _resolve_webhook_base_url() -> str:
+    """Public base URL for the Kibana webhook (ngrok in local dev, else the backend URL)."""
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
     if ngrok_url and backend_url.startswith("http://localhost"):
@@ -301,7 +290,7 @@ def status(user_id):
     if not creds:
         return jsonify({"connected": False})
 
-    client = _client_from_creds(creds)
+    client = client_from_credentials(creds)
     if not client:
         logger.warning("[ELASTIC] Incomplete credentials for user %s", sanitize(user_id))
         return jsonify({"connected": False})
@@ -519,33 +508,13 @@ def get_webhook_url(user_id):
             "4. Save the connector, then open the rule you want Aurora to investigate (Observability → Alerts → Manage rules).",
             "5. Add an action using the Aurora connector, set 'Run when' to the alert action group and action frequency to 'On status changes', and paste the action body template below into the Body.",
             "6. Add a second action row with the same connector and body, with 'Run when' = 'Recovered', so Aurora can close the loop.",
-            "7. Save the rule. Turn on 'Enable Alert RCA' in Aurora to create incidents from these alerts.",
+            "7. Save the rule. Alert RCA is on by default, so these alerts create incidents and start an investigation; turn it off in Aurora to only store them.",
         ],
     })
 
 
 # --------------------------------------------------------------------------- #
-# RCA settings (default OFF)
+# RCA settings (shared GET/PUT /rca-settings, default ON)
 # --------------------------------------------------------------------------- #
 
-
-@elastic_bp.route("/rca-settings", methods=["GET"])
-@require_permission("connectors", "read")
-def get_rca_settings(user_id):
-    rca_enabled = get_user_preference(user_id, RCA_PREFERENCE_KEY, default=False)
-    return jsonify({"rcaEnabled": bool(rca_enabled)})
-
-
-@elastic_bp.route("/rca-settings", methods=["PUT"])
-@require_permission("connectors", "write")
-def update_rca_settings(user_id):
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-    except Exception:
-        data = {}
-    rca_enabled = _arg(data, "rcaEnabled", "rca_enabled", default=False)
-    if not isinstance(rca_enabled, bool):
-        return jsonify({"error": "rcaEnabled must be a boolean"}), 400
-    store_user_preference(user_id, RCA_PREFERENCE_KEY, rca_enabled)
-    logger.info("[ELASTIC] Updated RCA settings for user %s: rcaEnabled=%s", sanitize(user_id), "true" if rca_enabled else "false")
-    return jsonify({"success": True, "rcaEnabled": rca_enabled})
+register_rca_settings_routes(elastic_bp, "elastic", RCA_PREFERENCE_KEY, default=DEFAULT_RCA_ENABLED)

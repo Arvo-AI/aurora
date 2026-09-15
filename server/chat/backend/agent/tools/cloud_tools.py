@@ -2183,7 +2183,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     else:
         logging.debug(f"Splunk tools not added - user {user_id} not connected to Splunk")
 
-    # Add Elastic Cloud tools if connected (feature-flagged via is_elastic_connected)
+    # Add Elastic Cloud tools if connected
     if is_elastic_connected(user_id):
         _elastic_tool_specs = [
             (

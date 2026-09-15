@@ -23,6 +23,8 @@ from urllib.parse import quote, urlparse
 import requests
 
 from utils.elastic_config import ELASTIC_SSL_VERIFY
+from utils.log_sanitizer import sanitize
+from utils.query_helpers import clamp, clamp_int
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ MAX_SEARCH_SIZE = 500
 MAX_ERROR_REASON_LEN = 300
 MAX_FIELD_VALUE_LENGTH = 1000
 TIMESTAMP_FIELD = "@timestamp"
+DEFAULT_INDEX_PATTERN = "logs-*"
 
 # Fields surfaced first (and always) in compacted log hits.
 PRIORITY_FIELDS: Tuple[str, ...] = (
@@ -232,10 +235,7 @@ def resolve_window(
         start = _parse_iso(start_time) or (end - (parse_time_range(time_range or default) or timedelta(hours=1)))
         return start.isoformat(), end.isoformat()
     if minutes is not None:
-        try:
-            minutes_int = max(1, min(int(minutes), 60 * 24 * 90))
-        except (TypeError, ValueError):
-            minutes_int = 60
+        minutes_int = clamp_int(minutes, 60, 1, 60 * 24 * 90)
         return (now - timedelta(minutes=minutes_int)).isoformat(), now.isoformat()
     delta = parse_time_range(time_range) or parse_time_range(default) or timedelta(hours=1)
     return (now - delta).isoformat(), now.isoformat()
@@ -303,6 +303,36 @@ def _flatten(obj: Any, prefix: str = "", out: Optional[Dict[str, Any]] = None) -
             else:
                 out[dotted] = value
     return out
+
+
+def client_from_credentials(creds: Optional[Dict[str, Any]]) -> Optional["ElasticClient"]:
+    """Build a client from stored connector credentials; None when the record is incomplete."""
+    if not creds or not creds.get("api_key") or not creds.get("elasticsearch_url"):
+        return None
+    return ElasticClient(creds["elasticsearch_url"], creds["api_key"], kibana_url=creds.get("kibana_url"))
+
+
+def get_elastic_client_for_user(user_id: Optional[str]) -> Tuple[Optional["ElasticClient"], Optional[str]]:
+    """``(client, default_index_pattern)`` for the user's stored connection, or ``(None, None)``.
+
+    Shared by the routes, the agent tools and the connection gate. Never raises: a
+    missing, incomplete or malformed record simply reads as "not connected".
+    """
+    if not user_id:
+        return None, None
+    from utils.auth.token_management import get_token_data  # lazy: keeps this module import-light
+
+    try:
+        creds = get_token_data(user_id, "elastic")
+        client = client_from_credentials(creds)
+    except Exception:
+        logger.exception("[ELASTIC] Failed to load stored credentials for user %s", sanitize(user_id))
+        return None, None
+    if client is None:
+        if creds:
+            logger.warning("[ELASTIC] Stored credentials for user %s are incomplete", sanitize(user_id))
+        return None, None
+    return client, creds.get("index_pattern") or DEFAULT_INDEX_PATTERN
 
 
 _SCRIPT_CLAUSES = frozenset({"script", "script_score", "script_fields", "runtime_mappings"})
@@ -568,10 +598,7 @@ class ElasticClient:
         safe = _path_segment(index)
         payload = dict(body)
         size = payload.get("size", 100)
-        try:
-            payload["size"] = max(0, min(int(size), MAX_SEARCH_SIZE))
-        except (TypeError, ValueError):
-            payload["size"] = 100
+        payload["size"] = clamp_int(size, 100, 0, MAX_SEARCH_SIZE)
         payload.setdefault("track_total_hits", 10000)
         payload.setdefault("timeout", SEARCH_SERVER_TIMEOUT)  # Elasticsearch stops the search itself
         return self._request(
@@ -605,10 +632,7 @@ class ElasticClient:
         rule_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Search Kibana alert documents in ``.alerts-*``."""
-        try:
-            hours_int = max(1, min(int(hours), 24 * 90))
-        except (TypeError, ValueError):
-            hours_int = 24
+        hours_int = clamp_int(hours, 24, 1, 24 * 90)
         now = datetime.now(timezone.utc)
         start = (now - timedelta(hours=hours_int)).isoformat()
         filters: List[Dict[str, Any]] = [
@@ -628,7 +652,7 @@ class ElasticClient:
                 }
             })
         body = {
-            "size": max(1, min(int(size or 50), MAX_SEARCH_SIZE)),
+            "size": clamp(size or 50, 1, MAX_SEARCH_SIZE),
             "sort": [{TIMESTAMP_FIELD: {"order": "desc"}}],
             "query": {"bool": {"filter": filters}},
             "_source": [
@@ -707,7 +731,7 @@ class ElasticClient:
             raise ElasticAPIError("Kibana URL is not configured for this connection", status_code=400)
         params: Dict[str, Any] = {
             "page": max(1, int(page or 1)),
-            "per_page": max(1, min(int(per_page or 50), 100)),
+            "per_page": clamp(per_page or 50, 1, 100),
             "sort_field": "name",
             "sort_order": "asc",
         }

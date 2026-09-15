@@ -10,21 +10,20 @@ from connectors.elastic_connector.client import (
     MAX_SEARCH_SIZE,
     TIMESTAMP_FIELD,
     ElasticAPIError,
-    ElasticClient,
     build_log_query,
     compact_hits,
     contains_script_clause,
+    get_elastic_client_for_user,
     resolve_window,
 )
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.token_management import get_token_data
 from utils.log_sanitizer import sanitize
+from utils.query_helpers import clamp_int
 
 logger = logging.getLogger(__name__)
 
 search_bp = Blueprint("elastic_search", __name__)
 
-DEFAULT_INDEX_PATTERN = "logs-*"
 MAX_INDICES_RETURN = 500
 MAX_FIELDS_RETURN = 500
 MAX_ESQL_ROWS = 500
@@ -44,32 +43,12 @@ def _arg(data: Dict[str, Any], *names: str, default: Any = None) -> Any:
     return default
 
 
-def _client_for_user(user_id: str):
-    """Return (client, index_pattern) or (None, None)."""
-    try:
-        creds = get_token_data(user_id, "elastic")
-    except Exception:
-        logger.exception("[ELASTIC-SEARCH] Failed to get credentials for user %s", sanitize(user_id))
-        return None, None
-    if not creds or not creds.get("api_key") or not creds.get("elasticsearch_url"):
-        return None, None
-    client = ElasticClient(creds["elasticsearch_url"], creds["api_key"], kibana_url=creds.get("kibana_url"))
-    return client, creds.get("index_pattern") or DEFAULT_INDEX_PATTERN
-
-
 def _error_response(exc: ElasticAPIError):
     if exc.status_code in (400, 401, 403):
         return jsonify({"error": exc.message}), 400
     if exc.status_code == 404:
         return jsonify({"error": exc.message}), 404
     return jsonify({"error": exc.message}), 502
-
-
-def _int(value: Any, default: int, lo: int, hi: int) -> int:
-    try:
-        return max(lo, min(int(value), hi))
-    except (TypeError, ValueError):
-        return default
 
 
 _HEALTH_RANK = {"green": 0, "yellow": 1, "red": 2}
@@ -166,7 +145,7 @@ def _hide_system(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 @require_permission("connectors", "read")
 def list_indices(user_id):
     """List indices, aliases and data streams matching ``pattern`` (default ``*``)."""
-    client, _ = _client_for_user(user_id)
+    client, _ = get_elastic_client_for_user(user_id)
     if not client:
         return jsonify({"error": NOT_CONNECTED_ERROR}), 400
     pattern = request.args.get("pattern") or "*"
@@ -186,7 +165,7 @@ def list_indices(user_id):
 @require_permission("connectors", "read")
 def list_fields(user_id):
     """Field names/types for an index pattern (``_field_caps``)."""
-    client, default_index = _client_for_user(user_id)
+    client, default_index = get_elastic_client_for_user(user_id)
     if not client:
         return jsonify({"error": NOT_CONNECTED_ERROR}), 400
     index = request.args.get("index") or default_index
@@ -236,7 +215,7 @@ def search(user_id):
     ``timeRangeMinutes`` or ``timeRange`` ("15m"/"2h") or ``startTime``/``endTime``,
     ``limit`` (≤500), ``fields`` (list of dotted names), ``timestampField``.
     """
-    client, default_index = _client_for_user(user_id)
+    client, default_index = get_elastic_client_for_user(user_id)
     if not client:
         return jsonify({"error": NOT_CONNECTED_ERROR}), 400
     data = request.get_json(silent=True) or {}
@@ -245,7 +224,7 @@ def search(user_id):
     index = requested_index or default_index
     query = _arg(data, "query", "q", default="*")
     query_dsl = _arg(data, "queryDsl", "query_dsl")
-    limit = _int(_arg(data, "limit", "size", "maxCount", "max_count", default=100), 100, 1, MAX_SEARCH_SIZE)
+    limit = clamp_int(_arg(data, "limit", "size", "maxCount", "max_count", default=100), 100, 1, MAX_SEARCH_SIZE)
     fields = _arg(data, "fields")
     if fields is not None and not isinstance(fields, list):
         return jsonify({"error": "fields must be a list of field names"}), 400
@@ -316,7 +295,7 @@ def search(user_id):
 @require_permission("connectors", "read")
 def esql(user_id):
     """Run an ES|QL query (``POST /_query``) with a time pre-filter."""
-    client, _ = _client_for_user(user_id)
+    client, _ = get_elastic_client_for_user(user_id)
     if not client:
         return jsonify({"error": NOT_CONNECTED_ERROR}), 400
     data = request.get_json(silent=True) or {}
@@ -340,7 +319,7 @@ def esql(user_id):
         start = end = None
 
     if not _LIMIT_RE.search(query):
-        row_limit = _int(_arg(data, "limit"), 100, 1, MAX_ESQL_ROWS)
+        row_limit = clamp_int(_arg(data, "limit"), 100, 1, MAX_ESQL_ROWS)
         query = f"{query} | LIMIT {row_limit}"
 
     logger.info("[ELASTIC-SEARCH] User %s ES|QL: %s", sanitize(user_id), sanitize(query)[:120])
@@ -369,14 +348,14 @@ def esql(user_id):
 @require_permission("connectors", "read")
 def active_alerts(user_id):
     """Kibana alert documents from ``.alerts-*`` (status active|recovered|all)."""
-    client, _ = _client_for_user(user_id)
+    client, _ = get_elastic_client_for_user(user_id)
     if not client:
         return jsonify({"error": NOT_CONNECTED_ERROR}), 400
     status = (request.args.get("status") or "active").lower()
     if status not in ("active", "recovered", "all"):
         return jsonify({"error": "status must be active, recovered or all"}), 400
-    hours = _int(request.args.get("hours"), 24, 1, 24 * 90)
-    limit = _int(request.args.get("limit"), 50, 1, MAX_SEARCH_SIZE)
+    hours = clamp_int(request.args.get("hours"), 24, 1, 24 * 90)
+    limit = clamp_int(request.args.get("limit"), 50, 1, MAX_SEARCH_SIZE)
     rule_name = request.args.get("ruleName") or request.args.get("rule_name")
     try:
         result = client.search_alerts(status=status, hours=hours, size=limit, rule_name=rule_name)
@@ -438,14 +417,14 @@ def _nested(obj: Dict[str, Any], dotted: str) -> Any:
 @require_permission("connectors", "read")
 def list_rules(user_id):
     """Kibana alerting rules (``/api/alerting/rules/_find``)."""
-    client, _ = _client_for_user(user_id)
+    client, _ = get_elastic_client_for_user(user_id)
     if not client:
         return jsonify({"error": NOT_CONNECTED_ERROR}), 400
     if not client.kibana_url:
         return jsonify({"error": "No Kibana URL configured for this connection. Reconnect with a Kibana URL or Cloud ID."}), 400
     search_term = request.args.get("search")
-    per_page = _int(request.args.get("perPage") or request.args.get("per_page"), 50, 1, 100)
-    page = _int(request.args.get("page"), 1, 1, 1000)
+    per_page = clamp_int(request.args.get("perPage") or request.args.get("per_page"), 50, 1, 100)
+    page = clamp_int(request.args.get("page"), 1, 1, 1000)
     space = request.args.get("space")
     try:
         result = client.find_rules(page=page, per_page=per_page, search=search_term, space=space)

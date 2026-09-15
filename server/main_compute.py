@@ -439,12 +439,10 @@ import routes.splunk.tasks  # noqa: F401
 app.register_blueprint(splunk_bp, url_prefix="/splunk")
 app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
 
-# --- Elastic Cloud Integration Routes (feature-flagged, default off) ---
-from utils.flags.feature_flags import is_elastic_enabled
-if is_elastic_enabled():
-    from routes.elastic import bp as elastic_bp, search_bp as elastic_search_bp
-    app.register_blueprint(elastic_bp, url_prefix="/elastic")
-    app.register_blueprint(elastic_search_bp, url_prefix="/elastic")
+# --- Elastic Cloud Integration Routes ---
+from routes.elastic import bp as elastic_bp, search_bp as elastic_search_bp
+app.register_blueprint(elastic_bp, url_prefix="/elastic")
+app.register_blueprint(elastic_search_bp, url_prefix="/elastic")
 
 # --- incident.io Integration Routes ---
 from routes.incidentio import bp as incidentio_bp  # noqa: F401

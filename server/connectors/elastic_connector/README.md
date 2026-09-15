@@ -2,8 +2,6 @@
 
 Read-only connector for Elastic Cloud Hosted, Elastic Cloud Serverless and self-managed clusters. Aurora searches logs (Lucene / ES|QL), reads Kibana alert documents, lists alerting rules, and can ingest Kibana alert actions through a per-user webhook.
 
-Feature-flagged: set `NEXT_PUBLIC_ENABLE_ELASTIC=true` (default `false`).
-
 ## Files
 
 | Path | Purpose |
@@ -21,7 +19,7 @@ Feature-flagged: set `NEXT_PUBLIC_ENABLE_ELASTIC=true` (default `false`).
 1. In Kibana (as an admin) create an API key under Stack Management → API keys with **Restrict privileges** and a read-only role descriptor (see docs), or as a user holding **Viewer** + a custom role with `manage_own_api_key`. Copy the **Encoded** value.
 2. In Aurora open **Connectors → Elastic Cloud**, paste the **Cloud ID** (Hosted) or the Elasticsearch/Kibana URLs (Serverless, self-managed), paste the key, connect.
 3. Optional: create a Kibana **Webhook** connector (Basic auth `aurora` / the secret shown in Aurora), attach it to rules with action frequency **On status changes**, paste the action body template from Aurora, and add a **Recovered** action.
-4. Turn on **Enable Alert RCA** if webhook alerts should create incidents (off by default; alerts are always stored under View Alerts).
+4. **Enable Alert RCA** is on by default, so webhook alerts create incidents; turn it off to only store them under View Alerts.
 
 Full guide with the least-privilege role descriptor and troubleshooting: `website/docs/integrations/connectors.md` → *Elastic Cloud*.
 
