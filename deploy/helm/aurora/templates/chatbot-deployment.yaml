@@ -43,7 +43,7 @@ spec:
       {{- include "aurora.scheduling" (dict "service" "chatbot" "global" $) | nindent 6 }}
       containers:
         - name: aurora-chatbot
-          image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: IfNotPresent
           command: ["python", "main_chatbot.py"]
           securityContext:

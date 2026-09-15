@@ -42,7 +42,7 @@ spec:
       {{- include "aurora.scheduling" (dict "service" "server" "global" $) | nindent 6 }}
       containers:
         - name: aurora-server
-          image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c"]
           args:
