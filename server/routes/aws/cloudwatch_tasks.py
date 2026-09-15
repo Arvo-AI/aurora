@@ -406,8 +406,10 @@ def _post_incident_actions(
             logger.info("[CLOUDWATCH][ALARM] Skipping RCA — rate limited for user %s", user_id)
             return
 
-        from chat.background.rca_prompt_builder import build_cloudwatch_rca_prompt
-        rca_prompt, rail_text = build_cloudwatch_rca_prompt(payload, user_id=user_id)
+        from chat.background.rca_prompt_builder import build_rca_prompt
+        rca_prompt, rail_text = build_rca_prompt(
+            "cloudwatch", alarm_name, payload, user_id=user_id
+        )
         chat_title = f"RCA: {alarm_name}"
         session_id = create_background_chat_session(
             user_id=user_id,

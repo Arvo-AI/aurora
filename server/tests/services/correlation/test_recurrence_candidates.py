@@ -58,6 +58,9 @@ class TestRecentIncidentsLines:
         assert "### Recent incidents in this org" in block
         assert block.index("### Recent incidents") > block.index("conclusion")
         assert CHILD in block
+        # Incident Index section is present (empty here) and precedes recent.
+        assert "### Incident Index" in block
+        assert block.index("### Incident Index") < block.index("### Recent incidents")
 
 
 class TestFetchRecentIncidents:
@@ -99,9 +102,14 @@ class TestFetchRecentIncidents:
         conn.cursor.return_value.__enter__.return_value = cursor
         pool = MagicMock()
         pool.get_admin_connection.return_value.__enter__.return_value = conn
-        with patch.object(ra, "db_pool", pool), patch.object(ra, "set_rls_context", return_value="org-1"):
+        # read_index is exercised separately; stub it so this test asserts only
+        # the incident-context query behavior (execute count below).
+        with patch.object(ra, "db_pool", pool), \
+                patch.object(ra, "set_rls_context", return_value="org-1"), \
+                patch("services.memory.incident_index.read_index", return_value="- [INC x | d | s | resolved] syn"):
             ctx = ra._fetch_incident_context(ME, "u1")
         assert ctx["recent"] == [{"id": ROOT, "title": "t", "service": "svc", "status": "analyzed",
                                   "fired_at_iso": ctx["recent"][0]["fired_at_iso"], "recurrence_of": None}]
         assert ctx["recent_truncated"] is False
+        assert ctx["incident_index"] == "- [INC x | d | s | resolved] syn"
         assert cursor.execute.call_count == 2

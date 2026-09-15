@@ -6,7 +6,7 @@ Used by both the index builder and the injector.
 """
 
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
@@ -14,6 +14,32 @@ from utils.auth.stateless_auth import set_rls_context
 from services.memory import MEMORY_CATEGORIES
 
 logger = logging.getLogger(__name__)
+
+
+def get_memory_content(user_id: str, category: str, title: str) -> Optional[str]:
+    """Fetch a single artifact's raw content by (category, title).
+
+    Plain DB read under RLS — the direct-Python counterpart to the agent
+    `read_memory` tool (which returns a JSON envelope for LLM consumption).
+    Returns None when the entry is absent or on any error, so callers can treat
+    "missing" and "empty" the same way.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                org_id = set_rls_context(cursor, conn, user_id, log_prefix="[MemoryQueries:content]")
+                if not org_id:
+                    return None
+                cursor.execute(
+                    """SELECT content FROM artifacts
+                       WHERE org_id = %s AND category = %s AND title = %s""",
+                    (org_id, category, title),
+                )
+                row = cursor.fetchone()
+                return (row[0] or "") if row else None
+    except Exception:
+        logger.exception("[MemoryQueries] Failed to fetch content for %s/%s", category, title)
+        return None
 
 
 def get_memory_entries(user_id: str, limit: int = 200) -> List[Dict]:
