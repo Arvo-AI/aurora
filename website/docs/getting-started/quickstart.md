@@ -192,7 +192,6 @@ aurora-chatbot          running
 aurora-frontend         running
 postgres                running
 redis                   running
-weaviate                running
 vault                   running
 seaweedfs-master        running
 seaweedfs-filer         running
@@ -230,7 +229,6 @@ Aurora starts these services:
 | Chatbot | 5006 | WebSocket server for real-time chat |
 | PostgreSQL | 5432 | Primary database |
 | Redis | 6379 | Task queue and cache |
-| Weaviate | 8080 | Vector database for semantic search |
 | Vault | 8200 | Secrets management |
 | SeaweedFS | 8333 | S3-compatible object storage |
 

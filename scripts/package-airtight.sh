@@ -29,8 +29,6 @@ THIRD_PARTY_IMAGES=(
   "amazon/aws-cli:2.34.6"
   "memgraph/memgraph-mage:3.8.1"
   "memgraph/lab:3.8.0"
-  "cr.weaviate.io/semitechnologies/weaviate:1.27.6"
-  "cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2"
 )
 
 AURORA_IMAGES=(

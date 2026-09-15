@@ -20,7 +20,7 @@ metadata:
 # ------------------------------------------------------------------------------
 # Network Isolation - Default Deny for Terminal Pods
 # ------------------------------------------------------------------------------
-# Blocks terminal pods from accessing cluster-internal services (Vault, Weaviate,
+# Blocks terminal pods from accessing cluster-internal services (Vault,
 # Postgres, Redis, etc.) while allowing external internet access for cloud CLI
 # operations (AWS, GCP, Azure, etc.).
 #

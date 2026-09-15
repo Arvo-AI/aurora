@@ -186,67 +186,6 @@ def make_submit_verdict_tool(captured: Dict[str, Any]):
     )
 
 
-def make_search_similar_rcas_tool(user_id: str):
-    """StructuredTool over search_similar_good_rcas: semantic search across the
-    org's past investigations, returning incident_id + similarity."""
-    from langchain_core.tools import StructuredTool
-    from pydantic import BaseModel, Field
-
-    class SearchSimilarRCAsArgs(BaseModel):
-        query_title: str = Field(
-            description="Alert title or failure description to search for."
-        )
-        query_service: str = Field(default="", description="Service name (optional).")
-        source_type: str = Field(
-            default="", description="Alert source, e.g. 'datadog' (optional)."
-        )
-        limit: int = Field(default=5, description="Max results (1-10).")
-
-    def search_similar_rcas(
-        query_title: str,
-        query_service: str = "",
-        source_type: str = "",
-        limit: int = 5,
-    ) -> str:
-        try:
-            from routes.incident_feedback.weaviate_client import (
-                search_similar_good_rcas,
-            )
-
-            results = search_similar_good_rcas(
-                user_id,
-                query_title,
-                query_service,
-                source_type,
-                limit=max(1, min(int(limit), 10)),
-                min_score=0.5,
-            )
-            out = [
-                {
-                    "incident_id": r.get("incident_id", ""),
-                    "alert_title": r.get("alert_title", ""),
-                    "alert_service": r.get("alert_service", ""),
-                    "similarity": r.get("similarity"),
-                    "summary": (r.get("aurora_summary") or "")[:600],
-                }
-                for r in results
-            ]
-            return json.dumps({"results": out})
-        except Exception as e:
-            return json.dumps({"error": f"search failed: {e}"})
-
-    return StructuredTool.from_function(
-        func=search_similar_rcas,
-        name="search_similar_rcas",
-        description=(
-            "Semantic search over this org's past incident investigations. "
-            "Returns candidate incident ids with similarity scores and summary "
-            "snippets. Use get_incident to read a candidate's full conclusion."
-        ),
-        args_schema=SearchSimilarRCAsArgs,
-    )
-
-
 def _build_input_block(ctx: Dict[str, Any], incident_id: str, decision_point: str) -> str:
     lines = [
         "## Incident under examination",
@@ -265,6 +204,11 @@ def _build_input_block(ctx: Dict[str, Any], incident_id: str, decision_point: st
             "",
             ctx.get("summary") or "(no summary available)",
         ]
+    # Primary candidate map: the org's Incident Index (compact, id-keyed history).
+    # The agent scans this for anchors, then drills in via get_incident.
+    lines += ["", *_incident_index_lines(ctx.get("incident_index"))]
+    # Bounded fallback / joinability guard: the incidents whose group can still
+    # be joined right now (last GROUP_IDLE_HOURS, capped at RECENT_CANDIDATES_LIMIT).
     lines += ["", *_recent_incidents_lines(ctx.get("recent"), truncated=bool(ctx.get("recent_truncated")))]
     hint = ctx.get("hint")
     if isinstance(hint, dict) and hint.get("incident_id"):
@@ -279,6 +223,30 @@ def _build_input_block(ctx: Dict[str, Any], incident_id: str, decision_point: st
             ),
         ]
     return "\n".join(lines)
+
+
+def _incident_index_lines(index_content: Optional[str]) -> list:
+    """Input-block section presenting the Incident Index as the candidate map.
+
+    This is the primary recurrence-discovery surface: a compact, id-keyed list
+    of past incidents the agent scans to find an anchor, then confirms with
+    get_incident. Bounded by INDEX_INJECTION_CHAR_BUDGET at read time. Empty on
+    cold start — the recent-incidents section below is then the only candidate
+    source (graceful fallback)."""
+    header = "### Incident Index (past incidents, newest last — the recurrence candidate map)"
+    if not index_content or not index_content.strip():
+        return [
+            header,
+            "",
+            "(empty) — no index yet. Use the recent-incidents list below and list_incidents/get_incident to find any prior related incident.",
+        ]
+    return [
+        header,
+        "",
+        "Each line is `- [INC <id> | <date> | <service> | <status>] <synopsis>`. To confirm a candidate, call get_incident(<id>) for its full conclusion before claiming a recurrence. Same monitor or service is NOT enough — the root cause must match.",
+        "",
+        index_content.strip(),
+    ]
 
 
 def _recent_incidents_lines(recent: Optional[list], *, truncated: bool = False) -> list:
@@ -385,6 +353,11 @@ def _fetch_incident_context(incident_id: str, user_id: str) -> Optional[Dict[str
                 hint = meta.get("correlation_hint") if isinstance(meta, dict) else None
                 started_at, fired_at = row[4], row[5] or row[4]
                 recent, recent_truncated = _fetch_recent_incidents(cursor, incident_id)
+                # Incident Index = primary candidate map. Read here (same RLS
+                # connection semantics via its own helper) so it's injected into
+                # the input block deterministically — no embeddings, one artifact.
+                from services.memory.incident_index import read_index
+                incident_index = read_index(user_id)
                 return {
                     "org_id": org_id,
                     "title": row[0] or "",
@@ -397,6 +370,7 @@ def _fetch_incident_context(incident_id: str, user_id: str) -> Optional[Dict[str
                     "hint": hint if isinstance(hint, dict) else None,
                     "recent": recent,
                     "recent_truncated": recent_truncated,
+                    "incident_index": incident_index,
                 }
     except Exception:
         logger.exception(
@@ -453,7 +427,6 @@ async def _run_agent(
     from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
     from chat.backend.agent.agent import Agent
     from chat.backend.agent.db import PostgreSQLClient
-    from chat.backend.agent.weaviate_client import WeaviateClient
     from chat.backend.agent.utils.state import State
     from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.tools.cloud_tools import get_cloud_tools
@@ -517,15 +490,16 @@ async def _run_agent(
         _LOG_PREFIX, incident_id, len(tools), len(all_tools),
     )
     tools = tools + [
-        make_search_similar_rcas_tool(user_id),
         make_submit_verdict_tool(captured),
     ]
 
     postgres_client = PostgreSQLClient()
-    weaviate_client = WeaviateClient(postgres_client)
+    # NOTE: Agent takes postgres only on this branch — the weaviate RCA-similarity
+    # store was removed. Recurrence candidates now come from the Incident Index
+    # (injected into the input block) plus the recent-incidents fallback; the
+    # agent confirms anchors with the read-only get_incident/list_incidents tools.
     try:
         agent = Agent(
-            weaviate_client=weaviate_client,
             postgres_client=postgres_client,
         )
         agent.set_tool_capture(tool_capture)
@@ -536,10 +510,6 @@ async def _run_agent(
             max_turns=MAX_TURNS,
         )
     finally:
-        try:
-            weaviate_client.close()
-        except Exception:
-            logger.exception("%s Failed to close weaviate client", _LOG_PREFIX)
         try:
             postgres_client.close()
         except Exception:
@@ -612,8 +582,14 @@ def _apply_verdict_outcome(
     correlator_score: Optional[float],
     elapsed_ms: int,
     model: Optional[str],
-) -> None:
-    """Clamp the claim, then fold (live) or persist the verdict row."""
+) -> Dict[str, Any]:
+    """Clamp the claim, then fold (live) or persist the verdict row.
+
+    Returns the fold outcome so the caller (summarization) can maintain the
+    Incident Index: {"folded": bool, "root_id": Optional[str]}. Only a live,
+    accepted, successfully-folded claim yields folded=True with the resolved
+    group root; every other path (shadow, new, reject) returns folded=False.
+    """
     claimed = verdict.recurrence_of if verdict else None
     reasoning = verdict.reasoning if verdict else None
 
@@ -640,7 +616,8 @@ def _apply_verdict_outcome(
             _LOG_PREFIX, incident_id, result.folded, result.root_id,
             result.reject_reason, elapsed_ms,
         )
-        return
+        # Surface the resolved root so the index rolls up under it, not a child.
+        return {"folded": bool(result.folded), "root_id": result.root_id}
 
     if accepted:
         # Same convention the rule correlator uses for its shadow decisions.
@@ -662,6 +639,7 @@ def _apply_verdict_outcome(
         elapsed_ms=elapsed_ms,
         model=model,
     )
+    return {"folded": False, "root_id": None}
 
 
 def run_recurrence_check(
@@ -670,30 +648,46 @@ def run_recurrence_check(
     user_id: str,
     session_id: Optional[str] = None,
     decision_point: str = "after",
-) -> None:
+) -> Optional[Dict[str, Any]]:
     """Run one recurrence check. Sync, never raises.
 
     off: no-op. shadow: verdict row only ("Would fold" logged, nothing folds).
     live: an accepted claim folds via fold_incident. Every completed check
     persists exactly one verdict row; every failure path degrades to today's
     behavior.
+
+    Returns the fold outcome ({"folded": bool, "root_id": Optional[str]}) so the
+    caller can maintain the Incident Index. On a task retry it returns the
+    previously-persisted outcome (not None) so an already-folded incident isn't
+    re-added as a standalone line. Returns None only when no check ran (off, no
+    context, or a degraded failure path).
     """
     started = time.monotonic()
     try:
         mode = get_recurrence_mode()
         if mode == MODE_OFF:
-            return
+            return None
 
-        if get_existing_verdict(incident_id, user_id, decision_point):
+        # Task retry: a verdict already exists, so don't re-run the check (no
+        # double fold, no double token spend). But we must NOT return None here
+        # — None means "no check ran" and would make the caller append a second,
+        # standalone index line for an incident that was already folded. Return
+        # the persisted fold outcome so the Incident Index stays consistent.
+        existing = get_existing_verdict(incident_id, user_id, decision_point)
+        if existing:
             logger.info(
-                "%s Verdict already exists for incident %s (%s); skipping re-run",
+                "%s Verdict already exists for incident %s (%s); returning persisted outcome",
                 _LOG_PREFIX, incident_id, decision_point,
             )
-            return
+            folded = bool(existing.get("folded"))
+            return {
+                "folded": folded,
+                "root_id": existing.get("accepted_recurrence_of") if folded else None,
+            }
 
         ctx = _fetch_incident_context(incident_id, user_id)
         if not ctx:
-            return
+            return None
 
         from chat.backend.agent.llm import ModelConfig
 
@@ -704,7 +698,7 @@ def run_recurrence_check(
             ctx=ctx,
             decision_point=decision_point,
         )
-        _apply_verdict_outcome(
+        return _apply_verdict_outcome(
             incident_id=str(incident_id),
             user_id=user_id,
             mode=mode,
@@ -723,14 +717,16 @@ def run_recurrence_check(
             "%s Recurrence check cancelled for incident %s; degrading to standalone",
             _LOG_PREFIX, incident_id,
         )
+        return None
     except Exception as exc:
         if _SoftTimeLimit is not None and isinstance(exc, _SoftTimeLimit):
             logger.error(
                 "%s Soft time limit hit during recurrence check for %s; degrading to standalone",
                 _LOG_PREFIX, incident_id,
             )
-            return
+            return None
         logger.exception(
             "%s Recurrence check failed for incident %s; degrading to standalone",
             _LOG_PREFIX, incident_id,
         )
+        return None

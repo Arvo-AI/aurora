@@ -78,13 +78,13 @@ def dispatch_postmortem_action(
     Raises:
         ValueError: If rate limited or generation already in progress
     """
-    # Check for active generation (row with NULL content = in progress)
+    # Check for active generation (artifact with NULL content = in progress)
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[PostmortemAction]")
             cur.execute(
-                """SELECT id FROM postmortems
-                   WHERE incident_id = %s AND content IS NULL""",
+                """SELECT id FROM artifacts
+                   WHERE incident_id = %s AND category = 'postmortem' AND content IS NULL""",
                 (incident_id,),
             )
             if cur.fetchone():
@@ -139,8 +139,8 @@ def dispatch_postmortem_action(
         trigger_metadata=trigger_meta,
     )
 
-    # Pre-create the postmortem row so the GET endpoint can detect "generating" state
-    _reserve_postmortem_row(user_id, incident_id, session_id)
+    # Pre-create the artifact row so the GET endpoint can detect "generating" state
+    _reserve_postmortem_artifact(user_id, incident_id, session_id)
 
     if run_id:
         _update_run(run_id, user_id, chat_session_id=session_id)
@@ -245,13 +245,13 @@ def _build_action_prompt(instructions: str, incident: dict) -> str:
     return "\n".join(parts)
 
 
-def _reserve_postmortem_row(user_id: str, incident_id: str, session_id: str) -> None:
-    """Pre-create a postmortem row with NULL content to signal 'generating' state.
+def _reserve_postmortem_artifact(user_id: str, incident_id: str, session_id: str) -> None:
+    """Pre-create an artifact row with NULL content to signal 'generating' state.
 
-    If a postmortem already exists (regeneration), sets content to NULL so the
-    GET endpoint returns 202. Previous content is already preserved in
-    postmortem_versions from the original save.
-    The save_postmortem tool will later fill in the content via ON CONFLICT UPDATE.
+    If a postmortem artifact already exists (regeneration), sets content to NULL so
+    the GET endpoint returns 202. Previous content is preserved in artifact_versions
+    from the original save. The save_postmortem tool will later fill in the content
+    via ON CONFLICT UPDATE.
     """
     try:
         with db_pool.get_admin_connection() as conn:
@@ -265,15 +265,29 @@ def _reserve_postmortem_row(user_id: str, incident_id: str, session_id: str) -> 
 
                 set_rls_context(cur, conn, user_id, log_prefix="[PostmortemAction:reserve]")
 
+                # Derive the title from the incident's alert_title
                 cur.execute(
-                    """INSERT INTO postmortems (incident_id, user_id, org_id, content, generation_session_id)
-                       VALUES (%s, %s, %s, NULL, %s)
-                       ON CONFLICT (incident_id)
+                    "SELECT alert_title FROM incidents WHERE id = %s",
+                    (incident_id,),
+                )
+                incident_row = cur.fetchone()
+                alert_title = incident_row[0] if incident_row else None
+                short_id = str(incident_id)[:8]
+                title = f"Postmortem: {alert_title} [{short_id}]" if alert_title else f"Postmortem ({incident_id})"
+
+                cur.execute(
+                    """INSERT INTO artifacts
+                           (org_id, user_id, title, content, category,
+                            incident_id, generation_session_id, last_edited_by, updated_at)
+                       VALUES (%s, %s, %s, NULL, 'postmortem',
+                               %s, %s, 'agent', CURRENT_TIMESTAMP)
+                       ON CONFLICT (incident_id) WHERE incident_id IS NOT NULL
                        DO UPDATE SET content = NULL,
                                      generation_session_id = EXCLUDED.generation_session_id,
+                                     last_edited_by = 'agent',
                                      updated_at = CURRENT_TIMESTAMP""",
-                    (incident_id, user_id, org_id, session_id),
+                    (org_id, user_id, title, incident_id, session_id),
                 )
                 conn.commit()
     except Exception:
-        logger.exception("[PostmortemAction] Failed to reserve postmortem row")
+        logger.exception("[PostmortemAction] Failed to reserve postmortem artifact row")
