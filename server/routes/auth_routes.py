@@ -13,6 +13,7 @@ from flask import Blueprint, request, jsonify
 from utils.db.db_utils import connect_to_db_as_user
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_auth_only
+from utils.web.limiter_ext import limiter
 import os
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
@@ -338,6 +339,79 @@ def setup_org(user_id):
     except Exception as e:
         logging.error(f"Error during org setup: {e}")
         return jsonify({"error": "Organization setup failed"}), 500
+
+
+@auth_bp.route('/handoff', methods=['POST'])
+@limiter.limit("10 per minute;30 per hour")
+def exchange_handoff():
+    """Exchange a one-time signup handoff token for a session payload.
+
+    Body: { token }. Minted by the GitHub one-click signup callback
+    (routes/github/github_signup.py) and redeemed exactly once by the
+    frontend's NextAuth handler — the row is burned before the payload is
+    returned, so a replayed token gets 401. Constant generic error for
+    every failure mode (unknown/expired/used) to avoid oracle behavior.
+    """
+    from routes.github.github_signup import is_hosted_signup_enabled
+
+    if not is_hosted_signup_enabled():
+        return jsonify({"error": "Not available"}), 404
+
+    try:
+        data = request.get_json(silent=True) or {}
+        token = data.get('token') or ''
+        if not isinstance(token, str) or not (20 <= len(token) <= 128):
+            return jsonify({"error": "Invalid token"}), 401
+
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                # Burn-then-read in one statement: the UPDATE only matches an
+                # unexpired, unused hash, so concurrent redeems race on the
+                # row lock and exactly one wins.
+                cursor.execute(
+                    """UPDATE users
+                          SET signup_handoff_hash = NULL,
+                              signup_handoff_expires_at = NULL
+                        WHERE signup_handoff_hash = %s
+                          AND signup_handoff_expires_at > NOW()
+                       RETURNING id, email, name, role, org_id,
+                                 COALESCE(must_change_password, FALSE),
+                                 COALESCE(email_verified, FALSE)""",
+                    (token_hash,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    conn.commit()
+                    return jsonify({"error": "Invalid token"}), 401
+                (user_id, user_email, user_name, user_role, user_org_id,
+                 must_change_pw, email_verified) = row
+                cursor.execute(
+                    "SELECT name FROM organizations WHERE id = %s", (user_org_id,)
+                )
+                org_row = cursor.fetchone()
+                conn.commit()
+
+        record_audit_event(
+            user_org_id or "", user_id, "login", "session", user_id,
+            {"via": "github_one_click_handoff"}, request,
+        )
+        return jsonify({
+            "id": user_id,
+            "email": user_email,
+            "name": user_name,
+            # Signup always writes role='admin'; if it is ever missing, fail
+            # toward the least privilege the frontend middleware understands.
+            "role": user_role or "viewer",
+            "orgId": user_org_id,
+            "orgName": org_row[0] if org_row else None,
+            "mustChangePassword": bool(must_change_pw),
+            "emailVerified": bool(email_verified),
+        }), 200
+    except Exception:
+        logging.exception("Error during handoff exchange")
+        return jsonify({"error": "Login failed"}), 500
 
 
 @auth_bp.route('/login', methods=['POST'])

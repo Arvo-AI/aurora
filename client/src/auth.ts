@@ -108,6 +108,42 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         const user = await response.json()
         return user // { id, email, name, role, orgId, orgName }
       }
+    }),
+    Credentials({
+      // One-time handoff token from the GitHub one-click signup flow. The
+      // backend burns the token on first redemption, so this can only ever
+      // establish a session once per signup.
+      id: "handoff",
+      name: "handoff",
+      credentials: {
+        token: { label: "Token", type: "text" }
+      },
+      authorize: async (credentials) => {
+        if (!credentials?.token) return null
+
+        const backendUrl = process.env.BACKEND_URL
+        if (!backendUrl) {
+          console.error("BACKEND_URL environment variable is not set")
+          return null
+        }
+
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 10000)
+        const response = await fetch(`${backendUrl}/api/auth/handoff`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: credentials.token }),
+          signal: controller.signal,
+        })
+        clearTimeout(timeout)
+
+        if (!response.ok) {
+          console.error("Handoff exchange failed:", response.status)
+          return null
+        }
+
+        return await response.json()
+      }
     })
   ],
   session: {

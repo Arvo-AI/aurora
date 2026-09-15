@@ -84,6 +84,55 @@ function AuthPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
+  // One-click GitHub signup handoff: the backend redirects here with a
+  // one-time token after provisioning the account. Redeem it silently and
+  // land the user in the app — no form. The token is burned server-side on
+  // first use, so a stale/replayed URL just falls through to the form.
+  // While it runs the form is replaced by a "setting up" panel — showing a
+  // login form to someone who just installed the App reads as "log in
+  // again". The panel stays up through the redirect; only a failure
+  // reveals the form (with the reason).
+  const handoffAttempted = useRef(false)
+  const [handoffInFlight, setHandoffInFlight] = useState(false)
+  useEffect(() => {
+    const handoffToken = searchParams.get("handoff")
+    if (!handoffToken || handoffAttempted.current) return
+    handoffAttempted.current = true
+    setHandoffInFlight(true)
+    setIsLoading(true)
+    ;(async () => {
+      try {
+        const result = await signIn("handoff", { token: handoffToken, redirect: false })
+        // Scrub the token from the URL/history either way.
+        const url = new URL(globalThis.location.href)
+        url.searchParams.delete("handoff")
+        globalThis.history.replaceState(null, "", url.toString())
+        if (result?.ok) {
+          router.push("/connectors?installed=github")
+          router.refresh()
+        } else {
+          setHandoffInFlight(false)
+          setError("This sign-in link has expired. Please sign in below.")
+        }
+      } catch {
+        setHandoffInFlight(false)
+        setError("An error occurred. Please try again.")
+      } finally {
+        setIsLoading(false)
+      }
+    })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
+
+  // Set by the signup callback when the GitHub email already has an
+  // (unlinked) Aurora account — sign in normally instead.
+  useEffect(() => {
+    if (searchParams.get("error") === "account_exists") {
+      setError("An account with your GitHub email already exists. Sign in below, then finish connecting GitHub from the Connectors page.")
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
+
   useEffect(() => {
     if (resendCooldown <= 0) return
     const t = setTimeout(() => setResendCooldown(resendCooldown - 1), 1000)
@@ -320,7 +369,20 @@ function AuthPage() {
             </div>
           </div>
 
-          <div className={`transition-opacity duration-300 ease-in-out ${formVisible ? 'opacity-100' : 'opacity-0'}`}>
+          {handoffInFlight && (
+            <div className="space-y-8" aria-live="polite">
+              <div>
+                <h2 className="text-2xl font-semibold text-white">Setting up your account</h2>
+                <p className="mt-2 text-[#888] text-sm">GitHub is connected. Creating your workspace and enrolling the repositories you selected.</p>
+              </div>
+              <div className="flex items-center gap-3 text-white/70 text-sm">
+                <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>
+                Signing you in…
+              </div>
+            </div>
+          )}
+
+          <div className={`${handoffInFlight ? 'hidden' : ''} transition-opacity duration-300 ease-in-out ${formVisible ? 'opacity-100' : 'opacity-0'}`}>
             {mode === 'signin' && (
               <div className="space-y-8">
                 <div>
