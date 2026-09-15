@@ -16,7 +16,7 @@ metadata:
 Multiple subscriptions may be connected. Omitting `account_id` fans a
 `cloud_exec('azure', ...)` call out across **every** connected subscription and
 returns `results_by_subscription`. That fan-out is **expensive** — it runs the
-command once per subscription — so treat it as a last resort:
+command once per subscription so use it wisely:
 
 - If you already know (or the user named) the target subscription, pass
   `account_id='SUBSCRIPTION_ID'` from the **first** call. Do NOT fan out across
