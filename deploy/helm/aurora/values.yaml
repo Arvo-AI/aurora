@@ -71,6 +71,15 @@ image:
   # Image tag to deploy. Empty = track the chart's appVersion (recommended).
   # Pin a specific tag (e.g. sha-<short>) to override; avoid "latest" (mutable).
   tag: ""
+
+  # Optional: pin images by immutable digest instead of tag (most reproducible).
+  # When a digest is set for an image it takes precedence over `tag`, so a given
+  # chart version can only ever run one exact binary. Released charts ship these
+  # pre-filled (see values.images-<version>.yaml on the release); leave empty to
+  # deploy by tag. Keys: server, frontend.
+  digests: {}
+    # server: "sha256:..."
+    # frontend: "sha256:..."
   
   # Optional: Pull secrets for private registries
   # pullSecrets:

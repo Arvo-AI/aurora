@@ -50,7 +50,7 @@ spec:
       {{- include "aurora.scheduling" (dict "service" "celeryWorker" "global" $) | nindent 6 }}
       containers:
         - name: celery-worker
-          image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: {{ include "aurora.image" (dict "image" "server" "global" $) | quote }}
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "exec celery -A celery_config worker --loglevel=info --concurrency=${CELERY_CONCURRENCY:-4} --queues=high,celery --pidfile=/tmp/celery-worker.pid"]
           securityContext:
