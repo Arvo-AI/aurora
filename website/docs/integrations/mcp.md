@@ -45,9 +45,9 @@ These appear in your tool list only when at least one backing integration is con
 
 | Tool | Enabling integrations |
 |------|----------------------|
-| `query_logs` | Datadog · Splunk |
+| `query_logs` | Datadog · Splunk · Elastic |
 | `query_metrics` | Datadog |
-| `query_alerts` | Datadog · New Relic · Dynatrace · OpsGenie · incident.io · Splunk |
+| `query_alerts` | Datadog · New Relic · Dynatrace · OpsGenie · incident.io · Splunk · Elastic |
 | `query_jira` | Jira (search, get issue) |
 | `query_notion` | Notion (list databases, fetch database) |
 | `query_bitbucket` | Bitbucket (workspaces, repos, branches, PRs) |

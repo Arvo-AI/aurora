@@ -47,6 +47,7 @@ x-common-env: &common-env
   REDIS_SSL_CERT_REQS: ${REDIS_SSL_CERT_REQS:-}
   WEAVIATE_SECURE: ${WEAVIATE_SECURE:-false}
   SPLUNK_SSL_VERIFY: ${SPLUNK_SSL_VERIFY:-false}
+  ELASTIC_SSL_VERIFY: ${ELASTIC_SSL_VERIFY:-true}
 
   # Knowledge Base storage uses the pluggable storage system (SeaWeedFS/S3-compatible)
   # Configure via STORAGE_* environment variables

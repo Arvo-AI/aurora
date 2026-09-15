@@ -907,6 +907,32 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_state ON splunk_alerts(alert_state);
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_received_at ON splunk_alerts(received_at DESC);
                 """,
+                "elastic_alerts": """
+                    CREATE TABLE IF NOT EXISTS elastic_alerts (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        alert_id VARCHAR(255),
+                        alert_uuid VARCHAR(255),
+                        alert_title TEXT,
+                        alert_state VARCHAR(50),
+                        rule_id VARCHAR(255),
+                        rule_name TEXT,
+                        rule_type VARCHAR(255),
+                        action_group VARCHAR(100),
+                        reason TEXT,
+                        severity VARCHAR(50),
+                        view_in_app_url TEXT,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_elastic_alerts_user_id ON elastic_alerts(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_elastic_alerts_org_uuid_state ON elastic_alerts(org_id, alert_uuid, alert_state);
+                    CREATE INDEX IF NOT EXISTS idx_elastic_alerts_state ON elastic_alerts(alert_state);
+                    CREATE INDEX IF NOT EXISTS idx_elastic_alerts_received_at ON elastic_alerts(received_at DESC);
+                """,
                 "incidentio_alerts": """
                     CREATE TABLE IF NOT EXISTS incidentio_alerts (
                         id SERIAL PRIMARY KEY,
@@ -1558,6 +1584,7 @@ def initialize_tables():
             rls_tables.append("datadog_events")
             rls_tables.append("netdata_alerts")
             rls_tables.append("splunk_alerts")
+            rls_tables.append("elastic_alerts")
             rls_tables.append("incidentio_alerts")
             rls_tables.append("bigpanda_events")
             rls_tables.append("jenkins_deployment_events")
@@ -2974,7 +3001,7 @@ def initialize_tables():
                 "llm_usage_tracking", "cloud_feed_metadata", "cloud_ingestion_state",
                 "grafana_alerts", "datadog_events", "netdata_alerts",
                 "pagerduty_events", "opsgenie_events", "incidents", "incident_alerts",
-                "rca_notification_emails", "splunk_alerts",
+                "rca_notification_emails", "splunk_alerts", "elastic_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
                 "bigpanda_events", "kubectl_agent_tokens",
                 "cloudwatch_alarms",

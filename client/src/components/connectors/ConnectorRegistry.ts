@@ -66,6 +66,19 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "elastic",
+      name: "Elastic Cloud",
+      description: "Connect Elasticsearch and Kibana (Elastic Cloud Hosted, Serverless, or self-managed) to search logs, read Kibana alerts, and turn alert rules into Aurora incidents.",
+      iconPath: "/elastic.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/elastic/auth",
+      storageKey: "isElasticConnected",
+      alertsPath: "/elastic/alerts",
+      alertsLabel: "View Alerts",
+    });
+
+    this.register({
         id: "dynatrace",
         name: "Dynatrace",
         description: "Connect to Dynatrace for full-stack observability. Receive problem notifications and query metrics, logs, and entities for root cause analysis.",

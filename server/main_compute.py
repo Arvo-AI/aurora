@@ -110,6 +110,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
                        "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/elastic/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                          "Authorization", "X-Provider-Preference"],
+                        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
         r"/incidentio/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                            "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                              "Authorization", "X-Provider-Preference"],
@@ -219,6 +223,7 @@ _OPEN_PREFIXES = (
     "/datadog/webhook/",
     "/grafana/alerts/webhook/",
     "/splunk/alerts/webhook/",
+    "/elastic/alerts/webhook/",
     "/netdata/alerts/webhook/",
     "/bigpanda/webhook/",
     "/dynatrace/webhook/",
@@ -432,6 +437,11 @@ from routes.splunk import bp as splunk_bp, search_bp as splunk_search_bp  # noqa
 import routes.splunk.tasks  # noqa: F401
 app.register_blueprint(splunk_bp, url_prefix="/splunk")
 app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
+
+# --- Elastic Cloud Integration Routes ---
+from routes.elastic import bp as elastic_bp, search_bp as elastic_search_bp
+app.register_blueprint(elastic_bp, url_prefix="/elastic")
+app.register_blueprint(elastic_search_bp, url_prefix="/elastic")
 
 # --- incident.io Integration Routes ---
 from routes.incidentio import bp as incidentio_bp  # noqa: F401

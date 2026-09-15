@@ -42,6 +42,7 @@ CONNECTOR_DIRS: frozenset = frozenset({
     "slack",
     "spinnaker",
     "splunk",
+    "elastic",
     "tailscale",
     "terraform",
     "thousandeyes",

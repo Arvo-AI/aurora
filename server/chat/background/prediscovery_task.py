@@ -142,9 +142,10 @@ These are indexed separately for semantic search during incident response.
    - For each deployment: what repo, what target environment, what K8s cluster/namespace
    - If CloudBees Operations Center OR a manually-registered controller fleet (Multiple Controllers mode) is connected: use cloudbees_rca(action='controller_list') to discover all controllers, then cloudbees_rca(action='cross_controller_deployments') to see what's deploying across the organization
 
-6. **Observability** (if Datadog/Splunk/Coroot/Dynatrace/ThousandEyes connected):
+6. **Observability** (if Datadog/Splunk/Elastic/Coroot/Dynatrace/ThousandEyes connected):
    - Datadog: query_datadog(resource_type='monitors') and query_datadog(resource_type='hosts')
    - Splunk: list_splunk_indexes(), search_splunk() to discover log sources
+   - Elastic: elastic_list_indices(), elastic_search_logs() to discover log data streams and services
    - Coroot: coroot_get_service_map() for eBPF-discovered service dependencies, coroot_get_applications() for app inventory
    - Dynatrace: query_dynatrace() for entities and topology
    - ThousandEyes: thousandeyes_list_tests() for network monitoring targets

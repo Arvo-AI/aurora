@@ -116,6 +116,7 @@ export class ProviderPolling {
     const isKubectlConnected = this.getConnectionStatus('kubectl');
     const isSlackConnected = this.getConnectionStatus('slack');
     const isSplunkConnected = this.getConnectionStatus('splunk');
+    const isElasticConnected = this.getConnectionStatus('elastic');
     const isDynatraceConnected = this.getConnectionStatus('dynatrace');
 
     this.config.onProvidersUpdate(prev => {
@@ -223,6 +224,15 @@ export class ProviderPolling {
             };
             if (JSON.stringify(newSplunkState) !== JSON.stringify(provider)) hasChanges = true;
             return newSplunkState;
+          case 'elastic': {
+            const newElasticState = {
+              ...provider,
+              isConnected: isElasticConnected,
+              status: isElasticConnected ? ('connected' as const) : ('disconnected' as const)
+            };
+            if (JSON.stringify(newElasticState) !== JSON.stringify(provider)) hasChanges = true;
+            return newElasticState;
+          }
 
           case 'dynatrace':
             const newDynatraceState = {

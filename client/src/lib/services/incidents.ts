@@ -8,7 +8,7 @@ import { apiGet, apiPost, apiRequest, type ApiError } from '@/lib/services/api-c
 // streaming thoughts, and copy-pasteable post-mortems
 // ============================================================================
 
-export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'dynatrace' | 'coroot' | 'bigpanda' | 'cloudwatch' | 'chat';
+export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'elastic' | 'dynatrace' | 'coroot' | 'bigpanda' | 'cloudwatch' | 'chat';
 
 export function getSourceIconSrc(source: string): string | null {
   if (source === 'chat') return null;
@@ -68,6 +68,17 @@ export interface AlertMetadata {
   incidentUrl?: string;
   urgency?: string;
   customFields?: Record<string, string>;
+
+  // Elastic specific
+  ruleId?: string;
+  ruleName?: string;
+  ruleType?: string;
+  reason?: string;
+  threshold?: string | number;
+  viewInAppUrl?: string;
+  alertDetailsUrl?: string;
+  kibanaUrl?: string;
+  spaceId?: string;
 }
 
 export interface Alert {
