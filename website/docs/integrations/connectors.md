@@ -468,6 +468,12 @@ first Callback URL, which is why the signup callback must be first. It
 recognises in-app installs by their signed state and hands them to the
 regular install handler, so both flows keep working. Self-hosted installs
 should leave all of this alone.
+
+After the GitHub install screen the visitor lands here for a second or two
+while the one-time handoff token is exchanged for a session, then arrives on
+the Connectors page signed in:
+
+![One-click signup landing](/img/one-click-signup-landing.jpg)
 :::
 
 **Repository permissions** (set in Permissions & events tab):
