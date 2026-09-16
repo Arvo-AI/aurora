@@ -61,7 +61,7 @@ requests==2.33.1
 rsa==4.9
 six==1.17.0
 typing_extensions>=4.12.2
-urllib3==2.7.0
+urllib3==2.8.0
 Werkzeug==3.1.6
 websockets==15.0
 pyyaml==6.0.1
