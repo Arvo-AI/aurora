@@ -206,6 +206,13 @@ export default function SlackManagePage() {
     }
   };
 
+  // "Generate with AI" from inside the editor: close it and kick off the same
+  // LLM generation as the regenerate action (result lands on next load).
+  const handleGenerateFromEditor = (channelId: string) => {
+    setEditingChannelId(null);
+    handleRegenerateDescription(channelId);
+  };
+
   const handleChannelNotifyToggle = async (channelId: string, enabled: boolean) => {
     setConnectedChannels((prev) =>
       prev.map((c) => (c.channel_id === channelId ? { ...c, notify_enabled: enabled } : c)),
@@ -532,13 +539,25 @@ export default function SlackManagePage() {
                               className="w-full text-xs rounded-md border bg-background p-2"
                               placeholder="Describe what this channel is for and which team/service it serves."
                             />
-                            <div className="flex justify-end gap-2">
-                              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={cancelEditingDescription}>
-                                Cancel
+                            <div className="flex items-center justify-between gap-2">
+                              {/* Let AI draft the description in-place instead of typing it. */}
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2 text-xs text-zinc-400 hover:text-white"
+                                onClick={() => handleGenerateFromEditor(c.channel_id)}
+                              >
+                                <RefreshCw className="h-3 w-3 mr-1" />
+                                {c.metadata_summary ? "Regenerate with AI" : "Generate with AI"}
                               </Button>
-                              <Button size="sm" className="h-6 px-2 text-xs" onClick={() => saveEditedDescription(c.channel_id)}>
-                                Save
-                              </Button>
+                              <div className="flex gap-2">
+                                <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={cancelEditingDescription}>
+                                  Cancel
+                                </Button>
+                                <Button size="sm" className="h-6 px-2 text-xs" onClick={() => saveEditedDescription(c.channel_id)}>
+                                  Save
+                                </Button>
+                              </div>
                             </div>
                           </div>
                         ) : (
@@ -547,30 +566,19 @@ export default function SlackManagePage() {
                               {c.metadata_status === "generating" || c.metadata_status === "pending"
                                 ? "Generating description…"
                                 : c.metadata_status === "skipped"
-                                  ? "No description yet — click Generate to create one, or the pen to write it."
+                                  ? "No description yet — click the pen to write or generate one."
                                   : c.metadata_summary || "No description yet."}
                             </p>
                             {canWrite && (
-                              <div className="flex items-center gap-1 shrink-0">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-6 px-2 text-xs text-zinc-400 hover:text-white"
-                                  title="Edit description"
-                                  onClick={() => startEditingDescription(c)}
-                                >
-                                  <Pencil className="h-3 w-3" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-6 px-2 text-xs text-zinc-400 hover:text-white"
-                                  onClick={() => handleRegenerateDescription(c.channel_id)}
-                                >
-                                  <RefreshCw className="h-3 w-3 mr-1" />
-                                  {c.metadata_summary ? "Regenerate" : "Generate"}
-                                </Button>
-                              </div>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2 text-xs text-zinc-400 hover:text-white shrink-0"
+                                title="Edit or generate description"
+                                onClick={() => startEditingDescription(c)}
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </Button>
                             )}
                           </div>
                         )}
