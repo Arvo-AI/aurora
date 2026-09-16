@@ -1440,12 +1440,14 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             list_slack_channels,
             get_channel_history,
             get_thread_replies,
+            get_connected_slack_channels,
             is_slack_connected,
         )
         if _safe_connected(is_slack_connected, "Slack"):
             tool_functions.append((list_slack_channels, "list_slack_channels"))
             tool_functions.append((get_channel_history, "get_channel_history"))
             tool_functions.append((get_thread_replies, "get_thread_replies"))
+            tool_functions.append((get_connected_slack_channels, "get_connected_slack_channels"))
             logging.info(f"Added Slack tools for user {user_id}")
     except Exception as e:
         logging.warning(f"Failed to add Slack tools: {e}")
@@ -1783,6 +1785,19 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "and the thread looks relevant to the incident investigation."
                 ),
                 args_schema=GetThreadRepliesArgs,
+            )
+        elif name == 'get_connected_slack_channels':
+            from .slack_tool import GetConnectedSlackChannelsArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List the Slack channels Aurora is aware of, each with a description "
+                    "of what it's for and which team/service it serves. Call this to decide "
+                    "which channel(s) are relevant when posting about an incident or "
+                    "notifying a team."
+                ),
+                args_schema=GetConnectedSlackChannelsArgs,
             )
         else:
             tool = StructuredTool.from_function(final_func)

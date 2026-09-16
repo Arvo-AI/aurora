@@ -391,8 +391,10 @@ app.register_blueprint(mcp_token_bp)
 # --- Slack Integration Routes ---
 from routes.slack.slack_routes import slack_bp
 from routes.slack.slack_events import slack_events_bp
+from routes.slack.slack_channels import slack_channels_bp
 app.register_blueprint(slack_bp, url_prefix="/slack")
 app.register_blueprint(slack_events_bp, url_prefix="/slack")
+app.register_blueprint(slack_channels_bp, url_prefix="/slack")
 
 # --- Google Chat Integration Routes ---
 from routes.google_chat.google_chat_routes import google_chat_bp

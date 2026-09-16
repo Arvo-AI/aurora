@@ -226,3 +226,70 @@ def get_thread_replies(
     except Exception as e:
         logger.info("[SlackTool] Failed to get thread replies for %s/%s", channel_id, thread_ts)
         return json.dumps({"error": f"Failed to fetch thread replies: {e}"})
+
+
+class GetConnectedSlackChannelsArgs(BaseModel):
+    """No required args — reads the org's known channels from context."""
+    pass
+
+
+def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
+    """Return the Slack channels Aurora is aware of, each with its description.
+
+    This is the routing-decision source: use the descriptions to choose which
+    channel(s) are relevant for a given incident/notification. Distinct from
+    list_slack_channels (a live, description-less listing of bot memberships).
+    """
+    if not user_id:
+        return json.dumps({"error": _ERR_NO_USER})
+
+    try:
+        from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
+        from utils.db.org_scope import resolve_org, org_read_predicate
+
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[SlackTool:connected]")
+                cur.execute(
+                    f"""SELECT DISTINCT ON (channel_id)
+                              channel_id, channel_name, channel_type,
+                              detected_platform, notify_enabled,
+                              metadata_summary, metadata_status, is_member
+                         FROM slack_channels
+                        WHERE provider = 'slack' AND {predicate}
+                        ORDER BY channel_id, updated_at DESC""",
+                    pred_params,
+                )
+                rows = cur.fetchall()
+
+        channels = [
+            {
+                "channel_id": r[0],
+                "channel_name": r[1],
+                "channel_type": r[2],
+                "detected_platform": r[3],
+                "notify_enabled": r[4],
+                "description": r[5] or (
+                    "(description generating...)" if r[6] != "ready" else "(no description)"
+                ),
+                "is_member": r[7],
+            }
+            for r in rows
+        ]
+
+        if not channels:
+            return json.dumps({
+                "channels": [],
+                "message": (
+                    "No Slack channels registered yet. Ask the user to select "
+                    "channels in Slack settings, or use list_slack_channels for a "
+                    "live listing."
+                ),
+            })
+        return json.dumps({"channels": channels})
+    except Exception as e:
+        logger.exception("Error fetching connected Slack channels")
+        return json.dumps({"error": f"Failed to fetch connected Slack channels: {e}"})

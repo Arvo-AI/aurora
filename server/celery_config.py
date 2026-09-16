@@ -114,6 +114,7 @@ celery_app.conf.update(
         'tasks.change_gating',
         'routes.bitbucket.bitbucket_selection',
         'routes.github.github_repo_metadata',
+        'routes.slack.slack_channel_metadata',
         'utils.repo_metadata',
         'services.actions.scheduler',
     ],
@@ -246,6 +247,12 @@ try:
     logging.info("GitHub repo metadata task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import GitHub repo metadata task: {e}")
+
+try:
+    import routes.slack.slack_channel_metadata  # noqa: F401
+    logging.info("Slack channel metadata task imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import Slack channel metadata task: {e}")
 
 # Log the number of registered tasks for debugging
 if hasattr(celery_app, 'tasks'):

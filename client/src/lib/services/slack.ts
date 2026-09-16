@@ -16,7 +16,35 @@ export interface SlackConnectResponse {
   message: string;
 }
 
+export interface SlackConnectedChannel {
+  channel_id: string;
+  channel_name?: string;
+  is_private?: boolean;
+  is_member?: boolean;
+  channel_type?: string;
+  detected_platform?: string | null;
+  notify_enabled?: boolean;
+  metadata_summary?: string | null;
+  metadata_status?: string;
+}
+
+export interface SlackAvailableChannel {
+  channel_id: string;
+  channel_name?: string;
+  is_private?: boolean;
+  is_member?: boolean;
+  topic?: string;
+  purpose?: string;
+  num_members?: number | null;
+}
+
+export interface SlackChannelsResponse {
+  connected: SlackConnectedChannel[];
+  available: SlackAvailableChannel[];
+}
+
 const API_BASE = '/api/slack';
+const CHANNELS_BASE = '/api/slack/channels';
 
 export const slackService = {
   async getStatus(): Promise<SlackStatus | null> {
@@ -51,6 +79,48 @@ export const slackService = {
   async disconnect(): Promise<void> {
     await apiRequest(`${API_BASE}`, {
       method: 'DELETE',
+      cache: 'no-store',
+    });
+  },
+
+  async getChannels(): Promise<SlackChannelsResponse> {
+    const data = await apiRequest<SlackChannelsResponse>(`${CHANNELS_BASE}`, {
+      cache: 'no-store',
+    });
+    return {
+      connected: data?.connected ?? [],
+      available: data?.available ?? [],
+    };
+  },
+
+  async saveChannels(channels: Array<Record<string, unknown>>): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}`, {
+      method: 'POST',
+      body: JSON.stringify({ channels }),
+      cache: 'no-store',
+    });
+  },
+
+  async updateChannelDescription(channelId: string, summary: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/${channelId}/metadata`, {
+      method: 'PUT',
+      body: JSON.stringify({ metadata_summary: summary }),
+      cache: 'no-store',
+    });
+  },
+
+  async setChannelNotify(channelId: string, enabled: boolean): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/${channelId}/notify`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+      cache: 'no-store',
+    });
+  },
+
+  async regenerateChannelDescription(channelId: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/metadata/generate`, {
+      method: 'POST',
+      body: JSON.stringify({ channel_id: channelId }),
       cache: 'no-store',
     });
   },

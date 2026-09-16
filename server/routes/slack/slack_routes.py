@@ -175,7 +175,17 @@ def slack_callback():
             if org_id and channel_result.get('channel_id'):
                 store_org_preference(org_id, 'slack_incidents_channel_id', channel_result['channel_id'])
                 store_org_preference(org_id, 'slack_incidents_channel_name', channel_result.get('channel_name', ''))
-            
+
+            # Seed the default "Slack" memory (teammate policy) so Aurora starts
+            # with sensible behaviour. Non-destructive: skips if one already
+            # exists, so user/agent edits survive reconnects. Best-effort — a
+            # seeding failure must not fail the connection.
+            try:
+                from services.memory.slack_memory import seed_slack_memory
+                seed_slack_memory(user_id)
+            except Exception:
+                logging.warning("Failed to seed Slack memory (non-fatal)", exc_info=True)
+
             logging.info("Incidents channel ready, Slack credentials stored successfully")
         except Exception as e:
             logging.exception("Failed to store Slack credentials")

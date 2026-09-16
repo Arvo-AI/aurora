@@ -11,6 +11,7 @@ tools:
   - list_slack_channels
   - get_channel_history
   - get_thread_replies
+  - get_connected_slack_channels
 index: "Slack messaging -- list channels, read messages, read threads"
 rca_priority: 50
 metadata:
@@ -34,6 +35,13 @@ Fetch messages from a channel. Scope with `oldest`/`latest` (ISO 8601) to the in
 ### `get_thread_replies(channel_id, thread_ts, limit?)`
 Fetch replies in a thread. Use when a message has `reply_count > 0` and looks relevant.
 
+### `get_connected_slack_channels()`
+Return the channels Aurora is aware of, each with a description of what it's for
+and which team/service it serves (plus `channel_type` and `detected_platform`).
+Call this to decide which channel(s) are relevant when posting about an incident
+or notifying a team — it's the routing-decision source. Distinct from
+`list_slack_channels`, which is a live, description-less membership listing.
+
 ## Strategy for Incident Investigation
 
 1. Call `list_slack_channels` — scan names/topics for the affected service or "incident"/"oncall" keywords
@@ -41,7 +49,22 @@ Fetch replies in a thread. Use when a message has `reply_count > 0` and looks re
 3. Look for messages about: deployments, rollbacks, alerts firing, team handoffs, escalations
 4. If a message has `reply_count > 0` and looks relevant, call `get_thread_replies` for full context
 
+## Slack behaviour memory
+
+Aurora's Slack behaviour (tone, when to speak, which teams/channels to notify)
+lives in a single memory entry: category `context`, title `Slack`. It is seeded
+on connect and is user- and agent-editable.
+
+- **Read it** whenever you act in Slack (it is auto-injected on Slack-sourced
+  sessions, but you may also `read_memory(category='context', title='Slack')`).
+- **Update it** when the team states a preference: use `edit_memory` /
+  `append_to_memory` to record things like "be quiet in #general", "post
+  conclusions to #payments-oncall", or a team → channel routing rule. This is
+  how Aurora learns per-team Slack policy over time.
+- Keep channel-specific preferences under the "Per-channel notes" section.
+
 ## Limitations
-- Read-only — cannot post messages
+- Read-only messaging today (posting is handled by the notification service and
+  the @mention flow, not by these tools)
 - Bot must be a member of the channel to read it
 - No cross-channel search — must check channels individually by name

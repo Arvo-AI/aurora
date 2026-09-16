@@ -7,11 +7,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Switch } from "@/components/ui/switch";
 import { ArrowLeft, Loader2, LogOut, Bell } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { slackService, type SlackStatus } from "@/lib/services/slack";
+import { slackService, type SlackStatus, type SlackConnectedChannel, type SlackAvailableChannel } from "@/lib/services/slack";
 import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite as checkCanWrite } from "@/lib/roles";
 import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
 import { queryClient, jsonFetcher } from "@/lib/query";
+import { Hash, RefreshCw } from "lucide-react";
 
 const SLACK_NOTIFICATION_KEYS = [
   { key: "slack_investigation_start_notifications", label: "Investigation Started", description: "Notify when Aurora begins an RCA investigation", defaultValue: true },
@@ -41,6 +42,26 @@ export default function SlackManagePage() {
   });
   const [isLoadingPrefs, setIsLoadingPrefs] = useState(true);
   const [savingPrefs, setSavingPrefs] = useState<Record<string, boolean>>({});
+
+  const [connectedChannels, setConnectedChannels] = useState<SlackConnectedChannel[]>([]);
+  const [availableChannels, setAvailableChannels] = useState<SlackAvailableChannel[]>([]);
+  const [isLoadingChannels, setIsLoadingChannels] = useState(true);
+  const [isSavingChannels, setIsSavingChannels] = useState(false);
+  // channel_ids Aurora should be aware of (the current selection in the picker)
+  const [selectedChannelIds, setSelectedChannelIds] = useState<Set<string>>(new Set());
+
+  const loadChannels = useCallback(async () => {
+    try {
+      const data = await slackService.getChannels();
+      setConnectedChannels(data.connected);
+      setAvailableChannels(data.available);
+      setSelectedChannelIds(new Set(data.connected.map((c) => c.channel_id)));
+    } catch (error) {
+      console.error("Error loading Slack channels:", error);
+    } finally {
+      setIsLoadingChannels(false);
+    }
+  }, []);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -86,7 +107,73 @@ export default function SlackManagePage() {
   useEffect(() => {
     loadStatus();
     loadPreferences();
-  }, [loadStatus, loadPreferences]);
+    loadChannels();
+  }, [loadStatus, loadPreferences, loadChannels]);
+
+  const toggleChannelSelected = (channelId: string) => {
+    setSelectedChannelIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(channelId)) {
+        next.delete(channelId);
+      } else {
+        next.add(channelId);
+      }
+      return next;
+    });
+  };
+
+  const handleSaveChannels = async () => {
+    setIsSavingChannels(true);
+    try {
+      // Build the payload from the picked available channels so the backend
+      // has names/privacy/membership to store + classify.
+      const byId = new Map(availableChannels.map((c) => [c.channel_id, c]));
+      const channels = Array.from(selectedChannelIds).map((id) => {
+        const c = byId.get(id);
+        return {
+          channel_id: id,
+          channel_name: c?.channel_name,
+          is_private: c?.is_private ?? false,
+          is_member: c?.is_member ?? false,
+          team_id: slackStatus?.team_id,
+        };
+      });
+      await slackService.saveChannels(channels);
+      toast({ title: "Saved", description: "Channel selection updated. Descriptions are generating." });
+      await loadChannels();
+    } catch (error: any) {
+      toast({ title: "Error", description: error?.message || "Failed to save channels", variant: "destructive" });
+    } finally {
+      setIsSavingChannels(false);
+    }
+  };
+
+  const handleChannelNotifyToggle = async (channelId: string, enabled: boolean) => {
+    setConnectedChannels((prev) =>
+      prev.map((c) => (c.channel_id === channelId ? { ...c, notify_enabled: enabled } : c)),
+    );
+    try {
+      await slackService.setChannelNotify(channelId, enabled);
+    } catch {
+      // Revert on failure.
+      setConnectedChannels((prev) =>
+        prev.map((c) => (c.channel_id === channelId ? { ...c, notify_enabled: !enabled } : c)),
+      );
+      toast({ title: "Error", description: "Failed to update channel notification setting", variant: "destructive" });
+    }
+  };
+
+  const handleRegenerateDescription = async (channelId: string) => {
+    try {
+      await slackService.regenerateChannelDescription(channelId);
+      toast({ title: "Regenerating", description: "Channel description is being regenerated." });
+      setConnectedChannels((prev) =>
+        prev.map((c) => (c.channel_id === channelId ? { ...c, metadata_status: "generating" } : c)),
+      );
+    } catch {
+      toast({ title: "Error", description: "Failed to regenerate description", variant: "destructive" });
+    }
+  };
 
   const handlePreferenceChange = async (key: PreferenceKey, enabled: boolean) => {
     setPreferences((prev) => ({ ...prev, [key]: enabled }));
@@ -237,6 +324,129 @@ export default function SlackManagePage() {
                 />
               </div>
             ))}
+          </CardContent>
+        </Card>
+
+        {/* Channel Awareness */}
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Hash className="h-5 w-5" />
+              Channels
+            </CardTitle>
+            <CardDescription>
+              Choose which channels Aurora is aware of. Aurora describes each one and uses those
+              descriptions to decide where to post about incidents. Toggle notifications per channel.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {isLoadingChannels ? (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <>
+                {/* Connected channels with descriptions + per-channel notify */}
+                {connectedChannels.length > 0 && (
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-medium text-muted-foreground">Aurora is aware of</h4>
+                    {connectedChannels.map((c) => (
+                      <div key={c.channel_id} className="p-4 border rounded-lg space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-sm font-semibold truncate">#{c.channel_name || c.channel_id}</span>
+                            {c.channel_type && c.channel_type !== "unknown" && (
+                              <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
+                                {c.channel_type}
+                              </span>
+                            )}
+                            {c.detected_platform && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-950 text-blue-300">
+                                {c.detected_platform}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-xs text-muted-foreground">Notify</span>
+                            <Switch
+                              checked={Boolean(c.notify_enabled)}
+                              onCheckedChange={(checked) => handleChannelNotifyToggle(c.channel_id, checked)}
+                              disabled={!canWrite}
+                            />
+                          </div>
+                        </div>
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-xs text-muted-foreground flex-1">
+                            {c.metadata_status === "generating" || c.metadata_status === "pending"
+                              ? "Generating description…"
+                              : c.metadata_summary || "No description yet."}
+                          </p>
+                          {canWrite && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-2 text-xs text-zinc-400 hover:text-white shrink-0"
+                              onClick={() => handleRegenerateDescription(c.channel_id)}
+                            >
+                              <RefreshCw className="h-3 w-3 mr-1" />
+                              Regenerate
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Available channel picker */}
+                <div className="space-y-2">
+                  <h4 className="text-sm font-medium text-muted-foreground">
+                    Available channels ({availableChannels.length})
+                  </h4>
+                  <div className="max-h-64 overflow-y-auto border rounded-lg divide-y divide-zinc-800">
+                    {availableChannels.length === 0 ? (
+                      <p className="text-xs text-muted-foreground p-4">
+                        No channels found. Make sure Aurora has been invited to the channels you want it to see.
+                      </p>
+                    ) : (
+                      availableChannels.map((c) => (
+                        <label
+                          key={c.channel_id}
+                          className={`flex items-center gap-3 p-3 cursor-pointer hover:bg-zinc-900 ${canWrite ? "" : "opacity-50 pointer-events-none"}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedChannelIds.has(c.channel_id)}
+                            onChange={() => toggleChannelSelected(c.channel_id)}
+                            disabled={!canWrite}
+                            className="accent-primary"
+                          />
+                          <span className="text-sm truncate">#{c.channel_name || c.channel_id}</span>
+                          {c.is_private && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">private</span>
+                          )}
+                          {typeof c.num_members === "number" && (
+                            <span className="text-[10px] text-muted-foreground ml-auto">{c.num_members} members</span>
+                          )}
+                        </label>
+                      ))
+                    )}
+                  </div>
+                  <div className="flex justify-end">
+                    <Button size="sm" onClick={handleSaveChannels} disabled={!canWrite || isSavingChannels}>
+                      {isSavingChannels ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Saving…
+                        </>
+                      ) : (
+                        "Save selection"
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
 
