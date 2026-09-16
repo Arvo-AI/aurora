@@ -493,7 +493,7 @@ export default function SlackManagePage() {
                       Aurora is aware of ({connectedChannels.length})
                     </h4>
                     {connectedChannels.map((c) => (
-                      <div key={c.channel_id} className="p-4 border rounded-lg space-y-2">
+                      <div key={c.channel_id} className="p-3 border rounded-lg">
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
                             <span className="text-sm font-semibold truncate">#{c.channel_name || c.channel_id}</span>
@@ -516,22 +516,33 @@ export default function SlackManagePage() {
                               disabled={!canWrite}
                             />
                             {canWrite && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 w-7 p-0 text-zinc-400 hover:text-destructive"
-                                title="Dismiss (hide from Aurora; stays in Slack)"
-                                onClick={() => handleDismissChannel(c.channel_id)}
-                              >
-                                <X className="h-4 w-4" />
-                              </Button>
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 p-0 text-zinc-400 hover:text-white"
+                                  title="Edit or generate description"
+                                  onClick={() => startEditingDescription(c)}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 p-0 text-zinc-400 hover:text-destructive"
+                                  title="Dismiss (hide from Aurora; stays in Slack)"
+                                  onClick={() => handleDismissChannel(c.channel_id)}
+                                >
+                                  <X className="h-4 w-4" />
+                                </Button>
+                              </>
                             )}
                           </div>
                         </div>
 
-                        {/* Inline description editor, or the description + actions */}
-                        {editingChannelId === c.channel_id ? (
-                          <div className="space-y-2">
+                        {/* Full description only shows while editing — keeps rows lean. */}
+                        {editingChannelId === c.channel_id && (
+                          <div className="space-y-2 mt-2">
                             <textarea
                               value={editingDraft}
                               onChange={(e) => setEditingDraft(e.target.value)}
@@ -559,27 +570,6 @@ export default function SlackManagePage() {
                                 </Button>
                               </div>
                             </div>
-                          </div>
-                        ) : (
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="text-xs text-muted-foreground flex-1">
-                              {c.metadata_status === "generating" || c.metadata_status === "pending"
-                                ? "Generating description…"
-                                : c.metadata_status === "skipped"
-                                  ? "No description yet — click the pen to write or generate one."
-                                  : c.metadata_summary || "No description yet."}
-                            </p>
-                            {canWrite && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 px-2 text-xs text-zinc-400 hover:text-white shrink-0"
-                                title="Edit or generate description"
-                                onClick={() => startEditingDescription(c)}
-                              >
-                                <Pencil className="h-3 w-3" />
-                              </Button>
-                            )}
                           </div>
                         )}
                       </div>
