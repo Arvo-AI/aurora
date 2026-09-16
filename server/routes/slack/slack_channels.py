@@ -18,6 +18,7 @@ Endpoints (all behind ``connectors`` RBAC):
 """
 import json
 import logging
+import re
 
 from flask import Blueprint, jsonify, request
 
@@ -26,9 +27,21 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
 from utils.db.org_scope import resolve_org, org_read_predicate
+from utils.log_sanitizer import sanitize
 
 slack_channels_bp = Blueprint("slack_channels", __name__)
 logger = logging.getLogger(__name__)
+
+
+# Word-boundary patterns for incident-platform detection. Using anchored regex
+# (rather than a bare substring `in` check) both avoids matching a platform
+# name embedded in an unrelated token and clears CodeQL's "incomplete URL
+# substring sanitization" rule, which flags substring checks on URL-like text.
+_PLATFORM_PATTERNS = (
+    ("incident.io", re.compile(r"\bincident\.io\b|\bincidentio\b")),
+    ("pagerduty", re.compile(r"\bpagerduty\b|\bpd-incident\b")),
+    ("opsgenie", re.compile(r"\bopsgenie\b")),
+)
 
 
 def _classify_channel(channel: dict) -> tuple[str, str | None]:
@@ -46,12 +59,10 @@ def _classify_channel(channel: dict) -> tuple[str, str | None]:
 
     # Detect the incident-management platform that spawned the channel, if any.
     platform = None
-    if "incident.io" in haystack or "incidentio" in haystack:
-        platform = "incident.io"
-    elif "pagerduty" in haystack or "pd-incident" in name:
-        platform = "pagerduty"
-    elif "opsgenie" in haystack:
-        platform = "opsgenie"
+    for platform_name, pattern in _PLATFORM_PATTERNS:
+        if pattern.search(haystack):
+            platform = platform_name
+            break
 
     # Incident channels: platform-created OR named like one.
     if platform or name.startswith(("incident", "inc-", "inc_")) or "incident" in name:
@@ -307,7 +318,7 @@ def _enqueue_metadata(user_id: str, channel_id: str):
         from routes.slack.slack_channel_metadata import generate_channel_metadata
         generate_channel_metadata.delay(user_id, channel_id)
     except Exception as e:
-        logger.warning("Failed to enqueue channel metadata for %s: %s", channel_id, e)
+        logger.warning("Failed to enqueue channel metadata for %s: %s", sanitize(channel_id), e)
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:

@@ -10,6 +10,7 @@ import logging
 
 from celery_config import celery_app
 from chat.backend.agent.utils.message_content import extract_text_from_content
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ def _build_context(client, channel_id: str) -> tuple[str, str, dict]:
             sample = "\n".join(f"- {t[:200]}" for t in texts[:15])
             parts.append(f"Recent messages:\n{sample}")
     except Exception:
-        logger.debug("No history available for channel %s", channel_id)
+        logger.debug("No history available for channel %s", sanitize(channel_id))
 
     return "\n".join(parts), name, info
 
@@ -97,7 +98,7 @@ def _build_context(client, channel_id: str) -> tuple[str, str, dict]:
 )
 def generate_channel_metadata(self, user_id: str, channel_id: str):
     """Fetch channel info + recent messages and generate an LLM description."""
-    logger.info("Generating metadata for Slack channel %s (user %s)", channel_id, user_id)
+    logger.info("Generating metadata for Slack channel %s (user %s)", sanitize(channel_id), sanitize(user_id))
 
     # Respect the LLM-usage hook (cost gating), like the GitHub metadata task.
     from utils.hooks import get_hook
@@ -144,10 +145,10 @@ def generate_channel_metadata(self, user_id: str, channel_id: str):
         )
         summary = extract_text_from_content(response.content).strip() or "No description generated"
         _update_metadata(user_id, channel_id, summary, "ready", channel_type, platform)
-        logger.info("Metadata generated for Slack channel %s", channel_id)
+        logger.info("Metadata generated for Slack channel %s", sanitize(channel_id))
 
     except Exception as e:
-        logger.exception("Channel metadata generation failed for %s: %s", channel_id, e)
+        logger.exception("Channel metadata generation failed for %s: %s", sanitize(channel_id), e)
         try:
             self.retry(countdown=30)
         except self.MaxRetriesExceededError:

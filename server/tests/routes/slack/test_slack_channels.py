@@ -50,6 +50,13 @@ def test_plain_channel_is_general():
     assert platform is None
 
 
+def test_platform_name_embedded_in_unrelated_token_does_not_match():
+    # Word-boundary matching: "opsgenie" as a substring of a larger token
+    # (e.g. a URL host) must not be detected as the platform.
+    _ctype, platform = _classify_channel(_ch(name="team", topic="see myopsgenies-notes"))
+    assert platform is None
+
+
 # --- list_all_channels pagination ------------------------------------------
 
 def test_list_all_channels_paginates_until_cursor_empty():
