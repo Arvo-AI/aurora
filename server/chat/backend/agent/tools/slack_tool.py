@@ -259,7 +259,7 @@ def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
                               detected_platform, notify_enabled,
                               metadata_summary, metadata_status, is_member
                          FROM slack_channels
-                        WHERE provider = 'slack' AND {predicate}
+                        WHERE provider = 'slack' AND NOT is_dismissed AND {predicate}
                         ORDER BY channel_id, updated_at DESC""",
                     pred_params,
                 )
@@ -286,9 +286,9 @@ def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
             return json.dumps({
                 "channels": [],
                 "message": (
-                    "No Slack channels registered yet. Ask the user to select "
-                    "channels in Slack settings, or use list_slack_channels for a "
-                    "live listing."
+                    "No Slack channels registered yet. Ask the user to invite "
+                    "Aurora to channels in Slack and refresh, or use "
+                    "list_slack_channels for a live listing."
                 ),
             })
         return json.dumps({"channels": channels})

@@ -346,6 +346,7 @@ def initialize_tables():
                         channel_type VARCHAR(20) DEFAULT 'unknown',
                         detected_platform VARCHAR(40),
                         notify_enabled BOOLEAN DEFAULT false,
+                        is_dismissed BOOLEAN DEFAULT false,
                         metadata_summary TEXT,
                         metadata_status VARCHAR(20) DEFAULT 'pending',
                         channel_data JSONB,
@@ -1805,6 +1806,23 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(
                     f"Error adding change_gating_enabled column to connected_repos: {e}"
+                )
+                conn.rollback()
+
+            # Migration: Add is_dismissed to slack_channels so users can hide
+            # irrelevant channels from routing/UI without leaving them on Slack.
+            # Dismissed channels are also not re-added by auto-register/refresh.
+            try:
+                cursor.execute(
+                    "ALTER TABLE slack_channels ADD COLUMN IF NOT EXISTS is_dismissed BOOLEAN DEFAULT FALSE;"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured is_dismissed column exists on slack_channels table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding is_dismissed column to slack_channels: {e}"
                 )
                 conn.rollback()
 

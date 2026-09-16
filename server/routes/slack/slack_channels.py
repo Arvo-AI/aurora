@@ -144,11 +144,13 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
     """Auto-register the workspace's channels on connect.
 
     Registers ALL visible channels so Aurora is aware of every channel (the
-    agent can still route by name even without a description). To bound LLM
-    cost/volume, descriptions are only generated for the ``describe_limit`` most
-    recent channels (ranked member-first, then by recency) — the rest stay
-    ``metadata_status='pending'`` with no description until one is explicitly
-    requested. Best-effort; returns the number of descriptions enqueued.
+    agent can still route by name even without a description). Descriptions are
+    generated automatically for up to ``describe_limit`` channels: if the
+    workspace has that many or fewer, every channel is described; if it has more,
+    only the most recent ``describe_limit`` (ranked member-first, then recency)
+    are described and the rest stay ``metadata_status='skipped'`` until a user
+    explicitly requests one. Channels the user previously dismissed are never
+    re-added. Best-effort; returns the number of descriptions enqueued.
     Idempotent — existing rows are updated, not duplicated.
     """
     try:
@@ -184,12 +186,21 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:auto]")
                 cur.execute(
-                    "SELECT channel_id, user_id FROM slack_channels WHERE provider = 'slack'"
+                    "SELECT channel_id, user_id, is_dismissed FROM slack_channels WHERE provider = 'slack'"
                 )
-                existing = {r[0]: r[1] for r in cur.fetchall()}
+                existing = {}
+                dismissed_ids = set()
+                for r in cur.fetchall():
+                    existing[r[0]] = r[1]
+                    if r[2]:
+                        dismissed_ids.add(r[0])
                 for ch in ranked:
                     ch = {**ch, "channel_id": ch.get("id"), "channel_name": ch.get("name"),
                           "team_id": team_id}
+                    # Skip channels the user dismissed — never resurrect them via
+                    # auto-register/refresh (existing dismissed rows are left as-is).
+                    if ch["channel_id"] in dismissed_ids:
+                        continue
                     # Describe only the top-N recent channels; register the rest
                     # for awareness with 'skipped' so the UI doesn't show a
                     # perpetual "generating" spinner for them.
@@ -230,7 +241,7 @@ def get_slack_channels(user_id):
                     f"""SELECT DISTINCT ON (channel_id)
                               channel_id, channel_name, is_private, is_member,
                               channel_type, detected_platform, notify_enabled,
-                              metadata_summary, metadata_status
+                              metadata_summary, metadata_status, is_dismissed
                          FROM slack_channels
                         WHERE provider = 'slack' AND {predicate}
                         ORDER BY channel_id, updated_at DESC""",
@@ -238,8 +249,11 @@ def get_slack_channels(user_id):
                 )
                 rows = cur.fetchall()
 
-        connected = [
-            {
+        # Split active vs. dismissed so the UI can show them separately.
+        connected = []
+        dismissed = []
+        for r in rows:
+            entry = {
                 "channel_id": r[0],
                 "channel_name": r[1],
                 "is_private": r[2],
@@ -249,85 +263,70 @@ def get_slack_channels(user_id):
                 "notify_enabled": r[6],
                 "metadata_summary": r[7],
                 "metadata_status": r[8],
+                "is_dismissed": r[9],
             }
-            for r in rows
-        ]
+            if r[9]:
+                dismissed.append(entry)
+            else:
+                connected.append(entry)
 
-        # Live available list (best-effort — never fail the whole response).
-        available = []
-        try:
-            client = get_slack_client_for_user(user_id)
-            if client:
-                for ch in client.list_all_channels():
-                    available.append({
-                        "channel_id": ch.get("id"),
-                        "channel_name": ch.get("name"),
-                        "is_private": ch.get("is_private", False),
-                        "is_member": ch.get("is_member", False),
-                        "topic": (ch.get("topic") or {}).get("value", ""),
-                        "purpose": (ch.get("purpose") or {}).get("value", ""),
-                        "num_members": ch.get("num_members"),
-                    })
-        except Exception:
-            logger.warning("Failed to list available Slack channels", exc_info=True)
-
-        return jsonify({"connected": connected, "available": available})
+        return jsonify({"connected": connected, "dismissed": dismissed})
     except Exception:
         logger.exception("Error getting Slack channels")
         return jsonify({"error": "Failed to get Slack channels"}), 500
 
 
-@slack_channels_bp.route("/channels", methods=["POST"])
+@slack_channels_bp.route("/channels/<channel_id>/dismiss", methods=["POST"])
 @require_permission("connectors", "write")
-def save_slack_channels(user_id):
-    """Sync the set of channels Aurora is aware of. Upserts new, removes dropped."""
+def dismiss_slack_channel(user_id, channel_id):
+    """Mark a channel as dismissed (irrelevant).
+
+    Does NOT touch Slack — Aurora stays in the channel. It just stops routing/
+    notifying there, hides it from the main list, and prevents auto-register/
+    refresh from resurfacing it. Reversible via the restore route.
+    """
     try:
-        data = request.get_json(silent=True) or {}
-        channels = data.get("channels")
-        if not isinstance(channels, list) or not all(isinstance(c, dict) for c in channels):
-            return jsonify({"error": "channels must be an array of objects"}), 400
-
-        org_id = resolve_org(user_id)
-
-        newly_added = []
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:save]")
+                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:dismiss]")
                 cur.execute(
-                    "SELECT channel_id, user_id FROM slack_channels WHERE provider = 'slack'"
+                    """UPDATE slack_channels
+                       SET is_dismissed = TRUE, notify_enabled = FALSE, updated_at = NOW()
+                       WHERE provider = 'slack' AND channel_id = %s""",
+                    (channel_id,),
                 )
-                # {channel_id: owner_user_id} — need the owner to delete the right row.
-                existing = {r[0]: r[1] for r in cur.fetchall()}
-
-                incoming = set()
-                for ch in channels:
-                    channel_id, is_new = _upsert_channel(cur, user_id, org_id, ch, existing)
-                    if not channel_id:
-                        continue
-                    incoming.add(channel_id)
-                    if is_new:
-                        newly_added.append(channel_id)
-
-                removed = set(existing.keys()) - incoming
-                if removed:
-                    cur.execute(
-                        "DELETE FROM slack_channels WHERE provider = 'slack' AND channel_id = ANY(%s)",
-                        (list(removed),),
-                    )
+                if cur.rowcount == 0:
+                    conn.rollback()
+                    return jsonify({"error": "Channel not found"}), 404
                 conn.commit()
-
-        # Kick off description generation for genuinely new channels.
-        for channel_id in newly_added:
-            _enqueue_metadata(user_id, channel_id)
-
-        return jsonify({
-            "message": f"Saved {len(incoming)} channels, removed {len(removed)}",
-            "added": newly_added,
-            "removed": list(removed),
-        })
+        return jsonify({"channel_id": channel_id, "is_dismissed": True})
     except Exception:
-        logger.exception("Error saving Slack channels")
-        return jsonify({"error": "Failed to save Slack channels"}), 500
+        logger.exception("Error dismissing Slack channel")
+        return jsonify({"error": "Failed to dismiss channel"}), 500
+
+
+@slack_channels_bp.route("/channels/<channel_id>/restore", methods=["POST"])
+@require_permission("connectors", "write")
+def restore_slack_channel(user_id, channel_id):
+    """Un-dismiss a channel so Aurora is aware of it again."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:restore]")
+                cur.execute(
+                    """UPDATE slack_channels
+                       SET is_dismissed = FALSE, updated_at = NOW()
+                       WHERE provider = 'slack' AND channel_id = %s""",
+                    (channel_id,),
+                )
+                if cur.rowcount == 0:
+                    conn.rollback()
+                    return jsonify({"error": "Channel not found"}), 404
+                conn.commit()
+        return jsonify({"channel_id": channel_id, "is_dismissed": False})
+    except Exception:
+        logger.exception("Error restoring Slack channel")
+        return jsonify({"error": "Failed to restore channel"}), 500
 
 
 @slack_channels_bp.route("/channels/refresh", methods=["POST"])

@@ -5,9 +5,9 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { ArrowLeft, Loader2, LogOut, Bell, Hash, RefreshCw } from "lucide-react";
+import { ArrowLeft, Loader2, LogOut, Bell, Hash, RefreshCw, X, Pencil, ChevronDown, ChevronRight } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { slackService, type SlackStatus, type SlackConnectedChannel, type SlackAvailableChannel } from "@/lib/services/slack";
+import { slackService, type SlackStatus, type SlackConnectedChannel } from "@/lib/services/slack";
 import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite as checkCanWrite } from "@/lib/roles";
 import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
@@ -84,19 +84,19 @@ export default function SlackManagePage() {
   const [savingPrefs, setSavingPrefs] = useState<Record<string, boolean>>({});
 
   const [connectedChannels, setConnectedChannels] = useState<SlackConnectedChannel[]>([]);
-  const [availableChannels, setAvailableChannels] = useState<SlackAvailableChannel[]>([]);
+  const [dismissedChannels, setDismissedChannels] = useState<SlackConnectedChannel[]>([]);
   const [isLoadingChannels, setIsLoadingChannels] = useState(true);
-  const [isSavingChannels, setIsSavingChannels] = useState(false);
   const [isRefreshingChannels, setIsRefreshingChannels] = useState(false);
-  // channel_ids Aurora should be aware of (the current selection in the picker)
-  const [selectedChannelIds, setSelectedChannelIds] = useState<Set<string>>(new Set());
+  // channel_id currently being edited inline (description pen), plus its draft
+  const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
+  const [editingDraft, setEditingDraft] = useState("");
+  const [showDismissed, setShowDismissed] = useState(false);
 
   const loadChannels = useCallback(async () => {
     try {
       const data = await slackService.getChannels();
       setConnectedChannels(data.connected);
-      setAvailableChannels(data.available);
-      setSelectedChannelIds(new Set(data.connected.map((c) => c.channel_id)));
+      setDismissedChannels(data.dismissed);
     } catch (error) {
       console.error("Error loading Slack channels:", error);
     } finally {
@@ -151,41 +151,58 @@ export default function SlackManagePage() {
     loadChannels();
   }, [loadStatus, loadPreferences, loadChannels]);
 
-  const toggleChannelSelected = (channelId: string) => {
-    setSelectedChannelIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(channelId)) {
-        next.delete(channelId);
-      } else {
-        next.add(channelId);
-      }
-      return next;
-    });
+  const handleDismissChannel = async (channelId: string) => {
+    // Optimistically move from active to dismissed.
+    const target = connectedChannels.find((c) => c.channel_id === channelId);
+    setConnectedChannels((prev) => prev.filter((c) => c.channel_id !== channelId));
+    if (target) {
+      setDismissedChannels((prev) => [{ ...target, is_dismissed: true, notify_enabled: false }, ...prev]);
+    }
+    try {
+      await slackService.dismissChannel(channelId);
+    } catch {
+      await loadChannels(); // Reconcile on failure.
+      toast({ title: "Error", description: "Failed to dismiss channel", variant: "destructive" });
+    }
   };
 
-  const handleSaveChannels = async () => {
-    setIsSavingChannels(true);
+  const handleRestoreChannel = async (channelId: string) => {
+    const target = dismissedChannels.find((c) => c.channel_id === channelId);
+    setDismissedChannels((prev) => prev.filter((c) => c.channel_id !== channelId));
+    if (target) {
+      setConnectedChannels((prev) => [...prev, { ...target, is_dismissed: false }]);
+    }
     try {
-      // Build the payload from the picked available channels so the backend
-      // has names/privacy/membership to store + classify.
-      const byId = new Map(availableChannels.map((c) => [c.channel_id, c]));
-      const channels = Array.from(selectedChannelIds).map((id) => {
-        const c = byId.get(id);
-        return {
-          channel_id: id,
-          channel_name: c?.channel_name,
-          is_private: c?.is_private ?? false,
-          is_member: c?.is_member ?? false,
-          team_id: slackStatus?.team_id,
-        };
-      });
-      await slackService.saveChannels(channels);
-      toast({ title: "Saved", description: "Channel selection updated. Descriptions are generating." });
+      await slackService.restoreChannel(channelId);
+    } catch {
       await loadChannels();
-    } catch (error: any) {
-      toast({ title: "Error", description: error?.message || "Failed to save channels", variant: "destructive" });
-    } finally {
-      setIsSavingChannels(false);
+      toast({ title: "Error", description: "Failed to restore channel", variant: "destructive" });
+    }
+  };
+
+  const startEditingDescription = (c: SlackConnectedChannel) => {
+    setEditingChannelId(c.channel_id);
+    setEditingDraft(c.metadata_summary || "");
+  };
+
+  const cancelEditingDescription = () => {
+    setEditingChannelId(null);
+    setEditingDraft("");
+  };
+
+  const saveEditedDescription = async (channelId: string) => {
+    const summary = editingDraft.trim();
+    setConnectedChannels((prev) =>
+      prev.map((c) =>
+        c.channel_id === channelId ? { ...c, metadata_summary: summary, metadata_status: "ready" } : c,
+      ),
+    );
+    setEditingChannelId(null);
+    try {
+      await slackService.updateChannelDescription(channelId, summary);
+    } catch {
+      await loadChannels();
+      toast({ title: "Error", description: "Failed to update description", variant: "destructive" });
     }
   };
 
@@ -427,9 +444,10 @@ export default function SlackManagePage() {
                   Channels
                 </CardTitle>
                 <CardDescription>
-                  Aurora automatically becomes aware of your channels (up to the 50 most recent) and
-                  describes each one, using those descriptions to decide where to post about incidents.
-                  Adjust the selection below or toggle notifications per channel.
+                  Aurora is automatically aware of every channel it can see and describes them (all
+                  of them when you have 50 or fewer; otherwise the 50 most recent). It uses those
+                  descriptions to decide where to post about incidents. Edit a description, generate
+                  one on demand, or dismiss channels that aren&apos;t relevant.
                 </CardDescription>
               </div>
               {canWrite && (
@@ -457,10 +475,16 @@ export default function SlackManagePage() {
               </div>
             ) : (
               <>
-                {/* Connected channels with descriptions + per-channel notify */}
-                {connectedChannels.length > 0 && (
+                {/* Active channels: description + inline edit, generate, dismiss */}
+                {connectedChannels.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No channels yet. Invite Aurora to channels in Slack, then click Refresh channels.
+                  </p>
+                ) : (
                   <div className="space-y-3">
-                    <h4 className="text-sm font-medium text-muted-foreground">Aurora is aware of</h4>
+                    <h4 className="text-sm font-medium text-muted-foreground">
+                      Aurora is aware of ({connectedChannels.length})
+                    </h4>
                     {connectedChannels.map((c) => (
                       <div key={c.channel_id} className="p-4 border rounded-lg space-y-2">
                         <div className="flex items-center justify-between gap-2">
@@ -484,80 +508,111 @@ export default function SlackManagePage() {
                               onCheckedChange={(checked) => handleChannelNotifyToggle(c.channel_id, checked)}
                               disabled={!canWrite}
                             />
+                            {canWrite && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0 text-zinc-400 hover:text-destructive"
+                                title="Dismiss (hide from Aurora; stays in Slack)"
+                                onClick={() => handleDismissChannel(c.channel_id)}
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            )}
                           </div>
                         </div>
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="text-xs text-muted-foreground flex-1">
-                            {c.metadata_status === "generating" || c.metadata_status === "pending"
-                              ? "Generating description…"
-                              : c.metadata_status === "skipped"
-                                ? "No description generated (outside the auto-described set). Click Generate to add one."
-                                : c.metadata_summary || "No description yet."}
-                          </p>
-                          {canWrite && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 px-2 text-xs text-zinc-400 hover:text-white shrink-0"
-                              onClick={() => handleRegenerateDescription(c.channel_id)}
-                            >
-                              <RefreshCw className="h-3 w-3 mr-1" />
-                              {c.metadata_status === "skipped" ? "Generate" : "Regenerate"}
-                            </Button>
-                          )}
-                        </div>
+
+                        {/* Inline description editor, or the description + actions */}
+                        {editingChannelId === c.channel_id ? (
+                          <div className="space-y-2">
+                            <textarea
+                              value={editingDraft}
+                              onChange={(e) => setEditingDraft(e.target.value)}
+                              rows={3}
+                              className="w-full text-xs rounded-md border bg-background p-2"
+                              placeholder="Describe what this channel is for and which team/service it serves."
+                            />
+                            <div className="flex justify-end gap-2">
+                              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={cancelEditingDescription}>
+                                Cancel
+                              </Button>
+                              <Button size="sm" className="h-6 px-2 text-xs" onClick={() => saveEditedDescription(c.channel_id)}>
+                                Save
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-xs text-muted-foreground flex-1">
+                              {c.metadata_status === "generating" || c.metadata_status === "pending"
+                                ? "Generating description…"
+                                : c.metadata_status === "skipped"
+                                  ? "No description yet — click Generate to create one, or the pen to write it."
+                                  : c.metadata_summary || "No description yet."}
+                            </p>
+                            {canWrite && (
+                              <div className="flex items-center gap-1 shrink-0">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 px-2 text-xs text-zinc-400 hover:text-white"
+                                  title="Edit description"
+                                  onClick={() => startEditingDescription(c)}
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 px-2 text-xs text-zinc-400 hover:text-white"
+                                  onClick={() => handleRegenerateDescription(c.channel_id)}
+                                >
+                                  <RefreshCw className="h-3 w-3 mr-1" />
+                                  {c.metadata_summary ? "Regenerate" : "Generate"}
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
                 )}
 
-                {/* Available channel picker */}
-                <div className="space-y-2">
-                  <h4 className="text-sm font-medium text-muted-foreground">
-                    Available channels ({availableChannels.length})
-                  </h4>
-                  <div className="max-h-64 overflow-y-auto border rounded-lg divide-y divide-zinc-800">
-                    {availableChannels.length === 0 ? (
-                      <p className="text-xs text-muted-foreground p-4">
-                        No channels found. Make sure Aurora has been invited to the channels you want it to see.
-                      </p>
-                    ) : (
-                      availableChannels.map((c) => (
-                        <label
-                          key={c.channel_id}
-                          className={`flex items-center gap-3 p-3 cursor-pointer hover:bg-zinc-900 ${canWrite ? "" : "opacity-50 pointer-events-none"}`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedChannelIds.has(c.channel_id)}
-                            onChange={() => toggleChannelSelected(c.channel_id)}
-                            disabled={!canWrite}
-                            className="accent-primary"
-                          />
-                          <span className="text-sm truncate">#{c.channel_name || c.channel_id}</span>
-                          {c.is_private && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">private</span>
-                          )}
-                          {typeof c.num_members === "number" && (
-                            <span className="text-[10px] text-muted-foreground ml-auto">{c.num_members} members</span>
-                          )}
-                        </label>
-                      ))
+                {/* Dismissed channels: collapsible, with restore */}
+                {dismissedChannels.length > 0 && (
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      className="text-sm font-medium text-muted-foreground hover:text-foreground flex items-center gap-1"
+                      onClick={() => setShowDismissed((s) => !s)}
+                    >
+                      {showDismissed ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      Dismissed channels ({dismissedChannels.length})
+                    </button>
+                    {showDismissed && (
+                      <div className="border rounded-lg divide-y divide-zinc-800">
+                        {dismissedChannels.map((c) => (
+                          <div key={c.channel_id} className="flex items-center justify-between gap-2 p-3">
+                            <span className="text-sm text-muted-foreground truncate">
+                              #{c.channel_name || c.channel_id}
+                            </span>
+                            {canWrite && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2 text-xs text-zinc-400 hover:text-white shrink-0"
+                                onClick={() => handleRestoreChannel(c.channel_id)}
+                              >
+                                Restore
+                              </Button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
-                  <div className="flex justify-end">
-                    <Button size="sm" onClick={handleSaveChannels} disabled={!canWrite || isSavingChannels}>
-                      {isSavingChannels ? (
-                        <>
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          Saving…
-                        </>
-                      ) : (
-                        "Save selection"
-                      )}
-                    </Button>
-                  </div>
-                </div>
+                )}
               </>
             )}
           </CardContent>

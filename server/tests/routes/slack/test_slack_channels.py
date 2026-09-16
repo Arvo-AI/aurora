@@ -130,6 +130,47 @@ def test_auto_register_describes_only_recency_cap():
     assert described == 2
 
 
+def test_auto_register_skips_dismissed_channels():
+    from unittest.mock import MagicMock
+
+    channels = [
+        {"id": "C1", "name": "one", "is_member": True, "created": 300},
+        {"id": "C2", "name": "two", "is_member": True, "created": 200},
+    ]
+    fake_client = MagicMock()
+    fake_client.list_all_channels.return_value = channels
+
+    upserts = []
+
+    def fake_upsert(cur, user_id, org_id, ch, existing, notify_default=False, initial_status="pending"):
+        upserts.append(ch["channel_id"])
+        existing[ch["channel_id"]] = user_id
+        return ch["channel_id"], False  # already-existing rows
+
+    enqueued = []
+    conn = MagicMock()
+    cur = MagicMock()
+    # C2 is already dismissed → (channel_id, user_id, is_dismissed).
+    cur.fetchall.return_value = [("C1", "u", False), ("C2", "u", True)]
+    conn.cursor.return_value.__enter__ = lambda s: cur
+    conn.cursor.return_value.__exit__ = lambda s, *a: False
+    dbcm = MagicMock()
+    dbcm.__enter__ = lambda s: conn
+    dbcm.__exit__ = lambda s, *a: False
+
+    with patch.object(mod, "get_slack_client_for_user", return_value=fake_client), \
+         patch.object(mod, "resolve_org", return_value="00000000-0000-0000-0000-000000000000"), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
+         patch.object(mod, "_enqueue_metadata", side_effect=lambda uid, cid: enqueued.append(cid)):
+        mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=50)
+
+    # Dismissed C2 is never upserted; only C1 is.
+    assert upserts == ["C1"]
+    assert enqueued == []  # C1 already existed, so nothing new to describe
+
+
 # --- list_all_channels pagination ------------------------------------------
 
 def test_list_all_channels_paginates_until_cursor_empty():

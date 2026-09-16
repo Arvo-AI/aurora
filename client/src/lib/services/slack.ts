@@ -26,21 +26,12 @@ export interface SlackConnectedChannel {
   notify_enabled?: boolean;
   metadata_summary?: string | null;
   metadata_status?: string;
-}
-
-export interface SlackAvailableChannel {
-  channel_id: string;
-  channel_name?: string;
-  is_private?: boolean;
-  is_member?: boolean;
-  topic?: string;
-  purpose?: string;
-  num_members?: number | null;
+  is_dismissed?: boolean;
 }
 
 export interface SlackChannelsResponse {
   connected: SlackConnectedChannel[];
-  available: SlackAvailableChannel[];
+  dismissed: SlackConnectedChannel[];
 }
 
 const API_BASE = '/api/slack';
@@ -89,14 +80,21 @@ export const slackService = {
     });
     return {
       connected: data?.connected ?? [],
-      available: data?.available ?? [],
+      dismissed: data?.dismissed ?? [],
     };
   },
 
-  async saveChannels(channels: Array<Record<string, unknown>>): Promise<void> {
-    await apiRequest(`${CHANNELS_BASE}`, {
+  // Dismiss = hide from routing/UI; does NOT leave the Slack channel.
+  async dismissChannel(channelId: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/${channelId}/dismiss`, {
       method: 'POST',
-      body: JSON.stringify({ channels }),
+      cache: 'no-store',
+    });
+  },
+
+  async restoreChannel(channelId: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/${channelId}/restore`, {
+      method: 'POST',
       cache: 'no-store',
     });
   },
