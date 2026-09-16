@@ -124,4 +124,15 @@ export const slackService = {
       cache: 'no-store',
     });
   },
+
+  // Re-scan the workspace and register any newly-visible channels. Used by the
+  // "Refresh channels" button so workspaces connected before auto-registration
+  // (or with new channels) get updated without reconnecting.
+  async refreshChannels(): Promise<{ described: number }> {
+    const data = await apiRequest<{ described: number }>(`${CHANNELS_BASE}/refresh`, {
+      method: 'POST',
+      cache: 'no-store',
+    });
+    return { described: data?.described ?? 0 };
+  },
 };

@@ -163,6 +163,16 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
     if not channels:
         return 0
 
+    # Derive team_id from stored creds when the caller didn't supply it (e.g. the
+    # manual "refresh" path), so rows are tagged consistently with the OAuth path.
+    if not team_id:
+        try:
+            from utils.auth.stateless_auth import get_credentials_from_db
+            creds = get_credentials_from_db(user_id, "slack") or {}
+            team_id = creds.get("team_id")
+        except Exception:
+            team_id = None
+
     # Rank once; the top slice is what we describe, but we register everything.
     ranked = _rank_channels(channels)
     describe_ids = {c.get("id") for c in ranked[:describe_limit]}
@@ -318,6 +328,28 @@ def save_slack_channels(user_id):
     except Exception:
         logger.exception("Error saving Slack channels")
         return jsonify({"error": "Failed to save Slack channels"}), 500
+
+
+@slack_channels_bp.route("/channels/refresh", methods=["POST"])
+@require_permission("connectors", "write")
+def refresh_slack_channels(user_id):
+    """Re-scan the workspace and register any channels Aurora can now see.
+
+    For workspaces connected before auto-registration existed (or when new
+    channels have appeared), this brings the stored channel list up to date
+    without requiring a reconnect. Idempotent: existing rows/descriptions are
+    preserved, only genuinely-new channels are added (and the most recent get a
+    description). Never removes channels — that's what the picker / clear are for.
+    """
+    try:
+        described = auto_register_channels(user_id)
+        return jsonify({
+            "message": "Channels refreshed",
+            "described": described,
+        })
+    except Exception:
+        logger.exception("Error refreshing Slack channels")
+        return jsonify({"error": "Failed to refresh channels"}), 500
 
 
 @slack_channels_bp.route("/channels", methods=["DELETE"])

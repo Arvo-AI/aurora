@@ -88,6 +88,7 @@ export default function SlackManagePage() {
   const [availableChannels, setAvailableChannels] = useState<SlackAvailableChannel[]>([]);
   const [isLoadingChannels, setIsLoadingChannels] = useState(true);
   const [isSavingChannels, setIsSavingChannels] = useState(false);
+  const [isRefreshingChannels, setIsRefreshingChannels] = useState(false);
   // channel_ids Aurora should be aware of (the current selection in the picker)
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<string>>(new Set());
 
@@ -213,6 +214,26 @@ export default function SlackManagePage() {
       );
     } catch {
       toast({ title: "Error", description: "Failed to regenerate description", variant: "destructive" });
+    }
+  };
+
+  // Re-scan the workspace so already-connected orgs (or ones with new channels)
+  // pick up channels without reconnecting. Reloads the list after.
+  const handleRefreshChannels = async () => {
+    setIsRefreshingChannels(true);
+    try {
+      const { described } = await slackService.refreshChannels();
+      await loadChannels();
+      toast({
+        title: "Channels refreshed",
+        description: described > 0
+          ? `Found new channels — generating ${described} description${described === 1 ? "" : "s"}.`
+          : "Channel list is up to date.",
+      });
+    } catch {
+      toast({ title: "Error", description: "Failed to refresh channels", variant: "destructive" });
+    } finally {
+      setIsRefreshingChannels(false);
     }
   };
 
@@ -400,15 +421,35 @@ export default function SlackManagePage() {
         {/* Channel Awareness */}
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Hash className="h-5 w-5" />
-              Channels
-            </CardTitle>
-            <CardDescription>
-              Aurora automatically becomes aware of your channels (up to the 50 most recent) and
-              describes each one, using those descriptions to decide where to post about incidents.
-              Adjust the selection below or toggle notifications per channel.
-            </CardDescription>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Hash className="h-5 w-5" />
+                  Channels
+                </CardTitle>
+                <CardDescription>
+                  Aurora automatically becomes aware of your channels (up to the 50 most recent) and
+                  describes each one, using those descriptions to decide where to post about incidents.
+                  Adjust the selection below or toggle notifications per channel.
+                </CardDescription>
+              </div>
+              {canWrite && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={handleRefreshChannels}
+                  disabled={isRefreshingChannels}
+                >
+                  {isRefreshingChannels ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                  )}
+                  Refresh channels
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="space-y-6">
             {isLoadingChannels ? (
