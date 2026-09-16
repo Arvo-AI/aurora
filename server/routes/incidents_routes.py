@@ -1833,10 +1833,12 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
                 "prNumber": pr_number,
             }), 200
 
+        # Don't log the raw result["error"] — it can carry tokens/secrets from the
+        # PR-creation flow and CodeQL doesn't treat sanitize() as a taint barrier.
+        # The failure detail is already surfaced to the caller in the response.
         logger.warning(
-            "[INCIDENTS] Failed to apply fix suggestion %s: %s",
+            "[INCIDENTS] Failed to apply fix suggestion %s",
             sanitize(suggestion_id),
-            sanitize(result.get("error")),
         )
         return jsonify({"success": False, "error": "Failed to apply fix suggestion"}), 400
 
