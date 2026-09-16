@@ -227,7 +227,7 @@ config:
 
   # --- Concurrency & Pool Sizing ---
   GUNICORN_WORKERS: "2"
-  GUNICORN_THREADS: "4"
+  GUNICORN_THREADS: "32"
   CELERY_CONCURRENCY: "4"
   DB_POOL_MIN: "2"
   DB_POOL_MAX: "20"
@@ -517,12 +517,12 @@ containerSecurityContext:
 resources:
   server:
     requests:
-      cpu: "200m"
-      memory: "512Mi"
+      cpu: "500m"
+      memory: "1Gi"
       ephemeral-storage: "1Gi"
     limits:
       cpu: "2000m"
-      memory: "2Gi"
+      memory: "4Gi"
       ephemeral-storage: "2Gi"
   mcp:
     requests:
@@ -535,37 +535,37 @@ resources:
       ephemeral-storage: "500Mi"
   celeryWorker:
     requests:
-      cpu: "100m"
-      memory: "1Gi"
+      cpu: "250m"
+      memory: "512Mi"
       ephemeral-storage: "1Gi"
     limits:
       cpu: "1000m"
-      memory: "4Gi"
+      memory: "2Gi"
       ephemeral-storage: "2Gi"
   celeryBeat:
     requests:
       cpu: "50m"
-      memory: "128Mi"
+      memory: "256Mi"
     limits:
       cpu: "200m"
-      memory: "256Mi"
+      memory: "512Mi"
   chatbot:
     requests:
-      cpu: "100m"
-      memory: "256Mi"
+      cpu: "200m"
+      memory: "512Mi"
       ephemeral-storage: "100Mi"
     limits:
-      cpu: "500m"
-      memory: "1Gi"
+      cpu: "1000m"
+      memory: "2Gi"
       ephemeral-storage: "1Gi"
   frontend:
     requests:
-      cpu: "50m"
+      cpu: "100m"
       memory: "256Mi"
       ephemeral-storage: "512Mi"
     limits:
-      cpu: "300m"
-      memory: "512Mi"
+      cpu: "1000m"
+      memory: "1Gi"
       ephemeral-storage: "1Gi"
   redis:
     requests:
