@@ -1368,10 +1368,17 @@ def _apply_azure_subscription(command: str, subscription_id: str) -> str:
     """Pin an `az` command to one subscription.
 
     `az graph query` takes --subscriptions (plural) and is scoped by the caller,
-    so it is left alone.
+    so it is left alone. `az account` commands operate at the tenant/management
+    plane (e.g. `az account list` enumerates every subscription) and reject
+    `--subscription` with "unrecognized arguments", so they are left alone too.
     """
     cmd = command if command.startswith("az ") else f"az {command}"
-    if "--subscription" in cmd or cmd.startswith("az graph"):
+    # Already pinned by the caller, or a command that doesn't take --subscription.
+    if (
+        "--subscription" in cmd
+        or cmd.startswith("az graph")
+        or cmd.startswith("az account")
+    ):
         return cmd
     return f"{cmd} --subscription {shlex.quote(subscription_id)}"
 

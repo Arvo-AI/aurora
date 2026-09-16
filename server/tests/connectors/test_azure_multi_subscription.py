@@ -82,6 +82,11 @@ def test_unparseable_command_is_not_read_only(helpers):
     ("az vm list --subscription OTHER", "az vm list --subscription OTHER"),
     # Resource Graph takes --subscriptions (plural) and is scoped by the caller.
     ('az graph query -q "Resources"', 'az graph query -q "Resources"'),
+    # `az account` commands are tenant/management-plane and reject --subscription.
+    ("az account list -o table", "az account list -o table"),
+    ("account list", "az account list"),
+    ("az account show", "az account show"),
+    ("az account tenant list", "az account tenant list"),
 ])
 def test_apply_azure_subscription(helpers, command, expected):
     assert helpers["_apply_azure_subscription"](command, "SUB1") == expected
