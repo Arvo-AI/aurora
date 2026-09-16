@@ -273,7 +273,9 @@ def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
                 "detected_platform": r[3],
                 "notify_enabled": r[4],
                 "description": r[5] or (
-                    "(description generating...)" if r[6] != "ready" else "(no description)"
+                    "(no description — call generate if needed)" if r[6] == "skipped"
+                    else "(description generating...)" if r[6] != "ready"
+                    else "(no description)"
                 ),
                 "is_member": r[7],
             }

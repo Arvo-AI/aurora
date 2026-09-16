@@ -77,6 +77,59 @@ def test_rank_handles_missing_created_field():
     assert ranked == ["C1", "C2"]
 
 
+# --- auto_register_channels: register all, describe only top-N --------------
+
+def test_auto_register_describes_only_recency_cap():
+    from unittest.mock import MagicMock
+    import routes.slack.slack_channels as mod
+
+    # 3 channels; cap describe at 2. All 3 should be upserted, only 2 described.
+    channels = [
+        {"id": "C1", "name": "one", "is_member": True, "created": 300},
+        {"id": "C2", "name": "two", "is_member": True, "created": 200},
+        {"id": "C3", "name": "three", "is_member": False, "created": 100},
+    ]
+
+    fake_client = MagicMock()
+    fake_client.list_all_channels.return_value = channels
+
+    # Capture every _upsert_channel call's initial_status.
+    upserts = []
+
+    def fake_upsert(cur, user_id, org_id, ch, existing, notify_default=False, initial_status="pending"):
+        upserts.append((ch["channel_id"], initial_status))
+        existing[ch["channel_id"]] = user_id
+        return ch["channel_id"], True  # all new
+
+    enqueued = []
+
+    # A context-manager-shaped DB connection stub.
+    conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchall.return_value = []
+    conn.cursor.return_value.__enter__ = lambda s: cur
+    conn.cursor.return_value.__exit__ = lambda s, *a: False
+    dbcm = MagicMock()
+    dbcm.__enter__ = lambda s: conn
+    dbcm.__exit__ = lambda s, *a: False
+
+    with patch.object(mod, "get_slack_client_for_user", return_value=fake_client), \
+         patch.object(mod, "resolve_org", return_value="00000000-0000-0000-0000-000000000000"), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
+         patch.object(mod, "_enqueue_metadata", side_effect=lambda uid, cid: enqueued.append(cid)):
+        described = mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=2)
+
+    # All 3 registered; only the 2 most-recent members described.
+    assert {u[0] for u in upserts} == {"C1", "C2", "C3"}
+    assert dict(upserts)["C1"] == "pending"
+    assert dict(upserts)["C2"] == "pending"
+    assert dict(upserts)["C3"] == "skipped"
+    assert enqueued == ["C1", "C2"]
+    assert described == 2
+
+
 # --- list_all_channels pagination ------------------------------------------
 
 def test_list_all_channels_paginates_until_cursor_empty():

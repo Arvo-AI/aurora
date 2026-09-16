@@ -450,7 +450,9 @@ export default function SlackManagePage() {
                           <p className="text-xs text-muted-foreground flex-1">
                             {c.metadata_status === "generating" || c.metadata_status === "pending"
                               ? "Generating description…"
-                              : c.metadata_summary || "No description yet."}
+                              : c.metadata_status === "skipped"
+                                ? "No description generated (outside the auto-described set). Click Generate to add one."
+                                : c.metadata_summary || "No description yet."}
                           </p>
                           {canWrite && (
                             <Button
@@ -460,7 +462,7 @@ export default function SlackManagePage() {
                               onClick={() => handleRegenerateDescription(c.channel_id)}
                             >
                               <RefreshCw className="h-3 w-3 mr-1" />
-                              Regenerate
+                              {c.metadata_status === "skipped" ? "Generate" : "Regenerate"}
                             </Button>
                           )}
                         </div>

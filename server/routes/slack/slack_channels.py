@@ -32,8 +32,9 @@ from utils.log_sanitizer import sanitize
 slack_channels_bp = Blueprint("slack_channels", __name__)
 logger = logging.getLogger(__name__)
 
-# Cap on how many channels Aurora auto-registers on connect, to avoid huge
-# workspaces creating unbounded rows + description-generation cost.
+# Cap on how many channels get an auto-generated description on connect, to
+# bound LLM cost/volume in large workspaces. ALL channels are still registered
+# (so Aurora is aware of them); only the most recent this-many are described.
 MAX_AUTO_CHANNELS = 50
 
 
@@ -78,12 +79,19 @@ def _classify_channel(channel: dict) -> tuple[str, str | None]:
 
 
 def _upsert_channel(cur, user_id: str, org_id: str | None, ch: dict,
-                    existing: dict, notify_default: bool = False) -> tuple[str | None, bool]:
+                    existing: dict, notify_default: bool = False,
+                    initial_status: str = "pending") -> tuple[str | None, bool]:
     """Upsert one channel row. Returns (channel_id, was_newly_added).
 
     ``existing`` maps channel_id -> owner_user_id and is mutated in place so a
     channel already connected by another org member keeps its original owner on
     the conflict key (mirrors github save_repo_selections).
+
+    ``initial_status`` is the metadata_status for a NEW row: 'pending' when a
+    description will be generated, 'skipped' when the channel is registered for
+    awareness but intentionally not described (bulk auto-register beyond the
+    recency cap). Existing rows never have their status reset (ON CONFLICT does
+    not touch metadata_status), so a prior 'ready' description is preserved.
     """
     channel_id = ch.get("channel_id") or ch.get("id")
     if not channel_id:
@@ -95,7 +103,7 @@ def _upsert_channel(cur, user_id: str, org_id: str | None, ch: dict,
                (user_id, org_id, provider, team_id, channel_id, channel_name,
                 is_private, is_member, channel_type, detected_platform,
                 notify_enabled, channel_data, metadata_status)
-           VALUES (%s, %s, 'slack', %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
+           VALUES (%s, %s, 'slack', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
            ON CONFLICT (user_id, provider, channel_id) DO UPDATE SET
                channel_name = EXCLUDED.channel_name,
                is_private = EXCLUDED.is_private,
@@ -111,6 +119,7 @@ def _upsert_channel(cur, user_id: str, org_id: str | None, ch: dict,
             channel_type, platform,
             bool(ch.get("notify_enabled", notify_default)),
             json.dumps(ch),
+            initial_status,
         ),
     )
     is_new = channel_id not in existing
@@ -131,15 +140,16 @@ def _rank_channels(channels: list[dict]) -> list[dict]:
 
 
 def auto_register_channels(user_id: str, team_id: str | None = None,
-                           limit: int = MAX_AUTO_CHANNELS) -> int:
-    """Auto-register up to ``limit`` of the workspace's channels on connect.
+                           describe_limit: int = MAX_AUTO_CHANNELS) -> int:
+    """Auto-register the workspace's channels on connect.
 
-    Selects ALL visible channels by default (per product decision), capped and
-    prioritized by _rank_channels so huge workspaces don't blow up volume/cost.
-    Enqueues a cheap-model description for each newly added channel. Best-effort:
-    returns the number of channels enqueued for description (0 on any failure).
-    Idempotent — existing rows are updated, not duplicated, and only genuinely
-    new channels get a description enqueued.
+    Registers ALL visible channels so Aurora is aware of every channel (the
+    agent can still route by name even without a description). To bound LLM
+    cost/volume, descriptions are only generated for the ``describe_limit`` most
+    recent channels (ranked member-first, then by recency) — the rest stay
+    ``metadata_status='pending'`` with no description until one is explicitly
+    requested. Best-effort; returns the number of descriptions enqueued.
+    Idempotent — existing rows are updated, not duplicated.
     """
     try:
         client = get_slack_client_for_user(user_id)
@@ -150,12 +160,15 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
         logger.warning("[slack_channels] auto-register: failed to list channels", exc_info=True)
         return 0
 
-    ranked = _rank_channels(channels)[:limit]
-    if not ranked:
+    if not channels:
         return 0
 
+    # Rank once; the top slice is what we describe, but we register everything.
+    ranked = _rank_channels(channels)
+    describe_ids = {c.get("id") for c in ranked[:describe_limit]}
+
     org_id = resolve_org(user_id)
-    newly_added: list[str] = []
+    newly_added_to_describe: list[str] = []
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
@@ -167,19 +180,28 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
                 for ch in ranked:
                     ch = {**ch, "channel_id": ch.get("id"), "channel_name": ch.get("name"),
                           "team_id": team_id}
-                    _cid, is_new = _upsert_channel(cur, user_id, org_id, ch, existing)
-                    if is_new and _cid:
-                        newly_added.append(_cid)
+                    # Describe only the top-N recent channels; register the rest
+                    # for awareness with 'skipped' so the UI doesn't show a
+                    # perpetual "generating" spinner for them.
+                    will_describe = ch["channel_id"] in describe_ids
+                    _cid, is_new = _upsert_channel(
+                        cur, user_id, org_id, ch, existing,
+                        initial_status="pending" if will_describe else "skipped",
+                    )
+                    if is_new and _cid and will_describe:
+                        newly_added_to_describe.append(_cid)
                 conn.commit()
     except Exception:
         logger.warning("[slack_channels] auto-register: DB upsert failed", exc_info=True)
         return 0
 
-    for channel_id in newly_added:
+    for channel_id in newly_added_to_describe:
         _enqueue_metadata(user_id, channel_id)
-    logger.info("[slack_channels] auto-registered %d channel(s), %d new",
-                len(ranked), len(newly_added))
-    return len(newly_added)
+    logger.info(
+        "[slack_channels] auto-registered %d channel(s), describing %d",
+        len(ranked), len(newly_added_to_describe),
+    )
+    return len(newly_added_to_describe)
 
 
 @slack_channels_bp.route("/channels", methods=["GET"])
