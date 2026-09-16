@@ -494,7 +494,16 @@ kubectl -n aurora-oss get deploy \
 ```
 
 :::note Coming from an older `image.tag: "latest"` install?
-`latest` is mutable, so `helm upgrade` re-renders the same image string and never rolls the pods — you stay on the old build. Drop `image.tag` from your `values.generated.yaml` (empty = track the chart's appVersion) or pin it to the target version once, then upgrade. Every image should read `:<X.Y.Z>` (or `@sha256:…` if digest-pinned) afterward.
+`latest` is mutable, so `helm upgrade` re-renders the same image string and never rolls the pods — you stay on the old build. The catch: `--reuse-values` keeps the persisted `image.tag: "latest"` from your last release even if you drop it from a values file, so the chart keeps rendering `:latest`. Clear it explicitly on the upgrade:
+
+```bash
+# --reuse-values path: clear the persisted tag so the chart falls back to appVersion.
+helm upgrade aurora-oss aurora/aurora-oss \
+  --namespace aurora-oss --version <X.Y.Z> --reuse-values \
+  --set-string image.tag=
+```
+
+Or use the config-change flow instead: drop `image.tag` from `values.generated.yaml` (empty = track the chart's appVersion) and upgrade with `--reset-values -f deploy/helm/aurora/values.generated.yaml`. Either way, every image should read `:<X.Y.Z>` (or `@sha256:…` if digest-pinned) afterward.
 :::
 
 ## Building Custom Images
