@@ -96,7 +96,7 @@ def test_auto_register_describes_only_recency_cap():
     # Capture every _upsert_channel call's initial_status.
     upserts = []
 
-    def fake_upsert(cur, user_id, org_id, ch, existing, notify_default=False, initial_status="pending"):
+    def fake_upsert(cur, user_id, org_id, ch, existing, initial_status="pending"):
         upserts.append((ch["channel_id"], initial_status))
         existing[ch["channel_id"]] = user_id
         return ch["channel_id"], True  # all new
@@ -142,7 +142,7 @@ def test_auto_register_skips_dismissed_channels():
 
     upserts = []
 
-    def fake_upsert(cur, user_id, org_id, ch, existing, notify_default=False, initial_status="pending"):
+    def fake_upsert(cur, user_id, org_id, ch, existing, initial_status="pending"):
         upserts.append(ch["channel_id"])
         existing[ch["channel_id"]] = user_id
         return ch["channel_id"], False  # already-existing rows

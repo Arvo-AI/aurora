@@ -188,8 +188,8 @@ class SlackClient:
         """List every channel visible in the workspace via conversations.list.
 
         Unlike list_bot_channels (bot-membership only), this enumerates all
-        channels so the user can pick which ones Aurora should be aware of.
-        Paginated with a hard cap so a huge workspace can't run unbounded.
+        channels so Aurora can be aware of the whole workspace. Paginated with a
+        hard cap so a huge workspace can't run unbounded.
         """
         all_channels: List[Dict[str, Any]] = []
         cursor = None
