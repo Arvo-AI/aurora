@@ -526,7 +526,7 @@ When enabled, `replicaCounts.*` values are ignored -- HPA manages replicas.
 config:
   GUNICORN_WORKERS: "4"    # 1 per vCPU
   GUNICORN_THREADS: "4"    # threads per worker
-  DB_POOL_MAX: "20"        # >= workers x threads
+  DB_POOL_MAX: "20"        # connections per worker process
   CELERY_CONCURRENCY: "4"  # parallel tasks per pod
 ```
 

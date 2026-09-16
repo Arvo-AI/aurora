@@ -51,14 +51,14 @@ Tuning parameters for gunicorn, Celery, and the database connection pool. Defaul
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GUNICORN_WORKERS` | `2` | Number of gunicorn worker processes |
-| `GUNICORN_THREADS` | `4` | Threads per gunicorn worker (total parallel requests = workers x threads) |
+| `GUNICORN_THREADS` | `32` | Threads per gunicorn worker (total parallel requests = workers x threads) |
 | `CELERY_CONCURRENCY` | `4` | Number of concurrent Celery task workers |
 | `DB_POOL_MIN` | `2` | Minimum database connections kept open per process |
-| `DB_POOL_MAX` | `20` | Maximum database connections per process (must be >= workers x threads) |
+| `DB_POOL_MAX` | `20` | Maximum database connections per process; excess threads wait briefly for a connection |
 
 ```bash
 GUNICORN_WORKERS=2
-GUNICORN_THREADS=4
+GUNICORN_THREADS=32
 CELERY_CONCURRENCY=4
 DB_POOL_MIN=2
 DB_POOL_MAX=20
