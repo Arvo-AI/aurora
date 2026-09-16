@@ -185,8 +185,9 @@ def store_bigquery_data(credentials, project_id, user_id):
                     )
                     cursor.execute(insert_query, data_tuple)
                 except Exception as ex:
-                    logging.error("Error inserting row %d: %s", idx, row)
-                    logging.exception(ex)
+                    # Log only the row index, not the full row contents (may
+                    # contain private billing/account data flagged by scanners).
+                    logging.error("Error inserting row %d: %s", idx, ex)
                     raise
             conn.commit()
             logging.info(f"Successfully stored {len(cloud_billing_data)} rows in 'cloud_billing_usage' table.")

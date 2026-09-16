@@ -263,14 +263,14 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
                     if 'conn' in locals() and conn:
                         conn.close()
             
-            logger.info(f"Retrieved {provider} credentials for user {user_id}")
+            logger.info(f"Retrieved {sanitize(provider)} credentials for user {sanitize(user_id)}")
             return token_data
         
-        logger.warning(f"No {provider} credentials found for user {user_id}")
+        logger.warning(f"No {sanitize(provider)} credentials found for user {sanitize(user_id)}")
         return None
         
     except Exception as e:
-        logger.error(f"Error retrieving credentials for {user_id}/{provider}: {e}")
+        logger.error(f"Error retrieving credentials for {sanitize(user_id)}/{sanitize(provider)}: {e}")
         return None
 
 def store_deployment_task(user_id: str, task_id: str, deployment_id: str = None, status: str = "started", task_data: Dict = None):

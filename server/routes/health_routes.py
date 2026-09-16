@@ -90,8 +90,10 @@ def check_chatbot_websocket():
             sock.connect((host, port))
         return {"status": "healthy", "message": f"Chatbot accepting connections on {host}:{port}"}
     except (socket.timeout, ConnectionRefusedError, OSError) as e:
+        # Log the underlying error server-side, but never leak exception details
+        # (which may include internal host/port/stack info) to external callers.
         logger.warning(f"Chatbot health check failed at {host}:{port}: {e}")
-        return {"status": "unhealthy", "error": f"Chatbot not reachable at {host}:{port}: {e}"}
+        return {"status": "unhealthy", "error": f"Chatbot not reachable at {host}:{port}"}
 
 
 @health_bp.route('/', methods=['GET'])
