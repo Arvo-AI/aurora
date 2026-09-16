@@ -68,8 +68,15 @@ image:
   # Container registry where images are stored
   registry: "your-registry"  #Examples: docker.io/myorg, gcr.io/project-id, ghcr.io/myorg
   
-  # Image tag (version) to deploy
-  tag: "latest"
+  # Image tag to deploy. Empty = track the chart's appVersion (recommended).
+  # Pin a specific tag (e.g. sha-<short>) to override; avoid "latest" (mutable).
+  tag: ""
+
+  # Optional: pin images by immutable digest (takes precedence over tag).
+  # Releases ship these in values.images-<version>.yaml; empty = deploy by tag.
+  digests: {}
+    # server: "sha256:..."
+    # frontend: "sha256:..."
   
   # Optional: Pull secrets for private registries
   # pullSecrets:
@@ -81,7 +88,9 @@ image:
 # When set, the frontend deployment uses this image instead of the default
 # aurora-frontend from image.registry. Useful for custom frontend builds
 # (e.g. with additional analytics or SaaS overlay features).
-# Deploy with: helm upgrade --reuse-values --set frontendImage.tag=sha-abc1234
+# Set `repository` to activate the override; `registry` and `tag` are optional
+# (tag defaults to the chart appVersion when omitted).
+# Deploy with: helm upgrade --reuse-values --set frontendImage.repository=aurora-frontend-custom
 frontendImage: {}
   # registry: "ghcr.io/your-org"
   # repository: "aurora-frontend-custom"

@@ -456,13 +456,27 @@ This builds images locally (no push), enables built-in MinIO for S3 storage, and
 
 ## Upgrading
 
-```bash
-# Image-only update (reuse all existing config):
-helm upgrade aurora-oss ./deploy/helm/aurora \
-  --namespace aurora-oss --reuse-values \
-  --set image.tag=sha-<7char>
+Aurora images track the chart version, so upgrading is usually just bumping `--version` — no `image.tag` to juggle. Pick the flow that matches how you installed.
 
-# Full config update:
+```bash
+# Version upgrade (recommended). The chart pulls the matching images and
+# rolls the pods automatically. Reuses your existing config/secrets.
+helm repo update
+helm upgrade aurora-oss aurora/aurora-oss \
+  --namespace aurora-oss --version <X.Y.Z> --reuse-values
+```
+
+```bash
+# Reproducible upgrade, pinned by immutable digest. Each release attaches a
+# values.images-<X.Y.Z>.yaml (download from the GitHub Release) that pins the
+# exact image digests — deploys the same binaries every time.
+helm upgrade aurora-oss aurora/aurora-oss \
+  --namespace aurora-oss --version <X.Y.Z> --reuse-values \
+  -f values.images-<X.Y.Z>.yaml
+```
+
+```bash
+# Config change (edited values.generated.yaml):
 helm upgrade aurora-oss ./deploy/helm/aurora \
   --namespace aurora-oss --reset-values \
   -f deploy/helm/aurora/values.generated.yaml
@@ -470,6 +484,26 @@ helm upgrade aurora-oss ./deploy/helm/aurora \
 # Rollback:
 helm rollback aurora-oss -n aurora-oss
 ```
+
+Then confirm the rollout landed on the new images:
+
+```bash
+kubectl -n aurora-oss rollout status deploy -l app.kubernetes.io/part-of=aurora
+kubectl -n aurora-oss get deploy \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.containers[0].image}{"\n"}{end}'
+```
+
+:::note Coming from an older `image.tag: "latest"` install?
+`latest` is mutable, so `helm upgrade` re-renders the same string and never rolls the pods. `--reuse-values` also keeps the persisted `image.tag: "latest"`, so clear it explicitly:
+
+```bash
+helm upgrade aurora-oss aurora/aurora-oss \
+  --namespace aurora-oss --version <X.Y.Z> --reuse-values \
+  --set-string image.tag=
+```
+
+Aurora-managed images should then read `:<X.Y.Z>` (or `@sha256:…` if digest-pinned); a custom `frontendImage` override keeps its own tag.
+:::
 
 ## Building Custom Images
 

@@ -39,7 +39,7 @@ spec:
       {{- include "aurora.scheduling" (dict "service" "celeryBeat" "global" $) | nindent 6 }}
       containers:
         - name: celery-beat
-          image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
+          image: {{ include "aurora.image" (dict "image" "server" "global" $) | quote }}
           imagePullPolicy: IfNotPresent
           command: ["celery", "-A", "celery_config", "beat", "--loglevel=info", "--pidfile=/tmp/celerybeat.pid", "--schedule=/tmp/celerybeat-schedule"]
           securityContext:
