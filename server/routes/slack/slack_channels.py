@@ -455,7 +455,7 @@ def _enqueue_metadata(user_id: str, channel_id: str):
         from routes.slack.slack_channel_metadata import generate_channel_metadata
         generate_channel_metadata.delay(user_id, channel_id)
     except Exception as e:
-        logger.warning("Failed to enqueue channel metadata for %s: %s", sanitize(channel_id), e)
+        logger.warning("Failed to enqueue channel metadata for %s: %s", sanitize(channel_id), sanitize(e))
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:

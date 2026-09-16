@@ -5,14 +5,13 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { ArrowLeft, Loader2, LogOut, Bell } from "lucide-react";
+import { ArrowLeft, Loader2, LogOut, Bell, Hash, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { slackService, type SlackStatus, type SlackConnectedChannel, type SlackAvailableChannel } from "@/lib/services/slack";
 import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite as checkCanWrite } from "@/lib/roles";
 import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
 import { queryClient, jsonFetcher } from "@/lib/query";
-import { Hash, RefreshCw } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const SLACK_NOTIFICATION_KEYS = [

@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 from connectors.slack_connector.client import SlackClient
+from routes.slack import slack_channels as mod
 from routes.slack.slack_channels import _classify_channel, _rank_channels
 
 
@@ -81,7 +82,6 @@ def test_rank_handles_missing_created_field():
 
 def test_auto_register_describes_only_recency_cap():
     from unittest.mock import MagicMock
-    import routes.slack.slack_channels as mod
 
     # 3 channels; cap describe at 2. All 3 should be upserted, only 2 described.
     channels = [
