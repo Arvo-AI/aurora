@@ -309,8 +309,6 @@ jobs:
       - name: Attach overlay to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # No checkout in this job, so gh can't infer the repo from git —
-          # set GH_REPO explicitly or `gh release` fails with "not a git repository".
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
           FILE: ${{ steps.overlay.outputs.file }}
