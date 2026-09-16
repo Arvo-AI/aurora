@@ -37,7 +37,15 @@ spec:
       {{- include "aurora.scheduling" (dict "service" "frontend" "global" $) | nindent 6 }}
       containers:
         - name: aurora-frontend
-          image: "{{ if and .Values.frontendImage .Values.frontendImage.tag }}{{ .Values.frontendImage.registry }}/{{ .Values.frontendImage.repository }}:{{ .Values.frontendImage.tag }}{{ else }}{{ include "aurora.image" (dict "image" "frontend" "global" $) }}{{ end }}"
+          {{- /* Custom frontend image is keyed off repository (the identifying field), so a
+                 custom registry isn't silently dropped when tag is left empty. Registry falls
+                 back to the global image.registry, and tag to the chart appVersion, matching
+                 the default image behaviour. */}}
+          {{- if and .Values.frontendImage .Values.frontendImage.repository }}
+          image: "{{ .Values.frontendImage.registry | default .Values.image.registry }}/{{ .Values.frontendImage.repository }}:{{ .Values.frontendImage.tag | default .Chart.AppVersion }}"
+          {{- else }}
+          image: "{{ include "aurora.image" (dict "image" "frontend" "global" $) }}"
+          {{- end }}
           imagePullPolicy: IfNotPresent
           securityContext:
             {{- include "aurora.containerSecurityContext" (dict "service" "frontend" "global" $ "defaults" (dict)) | nindent 12 }}
