@@ -3,7 +3,7 @@
 from unittest.mock import patch
 
 from connectors.slack_connector.client import SlackClient
-from routes.slack.slack_channels import _classify_channel
+from routes.slack.slack_channels import _classify_channel, _rank_channels
 
 
 def _ch(name="", topic="", purpose=""):
@@ -55,6 +55,26 @@ def test_platform_name_embedded_in_unrelated_token_does_not_match():
     # (e.g. a URL host) must not be detected as the platform.
     _ctype, platform = _classify_channel(_ch(name="team", topic="see myopsgenies-notes"))
     assert platform is None
+
+
+# --- _rank_channels ordering -----------------------------------------------
+
+def test_rank_prioritizes_members_then_recency():
+    channels = [
+        {"id": "C_old_member", "is_member": True, "created": 100},
+        {"id": "C_new_nonmember", "is_member": False, "created": 999},
+        {"id": "C_new_member", "is_member": True, "created": 500},
+        {"id": "C_old_nonmember", "is_member": False, "created": 50},
+    ]
+    ranked = [c["id"] for c in _rank_channels(channels)]
+    # Members first (newest member before older member), then non-members by recency.
+    assert ranked == ["C_new_member", "C_old_member", "C_new_nonmember", "C_old_nonmember"]
+
+
+def test_rank_handles_missing_created_field():
+    channels = [{"id": "C1", "is_member": True}, {"id": "C2", "is_member": False}]
+    ranked = [c["id"] for c in _rank_channels(channels)]
+    assert ranked == ["C1", "C2"]
 
 
 # --- list_all_channels pagination ------------------------------------------

@@ -13,6 +13,7 @@ import { canWrite as checkCanWrite } from "@/lib/roles";
 import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
 import { queryClient, jsonFetcher } from "@/lib/query";
 import { Hash, RefreshCw } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const SLACK_NOTIFICATION_KEYS = [
   { key: "slack_investigation_start_notifications", label: "Investigation Started", description: "Notify when Aurora begins an RCA investigation", defaultValue: true },
@@ -22,6 +23,46 @@ const SLACK_NOTIFICATION_KEYS = [
 ] as const;
 
 type PreferenceKey = typeof SLACK_NOTIFICATION_KEYS[number]["key"];
+
+// Two logical groups, each backed by a start + end boolean preference. The UI
+// exposes a single "when to notify" dropdown per group and derives/writes the
+// two underlying booleans, so the backend dispatcher gates stay unchanged.
+type NotifyMode = "never" | "start" | "end" | "both";
+
+const NOTIFICATION_GROUPS = [
+  {
+    id: "investigation",
+    label: "Investigations",
+    description: "When Aurora runs an RCA investigation",
+    startKey: "slack_investigation_start_notifications" as PreferenceKey,
+    endKey: "slack_investigation_complete_notifications" as PreferenceKey,
+  },
+  {
+    id: "actions",
+    label: "Actions",
+    description: "When an Aurora Action runs",
+    startKey: "slack_action_start_notifications" as PreferenceKey,
+    endKey: "slack_action_complete_notifications" as PreferenceKey,
+  },
+] as const;
+
+const NOTIFY_MODE_LABELS: Record<NotifyMode, string> = {
+  never: "Never",
+  start: "On start",
+  end: "On end",
+  both: "On start and end",
+};
+
+function modeFromBooleans(start: boolean, end: boolean): NotifyMode {
+  if (start && end) return "both";
+  if (start) return "start";
+  if (end) return "end";
+  return "never";
+}
+
+function booleansFromMode(mode: NotifyMode): { start: boolean; end: boolean } {
+  return { start: mode === "start" || mode === "both", end: mode === "end" || mode === "both" };
+}
 
 export default function SlackManagePage() {
   const router = useRouter();
@@ -175,29 +216,42 @@ export default function SlackManagePage() {
     }
   };
 
-  const handlePreferenceChange = async (key: PreferenceKey, enabled: boolean) => {
-    setPreferences((prev) => ({ ...prev, [key]: enabled }));
-    setSavingPrefs((prev) => ({ ...prev, [key]: true }));
+  const persistPreference = async (key: PreferenceKey, enabled: boolean): Promise<boolean> => {
+    const response = await fetch("/api/proxy/user-preferences", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, value: enabled }),
+    });
+    return response.ok;
+  };
+
+  const handleGroupModeChange = async (
+    group: typeof NOTIFICATION_GROUPS[number],
+    mode: NotifyMode,
+  ) => {
+    const { start, end } = booleansFromMode(mode);
+    // Snapshot for rollback if a write fails.
+    const prevStart = preferences[group.startKey];
+    const prevEnd = preferences[group.endKey];
+
+    setPreferences((prev) => ({ ...prev, [group.startKey]: start, [group.endKey]: end }));
+    setSavingPrefs((prev) => ({ ...prev, [group.id]: true }));
 
     try {
-      const response = await fetch("/api/proxy/user-preferences", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key, value: enabled }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to save preference");
-      }
+      const [okStart, okEnd] = await Promise.all([
+        persistPreference(group.startKey, start),
+        persistPreference(group.endKey, end),
+      ]);
+      if (!okStart || !okEnd) throw new Error("Failed to save preference");
     } catch {
-      setPreferences((prev) => ({ ...prev, [key]: !enabled }));
+      setPreferences((prev) => ({ ...prev, [group.startKey]: prevStart, [group.endKey]: prevEnd }));
       toast({
         title: "Error",
         description: "Failed to save notification preference",
         variant: "destructive",
       });
     } finally {
-      setSavingPrefs((prev) => ({ ...prev, [key]: false }));
+      setSavingPrefs((prev) => ({ ...prev, [group.id]: false }));
     }
   };
 
@@ -310,20 +364,36 @@ export default function SlackManagePage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {SLACK_NOTIFICATION_KEYS.map(({ key, label, description }) => (
-              <div key={key} className={`flex items-center justify-between p-4 border rounded-lg ${canWrite ? "" : "opacity-50"}`}>
-                <div className="space-y-1 flex-1">
-                  <h4 className="font-medium text-sm">{label}</h4>
-                  <p className="text-xs text-muted-foreground">{description}</p>
+            {NOTIFICATION_GROUPS.map((group) => {
+              const mode = modeFromBooleans(preferences[group.startKey], preferences[group.endKey]);
+              return (
+                <div
+                  key={group.id}
+                  className={`flex items-center justify-between p-4 border rounded-lg ${canWrite ? "" : "opacity-50"}`}
+                >
+                  <div className="space-y-1 flex-1">
+                    <h4 className="font-medium text-sm">{group.label}</h4>
+                    <p className="text-xs text-muted-foreground">{group.description}</p>
+                  </div>
+                  <Select
+                    value={mode}
+                    onValueChange={(v) => handleGroupModeChange(group, v as NotifyMode)}
+                    disabled={isLoadingPrefs || savingPrefs[group.id] || !canWrite}
+                  >
+                    <SelectTrigger className="w-44 ml-4">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(["never", "start", "end", "both"] as NotifyMode[]).map((m) => (
+                        <SelectItem key={m} value={m}>
+                          {NOTIFY_MODE_LABELS[m]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-                <Switch
-                  checked={preferences[key]}
-                  onCheckedChange={(checked) => handlePreferenceChange(key, checked)}
-                  disabled={isLoadingPrefs || savingPrefs[key] || !canWrite}
-                  className="ml-4"
-                />
-              </div>
-            ))}
+              );
+            })}
           </CardContent>
         </Card>
 
@@ -335,8 +405,9 @@ export default function SlackManagePage() {
               Channels
             </CardTitle>
             <CardDescription>
-              Choose which channels Aurora is aware of. Aurora describes each one and uses those
-              descriptions to decide where to post about incidents. Toggle notifications per channel.
+              Aurora automatically becomes aware of your channels (up to the 50 most recent) and
+              describes each one, using those descriptions to decide where to post about incidents.
+              Adjust the selection below or toggle notifications per channel.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">

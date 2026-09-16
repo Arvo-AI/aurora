@@ -186,6 +186,15 @@ def slack_callback():
             except Exception:
                 logging.warning("Failed to seed Slack memory (non-fatal)", exc_info=True)
 
+            # Auto-register the workspace's channels (all, capped to the 50 most
+            # recent) so Aurora is immediately aware of them and generates cheap
+            # descriptions. Best-effort — never fail the connection over this.
+            try:
+                from routes.slack.slack_channels import auto_register_channels
+                auto_register_channels(user_id, team_id=team_info.get('id'))
+            except Exception:
+                logging.warning("Failed to auto-register Slack channels (non-fatal)", exc_info=True)
+
             logging.info("Incidents channel ready, Slack credentials stored successfully")
         except Exception as e:
             logging.exception("Failed to store Slack credentials")

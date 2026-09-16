@@ -111,6 +111,7 @@ x-common-env: &common-env
   RECURRENCE_DETECTION_MODE: ${RECURRENCE_DETECTION_MODE:-live}
   RECURRENCE_AGENT_TIMEOUT_SECONDS: ${RECURRENCE_AGENT_TIMEOUT_SECONDS:-120}
   RECURRENCE_AGENT_MODEL: ${RECURRENCE_AGENT_MODEL}
+  CHEAP_MODEL: ${CHEAP_MODEL}
 
   # GitHub auth — every Aurora service that talks to GitHub (server,
   # celery_worker, chatbot) needs the auth mode + App credentials to mint

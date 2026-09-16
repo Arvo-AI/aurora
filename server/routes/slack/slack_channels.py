@@ -32,6 +32,10 @@ from utils.log_sanitizer import sanitize
 slack_channels_bp = Blueprint("slack_channels", __name__)
 logger = logging.getLogger(__name__)
 
+# Cap on how many channels Aurora auto-registers on connect, to avoid huge
+# workspaces creating unbounded rows + description-generation cost.
+MAX_AUTO_CHANNELS = 50
+
 
 # Word-boundary patterns for incident-platform detection. Using anchored regex
 # (rather than a bare substring `in` check) both avoids matching a platform
@@ -71,6 +75,111 @@ def _classify_channel(channel: dict) -> tuple[str, str | None]:
     if any(k in name for k in ("alert", "oncall", "on-call", "sev")):
         return "team", platform
     return "general", platform
+
+
+def _upsert_channel(cur, user_id: str, org_id: str | None, ch: dict,
+                    existing: dict, notify_default: bool = False) -> tuple[str | None, bool]:
+    """Upsert one channel row. Returns (channel_id, was_newly_added).
+
+    ``existing`` maps channel_id -> owner_user_id and is mutated in place so a
+    channel already connected by another org member keeps its original owner on
+    the conflict key (mirrors github save_repo_selections).
+    """
+    channel_id = ch.get("channel_id") or ch.get("id")
+    if not channel_id:
+        return None, False
+    owner_id = existing.get(channel_id, user_id)
+    channel_type, platform = _classify_channel(ch)
+    cur.execute(
+        """INSERT INTO slack_channels
+               (user_id, org_id, provider, team_id, channel_id, channel_name,
+                is_private, is_member, channel_type, detected_platform,
+                notify_enabled, channel_data, metadata_status)
+           VALUES (%s, %s, 'slack', %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
+           ON CONFLICT (user_id, provider, channel_id) DO UPDATE SET
+               channel_name = EXCLUDED.channel_name,
+               is_private = EXCLUDED.is_private,
+               is_member = EXCLUDED.is_member,
+               channel_type = EXCLUDED.channel_type,
+               detected_platform = EXCLUDED.detected_platform,
+               channel_data = EXCLUDED.channel_data,
+               updated_at = NOW()""",
+        (
+            owner_id, org_id, ch.get("team_id"), channel_id,
+            ch.get("channel_name") or ch.get("name"),
+            ch.get("is_private", False), ch.get("is_member", False),
+            channel_type, platform,
+            bool(ch.get("notify_enabled", notify_default)),
+            json.dumps(ch),
+        ),
+    )
+    is_new = channel_id not in existing
+    if is_new:
+        existing[channel_id] = user_id
+    return channel_id, is_new
+
+
+def _rank_channels(channels: list[dict]) -> list[dict]:
+    """Order channels for auto-registration: member channels first (Aurora can
+    read their history), then by recency (Slack ``created`` epoch, newest
+    first) as a proxy for "most recent"."""
+    return sorted(
+        channels,
+        key=lambda c: (bool(c.get("is_member")), c.get("created") or 0),
+        reverse=True,
+    )
+
+
+def auto_register_channels(user_id: str, team_id: str | None = None,
+                           limit: int = MAX_AUTO_CHANNELS) -> int:
+    """Auto-register up to ``limit`` of the workspace's channels on connect.
+
+    Selects ALL visible channels by default (per product decision), capped and
+    prioritized by _rank_channels so huge workspaces don't blow up volume/cost.
+    Enqueues a cheap-model description for each newly added channel. Best-effort:
+    returns the number of channels enqueued for description (0 on any failure).
+    Idempotent — existing rows are updated, not duplicated, and only genuinely
+    new channels get a description enqueued.
+    """
+    try:
+        client = get_slack_client_for_user(user_id)
+        if not client:
+            return 0
+        channels = client.list_all_channels()
+    except Exception:
+        logger.warning("[slack_channels] auto-register: failed to list channels", exc_info=True)
+        return 0
+
+    ranked = _rank_channels(channels)[:limit]
+    if not ranked:
+        return 0
+
+    org_id = resolve_org(user_id)
+    newly_added: list[str] = []
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:auto]")
+                cur.execute(
+                    "SELECT channel_id, user_id FROM slack_channels WHERE provider = 'slack'"
+                )
+                existing = {r[0]: r[1] for r in cur.fetchall()}
+                for ch in ranked:
+                    ch = {**ch, "channel_id": ch.get("id"), "channel_name": ch.get("name"),
+                          "team_id": team_id}
+                    _cid, is_new = _upsert_channel(cur, user_id, org_id, ch, existing)
+                    if is_new and _cid:
+                        newly_added.append(_cid)
+                conn.commit()
+    except Exception:
+        logger.warning("[slack_channels] auto-register: DB upsert failed", exc_info=True)
+        return 0
+
+    for channel_id in newly_added:
+        _enqueue_metadata(user_id, channel_id)
+    logger.info("[slack_channels] auto-registered %d channel(s), %d new",
+                len(ranked), len(newly_added))
+    return len(newly_added)
 
 
 @slack_channels_bp.route("/channels", methods=["GET"])
@@ -160,37 +269,11 @@ def save_slack_channels(user_id):
 
                 incoming = set()
                 for ch in channels:
-                    channel_id = ch.get("channel_id") or ch.get("id")
+                    channel_id, is_new = _upsert_channel(cur, user_id, org_id, ch, existing)
                     if not channel_id:
                         continue
                     incoming.add(channel_id)
-                    owner_id = existing.get(channel_id, user_id)
-                    channel_type, platform = _classify_channel(ch)
-                    cur.execute(
-                        """INSERT INTO slack_channels
-                               (user_id, org_id, provider, team_id, channel_id, channel_name,
-                                is_private, is_member, channel_type, detected_platform,
-                                notify_enabled, channel_data, metadata_status)
-                           VALUES (%s, %s, 'slack', %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
-                           ON CONFLICT (user_id, provider, channel_id) DO UPDATE SET
-                               channel_name = EXCLUDED.channel_name,
-                               is_private = EXCLUDED.is_private,
-                               is_member = EXCLUDED.is_member,
-                               channel_type = EXCLUDED.channel_type,
-                               detected_platform = EXCLUDED.detected_platform,
-                               channel_data = EXCLUDED.channel_data,
-                               updated_at = NOW()""",
-                        (
-                            owner_id, org_id, ch.get("team_id"), channel_id,
-                            ch.get("channel_name") or ch.get("name"),
-                            ch.get("is_private", False), ch.get("is_member", False),
-                            channel_type, platform,
-                            bool(ch.get("notify_enabled", False)),
-                            json.dumps(ch),
-                        ),
-                    )
-                    if channel_id not in existing:
-                        existing[channel_id] = user_id
+                    if is_new:
                         newly_added.append(channel_id)
 
                 removed = set(existing.keys()) - incoming
