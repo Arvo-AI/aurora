@@ -249,7 +249,7 @@ except ImportError as e:
     logging.warning(f"Failed to import GitHub repo metadata task: {e}")
 
 try:
-    import routes.slack.slack_channel_metadata  # noqa: F401  (registers Celery task)
+    importlib.import_module("routes.slack.slack_channel_metadata")  # registers Celery task
     logging.info("Slack channel metadata task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import Slack channel metadata task: {e}")

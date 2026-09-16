@@ -7,13 +7,18 @@ LLM-generated (and user/agent-editable) description in ``metadata_summary``.
 The agent queries these descriptions to decide which channel(s) are relevant
 for a given incident/notification.
 
+Aurora auto-registers every visible channel (see ``auto_register_channels``);
+users curate by *dismissing* irrelevant ones rather than picking relevant ones.
+
 Endpoints (all behind ``connectors`` RBAC):
 
-    GET    /slack/channels                       -> available (live) + connected (stored)
-    POST   /slack/channels                       -> sync the set Aurora is aware of
+    GET    /slack/channels                       -> stored channels {connected, dismissed}
+    POST   /slack/channels/refresh               -> re-scan & register newly-visible channels
     DELETE /slack/channels                       -> forget all channels
-    PUT    /slack/channels/<channel_id>/metadata -> human-edit a channel description
-    PUT    /slack/channels/<channel_id>/notify   -> toggle notify_enabled for a channel
+    POST   /slack/channels/<id>/dismiss          -> hide a channel from routing (stays in Slack)
+    POST   /slack/channels/<id>/restore          -> un-dismiss a channel
+    PUT    /slack/channels/<id>/metadata         -> human-edit a channel description
+    PUT    /slack/channels/<id>/notify           -> toggle notify_enabled for a channel
     POST   /slack/channels/metadata/generate     -> (re)generate a channel description
 """
 import json
@@ -79,8 +84,7 @@ def _classify_channel(channel: dict) -> tuple[str, str | None]:
 
 
 def _upsert_channel(cur, user_id: str, org_id: str | None, ch: dict,
-                    existing: dict, notify_default: bool = False,
-                    initial_status: str = "pending") -> tuple[str | None, bool]:
+                    existing: dict, initial_status: str = "pending") -> tuple[str | None, bool]:
     """Upsert one channel row. Returns (channel_id, was_newly_added).
 
     ``existing`` maps channel_id -> owner_user_id and is mutated in place so a
@@ -117,7 +121,7 @@ def _upsert_channel(cur, user_id: str, org_id: str | None, ch: dict,
             ch.get("channel_name") or ch.get("name"),
             ch.get("is_private", False), ch.get("is_member", False),
             channel_type, platform,
-            bool(ch.get("notify_enabled", notify_default)),
+            bool(ch.get("notify_enabled", False)),
             json.dumps(ch),
             initial_status,
         ),
@@ -137,6 +141,33 @@ def _rank_channels(channels: list[dict]) -> list[dict]:
         key=lambda c: (bool(c.get("is_member")), c.get("created") or 0),
         reverse=True,
     )
+
+
+def _update_one_channel(user_id: str, channel_id: str, set_clause: str, params: tuple):
+    """Run a single-row ``UPDATE slack_channels ... WHERE channel_id`` and return
+    a JSON response. Centralises the RLS + 404 + commit boilerplate shared by the
+    dismiss/restore/metadata/notify routes.
+
+    ``set_clause`` is the ``SET`` body (without ``updated_at``, which is always
+    appended); ``params`` are its bind values, followed here by ``channel_id``.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:update]")
+                cur.execute(
+                    f"""UPDATE slack_channels SET {set_clause}, updated_at = NOW()
+                        WHERE provider = 'slack' AND channel_id = %s""",
+                    (*params, channel_id),
+                )
+                if cur.rowcount == 0:
+                    conn.rollback()
+                    return jsonify({"error": "Channel not found"}), 404
+                conn.commit()
+        return None  # success — caller supplies the body
+    except Exception:
+        logger.exception("Error updating Slack channel %s", sanitize(channel_id))
+        return jsonify({"error": "Failed to update channel"}), 500
 
 
 def auto_register_channels(user_id: str, team_id: str | None = None,
@@ -228,7 +259,7 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
 @slack_channels_bp.route("/channels", methods=["GET"])
 @require_permission("connectors", "read")
 def get_slack_channels(user_id):
-    """Return connected (stored) channels plus the live available list."""
+    """Return the org's stored channels split into {connected, dismissed}."""
     try:
         org_id = resolve_org(user_id)
         predicate, pred_params = org_read_predicate(user_id, org_id)
@@ -285,48 +316,18 @@ def dismiss_slack_channel(user_id, channel_id):
     notifying there, hides it from the main list, and prevents auto-register/
     refresh from resurfacing it. Reversible via the restore route.
     """
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:dismiss]")
-                cur.execute(
-                    """UPDATE slack_channels
-                       SET is_dismissed = TRUE, notify_enabled = FALSE, updated_at = NOW()
-                       WHERE provider = 'slack' AND channel_id = %s""",
-                    (channel_id,),
-                )
-                if cur.rowcount == 0:
-                    conn.rollback()
-                    return jsonify({"error": "Channel not found"}), 404
-                conn.commit()
-        return jsonify({"channel_id": channel_id, "is_dismissed": True})
-    except Exception:
-        logger.exception("Error dismissing Slack channel")
-        return jsonify({"error": "Failed to dismiss channel"}), 500
+    err = _update_one_channel(
+        user_id, channel_id, "is_dismissed = TRUE, notify_enabled = FALSE", ()
+    )
+    return err or jsonify({"channel_id": channel_id, "is_dismissed": True})
 
 
 @slack_channels_bp.route("/channels/<channel_id>/restore", methods=["POST"])
 @require_permission("connectors", "write")
 def restore_slack_channel(user_id, channel_id):
     """Un-dismiss a channel so Aurora is aware of it again."""
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:restore]")
-                cur.execute(
-                    """UPDATE slack_channels
-                       SET is_dismissed = FALSE, updated_at = NOW()
-                       WHERE provider = 'slack' AND channel_id = %s""",
-                    (channel_id,),
-                )
-                if cur.rowcount == 0:
-                    conn.rollback()
-                    return jsonify({"error": "Channel not found"}), 404
-                conn.commit()
-        return jsonify({"channel_id": channel_id, "is_dismissed": False})
-    except Exception:
-        logger.exception("Error restoring Slack channel")
-        return jsonify({"error": "Failed to restore channel"}), 500
+    err = _update_one_channel(user_id, channel_id, "is_dismissed = FALSE", ())
+    return err or jsonify({"channel_id": channel_id, "is_dismissed": False})
 
 
 @slack_channels_bp.route("/channels/refresh", methods=["POST"])
@@ -337,15 +338,12 @@ def refresh_slack_channels(user_id):
     For workspaces connected before auto-registration existed (or when new
     channels have appeared), this brings the stored channel list up to date
     without requiring a reconnect. Idempotent: existing rows/descriptions are
-    preserved, only genuinely-new channels are added (and the most recent get a
-    description). Never removes channels — that's what the picker / clear are for.
+    preserved, dismissed channels stay dismissed, and only genuinely-new
+    channels are added (the most recent also get a description). Never removes.
     """
     try:
         described = auto_register_channels(user_id)
-        return jsonify({
-            "message": "Channels refreshed",
-            "described": described,
-        })
+        return jsonify({"message": "Channels refreshed", "described": described})
     except Exception:
         logger.exception("Error refreshing Slack channels")
         return jsonify({"error": "Failed to refresh channels"}), 500
@@ -371,81 +369,40 @@ def clear_slack_channels(user_id):
 @require_permission("connectors", "write")
 def update_channel_metadata(user_id, channel_id):
     """Human edit of a channel description."""
-    try:
-        data = request.get_json(silent=True) or {}
-        summary = data.get("metadata_summary")
-        if summary is None:
-            return jsonify({"error": "metadata_summary is required"}), 400
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:metadata]")
-                cur.execute(
-                    """UPDATE slack_channels
-                       SET metadata_summary = %s, metadata_status = 'ready', updated_at = NOW()
-                       WHERE provider = 'slack' AND channel_id = %s""",
-                    (summary, channel_id),
-                )
-                if cur.rowcount == 0:
-                    conn.rollback()
-                    return jsonify({"error": "Channel not found"}), 404
-                conn.commit()
-        return jsonify({"message": "Metadata updated"})
-    except Exception:
-        logger.exception("Error updating channel metadata")
-        return jsonify({"error": "Failed to update metadata"}), 500
+    summary = (request.get_json(silent=True) or {}).get("metadata_summary")
+    if summary is None:
+        return jsonify({"error": "metadata_summary is required"}), 400
+    err = _update_one_channel(
+        user_id, channel_id,
+        "metadata_summary = %s, metadata_status = 'ready'", (summary,),
+    )
+    return err or jsonify({"message": "Metadata updated"})
 
 
 @slack_channels_bp.route("/channels/<channel_id>/notify", methods=["PUT"])
 @require_permission("connectors", "write")
 def update_channel_notify(user_id, channel_id):
     """Toggle whether Aurora may proactively notify a channel."""
-    try:
-        data = request.get_json(silent=True) or {}
-        enabled = data.get("enabled")
-        if not isinstance(enabled, bool):
-            return jsonify({"error": "enabled must be a boolean"}), 400
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:notify]")
-                cur.execute(
-                    """UPDATE slack_channels
-                       SET notify_enabled = %s, updated_at = NOW()
-                       WHERE provider = 'slack' AND channel_id = %s""",
-                    (enabled, channel_id),
-                )
-                if cur.rowcount == 0:
-                    conn.rollback()
-                    return jsonify({"error": "Channel not found"}), 404
-                conn.commit()
-        return jsonify({"channel_id": channel_id, "notify_enabled": enabled})
-    except Exception:
-        logger.exception("Error updating channel notify flag")
-        return jsonify({"error": "Failed to update notify flag"}), 500
+    enabled = (request.get_json(silent=True) or {}).get("enabled")
+    if not isinstance(enabled, bool):
+        return jsonify({"error": "enabled must be a boolean"}), 400
+    err = _update_one_channel(user_id, channel_id, "notify_enabled = %s", (enabled,))
+    return err or jsonify({"channel_id": channel_id, "notify_enabled": enabled})
 
 
 @slack_channels_bp.route("/channels/metadata/generate", methods=["POST"])
 @require_permission("connectors", "write")
 def trigger_channel_metadata(user_id):
     """(Re)generate the LLM description for a specific channel."""
-    try:
-        data = request.get_json(silent=True) or {}
-        channel_id = data.get("channel_id")
-        if not channel_id:
-            return jsonify({"error": "channel_id is required"}), 400
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:regen]")
-                cur.execute(
-                    """UPDATE slack_channels SET metadata_status = 'generating', updated_at = NOW()
-                       WHERE provider = 'slack' AND channel_id = %s""",
-                    (channel_id,),
-                )
-                conn.commit()
-        _enqueue_metadata(user_id, channel_id)
-        return jsonify({"message": "Metadata generation started"})
-    except Exception:
-        logger.exception("Error triggering channel metadata")
-        return jsonify({"error": "Failed to trigger metadata generation"}), 500
+    channel_id = (request.get_json(silent=True) or {}).get("channel_id")
+    if not channel_id:
+        return jsonify({"error": "channel_id is required"}), 400
+    # Flip to 'generating' first so the UI shows a spinner; 404 if unknown.
+    err = _update_one_channel(user_id, channel_id, "metadata_status = 'generating'", ())
+    if err:
+        return err
+    _enqueue_metadata(user_id, channel_id)
+    return jsonify({"message": "Metadata generation started"})
 
 
 def _enqueue_metadata(user_id: str, channel_id: str):
