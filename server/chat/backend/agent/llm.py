@@ -43,10 +43,20 @@ class ModelConfig:
     MAIN_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
     VISION_MODEL = os.getenv("VISION_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
-    # Background RCA model - configurable via RCA_MODEL env var, falls back to cost-based selection
+    # Background RCA model. Precedence:
+    #   1. Explicit RCA_MODEL env var (highest).
+    #   2. If the client is on the default Anthropic stack (no custom MAIN_MODEL),
+    #      pick a cost-optimized Anthropic model.
+    #   3. Otherwise fall back to the client's MAIN_MODEL — so an OSS deployment
+    #      on a non-Anthropic provider (no Anthropic key) doesn't hit a hardcoded
+    #      Anthropic model and RuntimeError at create_chat_model.
     RCA_MODEL = os.getenv("RCA_MODEL") or (
-        "anthropic/claude-haiku-4.5" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
-        else "anthropic/claude-opus-4.6"
+        (
+            "anthropic/claude-haiku-4.5" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
+            else "anthropic/claude-opus-4.6"
+        )
+        if not os.getenv("MAIN_MODEL")
+        else os.getenv("MAIN_MODEL")
     )
 
     # Multi-agent RCA orchestrator — required when ORCHESTRATOR_ENABLED=true.
