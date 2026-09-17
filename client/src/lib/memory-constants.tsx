@@ -25,10 +25,6 @@ export const SYSTEM_CATEGORY = "artifact";
 
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
-// Badge palette uses the app's dark-native convention (translucent fill +
-// saturated text) rather than light/dark `bg-*-100`/`dark:*` pairs. The old
-// pairs rendered white-on-white until hover, because the light `bg-gray-100`
-// base could win over its `dark:` variant on this always-dark surface.
 export const CATEGORY_META: Record<MemoryCategory, { label: string; icon: React.ReactNode; color: string }> = {
   context: { label: "Context", icon: <Brain className="h-3.5 w-3.5" />, color: "bg-purple-500/10 text-purple-400 border-purple-500/20" },
   runbook: { label: "Runbook", icon: <BookOpen className="h-3.5 w-3.5" />, color: "bg-blue-500/10 text-blue-400 border-blue-500/20" },
