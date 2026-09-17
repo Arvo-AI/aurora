@@ -14,7 +14,6 @@ from routes.slack.slack_events_helpers import (
     verify_slack_signature,
     get_user_id_from_slack_user,
     get_user_id_from_slack_team,
-    get_bot_user_id_for_team,
     get_thread_messages,
     get_channel_context_with_threads,
     get_session_from_thread,
@@ -74,7 +73,7 @@ def _handle_member_joined(event: dict, team_id: str | None) -> None:
         # it directly. Older installs without it fall back to a membership check:
         # only register if Aurora is actually a member of the channel now (so a
         # human joining a channel Aurora isn't in won't create a row).
-        bot_user_id = get_bot_user_id_for_team(team_id, aurora_user_id)
+        bot_user_id = (get_user_token_data(aurora_user_id, "slack") or {}).get("bot_user_id")
         if bot_user_id:
             # Not Aurora's join — ignore.
             if joined_user != bot_user_id:
