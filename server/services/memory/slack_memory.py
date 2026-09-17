@@ -1,7 +1,6 @@
 """Seed the default "Slack" memory entry (category ``context``, title ``Slack``)
-on connect. It's an ordinary memory entry, so it's auto-injected, UI-editable,
-and agent-editable thereafter — this only creates the starting policy, never
-overwriting an existing one.
+on connect. It's an ordinary memory entry — this only creates the starting policy, 
+never overwrites an existing one.
 """
 
 import logging
