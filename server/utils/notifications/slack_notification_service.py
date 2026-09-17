@@ -475,22 +475,44 @@ def send_slack_investigation_completed_notification(
             logger.warning(f"[SlackNotification] Truncating blocks from {len(blocks)} to {SLACK_MAX_BLOCKS - 5}")
             blocks = blocks[:SLACK_MAX_BLOCKS - 5]
         
-        # Post the full card to the incidents channel (keeps threading under this
-        # incident's Started message). Then also route to any description-matched
-        # channels — the "post the conclusion to the relevant team" behaviour.
+        # Post the full structured card to the incidents channel (keeps threading
+        # under this incident's Started message, and its escaped title/service).
+        # Then route the conclusion to any description-matched team channels, where
+        # the message is composed per that channel's team/format preferences.
+        try:
+            from utils.notifications.slack_routing import (
+                resolve_notification_channels,
+                compose_channel_message,
+                _channel_descriptions,
+            )
+            descriptions = _channel_descriptions(user_id)
+            base_link = _get_incident_url(incident_id)
+        except Exception:
+            logger.warning("[SlackNotification] routing setup failed (non-fatal)", exc_info=True)
+            descriptions, base_link = {}, _get_incident_url(incident_id)
+
         primary_ok = _post_incident_card(client, channel_id, user_id, incident_data, kind="completed", blocks=blocks)
 
         try:
-            from utils.notifications.slack_routing import resolve_notification_channels
             targets = resolve_notification_channels(user_id, incident_data, channel_id)
-            # Extras get a plain standalone card — no in-place update/threading,
+            # Extras get a standalone message — no in-place update/threading,
             # which is anchored to the incidents channel and must not be reused
             # here (it would clobber slack_message_ts / thread under a wrong ts).
-            card_text = f"Analysis Complete: {alert_title}"
+            # Each extra channel's message is composed for that team/channel; the
+            # incidents channel keeps its structured, escaped card above.
             for extra_channel in targets:
                 if extra_channel and extra_channel != channel_id:
                     try:
-                        client.send_message(channel=extra_channel, text=card_text, blocks=blocks)
+                        desc = descriptions.get(extra_channel, {})
+                        text = compose_channel_message(
+                            user_id, incident_data,
+                            channel_name=desc.get("name") or extra_channel,
+                            channel_description=desc.get("description") or "",
+                            base_summary=summary_for_slack,
+                            incident_url=base_link,
+                            fallback_text=f"Analysis Complete: {alert_title}",
+                        )
+                        client.send_message(channel=extra_channel, text=text)
                     except Exception:
                         logger.warning("[SlackNotification] Failed to post to a routed channel",
                                        exc_info=True)

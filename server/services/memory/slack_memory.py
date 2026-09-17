@@ -46,6 +46,13 @@ relevant to a given incident, service, or team.
 - Default fallback is the shared incidents channel when no better match exists.
 - Record team → channel routing preferences here as they are learned.
 
+## Message format
+- Incident notifications are composed per channel. Some teams want a structured \
+summary (alert, severity, service, root cause, link); others want a short, human \
+one-liner. State the preference here — org-wide and/or per-channel.
+- Default: a concise structured summary. Record any channel/team that prefers a \
+different style under "Per-channel notes".
+
 ## Per-channel notes
 (none yet — Aurora and the team add channel-specific preferences here over time)
 """

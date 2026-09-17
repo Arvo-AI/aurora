@@ -79,3 +79,55 @@ def test_llm_empty_pick_falls_back_to_default():
          patch("chat.backend.agent.providers.create_chat_model", return_value=MagicMock()), \
          patch("chat.backend.agent.utils.llm_usage_tracker.tracked_invoke", return_value=fake_resp):
         assert slack_routing.resolve_notification_channels("u1", {}, "C_DEFAULT") == ["C_DEFAULT"]
+
+
+# --- compose_channel_message ------------------------------------------------
+
+_COMPOSE_KWARGS = dict(
+    channel_name="db-team",
+    channel_description="database on-call",
+    base_summary="disk full on primary",
+    incident_url="http://x/y",
+    fallback_text="Analysis Complete: pay failed",
+)
+
+
+def test_compose_hook_blocked_returns_fallback():
+    # Cost-gated — must fall back to the plain text, never skip the post.
+    with patch("utils.hooks.get_hook", return_value=lambda *a, **k: (False, "limit")), \
+         patch("utils.auth.stateless_auth.get_org_id_for_user", return_value="org1"):
+        out = slack_routing.compose_channel_message("u1", {"alert_title": "pay failed"}, **_COMPOSE_KWARGS)
+    assert out == "Analysis Complete: pay failed"
+
+
+def test_compose_llm_error_returns_fallback():
+    with patch("utils.hooks.get_hook", return_value=lambda *a, **k: (True, "")), \
+         patch("utils.auth.stateless_auth.get_org_id_for_user", return_value="org1"), \
+         patch("services.memory.slack_memory.read_slack_memory", return_value="policy"), \
+         patch("chat.backend.agent.providers.create_chat_model", side_effect=RuntimeError("boom")):
+        out = slack_routing.compose_channel_message("u1", {"alert_title": "pay failed"}, **_COMPOSE_KWARGS)
+    assert out == "Analysis Complete: pay failed"
+
+
+def test_compose_empty_output_returns_fallback():
+    fake_resp = MagicMock()
+    fake_resp.content = "   "  # model produced nothing usable
+    with patch("utils.hooks.get_hook", return_value=lambda *a, **k: (True, "")), \
+         patch("utils.auth.stateless_auth.get_org_id_for_user", return_value="org1"), \
+         patch("services.memory.slack_memory.read_slack_memory", return_value="policy"), \
+         patch("chat.backend.agent.providers.create_chat_model", return_value=MagicMock()), \
+         patch("chat.backend.agent.utils.llm_usage_tracker.tracked_invoke", return_value=fake_resp):
+        out = slack_routing.compose_channel_message("u1", {"alert_title": "pay failed"}, **_COMPOSE_KWARGS)
+    assert out == "Analysis Complete: pay failed"
+
+
+def test_compose_returns_llm_text_when_available():
+    fake_resp = MagicMock()
+    fake_resp.content = "*Heads up* disk filled on the primary — see http://x/y"
+    with patch("utils.hooks.get_hook", return_value=lambda *a, **k: (True, "")), \
+         patch("utils.auth.stateless_auth.get_org_id_for_user", return_value="org1"), \
+         patch("services.memory.slack_memory.read_slack_memory", return_value="db team likes short human msgs"), \
+         patch("chat.backend.agent.providers.create_chat_model", return_value=MagicMock()), \
+         patch("chat.backend.agent.utils.llm_usage_tracker.tracked_invoke", return_value=fake_resp):
+        out = slack_routing.compose_channel_message("u1", {"alert_title": "pay failed"}, **_COMPOSE_KWARGS)
+    assert out == "*Heads up* disk filled on the primary — see http://x/y"

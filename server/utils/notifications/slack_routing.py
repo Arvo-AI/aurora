@@ -168,3 +168,111 @@ def resolve_notification_channels(user_id: str, incident_data: dict,
 
     # No confident match — default incidents channel keeps us from dropping it.
     return [default_channel_id] if default_channel_id else []
+
+
+# Template handed to the model. It gets the incident facts + a base summary, the
+# team's Slack policy (org-level tone/format prefs), and the target channel's own
+# description (per-channel context), then writes whatever it judges appropriate —
+# structured for some teams, a quick human line for others. No fixed format.
+_COMPOSE_PROMPT = """You are Aurora, posting an incident update into a specific Slack channel.
+
+Write the message for THIS channel, honoring the team's preferences below.
+Some teams want a structured summary; others want a short, human one-liner. Follow
+the policy and the channel's purpose — if unsure, keep it concise and useful.
+
+Team's Slack policy (tone / formatting / per-channel preferences):
+---
+{memory}
+---
+
+Target channel:
+- #{channel_name} — {channel_description}
+
+Incident facts you may use:
+- Title: {title}
+- Severity: {severity}
+- Service: {service}
+- Root cause / summary: {summary}
+- Full report link: {url}
+
+Rules:
+- Use Slack mrkdwn only (*bold*, _italic_, `code`). No block-kit, no JSON, no HTML.
+- Include the report link if it's useful.
+- Output ONLY the message text to post — no preamble, no explanation."""
+
+
+def _channel_descriptions(user_id: str) -> dict:
+    """Map channel_id -> {name, description} for the org's known channels.
+
+    Used to give the message composer the target channel's purpose. Returns {}
+    on any error so the caller falls back to a non-adaptive message.
+    """
+    try:
+        return {
+            c["channel_id"]: {"name": c["channel_name"], "description": c["description"]}
+            for c in _load_candidate_channels(user_id)
+        }
+    except Exception:
+        return {}
+
+
+def compose_channel_message(
+    user_id: str,
+    incident_data: dict,
+    *,
+    channel_name: str,
+    channel_description: str,
+    base_summary: str,
+    incident_url: str,
+    fallback_text: str,
+) -> str:
+    """Return an LLM-composed Slack message tailored to one channel + org policy.
+
+    Combines the org's Slack memory (tone/format prefs, incl. per-channel notes)
+    with the target channel's description so each team gets the shape it wants —
+    structured or human — from the same incident. Always safe: returns
+    ``fallback_text`` if cost-gated, the LLM is unavailable, or output is empty,
+    so notifications never break.
+    """
+    try:
+        from utils.hooks import get_hook
+        from utils.auth.stateless_auth import get_org_id_for_user
+
+        org_id = get_org_id_for_user(user_id) if user_id else None
+        allowed, message = get_hook("before_llm_call")(org_id, user_id)
+        # Cost-gated — fall back to the plain card text rather than skip the post.
+        if not allowed:
+            logger.info("[SlackCompose] LLM hook blocked compose (%s); using fallback", message)
+            return fallback_text
+
+        from services.memory.slack_memory import read_slack_memory
+        from chat.backend.agent.providers import create_chat_model
+        from chat.backend.agent.llm import ModelConfig
+        from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
+        from chat.backend.agent.utils.message_content import extract_text_from_content
+        from langchain_core.messages import HumanMessage
+
+        prompt = _COMPOSE_PROMPT.format(
+            memory=read_slack_memory(user_id) or "(no policy recorded)",
+            channel_name=channel_name or "unknown",
+            channel_description=channel_description or "(no description)",
+            title=incident_data.get("alert_title") or incident_data.get("title") or "unknown",
+            service=incident_data.get("service") or "unknown",
+            severity=incident_data.get("severity") or "unknown",
+            summary=base_summary or "(no summary available)",
+            url=incident_url or "(no link)",
+        )
+        llm = create_chat_model(ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
+                                temperature=0.3, streaming=False)
+        response = tracked_invoke(
+            llm,
+            [HumanMessage(content=prompt)],
+            user_id=user_id,
+            model_name=ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
+            request_type="slack_notification_compose",
+        )
+        text = (extract_text_from_content(response.content) or "").strip()
+        return text or fallback_text
+    except Exception:
+        logger.warning("[SlackCompose] compose failed; using fallback text", exc_info=True)
+        return fallback_text
