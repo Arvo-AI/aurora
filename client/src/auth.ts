@@ -9,6 +9,7 @@ type RefreshResult = {
   orgName: string | null
   mustChangePassword: boolean
   emailVerified: boolean
+  isGithubProvisioned: boolean
 } | null | "not_found"
 
 // Deduplicate concurrent refresh calls — all middleware requests share one
@@ -165,6 +166,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.orgName = user.orgName
         token.mustChangePassword = user.mustChangePassword
         token.emailVerified = user.emailVerified
+        token.isGithubProvisioned = user.isGithubProvisioned
         token.lastRefreshedAt = Math.floor(Date.now() / 1000)
         return token
       }
@@ -190,6 +192,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           token.orgName = fresh.orgName
           token.mustChangePassword = fresh.mustChangePassword
           token.emailVerified = fresh.emailVerified
+          token.isGithubProvisioned = fresh.isGithubProvisioned
           token.lastRefreshedAt = now
         }
       }
@@ -209,6 +212,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           session.user.orgName = (token.orgName as string) ?? undefined
           session.user.mustChangePassword = token.mustChangePassword as boolean
           session.user.emailVerified = token.emailVerified as boolean
+          session.user.isGithubProvisioned = token.isGithubProvisioned as boolean
         }
       }
       return session

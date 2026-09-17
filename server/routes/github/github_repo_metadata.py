@@ -270,8 +270,6 @@ def _import_installation_repos(
                            is_private = EXCLUDED.is_private,
                            installation_id = COALESCE(EXCLUDED.installation_id,
                                                       connected_repos.installation_id),
-                           change_gating_enabled = connected_repos.change_gating_enabled
-                                                   OR EXCLUDED.change_gating_enabled,
                            updated_at = NOW()""",
                     (
                         owner_id, org_id, full_name, repo.get("id"),

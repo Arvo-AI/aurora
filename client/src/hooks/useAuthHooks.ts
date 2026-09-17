@@ -22,6 +22,7 @@ export function useUser() {
     role: session.user.role || "viewer",
     orgId: session.user.orgId || null,
     orgName: session.user.orgName || null,
+    isGithubProvisioned: session.user.isGithubProvisioned || false,
   } : null;
 
   return {

@@ -15,6 +15,7 @@ declare module "next-auth" {
       orgName?: string
       mustChangePassword?: boolean
       emailVerified?: boolean
+      isGithubProvisioned?: boolean
     } & DefaultSession["user"]
   }
 
@@ -27,6 +28,7 @@ declare module "next-auth" {
     orgName?: string
     mustChangePassword?: boolean
     emailVerified?: boolean
+    isGithubProvisioned?: boolean
   }
 }
 
@@ -40,6 +42,7 @@ declare module "next-auth/jwt" {
     orgName?: string
     mustChangePassword?: boolean
     emailVerified?: boolean
+    isGithubProvisioned?: boolean
     lastRefreshedAt?: number
   }
 }

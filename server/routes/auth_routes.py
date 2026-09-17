@@ -378,7 +378,8 @@ def exchange_handoff():
                           AND signup_handoff_expires_at > NOW()
                        RETURNING id, email, name, role, org_id,
                                  COALESCE(must_change_password, FALSE),
-                                 COALESCE(email_verified, FALSE)""",
+                                 COALESCE(email_verified, FALSE),
+                                 (github_user_id IS NOT NULL)""",
                     (token_hash,),
                 )
                 row = cursor.fetchone()
@@ -386,7 +387,7 @@ def exchange_handoff():
                     conn.commit()
                     return jsonify({"error": "Invalid token"}), 401
                 (user_id, user_email, user_name, user_role, user_org_id,
-                 must_change_pw, email_verified) = row
+                 must_change_pw, email_verified, is_github) = row
                 cursor.execute(
                     "SELECT name FROM organizations WHERE id = %s", (user_org_id,)
                 )
@@ -408,6 +409,7 @@ def exchange_handoff():
             "orgName": org_row[0] if org_row else None,
             "mustChangePassword": bool(must_change_pw),
             "emailVerified": bool(email_verified),
+            "isGithubProvisioned": bool(is_github),
         }), 200
     except Exception:
         logging.exception("Error during handoff exchange")
@@ -435,17 +437,18 @@ def login():
                 # No RLS needed — users not RLS-protected
                 cursor.execute(
                     "SELECT u.id, u.email, u.name, u.password_hash, u.role, u.org_id, o.name, "
-                    "COALESCE(u.must_change_password, FALSE), COALESCE(u.email_verified, FALSE) "
+                    "COALESCE(u.must_change_password, FALSE), COALESCE(u.email_verified, FALSE), "
+                    "(u.github_user_id IS NOT NULL) "
                     "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
                     "WHERE u.email = %s",
                     (email,)
                 )
                 user = cursor.fetchone()
-                
+
                 # Always perform password check to prevent timing attacks
                 # Use dummy hash if user doesn't exist
                 if user:
-                    user_id, user_email, user_name, password_hash, user_role, user_org_id, user_org_name, must_change_pw, email_verified = user
+                    user_id, user_email, user_name, password_hash, user_role, user_org_id, user_org_name, must_change_pw, email_verified, is_github = user
                 else:
                     # Dummy hash to maintain consistent timing
                     password_hash = _DUMMY_BCRYPT_HASH
@@ -486,6 +489,7 @@ def login():
                     "orgName": user_org_name,
                     "mustChangePassword": bool(must_change_pw),
                     "emailVerified": bool(email_verified),
+                    "isGithubProvisioned": bool(is_github),
                 }), 200
         finally:
             conn.close()
@@ -504,41 +508,49 @@ def change_password(user_id):
         if not data:
             return jsonify({"error": "Invalid request body"}), 400
         
-        current_password = data.get('currentPassword')
+        current_password = data.get('currentPassword') or ''
         new_password = data.get('newPassword')
-        
-        if not current_password or not new_password:
-            return jsonify({"error": "Current and new password are required"}), 400
-            
+
+        if not new_password:
+            return jsonify({"error": "New password is required"}), 400
+
         if len(new_password) < 8:
             return jsonify({"error": "New password must be at least 8 characters"}), 400
-        
+
         # Verify current password and update
         conn = connect_to_db_as_user()
         try:
             with conn.cursor() as cursor:
                 # No RLS needed — users not RLS-protected
                 cursor.execute(
-                    "SELECT password_hash, email, COALESCE(must_change_password, FALSE), COALESCE(email_verified, FALSE) FROM users WHERE id = %s",
+                    "SELECT password_hash, email, COALESCE(must_change_password, FALSE), "
+                    "COALESCE(email_verified, FALSE), github_user_id "
+                    "FROM users WHERE id = %s",
                     (user_id,)
                 )
                 result = cursor.fetchone()
-                
+
                 if not result:
                     return jsonify({"error": "User not found"}), 404
-                
-                password_hash, user_email, was_must_change, was_verified = result
-                
+
+                password_hash, user_email, was_must_change, was_verified, github_user_id = result
+
                 from utils.auth.stateless_auth import resolve_org_id
                 org_id = resolve_org_id(user_id) or ""
 
-                # Verify current password
-                if not bcrypt.checkpw(current_password.encode('utf-8'), password_hash.encode('utf-8')):
-                    record_audit_event(
-                        org_id, user_id, "change_password_failed",
-                        "user", user_id, {"reason": "wrong_current_password"}, request,
-                    )
-                    return jsonify({"error": "Current password is incorrect"}), 401
+                # GitHub-provisioned users have an unusable password (hash of
+                # random bytes). Allow them to set their first password without
+                # providing the current one. Non-GitHub users must always prove
+                # they know the current password.
+                if current_password:
+                    if not bcrypt.checkpw(current_password.encode('utf-8'), password_hash.encode('utf-8')):
+                        record_audit_event(
+                            org_id, user_id, "change_password_failed",
+                            "user", user_id, {"reason": "wrong_current_password"}, request,
+                        )
+                        return jsonify({"error": "Current password is incorrect"}), 401
+                elif not github_user_id:
+                    return jsonify({"error": "Current password is required"}), 400
                 
                 # Hash and update new password
                 new_password_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
@@ -578,7 +590,7 @@ def get_current_user(user_id):
                 # No RLS needed — users, organizations not RLS-protected
                 cursor.execute(
                     "SELECT u.role, u.org_id, o.name, COALESCE(u.must_change_password, FALSE), "
-                    "COALESCE(u.email_verified, FALSE) "
+                    "COALESCE(u.email_verified, FALSE), (u.github_user_id IS NOT NULL) "
                     "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
                     "WHERE u.id = %s",
                     (user_id,),
@@ -593,6 +605,7 @@ def get_current_user(user_id):
                     "orgName": row[2],
                     "mustChangePassword": bool(row[3]),
                     "emailVerified": bool(row[4]),
+                    "isGithubProvisioned": bool(row[5]),
                 }), 200
     except Exception:
         logging.exception("Error in /me")

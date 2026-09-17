@@ -67,10 +67,17 @@ export function ProfileSettings() {
     return <div className="text-muted-foreground">Not signed in</div>
   }
 
+  const isGithub = user.isGithubProvisioned
+
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
     setSuccess("")
+
+    if (!isGithub && !currentPassword) {
+      setError("Current password is required")
+      return
+    }
 
     if (newPassword !== confirmPassword) {
       setError("New passwords do not match")
@@ -85,15 +92,14 @@ export function ProfileSettings() {
     setIsLoading(true)
 
     try {
+      const body: Record<string, string> = { newPassword }
+      if (currentPassword) body.currentPassword = currentPassword
       const response = await fetch('/api/auth/change-password', {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          currentPassword,
-          newPassword,
-        }),
+        body: JSON.stringify(body),
       })
 
       if (!response.ok) {
@@ -201,25 +207,27 @@ export function ProfileSettings() {
 
       {/* Password Change Section */}
       <div className="border-t pt-6">
-        <h3 className="text-lg font-semibold mb-4">Change Password</h3>
+        <h3 className="text-lg font-semibold mb-4">{isGithub ? "Set Password" : "Change Password"}</h3>
 
         {!isChangingPassword ? (
           <Button onClick={() => setIsChangingPassword(true)} variant="outline">
-            Change Password
+            {isGithub ? "Set Password" : "Change Password"}
           </Button>
         ) : (
           <form onSubmit={handlePasswordChange} className="space-y-4">
-            <div>
-              <Label htmlFor="current-password">Current Password</Label>
-              <Input
-                id="current-password"
-                type="password"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                required
-                disabled={isLoading}
-              />
-            </div>
+            {!isGithub && (
+              <div>
+                <Label htmlFor="current-password">Current Password</Label>
+                <Input
+                  id="current-password"
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  required
+                  disabled={isLoading}
+                />
+              </div>
+            )}
 
             <div>
               <Label htmlFor="new-password">New Password</Label>

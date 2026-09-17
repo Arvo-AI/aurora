@@ -108,8 +108,7 @@ function AuthPage() {
         url.searchParams.delete("handoff")
         globalThis.history.replaceState(null, "", url.toString())
         if (result?.ok) {
-          router.push("/connectors?installed=github")
-          router.refresh()
+          globalThis.location.href = "/connectors?installed=github"
         } else {
           setHandoffInFlight(false)
           setError("This sign-in link has expired. Please sign in below.")
