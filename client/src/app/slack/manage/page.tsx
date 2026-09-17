@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -102,6 +102,31 @@ export default function SlackManagePage() {
     } finally {
       setIsLoadingChannels(false);
     }
+  }, []);
+
+  // Description generation runs async on the worker, so poll the channel list
+  // until nothing is still 'generating'/'pending' (capped so we never poll
+  // forever). Cleared on unmount.
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (pollTimerRef.current) clearTimeout(pollTimerRef.current); }, []);
+
+  const pollChannelsUntilSettled = useCallback((attempt = 0) => {
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    // ~30s ceiling (15 tries × 2s) — generation is normally a few seconds.
+    if (attempt >= 15) return;
+    pollTimerRef.current = setTimeout(async () => {
+      try {
+        const data = await slackService.getChannels();
+        setConnectedChannels(data.connected);
+        setDismissedChannels(data.dismissed);
+        const stillWorking = data.connected.some(
+          (c) => c.metadata_status === "generating" || c.metadata_status === "pending",
+        );
+        if (stillWorking) pollChannelsUntilSettled(attempt + 1);
+      } catch (error) {
+        console.error("Error polling Slack channels:", error);
+      }
+    }, 2000);
   }, []);
 
   const loadStatus = useCallback(async () => {
@@ -235,6 +260,8 @@ export default function SlackManagePage() {
       setConnectedChannels((prev) =>
         prev.map((c) => (c.channel_id === channelId ? { ...c, metadata_status: "generating" } : c)),
       );
+      // Poll until the worker finishes so the spinner clears without a manual refresh.
+      pollChannelsUntilSettled();
     } catch {
       toast({ title: "Error", description: "Failed to regenerate description", variant: "destructive" });
     }
@@ -247,6 +274,8 @@ export default function SlackManagePage() {
     try {
       const { described } = await slackService.refreshChannels();
       await loadChannels();
+      // New channels get descriptions generated async — poll so they settle.
+      if (described > 0) pollChannelsUntilSettled();
       toast({
         title: "Channels refreshed",
         description: described > 0
