@@ -492,8 +492,8 @@ def send_slack_investigation_completed_notification(
                     try:
                         client.send_message(channel=extra_channel, text=card_text, blocks=blocks)
                     except Exception:
-                        logger.warning("[SlackNotification] Failed to post to routed channel %s",
-                                       extra_channel, exc_info=True)
+                        logger.warning("[SlackNotification] Failed to post to a routed channel",
+                                       exc_info=True)
         except Exception:
             logger.warning("[SlackNotification] extra-channel routing failed (non-fatal)", exc_info=True)
 
