@@ -31,7 +31,9 @@ skill only covers *when* to use each and Slack-specific behaviour.
 - **`get_connected_slack_channels`** is the routing-decision source: the channels
   Aurora is aware of, each with a description of what it's for and which
   team/service it serves. Use it to pick which channel(s) are relevant when
-  posting about an incident or notifying a team.
+  posting about an incident or notifying a team — and combine it with the
+  `Slack` behaviour memory (below), which holds the team/channel routing
+  *preferences* the descriptions alone don't capture.
 - **`list_slack_channels`** is a live, description-less listing of channels the
   bot can access — use it for discovery (scan names/topics for a service or
   "incident"/"oncall"/"alerts"), not routing.

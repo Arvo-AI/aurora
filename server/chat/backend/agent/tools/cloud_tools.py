@@ -1795,7 +1795,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "List the Slack channels Aurora is aware of, each with a description "
                     "of what it's for and which team/service it serves. Call this to decide "
                     "which channel(s) are relevant when posting about an incident or "
-                    "notifying a team."
+                    "notifying a team. Combine it with the 'Slack' memory (context/Slack), "
+                    "which holds team/channel routing preferences (e.g. 'post conclusions "
+                    "to #payments-oncall', 'stay quiet in #general')."
                 ),
                 args_schema=GetConnectedSlackChannelsArgs,
             )
