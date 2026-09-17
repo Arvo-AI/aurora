@@ -140,6 +140,22 @@ def get_user_id_from_slack_team(team_id: str) -> Optional[str]:
         return None
 
 
+def get_bot_user_id_for_team(team_id: str, aurora_user_id: str) -> Optional[str]:
+    """Return Aurora's own Slack bot user id for a workspace, if we stored it.
+
+    Used to recognise Aurora's own joins in member_joined_channel events. Older
+    installs (connected before we stored it) return None; callers should degrade
+    gracefully (e.g. verify membership via conversations.info instead).
+    """
+    try:
+        from utils.secrets.secret_ref_utils import get_user_token_data
+        token_data = get_user_token_data(aurora_user_id, "slack") or {}
+        return token_data.get("bot_user_id")
+    except Exception:
+        logger.debug("Could not fetch bot_user_id for team %s", sanitize(team_id))
+        return None
+
+
 def get_user_id_from_slack_user(slack_user_id: str, team_id: str) -> Optional[str]:
     """
     Find Aurora user_id from Slack user_id.

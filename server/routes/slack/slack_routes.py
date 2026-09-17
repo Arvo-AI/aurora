@@ -165,6 +165,10 @@ def slack_callback():
                 "team_name": team_name,
                 "team_id": team_info.get('id'),
                 "user_id": authed_user.get('id'),
+                # Bot's own Slack user id — used to recognise Aurora's own joins in
+                # member_joined_channel events (so we auto-register channels Aurora
+                # is invited to, e.g. incident.io-created ones).
+                "bot_user_id": token_data.get('bot_user_id'),
                 "connected_at": int(time.time()),
                 "incidents_channel_id": channel_result.get('channel_id'),
                 "incidents_channel_name": channel_result.get('channel_name'),
