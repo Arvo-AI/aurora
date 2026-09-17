@@ -493,7 +493,7 @@ export default function SlackManagePage() {
                       Aurora is aware of ({connectedChannels.length})
                     </h4>
                     {connectedChannels.map((c) => (
-                      <div key={c.channel_id} className="p-3 border rounded-lg">
+                      <div key={c.channel_id} className="p-2 rounded-md border border-border space-y-1">
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
                             <span className="text-sm font-semibold truncate">#{c.channel_name || c.channel_id}</span>
@@ -540,9 +540,31 @@ export default function SlackManagePage() {
                           </div>
                         </div>
 
+                        {/* Description shows inline like the GitHub repos list —
+                            clamped to 2 lines so long, multi-line summaries don't
+                            blow up the row. Editing (below) reveals the full text. */}
+                        {editingChannelId !== c.channel_id && (
+                          <div className="text-xs">
+                            {c.metadata_status === "generating" || c.metadata_status === "pending" ? (
+                              <span className="flex items-center gap-1.5 text-muted-foreground">
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                Generating description…
+                              </span>
+                            ) : c.metadata_status === "error" ? (
+                              <span className="text-red-400">Couldn&apos;t generate a description — edit to add one.</span>
+                            ) : c.metadata_summary ? (
+                              <p className="text-muted-foreground line-clamp-2">
+                                {c.metadata_summary.replace(/\*\*/g, "")}
+                              </p>
+                            ) : (
+                              <span className="text-muted-foreground/70 italic">No description yet.</span>
+                            )}
+                          </div>
+                        )}
+
                         {/* Full description only shows while editing — keeps rows lean. */}
                         {editingChannelId === c.channel_id && (
-                          <div className="space-y-2 mt-2">
+                          <div className="space-y-2">
                             <textarea
                               value={editingDraft}
                               onChange={(e) => setEditingDraft(e.target.value)}
