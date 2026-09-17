@@ -273,9 +273,6 @@ config:
   RECURRENCE_AGENT_TIMEOUT_SECONDS: "120"
   # Model for the recurrence agent. Empty = falls back to MAIN_MODEL.
   RECURRENCE_AGENT_MODEL: ""
-  # Cheap model for lightweight, high-volume metadata generation (e.g. Slack
-  # channel descriptions). Empty = defaults to anthropic/claude-haiku-4.5.
-  CHEAP_MODEL: ""
 
   # --- AWS Bedrock (non-secret config; credentials live in secrets.llm) ---
   # Gateway mode: set BEDROCK_BASE_URL to an OpenAI-compatible endpoint in front of

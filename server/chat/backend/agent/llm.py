@@ -70,11 +70,6 @@ class ModelConfig:
     # Root-cause recurrence detection agent — falls back to MAIN_MODEL
     RECURRENCE_AGENT_MODEL = os.getenv("RECURRENCE_AGENT_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
-    # Cheap model for lightweight, high-volume metadata generation (e.g. Slack
-    # channel descriptions). Defaults to Haiku so bulk description generation
-    # never runs on an expensive model. Configurable via CHEAP_MODEL.
-    CHEAP_MODEL = os.getenv("CHEAP_MODEL") or "anthropic/claude-haiku-4.5"
-
 
 class LLMManager:
     def __init__(

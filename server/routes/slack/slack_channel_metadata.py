@@ -131,7 +131,7 @@ def generate_channel_metadata(self, user_id: str, channel_id: str):
         from langchain_core.messages import HumanMessage
 
         llm = create_chat_model(
-            ModelConfig.CHEAP_MODEL,
+            ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
             temperature=0.2,
             streaming=False,
         )
@@ -140,7 +140,7 @@ def generate_channel_metadata(self, user_id: str, channel_id: str):
             llm,
             [HumanMessage(content=prompt)],
             user_id=user_id,
-            model_name=ModelConfig.CHEAP_MODEL,
+            model_name=ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
             request_type="slack_channel_metadata",
         )
         summary = extract_text_from_content(response.content).strip() or "No description generated"
