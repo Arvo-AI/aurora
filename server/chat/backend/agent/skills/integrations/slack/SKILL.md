@@ -24,23 +24,19 @@ metadata:
 ## Overview
 Read-only tools for searching Slack conversations. Used during postmortem generation to gather human context (deployment decisions, communication gaps, resolution steps) and during interactive chat for incident investigation.
 
-## Tools
+The tool signatures and parameters are provided to you in the tool schema — this
+skill only covers *when* to use each and Slack-specific behaviour.
 
-### `list_slack_channels()`
-Returns all channels the bot can access: id, name, topic, purpose, member count. Use channel names and topics to identify relevant channels for the incident (look for service names, "incident", "oncall", "alerts").
-
-### `get_channel_history(channel_id, oldest?, latest?, limit?)`
-Fetch messages from a channel. Scope with `oldest`/`latest` (ISO 8601) to the incident time window. Returns message text, timestamps, user IDs, and thread metadata (reply_count, thread_ts).
-
-### `get_thread_replies(channel_id, thread_ts, limit?)`
-Fetch replies in a thread. Use when a message has `reply_count > 0` and looks relevant.
-
-### `get_connected_slack_channels()`
-Return the channels Aurora is aware of, each with a description of what it's for
-and which team/service it serves (plus `channel_type` and `detected_platform`).
-Call this to decide which channel(s) are relevant when posting about an incident
-or notifying a team — it's the routing-decision source. Distinct from
-`list_slack_channels`, which is a live, description-less membership listing.
+## Choosing a tool
+- **`get_connected_slack_channels`** is the routing-decision source: the channels
+  Aurora is aware of, each with a description of what it's for and which
+  team/service it serves. Use it to pick which channel(s) are relevant when
+  posting about an incident or notifying a team.
+- **`list_slack_channels`** is a live, description-less listing of channels the
+  bot can access — use it for discovery (scan names/topics for a service or
+  "incident"/"oncall"/"alerts"), not routing.
+- **`get_channel_history` / `get_thread_replies`** read messages; scope history
+  to the incident time window and follow into a thread when `reply_count > 0`.
 
 ## Strategy for Incident Investigation
 
