@@ -77,16 +77,31 @@ def _build_context(client, channel_id: str) -> tuple[str, str, dict]:
         result = client._make_request(
             "GET", "conversations.history", {"channel": channel_id, "limit": 15}
         )
+        raw_messages = result.get("messages", [])
         texts = [
             (m.get("text") or "").strip()
             for m in result.get("messages", [])
             if (m.get("text") or "").strip()
         ]
+        logger.info(
+            "[SlackChannelMeta] history for #%s (%s): api_ok=%s returned=%d with_text=%d",
+            sanitize(name), sanitize(channel_id), result.get("ok"),
+            len(raw_messages), len(texts),
+        )
         if texts:
             sample = "\n".join(f"- {t[:200]}" for t in texts[:15])
             parts.append(f"Recent messages:\n{sample}")
-    except Exception:
-        logger.debug("No history available for channel %s", sanitize(channel_id))
+        else:
+            # No usable text — often the bot isn't a member of the channel.
+            logger.info(
+                "[SlackChannelMeta] no message text for #%s (%s) — bot may not be a member",
+                sanitize(name), sanitize(channel_id),
+            )
+    except Exception as e:
+        logger.warning(
+            "[SlackChannelMeta] history fetch failed for #%s (%s): %s",
+            sanitize(name), sanitize(channel_id), sanitize(e),
+        )
 
     return "\n".join(parts), name, info
 
@@ -120,6 +135,11 @@ def generate_channel_metadata(self, user_id: str, channel_id: str):
             return
 
         context_text, channel_name, info = _build_context(client, channel_id)
+        logger.info(
+            "[SlackChannelMeta] context for #%s (%s): %d chars, includes_recent_messages=%s",
+            sanitize(channel_name), sanitize(channel_id),
+            len(context_text), "Recent messages:" in context_text,
+        )
 
         # Re-classify with the fuller info dict (topic/purpose now available).
         from routes.slack.slack_channels import _classify_channel
