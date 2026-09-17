@@ -1,21 +1,7 @@
-"""
-Slack memory seeding.
-
-Aurora keeps all Slack behavioural context (tone, when to speak, which teams
-to notify, per-channel preferences) in a single, ordinary user-writable memory
-entry titled "Slack" in the ``context`` category. Because it's a normal memory
-entry it is automatically:
-
-- injected into the agent's system prompt by ``services.memory.injector`` when
-  relevant (e.g. any Slack-related message),
-- visible and editable by humans in the Memory settings UI,
-- editable by the agent via the standard ``edit_memory`` / ``append_to_memory``
-  tools (so it can learn team preferences over time — e.g. "be quiet in this
-  channel").
-
-This module only *seeds* the entry on Slack connect so Aurora starts with a
-sensible default teammate policy. It never overwrites an existing entry, so any
-edits made by users or the agent survive reconnects.
+"""Seed the default "Slack" memory entry (category ``context``, title ``Slack``)
+on connect. It's an ordinary memory entry, so it's auto-injected, UI-editable,
+and agent-editable thereafter — this only creates the starting policy, never
+overwriting an existing one.
 """
 
 import logging
@@ -26,8 +12,7 @@ from services.artifacts.store import create_version
 
 logger = logging.getLogger(__name__)
 
-# Well-known identity of the Slack memory entry. Kept in one place so the
-# injector, seeding, and any agent guidance all reference the same title.
+# Well-known identity of the Slack memory entry — referenced by seeding + injector.
 SLACK_MEMORY_CATEGORY = "context"
 SLACK_MEMORY_TITLE = "Slack"
 SLACK_MEMORY_DESCRIPTION = (
@@ -35,9 +20,7 @@ SLACK_MEMORY_DESCRIPTION = (
     "notify. Aurora reads and updates this whenever Slack is involved."
 )
 
-# Default teammate policy. Deliberately concise-professional and conservative:
-# post conclusions, otherwise stay quiet. Both users and the agent are expected
-# to refine this over time; it is only the starting point.
+# Default teammate policy — a conservative starting point users/agent refine over time.
 SLACK_MEMORY_DEFAULT_CONTENT = """\
 This is Aurora's operating policy for Slack. Aurora acts like a teammate here, \
 not a notification bot. Update this entry as the team states preferences.
@@ -69,12 +52,8 @@ relevant to a given incident, service, or team.
 
 
 def seed_slack_memory(user_id: str) -> bool:
-    """Create the default "Slack" memory entry for the user's org if absent.
-
-    Idempotent and non-destructive: if an entry already exists (seeded before,
-    or edited by a human/agent) it is left untouched so preferences are never
-    clobbered on reconnect. Returns True if a new entry was created.
-    """
+    """Create the default "Slack" memory for the user's org if absent (idempotent,
+    non-destructive). Returns True if a new entry was created."""
     if not user_id:
         return False
 
