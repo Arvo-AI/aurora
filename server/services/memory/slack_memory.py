@@ -8,6 +8,7 @@ import logging
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 from services.artifacts.store import create_version
+from services.memory.queries import get_memory_content
 
 logger = logging.getLogger(__name__)
 
@@ -53,27 +54,13 @@ relevant to a given incident, service, or team.
 def read_slack_memory(user_id: str) -> str:
     """Return the org's current "Slack" memory content, or "" if none/error.
 
-    Used by routing (and any non-agent path) that needs the team's Slack policy
-    without going through the LLM memory selector.
+    Thin wrapper over the shared ``get_memory_content`` helper, pinned to the
+    Slack entry's (category, title) and normalising its ``None`` to "" for the
+    routing / non-agent callers that expect a string.
     """
     if not user_id:
         return ""
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                org_id = set_rls_context(cursor, conn, user_id, log_prefix="[SlackMemory:read]")
-                if not org_id:
-                    return ""
-                cursor.execute(
-                    """SELECT content FROM artifacts
-                       WHERE org_id = %s AND category = %s AND title = %s""",
-                    (org_id, SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE),
-                )
-                row = cursor.fetchone()
-                return (row[0] or "") if row else ""
-    except Exception:
-        logger.exception("[SlackMemory] Failed to read Slack memory")
-        return ""
+    return get_memory_content(user_id, SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE) or ""
 
 
 def seed_slack_memory(user_id: str) -> bool:
