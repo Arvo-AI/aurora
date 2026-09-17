@@ -203,11 +203,13 @@ def test_register_single_channel_registers_and_describes_new():
     assert enqueued == ["C1"]
 
 
-def test_register_single_channel_skips_dismissed():
+def test_register_single_channel_restores_dismissed_on_reinvite():
+    """A re-invite is the latest signal: restore (un-dismiss) and re-describe,
+    even though no new row is created (returns False)."""
     from unittest.mock import MagicMock
     client = MagicMock()
     client.get_channel_info.return_value = {"id": "C1", "name": "inc-payments", "is_member": True}
-    dbcm, _cur = _single_reg_db(("owner", True))  # existing + dismissed
+    dbcm, cur = _single_reg_db(("owner", True))  # existing + dismissed
     enqueued = []
     with patch.object(mod, "get_slack_client_for_user", return_value=client), \
          patch.object(mod, "resolve_org", return_value="org"), \
@@ -215,9 +217,12 @@ def test_register_single_channel_skips_dismissed():
          patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
          patch.object(mod, "_upsert_channel", return_value=("C1", False)) as up, \
          patch.object(mod, "_enqueue_metadata", side_effect=lambda u, c: enqueued.append(c)):
+        # No new row created → return False, but it's restored + re-described.
         assert mod.register_single_channel("u1", "C1", team_id="T1") is False
-    up.assert_not_called()
-    assert enqueued == []
+    up.assert_called_once()
+    # An UPDATE that clears is_dismissed must have run.
+    assert any("is_dismissed = FALSE" in call.args[0] for call in cur.execute.call_args_list)
+    assert enqueued == ["C1"]
 
 
 # --- list_all_channels pagination ------------------------------------------

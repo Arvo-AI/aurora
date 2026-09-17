@@ -263,9 +263,9 @@ def register_single_channel(user_id: str, channel_id: str,
     Lightweight counterpart to auto_register_channels for the
     ``member_joined_channel`` event (e.g. Aurora invited to an incident.io
     channel). Fetches just that channel's info, upserts it, and enqueues a
-    description. Idempotent and dismissed-aware: a channel the user previously
-    dismissed is left dismissed (not resurrected). Returns True if a new row was
-    created.
+    description. Idempotent. A re-invite is treated as the latest signal: a
+    channel the user previously dismissed is restored (un-dismissed) and
+    re-described. Returns True if a new row was created.
     """
     if not channel_id:
         return False
@@ -292,11 +292,17 @@ def register_single_channel(user_id: str, channel_id: str,
                     (channel_id,),
                 )
                 row = cur.fetchone()
-                # Previously dismissed — respect that, don't resurrect on re-invite.
-                if row and row[1]:
-                    logger.info("[slack_channels] joined channel %s is dismissed; skipping",
+                # A re-invite is the latest signal — un-dismiss so the channel
+                # comes back (we always go by the most recent event, not history).
+                was_dismissed = bool(row and row[1])
+                if was_dismissed:
+                    cur.execute(
+                        """UPDATE slack_channels SET is_dismissed = FALSE, updated_at = NOW()
+                           WHERE provider = 'slack' AND channel_id = %s""",
+                        (channel_id,),
+                    )
+                    logger.info("[slack_channels] re-invited to dismissed channel %s; restoring",
                                 sanitize(channel_id))
-                    return False
                 existing = {channel_id: row[0]} if row else {}
                 _cid, is_new = _upsert_channel(cur, user_id, org_id, ch, existing,
                                                initial_status="pending")
@@ -305,9 +311,10 @@ def register_single_channel(user_id: str, channel_id: str,
         logger.warning("[slack_channels] single-register: DB upsert failed", exc_info=True)
         return False
 
-    # Describe every newly-joined channel — a channel Aurora was explicitly
-    # invited to is relevant by definition, so it's worth the cheap LLM call.
-    if is_new and _cid:
+    # Describe newly-joined AND freshly-restored channels — a channel Aurora was
+    # explicitly (re-)invited to is relevant by definition, so it's worth the
+    # cheap LLM call. Restored rows aren't "new" but should refresh their blurb.
+    if (is_new or was_dismissed) and _cid:
         _enqueue_metadata(user_id, channel_id)
         logger.info("[slack_channels] registered joined channel %s", sanitize(channel_id))
     return bool(is_new)
