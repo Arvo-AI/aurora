@@ -84,6 +84,16 @@ export const slackService = {
     };
   },
 
+  // Fold the team's onboarding answers into the "Slack" memory (seeds Aurora's
+  // starting policy). Free-form string map so questions can evolve server-side.
+  async submitOnboarding(answers: Record<string, string>): Promise<void> {
+    await apiRequest(`${API_BASE}/onboarding`, {
+      method: 'POST',
+      body: JSON.stringify({ answers }),
+      cache: 'no-store',
+    });
+  },
+
   // Dismiss = hide from routing/UI; does NOT leave the Slack channel.
   async dismissChannel(channelId: string): Promise<void> {
     await apiRequest(`${CHANNELS_BASE}/${channelId}/dismiss`, {

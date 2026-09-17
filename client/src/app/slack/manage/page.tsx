@@ -92,6 +92,18 @@ export default function SlackManagePage() {
   const [editingDraft, setEditingDraft] = useState("");
   const [showDismissed, setShowDismissed] = useState(false);
 
+  // One-time onboarding questionnaire that seeds the "Slack" memory with the
+  // team's preferences. Free-form strings — all optional; blanks are ignored.
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboarding, setOnboarding] = useState<Record<string, string>>({
+    tone: "",
+    verbosity: "",
+    quiet_channels: "",
+    priority_channels: "",
+    routing_notes: "",
+  });
+  const [isSavingOnboarding, setIsSavingOnboarding] = useState(false);
+
   const loadChannels = useCallback(async () => {
     try {
       const data = await slackService.getChannels();
@@ -289,6 +301,24 @@ export default function SlackManagePage() {
     }
   };
 
+  // Fold the questionnaire answers into the "Slack" memory, then collapse the
+  // card. Editable later via the memory UI, so this is a starting point only.
+  const handleSaveOnboarding = async () => {
+    setIsSavingOnboarding(true);
+    try {
+      await slackService.submitOnboarding(onboarding);
+      setShowOnboarding(false);
+      toast({
+        title: "Preferences saved",
+        description: "Aurora will use these as its starting point. Edit anytime in the Slack memory.",
+      });
+    } catch {
+      toast({ title: "Error", description: "Failed to save preferences", variant: "destructive" });
+    } finally {
+      setIsSavingOnboarding(false);
+    }
+  };
+
   const persistPreference = async (key: PreferenceKey, enabled: boolean): Promise<boolean> => {
     const response = await fetch("/api/proxy/user-preferences", {
       method: "POST",
@@ -468,6 +498,52 @@ export default function SlackManagePage() {
               );
             })}
           </CardContent>
+        </Card>
+
+        {/* Onboarding questionnaire — seeds the Slack memory with team prefs.
+            Collapsed by default; a starting point, editable later in the memory UI. */}
+        <Card className="mb-6">
+          <CardHeader
+            className="cursor-pointer select-none"
+            onClick={() => setShowOnboarding((v) => !v)}
+          >
+            <CardTitle className="text-lg flex items-center gap-2">
+              {showOnboarding ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              Tell Aurora how your team works
+            </CardTitle>
+            <CardDescription>
+              Optional — a few preferences to start on the right foot. Editable anytime in the Slack memory.
+            </CardDescription>
+          </CardHeader>
+          {showOnboarding && (
+            <CardContent className="space-y-4">
+              {([
+                { key: "tone", label: "Preferred tone", placeholder: "e.g. concise and professional" },
+                { key: "verbosity", label: "How chatty should Aurora be?", placeholder: "e.g. only speak when it has a conclusion" },
+                { key: "quiet_channels", label: "Channels to stay quiet in", placeholder: "e.g. #general, #random" },
+                { key: "priority_channels", label: "Channels to post conclusions to", placeholder: "e.g. #incidents, #oncall" },
+                { key: "routing_notes", label: "Anything else about routing / who to notify?", placeholder: "e.g. page the platform team for infra alerts" },
+              ] as const).map((q) => (
+                <div key={q.key} className="space-y-1">
+                  <label className="text-sm font-medium">{q.label}</label>
+                  <input
+                    type="text"
+                    value={onboarding[q.key]}
+                    onChange={(e) => setOnboarding((prev) => ({ ...prev, [q.key]: e.target.value }))}
+                    placeholder={q.placeholder}
+                    disabled={!canWrite}
+                    className="w-full text-sm rounded-md border bg-background p-2"
+                  />
+                </div>
+              ))}
+              <div className="flex justify-end">
+                <Button size="sm" onClick={handleSaveOnboarding} disabled={isSavingOnboarding || !canWrite}>
+                  {isSavingOnboarding && <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />}
+                  Save preferences
+                </Button>
+              </div>
+            </CardContent>
+          )}
         </Card>
 
         {/* Channel Awareness */}

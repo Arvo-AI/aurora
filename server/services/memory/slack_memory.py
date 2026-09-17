@@ -143,3 +143,90 @@ def seed_slack_memory(user_id: str) -> bool:
     except Exception:
         logger.exception("[SlackMemory] Failed to seed Slack memory")
         return False
+
+
+# Marker for the onboarding-written section, so re-submitting replaces it rather
+# than stacking duplicates. Kept stable — changing it would orphan old sections.
+ONBOARDING_MARKER = "## Team preferences (from onboarding)"
+
+# Human labels for known questionnaire keys; unknown keys de-slugify their name,
+# so the questionnaire can add fields without touching this map.
+_ONBOARDING_LABELS = {
+    "tone": "Preferred tone",
+    "verbosity": "Verbosity",
+    "quiet_channels": "Stay quiet in",
+    "priority_channels": "Post conclusions to",
+    "routing_notes": "Routing notes",
+}
+
+
+def apply_onboarding_to_slack_memory(user_id: str, answers: dict) -> bool:
+    """Fold short onboarding answers into the org's "Slack" memory.
+
+    Appends (or replaces, keyed on ONBOARDING_MARKER) a "Team preferences" section
+    so a team starts on the right foot instead of Aurora learning by trial. The
+    default policy and any prior edits above the marker are preserved. Only
+    non-empty string answers are written (one bullet each). Returns True on
+    success. Seeds the default memory first if onboarding runs before connect did.
+    """
+    if not user_id or not isinstance(answers, dict):
+        return False
+
+    lines = []
+    for key, value in answers.items():
+        text = value.strip() if isinstance(value, str) else ""
+        if not text:
+            continue
+        label = _ONBOARDING_LABELS.get(key) or key.replace("_", " ").capitalize()
+        lines.append(f"- {label}: {text}")
+    # Nothing filled in — treat as a no-op rather than writing an empty section.
+    if not lines:
+        return False
+
+    section = ONBOARDING_MARKER + "\n" + "\n".join(lines)
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                org_id = set_rls_context(cursor, conn, user_id, log_prefix="[SlackMemory:onboard]")
+                if not org_id:
+                    return False
+
+                def _fetch():
+                    cursor.execute(
+                        """SELECT id, content FROM artifacts
+                           WHERE org_id = %s AND category = %s AND title = %s""",
+                        (org_id, SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE),
+                    )
+                    return cursor.fetchone()
+
+                row = _fetch()
+                # Onboarding ran before the default was seeded — seed then re-read.
+                if not row:
+                    seed_slack_memory(user_id)
+                    row = _fetch()
+                    if not row:
+                        return False
+
+                artifact_id, content = str(row[0]), (row[1] or "")
+
+                # Replace an existing onboarding section, else append a new one.
+                if ONBOARDING_MARKER in content:
+                    head = content.split(ONBOARDING_MARKER)[0].rstrip()
+                    new_content = f"{head}\n\n{section}\n"
+                else:
+                    new_content = f"{content.rstrip()}\n\n{section}\n"
+
+                cursor.execute(
+                    """UPDATE artifacts
+                       SET content = %s, last_edited_by = 'user', updated_at = CURRENT_TIMESTAMP
+                       WHERE id = %s""",
+                    (new_content, artifact_id),
+                )
+                create_version(cursor, artifact_id, org_id, user_id, new_content, source="manual")
+                conn.commit()
+                logger.info("[SlackMemory] Applied onboarding preferences for org %s", org_id)
+                return True
+    except Exception:
+        logger.exception("[SlackMemory] Failed to apply onboarding preferences")
+        return False

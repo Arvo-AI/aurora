@@ -211,3 +211,27 @@ def slack_callback():
         logging.error("Error during Slack callback", exc_info=True)
         return redirect(f"{FRONTEND_URL}?slack_auth=failed&error=unexpected_error")
 
+
+@slack_bp.route("/onboarding", methods=["POST"])
+@require_permission("connectors", "write")
+def slack_onboarding(user_id):
+    """POST /slack/onboarding - Fold short onboarding answers into the Slack memory.
+
+    Lets a team state its Slack preferences (tone, quiet/priority channels,
+    routing notes) up front so Aurora starts on the right foot. Re-submitting
+    replaces the onboarding section, never stacks duplicates.
+    """
+    try:
+        answers = (request.get_json(silent=True) or {}).get("answers")
+        if not isinstance(answers, dict):
+            return jsonify({"error": "answers must be an object"}), 400
+
+        from services.memory.slack_memory import apply_onboarding_to_slack_memory
+        ok = apply_onboarding_to_slack_memory(user_id, answers)
+        if not ok:
+            return jsonify({"error": "No preferences to save"}), 400
+        return jsonify({"message": "Preferences saved"})
+    except Exception:
+        logging.exception("Error applying Slack onboarding preferences")
+        return jsonify({"error": "Failed to save preferences"}), 500
+
