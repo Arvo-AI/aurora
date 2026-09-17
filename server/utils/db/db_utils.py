@@ -3399,6 +3399,29 @@ def initialize_tables():
                 cursor.execute("""
                     ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE;
                     ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);
+                """)
+                # Self-healing: older DBs shipped a NON-unique idx_artifacts_incident_id.
+                # `CREATE UNIQUE INDEX IF NOT EXISTS` silently no-ops when a same-named
+                # index already exists, so the postmortem upserts' `ON CONFLICT (incident_id)`
+                # never finds its target. Detect that case and rebuild the index as unique.
+                cursor.execute("""
+                    DO $$
+                    DECLARE
+                        is_unique boolean;
+                    BEGIN
+                        SELECT indisunique INTO is_unique
+                        FROM pg_index
+                        WHERE indexrelid = 'idx_artifacts_incident_id'::regclass;
+
+                        -- Existing index is not unique — drop so we can recreate it correctly
+                        IF is_unique IS NOT NULL AND is_unique = false THEN
+                            DROP INDEX idx_artifacts_incident_id;
+                        END IF;
+                    EXCEPTION
+                        -- Index doesn't exist yet — nothing to drop
+                        WHEN undefined_table THEN NULL;
+                    END $$;
+
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_incident_id ON artifacts(incident_id) WHERE incident_id IS NOT NULL;
                 """)
                 # Drop FK constraint on postmortem_exports so it can reference artifact IDs
