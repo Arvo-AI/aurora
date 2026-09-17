@@ -1368,10 +1368,17 @@ def _apply_azure_subscription(command: str, subscription_id: str) -> str:
     """Pin an `az` command to one subscription.
 
     `az graph query` takes --subscriptions (plural) and is scoped by the caller,
-    so it is left alone.
+    so it is left alone. `az account` commands operate at the tenant/management
+    plane (e.g. `az account list` enumerates every subscription) and reject
+    `--subscription` with "unrecognized arguments", so they are left alone too.
     """
     cmd = command if command.startswith("az ") else f"az {command}"
-    if "--subscription" in cmd or cmd.startswith("az graph"):
+    # Already pinned by the caller, or a command that doesn't take --subscription.
+    if (
+        "--subscription" in cmd
+        or cmd.startswith("az graph")
+        or cmd.startswith("az account")
+    ):
         return cmd
     return f"{cmd} --subscription {shlex.quote(subscription_id)}"
 
@@ -1387,9 +1394,18 @@ def _cloud_exec_azure_multi_subscription(
 ) -> str:
     """Execute an Azure CLI command across all connected subscriptions and merge results.
 
-    Mirrors _cloud_exec_aws_multi_account. Each subscription gets its own
-    AZURE_CONFIG_DIR (az login writes auth state to disk, so a shared dir would
-    race across threads). Results are keyed by subscription id.
+    Every connected subscription belongs to the same service principal (same
+    client_id/client_secret/tenant), so one `az login` authenticates all of them
+    and the CLI can then be scoped per command with `--subscription`. We therefore
+    authenticate ONCE into a single shared AZURE_CONFIG_DIR and fan the (read-only,
+    subscription-pinned) commands out across it, instead of paying a full
+    `az login` subprocess plus a private temp dir per subscription. That turns the
+    cost from 2N subprocesses / N temp dirs into N+1 subprocesses / 1 temp dir.
+
+    Sharing the config dir across threads is only safe because login happens up
+    front and the fanned-out commands never write auth state — each carries its own
+    `--subscription` flag rather than mutating the CLI's active-subscription setting.
+    Results are keyed by subscription id.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import shutil as _shutil
@@ -1406,69 +1422,87 @@ def _cloud_exec_azure_multi_subscription(
             "provider": "azure",
         })
 
-    def _run_on_subscription(conn: dict) -> dict:
-        sub_id = conn.get("account_id", "unknown")
-        config_dir = None
-        try:
-            success, _sub, _auth, isolated_env, auth_argv = setup_azure_environment_isolated(user_id, sub_id)
-            if not success:
-                return {"subscription_id": sub_id, "success": False, "error": "Failed to authenticate"}
-            config_dir = isolated_env.get("AZURE_CONFIG_DIR")
+    # Authenticate ONCE for the whole fan-out. subscription_id is left unset: the
+    # SP login is tenant-scoped, so the shared session can reach every subscription;
+    # each command below pins its own scope with --subscription.
+    setup_ok, _sub, _auth, isolated_env, auth_argv = setup_azure_environment_isolated(user_id, None)
+    if not setup_ok:
+        return json.dumps({
+            "success": False,
+            "error": "Failed to authenticate with Azure",
+            "multi_subscription": True,
+            "command": command,
+            "provider": "azure",
+        })
+    config_dir = isolated_env.get("AZURE_CONFIG_DIR")
 
-            cmd = _apply_azure_subscription(command.strip(), sub_id)
-            # Auth and command run as separate argv invocations, never through a
-            # shell: the secret would otherwise be exposed to shell metacharacter
-            # parsing. auth_argv is already a list, so the secret is never re-lexed.
+    try:
+        # Auth and command run as separate argv invocations, never through a shell:
+        # the secret would otherwise be exposed to shell metacharacter parsing.
+        # auth_argv is already a list, so the secret is never re-lexed.
+        auth_result = terminal_run(
+            auth_argv,
+            capture_output=True, text=True, timeout=30,
+            env=isolated_env, trusted=True,
+        )
+        if auth_result.returncode != 0:
+            return json.dumps({
+                "success": False,
+                "error": "Azure authentication failed",
+                "multi_subscription": True,
+                "command": command,
+                "provider": "azure",
+            })
+
+        def _run_on_subscription(conn: dict) -> dict:
+            sub_id = conn.get("account_id", "unknown")
             try:
-                cmd_args = shlex.split(cmd)
-            except ValueError as e:
-                return {"subscription_id": sub_id, "success": False,
-                        "error": f"Command parsing failed: {e}"}
+                cmd = _apply_azure_subscription(command.strip(), sub_id)
+                try:
+                    cmd_args = shlex.split(cmd)
+                except ValueError as e:
+                    return {"subscription_id": sub_id, "success": False,
+                            "error": f"Command parsing failed: {e}"}
 
-            auth_result = terminal_run(
-                auth_argv,
-                capture_output=True, text=True, timeout=30,
-                env=isolated_env, trusted=True,
-            )
-            if auth_result.returncode != 0:
-                return {"subscription_id": sub_id, "success": False,
-                        "error": "Azure authentication failed"}
+                # Reuse the shared, already-authenticated config dir. The command is
+                # pinned to sub_id, so concurrent workers never contend on the CLI's
+                # active-subscription state.
+                result = terminal_run(
+                    cmd_args,
+                    capture_output=True, text=True,
+                    timeout=get_command_timeout(cmd, timeout), env=isolated_env,
+                )
+                return {
+                    "subscription_id": sub_id,
+                    "success": result.returncode == 0,
+                    "output": result.stdout.strip() if result.returncode == 0 else result.stderr.strip(),
+                    "return_code": result.returncode,
+                }
+            except Exception as e:
+                logger.exception("Multi-subscription exec failed for %s: %s", sub_id, e)
+                return {"subscription_id": sub_id, "success": False, "error": str(e)[:300]}
 
-            result = terminal_run(
-                cmd_args,
-                capture_output=True, text=True,
-                timeout=get_command_timeout(cmd, timeout), env=isolated_env,
-            )
-            return {
-                "subscription_id": sub_id,
-                "success": result.returncode == 0,
-                "output": result.stdout.strip() if result.returncode == 0 else result.stderr.strip(),
-                "return_code": result.returncode,
-            }
-        except Exception as e:
-            logger.exception("Multi-subscription exec failed for %s: %s", sub_id, e)
-            return {"subscription_id": sub_id, "success": False, "error": str(e)[:300]}
-        finally:
-            if config_dir:
-                _shutil.rmtree(config_dir, ignore_errors=True)
-
-    results = {}
-    with ThreadPoolExecutor(max_workers=min(len(connections), 10)) as pool:
-        # Worker threads start with an empty context, so user_id/session_id/state/
-        # mode are all invisible inside them. That makes the safety guardrail fail
-        # closed ("missing user context", exit 126) and makes get_mode_from_context()
-        # fall back to "agent". Copy the context per task: a single Context object
-        # cannot be entered by two threads at once.
-        futures = [
-            pool.submit(contextvars.copy_context().run, _run_on_subscription, c)
-            for c in connections
-        ]
-        for future in as_completed(futures):
-            res = future.result()
-            results[res.pop("subscription_id")] = res
+        results = {}
+        with ThreadPoolExecutor(max_workers=min(len(connections), 10)) as pool:
+            # Worker threads start with an empty context, so user_id/session_id/state/
+            # mode are all invisible inside them. That makes the safety guardrail fail
+            # closed ("missing user context", exit 126) and makes get_mode_from_context()
+            # fall back to "agent". Copy the context per task: a single Context object
+            # cannot be entered by two threads at once.
+            futures = [
+                pool.submit(contextvars.copy_context().run, _run_on_subscription, c)
+                for c in connections
+            ]
+            for future in as_completed(futures):
+                res = future.result()
+                results[res.pop("subscription_id")] = res
+    finally:
+        # One shared tempdir for the whole fan-out, removed once every worker is done.
+        if config_dir:
+            _shutil.rmtree(config_dir, ignore_errors=True)
 
     elapsed = time.perf_counter() - fn_start if fn_start else 0
-    logger.info("TIME: cloud_exec Azure multi-subscription (%d subs) completed in %.2fs",
+    logger.info("TIME: cloud_exec Azure multi-subscription (%d subs, single login) completed in %.2fs",
                 len(connections), elapsed)
     return json.dumps({
         "success": all(r.get("success") for r in results.values()),

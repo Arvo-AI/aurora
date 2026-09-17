@@ -82,6 +82,11 @@ def test_unparseable_command_is_not_read_only(helpers):
     ("az vm list --subscription OTHER", "az vm list --subscription OTHER"),
     # Resource Graph takes --subscriptions (plural) and is scoped by the caller.
     ('az graph query -q "Resources"', 'az graph query -q "Resources"'),
+    # `az account` commands are tenant/management-plane and reject --subscription.
+    ("az account list -o table", "az account list -o table"),
+    ("account list", "az account list"),
+    ("az account show", "az account show"),
+    ("az account tenant list", "az account tenant list"),
 ])
 def test_apply_azure_subscription(helpers, command, expected):
     assert helpers["_apply_azure_subscription"](command, "SUB1") == expected
@@ -212,7 +217,7 @@ def test_read_only_mode_fails_closed_without_distinct_identity():
 # boundaries are faked: credential setup and subprocess execution.
 # ---------------------------------------------------------------------------
 
-def _load_fanout(run_command, config_dirs, fail_subs=(), mode="agent"):
+def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent"):
     """Exec the real fan-out function with faked module-level dependencies."""
     src = _read(CLOUD_EXEC)
     ns = {"shlex": shlex, "json": __import__("json"), "time": __import__("time"),
@@ -226,7 +231,9 @@ def _load_fanout(run_command, config_dirs, fail_subs=(), mode="agent"):
         exec(ns_src, ns)
 
     def fake_setup(user_id, sub_id):
-        if sub_id in fail_subs:
+        # The fan-out authenticates once for the whole tenant, so it is called with
+        # sub_id=None and must NOT allocate a dir per subscription.
+        if fail_setup:
             return False, None, None, None, None
         cfg = tempfile.mkdtemp(prefix="aurora-az-test-")
         config_dirs.append(cfg)
@@ -254,8 +261,15 @@ def _load_fanout(run_command, config_dirs, fail_subs=(), mode="agent"):
     return ns["_cloud_exec_azure_multi_subscription"], Result
 
 
-def test_fanout_across_30_subscriptions_isolates_config_dirs():
-    """Each subscription needs its own AZURE_CONFIG_DIR or `az login` races."""
+def test_fanout_authenticates_once_and_pins_every_subscription():
+    """The whole point of the single-login fan-out: one `az login`, one config dir.
+
+    All connected subscriptions share the same service principal, so re-running
+    `az login` per subscription (the old behaviour) was pure waste: 2N subprocesses
+    and N temp dirs for what one tenant login covers. This locks in N+1 subprocesses
+    and a single shared config dir, while still pinning every command to its own
+    subscription so concurrent workers never contend on the active-subscription state.
+    """
     import json as _json
     config_dirs = []
     seen_dirs, seen_cmds, lock = [], [], threading.Lock()
@@ -266,8 +280,8 @@ def test_fanout_across_30_subscriptions_isolates_config_dirs():
         with lock:
             seen_dirs.append(env["AZURE_CONFIG_DIR"])
             seen_argvs.append(list(argv))
-            # argv is a list, so join to inspect it. Auth runs as its own
-            # invocation now, so both it and the command land here.
+            # argv is a list, so join to inspect it. The single auth login lands
+            # here too, alongside every per-subscription command.
             seen_cmds.append(" ".join(argv))
         time.sleep(0.01)  # widen the window for a real race
         return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
@@ -278,9 +292,13 @@ def test_fanout_across_30_subscriptions_isolates_config_dirs():
 
     assert out["success"] is True
     assert len(out["results_by_subscription"]) == 30, "every subscription must report"
-    # The core invariant: no two concurrent invocations shared a config dir.
-    assert len(set(seen_dirs)) == 30, "AZURE_CONFIG_DIR was reused across threads"
-    # Every command was pinned to its own subscription.
+    # Single login for the whole tenant, not one per subscription.
+    assert len(config_dirs) == 1, "fan-out authenticated more than once"
+    auth_argvs = [a for a in seen_argvs if "login" in a]
+    assert len(auth_argvs) == 1, "expected exactly one `az login` for the whole fan-out"
+    # Every worker reused the one shared, already-authenticated config dir.
+    assert set(seen_dirs) == set(config_dirs), "workers did not reuse the shared config dir"
+    # Every command was still pinned to its own subscription.
     for i in range(30):
         assert any(f"--subscription sub-{i:02d}" in c for c in seen_cmds), \
             f"sub-{i:02d} command was not pinned to its subscription"
@@ -293,15 +311,13 @@ def test_fanout_across_30_subscriptions_isolates_config_dirs():
     # The secret must reach az byte-for-byte. The stub's secret contains a space, so
     # any re-lexing of the auth argv (e.g. shlex.split on a joined string) truncates
     # it and this fails.
-    auth_argvs = [a for a in seen_argvs if "login" in a]
-    assert len(auth_argvs) == 30, "each subscription must authenticate exactly once"
     for argv in auth_argvs:
         assert argv[argv.index("--password") + 1] == "s3c ret", \
             "client secret was re-parsed and corrupted before reaching az"
 
 
-def test_fanout_cleans_up_every_temp_dir():
-    """A leaked tempdir per exec would accumulate unboundedly in the worker."""
+def test_fanout_cleans_up_its_shared_temp_dir():
+    """The one shared config dir must be removed after every worker finishes."""
     config_dirs = []
 
     def run_command(argv, **kw):
@@ -310,8 +326,8 @@ def test_fanout_cleans_up_every_temp_dir():
     fanout, _ = _load_fanout(run_command, config_dirs)
     fanout("u", [{"account_id": f"s{i}"} for i in range(8)], "vm list")
 
-    assert len(config_dirs) == 8
-    assert not [d for d in config_dirs if os.path.exists(d)], "temp dirs leaked"
+    assert len(config_dirs) == 1, "fan-out must allocate exactly one shared config dir"
+    assert not [d for d in config_dirs if os.path.exists(d)], "temp dir leaked"
 
 
 def test_fanout_isolates_per_subscription_failures():
@@ -320,24 +336,38 @@ def test_fanout_isolates_per_subscription_failures():
     config_dirs = []
 
     def run_command(argv, **kw):
-        cmd = argv[-1]
+        # The single login succeeds; only the sub-bad command returns an error.
+        if "login" in argv:
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        cmd = " ".join(argv)
         if "sub-bad" in cmd:
             return type("R", (), {
                 "returncode": 1, "stdout": "",
                 "stderr": "(SubscriptionNotFound) The subscription could not be found."})()
         return type("R", (), {"returncode": 0, "stdout": '{"ok":true}', "stderr": ""})()
 
-    fanout, _ = _load_fanout(run_command, config_dirs, fail_subs=("sub-noauth",))
-    conns = [{"account_id": s} for s in ("sub-ok", "sub-bad", "sub-noauth")]
+    fanout, _ = _load_fanout(run_command, config_dirs)
+    conns = [{"account_id": s} for s in ("sub-ok", "sub-bad")]
     out = _json.loads(fanout("u", conns, "vm list"))
     res = out["results_by_subscription"]
 
-    assert out["success"] is False           # aggregate reflects the failures
+    assert out["success"] is False           # aggregate reflects the failure
     assert res["sub-ok"]["success"] is True  # but the good one still returned data
     assert "SubscriptionNotFound" in res["sub-bad"]["output"]
-    assert res["sub-noauth"]["error"] == "Failed to authenticate"
-    # Auth failure happens before a tempdir is made, so only 2 were created.
-    assert len(config_dirs) == 2
+
+
+def test_fanout_fails_closed_when_shared_login_fails():
+    """If the single up-front authentication fails, no command may run."""
+    import json as _json
+
+    def run_command(argv, **kw):
+        raise AssertionError("no command may run when authentication failed")
+
+    fanout, _ = _load_fanout(run_command, [], fail_setup=True)
+    out = _json.loads(fanout("u", [{"account_id": "s1"}], "vm list"))
+    assert out["success"] is False
+    assert "Failed to authenticate" in out["error"]
+    assert out["multi_subscription"] is True
 
 
 def test_fanout_blocks_write_commands_in_ask_mode():
