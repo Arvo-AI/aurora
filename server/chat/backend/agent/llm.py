@@ -30,6 +30,25 @@ def _model_label(model) -> str:
     )
 
 
+def _resolve_rca_model() -> str:
+    """Pick the background RCA model. See ModelConfig.RCA_MODEL for precedence."""
+    # 1. Explicit override always wins.
+    explicit = os.getenv("RCA_MODEL")
+    if explicit:
+        return explicit
+
+    # 3. Custom (likely non-Anthropic) stack — reuse their MAIN_MODEL so we don't
+    #    hardcode an Anthropic model that a non-Anthropic deployment can't create.
+    main_model = os.getenv("MAIN_MODEL")
+    if main_model:
+        return main_model
+
+    # 2. Default Anthropic stack — pick by cost preference.
+    if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true":
+        return "anthropic/claude-haiku-4.5"
+    return "anthropic/claude-opus-4.6"
+
+
 class ModelConfig:
     """Centralized model configuration for all Aurora LLM usage.
     
@@ -50,14 +69,7 @@ class ModelConfig:
     #   3. Otherwise fall back to the client's MAIN_MODEL — so an OSS deployment
     #      on a non-Anthropic provider (no Anthropic key) doesn't hit a hardcoded
     #      Anthropic model and RuntimeError at create_chat_model.
-    RCA_MODEL = os.getenv("RCA_MODEL") or (
-        (
-            "anthropic/claude-haiku-4.5" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
-            else "anthropic/claude-opus-4.6"
-        )
-        if not os.getenv("MAIN_MODEL")
-        else os.getenv("MAIN_MODEL")
-    )
+    RCA_MODEL = _resolve_rca_model()
 
     # Multi-agent RCA orchestrator — required when ORCHESTRATOR_ENABLED=true.
     # No fallback to MAIN_MODEL/RCA_MODEL: must be set explicitly.
