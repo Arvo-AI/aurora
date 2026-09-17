@@ -354,6 +354,8 @@ def send_slack_investigation_completed_notification(
         incident_id = incident_data.get('incident_id', 'unknown')
         incident_url = _get_incident_url(incident_id)
 
+        # Recurrence folding is anchored to the incidents channel (that's where
+        # the anchor's Started thread lives), so keep folded replies there.
         if _post_recurrence_reply(client, channel_id, user_id, incident_data, incident_url=incident_url):
             return True
         # Standalone, or a folded child whose anchor thread is unavailable:
@@ -473,7 +475,29 @@ def send_slack_investigation_completed_notification(
             logger.warning(f"[SlackNotification] Truncating blocks from {len(blocks)} to {SLACK_MAX_BLOCKS - 5}")
             blocks = blocks[:SLACK_MAX_BLOCKS - 5]
         
-        return _post_incident_card(client, channel_id, user_id, incident_data, kind="completed", blocks=blocks)
+        # Post the full card to the incidents channel (keeps threading under this
+        # incident's Started message). Then also route to any description-matched
+        # channels — the "post the conclusion to the relevant team" behaviour.
+        primary_ok = _post_incident_card(client, channel_id, user_id, incident_data, kind="completed", blocks=blocks)
+
+        try:
+            from utils.notifications.slack_routing import resolve_notification_channels
+            targets = resolve_notification_channels(user_id, incident_data, channel_id)
+            # Extras get a plain standalone card — no in-place update/threading,
+            # which is anchored to the incidents channel and must not be reused
+            # here (it would clobber slack_message_ts / thread under a wrong ts).
+            card_text = f"Analysis Complete: {alert_title}"
+            for extra_channel in targets:
+                if extra_channel and extra_channel != channel_id:
+                    try:
+                        client.send_message(channel=extra_channel, text=card_text, blocks=blocks)
+                    except Exception:
+                        logger.warning("[SlackNotification] Failed to post to routed channel %s",
+                                       extra_channel, exc_info=True)
+        except Exception:
+            logger.warning("[SlackNotification] extra-channel routing failed (non-fatal)", exc_info=True)
+
+        return primary_ok
 
     except Exception:
         logger.exception("[SlackNotification] Error sending completed notification")

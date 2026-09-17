@@ -50,6 +50,32 @@ relevant to a given incident, service, or team.
 """
 
 
+def read_slack_memory(user_id: str) -> str:
+    """Return the org's current "Slack" memory content, or "" if none/error.
+
+    Used by routing (and any non-agent path) that needs the team's Slack policy
+    without going through the LLM memory selector.
+    """
+    if not user_id:
+        return ""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                org_id = set_rls_context(cursor, conn, user_id, log_prefix="[SlackMemory:read]")
+                if not org_id:
+                    return ""
+                cursor.execute(
+                    """SELECT content FROM artifacts
+                       WHERE org_id = %s AND category = %s AND title = %s""",
+                    (org_id, SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE),
+                )
+                row = cursor.fetchone()
+                return (row[0] or "") if row else ""
+    except Exception:
+        logger.exception("[SlackMemory] Failed to read Slack memory")
+        return ""
+
+
 def seed_slack_memory(user_id: str) -> bool:
     """Create the default "Slack" memory for the user's org if absent (idempotent,
     non-destructive). Returns True if a new entry was created."""

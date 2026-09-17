@@ -171,6 +171,55 @@ def test_auto_register_skips_dismissed_channels():
     assert enqueued == []  # C1 already existed, so nothing new to describe
 
 
+# --- register_single_channel (member_joined_channel path) -------------------
+
+def _single_reg_db(fetchone_row):
+    """Build a (dbcm, cur) pair whose SELECT returns fetchone_row."""
+    from unittest.mock import MagicMock
+    conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.return_value = fetchone_row
+    conn.cursor.return_value.__enter__ = lambda s: cur
+    conn.cursor.return_value.__exit__ = lambda s, *a: False
+    dbcm = MagicMock()
+    dbcm.__enter__ = lambda s: conn
+    dbcm.__exit__ = lambda s, *a: False
+    return dbcm, cur
+
+
+def test_register_single_channel_registers_and_describes_new():
+    from unittest.mock import MagicMock
+    client = MagicMock()
+    client.get_channel_info.return_value = {"id": "C1", "name": "inc-payments", "is_member": True}
+    dbcm, _cur = _single_reg_db(None)  # no existing row
+    enqueued = []
+    with patch.object(mod, "get_slack_client_for_user", return_value=client), \
+         patch.object(mod, "resolve_org", return_value="org"), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_upsert_channel", return_value=("C1", True)), \
+         patch.object(mod, "_enqueue_metadata", side_effect=lambda u, c: enqueued.append(c)):
+        assert mod.register_single_channel("u1", "C1", team_id="T1") is True
+    assert enqueued == ["C1"]
+
+
+def test_register_single_channel_skips_dismissed():
+    from unittest.mock import MagicMock
+    client = MagicMock()
+    client.get_channel_info.return_value = {"id": "C1", "name": "inc-payments", "is_member": True}
+    dbcm, _cur = _single_reg_db(("owner", True))  # existing + dismissed
+    enqueued = []
+    with patch.object(mod, "get_slack_client_for_user", return_value=client), \
+         patch.object(mod, "resolve_org", return_value="org"), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_upsert_channel", return_value=("C1", False)) as up, \
+         patch.object(mod, "_enqueue_metadata", side_effect=lambda u, c: enqueued.append(c)):
+        assert mod.register_single_channel("u1", "C1", team_id="T1") is False
+    up.assert_not_called()
+    assert enqueued == []
+
+
 # --- list_all_channels pagination ------------------------------------------
 
 def test_list_all_channels_paginates_until_cursor_empty():
