@@ -3400,12 +3400,10 @@ def initialize_tables():
                     ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE;
                     ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);
                 """)
-                # Reconcile duplicate non-NULL incident_id values before creating the partial
-                # unique index — otherwise CREATE UNIQUE INDEX raises, gets swallowed by the
-                # except below, and the runtime ON CONFLICT (incident_id) upserts break.
-                # Keep the best artifact per incident (real content first, then newest) and
-                # detach incident_id from the rest. FORCE RLS is on with no org context here,
-                # so relax it or the UPDATE silently matches 0 rows.
+                # Drop duplicate incident_id values before the partial unique index, else
+                # CREATE UNIQUE INDEX raises (swallowed below) and ON CONFLICT upserts break.
+                # Keep best artifact per incident (content first, then newest), detach the rest.
+                # Relax FORCE RLS or the UPDATE matches 0 rows (no org context here).
                 cursor.execute("ALTER TABLE artifacts NO FORCE ROW LEVEL SECURITY")
                 cursor.execute("""
                     WITH ranked AS (
