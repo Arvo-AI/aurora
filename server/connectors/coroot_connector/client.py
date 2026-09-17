@@ -222,10 +222,6 @@ class CorootClient:
                 "[COROOT] %s %s failed (HTTP %s)",
                 method, path, resp.status_code,
             )
-            logger.debug(
-                "Coroot response body: %s",
-                (resp.text[:1000] if resp.text else "(empty)"),
-            )
             raise CorootAPIError(
                 f"Request to Coroot failed (HTTP {resp.status_code})"
             )

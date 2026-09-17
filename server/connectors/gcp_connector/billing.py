@@ -184,14 +184,16 @@ def store_bigquery_data(credentials, project_id, user_id):
                         row.get('provider', 'gcp')
                     )
                     cursor.execute(insert_query, data_tuple)
-                except Exception as ex:
-                    logging.error("Error inserting row %d: %s", idx, row)
-                    logging.exception(ex)
+                except Exception:
+                    # Re-raise to the outer handler which logs a single fixed
+                    # message. Don't log the row or exception here: the row holds
+                    # private billing data and the exception text can carry values
+                    # (avoids double-logging + CWE-532 sensitive-data exposure).
                     raise
             conn.commit()
             logging.info(f"Successfully stored {len(cloud_billing_data)} rows in 'cloud_billing_usage' table.")
-        except Exception as e:
-            logging.error(f"Error storing BigQuery data in PostgreSQL: {e}")
+        except Exception:
+            logging.error("Error storing BigQuery data in PostgreSQL")
         finally:
             if cursor:
                 cursor.close()

@@ -88,10 +88,14 @@ def check_chatbot_websocket():
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.settimeout(3)
             sock.connect((host, port))
-        return {"status": "healthy", "message": f"Chatbot accepting connections on {host}:{port}"}
+        # Fixed message only — never echo the internal host/port back to callers,
+        # since /health is reachable on the external API host without auth.
+        return {"status": "healthy", "message": "Chatbot accepting connections"}
     except (socket.timeout, ConnectionRefusedError, OSError) as e:
+        # Log the underlying host/port + error server-side for debugging, but return
+        # a fixed message so no internal topology or exception detail leaks externally.
         logger.warning(f"Chatbot health check failed at {host}:{port}: {e}")
-        return {"status": "unhealthy", "error": f"Chatbot not reachable at {host}:{port}: {e}"}
+        return {"status": "unhealthy", "error": "Chatbot unavailable"}
 
 
 @health_bp.route('/', methods=['GET'])

@@ -3399,6 +3399,59 @@ def initialize_tables():
                 cursor.execute("""
                     ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE;
                     ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);
+                """)
+                # Self-healing: older DBs shipped a NON-unique idx_artifacts_incident_id.
+                # `CREATE UNIQUE INDEX IF NOT EXISTS` silently no-ops when a same-named
+                # index already exists, so the postmortem upserts' `ON CONFLICT (incident_id)`
+                # never finds its target. Detect that case and rebuild the index as unique.
+                cursor.execute("""
+                    DO $$
+                    DECLARE
+                        is_unique boolean;
+                    BEGIN
+                        SELECT indisunique INTO is_unique
+                        FROM pg_index
+                        WHERE indexrelid = 'idx_artifacts_incident_id'::regclass;
+
+                        -- Existing index is not unique — drop so we can recreate it correctly
+                        IF is_unique IS NOT NULL AND is_unique = false THEN
+                            DROP INDEX idx_artifacts_incident_id;
+                        END IF;
+                    EXCEPTION
+                        -- Index doesn't exist yet — nothing to drop
+                        WHEN undefined_table THEN NULL;
+                    END $$;
+                """)
+                # Drop duplicate incident_id values before the partial unique index, else
+                # CREATE UNIQUE INDEX raises (swallowed below) and ON CONFLICT upserts break.
+                # Keep best artifact per incident (content first, then newest), detach the rest.
+                # Relax FORCE RLS or the UPDATE matches 0 rows (no org context here).
+                cursor.execute("ALTER TABLE artifacts NO FORCE ROW LEVEL SECURITY")
+                cursor.execute("""
+                    WITH ranked AS (
+                        SELECT id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY incident_id
+                                   ORDER BY (content IS NOT NULL) DESC,
+                                            updated_at DESC NULLS LAST,
+                                            created_at DESC NULLS LAST,
+                                            id DESC
+                               ) AS rn
+                        FROM artifacts
+                        WHERE incident_id IS NOT NULL
+                    )
+                    UPDATE artifacts a
+                    SET incident_id = NULL
+                    FROM ranked r
+                    WHERE a.id = r.id AND r.rn > 1
+                """)
+                if cursor.rowcount > 0:
+                    logging.info(
+                        f"Detached incident_id from {cursor.rowcount} duplicate artifact(s) "
+                        "before creating unique index."
+                    )
+                cursor.execute("ALTER TABLE artifacts FORCE ROW LEVEL SECURITY")
+                cursor.execute("""
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_incident_id ON artifacts(incident_id) WHERE incident_id IS NOT NULL;
                 """)
                 # Drop FK constraint on postmortem_exports so it can reference artifact IDs
