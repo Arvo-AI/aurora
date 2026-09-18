@@ -55,11 +55,15 @@ on connect and is user- and agent-editable.
 
 - **Read it** whenever you act in Slack (it is auto-injected on Slack-sourced
   sessions, but you may also `read_memory(category='context', title='Slack')`).
-- **Update it** when the team states a preference: use `edit_memory` /
-  `append_to_memory` to record things like "be quiet in #general", "post
-  conclusions to #payments-oncall", or a team → channel routing rule. This is
-  how Aurora learns per-team Slack policy over time.
-- Keep channel-specific preferences under the "Per-channel notes" section.
+- **Update it (MANDATORY) as soon as a user states a standing preference or
+  protocol** — don't just acknowledge it in chat, or it's lost when the session
+  ends. Use `edit_memory` / `append_to_memory` on category `context`, title
+  `Slack` to record things like "be quiet in #general", "post conclusions to
+  #payments-oncall", "on every incident post 'down' then 'back up' here", or a
+  team → channel routing rule. Save the directive BEFORE replying, then confirm
+  briefly that you recorded it. This is how Aurora learns per-team Slack policy.
+- Channel-scoped directives ("for this channel only") go under the "Per-channel
+  notes" section keyed by channel name — never promote them to org-wide rules.
 
 ## Limitations
 - Read-only messaging today (posting is handled by the notification service and
