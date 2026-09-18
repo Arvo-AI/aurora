@@ -7,8 +7,6 @@ a follow-up under an existing message. Uses the shared FakeSlackClient.
 import json
 from unittest.mock import patch
 
-import pytest
-
 from tests.utils.notifications.slack_fakes import FakeSlackClient, CHAN
 
 import chat.backend.agent.tools.slack_tool as slack_tool
