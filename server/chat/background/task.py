@@ -843,10 +843,12 @@ def run_background_chat(
             else:
                 try:
                     slack_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
-                    _send_response_to_slack(
+                    # Only treat as sent if a message was actually posted — a False
+                    # return (e.g. no assistant text + no fallback) must still let the
+                    # finally-block fallback fire so "Thinking…" isn't orphaned.
+                    _chat_reply_sent = bool(_send_response_to_slack(
                         user_id, session_id, trigger_metadata, fallback_text=slack_fallback,
-                    )
-                    _chat_reply_sent = True
+                    ))
                 except Exception as e:
                     logger.error(f"[BackgroundChat] Failed to send response to Slack: {e}", exc_info=True)
         
@@ -854,10 +856,9 @@ def run_background_chat(
         if trigger_metadata and trigger_metadata.get('source') in ['google_chat', 'google_chat_button']:
             try:
                 gchat_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
-                _send_response_to_google_chat(
+                _chat_reply_sent = bool(_send_response_to_google_chat(
                     user_id, session_id, trigger_metadata, fallback_text=gchat_fallback,
-                )
-                _chat_reply_sent = True
+                ))
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
         
