@@ -11,7 +11,7 @@ The actual posting is done by the agent via the post_slack_message tool.
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
