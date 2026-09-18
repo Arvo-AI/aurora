@@ -144,6 +144,11 @@ from .datadog_tool import (
     QueryDatadogArgs,
 )
 from .opsgenie_tool import query_opsgenie, is_opsgenie_connected, QueryOpsGenieArgs
+from .splunk_on_call_tool import (
+    query_splunk_on_call,
+    is_splunk_on_call_connected,
+    QuerySplunkOnCallArgs,
+)
 from .newrelic_tool import (
     query_newrelic,
     is_newrelic_connected,
@@ -2428,6 +2433,25 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             args_schema=QueryOpsGenieArgs,
         ))
         logging.info(f"Added {_og_label} tool for user {user_id}")
+
+    # --- Splunk On-Call tool ---
+    if is_splunk_on_call_connected(user_id):
+        context_wrapped_soc = with_user_context(query_splunk_on_call)
+        notification_wrapped_soc = with_completion_notification(context_wrapped_soc)
+        final_soc_func = (
+            wrap_func_with_capture(notification_wrapped_soc, "query_splunk_on_call")
+            if tool_capture else notification_wrapped_soc
+        )
+        tools.append(StructuredTool.from_function(
+            func=final_soc_func,
+            name="query_splunk_on_call",
+            description=(
+                "Query Splunk On-Call incidents by phase and routing-key substring. "
+                "This tool is read-only."
+            ),
+            args_schema=QuerySplunkOnCallArgs,
+        ))
+        logging.info("Added Splunk On-Call tool for user %s", user_id)
 
     # Add Bitbucket tools if connected
     try:
