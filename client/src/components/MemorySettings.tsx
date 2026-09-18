@@ -37,6 +37,7 @@ import {
   Brain,
   Plus,
   Pencil,
+  Eye,
 } from "lucide-react";
 import { useUser } from "@/hooks/useAuthHooks";
 import { DiscoverySettings } from "@/components/DiscoverySettings";
@@ -85,6 +86,8 @@ export function MemorySettings() {
 
   // Edit dialog state — the entry currently being edited (dialog logic lives in MemoryEditDialog).
   const [editingEntry, setEditingEntry] = useState<MemoryEntry | null>(null);
+  // View-only dialog state — for system entries users can inspect but not edit.
+  const [viewingEntry, setViewingEntry] = useState<MemoryEntry | null>(null);
 
   const fetchEntries = useCallback(async () => {
     if (!userId) {
@@ -611,7 +614,7 @@ export function MemorySettings() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
-                      {canWrite && !isSystem && (
+                      {canWrite && !isSystem ? (
                         <>
                           <Button
                             variant="ghost"
@@ -635,6 +638,17 @@ export function MemorySettings() {
                             )}
                           </Button>
                         </>
+                      ) : (
+                        // System-managed (or read-only for viewers): can't edit, but
+                        // can still inspect the content via the eye icon.
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setViewingEntry(entry)}
+                          title="View memory entry"
+                        >
+                          <Eye className="h-4 w-4 text-muted-foreground hover:text-primary" />
+                        </Button>
                       )}
                     </div>
                   </div>
@@ -649,6 +663,14 @@ export function MemorySettings() {
       <MemoryEditDialog
         entry={editingEntry}
         onOpenChange={(open) => { if (!open) setEditingEntry(null); }}
+        onSaved={fetchEntries}
+      />
+
+      {/* View-only dialog for system-managed entries */}
+      <MemoryEditDialog
+        entry={viewingEntry}
+        readOnly
+        onOpenChange={(open) => { if (!open) setViewingEntry(null); }}
         onSaved={fetchEntries}
       />
 
