@@ -167,8 +167,11 @@ def resolve_notification_channels(user_id: str, incident_data: dict,
         chosen = _parse_channel_ids(extract_text_from_content(response.content), set(by_id))
 
         if chosen:
-            logger.info("[SlackRouting] routed to %d channel(s) for user %s",
-                        len(chosen), sanitize(user_id))
+            # Log the actual channel names so routing decisions are auditable.
+            names = ", ".join(f"#{by_id[cid]['channel_name'] or cid}" for cid in chosen)
+            logger.info("[SlackRouting] routed incident '%s' to %d channel(s): %s",
+                        sanitize(incident_data.get("alert_title") or incident_data.get("title") or "unknown"),
+                        len(chosen), names)
             return [by_id[cid] for cid in chosen]
     except Exception:
         logger.warning("[SlackRouting] routing failed; using default channel", exc_info=True)
