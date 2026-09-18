@@ -122,7 +122,8 @@ def test_failed_login_leaves_nothing_behind():
 
     ok, stderr = login.ensure(_Logins(env, returncode=1, stderr="AADSTS7000215: invalid secret"))
 
-    assert ok is False and "AADSTS7000215" in stderr
+    assert ok is False
+    assert "AADSTS7000215" in stderr
     assert not os.path.exists(login.config_dir), "a failed login must not look cached"
 
 
@@ -145,7 +146,9 @@ def test_different_credentials_never_share_a_directory(other):
 
 def test_directory_name_does_not_expose_the_credentials():
     name = os.path.basename(cache.attach(_env(secret="hunter2"), "vm list").config_dir)
-    assert "hunter2" not in name and "client-a" not in name and "tenant-a" not in name
+    assert "hunter2" not in name
+    assert "client-a" not in name
+    assert "tenant-a" not in name
 
 
 def test_directory_name_depends_on_the_server_key(monkeypatch):
@@ -174,7 +177,8 @@ def test_untrusted_cache_root_disables_caching(isolated_cache):
     private = env["AZURE_CONFIG_DIR"]
 
     assert cache.attach(env, "vm list") is None
-    assert env["AZURE_CONFIG_DIR"] == private and os.path.isdir(private)
+    assert env["AZURE_CONFIG_DIR"] == private
+    assert os.path.isdir(private)
 
 
 def test_symlinked_cache_root_disables_caching(isolated_cache):
@@ -206,7 +210,8 @@ def test_disabled_cache_keeps_the_private_directory(monkeypatch):
     private = env["AZURE_CONFIG_DIR"]
 
     assert cache.attach(env, "vm list") is None
-    assert env["AZURE_CONFIG_DIR"] == private and os.path.isdir(private)
+    assert env["AZURE_CONFIG_DIR"] == private
+    assert os.path.isdir(private)
     assert not cache.is_cached_dir(private)
 
 
@@ -228,7 +233,8 @@ def test_pod_isolation_disables_caching(monkeypatch, setting):
     private = env["AZURE_CONFIG_DIR"]
 
     assert cache.attach(env, "vm list") is None
-    assert env["AZURE_CONFIG_DIR"] == private and os.path.isdir(private)
+    assert env["AZURE_CONFIG_DIR"] == private
+    assert os.path.isdir(private)
 
 
 @pytest.mark.parametrize("command", [

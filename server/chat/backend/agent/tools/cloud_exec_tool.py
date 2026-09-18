@@ -1385,6 +1385,64 @@ def _apply_azure_subscription(command: str, subscription_id: str) -> str:
     return f"{cmd} --subscription {shlex.quote(subscription_id)}"
 
 
+def _run_azure_on_subscription(conn: dict, command: str, isolated_env: dict, timeout: Optional[int]) -> dict:
+    """Run one subscription-pinned command against the shared, already-authenticated config dir.
+
+    The command is pinned to the subscription, so concurrent workers never contend
+    on the CLI's active-subscription state.
+    """
+    sub_id = conn.get("account_id", "unknown")
+    try:
+        cmd = _apply_azure_subscription(command.strip(), sub_id)
+        try:
+            cmd_args = shlex.split(cmd)
+        except ValueError as e:
+            return {"subscription_id": sub_id, "success": False,
+                    "error": f"Command parsing failed: {e}"}
+        result = terminal_run(
+            cmd_args,
+            capture_output=True, text=True,
+            timeout=get_command_timeout(cmd, timeout), env=isolated_env,
+        )
+        return {
+            "subscription_id": sub_id,
+            "success": result.returncode == 0,
+            "output": result.stdout.strip() if result.returncode == 0 else result.stderr.strip(),
+            "return_code": result.returncode,
+        }
+    except Exception as e:
+        logger.exception("Multi-subscription exec failed for %s: %s", sub_id, e)
+        return {"subscription_id": sub_id, "success": False, "error": str(e)[:300]}
+
+
+def _fan_out_azure(conns: list, run_one) -> dict:
+    """Run run_one(conn) for every connection on a thread pool, keyed by subscription id."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    out = {}
+    with ThreadPoolExecutor(max_workers=min(len(conns), 10)) as pool:
+        # Worker threads start with an empty context, so user_id/session_id/state/
+        # mode are all invisible inside them. That makes the safety guardrail fail
+        # closed ("missing user context", exit 126) and makes get_mode_from_context()
+        # fall back to "agent". Copy the context per task: a single Context object
+        # cannot be entered by two threads at once.
+        futures = [pool.submit(contextvars.copy_context().run, run_one, c) for c in conns]
+        for future in as_completed(futures):
+            res = future.result()
+            out[res.pop("subscription_id")] = res
+    return out
+
+
+def _subscriptions_needing_relogin(azure_login, connections: list, results: dict) -> list:
+    """Connections whose failure means the cached login itself was unusable."""
+    stale = []
+    for conn in connections:
+        res = results.get(conn.get("account_id", "unknown"), {})
+        if not res.get("success") and azure_login.should_relogin(res.get("output", "")):
+            stale.append(conn)
+    return stale
+
+
 def _cloud_exec_azure_multi_subscription(
     user_id: str,
     connections: list,
@@ -1410,7 +1468,6 @@ def _cloud_exec_azure_multi_subscription(
     credentials is already cached (utils.cloud.azure_login_cache) the fan-out
     reuses it and spawns no login at all. Results are keyed by subscription id.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     import shutil as _shutil
 
     current_mode = get_mode_from_context()
@@ -1467,65 +1524,19 @@ def _cloud_exec_azure_multi_subscription(
                 "provider": "azure",
             })
 
-        def _run_on_subscription(conn: dict) -> dict:
-            sub_id = conn.get("account_id", "unknown")
-            try:
-                cmd = _apply_azure_subscription(command.strip(), sub_id)
-                try:
-                    cmd_args = shlex.split(cmd)
-                except ValueError as e:
-                    return {"subscription_id": sub_id, "success": False,
-                            "error": f"Command parsing failed: {e}"}
-
-                # Reuse the shared, already-authenticated config dir. The command is
-                # pinned to sub_id, so concurrent workers never contend on the CLI's
-                # active-subscription state.
-                result = terminal_run(
-                    cmd_args,
-                    capture_output=True, text=True,
-                    timeout=get_command_timeout(cmd, timeout), env=isolated_env,
-                )
-                return {
-                    "subscription_id": sub_id,
-                    "success": result.returncode == 0,
-                    "output": result.stdout.strip() if result.returncode == 0 else result.stderr.strip(),
-                    "return_code": result.returncode,
-                }
-            except Exception as e:
-                logger.exception("Multi-subscription exec failed for %s: %s", sub_id, e)
-                return {"subscription_id": sub_id, "success": False, "error": str(e)[:300]}
-
-        def _fan_out(conns: list) -> dict:
-            out = {}
-            with ThreadPoolExecutor(max_workers=min(len(conns), 10)) as pool:
-                # Worker threads start with an empty context, so user_id/session_id/state/
-                # mode are all invisible inside them. That makes the safety guardrail fail
-                # closed ("missing user context", exit 126) and makes get_mode_from_context()
-                # fall back to "agent". Copy the context per task: a single Context object
-                # cannot be entered by two threads at once.
-                futures = [
-                    pool.submit(contextvars.copy_context().run, _run_on_subscription, c)
-                    for c in conns
-                ]
-                for future in as_completed(futures):
-                    res = future.result()
-                    out[res.pop("subscription_id")] = res
-            return out
+        def _run_one(conn: dict) -> dict:
+            return _run_azure_on_subscription(conn, command, isolated_env, timeout)
 
         fan_out_started_at = time.time()
-        results = _fan_out(connections)
+        results = _fan_out_azure(connections, _run_one)
 
         # A cached login can be gone (swept, expired) or predate a newly connected
         # subscription. Log in again once and re-run only the subscriptions it failed.
         if azure_login:
-            stale = [
-                c for c in connections
-                if not results[c.get("account_id", "unknown")].get("success")
-                and azure_login.should_relogin(results[c.get("account_id", "unknown")].get("output", ""))
-            ]
+            stale = _subscriptions_needing_relogin(azure_login, connections, results)
             if stale and azure_login.relogin(_run_azure_login, fan_out_started_at)[0]:
                 logger.info("Cached Azure login was unusable; logged in again, retrying %d subscription(s)", len(stale))
-                results.update(_fan_out(stale))
+                results.update(_fan_out_azure(stale, _run_one))
     finally:
         # A private tempdir is removed once every worker is done. A cached login
         # directory is shared and outlives the fan-out; the login cache expires it.

@@ -237,7 +237,8 @@ def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent", login
           "Optional": typing.Optional, "logger": __import__("logging").getLogger("test")}
 
     for fn in ["is_read_only_command", "_apply_azure_subscription",
-               "_cloud_exec_azure_multi_subscription"]:
+               "_run_azure_on_subscription", "_fan_out_azure",
+               "_subscriptions_needing_relogin", "_cloud_exec_azure_multi_subscription"]:
         match = re.search(r"^def " + fn + r"\(.*?(?=^def )", src, re.S | re.M)
         ns_src = match.group(0)
         exec(ns_src, ns)
@@ -385,7 +386,7 @@ def test_fanout_fails_closed_when_shared_login_fails():
     assert out["multi_subscription"] is True
 
 
-@pytest.fixture()
+@pytest.fixture
 def login_cache(tmp_path, monkeypatch):
     """The real login cache, rooted in a throwaway directory."""
     from utils.cloud import azure_login_cache
@@ -421,7 +422,8 @@ def test_warm_fanout_spawns_no_login_and_keeps_the_cached_directory(login_cache)
     assert not [a for a, _d in seen if "login" in a], "a warm fan-out must not log in"
     assert len(seen) == 6
     dirs = {d for _a, d in seen}
-    assert len(dirs) == 1 and login_cache.is_cached_dir(next(iter(dirs)))
+    assert len(dirs) == 1
+    assert login_cache.is_cached_dir(next(iter(dirs)))
     assert os.path.isdir(next(iter(dirs))), "the fan-out must not delete a shared login"
     assert not [d for d in private_dirs if os.path.exists(d)], "unused private dirs leaked"
     for i in range(6):
@@ -468,7 +470,8 @@ def test_cloud_exec_never_deletes_a_cached_login_directory():
     """
     src = _read(CLOUD_EXEC)
     cleanup = src[src.rindex("finally:"):]
-    assert "is_cached_dir" in cleanup and "rmtree" in cleanup
+    assert "is_cached_dir" in cleanup
+    assert "rmtree" in cleanup
     assert cleanup.index("is_cached_dir") < cleanup.index("rmtree")
 
 
@@ -849,7 +852,8 @@ def test_fan_out_propagates_contextvars_to_workers():
 def test_both_fan_outs_copy_context():
     """Both providers must copy context; a bare submit reintroduces exit-126 blocks."""
     src = _read(CLOUD_EXEC)
-    for fn in ("_cloud_exec_aws_multi_account", "_cloud_exec_azure_multi_subscription"):
+    # Azure submits from its _fan_out_azure helper rather than the entry function.
+    for fn in ("_cloud_exec_aws_multi_account", "_fan_out_azure"):
         match = re.search(r"^def " + fn + r"\(.*?(?=^def )", src, re.S | re.M)
         assert match, f"{fn} not found"
         submits = re.findall(r"pool\.submit\(\s*([^,]+)", match.group(0))
