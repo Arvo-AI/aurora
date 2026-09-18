@@ -217,7 +217,19 @@ def test_read_only_mode_fails_closed_without_distinct_identity():
 # boundaries are faked: credential setup and subprocess execution.
 # ---------------------------------------------------------------------------
 
-def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent"):
+class _NoLoginCache:
+    """Login cache switched off: the fan-out keeps its own private directory."""
+
+    @staticmethod
+    def attach(env, command):
+        return None
+
+    @staticmethod
+    def is_cached_dir(path):
+        return False
+
+
+def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent", login_cache=_NoLoginCache):
     """Exec the real fan-out function with faked module-level dependencies."""
     src = _read(CLOUD_EXEC)
     ns = {"shlex": shlex, "json": __import__("json"), "time": __import__("time"),
@@ -239,7 +251,9 @@ def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent"):
         config_dirs.append(cfg)
         # argv list, matching setup_azure_environment_isolated's real contract. A
         # string here would let a regression back into shlex-parsing the secret pass.
-        return True, sub_id, "service_principal", {"AZURE_CONFIG_DIR": cfg}, [
+        env = {"AZURE_CONFIG_DIR": cfg, "AZURE_TENANT_ID": "tenant",
+               "AZURE_CLIENT_ID": "client", "AZURE_CLIENT_SECRET": "s3c ret"}
+        return True, sub_id, "service_principal", env, [
             "az", "login", "--service-principal", "--password", "s3c ret", "--output", "none",
         ]
 
@@ -249,6 +263,7 @@ def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent"):
 
     ns.update({
         "setup_azure_environment_isolated": fake_setup,
+        "azure_login_cache": login_cache,
         "terminal_run": run_command,
         "get_command_timeout": lambda c, t: t or 60,
         "get_mode_from_context": lambda: mode,
@@ -368,6 +383,93 @@ def test_fanout_fails_closed_when_shared_login_fails():
     assert out["success"] is False
     assert "Failed to authenticate" in out["error"]
     assert out["multi_subscription"] is True
+
+
+@pytest.fixture()
+def login_cache(tmp_path, monkeypatch):
+    """The real login cache, rooted in a throwaway directory."""
+    from utils.cloud import azure_login_cache
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setenv("FLASK_SECRET_KEY", "test-key")
+    monkeypatch.delenv("AZURE_LOGIN_CACHE_IDLE_SECONDS", raising=False)
+    monkeypatch.setenv("ENABLE_POD_ISOLATION", "false")  # unset means on, which disables the cache
+    monkeypatch.setattr(azure_login_cache, "_last_sweep", 0.0)
+    return azure_login_cache
+
+
+def test_warm_fanout_spawns_no_login_and_keeps_the_cached_directory(login_cache):
+    """With a cached login the whole fan-out is N commands and zero logins."""
+    import json as _json
+    seen, lock = [], threading.Lock()
+
+    def run_command(argv, **kw):
+        with lock:
+            seen.append((list(argv), kw["env"]["AZURE_CONFIG_DIR"]))
+        return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+
+    private_dirs = []
+    fanout, _ = _load_fanout(run_command, private_dirs, login_cache=login_cache)
+    conns = [{"account_id": f"sub-{i}"} for i in range(6)]
+
+    assert _json.loads(fanout("u", conns, "vm list"))["success"] is True
+    cold_logins = [a for a, _d in seen if "login" in a]
+    assert len(cold_logins) == 1, "a cold cache still logs in exactly once"
+
+    seen.clear()
+    assert _json.loads(fanout("u", conns, "vm list"))["success"] is True
+
+    assert not [a for a, _d in seen if "login" in a], "a warm fan-out must not log in"
+    assert len(seen) == 6
+    dirs = {d for _a, d in seen}
+    assert len(dirs) == 1 and login_cache.is_cached_dir(next(iter(dirs)))
+    assert os.path.isdir(next(iter(dirs))), "the fan-out must not delete a shared login"
+    assert not [d for d in private_dirs if os.path.exists(d)], "unused private dirs leaked"
+    for i in range(6):
+        assert any(f"--subscription sub-{i}" in " ".join(a) for a, _d in seen)
+
+
+def test_fanout_recovers_from_a_dead_cached_login_with_one_relogin(login_cache):
+    """A swept or replaced login fails every subscription at once; heal it once."""
+    import json as _json
+    state = {"logged_in": False, "logins": 0, "commands": 0}
+    lock = threading.Lock()
+
+    def run_command(argv, **kw):
+        with lock:
+            if "login" in argv:
+                state["logins"] += 1
+                state["logged_in"] = True
+                return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            state["commands"] += 1
+            if not state["logged_in"]:
+                return type("R", (), {"returncode": 1, "stdout": "",
+                                      "stderr": "ERROR: Please run 'az login' to setup account."})()
+        return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+
+    fanout, _ = _load_fanout(run_command, [], login_cache=login_cache)
+    conns = [{"account_id": f"sub-{i}"} for i in range(5)]
+    fanout("u", conns, "vm list")
+    assert state["logins"] == 1
+
+    # The directory's login dies behind the cache's back (az state wiped, marker intact).
+    state.update(logged_in=False, commands=0)
+    out = _json.loads(fanout("u", conns, "vm list"))
+
+    assert out["success"] is True, "every subscription must succeed after the relogin"
+    assert state["logins"] == 2, "one relogin for the whole fan-out, not one per subscription"
+    assert state["commands"] == 10, "only the failed subscriptions are re-run, once"
+
+
+def test_cloud_exec_never_deletes_a_cached_login_directory():
+    """cloud_exec's converging cleanup must skip the shared directory.
+
+    Deleting it would silently turn every command back into login-plus-command and
+    pull the login out from under other requests mid-flight.
+    """
+    src = _read(CLOUD_EXEC)
+    cleanup = src[src.rindex("finally:"):]
+    assert "is_cached_dir" in cleanup and "rmtree" in cleanup
+    assert cleanup.index("is_cached_dir") < cleanup.index("rmtree")
 
 
 def test_fanout_blocks_write_commands_in_ask_mode():
