@@ -9,6 +9,7 @@ type RefreshResult = {
   orgName: string | null
   mustChangePassword: boolean
   emailVerified: boolean
+  isGithubProvisioned: boolean
 } | null | "not_found"
 
 // Deduplicate concurrent refresh calls — all middleware requests share one
@@ -108,6 +109,46 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         const user = await response.json()
         return user // { id, email, name, role, orgId, orgName }
       }
+    }),
+    Credentials({
+      // One-time handoff token from the GitHub one-click signup flow. The
+      // backend burns the token on first redemption, so this can only ever
+      // establish a session once per signup.
+      id: "handoff",
+      name: "handoff",
+      credentials: {
+        token: { label: "Token", type: "text" }
+      },
+      authorize: async (credentials) => {
+        if (!credentials?.token) return null
+
+        const backendUrl = process.env.BACKEND_URL
+        if (!backendUrl) {
+          console.error("BACKEND_URL environment variable is not set")
+          return null
+        }
+
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 10000)
+        try {
+          const response = await fetch(`${backendUrl}/api/auth/handoff`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: credentials.token }),
+            signal: controller.signal,
+          })
+          if (!response.ok) {
+            console.error("Handoff exchange failed:", response.status)
+            return null
+          }
+          return await response.json()
+        } catch (err) {
+          console.error("Handoff exchange error:", err)
+          return null
+        } finally {
+          clearTimeout(timeout)
+        }
+      }
     })
   ],
   session: {
@@ -129,6 +170,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.orgName = user.orgName
         token.mustChangePassword = user.mustChangePassword
         token.emailVerified = user.emailVerified
+        token.isGithubProvisioned = user.isGithubProvisioned
         token.lastRefreshedAt = Math.floor(Date.now() / 1000)
         return token
       }
@@ -154,6 +196,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           token.orgName = fresh.orgName
           token.mustChangePassword = fresh.mustChangePassword
           token.emailVerified = fresh.emailVerified
+          token.isGithubProvisioned = fresh.isGithubProvisioned
           token.lastRefreshedAt = now
         }
       }
@@ -173,6 +216,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           session.user.orgName = (token.orgName as string) ?? undefined
           session.user.mustChangePassword = token.mustChangePassword as boolean
           session.user.emailVerified = token.emailVerified as boolean
+          session.user.isGithubProvisioned = token.isGithubProvisioned as boolean
         }
       }
       return session
