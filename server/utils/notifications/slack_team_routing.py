@@ -1,17 +1,13 @@
 """Team-channel routing via the background agent.
 
-Phase 6: instead of composing one templated message per description-matched
-channel and posting it top-level (the old deterministic loop in
-slack_notification_service), we hand routing to the agent so it behaves like a
-teammate — reads the Slack memory, the connected channels and their recent
+We hand routing to a full agent so it behaves like a teammate. 
+It reads the Slack memory, the connected channels and their recent
 history, checks the Incident Index for whether this is a recurrence, and decides
 which channel(s) (if any) to post to and whether to thread a follow-up under an
 existing conversation instead of adding a new top-level message.
 
-This module only *builds the prompt and dispatches* the background agent
-(run_background_chat, mode="agent"). The actual posting is done by the agent via
-the post_slack_message tool. Kept separate from the notification service so the
-deterministic primary incidents-channel card path stays independent of the LLM.
+This module only *builds the prompt and dispatches* the background agent (run_background_chat, mode="agent"). 
+The actual posting is done by the agent via the post_slack_message tool. 
 """
 
 import logging
