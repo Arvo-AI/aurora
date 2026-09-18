@@ -6,8 +6,6 @@ posts to team channels (via post_slack_message) and builds its teammate prompt.
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 import utils.notifications.slack_team_routing as tr
 from tests.utils.notifications.slack_fakes import folded_incident, standalone_incident
 
