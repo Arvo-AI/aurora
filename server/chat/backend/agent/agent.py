@@ -355,10 +355,22 @@ class Agent:
                         _lm = state.messages[-1]
                         _last_msg_content = _lm.content if isinstance(getattr(_lm, 'content', ''), str) else str(getattr(_lm, 'content', ''))
                     if _last_msg_content:
+                        # For Slack-sourced sessions, always inject the "Slack"
+                        # memory (teammate policy) regardless of the selector so
+                        # tone/notification behaviour is consistently applied.
+                        _force_entries = None
+                        _rca_ctx = getattr(state, "rca_context", None) or {}
+                        if str(_rca_ctx.get("source", "")).lower() == "slack":
+                            from services.memory.slack_memory import (
+                                SLACK_MEMORY_CATEGORY,
+                                SLACK_MEMORY_TITLE,
+                            )
+                            _force_entries = [(SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE)]
                         _memory_prefetch = MemoryPrefetch(
                             user_id=state.user_id,
                             session_id=state.session_id,
                             user_message=_last_msg_content,
+                            force_entries=_force_entries,
                         )
                         _memory_prefetch.start()
                 except Exception as _mpe:

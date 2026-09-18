@@ -44,9 +44,14 @@ class FakeSlackClient:
 
     def __init__(self, *, fail_thread=False, fail_delete=False, fail_all=False, transport_error=False,
                  ignore_thread=False, missing=(), replies=None, reject_with="cannot_reply_to_message",
-                 fail_update=False, cards=None):
+                 fail_update=False, cards=None, not_in_channel_until_joined=False, join_succeeds=True):
         self.fail_thread = fail_thread  # ok=false on any threaded post
         self.fail_delete = fail_delete
+        # Simulate a channel Aurora isn't in: posts raise not_in_channel until a
+        # successful join_channel flips membership. join_succeeds gates that join.
+        self.not_in_channel_until_joined = not_in_channel_until_joined
+        self.join_succeeds = join_succeeds
+        self.joined = []  # channel ids join_channel was called with
         self.fail_update = fail_update  # chat.update rejected with cant_update_message
         self.fail_all = fail_all  # ok=false on any post
         self.reject_with = reject_with  # the ok=false error code for fail_thread / fail_all
@@ -69,6 +74,9 @@ class FakeSlackClient:
         self.attempts += 1
         if self.transport_error:
             raise ValueError("Failed to communicate with Slack: read timeout")
+        # Not a member yet → Slack rejects the post until we join the channel.
+        if self.not_in_channel_until_joined and channel not in self.joined:
+            raise SlackAPIError("not_in_channel")
         if self.fail_all or (self.fail_thread and thread_ts):
             raise SlackAPIError(self.reject_with)
         self._n += 1
@@ -97,6 +105,11 @@ class FakeSlackClient:
         if self.fail_delete:
             raise SlackAPIError("cant_delete_message")
         self.deleted.append((channel, ts))
+
+    def join_channel(self, channel):
+        self.joined.append(channel)
+        # Mirrors SlackClient.join_channel: returns channel info or None.
+        return {"id": channel} if self.join_succeeds else None
 
     def get_message(self, channel, ts):
         self.lookups.append(ts)

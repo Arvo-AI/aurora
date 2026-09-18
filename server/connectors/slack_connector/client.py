@@ -148,6 +148,18 @@ class SlackClient:
     def set_channel_topic(self, channel: str, topic: str) -> Dict[str, Any]:
         """Set channel topic/description."""
         return self._make_request("POST", "conversations.setTopic", {"channel": channel, "topic": topic})
+
+    def get_channel_info(self, channel: str) -> Optional[Dict[str, Any]]:
+        """Fetch a channel's metadata (name, topic, purpose, membership) via
+        conversations.info. Returns None on failure so callers can degrade."""
+        try:
+            result = self._make_request(
+                "GET", "conversations.info", {"channel": channel}, timeout=15, max_retries=1
+            )
+            return result.get("channel")
+        except Exception:
+            logger.warning("Could not fetch channel info", exc_info=True)
+            return None
     
     def list_bot_channels(self, types: str = "public_channel,private_channel") -> List[Dict[str, Any]]:
         """List channels the bot is a member of (much smaller set than all visible channels)."""
@@ -163,6 +175,38 @@ class SlackClient:
             channels = result.get('channels', [])
             all_channels.extend(channels)
             
+            cursor = result.get('response_metadata', {}).get('next_cursor')
+            if not cursor:
+                break
+        return all_channels
+
+    def list_all_channels(
+        self,
+        types: str = "public_channel,private_channel",
+        max_channels: int = 2000,
+    ) -> List[Dict[str, Any]]:
+        """List every channel visible in the workspace via conversations.list.
+
+        Unlike list_bot_channels (bot-membership only), this enumerates all
+        channels so Aurora can be aware of the whole workspace. Paginated with a
+        hard cap so a huge workspace can't run unbounded.
+        """
+        all_channels: List[Dict[str, Any]] = []
+        cursor = None
+
+        while True:
+            data = {"types": types, "exclude_archived": True, "limit": 200}
+            if cursor:
+                data["cursor"] = cursor
+
+            result = self._make_request("GET", "conversations.list", data)
+            channels = result.get('channels', [])
+            all_channels.extend(channels)
+
+            if len(all_channels) >= max_channels:
+                logger.warning("list_all_channels hit safety cap of %d channels", max_channels)
+                break
+
             cursor = result.get('response_metadata', {}).get('next_cursor')
             if not cursor:
                 break

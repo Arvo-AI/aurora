@@ -165,6 +165,10 @@ def slack_callback():
                 "team_name": team_name,
                 "team_id": team_info.get('id'),
                 "user_id": authed_user.get('id'),
+                # Bot's own Slack user id — used to recognise Aurora's own joins in
+                # member_joined_channel events (so we auto-register channels Aurora
+                # is invited to, e.g. incident.io-created ones).
+                "bot_user_id": token_data.get('bot_user_id'),
                 "connected_at": int(time.time()),
                 "incidents_channel_id": channel_result.get('channel_id'),
                 "incidents_channel_name": channel_result.get('channel_name'),
@@ -175,7 +179,26 @@ def slack_callback():
             if org_id and channel_result.get('channel_id'):
                 store_org_preference(org_id, 'slack_incidents_channel_id', channel_result['channel_id'])
                 store_org_preference(org_id, 'slack_incidents_channel_name', channel_result.get('channel_name', ''))
-            
+
+            # Seed the default "Slack" memory (teammate policy) so Aurora starts
+            # with sensible behaviour. Non-destructive: skips if one already
+            # exists, so user/agent edits survive reconnects. Best-effort — a
+            # seeding failure must not fail the connection.
+            try:
+                from services.memory.slack_memory import seed_slack_memory
+                seed_slack_memory(user_id)
+            except Exception:
+                logging.warning("Failed to seed Slack memory (non-fatal)", exc_info=True)
+
+            # Auto-register the workspace's channels (all, capped to the 50 most
+            # recent) so Aurora is immediately aware of them and generates cheap
+            # descriptions. Best-effort — never fail the connection over this.
+            try:
+                from routes.slack.slack_channels import auto_register_channels
+                auto_register_channels(user_id, team_id=team_info.get('id'))
+            except Exception:
+                logging.warning("Failed to auto-register Slack channels (non-fatal)", exc_info=True)
+
             logging.info("Incidents channel ready, Slack credentials stored successfully")
         except Exception as e:
             logging.exception("Failed to store Slack credentials")

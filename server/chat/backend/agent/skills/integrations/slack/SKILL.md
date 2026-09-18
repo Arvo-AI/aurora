@@ -11,7 +11,9 @@ tools:
   - list_slack_channels
   - get_channel_history
   - get_thread_replies
-index: "Slack messaging -- list channels, read messages, read threads"
+  - get_connected_slack_channels
+  - post_slack_message
+index: "Slack messaging -- list channels, read messages, read threads, post messages"
 rca_priority: 50
 metadata:
   author: aurora
@@ -23,16 +25,43 @@ metadata:
 ## Overview
 Read-only tools for searching Slack conversations. Used during postmortem generation to gather human context (deployment decisions, communication gaps, resolution steps) and during interactive chat for incident investigation.
 
-## Tools
+The tool signatures and parameters are provided to you in the tool schema — this
+skill only covers *when* to use each and Slack-specific behaviour.
 
-### `list_slack_channels()`
-Returns all channels the bot can access: id, name, topic, purpose, member count. Use channel names and topics to identify relevant channels for the incident (look for service names, "incident", "oncall", "alerts").
+## Choosing a tool
+- **`get_connected_slack_channels`** is the routing-decision source: the channels
+  Aurora is aware of, each with a description of what it's for and which
+  team/service it serves. Use it to pick which channel(s) are relevant when
+  posting about an incident or notifying a team — and combine it with the
+  `Slack` behaviour memory (below), which holds the team/channel routing
+  *preferences* the descriptions alone don't capture.
+- **`list_slack_channels`** is a live, description-less listing of channels the
+  bot can access — use it for discovery (scan names/topics for a service or
+  "incident"/"oncall"/"alerts"), not routing.
+- **`get_channel_history` / `get_thread_replies`** read messages; scope history
+  to the incident time window and follow into a thread when `reply_count > 0`.
+- **`post_slack_message`** is the one write tool. Post a new message, or set
+  `thread_ts` to reply UNDER an existing message. Available in Agent mode only.
 
-### `get_channel_history(channel_id, oldest?, latest?, limit?)`
-Fetch messages from a channel. Scope with `oldest`/`latest` (ISO 8601) to the incident time window. Returns message text, timestamps, user IDs, and thread metadata (reply_count, thread_ts).
+## Posting like a teammate
 
-### `get_thread_replies(channel_id, thread_ts, limit?)`
-Fetch replies in a thread. Use when a message has `reply_count > 0` and looks relevant.
+When you post about an incident, behave like a human on-call would — don't just
+dump a card into every channel:
+
+1. Decide **who cares** using `get_connected_slack_channels` + the `Slack` memory.
+   If no channel is relevant, **stay silent** (post nothing).
+2. Before posting, **read the recent history** of the target channel
+   (`get_channel_history`) and check whether this incident is already being
+   discussed — your own earlier message, an incident.io/PagerDuty thread, or a
+   human asking about it.
+3. **Recurring incident** (you've seen it before — check the Incident Index in
+   your prompt and your prior messages): reply IN THE THREAD of the existing
+   message with a short note (e.g. "Still happening — 3rd time today, same DB
+   pool exhaustion") using `thread_ts`. Do **not** start a new top-level message.
+4. **New incident**: post a new, short message. Match the channel's preferred
+   format from the `Slack` memory (some teams want a plain human line, others a
+   short structured summary).
+5. Keep it terse. One or two lines beats a wall of text.
 
 ## Strategy for Incident Investigation
 
@@ -41,7 +70,23 @@ Fetch replies in a thread. Use when a message has `reply_count > 0` and looks re
 3. Look for messages about: deployments, rollbacks, alerts firing, team handoffs, escalations
 4. If a message has `reply_count > 0` and looks relevant, call `get_thread_replies` for full context
 
+## Slack behaviour memory
+
+Aurora's Slack behaviour (tone, when to speak, which teams/channels to notify)
+lives in a single memory entry: category `context`, title `Slack`. It is seeded
+on connect and is user- and agent-editable.
+
+- **Read it** whenever you act in Slack (it is auto-injected on Slack-sourced
+  sessions, but you may also `read_memory(category='context', title='Slack')`).
+- **Update it** when the team states a preference: use `edit_memory` /
+  `append_to_memory` to record things like "be quiet in #general", "post
+  conclusions to #payments-oncall", or a team → channel routing rule. This is
+  how Aurora learns per-team Slack policy over time.
+- Keep channel-specific preferences under the "Per-channel notes" section.
+
 ## Limitations
-- Read-only — cannot post messages
-- Bot must be a member of the channel to read it
+- `post_slack_message` posts a plain mrkdwn message (or threaded reply); rich
+  interactive cards are still posted by the notification service, not the agent
+- Bot must be a member of the channel to read it (posting auto-joins on
+  not_in_channel)
 - No cross-channel search — must check channels individually by name

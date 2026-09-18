@@ -395,7 +395,12 @@ def send_message_to_aurora(
                 f"{space_context}\n--- End of space context ---\n"
             )
 
-        full_message = f"{message_text}{context_str}"
+        # Lead with an explicit space identity so the agent can resolve "this
+        # space"/"this channel" and scope any directive it saves to the right
+        # space. Google Chat spaces have no local registry, so the stable
+        # resource id is the anchor.
+        space_header = f"[Google Chat message from space {space_name}]\n\n"
+        full_message = f"{space_header}{message_text}{context_str}"
 
         trigger_metadata = {
             "source": "google_chat",

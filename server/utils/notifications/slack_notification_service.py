@@ -7,9 +7,10 @@ import logging
 import os
 from typing import Dict, Any, Optional
 from datetime import datetime
-from connectors.slack_connector.client import SlackClient, get_slack_client_for_user
+from connectors.slack_connector.client import SlackClient, get_slack_client_for_user, SlackAPIError
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
+from utils.log_sanitizer import sanitize, hash_for_log
 from utils.notifications.slack_threading import (
     KEPT_REPLIES,
     LOOKUP_FAILED,
@@ -175,14 +176,22 @@ def send_slack_investigation_started_notification(user_id: str, incident_data: D
         # of opening a second top-level card. The post becomes the thread
         # parent only when it landed top-level and no live parent is stored.
         stored_ts = incident_data.get('slack_message_ts')
-        result = post_with_thread_fallback(client, channel=channel_id, text=text, blocks=blocks, thread_ts=stored_ts)
+        try:
+            result = post_with_thread_fallback(client, channel=channel_id, text=text, blocks=blocks, thread_ts=stored_ts)
+        except SlackAPIError as e:
+            # not_in_channel → join the incidents channel once and retry so the
+            # anchor 'Started' message (which the whole thread hangs off) lands.
+            if not _join_channel_if_needed(client, channel_id, e):
+                raise
+            result = post_with_thread_fallback(client, channel=channel_id, text=text, blocks=blocks, thread_ts=stored_ts)
         record_thread_parent(client, channel=channel_id, user_id=user_id, incident_id=incident_id,
                              result=result, stored=stored_ts)
         logger.info(f"[SlackNotification] Sent 'started' notification for incident {incident_id}")
         return True
             
     except Exception:
-        logger.exception("[SlackNotification] Error sending started notification")
+        logger.exception("[SlackNotification] Error sending started notification for incident %s",
+                         incident_data.get("incident_id", "unknown"))
         return False
     
 def _post_recurrence_reply(client: SlackClient, channel_id: str, user_id: str, incident_data: Dict[str, Any], *,
@@ -307,13 +316,41 @@ def _post_incident_card(client: SlackClient, channel_id: str, user_id: str, inci
     return True
 
 
+def _join_channel_if_needed(client: SlackClient, channel_id: str, err: SlackAPIError) -> bool:
+    """If a post failed with ``not_in_channel``, try to join the channel once.
+
+    Aurora acting like a teammate: join the public channel it's meant to post in,
+    then let the caller retry. Returns True if a join was attempted (caller should
+    retry), False otherwise. Private channels can't be self-joined (need an
+    invite) — Slack returns ``channel_not_found``/``not_in_channel`` and the join
+    call fails, so we surface a clear log instead of silently looping.
+    """
+    if "not_in_channel" not in str(err):
+        return False
+    logger.info("[SlackNotification] Not in channel %s; attempting to join before retry",
+                hash_for_log(channel_id))
+    joined = client.join_channel(channel_id)
+    if not joined:
+        logger.warning("[SlackNotification] Could not join channel %s (private, or bot lacks "
+                       "channels:join) — message not delivered here", hash_for_log(channel_id))
+    return bool(joined)
+
+
 def send_slack_investigation_completed_notification(
     user_id: str,
-    incident_data: Dict[str, Any]
+    incident_data: Dict[str, Any],
+    post_primary_card: bool = True,
 ) -> bool:
     """
     Send Slack notification when RCA investigation completes.
-    
+
+    post_primary_card: whether to post the structured card to the incidents
+        channel. This mirrors the org's "Investigation Complete" toggle. When
+        False, the incidents-channel card (and its folded-recurrence reply) is
+        skipped, but the description-driven routing to team channels still runs
+        — routing is the core teammate behaviour and is gated per-channel by the
+        Slack memory, not by this toggle.
+
     Args:
         user_id: User ID to send notification to
         incident_data: Dictionary containing incident details
@@ -354,7 +391,14 @@ def send_slack_investigation_completed_notification(
         incident_id = incident_data.get('incident_id', 'unknown')
         incident_url = _get_incident_url(incident_id)
 
-        if _post_recurrence_reply(client, channel_id, user_id, incident_data, incident_url=incident_url):
+        # Recurrence folding is anchored to the incidents channel (that's where
+        # the anchor's Started thread lives), so keep folded replies there.
+        # Only when the incidents-channel card is enabled — a folded "Still
+        # firing" reply is itself a card. When cards are off we skip it and fall
+        # through to team-channel routing below.
+        if post_primary_card and _post_recurrence_reply(
+            client, channel_id, user_id, incident_data, incident_url=incident_url
+        ):
             return True
         # Standalone, or a folded child whose anchor thread is unavailable:
         # the full card under this incident's own Started message.
@@ -473,10 +517,50 @@ def send_slack_investigation_completed_notification(
             logger.warning(f"[SlackNotification] Truncating blocks from {len(blocks)} to {SLACK_MAX_BLOCKS - 5}")
             blocks = blocks[:SLACK_MAX_BLOCKS - 5]
         
-        return _post_incident_card(client, channel_id, user_id, incident_data, kind="completed", blocks=blocks)
+        # Post the full structured card to the incidents channel (keeps threading
+        # under this incident's Started message, and its escaped title/service).
+        # Isolated so a failure here (e.g. Aurora not in the channel) can't stop
+        # the team-channel routing below. Skipped entirely when the org's
+        # "Investigation Complete" card toggle is off — routing still runs.
+        primary_ok = False
+        if post_primary_card:
+            try:
+                primary_ok = _post_incident_card(client, channel_id, user_id, incident_data, kind="completed", blocks=blocks)
+            except SlackAPIError as e:
+                # not_in_channel → join the incidents channel once and retry.
+                if _join_channel_if_needed(client, channel_id, e):
+                    try:
+                        primary_ok = _post_incident_card(client, channel_id, user_id, incident_data, kind="completed", blocks=blocks)
+                    except Exception:
+                        logger.exception("[SlackNotification] Primary card retry failed for incident %s "
+                                         "in channel %s", incident_id, hash_for_log(channel_id))
+                else:
+                    logger.error("[SlackNotification] Primary card post failed for incident %s in "
+                                 "channel %s: %s", incident_id, hash_for_log(channel_id), sanitize(e))
+            except Exception:
+                logger.exception("[SlackNotification] Primary card post failed for incident %s in "
+                                 "channel %s", incident_id, hash_for_log(channel_id))
+
+        # Then hand team-channel routing to the background agent. It reads the
+        # Slack memory, connected channels and recent history, and decides —
+        # like a teammate — which channel(s) (if any) to post to and whether to
+        # thread a follow-up on a recurring incident instead of adding noise.
+        # Fire-and-forget: never block or fail the primary card on it.
+        routed_any = False
+        try:
+            from utils.notifications.slack_team_routing import trigger_team_routing_agent
+            routed_any = trigger_team_routing_agent(user_id, incident_data)
+        except Exception:
+            logger.warning("[SlackNotification] Could not dispatch team-routing agent for "
+                           "incident %s (non-fatal)", incident_id, exc_info=True)
+
+        # Success = the incidents card posted OR the team-routing agent was
+        # dispatched. With the card toggle off, dispatching routing is success.
+        return primary_ok or routed_any
 
     except Exception:
-        logger.exception("[SlackNotification] Error sending completed notification")
+        logger.exception("[SlackNotification] Error sending completed notification for incident %s",
+                         incident_data.get("incident_id", "unknown"))
         return False
 
 
@@ -564,7 +648,8 @@ def send_slack_investigation_failed_notification(
                                    error_text=error_text)
 
     except Exception:
-        logger.exception("[SlackNotification] Error sending failed notification")
+        logger.exception("[SlackNotification] Error sending failed notification for incident %s",
+                         incident_data.get("incident_id", "unknown"))
         return False
 
 

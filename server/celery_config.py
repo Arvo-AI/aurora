@@ -38,6 +38,40 @@ celery_app = Celery('aurora_tasks',
                     broker=redis_url,
                     backend=redis_url)
 
+# ------------------------------------------------------------
+# Tolerant result serializer.
+#
+# Background chat tasks run heavy async streaming; a cancelled coroutine can
+# leave an ``asyncio.CancelledError`` embedded in the task's result/meta. The
+# stock kombu JSON encoder then dies at RESULT-STORE time with
+# ``EncodeError: Object of type CancelledError is not JSON serializable`` — a
+# failure that happens AFTER the task body ran (in a pool callback), so it
+# can't be caught by our task-level try/except and it poisons the result
+# backend. Register a JSON serializer that stringifies any unknown object
+# instead of raising, and use it for results so storing a result can never
+# crash. Task *inputs* stay on strict 'json' (we control those payloads).
+# ------------------------------------------------------------
+try:
+    import json as _json
+    from kombu.serialization import register as _kombu_register
+
+    def _tolerant_json_dumps(obj):
+        # default=str: any non-JSON leaf (exceptions, objects) becomes its repr
+        # rather than raising, so result encoding is always safe.
+        return _json.dumps(obj, default=str)
+
+    _kombu_register(
+        "json-tolerant",
+        _tolerant_json_dumps,
+        _json.loads,
+        content_type="application/x-json-tolerant",
+        content_encoding="utf-8",
+    )
+except Exception as _ser_err:  # pragma: no cover - never block worker startup
+    logging.getLogger(__name__).warning(
+        "Could not register tolerant JSON serializer; falling back to 'json': %s", _ser_err
+    )
+
 # Configure SSL for Redis broker/backend when using rediss:// scheme
 if redis_url.startswith('rediss://'):
     import ssl as _ssl
@@ -65,8 +99,9 @@ if redis_url.startswith('rediss://'):
 # Configure Celery
 celery_app.conf.update(
     task_serializer='json',
-    accept_content=['json'],
-    result_serializer='json',
+    accept_content=['json', 'json-tolerant'],
+    result_serializer='json-tolerant',
+    result_accept_content=['json', 'json-tolerant'],
     timezone='UTC',
     enable_utc=True,
     task_track_started=True,
@@ -114,6 +149,7 @@ celery_app.conf.update(
         'tasks.change_gating',
         'routes.bitbucket.bitbucket_selection',
         'routes.github.github_repo_metadata',
+        'routes.slack.slack_channel_metadata',
         'utils.repo_metadata',
         'services.actions.scheduler',
     ],
@@ -246,6 +282,12 @@ try:
     logging.info("GitHub repo metadata task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import GitHub repo metadata task: {e}")
+
+try:
+    importlib.import_module("routes.slack.slack_channel_metadata")  # registers Celery task
+    logging.info("Slack channel metadata task imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import Slack channel metadata task: {e}")
 
 # Log the number of registered tasks for debugging
 if hasattr(celery_app, 'tasks'):
