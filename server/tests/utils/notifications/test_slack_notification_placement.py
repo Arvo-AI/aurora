@@ -10,7 +10,7 @@ from datetime import datetime
 import pytest
 
 from utils.notifications import slack_notification_service as svc
-from utils.notifications import slack_routing
+from utils.notifications import slack_team_routing
 
 from utils.notifications.slack_threading import RECURRENCE_FOOTER_BLOCK_ID
 from .slack_fakes import ANCHOR_ID, ANCHOR_TS, CHAN, CHILD_ID, CHILD_TS, FIRST_POSTED_TS
@@ -460,23 +460,20 @@ class TestNotInChannelRecovery:
 
 class TestCardToggleVsRouting:
     """The "Investigation Complete" card toggle (post_primary_card) governs only
-    the incidents-channel card. Team-channel routing always runs regardless."""
+    the incidents-channel card. Team-channel routing (now the background agent)
+    always runs regardless."""
 
     def test_card_off_skips_incidents_card_but_still_routes(self, monkeypatch, make_client, patched_db,
                                                              standalone, slack_helpers_stub):
         client = make_client()
         monkeypatch.setattr(svc, "get_slack_client_for_user", lambda user_id: client)
         monkeypatch.setattr(svc, "_get_incidents_channel_id", lambda user_id, c: CHAN)
-        # One routed team channel, distinct from the incidents channel.
+        # The team-routing agent is dispatched (fire-and-forget) instead of the
+        # old deterministic compose+send loop.
+        calls = []
         monkeypatch.setattr(
-            slack_routing, "resolve_notification_channels",
-            lambda user_id, data, primary: [
-                {"channel_id": "C_DBTEAM", "channel_name": "db-team", "description": "database team"}
-            ],
-        )
-        monkeypatch.setattr(
-            slack_routing, "compose_channel_message",
-            lambda *a, **k: "db-team: postgres primary is degraded — see report",
+            slack_team_routing, "trigger_team_routing_agent",
+            lambda user_id, data: calls.append((user_id, data.get("incident_id"))) or True,
         )
 
         ok = svc.send_slack_investigation_completed_notification(
@@ -486,23 +483,19 @@ class TestCardToggleVsRouting:
         # No incidents-channel card: no update in place, and nothing posted to CHAN.
         assert client.updated == []
         assert all(m["channel"] != CHAN for m in client.sent), client.sent
-        # The routed team channel still received its composed message.
-        routed = [m for m in client.sent if m["channel"] == "C_DBTEAM"]
-        assert len(routed) == 1
-        assert "db-team" in routed[0]["text"]
+        # Routing was still dispatched to the agent.
+        assert len(calls) == 1
 
     def test_card_on_posts_incidents_card_and_routes(self, monkeypatch, make_client, patched_db,
                                                       standalone, slack_helpers_stub):
         client = make_client()
         monkeypatch.setattr(svc, "get_slack_client_for_user", lambda user_id: client)
         monkeypatch.setattr(svc, "_get_incidents_channel_id", lambda user_id, c: CHAN)
+        calls = []
         monkeypatch.setattr(
-            slack_routing, "resolve_notification_channels",
-            lambda user_id, data, primary: [
-                {"channel_id": "C_DBTEAM", "channel_name": "db-team", "description": "database team"}
-            ],
+            slack_team_routing, "trigger_team_routing_agent",
+            lambda user_id, data: calls.append(user_id) or True,
         )
-        monkeypatch.setattr(slack_routing, "compose_channel_message", lambda *a, **k: "db-team msg")
 
         ok = svc.send_slack_investigation_completed_notification(
             "u1", standalone(), post_primary_card=True,
@@ -510,23 +503,21 @@ class TestCardToggleVsRouting:
         assert ok is True
         # Card updated the incidents-channel Started message in place …
         assert len(client.updated) == 1 and client.updated[0]["ts"] == ANCHOR_TS
-        # … and the routed team channel still got its message.
-        assert any(m["channel"] == "C_DBTEAM" for m in client.sent)
+        # … and the routing agent was still dispatched.
+        assert len(calls) == 1
 
     def test_card_off_folded_child_skips_reply_but_routes(self, monkeypatch, make_client, patched_db,
                                                            folded, slack_helpers_stub):
         # A folded recurrence with cards off must NOT post the "Still firing"
-        # reply (that's a card) but must still route to team channels.
+        # reply (that's a card) but must still dispatch team routing.
         client = make_client()
         monkeypatch.setattr(svc, "get_slack_client_for_user", lambda user_id: client)
         monkeypatch.setattr(svc, "_get_incidents_channel_id", lambda user_id, c: CHAN)
+        calls = []
         monkeypatch.setattr(
-            slack_routing, "resolve_notification_channels",
-            lambda user_id, data, primary: [
-                {"channel_id": "C_DBTEAM", "channel_name": "db-team", "description": "db"}
-            ],
+            slack_team_routing, "trigger_team_routing_agent",
+            lambda user_id, data: calls.append(user_id) or True,
         )
-        monkeypatch.setattr(slack_routing, "compose_channel_message", lambda *a, **k: "db-team msg")
 
         ok = svc.send_slack_investigation_completed_notification(
             "u1", folded(), post_primary_card=False,
@@ -536,5 +527,5 @@ class TestCardToggleVsRouting:
         # message is NOT retired (that retirement is part of card placement).
         assert all(m["channel"] != CHAN for m in client.sent), client.sent
         assert client.deleted == []
-        # Routing still happened.
-        assert any(m["channel"] == "C_DBTEAM" for m in client.sent)
+        # Routing still dispatched.
+        assert len(calls) == 1

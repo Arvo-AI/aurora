@@ -12,7 +12,8 @@ tools:
   - get_channel_history
   - get_thread_replies
   - get_connected_slack_channels
-index: "Slack messaging -- list channels, read messages, read threads"
+  - post_slack_message
+index: "Slack messaging -- list channels, read messages, read threads, post messages"
 rca_priority: 50
 metadata:
   author: aurora
@@ -39,6 +40,28 @@ skill only covers *when* to use each and Slack-specific behaviour.
   "incident"/"oncall"/"alerts"), not routing.
 - **`get_channel_history` / `get_thread_replies`** read messages; scope history
   to the incident time window and follow into a thread when `reply_count > 0`.
+- **`post_slack_message`** is the one write tool. Post a new message, or set
+  `thread_ts` to reply UNDER an existing message. Available in Agent mode only.
+
+## Posting like a teammate
+
+When you post about an incident, behave like a human on-call would — don't just
+dump a card into every channel:
+
+1. Decide **who cares** using `get_connected_slack_channels` + the `Slack` memory.
+   If no channel is relevant, **stay silent** (post nothing).
+2. Before posting, **read the recent history** of the target channel
+   (`get_channel_history`) and check whether this incident is already being
+   discussed — your own earlier message, an incident.io/PagerDuty thread, or a
+   human asking about it.
+3. **Recurring incident** (you've seen it before — check the Incident Index in
+   your prompt and your prior messages): reply IN THE THREAD of the existing
+   message with a short note (e.g. "Still happening — 3rd time today, same DB
+   pool exhaustion") using `thread_ts`. Do **not** start a new top-level message.
+4. **New incident**: post a new, short message. Match the channel's preferred
+   format from the `Slack` memory (some teams want a plain human line, others a
+   short structured summary).
+5. Keep it terse. One or two lines beats a wall of text.
 
 ## Strategy for Incident Investigation
 
@@ -62,7 +85,8 @@ on connect and is user- and agent-editable.
 - Keep channel-specific preferences under the "Per-channel notes" section.
 
 ## Limitations
-- Read-only messaging today (posting is handled by the notification service and
-  the @mention flow, not by these tools)
-- Bot must be a member of the channel to read it
+- `post_slack_message` posts a plain mrkdwn message (or threaded reply); rich
+  interactive cards are still posted by the notification service, not the agent
+- Bot must be a member of the channel to read it (posting auto-joins on
+  not_in_channel)
 - No cross-channel search — must check channels individually by name

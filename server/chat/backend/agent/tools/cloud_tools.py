@@ -1441,6 +1441,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             get_channel_history,
             get_thread_replies,
             get_connected_slack_channels,
+            post_slack_message,
             is_slack_connected,
         )
         if _safe_connected(is_slack_connected, "Slack"):
@@ -1448,6 +1449,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             tool_functions.append((get_channel_history, "get_channel_history"))
             tool_functions.append((get_thread_replies, "get_thread_replies"))
             tool_functions.append((get_connected_slack_channels, "get_connected_slack_channels"))
+            # Write tool — filtered out of ask mode by ModeAccessController.
+            tool_functions.append((post_slack_message, "post_slack_message"))
             logging.info(f"Added Slack tools for user {user_id}")
     except Exception as e:
         logging.warning(f"Failed to add Slack tools: {e}")
@@ -1790,8 +1793,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             from .slack_tool import GetConnectedSlackChannelsArgs
             tool = StructuredTool.from_function(
                 func=final_func,
-                name=name,
-                description=(
+                name=name,                description=(
                     "List the Slack channels Aurora is aware of, each with a description "
                     "of what it's for and which team/service it serves. Call this to decide "
                     "which channel(s) are relevant when posting about an incident or "
@@ -1800,6 +1802,22 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "to #payments-oncall', 'stay quiet in #general')."
                 ),
                 args_schema=GetConnectedSlackChannelsArgs,
+            )
+        elif name == 'post_slack_message':
+            from .slack_tool import PostSlackMessageArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Post a message to a Slack channel. Set thread_ts to reply UNDER an "
+                    "existing message (use this for a follow-up on a recurring incident so "
+                    "it threads under the earlier conversation instead of adding a new "
+                    "top-level message and noise). Omit thread_ts to start a new message. "
+                    "Keep messages short and human. Only post to channels the routing "
+                    "policy (Slack memory + channel descriptions) says are relevant; stay "
+                    "silent otherwise."
+                ),
+                args_schema=PostSlackMessageArgs,
             )
         else:
             tool = StructuredTool.from_function(final_func)
