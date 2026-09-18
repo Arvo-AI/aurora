@@ -479,35 +479,30 @@ def send_slack_investigation_completed_notification(
         # under this incident's Started message, and its escaped title/service).
         # Then route the conclusion to any description-matched team channels, where
         # the message is composed per that channel's team/format preferences.
+        primary_ok = _post_incident_card(client, channel_id, user_id, incident_data, kind="completed", blocks=blocks)
+
         try:
             from utils.notifications.slack_routing import (
                 resolve_notification_channels,
                 compose_channel_message,
-                _channel_descriptions,
             )
-            descriptions = _channel_descriptions(user_id)
             base_link = _get_incident_url(incident_id)
-        except Exception:
-            logger.warning("[SlackNotification] routing setup failed (non-fatal)", exc_info=True)
-            descriptions, base_link = {}, _get_incident_url(incident_id)
-
-        primary_ok = _post_incident_card(client, channel_id, user_id, incident_data, kind="completed", blocks=blocks)
-
-        try:
+            # Routing returns the chosen channel rows (id + name + description),
+            # so no second lookup is needed to compose each message.
             targets = resolve_notification_channels(user_id, incident_data, channel_id)
             # Extras get a standalone message — no in-place update/threading,
             # which is anchored to the incidents channel and must not be reused
             # here (it would clobber slack_message_ts / thread under a wrong ts).
             # Each extra channel's message is composed for that team/channel; the
             # incidents channel keeps its structured, escaped card above.
-            for extra_channel in targets:
+            for target in targets:
+                extra_channel = target.get("channel_id")
                 if extra_channel and extra_channel != channel_id:
                     try:
-                        desc = descriptions.get(extra_channel, {})
                         text = compose_channel_message(
                             user_id, incident_data,
-                            channel_name=desc.get("name") or extra_channel,
-                            channel_description=desc.get("description") or "",
+                            channel_name=target.get("channel_name") or extra_channel,
+                            channel_description=target.get("description") or "",
                             base_summary=summary_for_slack,
                             incident_url=base_link,
                             fallback_text=f"Analysis Complete: {alert_title}",

@@ -28,7 +28,8 @@ def test_parse_handles_garbage_and_empty():
 
 def test_no_candidates_falls_back_to_default():
     with patch.object(slack_routing, "_load_candidate_channels", return_value=[]):
-        assert slack_routing.resolve_notification_channels("u1", {}, "C_DEFAULT") == ["C_DEFAULT"]
+        out = slack_routing.resolve_notification_channels("u1", {}, "C_DEFAULT")
+    assert [c["channel_id"] for c in out] == ["C_DEFAULT"]
 
 
 def test_llm_error_falls_back_to_default():
@@ -38,7 +39,8 @@ def test_llm_error_falls_back_to_default():
          patch("utils.auth.stateless_auth.get_org_id_for_user", return_value="org1"), \
          patch("services.memory.slack_memory.read_slack_memory", return_value="policy"), \
          patch("chat.backend.agent.providers.create_chat_model", side_effect=RuntimeError("boom")):
-        assert slack_routing.resolve_notification_channels("u1", {}, "C_DEFAULT") == ["C_DEFAULT"]
+        out = slack_routing.resolve_notification_channels("u1", {}, "C_DEFAULT")
+    assert [c["channel_id"] for c in out] == ["C_DEFAULT"]
 
 
 def test_hook_blocked_falls_back_to_default():
@@ -46,7 +48,8 @@ def test_hook_blocked_falls_back_to_default():
     with patch.object(slack_routing, "_load_candidate_channels", return_value=candidates), \
          patch("utils.hooks.get_hook", return_value=lambda *a, **k: (False, "limit reached")), \
          patch("utils.auth.stateless_auth.get_org_id_for_user", return_value="org1"):
-        assert slack_routing.resolve_notification_channels("u1", {}, "C_DEFAULT") == ["C_DEFAULT"]
+        out = slack_routing.resolve_notification_channels("u1", {}, "C_DEFAULT")
+    assert [c["channel_id"] for c in out] == ["C_DEFAULT"]
 
 
 def test_llm_pick_returns_matched_channel():
@@ -65,7 +68,8 @@ def test_llm_pick_returns_matched_channel():
         out = slack_routing.resolve_notification_channels(
             "u1", {"alert_title": "pay failed", "service": "payments", "severity": "high"}, "C_DEFAULT"
         )
-    assert out == ["C1"]
+    # Returns the full chosen row so the caller can compose without a re-fetch.
+    assert out == [{"channel_id": "C1", "channel_name": "payments", "description": "payments incidents"}]
 
 
 def test_llm_empty_pick_falls_back_to_default():
@@ -78,7 +82,8 @@ def test_llm_empty_pick_falls_back_to_default():
          patch("services.memory.slack_memory.read_slack_memory", return_value="policy"), \
          patch("chat.backend.agent.providers.create_chat_model", return_value=MagicMock()), \
          patch("chat.backend.agent.utils.llm_usage_tracker.tracked_invoke", return_value=fake_resp):
-        assert slack_routing.resolve_notification_channels("u1", {}, "C_DEFAULT") == ["C_DEFAULT"]
+        out = slack_routing.resolve_notification_channels("u1", {}, "C_DEFAULT")
+    assert [c["channel_id"] for c in out] == ["C_DEFAULT"]
 
 
 # --- compose_channel_message ------------------------------------------------

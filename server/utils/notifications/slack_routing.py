@@ -102,20 +102,27 @@ def _parse_channel_ids(raw: str, valid_ids: set[str]) -> list[str]:
 
 
 def resolve_notification_channels(user_id: str, incident_data: dict,
-                                  default_channel_id: str) -> list[str]:
-    """Return the channel id(s) to post an incident notification to.
+                                  default_channel_id: str) -> list[dict]:
+    """Return the channel(s) to post an incident notification to.
 
-    Uses the Slack memory + channel table via one cheap-model call. Falls back to
-    ``[default_channel_id]`` whenever routing can't confidently decide (no
-    candidates, LLM unavailable/blocked, empty/parse-failed result) so a
-    notification is never dropped.
+    Each item is ``{"channel_id", "channel_name", "description"}`` — the same
+    rows loaded for routing, so callers can compose per-channel messages without
+    a second DB read. Uses the Slack memory + channel table via one cheap-model
+    call. Falls back to just the default incidents channel (as a bare-id dict)
+    whenever routing can't confidently decide (no candidates, LLM
+    unavailable/blocked, empty/parse-failed result) so a notification is never
+    dropped.
     """
+    def _default() -> list[dict]:
+        # Default channel isn't necessarily in the table — return a bare-id dict.
+        return [{"channel_id": default_channel_id, "channel_name": None, "description": ""}] if default_channel_id else []
+
     candidates = _load_candidate_channels(user_id)
     # No routing table to reason over — keep the current single-channel behaviour.
     if not candidates:
-        return [default_channel_id] if default_channel_id else []
+        return _default()
 
-    valid_ids = {c["channel_id"] for c in candidates}
+    by_id = {c["channel_id"]: c for c in candidates}
 
     try:
         # Respect cost gating exactly like the channel-description task.
@@ -125,7 +132,7 @@ def resolve_notification_channels(user_id: str, incident_data: dict,
         allowed, message = get_hook("before_llm_call")(org_id, user_id)
         if not allowed:
             logger.info("[SlackRouting] LLM hook blocked routing (%s); using default channel", message)
-            return [default_channel_id] if default_channel_id else []
+            return _default()
 
         from services.memory.slack_memory import read_slack_memory
         from chat.backend.agent.providers import create_chat_model
@@ -157,17 +164,17 @@ def resolve_notification_channels(user_id: str, incident_data: dict,
             request_type="slack_notification_routing",
         )
         from chat.backend.agent.utils.message_content import extract_text_from_content
-        chosen = _parse_channel_ids(extract_text_from_content(response.content), valid_ids)
+        chosen = _parse_channel_ids(extract_text_from_content(response.content), set(by_id))
 
         if chosen:
             logger.info("[SlackRouting] routed to %d channel(s) for user %s",
                         len(chosen), sanitize(user_id))
-            return chosen
+            return [by_id[cid] for cid in chosen]
     except Exception:
         logger.warning("[SlackRouting] routing failed; using default channel", exc_info=True)
 
     # No confident match — default incidents channel keeps us from dropping it.
-    return [default_channel_id] if default_channel_id else []
+    return _default()
 
 
 # Template handed to the model. It gets the incident facts + a base summary, the
@@ -199,21 +206,6 @@ Rules:
 - Use Slack mrkdwn only (*bold*, _italic_, `code`). No block-kit, no JSON, no HTML.
 - Include the report link if it's useful.
 - Output ONLY the message text to post — no preamble, no explanation."""
-
-
-def _channel_descriptions(user_id: str) -> dict:
-    """Map channel_id -> {name, description} for the org's known channels.
-
-    Used to give the message composer the target channel's purpose. Returns {}
-    on any error so the caller falls back to a non-adaptive message.
-    """
-    try:
-        return {
-            c["channel_id"]: {"name": c["channel_name"], "description": c["description"]}
-            for c in _load_candidate_channels(user_id)
-        }
-    except Exception:
-        return {}
 
 
 def compose_channel_message(
