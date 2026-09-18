@@ -130,20 +130,24 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
         const controller = new AbortController()
         const timeout = setTimeout(() => controller.abort(), 10000)
-        const response = await fetch(`${backendUrl}/api/auth/handoff`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token: credentials.token }),
-          signal: controller.signal,
-        })
-        clearTimeout(timeout)
-
-        if (!response.ok) {
-          console.error("Handoff exchange failed:", response.status)
+        try {
+          const response = await fetch(`${backendUrl}/api/auth/handoff`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: credentials.token }),
+            signal: controller.signal,
+          })
+          if (!response.ok) {
+            console.error("Handoff exchange failed:", response.status)
+            return null
+          }
+          return await response.json()
+        } catch (err) {
+          console.error("Handoff exchange error:", err)
           return null
+        } finally {
+          clearTimeout(timeout)
         }
-
-        return await response.json()
       }
     })
   ],

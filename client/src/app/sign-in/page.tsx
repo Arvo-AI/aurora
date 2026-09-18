@@ -103,10 +103,6 @@ function AuthPage() {
     ;(async () => {
       try {
         const result = await signIn("handoff", { token: handoffToken, redirect: false })
-        // Scrub the token from the URL/history either way.
-        const url = new URL(globalThis.location.href)
-        url.searchParams.delete("handoff")
-        globalThis.history.replaceState(null, "", url.toString())
         if (result?.ok) {
           globalThis.location.href = "/connectors?installed=github"
         } else {
@@ -117,6 +113,9 @@ function AuthPage() {
         setHandoffInFlight(false)
         setError("An error occurred. Please try again.")
       } finally {
+        const url = new URL(globalThis.location.href)
+        url.searchParams.delete("handoff")
+        globalThis.history.replaceState(null, "", url.toString())
         setIsLoading(false)
       }
     })()
