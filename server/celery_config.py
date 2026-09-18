@@ -91,6 +91,7 @@ celery_app.conf.update(
         'routes.elastic.tasks',
         'routes.dynatrace.tasks',
         'routes.bigpanda.tasks',
+        'routes.splunk_on_call.tasks',
         'routes.pagerduty.tasks',
         'routes.opsgenie.tasks',
         'routes.newrelic.tasks',
@@ -180,6 +181,12 @@ try:
     logging.info("BigPanda tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import BigPanda tasks: {e}")
+
+try:
+    import routes.splunk_on_call.tasks  # noqa: F401
+    logging.info("Splunk On-Call tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import Splunk On-Call tasks: {e}")
 
 try:
     import routes.pagerduty.tasks
