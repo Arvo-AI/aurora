@@ -65,13 +65,16 @@ class AsyncSaveQueue:
                 await self.queue.put(None)  # Sentinel to stop worker
             except Exception:
                 logger.debug("[AsyncSaveQueue] Could not enqueue stop sentinel", exc_info=True)
-            try:
-                await self.worker_task
-            except asyncio.CancelledError:
-                # Expected during loop teardown — not an error.
+            # gather(..., return_exceptions=True) collects the worker's result —
+            # including a CancelledError from loop teardown — without re-raising it
+            # into stop(). This avoids swallowing our own cancellation (Sonar S7497)
+            # while still tolerating an expected shutdown-time cancel of the worker.
+            results = await asyncio.gather(self.worker_task, return_exceptions=True)
+            err = results[0]
+            if isinstance(err, asyncio.CancelledError):
                 logger.debug("[AsyncSaveQueue] Save worker was cancelled during stop")
-            except Exception:
-                logger.warning("[AsyncSaveQueue] Save worker errored during stop", exc_info=True)
+            elif isinstance(err, Exception):
+                logger.warning("[AsyncSaveQueue] Save worker errored during stop", exc_info=err)
             logger.info("✓ Async save queue stopped")
     
     async def enqueue_save(self, session_id: str, user_id: str, 

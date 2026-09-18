@@ -856,9 +856,13 @@ def run_background_chat(
         if trigger_metadata and trigger_metadata.get('source') in ['google_chat', 'google_chat_button']:
             try:
                 gchat_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
-                _chat_reply_sent = bool(_send_response_to_google_chat(
+                # _send_response_to_google_chat returns None; a raised exception
+                # (caught below) is the only failure signal, so a clean return means
+                # the reply attempt completed — mark sent to avoid a double fallback.
+                _send_response_to_google_chat(
                     user_id, session_id, trigger_metadata, fallback_text=gchat_fallback,
-                ))
+                )
+                _chat_reply_sent = True
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
         
