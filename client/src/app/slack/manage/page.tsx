@@ -32,14 +32,14 @@ const NOTIFICATION_GROUPS = [
   {
     id: "investigation",
     label: "Investigations",
-    description: "When Aurora runs an RCA investigation",
+    description: "Status cards in your incidents channel when Aurora runs an RCA",
     startKey: "slack_investigation_start_notifications" as PreferenceKey,
     endKey: "slack_investigation_complete_notifications" as PreferenceKey,
   },
   {
     id: "actions",
     label: "Actions",
-    description: "When an Aurora Action runs",
+    description: "Status cards in your incidents channel when an Aurora Action runs",
     startKey: "slack_action_start_notifications" as PreferenceKey,
     endKey: "slack_action_complete_notifications" as PreferenceKey,
   },
@@ -433,7 +433,11 @@ export default function SlackManagePage() {
               Notification Settings
             </CardTitle>
             <CardDescription>
-              Configure which events send notifications to your Slack channel
+              Control the incident status cards Aurora posts to your main
+              incidents channel. This does not affect Aurora replying when
+              @mentioned, or Aurora posting an investigation&apos;s conclusion to
+              the relevant team channels — that routing is always on and is
+              tuned per channel in Aurora&apos;s Slack memory.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
