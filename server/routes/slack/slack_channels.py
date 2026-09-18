@@ -58,6 +58,13 @@ _PLATFORM_PATTERNS = (
     ("opsgenie", re.compile(r"\bopsgenie\b")),
 )
 
+# Channel-name heuristics. Anchored on the left (token start) so we match
+# "incident"/"alert" as words/prefixes, not an arbitrary substring mid-token
+# (also clears CodeQL's URL-substring sanitization rule). Right side is loose so
+# "alerts"/"oncall-db"/"incident-42" still match.
+_INCIDENT_NAME_RE = re.compile(r"(?:^|[\s\-_])inc(?:ident)?(?:[\s\-_]|$)|\bincident")
+_TEAM_NAME_RE = re.compile(r"\balert|\bon-?call|\bsev(?:[\s\-_]|$)")
+
 
 def _classify_channel(channel: dict) -> tuple[str, str | None]:
     """Best-effort (channel_type, detected_platform) from a Slack channel dict.
@@ -79,11 +86,13 @@ def _classify_channel(channel: dict) -> tuple[str, str | None]:
             platform = platform_name
             break
 
-    # Incident channels: platform-created OR named like one.
-    if platform or name.startswith(("incident", "inc-", "inc_")) or "incident" in name:
+    # Incident channels: platform-created OR named like one. Anchored patterns
+    # (not bare `in name`) both read as intent and clear CodeQL's URL-substring
+    # rule, which flags substring membership on URL-like text.
+    if platform or _INCIDENT_NAME_RE.search(name):
         return "incident", platform
     # Alerting/on-call channels are still team-facing routing targets.
-    if any(k in name for k in ("alert", "oncall", "on-call", "sev")):
+    if _TEAM_NAME_RE.search(name):
         return "team", platform
     return "general", platform
 

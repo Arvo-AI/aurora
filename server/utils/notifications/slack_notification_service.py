@@ -10,7 +10,7 @@ from datetime import datetime
 from connectors.slack_connector.client import SlackClient, get_slack_client_for_user, SlackAPIError
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
-from utils.log_sanitizer import sanitize
+from utils.log_sanitizer import sanitize, hash_for_log
 from utils.notifications.slack_threading import (
     KEPT_REPLIES,
     LOOKUP_FAILED,
@@ -328,11 +328,11 @@ def _join_channel_if_needed(client: SlackClient, channel_id: str, err: SlackAPIE
     if "not_in_channel" not in str(err):
         return False
     logger.info("[SlackNotification] Not in channel %s; attempting to join before retry",
-                sanitize(channel_id))
+                hash_for_log(channel_id))
     joined = client.join_channel(channel_id)
     if not joined:
         logger.warning("[SlackNotification] Could not join channel %s (private, or bot lacks "
-                       "channels:join) — message not delivered here", sanitize(channel_id))
+                       "channels:join) — message not delivered here", hash_for_log(channel_id))
     return bool(joined)
 
 
@@ -533,13 +533,13 @@ def send_slack_investigation_completed_notification(
                         primary_ok = _post_incident_card(client, channel_id, user_id, incident_data, kind="completed", blocks=blocks)
                     except Exception:
                         logger.exception("[SlackNotification] Primary card retry failed for incident %s "
-                                         "in channel %s", incident_id, sanitize(channel_id))
+                                         "in channel %s", incident_id, hash_for_log(channel_id))
                 else:
                     logger.error("[SlackNotification] Primary card post failed for incident %s in "
-                                 "channel %s: %s", incident_id, sanitize(channel_id), e)
+                                 "channel %s: %s", incident_id, hash_for_log(channel_id), sanitize(e))
             except Exception:
                 logger.exception("[SlackNotification] Primary card post failed for incident %s in "
-                                 "channel %s", incident_id, sanitize(channel_id))
+                                 "channel %s", incident_id, hash_for_log(channel_id))
 
         # Then hand team-channel routing to the background agent. It reads the
         # Slack memory, connected channels and recent history, and decides —
