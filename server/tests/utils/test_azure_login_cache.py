@@ -235,6 +235,9 @@ def test_pod_isolation_disables_caching(monkeypatch, setting):
     "login --service-principal -u x -p y --tenant z",
     "az login",
     "az --output json login",          # global flag value ahead of the group
+    "--output json --query x --subscription y login --service-principal -u a -p b --tenant t",
+    "--output json --query x --subscription y account set -s z",
+    "group show --name login",         # a value that looks like a group is treated as one
     "logout",
     "account set --subscription S",
     "az account clear",

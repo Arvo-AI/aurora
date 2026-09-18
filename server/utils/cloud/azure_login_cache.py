@@ -117,10 +117,11 @@ def uses_local_cli_state(command: str) -> bool:
     if tokens and tokens[0].lower() == "az":
         tokens = tokens[1:]
     words = [t.lower() for t in tokens if not t.startswith("-")]
-    # Deliberately loose: a global flag's value can sit before the group
-    # (`az --output json login`). A false positive only costs one private login;
-    # a false negative would let a command replace the identity in a shared directory.
-    if any(w in _LOCAL_STATE_GROUPS for w in words[:3]):
+    # Deliberately loose: any number of global flag values can sit before the
+    # group (`az --output json --query x --subscription y login`), so every word is
+    # checked. A false positive only costs one private login; a false negative
+    # would let a command replace the identity in a shared directory.
+    if any(w in _LOCAL_STATE_GROUPS for w in words):
         return True
     return any(
         a == "account" and b in _LOCAL_STATE_ACCOUNT_SUBCOMMANDS
