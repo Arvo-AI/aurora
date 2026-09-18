@@ -13,7 +13,7 @@ users curate by *dismissing* irrelevant ones rather than picking relevant ones.
 Endpoints (all behind ``connectors`` RBAC):
 
     GET    /slack/channels                       -> stored channels {connected, dismissed}
-    POST   /slack/channels/refresh               -> re-scan & register newly-visible channels
+    POST   /slack/channels/refresh               -> re-scan: add new & prune deleted channels
     DELETE /slack/channels                       -> forget all channels
     POST   /slack/channels/<id>/dismiss          -> hide a channel from routing (stays in Slack)
     POST   /slack/channels/<id>/restore          -> un-dismiss a channel
@@ -41,6 +41,11 @@ logger = logging.getLogger(__name__)
 # bound LLM cost/volume in large workspaces. ALL channels are still registered
 # (so Aurora is aware of them); only the most recent this-many are described.
 MAX_AUTO_CHANNELS = 50
+
+# Hard cap on how many channels we enumerate from Slack in one pass. Seeing fewer
+# than this means we paged through the whole workspace, so a stored channel that's
+# absent can be safely pruned; hitting it means the list is partial (don't prune).
+LIST_CHANNELS_CAP = 2000
 
 
 # Word-boundary patterns for incident-platform detection. Using anchored regex
@@ -181,20 +186,31 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
     only the most recent ``describe_limit`` (ranked member-first, then recency)
     are described and the rest stay ``metadata_status='skipped'`` until a user
     explicitly requests one. Channels the user previously dismissed are never
-    re-added. Best-effort; returns the number of descriptions enqueued.
+    re-added. Channels Slack no longer lists (deleted/archived, or a private
+    channel Aurora was removed from) are pruned from the table when the
+    enumeration is complete — Slack itself is never modified. Best-effort;
+    returns the number of descriptions enqueued.
     Idempotent — existing rows are updated, not duplicated.
     """
     try:
         client = get_slack_client_for_user(user_id)
         if not client:
             return 0
-        channels = client.list_all_channels()
+        # Own the cap here so we can tell a complete enumeration (safe to prune
+        # stale rows) from a truncated one (must NOT prune — we'd delete real
+        # channels we simply didn't page through).
+        channels = client.list_all_channels(max_channels=LIST_CHANNELS_CAP)
     except Exception:
         logger.warning("[slack_channels] auto-register: failed to list channels", exc_info=True)
         return 0
 
     if not channels:
         return 0
+
+    # Only reconcile deletions when we saw the whole workspace. Hitting the cap
+    # means the list is partial, so absence doesn't imply the channel is gone.
+    enumeration_complete = len(channels) < LIST_CHANNELS_CAP
+    live_ids = {c.get("id") for c in channels if c.get("id")}
 
     # Derive team_id from stored creds when the caller didn't supply it (e.g. the
     # manual "refresh" path), so rows are tagged consistently with the OAuth path.
@@ -242,6 +258,22 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
                     )
                     if is_new and _cid and will_describe:
                         newly_added_to_describe.append(_cid)
+
+                # Reconcile deletions: rows we have for channels Slack no longer
+                # lists (deleted/archived, or a private channel Aurora was removed
+                # from) are pruned so Aurora doesn't route to dead channels. Only
+                # when the enumeration was complete (see above). Never touches
+                # Slack — this deletes Aurora's own rows only.
+                if enumeration_complete and existing:
+                    stale_ids = [cid for cid in existing if cid not in live_ids]
+                    if stale_ids:
+                        cur.execute(
+                            """DELETE FROM slack_channels
+                               WHERE provider = 'slack' AND channel_id = ANY(%s)""",
+                            (stale_ids,),
+                        )
+                        logger.info("[slack_channels] pruned %d channel(s) no longer in Slack",
+                                    len(stale_ids))
                 conn.commit()
     except Exception:
         logger.warning("[slack_channels] auto-register: DB upsert failed", exc_info=True)
@@ -402,8 +434,9 @@ def refresh_slack_channels(user_id):
     For workspaces connected before auto-registration existed (or when new
     channels have appeared), this brings the stored channel list up to date
     without requiring a reconnect. Idempotent: existing rows/descriptions are
-    preserved, dismissed channels stay dismissed, and only genuinely-new
-    channels are added (the most recent also get a description). Never removes.
+    preserved and dismissed channels stay dismissed. New channels are added (the
+    most recent also get a description); channels Slack no longer lists
+    (deleted/archived) are pruned from Aurora's table (Slack is never modified).
     """
     try:
         described = auto_register_channels(user_id)

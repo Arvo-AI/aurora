@@ -171,6 +171,78 @@ def test_auto_register_skips_dismissed_channels():
     assert enqueued == []  # C1 already existed, so nothing new to describe
 
 
+def test_auto_register_prunes_channels_gone_from_slack():
+    """A stored channel absent from a complete enumeration is deleted."""
+    from unittest.mock import MagicMock
+
+    # Slack now lists only C1; C_OLD was deleted/archived (or bot removed).
+    channels = [{"id": "C1", "name": "one", "is_member": True, "created": 300}]
+    fake_client = MagicMock()
+    fake_client.list_all_channels.return_value = channels
+
+    def fake_upsert(cur, user_id, org_id, ch, existing, initial_status="pending"):
+        existing[ch["channel_id"]] = user_id
+        return ch["channel_id"], False
+
+    conn = MagicMock()
+    cur = MagicMock()
+    # We have rows for C1 (still live) and C_OLD (gone).
+    cur.fetchall.return_value = [("C1", "u", False), ("C_OLD", "u", False)]
+    conn.cursor.return_value.__enter__ = lambda s: cur
+    conn.cursor.return_value.__exit__ = lambda s, *a: False
+    dbcm = MagicMock()
+    dbcm.__enter__ = lambda s: conn
+    dbcm.__exit__ = lambda s, *a: False
+
+    with patch.object(mod, "get_slack_client_for_user", return_value=fake_client), \
+         patch.object(mod, "resolve_org", return_value="00000000-0000-0000-0000-000000000000"), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
+         patch.object(mod, "_enqueue_metadata", side_effect=lambda uid, cid: None):
+        mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=50)
+
+    # A DELETE targeting exactly the stale id must have run.
+    delete_calls = [c for c in cur.execute.call_args_list
+                    if "DELETE FROM slack_channels" in c.args[0]]
+    assert len(delete_calls) == 1
+    assert delete_calls[0].args[1] == (["C_OLD"],)
+
+
+def test_auto_register_does_not_prune_when_enumeration_truncated():
+    """Hitting the cap means a partial list — never prune, or we'd delete real ones."""
+    from unittest.mock import MagicMock
+
+    # Exactly the cap → list is (assumed) truncated, so C_OLD must survive.
+    channels = [{"id": f"C{i}", "name": str(i), "is_member": True, "created": i}
+                for i in range(mod.LIST_CHANNELS_CAP)]
+    fake_client = MagicMock()
+    fake_client.list_all_channels.return_value = channels
+
+    def fake_upsert(cur, user_id, org_id, ch, existing, initial_status="pending"):
+        existing[ch["channel_id"]] = user_id
+        return ch["channel_id"], False
+
+    conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchall.return_value = [("C_OLD", "u", False)]
+    conn.cursor.return_value.__enter__ = lambda s: cur
+    conn.cursor.return_value.__exit__ = lambda s, *a: False
+    dbcm = MagicMock()
+    dbcm.__enter__ = lambda s: conn
+    dbcm.__exit__ = lambda s, *a: False
+
+    with patch.object(mod, "get_slack_client_for_user", return_value=fake_client), \
+         patch.object(mod, "resolve_org", return_value="00000000-0000-0000-0000-000000000000"), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
+         patch.object(mod, "_enqueue_metadata", side_effect=lambda uid, cid: None):
+        mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=50)
+
+    assert not any("DELETE FROM slack_channels" in c.args[0] for c in cur.execute.call_args_list)
+
+
 # --- register_single_channel (member_joined_channel path) -------------------
 
 def _single_reg_db(fetchone_row):
