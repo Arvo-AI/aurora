@@ -146,6 +146,9 @@ x-common-env: &common-env
   # Pod Isolation (disabled for local)
   ENABLE_POD_ISOLATION: ${ENABLE_POD_ISOLATION}
 
+  # Azure CLI login reuse: idle seconds before a cached `az login` is dropped (0 disables)
+  AZURE_LOGIN_CACHE_IDLE_SECONDS: ${AZURE_LOGIN_CACHE_IDLE_SECONDS:-1800}
+
   # Security
   FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
 

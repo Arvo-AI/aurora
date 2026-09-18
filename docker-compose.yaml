@@ -116,6 +116,9 @@ x-common-env: &common-env
   # Pod Isolation
   ENABLE_POD_ISOLATION: ${ENABLE_POD_ISOLATION}
 
+  # Azure CLI login reuse: idle seconds before a cached `az login` is dropped (0 disables)
+  AZURE_LOGIN_CACHE_IDLE_SECONDS: ${AZURE_LOGIN_CACHE_IDLE_SECONDS:-1800}
+
 
   # Feature Flags (single NEXT_PUBLIC_ENABLE_* vars for both backend and frontend)
   NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
