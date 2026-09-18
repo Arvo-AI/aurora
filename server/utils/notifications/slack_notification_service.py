@@ -541,59 +541,21 @@ def send_slack_investigation_completed_notification(
                 logger.exception("[SlackNotification] Primary card post failed for incident %s in "
                                  "channel %s", incident_id, sanitize(channel_id))
 
-        # Then route the conclusion to any description-matched team channels, where
-        # the message is composed per that channel's team/format preferences.
+        # Then hand team-channel routing to the background agent. It reads the
+        # Slack memory, connected channels and recent history, and decides —
+        # like a teammate — which channel(s) (if any) to post to and whether to
+        # thread a follow-up on a recurring incident instead of adding noise.
+        # Fire-and-forget: never block or fail the primary card on it.
         routed_any = False
         try:
-            from utils.notifications.slack_routing import (
-                resolve_notification_channels,
-                compose_channel_message,
-            )
-            base_link = _get_incident_url(incident_id)
-            # Routing returns the chosen channel rows (id + name + description),
-            # so no second lookup is needed to compose each message.
-            targets = resolve_notification_channels(user_id, incident_data, channel_id)
-            # Extras get a standalone message — no in-place update/threading,
-            # which is anchored to the incidents channel and must not be reused
-            # here (it would clobber slack_message_ts / thread under a wrong ts).
-            # Each extra channel's message is composed for that team/channel; the
-            # incidents channel keeps its structured, escaped card above.
-            for target in targets:
-                extra_channel = target.get("channel_id")
-                if extra_channel and extra_channel != channel_id:
-                    text = compose_channel_message(
-                        user_id, incident_data,
-                        channel_name=target.get("channel_name") or extra_channel,
-                        channel_description=target.get("description") or "",
-                        base_summary=summary_for_slack,
-                        incident_url=base_link,
-                        fallback_text=f"Analysis Complete: {alert_title}",
-                    )
-                    try:
-                        client.send_message(channel=extra_channel, text=text)
-                        routed_any = True
-                    except SlackAPIError as e:
-                        # not_in_channel → join and retry once, else log & move on.
-                        if _join_channel_if_needed(client, extra_channel, e):
-                            try:
-                                client.send_message(channel=extra_channel, text=text)
-                                routed_any = True
-                            except Exception:
-                                logger.warning("[SlackNotification] Retry after join failed for "
-                                               "routed channel %s (incident %s)",
-                                               sanitize(extra_channel), incident_id, exc_info=True)
-                        else:
-                            logger.warning("[SlackNotification] Failed to post to routed channel %s "
-                                           "(incident %s): %s", sanitize(extra_channel), incident_id, e)
-                    except Exception:
-                        logger.warning("[SlackNotification] Failed to post to routed channel %s "
-                                       "(incident %s)", sanitize(extra_channel), incident_id, exc_info=True)
+            from utils.notifications.slack_team_routing import trigger_team_routing_agent
+            routed_any = trigger_team_routing_agent(user_id, incident_data)
         except Exception:
-            logger.warning("[SlackNotification] extra-channel routing failed for incident %s "
-                           "(non-fatal)", incident_id, exc_info=True)
+            logger.warning("[SlackNotification] Could not dispatch team-routing agent for "
+                           "incident %s (non-fatal)", incident_id, exc_info=True)
 
-        # Success = the incidents card posted OR at least one team channel got the
-        # routed conclusion. With the card toggle off, routing alone is success.
+        # Success = the incidents card posted OR the team-routing agent was
+        # dispatched. With the card toggle off, dispatching routing is success.
         return primary_ok or routed_any
 
     except Exception:
