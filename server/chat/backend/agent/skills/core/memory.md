@@ -27,6 +27,17 @@ HOW TO VERIFY BEFORE ACTING ON MEMORY:
 WHEN TO SAVE IMMEDIATELY:
 - The user explicitly asks you to remember something
 - The user corrects your approach or confirms a non-obvious approach worked
+- The user gives a STANDING DIRECTIVE — any instruction meant to persist beyond the
+  current message, even if phrased casually and without the word "remember". Signals:
+  "from now on…", "always/never…", "on every incident…", "going forward…", "by default…",
+  "for this channel/team only…", or any protocol, convention, or behavioral preference for
+  how you should act. Acknowledging it in your reply is NOT enough — the reply is forgotten
+  when the session ends. You MUST write it to a `context` memory FIRST (edit_memory /
+  append_to_memory an existing relevant entry, else write_memory), THEN confirm briefly that
+  you recorded it. Do this on ANY surface (chat, Slack, Google Chat, RCA) and even
+  mid-investigation: capture the directive, then continue.
+- If a directive is scoped ("for this channel/team/service only"), record that scope
+  explicitly in the entry so it isn't over-applied elsewhere.
 
 WHAT NOT TO SAVE:
 - Ephemeral investigation data (logs, metrics snapshots, one-off commands)
