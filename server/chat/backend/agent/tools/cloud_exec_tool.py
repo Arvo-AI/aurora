@@ -25,6 +25,7 @@ _ISOLATED_HOME = "/home/appuser" if _POD_ISOLATION else str(Path.home())
 
 from utils.auth.cloud_auth import generate_contextual_access_token
 from utils.auth.cloud_auth import generate_azure_access_token
+from utils.cloud import azure_login_cache
 from utils.secrets.secret_ref_utils import get_user_token_data, get_token_owner_id
 from .output_sanitizer import sanitize_command_output, filter_error_messages, truncate_json_fields
 from .cloud_provider_utils import determine_target_provider_from_context
@@ -141,10 +142,11 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
             raise ValueError("Incomplete Azure credentials for CLI authentication")
         
         # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
-        # AZURE_CONFIG_DIR must be per-invocation: `az login` writes auth state to disk,
-        # so a shared dir would race when fanning out across subscriptions in parallel.
-        # ponytail: caller owns the tempdir. The fan-out removes it per subscription;
-        # cloud_exec removes it in its outer finally.
+        # Always hand back a private, empty AZURE_CONFIG_DIR: `az login` writes auth
+        # state to disk and this function has callers (discovery) that delete the
+        # directory they are given. The caller owns the tempdir and must remove it.
+        # cloud_exec may swap it for a shared cached login via azure_login_cache.attach,
+        # which removes this private one; nothing here knows about the cache.
         config_dir = tempfile.mkdtemp(prefix="aurora-az-")
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
@@ -1383,6 +1385,64 @@ def _apply_azure_subscription(command: str, subscription_id: str) -> str:
     return f"{cmd} --subscription {shlex.quote(subscription_id)}"
 
 
+def _run_azure_on_subscription(conn: dict, command: str, isolated_env: dict, timeout: Optional[int]) -> dict:
+    """Run one subscription-pinned command against the shared, already-authenticated config dir.
+
+    The command is pinned to the subscription, so concurrent workers never contend
+    on the CLI's active-subscription state.
+    """
+    sub_id = conn.get("account_id", "unknown")
+    try:
+        cmd = _apply_azure_subscription(command.strip(), sub_id)
+        try:
+            cmd_args = shlex.split(cmd)
+        except ValueError as e:
+            return {"subscription_id": sub_id, "success": False,
+                    "error": f"Command parsing failed: {e}"}
+        result = terminal_run(
+            cmd_args,
+            capture_output=True, text=True,
+            timeout=get_command_timeout(cmd, timeout), env=isolated_env,
+        )
+        return {
+            "subscription_id": sub_id,
+            "success": result.returncode == 0,
+            "output": result.stdout.strip() if result.returncode == 0 else result.stderr.strip(),
+            "return_code": result.returncode,
+        }
+    except Exception as e:
+        logger.exception("Multi-subscription exec failed for %s: %s", sub_id, e)
+        return {"subscription_id": sub_id, "success": False, "error": str(e)[:300]}
+
+
+def _fan_out_azure(conns: list, run_one) -> dict:
+    """Run run_one(conn) for every connection on a thread pool, keyed by subscription id."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    out = {}
+    with ThreadPoolExecutor(max_workers=min(len(conns), 10)) as pool:
+        # Worker threads start with an empty context, so user_id/session_id/state/
+        # mode are all invisible inside them. That makes the safety guardrail fail
+        # closed ("missing user context", exit 126) and makes get_mode_from_context()
+        # fall back to "agent". Copy the context per task: a single Context object
+        # cannot be entered by two threads at once.
+        futures = [pool.submit(contextvars.copy_context().run, run_one, c) for c in conns]
+        for future in as_completed(futures):
+            res = future.result()
+            out[res.pop("subscription_id")] = res
+    return out
+
+
+def _subscriptions_needing_relogin(azure_login, connections: list, results: dict) -> list:
+    """Connections whose failure means the cached login itself was unusable."""
+    stale = []
+    for conn in connections:
+        res = results.get(conn.get("account_id", "unknown"), {})
+        if not res.get("success") and azure_login.should_relogin(res.get("output", "")):
+            stale.append(conn)
+    return stale
+
+
 def _cloud_exec_azure_multi_subscription(
     user_id: str,
     connections: list,
@@ -1402,12 +1462,12 @@ def _cloud_exec_azure_multi_subscription(
     `az login` subprocess plus a private temp dir per subscription. That turns the
     cost from 2N subprocesses / N temp dirs into N+1 subprocesses / 1 temp dir.
 
-    Sharing the config dir across threads is only safe because login happens up
-    front and the fanned-out commands never write auth state — each carries its own
-    `--subscription` flag rather than mutating the CLI's active-subscription setting.
-    Results are keyed by subscription id.
+    Sharing the config dir across threads relies on login happening up front and
+    every fanned-out command carrying its own `--subscription` flag rather than
+    mutating the CLI's active-subscription setting. When a login for these
+    credentials is already cached (utils.cloud.azure_login_cache) the fan-out
+    reuses it and spawns no login at all. Results are keyed by subscription id.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     import shutil as _shutil
 
     current_mode = get_mode_from_context()
@@ -1434,18 +1494,28 @@ def _cloud_exec_azure_multi_subscription(
             "command": command,
             "provider": "azure",
         })
+    # Reuse a cached `az login` for these credentials when there is one, so a warm
+    # fan-out spawns no login at all. None means the fan-out keeps its own private
+    # directory and logs in once, as before.
+    azure_login = azure_login_cache.attach(isolated_env, command)
     config_dir = isolated_env.get("AZURE_CONFIG_DIR")
 
-    try:
+    def _run_azure_login():
         # Auth and command run as separate argv invocations, never through a shell:
         # the secret would otherwise be exposed to shell metacharacter parsing.
         # auth_argv is already a list, so the secret is never re-lexed.
-        auth_result = terminal_run(
+        return terminal_run(
             auth_argv,
             capture_output=True, text=True, timeout=30,
             env=isolated_env, trusted=True,
         )
-        if auth_result.returncode != 0:
+
+    try:
+        if azure_login:
+            auth_ok, _ = azure_login.ensure(_run_azure_login)
+        else:
+            auth_ok = _run_azure_login().returncode == 0
+        if not auth_ok:
             return json.dumps({
                 "success": False,
                 "error": "Azure authentication failed",
@@ -1454,56 +1524,28 @@ def _cloud_exec_azure_multi_subscription(
                 "provider": "azure",
             })
 
-        def _run_on_subscription(conn: dict) -> dict:
-            sub_id = conn.get("account_id", "unknown")
-            try:
-                cmd = _apply_azure_subscription(command.strip(), sub_id)
-                try:
-                    cmd_args = shlex.split(cmd)
-                except ValueError as e:
-                    return {"subscription_id": sub_id, "success": False,
-                            "error": f"Command parsing failed: {e}"}
+        def _run_one(conn: dict) -> dict:
+            return _run_azure_on_subscription(conn, command, isolated_env, timeout)
 
-                # Reuse the shared, already-authenticated config dir. The command is
-                # pinned to sub_id, so concurrent workers never contend on the CLI's
-                # active-subscription state.
-                result = terminal_run(
-                    cmd_args,
-                    capture_output=True, text=True,
-                    timeout=get_command_timeout(cmd, timeout), env=isolated_env,
-                )
-                return {
-                    "subscription_id": sub_id,
-                    "success": result.returncode == 0,
-                    "output": result.stdout.strip() if result.returncode == 0 else result.stderr.strip(),
-                    "return_code": result.returncode,
-                }
-            except Exception as e:
-                logger.exception("Multi-subscription exec failed for %s: %s", sub_id, e)
-                return {"subscription_id": sub_id, "success": False, "error": str(e)[:300]}
+        fan_out_started_at = time.time()
+        results = _fan_out_azure(connections, _run_one)
 
-        results = {}
-        with ThreadPoolExecutor(max_workers=min(len(connections), 10)) as pool:
-            # Worker threads start with an empty context, so user_id/session_id/state/
-            # mode are all invisible inside them. That makes the safety guardrail fail
-            # closed ("missing user context", exit 126) and makes get_mode_from_context()
-            # fall back to "agent". Copy the context per task: a single Context object
-            # cannot be entered by two threads at once.
-            futures = [
-                pool.submit(contextvars.copy_context().run, _run_on_subscription, c)
-                for c in connections
-            ]
-            for future in as_completed(futures):
-                res = future.result()
-                results[res.pop("subscription_id")] = res
+        # A cached login can be gone (swept, expired) or predate a newly connected
+        # subscription. Log in again once and re-run only the subscriptions it failed.
+        if azure_login:
+            stale = _subscriptions_needing_relogin(azure_login, connections, results)
+            if stale and azure_login.relogin(_run_azure_login, fan_out_started_at)[0]:
+                logger.info("Cached Azure login was unusable; logged in again, retrying %d subscription(s)", len(stale))
+                results.update(_fan_out_azure(stale, _run_one))
     finally:
-        # One shared tempdir for the whole fan-out, removed once every worker is done.
-        if config_dir:
+        # A private tempdir is removed once every worker is done. A cached login
+        # directory is shared and outlives the fan-out; the login cache expires it.
+        if config_dir and not azure_login_cache.is_cached_dir(config_dir):
             _shutil.rmtree(config_dir, ignore_errors=True)
 
     elapsed = time.perf_counter() - fn_start if fn_start else 0
-    logger.info("TIME: cloud_exec Azure multi-subscription (%d subs, single login) completed in %.2fs",
-                len(connections), elapsed)
+    logger.info("TIME: cloud_exec Azure multi-subscription (%d subs, %s login) completed in %.2fs",
+                len(connections), "cached" if azure_login else "single", elapsed)
     return json.dumps({
         "success": all(r.get("success") for r in results.values()),
         "multi_subscription": True,
@@ -1645,6 +1687,7 @@ Security & Compliance
         # Set up ISOLATED environment based on provider - NO GLOBAL STATE!
         isolated_env = None
         auth_argv = None
+        azure_login = None
         if normalized_provider == 'azure':
             # Azure multi-subscription: fan out only for `az` commands when no
             # specific subscription was requested. kubectl/helm inherit their
@@ -1667,6 +1710,9 @@ Security & Compliance
             if not success:
                 return json.dumps({"error": f"Failed to setup Azure environment with {provider_preference} authentication", "final_command": command})
             resource_id = subscription_id
+            # Reuse an existing `az login` for these credentials when one is cached.
+            # None means this command keeps its private directory and logs in itself.
+            azure_login = azure_login_cache.attach(isolated_env, original_command)
         elif normalized_provider == 'aws':
             # AWS multi-account: fan out only if no specific account_id given
             if not account_id:
@@ -2112,9 +2158,8 @@ Security & Compliance
         # For Azure, we need to handle authentication differently
         # Execute auth and user command sequentially to preserve argument quoting
         if provider.lower() in ['azure', 'az'] and auth_argv:
-            # First, execute the authentication command
-            try:
-                auth_result = terminal_run(
+            def _run_azure_login():
+                return terminal_run(
                     auth_argv,
                     capture_output=True,
                     text=True,
@@ -2122,11 +2167,20 @@ Security & Compliance
                     env=isolated_env,
                     trusted=True
                 )
-                if auth_result.returncode != 0:
-                    logger.error(f"Azure authentication failed: {auth_result.stderr}")
+
+            # First, execute the authentication command. With a cached login this
+            # only spawns `az login` when the directory is cold.
+            try:
+                if azure_login:
+                    auth_ok, auth_stderr = azure_login.ensure(_run_azure_login)
+                else:
+                    auth_result = _run_azure_login()
+                    auth_ok, auth_stderr = auth_result.returncode == 0, auth_result.stderr
+                if not auth_ok:
+                    logger.error(f"Azure authentication failed: {auth_stderr}")
                     return json.dumps({
                         "success": False,
-                        "error": f"Azure authentication failed: {auth_result.stderr}",
+                        "error": f"Azure authentication failed: {auth_stderr}",
                         "command": command,
                         "final_command": command
                     })
@@ -2148,6 +2202,7 @@ Security & Compliance
         
         # Execute the command
         exec_start = time.perf_counter()
+        exec_started_at = time.time()
         try:
             result = terminal_run(
                 exec_command,  # Use chained command for Azure, direct for others
@@ -2156,6 +2211,19 @@ Security & Compliance
                 timeout=effective_timeout,
                 env=isolated_env  # Use ISOLATED environment - NO global state!
             )
+            # A cached login can be gone (swept, expired) or predate a newly
+            # connected subscription. Log in again and retry exactly once.
+            if azure_login and result.returncode != 0 and azure_login.should_relogin(result.stderr):
+                logger.info("Cached Azure login was unusable; logging in again and retrying once")
+                relogin_ok, _ = azure_login.relogin(_run_azure_login, exec_started_at)
+                if relogin_ok:
+                    result = terminal_run(
+                        exec_command,
+                        capture_output=True,
+                        text=True,
+                        timeout=effective_timeout,
+                        env=isolated_env
+                    )
             logger.info(f"TIME: cloud command execution took {time.perf_counter() - exec_start:.2f}s")
             # Entra-integrated AKS writes a kubeconfig whose exec plugin defaults to
             # devicecode, which is interactive. Convert it to service-principal auth
@@ -2701,10 +2769,13 @@ Security & Compliance
         return exception_result
     finally:
         # setup_azure_environment_isolated mkdtemps an AZURE_CONFIG_DIR per call. The
-        # fan-out path removes its own per subscription, but the single-subscription
-        # path returns from ~20 places, so clean up here where every path converges.
+        # fan-out path cleans up after itself, but the single-subscription path
+        # returns from ~20 places, so clean up here where every path converges.
         # Without this the dirs accumulate in /tmp for the life of the worker.
-        if isinstance(isolated_env, dict) and isolated_env.get("AZURE_CONFIG_DIR"):
+        # A cached login directory is shared and outlives the command; the login
+        # cache expires those itself.
+        if (isinstance(isolated_env, dict) and isolated_env.get("AZURE_CONFIG_DIR")
+                and not azure_login_cache.is_cached_dir(isolated_env["AZURE_CONFIG_DIR"])):
             shutil.rmtree(isolated_env["AZURE_CONFIG_DIR"], ignore_errors=True)
 
 cloud_exec_tool = StructuredTool.from_function(cloud_exec) 
