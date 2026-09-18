@@ -49,11 +49,29 @@ class AsyncSaveQueue:
             logger.info("✓ Async save queue started")
     
     async def stop(self):
-        """Stop the async save worker gracefully."""
+        """Stop the async save worker gracefully.
+
+        Tolerates a cancelled/errored worker task: shutdown races (loop teardown,
+        ``asyncio.run`` cancelling stray tasks) can leave ``worker_task`` in a
+        cancelled state. Awaiting it would then re-raise ``CancelledError``, which
+        propagates out of the background-chat coroutine and becomes the Celery
+        task's (non-serializable) result — silently breaking downstream side
+        effects like the Slack reply. Swallow it: a cancelled save-worker at
+        shutdown is expected, not a failure.
+        """
         self._running = False
         if self.worker_task:
-            await self.queue.put(None)  # Sentinel to stop worker
-            await self.worker_task
+            try:
+                await self.queue.put(None)  # Sentinel to stop worker
+            except Exception:
+                logger.debug("[AsyncSaveQueue] Could not enqueue stop sentinel", exc_info=True)
+            try:
+                await self.worker_task
+            except asyncio.CancelledError:
+                # Expected during loop teardown — not an error.
+                logger.debug("[AsyncSaveQueue] Save worker was cancelled during stop")
+            except Exception:
+                logger.warning("[AsyncSaveQueue] Save worker errored during stop", exc_info=True)
             logger.info("✓ Async save queue stopped")
     
     async def enqueue_save(self, session_id: str, user_id: str, 
