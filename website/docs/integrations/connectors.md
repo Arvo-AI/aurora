@@ -657,25 +657,51 @@ OAuth 2.0 authentication for Slack workspaces.
 
 #### 2. Add Bot Token Scopes
 
-In **OAuth & Permissions** > **Scopes** > **Bot Token Scopes**, add:
+In **OAuth & Permissions** > **Scopes** > **Bot Token Scopes**, add (these must match `SLACK_SCOPES` in `server/connectors/slack_connector/oauth.py`):
 
 | Scope | Purpose |
 |-------|---------|
-| `chat:write` | Send messages |
-| `channels:read` | List channels |
-| `channels:history` | Read channel messages |
-| `channels:join` | Join channels |
 | `app_mentions:read` | Receive @mentions |
+| `chat:write` | Send messages |
+| `channels:join` | Join public channels |
+| `channels:manage` | Create channels, invite users, set topics |
+| `channels:read` | List public channels |
+| `channels:history` | Read public channel messages |
+| `groups:read` | List private channels |
+| `groups:history` | Read private channel messages |
+| `groups:write` | Create private channels |
+| `im:write` | Send direct messages |
+| `im:history` | Read direct messages |
+| `mpim:write` | Send group direct messages |
+| `mpim:history` | Read group direct messages |
 | `users:read` | Get user info |
+| `users:read.email` | Get user email |
 
-#### 3. Get Credentials
+#### 3. Enable Event Subscriptions
+
+In **Event Subscriptions**, toggle **Enable Events** on.
+
+- **Request URL**: `https://your-ngrok-url.ngrok-free.app/slack/events`
+  (or `http://localhost:5080/slack/events` if reachable). The server must be
+  running so Slack's one-time `url_verification` challenge succeeds.
+- Under **Subscribe to bot events**, add:
+
+| Event | Purpose |
+|-------|---------|
+| `app_mention` | Aurora replies when @mentioned (required) |
+| `member_joined_channel` | Auto-register + describe channels Aurora is added to, e.g. incident.io channels (required for auto-registration) |
+
+Save changes. If the app is already installed, Slack will prompt you to
+**reinstall** so the new events and scopes take effect.
+
+#### 4. Get Credentials
 
 In **Basic Information**, copy:
 - **Client ID**
 - **Client Secret**
 - **Signing Secret**
 
-#### 4. Configure Environment
+#### 5. Configure Environment
 
 ```bash
 SLACK_CLIENT_ID=your-slack-client-id
@@ -689,6 +715,8 @@ SLACK_SIGNING_SECRET=your-signing-secret
 |-------|----------|
 | "bad_redirect_uri" | Redirect URL must match exactly in Slack App settings |
 | "Slack OAuth credentials not configured" | Set `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` in `.env` |
+| Aurora doesn't reply to @mentions | Enable **Event Subscriptions**, verify the `/slack/events` Request URL, and subscribe to the `app_mention` bot event, then reinstall the app |
+| Channels Aurora is added to aren't auto-registered | Subscribe to the `member_joined_channel` bot event under **Event Subscriptions**, then reinstall the app |
 
 ---
 
