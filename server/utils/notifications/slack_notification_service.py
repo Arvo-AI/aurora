@@ -7,9 +7,10 @@ import logging
 import os
 from typing import Dict, Any, Optional
 from datetime import datetime
-from connectors.slack_connector.client import SlackClient, get_slack_client_for_user
+from connectors.slack_connector.client import SlackClient, get_slack_client_for_user, SlackAPIError
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
+from utils.log_sanitizer import sanitize
 from utils.notifications.slack_threading import (
     KEPT_REPLIES,
     LOOKUP_FAILED,
@@ -175,14 +176,22 @@ def send_slack_investigation_started_notification(user_id: str, incident_data: D
         # of opening a second top-level card. The post becomes the thread
         # parent only when it landed top-level and no live parent is stored.
         stored_ts = incident_data.get('slack_message_ts')
-        result = post_with_thread_fallback(client, channel=channel_id, text=text, blocks=blocks, thread_ts=stored_ts)
+        try:
+            result = post_with_thread_fallback(client, channel=channel_id, text=text, blocks=blocks, thread_ts=stored_ts)
+        except SlackAPIError as e:
+            # not_in_channel → join the incidents channel once and retry so the
+            # anchor 'Started' message (which the whole thread hangs off) lands.
+            if not _join_channel_if_needed(client, channel_id, e):
+                raise
+            result = post_with_thread_fallback(client, channel=channel_id, text=text, blocks=blocks, thread_ts=stored_ts)
         record_thread_parent(client, channel=channel_id, user_id=user_id, incident_id=incident_id,
                              result=result, stored=stored_ts)
         logger.info(f"[SlackNotification] Sent 'started' notification for incident {incident_id}")
         return True
             
     except Exception:
-        logger.exception("[SlackNotification] Error sending started notification")
+        logger.exception("[SlackNotification] Error sending started notification for incident %s",
+                         incident_data.get("incident_id", "unknown"))
         return False
     
 def _post_recurrence_reply(client: SlackClient, channel_id: str, user_id: str, incident_data: Dict[str, Any], *,
@@ -305,6 +314,26 @@ def _post_incident_card(client: SlackClient, channel_id: str, user_id: str, inci
         + (f" in thread {placed_in}" if placed_in else " top-level")
     )
     return True
+
+
+def _join_channel_if_needed(client: SlackClient, channel_id: str, err: SlackAPIError) -> bool:
+    """If a post failed with ``not_in_channel``, try to join the channel once.
+
+    Aurora acting like a teammate: join the public channel it's meant to post in,
+    then let the caller retry. Returns True if a join was attempted (caller should
+    retry), False otherwise. Private channels can't be self-joined (need an
+    invite) — Slack returns ``channel_not_found``/``not_in_channel`` and the join
+    call fails, so we surface a clear log instead of silently looping.
+    """
+    if "not_in_channel" not in str(err):
+        return False
+    logger.info("[SlackNotification] Not in channel %s; attempting to join before retry",
+                sanitize(channel_id))
+    joined = client.join_channel(channel_id)
+    if not joined:
+        logger.warning("[SlackNotification] Could not join channel %s (private, or bot lacks "
+                       "channels:join) — message not delivered here", sanitize(channel_id))
+    return bool(joined)
 
 
 def send_slack_investigation_completed_notification(
@@ -477,10 +506,28 @@ def send_slack_investigation_completed_notification(
         
         # Post the full structured card to the incidents channel (keeps threading
         # under this incident's Started message, and its escaped title/service).
+        # Isolated so a failure here (e.g. Aurora not in the channel) can't stop
+        # the team-channel routing below.
+        primary_ok = False
+        try:
+            primary_ok = _post_incident_card(client, channel_id, user_id, incident_data, kind="completed", blocks=blocks)
+        except SlackAPIError as e:
+            # not_in_channel → join the incidents channel once and retry.
+            if _join_channel_if_needed(client, channel_id, e):
+                try:
+                    primary_ok = _post_incident_card(client, channel_id, user_id, incident_data, kind="completed", blocks=blocks)
+                except Exception:
+                    logger.exception("[SlackNotification] Primary card retry failed for incident %s "
+                                     "in channel %s", incident_id, sanitize(channel_id))
+            else:
+                logger.error("[SlackNotification] Primary card post failed for incident %s in "
+                             "channel %s: %s", incident_id, sanitize(channel_id), e)
+        except Exception:
+            logger.exception("[SlackNotification] Primary card post failed for incident %s in "
+                             "channel %s", incident_id, sanitize(channel_id))
+
         # Then route the conclusion to any description-matched team channels, where
         # the message is composed per that channel's team/format preferences.
-        primary_ok = _post_incident_card(client, channel_id, user_id, incident_data, kind="completed", blocks=blocks)
-
         try:
             from utils.notifications.slack_routing import (
                 resolve_notification_channels,
@@ -498,26 +545,40 @@ def send_slack_investigation_completed_notification(
             for target in targets:
                 extra_channel = target.get("channel_id")
                 if extra_channel and extra_channel != channel_id:
+                    text = compose_channel_message(
+                        user_id, incident_data,
+                        channel_name=target.get("channel_name") or extra_channel,
+                        channel_description=target.get("description") or "",
+                        base_summary=summary_for_slack,
+                        incident_url=base_link,
+                        fallback_text=f"Analysis Complete: {alert_title}",
+                    )
                     try:
-                        text = compose_channel_message(
-                            user_id, incident_data,
-                            channel_name=target.get("channel_name") or extra_channel,
-                            channel_description=target.get("description") or "",
-                            base_summary=summary_for_slack,
-                            incident_url=base_link,
-                            fallback_text=f"Analysis Complete: {alert_title}",
-                        )
                         client.send_message(channel=extra_channel, text=text)
+                    except SlackAPIError as e:
+                        # not_in_channel → join and retry once, else log & move on.
+                        if _join_channel_if_needed(client, extra_channel, e):
+                            try:
+                                client.send_message(channel=extra_channel, text=text)
+                            except Exception:
+                                logger.warning("[SlackNotification] Retry after join failed for "
+                                               "routed channel %s (incident %s)",
+                                               sanitize(extra_channel), incident_id, exc_info=True)
+                        else:
+                            logger.warning("[SlackNotification] Failed to post to routed channel %s "
+                                           "(incident %s): %s", sanitize(extra_channel), incident_id, e)
                     except Exception:
-                        logger.warning("[SlackNotification] Failed to post to a routed channel",
-                                       exc_info=True)
+                        logger.warning("[SlackNotification] Failed to post to routed channel %s "
+                                       "(incident %s)", sanitize(extra_channel), incident_id, exc_info=True)
         except Exception:
-            logger.warning("[SlackNotification] extra-channel routing failed (non-fatal)", exc_info=True)
+            logger.warning("[SlackNotification] extra-channel routing failed for incident %s "
+                           "(non-fatal)", incident_id, exc_info=True)
 
         return primary_ok
 
     except Exception:
-        logger.exception("[SlackNotification] Error sending completed notification")
+        logger.exception("[SlackNotification] Error sending completed notification for incident %s",
+                         incident_data.get("incident_id", "unknown"))
         return False
 
 
@@ -605,7 +666,8 @@ def send_slack_investigation_failed_notification(
                                    error_text=error_text)
 
     except Exception:
-        logger.exception("[SlackNotification] Error sending failed notification")
+        logger.exception("[SlackNotification] Error sending failed notification for incident %s",
+                         incident_data.get("incident_id", "unknown"))
         return False
 
 
