@@ -64,7 +64,6 @@ def isolated_cache(tmp_path, monkeypatch):
     """Give every test its own cache root, a known key, and a fresh sweep clock."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     monkeypatch.setenv("FLASK_SECRET_KEY", "test-key")
-    monkeypatch.delenv("AZURE_LOGIN_CACHE_IDLE_SECONDS", raising=False)
     # Unset means pod isolation is on (terminal_run's default), which disables the cache.
     monkeypatch.setenv("ENABLE_POD_ISOLATION", "false")
     monkeypatch.setattr(cache, "_last_sweep", 0.0)
@@ -205,7 +204,7 @@ def test_attach_swaps_the_private_directory_for_the_cached_one():
 
 
 def test_disabled_cache_keeps_the_private_directory(monkeypatch):
-    monkeypatch.setenv("AZURE_LOGIN_CACHE_IDLE_SECONDS", "0")
+    monkeypatch.setattr(cache, "_IDLE_SECONDS", 0)
     env = _env()
     private = env["AZURE_CONFIG_DIR"]
 
@@ -293,7 +292,7 @@ def test_idle_login_is_not_reused():
     logins = _Logins(env)
     login.ensure(logins)
 
-    _age_marker(login, last_used=time.time() - cache._DEFAULT_IDLE_SECONDS - 5)
+    _age_marker(login, last_used=time.time() - cache._IDLE_SECONDS - 5)
     login.ensure(logins)
 
     assert logins.count == 2
@@ -304,7 +303,7 @@ def test_use_keeps_a_login_alive():
     login = cache.attach(env, "vm list")
     logins = _Logins(env)
     login.ensure(logins)
-    _age_marker(login, last_used=time.time() - cache._DEFAULT_IDLE_SECONDS + 60)
+    _age_marker(login, last_used=time.time() - cache._IDLE_SECONDS + 60)
 
     login.ensure(logins)
 
@@ -329,7 +328,7 @@ def test_sweep_removes_idle_logins_and_keeps_live_ones(monkeypatch):
     live, idle = cache.attach(live_env, "vm list"), cache.attach(idle_env, "vm list")
     live.ensure(_Logins(live_env))
     idle.ensure(_Logins(idle_env))
-    _age_marker(idle, last_used=time.time() - cache._DEFAULT_IDLE_SECONDS - 5)
+    _age_marker(idle, last_used=time.time() - cache._IDLE_SECONDS - 5)
 
     monkeypatch.setattr(cache, "_last_sweep", 0.0)
     cache.attach(_env(secret="third"), "vm list")  # any Azure command sweeps
@@ -422,10 +421,3 @@ def test_burst_of_failures_costs_one_relogin():
         t.join()
 
     assert logins.count == 2, "one initial login plus exactly one relogin"
-
-
-def test_invalid_idle_setting_falls_back_to_the_default(monkeypatch):
-    monkeypatch.setenv("AZURE_LOGIN_CACHE_IDLE_SECONDS", "soon")
-    assert cache.idle_seconds() == cache._DEFAULT_IDLE_SECONDS
-    monkeypatch.setenv("AZURE_LOGIN_CACHE_IDLE_SECONDS", "-5")
-    assert cache.idle_seconds() == 0

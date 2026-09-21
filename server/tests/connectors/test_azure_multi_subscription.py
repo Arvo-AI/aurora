@@ -392,7 +392,6 @@ def login_cache(tmp_path, monkeypatch):
     from utils.cloud import azure_login_cache
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     monkeypatch.setenv("FLASK_SECRET_KEY", "test-key")
-    monkeypatch.delenv("AZURE_LOGIN_CACHE_IDLE_SECONDS", raising=False)
     monkeypatch.setenv("ENABLE_POD_ISOLATION", "false")  # unset means on, which disables the cache
     monkeypatch.setattr(azure_login_cache, "_last_sweep", 0.0)
     return azure_login_cache

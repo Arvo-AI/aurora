@@ -588,14 +588,6 @@ SMTP_FROM_EMAIL=aurora@example.com
 SMTP_FROM_NAME=Aurora
 ```
 
-## Azure CLI Login Reuse
-
-The `az` CLI cannot take a token from the environment, so Aurora keeps one `az login` per set of Azure credentials and reuses it across commands instead of logging in before every command. Cached logins are private to the container, keyed by the credentials themselves, and deleted once idle. Reuse is off when `ENABLE_POD_ISOLATION` is `true`: commands then run in per-session terminal pods with their own filesystems, so every command logs in as before.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AZURE_LOGIN_CACHE_IDLE_SECONDS` | `1800` | Seconds a cached `az login` may sit unused before it is deleted. `0` disables reuse, so every Azure command logs in again |
-
 ## Kubernetes & Pod Isolation
 
 | Variable | Default | Description |

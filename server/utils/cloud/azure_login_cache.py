@@ -19,10 +19,7 @@ Isolation model:
     after a maximum age. `az` stores the client secret in plaintext inside the
     directory and refuses to run without it, so the idle window bounds how long
     the secret rests on disk.
-
-Each container has its own cache; nothing is shared across containers. With pod
-isolation on, `az` runs in a per-session terminal pod whose filesystem this
-module cannot see, so the cache is disabled there and every command logs in.
+  * Each container has its own cache; nothing is shared across containers.
 """
 
 import fcntl
@@ -44,7 +41,8 @@ logger = logging.getLogger(__name__)
 
 CACHE_DIR_NAME = "aurora-az-login-cache"
 _MARKER = ".aurora-login"
-_DEFAULT_IDLE_SECONDS = 1800
+# Idle window before a cached login is dropped. 0 disables the cache.
+_IDLE_SECONDS = 1800
 _MAX_AGE_SECONDS = 8 * 3600
 _SWEEP_INTERVAL_SECONDS = 300
 # A directory with no marker is a login that crashed midway; leave a live one alone.
@@ -68,18 +66,6 @@ _LOCAL_STATE_GROUPS = {"login", "logout", "config", "configure", "extension", "c
 _LOCAL_STATE_ACCOUNT_SUBCOMMANDS = {"set", "clear"}
 
 _last_sweep = 0.0
-
-
-def idle_seconds() -> int:
-    """Idle window in seconds. 0 disables the cache entirely."""
-    raw = os.getenv("AZURE_LOGIN_CACHE_IDLE_SECONDS", "").strip()
-    if not raw:
-        return _DEFAULT_IDLE_SECONDS
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        logger.warning("AZURE_LOGIN_CACHE_IDLE_SECONDS is not an integer; using %d", _DEFAULT_IDLE_SECONDS)
-        return _DEFAULT_IDLE_SECONDS
 
 
 def _root() -> Optional[str]:
@@ -129,16 +115,6 @@ def uses_local_cli_state(command: str) -> bool:
     )
 
 
-def _pod_isolation_enabled() -> bool:
-    """True when terminal_run executes commands in a per-session terminal pod.
-
-    Same default as terminal_run: unset means on. The directory `az` logs into
-    then lives in the pod, not on this filesystem, so a marker here would vouch
-    for a login the pod never performed.
-    """
-    return os.getenv("ENABLE_POD_ISOLATION", "true") == "true"
-
-
 def _key(env: dict) -> Optional[str]:
     parts = [env.get("AZURE_TENANT_ID"), env.get("AZURE_CLIENT_ID"), env.get("AZURE_CLIENT_SECRET")]
     if not all(parts):
@@ -174,11 +150,10 @@ def _locked(lock_path: str, blocking: bool = True):
 class CachedLogin:
     """A reusable logged-in AZURE_CONFIG_DIR for one set of credentials."""
 
-    def __init__(self, root: str, key: str, idle: int):
+    def __init__(self, root: str, key: str):
         self.config_dir = os.path.join(root, key)
         self._lock_path = os.path.join(root, key + ".lock")
         self._marker = os.path.join(self.config_dir, _MARKER)
-        self._idle = idle
 
     def _created_at(self) -> Optional[float]:
         """Login time when the directory holds a live login, else None."""
@@ -189,7 +164,7 @@ class CachedLogin:
         except (OSError, ValueError, KeyError, TypeError):
             return None
         now = time.time()
-        if now - created > _MAX_AGE_SECONDS or now - last_used > self._idle:
+        if now - created > _MAX_AGE_SECONDS or now - last_used > _IDLE_SECONDS:
             return None
         return created
 
@@ -264,23 +239,25 @@ def attach(env: dict, command: str) -> Optional[CachedLogin]:
     is removed and env is repointed at the shared one. Returns None when the
     caller should carry on with its private directory and a per-command login.
     """
-    idle = idle_seconds()
-    if idle <= 0 or _pod_isolation_enabled() or uses_local_cli_state(command):
+    # With pod isolation on (terminal_run's default when unset) `az` logs in inside
+    # the pod's filesystem, so a marker here would vouch for a login it never saw.
+    pod_isolation = os.getenv("ENABLE_POD_ISOLATION", "true") == "true"
+    if _IDLE_SECONDS <= 0 or pod_isolation or uses_local_cli_state(command):
         return None
     key = _key(env)
     root = _root() if key else None
     if not root:
         return None
-    _sweep(root, idle)
+    _sweep(root)
     private_dir = env.get("AZURE_CONFIG_DIR")
     if private_dir and not is_cached_dir(private_dir):
         shutil.rmtree(private_dir, ignore_errors=True)
-    login = CachedLogin(root, key, idle)
+    login = CachedLogin(root, key)
     env["AZURE_CONFIG_DIR"] = login.config_dir
     return login
 
 
-def _sweep(root: str, idle: int) -> None:
+def _sweep(root: str) -> None:
     """Delete idle, over-age and orphaned directories. Throttled per process."""
     global _last_sweep
     now = time.time()
@@ -292,7 +269,7 @@ def _sweep(root: str, idle: int) -> None:
     except OSError:
         return
     for entry in entries:
-        login = CachedLogin(root, entry.name, idle)
+        login = CachedLogin(root, entry.name)
         if login._created_at() is not None:
             continue
         with _locked(login._lock_path, blocking=False) as held:
