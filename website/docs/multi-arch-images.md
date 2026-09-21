@@ -117,10 +117,10 @@ For air-gapped environments, `.github/workflows/publish-airtight.yml` builds `sc
 aurora-airtight-<version>-<arch>.tar.gz
 ```
 
-The bundles are uploaded to per-arch GCS buckets:
+The bundles are uploaded to a public S3 bucket, split by architecture prefix:
 
-- `aurora-airtight-bucket` — `linux/amd64`
-- `aurora-airtight-bucket-arm64` — `linux/arm64`
+- `s3://arvo-aurora-airtight/amd64/` — `linux/amd64`
+- `s3://arvo-aurora-airtight/arm64/` — `linux/arm64`
 
 Download the bundle that matches your target host, transfer it across the air gap, and point `make prod-airtight` at it with the `AIRTIGHT_BUNDLE` variable:
 
