@@ -492,37 +492,43 @@ def connect(user_id):
     # from both a dev and a prod Datadog needs both reachable, and a second
     # /connect used to silently overwrite the first.
     existing = list_datadog_accounts(user_id)
+    incoming_org = token_payload.get("org_id")
     new_label = account_label(token_payload).lower()
-    clash = next((a for a in existing if account_label(a).lower() == new_label), None)
 
-    # A label collision is either a re-connect of the same org (rotating keys,
-    # which should overwrite) or a different org that happens to resolve to the
-    # same label (which must not). Labels are unreliable here: get_org() returns
-    # None whenever the org cannot be proven, so org_name is absent and unrelated
-    # orgs all fall through to "default". Datadog's own org id is the only
-    # trustworthy identity, so compare on that and refuse whenever sameness cannot
-    # be proven -- guessing wrong destroys the stored credentials of a working org.
-    if clash is not None:
-        incoming_org = token_payload.get("org_id")
-        existing_org = clash.get("org_id")
-        if not incoming_org or not existing_org or incoming_org != existing_org:
-            return jsonify({
-                "error": (
-                    f"A different Datadog organization is already connected as "
-                    f"'{account_label(clash)}'. Set a label to tell them apart."
-                ),
-                "conflictingLabel": account_label(clash),
-                "accounts": [_account_summary(a) for a in existing],
-            }), 409
+    # Identity is the org id, not the label. Matching on label first would append
+    # a second entry when a known org reconnects under a new name, leaving the
+    # stale keys primary -- the rotation would look like it took while every
+    # unqualified query still used the old credentials.
+    same_org = next(
+        (a for a in existing if incoming_org and a.get("org_id") == incoming_org), None
+    )
+    label_owner = next(
+        (a for a in existing if account_label(a).lower() == new_label), None
+    )
 
-    if clash is not None:
+    # Refuse when the requested label already belongs to a different account.
+    # Labels are unreliable on their own: get_org() returns None whenever the org
+    # cannot be proven, so org_name is absent and unrelated orgs all fall through
+    # to "default". Without an id proving sameness, overwriting would destroy a
+    # working org's credentials, so make the user disambiguate instead.
+    if label_owner is not None and label_owner is not same_org:
+        return jsonify({
+            "error": (
+                f"A different Datadog organization is already connected as "
+                f"'{account_label(label_owner)}'. Set a label to tell them apart."
+            ),
+            "conflictingLabel": account_label(label_owner),
+            "accounts": [_account_summary(a) for a in existing],
+        }), 409
+
+    if same_org is not None:
         # Replace in place. Appending would move a re-connected org to the end of
         # the list, silently promoting a different org to primary -- so rotating
         # prod's keys would quietly redirect every unqualified query to dev.
-        accounts = [token_payload if a is clash else a for a in existing]
+        accounts = [token_payload if a is same_org else a for a in existing]
     else:
         accounts = [*existing, token_payload]
-    replaced = clash is not None
+    replaced = same_org is not None
 
     try:
         _store_accounts(user_id, accounts)
