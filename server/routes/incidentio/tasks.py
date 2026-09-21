@@ -26,8 +26,9 @@ _ORG_SEVERITY_CACHE_TTL_SECONDS = 3600
 
 # When the API key lacks the "View data" scope, /v1/severities returns 403
 # forever for that key. Cache a "denied" marker so we stop calling on every
-# alert, but re-check periodically in case the key's scopes are widened.
-_ORG_SEVERITY_DENIED_TTL_SECONDS = 3600
+# alert, but re-check every 5 minutes so the UI/self-heals promptly once the
+# key's scopes are widened (without re-saving the key in Aurora).
+_ORG_SEVERITY_DENIED_TTL_SECONDS = 300
 _ORG_SEVERITY_DENIED_MARKER = "__denied__"
 
 

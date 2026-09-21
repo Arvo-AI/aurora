@@ -445,9 +445,10 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
                   <Label htmlFor="alert-min-severity" className="text-sm font-medium">
                     Minimum alert priority
                   </Label>
-                  <p className="text-sm text-muted-foreground">
+                  <p className={severitiesAvailable ? "text-sm text-muted-foreground" : "text-sm text-red-600 dark:text-red-400"}>
                     {/* Message differs depending on whether we could read the
-                        org's real alert priorities from the incident.io API. */}
+                        org's real alert priorities from the incident.io API.
+                        Shown in red when unavailable to flag the misconfig. */}
                     {severitiesAvailable
                       ? "Only investigate alerts at or above this priority"
                       : "Add the “View data” permission to your incident.io API key to filter by your organization's alert priorities"}
