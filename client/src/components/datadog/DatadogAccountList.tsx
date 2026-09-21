@@ -56,7 +56,9 @@ export function DatadogAccountList({ accounts, onRemove, removingLabel, disabled
             <Button
               variant="outline"
               size="sm"
-              disabled={disabled || removingLabel === account.label}
+              // Any removal in flight disables every button: the handler keys on a
+              // single removingLabel, so a second concurrent remove would overwrite it.
+              disabled={disabled || removingLabel !== null}
               onClick={() => onRemove(account.label)}
             >
               {removingLabel === account.label ? 'Removing…' : 'Remove'}

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from routes.datadog.config import MAX_OUTPUT_SIZE, MAX_RESULTS_CAP
 from routes.datadog.datadog_routes import (
     DatadogAPIError,
-    _account_label,
+    account_label,
     _account_summary,
     _build_client_from_creds,
     list_datadog_accounts,
@@ -629,17 +629,17 @@ def query_datadog(
 
     selected = select_datadog_account(accounts, account)
     if not selected:
-        known = ", ".join(_account_label(a) for a in accounts)
+        known = ", ".join(account_label(a) for a in accounts)
         return json.dumps({"error": f"Unknown Datadog account '{account}'. Connected: {known}"})
 
     client = _build_client_from_creds(selected)
     if not client:
         return json.dumps({"error": "Datadog credentials are incomplete. Please reconnect Datadog."})
 
-    account_label = _account_label(selected)
+    selected_label = account_label(selected)
     limit = min(max(limit, 1), MAX_RESULTS_CAP)
     logger.info("[DATADOG-TOOL] user=%s account=%s resource=%s query=%s",
-                user_id, account_label, resource_type, query[:100] if query else "")
+                user_id, selected_label, resource_type, query[:100] if query else "")
 
     try:
         # Forward **kwargs so internal-only handler options (e.g. metric_stats'
@@ -651,7 +651,7 @@ def query_datadog(
         result["time_range"] = f"{time_from} to {time_to}"
         # Name the org that answered: with several connected, an answer from the
         # wrong environment is otherwise indistinguishable from a correct one.
-        result["account"] = account_label
+        result["account"] = selected_label
 
         results_list = result.get("results", [])
         serialized = [json.dumps(item) for item in results_list]

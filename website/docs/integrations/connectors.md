@@ -957,6 +957,10 @@ Several Datadog organizations can be connected at once, each needing its own API
 application key pair. Aurora names each one from the org name Datadog reports and queries
 whichever matches the alert under investigation; a custom label is optional, to override that
 name with something your team recognises.
+
+Where the name cannot be read — a key managing several organizations, or one without the
+`org_management` permission — Aurora falls back to the organization id, then to `default`.
+Set a label in that case so the organizations stay tellable apart.
 :::
 
 #### 1. Create API Key

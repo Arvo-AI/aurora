@@ -111,28 +111,51 @@ class DatadogClient:
     def validate_credentials(self) -> Dict[str, Any]:
         return self._request("GET", "/api/v1/validate").json()
 
+    def _org_payload(self, path: str) -> Dict[str, Any]:
+        """GET a JSON object, or {} if the call fails. Org lookups are best-effort:
+        an unnamed org is recoverable, a failed /connect is not."""
+        try:
+            payload = self._request("GET", path).json()
+        except DatadogAPIError:
+            logger.debug("[DATADOG] Unable to fetch %s", path, exc_info=True)
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _current_org_from_v2(self) -> Optional[Dict[str, Any]]:
+        """The org these keys belong to, per v2's current_org relationship.
+
+        v2 is JSON:API: current_org points at a UUID and the matching entry in
+        `included` carries the name and public_id.
+        """
+        payload = self._org_payload("/api/v2/org")
+        relationships = (payload.get("data") or {}).get("relationships") or {}
+        current_id = ((relationships.get("current_org") or {}).get("data") or {}).get("id")
+        if not current_id:
+            return None
+        return next(
+            (e.get("attributes") for e in payload.get("included") or []
+             if isinstance(e, dict) and e.get("id") == current_id),
+            None,
+        )
+
     def get_org(self) -> Optional[Dict[str, Any]]:
         """Name and id of the org these keys belong to, or None if unprovable.
 
-        GET /api/v1/org answers `{"orgs": [...]}` -- the orgs this key manages --
-        while GET /api/v1/org/{public_id} answers `{"org": {...}}`. Accept either,
-        but only trust a list holding exactly one org: a parent key manages several
-        and nothing in the payload says which one issued the key. The name decides
-        which org the agent queries, so a confident wrong name is worse than none.
+        GET /api/v1/org answers `{"orgs": [...]}` -- every org the key manages --
+        while GET /api/v1/org/{public_id} answers `{"org": {...}}`. One entry is
+        unambiguous. A parent key returns several and v1 never says which is
+        current, so ask v2, whose current_org relationship names it. The label
+        decides which org the agent queries, so guessing here is not an option,
+        and without an id /connect cannot tell a key rotation from a new org.
 
-        Returns name and id only. The raw payload also carries billing details
-        (cardholder, card last4, payment token) and SAML config, and /status hands
-        this straight to the browser.
+        Returns name and id only. Both raw payloads carry more (v1 includes
+        billing details and SAML config) and /status hands this to the browser.
         """
-        try:
-            payload = self._request("GET", "/api/v1/org").json() or {}
-        except DatadogAPIError:
-            logger.debug("[DATADOG] Unable to fetch org metadata", exc_info=True)
-            return None
-        org = payload.get("org")
-        if not isinstance(org, dict):
-            orgs = payload.get("orgs")
-            org = orgs[0] if isinstance(orgs, list) and len(orgs) == 1 and isinstance(orgs[0], dict) else None
+        payload = self._org_payload("/api/v1/org")
+        org = payload.get("org") if isinstance(payload.get("org"), dict) else None
+        if org is None:
+            orgs = [o for o in payload.get("orgs") or [] if isinstance(o, dict)]
+            org = orgs[0] if len(orgs) == 1 else (self._current_org_from_v2() if orgs else None)
         if not org:
             return None
         return {"name": org.get("name"), "id": org.get("public_id") or org.get("id")}
@@ -302,7 +325,7 @@ def _build_client_from_creds(creds: Dict[str, Any]) -> Optional[DatadogClient]:
     return DatadogClient(api_key=api_key, app_key=app_key, site=site)
 
 
-def _account_label(account: Dict[str, Any]) -> str:
+def account_label(account: Dict[str, Any]) -> str:
     """Stable, user-facing name for one Datadog connection.
 
     Falls back to what Datadog itself reports, so a label is almost never needed:
@@ -318,7 +341,7 @@ def _account_label(account: Dict[str, Any]) -> str:
 def _account_summary(account: Dict[str, Any]) -> Dict[str, Any]:
     """Credential-free view of one account, safe for API responses and the agent."""
     return {
-        "label": _account_label(account),
+        "label": account_label(account),
         "site": account.get("site"),
         "orgName": account.get("org_name"),
         "serviceAccountName": account.get("service_account_name"),
@@ -361,7 +384,7 @@ def select_datadog_account(accounts: list, selector: Optional[str]) -> Optional[
     if not selector or not str(selector).strip():
         return accounts[0]
     wanted = str(selector).strip().lower()
-    return next((a for a in accounts if _account_label(a).lower() == wanted), None)
+    return next((a for a in accounts if account_label(a).lower() == wanted), None)
 
 
 def _resolve_client(user_id: str, selector: Optional[str] = None):
@@ -372,7 +395,7 @@ def _resolve_client(user_id: str, selector: Optional[str] = None):
 
     account = select_datadog_account(accounts, selector)
     if not account:
-        known = ", ".join(_account_label(a) for a in accounts)
+        known = ", ".join(account_label(a) for a in accounts)
         return None, (jsonify({"error": f"Unknown Datadog account. Connected: {known}"}), 400)
 
     client = _build_client_from_creds(account)
@@ -469,8 +492,8 @@ def connect(user_id):
     # from both a dev and a prod Datadog needs both reachable, and a second
     # /connect used to silently overwrite the first.
     existing = list_datadog_accounts(user_id)
-    new_label = _account_label(token_payload).lower()
-    clash = next((a for a in existing if _account_label(a).lower() == new_label), None)
+    new_label = account_label(token_payload).lower()
+    clash = next((a for a in existing if account_label(a).lower() == new_label), None)
 
     # A label collision is either a re-connect of the same org (rotating keys,
     # which should overwrite) or a different org that happens to resolve to the
@@ -486,9 +509,9 @@ def connect(user_id):
             return jsonify({
                 "error": (
                     f"A different Datadog organization is already connected as "
-                    f"'{_account_label(clash)}'. Set a label to tell them apart."
+                    f"'{account_label(clash)}'. Set a label to tell them apart."
                 ),
-                "conflictingLabel": _account_label(clash),
+                "conflictingLabel": account_label(clash),
                 "accounts": [_account_summary(a) for a in existing],
             }), 409
 
@@ -505,7 +528,7 @@ def connect(user_id):
         _store_accounts(user_id, accounts)
         logger.info(
             "[DATADOG] Stored credentials for user %s (site=%s, label=%s, accounts=%d, replaced=%s)",
-            sanitize(user_id), sanitize(site), sanitize(_account_label(token_payload)),
+            sanitize(user_id), sanitize(site), sanitize(account_label(token_payload)),
             len(accounts), replaced,
         )
     except Exception as exc:
@@ -518,7 +541,7 @@ def connect(user_id):
         "baseUrl": base_url,
         "org": org_data,
         "serviceAccountName": service_account,
-        "label": _account_label(token_payload),
+        "label": account_label(token_payload),
         "replaced": replaced,
         "accounts": [_account_summary(a) for a in accounts],
         "validated": True,
@@ -577,11 +600,11 @@ def disconnect(user_id):
         if selector and selector.strip():
             accounts = list_datadog_accounts(user_id)
             if not select_datadog_account(accounts, selector):
-                known = ", ".join(_account_label(a) for a in accounts) or "none"
+                known = ", ".join(account_label(a) for a in accounts) or "none"
                 return jsonify({"error": f"Unknown Datadog account. Connected: {known}"}), 404
 
             wanted = selector.strip().lower()
-            remaining = [a for a in accounts if _account_label(a).lower() != wanted]
+            remaining = [a for a in accounts if account_label(a).lower() != wanted]
             if remaining:
                 _store_accounts(user_id, remaining)
                 logger.info("[DATADOG] Removed account %s for user %s (%d remaining)",

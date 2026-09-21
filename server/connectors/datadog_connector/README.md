@@ -4,7 +4,9 @@ API Key + Application Key authentication for Datadog.
 
 Several organizations can be connected at once, each needing its own key pair. Aurora names
 each from the org name Datadog reports and queries whichever matches the alert; a custom
-label is optional, to override that name.
+label is optional, to override that name. Where the name cannot be read (a key managing
+several orgs, or one lacking `org_management`), the org id is used, falling back to
+`default`.
 
 ## Setup
 
