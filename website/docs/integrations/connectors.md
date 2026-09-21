@@ -952,6 +952,13 @@ API Key + Application Key authentication.
 If you need to ensure PII is never sent to Aurora (for GDPR, SOC 2, or other compliance requirements), see the [Datadog PII Filtering guide](../configuration/data-access/datadog.md) after completing the setup below.
 :::
 
+:::info Multiple organizations
+Several Datadog organizations can be connected at once — commonly one per environment, such
+as a separate dev and prod. Each needs its own API + application key pair, so repeat the
+setup below for every organization and give each a label (e.g. `prod`, `dev`). Aurora uses
+the label to query the organization matching the alert under investigation.
+:::
+
 #### 1. Create API Key
 
 1. Go to [Datadog](https://app.datadoghq.com/) > avatar > **Organization Settings** > **API Keys**
@@ -975,7 +982,14 @@ If you need to ensure PII is never sent to Aurora (for GDPR, SOC 2, or other com
 | US5 | `us5.datadoghq.com` |
 | EU | `datadoghq.eu` |
 
-Users enter API keys and site via the Aurora UI.
+Users enter API keys, site and label via the Aurora UI. Site is recorded per organization, so
+a dev org on `datadoghq.eu` and a prod org on `datadoghq.com` can both be connected.
+
+#### 4. Connect Additional Organizations
+
+1. Switch organization from the bottom-left **Accounts** menu in Datadog
+2. Repeat steps 1-3 to create a key pair there
+3. In Aurora, use **Add another organization** on the Datadog page and enter the new keys with a distinct label
 
 #### Webhook Configuration
 
@@ -983,6 +997,13 @@ Users enter API keys and site via the Aurora UI.
 2. Name: `aurora`
 3. URL: `https://your-aurora-domain/datadog/webhook/{user_id}`
 4. In monitors, add `@webhook-aurora` to notifications
+
+:::warning One URL, every organization
+The webhook URL is per Aurora **user**, not per Datadog organization. When several
+organizations are connected, create this same webhook inside **each** of them — otherwise
+Aurora receives no alerts from the others, while still appearing connected. Using the name
+`aurora` everywhere keeps `@webhook-aurora` working uniformly.
+:::
 
 ---
 

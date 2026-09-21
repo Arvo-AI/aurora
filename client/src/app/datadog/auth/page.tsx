@@ -5,6 +5,8 @@ import { useToast } from "@/hooks/use-toast";
 import { datadogService, DatadogStatus } from "@/lib/services/datadog";
 import { DatadogConnectionStep } from "@/components/datadog/DatadogConnectionStep";
 import { DatadogWebhookStep } from "@/components/datadog/DatadogWebhookStep";
+import { DatadogAccountList } from "@/components/datadog/DatadogAccountList";
+import { Button } from "@/components/ui/button";
 import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
@@ -21,11 +23,14 @@ export default function DatadogAuthPage() {
   const [appKey, setAppKey] = useState("");
   const [site, setSite] = useState(DEFAULT_SITE);
   const [serviceAccountName, setServiceAccountName] = useState("");
+  const [label, setLabel] = useState("");
   const [status, setStatus] = useState<DatadogStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [removingLabel, setRemovingLabel] = useState<string | null>(null);
 
   const updateLocalStorageConnection = (connected: boolean) => {
     if (typeof window === 'undefined') return;
@@ -62,7 +67,11 @@ export default function DatadogAuthPage() {
     updateLocalStorageConnection(result?.connected ?? false);
 
     if (result?.connected) {
-      setSite(result.site || DEFAULT_SITE);
+      // Only seed the form's site from status when not adding another org, or
+      // typing a second org's site would be overwritten by the primary's.
+      if (!showAddForm) {
+        setSite(result.site || DEFAULT_SITE);
+      }
       await loadWebhookUrl();
     } else if (typeof window !== 'undefined') {
       localStorage.removeItem(CACHE_KEYS.WEBHOOK);
@@ -77,6 +86,8 @@ export default function DatadogAuthPage() {
 
         if (cachedStatus) {
           const parsedStatus = JSON.parse(cachedStatus) as DatadogStatus;
+          // A cache written before multi-org support has no accounts array; the
+          // refetch below fills it in rather than rendering an empty org list.
           setStatus(parsedStatus);
           // Update localStorage flag based on cached status
           updateLocalStorageConnection(parsedStatus?.connected ?? false);
@@ -93,6 +104,9 @@ export default function DatadogAuthPage() {
             return;
           }
 
+          if (!parsedStatus?.accounts) {
+            await fetchAndUpdateStatus();
+          }
           return;
         }
       }
@@ -117,22 +131,35 @@ export default function DatadogAuthPage() {
     setLoading(true);
 
     try {
-      const payload = { apiKey, appKey, site, serviceAccountName: serviceAccountName || undefined };
+      const payload = {
+        apiKey,
+        appKey,
+        site,
+        serviceAccountName: serviceAccountName || undefined,
+        label: label.trim() || undefined,
+      };
       const result = await datadogService.connect(payload);
       setStatus(result);
+      setShowAddForm(false);
 
       if (typeof window !== 'undefined') {
         localStorage.setItem(CACHE_KEYS.STATUS, JSON.stringify(result));
         localStorage.setItem('isDatadogConnected', 'true');
       }
 
+      const orgCount = result.accounts?.length ?? 1;
       toast({
         title: 'Success',
-        description: 'Datadog connected successfully. Configure the webhook below to start receiving alerts.',
+        description: orgCount > 1
+          ? `Datadog organization "${result.label}" connected. ${orgCount} organizations are now connected - make sure the webhook below exists in each one.`
+          : 'Datadog connected successfully. Configure the webhook below to start receiving alerts.',
       });
 
       await loadWebhookUrl();
       updateLocalStorageConnection(true);
+      // Re-fetch so the account list carries per-org validity, which /connect
+      // does not report for the orgs it did not just validate.
+      await fetchAndUpdateStatus();
 
       try {
         await fetch('/api/provider-preferences', {
@@ -156,6 +183,65 @@ export default function DatadogAuthPage() {
       setLoading(false);
       setApiKey('');
       setAppKey('');
+      setLabel('');
+      setServiceAccountName('');
+    }
+  };
+
+  const handleRemoveAccount = async (accountLabel: string) => {
+    setRemovingLabel(accountLabel);
+
+    try {
+      const { accounts } = await datadogService.disconnect(accountLabel);
+      toast({
+        title: 'Removed',
+        description: `Datadog organization "${accountLabel}" removed.`,
+      });
+
+      if (accounts.length === 0) {
+        // That was the last org, so the backend tore the whole provider down.
+        await resetLocalConnectionState();
+        return;
+      }
+
+      await fetchAndUpdateStatus();
+    } catch (error: unknown) {
+      console.error('[datadog] Remove account failed', error);
+      toast({
+        title: 'Failed to remove organization',
+        description: getUserFriendlyError(error),
+        variant: 'destructive',
+      });
+    } finally {
+      setRemovingLabel(null);
+    }
+  };
+
+  const resetLocalConnectionState = async () => {
+    setStatus({ connected: false, accounts: [] });
+    setWebhookUrl(null);
+    setServiceAccountName('');
+    setLabel('');
+    setSite(DEFAULT_SITE);
+    setShowAddForm(false);
+
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(CACHE_KEYS.STATUS);
+      localStorage.removeItem(CACHE_KEYS.WEBHOOK);
+      localStorage.removeItem('isDatadogConnected');
+    }
+
+    updateLocalStorageConnection(false);
+
+    try {
+      await fetch('/api/provider-preferences', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'remove', provider: 'datadog' }),
+      });
+      window.dispatchEvent(new CustomEvent('providerPreferenceChanged', { detail: { providers: [] } }));
+    } catch (prefErr: unknown) {
+      console.warn('[datadog] Failed to update provider preferences', prefErr);
     }
   };
 
@@ -163,44 +249,15 @@ export default function DatadogAuthPage() {
     setLoading(true);
 
     try {
-      const response = await fetch('/api/connected-accounts/datadog', {
-        method: 'DELETE',
-        credentials: 'include',
-      });
+      // No account selector: removes every connected organization.
+      await datadogService.disconnect();
 
-      if (!response.ok && response.status !== 204) {
-        const text = await response.text();
-        throw new Error(text || 'Failed to disconnect Datadog');
-      }
-
-      setStatus({ connected: false });
-      setWebhookUrl(null);
-      setServiceAccountName('');
-      setSite(DEFAULT_SITE);
-
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem(CACHE_KEYS.STATUS);
-        localStorage.removeItem(CACHE_KEYS.WEBHOOK);
-        localStorage.removeItem('isDatadogConnected');
-      }
-
-      updateLocalStorageConnection(false);
+      await resetLocalConnectionState();
 
       toast({
         title: 'Success',
         description: 'Datadog disconnected successfully.',
       });
-
-      try {
-        await fetch('/api/provider-preferences', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'remove', provider: 'datadog' }),
-        });
-        window.dispatchEvent(new CustomEvent('providerPreferenceChanged', { detail: { providers: [] } }));
-      } catch (prefErr: unknown) {
-        console.warn('[datadog] Failed to update provider preferences', prefErr);
-      }
     } catch (error: unknown) {
       console.error('[datadog] Disconnect failed', error);
       const message = getUserFriendlyError(error);
@@ -223,6 +280,20 @@ export default function DatadogAuthPage() {
   };
 
   const isConnected = Boolean(status?.connected);
+  // Fall back to a synthetic single entry so a legacy status payload (no accounts
+  // array) still renders one row rather than an empty list.
+  const accounts = status?.accounts?.length
+    ? status.accounts
+    : isConnected
+      ? [{
+          label: status?.label || status?.site || 'default',
+          site: status?.site,
+          orgName: (status?.org?.name as string | undefined) ?? null,
+          serviceAccountName: status?.serviceAccountName ?? null,
+          validatedAt: status?.validatedAt ?? null,
+          valid: true,
+        }]
+      : [];
 
   return (
     <ConnectorAuthGuard connectorName="Datadog">
@@ -266,6 +337,8 @@ export default function DatadogAuthPage() {
             setSite={setSite}
             serviceAccountName={serviceAccountName}
             setServiceAccountName={setServiceAccountName}
+            label={label}
+            setLabel={setLabel}
             loading={loading}
             onConnect={handleConnect}
           />
@@ -277,7 +350,43 @@ export default function DatadogAuthPage() {
             onCopy={handleCopyWebhook}
             onDisconnect={handleDisconnect}
             loading={loading}
-          />
+          >
+            <div className="space-y-4">
+              <DatadogAccountList
+                accounts={accounts}
+                onRemove={handleRemoveAccount}
+                removingLabel={removingLabel}
+                disabled={loading}
+              />
+
+              {showAddForm ? (
+                <div className="space-y-3">
+                  <DatadogConnectionStep
+                    apiKey={apiKey}
+                    setApiKey={setApiKey}
+                    appKey={appKey}
+                    setAppKey={setAppKey}
+                    site={site}
+                    setSite={setSite}
+                    serviceAccountName={serviceAccountName}
+                    setServiceAccountName={setServiceAccountName}
+                    label={label}
+                    setLabel={setLabel}
+                    loading={loading}
+                    onConnect={handleConnect}
+                    isAdditional
+                  />
+                  <Button variant="ghost" size="sm" onClick={() => setShowAddForm(false)} disabled={loading}>
+                    Cancel
+                  </Button>
+                </div>
+              ) : (
+                <Button variant="outline" size="sm" onClick={() => setShowAddForm(true)}>
+                  Add another organization
+                </Button>
+              )}
+            </div>
+          </DatadogWebhookStep>
         ) : null}
       </div>
     </ConnectorAuthGuard>

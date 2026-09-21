@@ -6,7 +6,7 @@ category: observability
 connection_check:
   method: get_token_data
   provider_key: datadog
-  required_any_fields: [api_key, apiKey]
+  required_any_fields: [api_key, apiKey, accounts]
 tools:
   - query_datadog
 index: "Full-stack monitoring -- query logs, metrics, monitors, events, traces, hosts, incidents"
@@ -27,20 +27,41 @@ Datadog integration for querying observability data during Root Cause Analysis. 
 
 ### Tool Usage
 
-`query_datadog(resource_type=TYPE, query=QUERY, time_from=START, time_to=END, limit=N, interval=MS)`
+`query_datadog(resource_type=TYPE, query=QUERY, time_from=START, time_to=END, limit=N, interval=MS, account=LABEL)`
 
 ### Resource Types
 
-1. `'logs'` -- Search log entries. query=Datadog log query syntax e.g. `"service:web status:error"`
-2. `'metrics'` -- Query metric timeseries (raw points). query=metric query e.g. `"avg:system.cpu.user{*}"`
-3. `'metric_stats'` -- Percentile summary per series (p50/p95/p99/max/mean). Same metric query
+1. `'accounts'` -- List the connected Datadog organizations. Takes no query and calls no
+   Datadog API. See "Multiple Organizations" below.
+2. `'logs'` -- Search log entries. query=Datadog log query syntax e.g. `"service:web status:error"`
+3. `'metrics'` -- Query metric timeseries (raw points). query=metric query e.g. `"avg:system.cpu.user{*}"`
+4. `'metric_stats'` -- Percentile summary per series (p50/p95/p99/max/mean). Same metric query
    syntax as `'metrics'`, but returns one compact row per series instead of raw points.
    Use this for capacity and right-sizing questions over long windows.
-4. `'monitors'` -- List monitors with status. query=name filter (optional)
-5. `'events'` -- Platform events. query=source filter (optional)
-6. `'traces'` -- APM spans/traces. query=span query e.g. `"service:web @http.status_code:500"`
-7. `'hosts'` -- Infrastructure hosts. query=host filter (optional)
-8. `'incidents'` -- Datadog incidents. Lists active/recent incidents (requires Incident Management; may 403 if not enabled).
+5. `'monitors'` -- List monitors with status. query=name filter (optional)
+6. `'events'` -- Platform events. query=source filter (optional)
+7. `'traces'` -- APM spans/traces. query=span query e.g. `"service:web @http.status_code:500"`
+8. `'hosts'` -- Infrastructure hosts. query=host filter (optional)
+9. `'incidents'` -- Datadog incidents. Lists active/recent incidents (requires Incident Management; may 403 if not enabled).
+
+### Multiple Organizations
+
+An organization may have several Datadog instances connected -- commonly one per
+environment, such as a separate dev and prod. They are distinct Datadog orgs with their own
+data: a service that exists in both has different logs, metrics and hosts in each.
+
+`resource_type='accounts'` returns the connected orgs with their labels, sites and org
+names. Pass `account=<label>` on any other resource type to query that one. Omitting
+`account` uses the first (primary) org.
+
+This matters because alerts from every environment can arrive through a single alerting
+pipeline, so the alert under investigation is not necessarily from the primary org. Querying
+the wrong org does not return an error -- it returns that org's healthy data, which reads as
+"the service is fine" and sends the investigation somewhere else entirely.
+
+So when more than one org is connected: check `accounts`, match the alert's environment to a
+label, pass `account`, and state which org the evidence came from. Every response carries an
+`account` field naming the org that answered.
 
 ### The `interval` Parameter
 
@@ -130,6 +151,13 @@ These are two different questions and must not be conflated:
 
 ## RCA Investigation Workflow
 
+**Step 0 -- Confirm which organization to investigate:**
+`query_datadog(resource_type='accounts')`
+
+If only one is connected, continue without `account`. If several are, match the alert's
+environment to a label and pass `account=<label>` on every subsequent step, so the
+investigation does not read one environment's data while explaining another's alert.
+
 **Step 1 -- Search logs for errors around the alert time:**
 `query_datadog(resource_type='logs', query='service:affected-service status:error', time_from='-1h')`
 
@@ -151,7 +179,10 @@ These are two different questions and must not be conflated:
 ## Important Rules
 
 - Datadog is a REMOTE service. Use ONLY the `query_datadog` API tool.
-- The `resource_type` parameter is required and must be one of: logs, metrics, metric_stats, monitors, events, traces, hosts, incidents.
+- The `resource_type` parameter is required and must be one of: accounts, logs, metrics, metric_stats, monitors, events, traces, hosts, incidents.
+- When several organizations are connected, name the one you queried in any finding you
+  report. An unattributed Datadog number is ambiguous, and a number from the wrong
+  environment looks identical to a correct one.
 - Time parameters accept relative strings (`'-1h'`, `'-24h'`, `'-7d'`) or ISO 8601 timestamps.
 - The `incidents` resource type requires Datadog Incident Management to be enabled; may return 403 if not.
 - Results are truncated at the output size limit. Use more specific queries to narrow results.

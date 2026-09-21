@@ -63,24 +63,45 @@ def _check_grafana(user_id: str, org_id: str) -> Dict[str, Any]:
 
 
 def _check_datadog(creds: Dict[str, Any]) -> Dict[str, Any]:
-    api_key = creds.get("api_key")
-    app_key = creds.get("app_key")
-    if not api_key or not app_key:
+    # Several Datadog orgs can be connected (e.g. separate dev and prod), stored
+    # as a list under "accounts" with the primary mirrored at the top level.
+    # Report connected when ANY org validates: keying off the primary alone would
+    # render "not connected" on a revoked prod key while a healthy dev org is
+    # still connected and queryable.
+    accounts = creds.get("accounts")
+    if not isinstance(accounts, list) or not accounts:
+        accounts = [creds]
+
+    results = []
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        api_key = account.get("api_key")
+        app_key = account.get("app_key")
+        label = account.get("label") or account.get("org_name") or account.get("site") or "default"
+        site = account.get("site", "datadoghq.com")
+        if not api_key or not app_key:
+            results.append({"label": label, "site": site, "connected": False})
+            continue
+        base_url = account.get("base_url", "https://api.datadoghq.com")
+        try:
+            r = requests.get(
+                f"{base_url}/api/v1/validate",
+                headers={"DD-API-KEY": api_key, "DD-APPLICATION-KEY": app_key},
+                timeout=HTTP_TIMEOUT,
+            )
+            connected = bool(r.json().get("valid"))
+        except Exception:
+            connected = False
+        results.append({"label": label, "site": site, "connected": connected})
+
+    if not results:
         return {"connected": False}
-    site = creds.get("site", "datadoghq.com")
-    base_url = creds.get("base_url", "https://api.datadoghq.com")
-    try:
-        r = requests.get(
-            f"{base_url}/api/v1/validate",
-            headers={"DD-API-KEY": api_key, "DD-APPLICATION-KEY": app_key},
-            timeout=HTTP_TIMEOUT,
-        )
-        data = r.json()
-        if data.get("valid"):
-            return {"connected": True, "site": site}
-        return {"connected": False}
-    except Exception:
-        return {"connected": False}
+
+    status = {"connected": any(r["connected"] for r in results), "site": results[0]["site"]}
+    if len(results) > 1:
+        status["accounts"] = results
+    return status
 
 
 def _check_ci_provider(creds: Dict[str, Any]) -> Dict[str, Any]:

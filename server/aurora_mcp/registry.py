@@ -184,39 +184,46 @@ class DispatchEntry:
 # WAF surfaces (the assert at import time will reject those).
 DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
     # ----- Datadog (prefix: /datadog) -----
+    # More than one Datadog org can be connected (e.g. separate dev and prod), so
+    # every entry advertises `account`. It belongs in query_keys even on the POST
+    # entries: the backend reads it from the query string, not the body.
     DispatchEntry(
         name="datadog_logs_search",
-        description="Search Datadog logs by query, time range, and tags.",
+        description="Search Datadog logs by query, time range, and tags. Pass account=<label> to target a specific connected organization.",
         category="logs",
         method="POST",
         path="/datadog/logs/search",
         enabling_skills=("datadog",),
         body_keys=("query", "from", "to", "limit", "indexes"),
+        query_keys=("account",),
     ),
     DispatchEntry(
         name="datadog_metrics_query",
-        description="Query Datadog metrics via the query API.",
+        description="Query Datadog metrics via the query API. Pass account=<label> to target a specific connected organization.",
         category="metrics",
         method="POST",
         path="/datadog/metrics/query",
         enabling_skills=("datadog",),
         body_keys=("query", "from", "to"),
+        query_keys=("account",),
     ),
     DispatchEntry(
         name="datadog_events",
-        description="List Datadog events in a time range.",
+        description="List Datadog events in a time range. Pass account=<label> to target a specific connected organization.",
         category="events",
         method="GET",
         path="/datadog/events",
         enabling_skills=("datadog",),
+        query_keys=("account",),
     ),
     DispatchEntry(
         name="datadog_monitors",
-        description="List Datadog monitors and their status.",
+        description="List Datadog monitors and their status. Pass account=<label> to target a specific connected organization.",
         category="alerts",
         method="GET",
         path="/datadog/monitors",
         enabling_skills=("datadog",),
+        query_keys=("account",),
     ),
     # ----- Jira (prefix: /jira) -----
     DispatchEntry(

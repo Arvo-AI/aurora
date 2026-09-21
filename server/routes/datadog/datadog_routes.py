@@ -283,6 +283,107 @@ def _build_client_from_creds(creds: Dict[str, Any]) -> Optional[DatadogClient]:
     return DatadogClient(api_key=api_key, app_key=app_key, site=site)
 
 
+def _account_label(account: Dict[str, Any]) -> str:
+    """Stable, user-facing name for one Datadog connection."""
+    label = account.get("label") or account.get("org_name") or account.get("site") or "default"
+    return str(label).strip() or "default"
+
+
+def _account_summary(account: Dict[str, Any]) -> Dict[str, Any]:
+    """Credential-free view of one account, safe for API responses and the agent."""
+    return {
+        "label": _account_label(account),
+        "site": account.get("site"),
+        "orgName": account.get("org_name"),
+        "serviceAccountName": account.get("service_account_name"),
+        "validatedAt": account.get("validated_at"),
+    }
+
+
+def list_datadog_accounts(user_id: str) -> list:
+    """Every connected Datadog org, primary first.
+
+    Each org needs its own API + application key pair, so unlike AWS (one role ARN
+    per account, assumed on demand) and Azure (one service principal spanning
+    subscriptions) there is no single credential covering them all, and therefore
+    no use for user_connections rows.
+
+    ponytail: all orgs live in one Vault blob under "accounts", with the primary
+    also mirrored at the top level so store_tokens_in_db's datadog branch keeps
+    finding org_name/site for its user_tokens display columns, the skill's
+    connection_check keeps finding api_key, and the webhook's truthiness check
+    keeps working. Ceiling: no per-org key rotation or RBAC, and the blob grows
+    with org count. Upgrade path is user_connections rows plus one Vault secret
+    per account.
+    """
+    creds = _get_stored_datadog_credentials(user_id)
+    if not creds:
+        return []
+    accounts = creds.get("accounts")
+    if not isinstance(accounts, list) or not accounts:
+        accounts = [creds]  # pre-multi-account blob: one bare credential dict
+    return [
+        a for a in accounts
+        if isinstance(a, dict) and a.get("api_key") and a.get("app_key")
+    ]
+
+
+def select_datadog_account(accounts: list, selector: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Pick one account by label. No selector means the primary (first)."""
+    if not accounts:
+        return None
+    if not selector or not str(selector).strip():
+        return accounts[0]
+    wanted = str(selector).strip().lower()
+    return next((a for a in accounts if _account_label(a).lower() == wanted), None)
+
+
+def _resolve_client(user_id: str, selector: Optional[str] = None):
+    """Resolve a client for one account, or a ready-to-return Flask error tuple."""
+    accounts = list_datadog_accounts(user_id)
+    if not accounts:
+        return None, (jsonify({"error": "Datadog is not connected"}), 400)
+
+    account = select_datadog_account(accounts, selector)
+    if not account:
+        known = ", ".join(_account_label(a) for a in accounts)
+        return None, (jsonify({"error": f"Unknown Datadog account. Connected: {known}"}), 400)
+
+    client = _build_client_from_creds(account)
+    if not client:
+        return None, (jsonify({"error": "Stored Datadog credentials are incomplete"}), 400)
+    return client, None
+
+
+def _validate_account(account: Dict[str, Any]) -> Dict[str, Any]:
+    """Summary of one account plus a live validity check of its keys."""
+    summary = _account_summary(account)
+    client = _build_client_from_creds(account)
+    if not client:
+        return {**summary, "valid": False, "error": "Stored Datadog credentials are incomplete"}
+    try:
+        valid = bool(client.validate_credentials().get("valid"))
+    except DatadogAPIError as exc:
+        logger.warning("[DATADOG] Validation failed for account %s: %s",
+                       sanitize(summary["label"]), exc)
+        return {**summary, "valid": False, "error": "Failed to validate stored Datadog credentials"}
+    if not valid:
+        return {**summary, "valid": False, "error": "Stored Datadog keys are no longer valid"}
+    return {**summary, "valid": True}
+
+
+def _store_accounts(user_id: str, accounts: list) -> None:
+    """Persist the account list, mirroring the primary at the top level.
+
+    The mirror is load-bearing: store_tokens_in_db's datadog branch reads
+    org_name/org_id/site/service_account_name off the top level for its
+    user_tokens display columns, and several callers still read api_key there.
+    """
+    stored = dict(accounts[0])
+    stored["accounts"] = accounts
+    store_tokens_in_db(user_id, stored, "datadog")
+
+
 @datadog_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
@@ -295,11 +396,14 @@ def connect(user_id):
     app_key = payload.get("appKey")
     raw_site = payload.get("site")
     service_account = payload.get("serviceAccountName")
+    label = payload.get("label")
 
     if not api_key or not isinstance(api_key, str):
         return jsonify({"error": "Datadog API key is required"}), 400
     if not app_key or not isinstance(app_key, str):
         return jsonify({"error": "Datadog application key is required"}), 400
+    if label is not None and not isinstance(label, str):
+        return jsonify({"error": "Datadog label must be a string"}), 400
 
     site, base_url = _normalize_site(raw_site)
 
@@ -332,10 +436,25 @@ def connect(user_id):
         "validated_at": datetime.now(timezone.utc).isoformat(),
         "service_account_name": service_account,
     }
+    if label and label.strip():
+        token_payload["label"] = label.strip()
+
+    # Upsert into the account list rather than replacing it. An org that alerts
+    # from both a dev and a prod Datadog needs both reachable, and a second
+    # /connect used to silently overwrite the first.
+    existing = list_datadog_accounts(user_id)
+    new_label = _account_label(token_payload).lower()
+    accounts = [a for a in existing if _account_label(a).lower() != new_label]
+    replaced = len(accounts) != len(existing)
+    accounts.append(token_payload)
 
     try:
-        store_tokens_in_db(user_id, token_payload, "datadog")
-        logger.info("[DATADOG] Stored credentials for user %s (site=%s)", sanitize(user_id), sanitize(site))
+        _store_accounts(user_id, accounts)
+        logger.info(
+            "[DATADOG] Stored credentials for user %s (site=%s, label=%s, accounts=%d, replaced=%s)",
+            sanitize(user_id), sanitize(site), sanitize(_account_label(token_payload)),
+            len(accounts), replaced,
+        )
     except Exception as exc:
         logger.exception("[DATADOG] Failed to store credentials: %s", exc)
         return jsonify({"error": "Failed to store Datadog credentials"}), 500
@@ -346,6 +465,9 @@ def connect(user_id):
         "baseUrl": base_url,
         "org": org_data,
         "serviceAccountName": service_account,
+        "label": _account_label(token_payload),
+        "replaced": replaced,
+        "accounts": [_account_summary(a) for a in accounts],
         "validated": True,
     }
     return jsonify(response)
@@ -354,39 +476,72 @@ def connect(user_id):
 @datadog_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
-    creds = _get_stored_datadog_credentials(user_id)
-    if not creds:
-        return jsonify({"connected": False})
+    accounts = list_datadog_accounts(user_id)
+    if not accounts:
+        return jsonify({"connected": False, "accounts": []})
 
-    client = _build_client_from_creds(creds)
-    if not client:
-        logger.warning("[DATADOG] Incomplete credentials for user %s", user_id)
-        return jsonify({"connected": False})
+    # Validate every account, not just the primary: a revoked dev key must be
+    # visible rather than hidden behind a healthy prod org.
+    summaries = [_validate_account(account) for account in accounts]
+    primary, primary_summary = accounts[0], summaries[0]
 
-    try:
-        validation = client.validate_credentials()
-        if not validation.get("valid"):
-            return jsonify({"connected": False, "error": "Stored Datadog keys are no longer valid"})
-    except DatadogAPIError as exc:
-        logger.warning("[DATADOG] Status validation failed for user %s: %s", user_id, exc)
-        return jsonify({"connected": False, "error": "Failed to validate stored Datadog credentials"})
+    # "connected" means any account works, so one dead org cannot make Datadog
+    # read as disconnected and hide the others from the agent.
+    any_valid = any(s["valid"] for s in summaries)
 
-    org_data = client.get_org()
+    response = {
+        "connected": any_valid,
+        "site": primary.get("site"),
+        "baseUrl": primary.get("base_url"),
+        "serviceAccountName": primary.get("service_account_name"),
+        "validatedAt": primary.get("validated_at"),
+        "label": primary_summary["label"],
+        "accounts": summaries,
+    }
 
-    return jsonify({
-        "connected": True,
-        "site": creds.get("site"),
-        "baseUrl": creds.get("base_url"),
-        "org": org_data,
-        "serviceAccountName": creds.get("service_account_name"),
-        "validatedAt": creds.get("validated_at"),
-    })
+    if not any_valid:
+        response["error"] = primary_summary.get("error") or "Stored Datadog keys are no longer valid"
+        return jsonify(response)
+
+    if primary_summary["valid"]:
+        client = _build_client_from_creds(primary)
+        try:
+            response["org"] = client.get_org() if client else None
+        except DatadogAPIError:
+            logger.debug("[DATADOG] Org lookup failed during status", exc_info=True)
+            response["org"] = None
+
+    return jsonify(response)
 
 
 @datadog_bp.route("/disconnect", methods=["DELETE", "POST"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
+    # ?account=<label> removes one org. No selector keeps the original
+    # remove-everything behaviour, so existing callers are unaffected.
+    selector = request.args.get("account")
     try:
+        if selector and selector.strip():
+            accounts = list_datadog_accounts(user_id)
+            if not select_datadog_account(accounts, selector):
+                known = ", ".join(_account_label(a) for a in accounts) or "none"
+                return jsonify({"error": f"Unknown Datadog account. Connected: {known}"}), 404
+
+            wanted = selector.strip().lower()
+            remaining = [a for a in accounts if _account_label(a).lower() != wanted]
+            if remaining:
+                _store_accounts(user_id, remaining)
+                logger.info("[DATADOG] Removed account %s for user %s (%d remaining)",
+                            sanitize(selector), sanitize(user_id), len(remaining))
+                # Ingested events are not attributable to an account (datadog_events
+                # has no such column), so they are kept while any org remains.
+                return jsonify({
+                    "success": True,
+                    "message": "Datadog account removed",
+                    "accounts": [_account_summary(a) for a in remaining],
+                })
+            # Last remaining account: fall through to the full teardown below.
+
         success, token_rows = delete_user_secret(user_id, "datadog")
         if not success:
             logger.warning("[DATADOG] Failed to clean up secrets during disconnect")
@@ -407,6 +562,7 @@ def disconnect(user_id):
             "message": "Datadog disconnected successfully",
             "tokensDeleted": token_rows,
             "eventsDeleted": event_rows,
+            "accounts": [],
         })
     except Exception as exc:
         logger.exception("[DATADOG] Failed to disconnect provider")
@@ -416,13 +572,9 @@ def disconnect(user_id):
 @datadog_bp.route("/logs/search", methods=["POST"])
 @require_permission("connectors", "read")
 def search_logs(user_id):
-    creds = _get_stored_datadog_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "Datadog is not connected"}), 400
-
-    client = _build_client_from_creds(creds)
-    if not client:
-        return jsonify({"error": "Stored Datadog credentials are incomplete"}), 400
+    client, error = _resolve_client(user_id, request.args.get("account"))
+    if error:
+        return error
 
     body = request.get_json(force=True, silent=True) or {}
     query = body.get("query", "*")
@@ -446,13 +598,9 @@ def search_logs(user_id):
 @datadog_bp.route("/metrics/query", methods=["POST"])
 @require_permission("connectors", "read")
 def query_metrics(user_id):
-    creds = _get_stored_datadog_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "Datadog is not connected"}), 400
-
-    client = _build_client_from_creds(creds)
-    if not client:
-        return jsonify({"error": "Stored Datadog credentials are incomplete"}), 400
+    client, error = _resolve_client(user_id, request.args.get("account"))
+    if error:
+        return error
 
     body = request.get_json(force=True, silent=True) or {}
     query = body.get("query")
@@ -479,13 +627,9 @@ def query_metrics(user_id):
 @datadog_bp.route("/events", methods=["GET"])
 @require_permission("connectors", "read")
 def list_events(user_id):
-    creds = _get_stored_datadog_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "Datadog is not connected"}), 400
-
-    client = _build_client_from_creds(creds)
-    if not client:
-        return jsonify({"error": "Stored Datadog credentials are incomplete"}), 400
+    client, error = _resolve_client(user_id, request.args.get("account"))
+    if error:
+        return error
 
     args = request.args
     try:
@@ -514,13 +658,9 @@ def list_events(user_id):
 @datadog_bp.route("/monitors", methods=["GET"])
 @require_permission("connectors", "read")
 def list_monitors(user_id):
-    creds = _get_stored_datadog_credentials(user_id)
-    if not creds:
-        return jsonify({"error": "Datadog is not connected"}), 400
-
-    client = _build_client_from_creds(creds)
-    if not client:
-        return jsonify({"error": "Stored Datadog credentials are incomplete"}), 400
+    client, error = _resolve_client(user_id, request.args.get("account"))
+    if error:
+        return error
 
     raw_params = {
         "page": request.args.get("page"),
@@ -650,15 +790,19 @@ def webhook_url(user_id):
 
     url = f"{base_url}/datadog/webhook/{user_id}"
 
+    # The URL is per Aurora user, not per Datadog org, so a user with both a dev
+    # and a prod Datadog connected must create this same webhook in each of them.
     instructions = [
         "1. Navigate to Integrations → Webhooks in Datadog.",
         "2. Create a new webhook with the URL above.",
         "3. (Optional) Configure a custom payload to include monitor or event context.",
         "4. Add the webhook to your monitors or event rules.",
         "5. Save and test the webhook to verify connectivity.",
+        "6. Repeat these steps in every Datadog organization you connect to Aurora - this URL is shared across all of them.",
     ]
 
     return jsonify({
         "webhookUrl": url,
         "instructions": instructions,
+        "perOrganization": True,
     })

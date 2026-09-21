@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { datadogService } from "@/lib/services/datadog";
+import { datadogService, type DatadogAccount } from "@/lib/services/datadog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { HelpCircle } from "lucide-react";
 
@@ -36,6 +36,20 @@ export default function DatadogOverviewPage() {
   const [eventsResult, setEventsResult] = useState<string>("");
   const [eventsError, setEventsError] = useState<string | null>(null);
 
+  // Several Datadog orgs can be connected (e.g. dev and prod). Without an
+  // explicit choice every query silently hits the primary, so a dev
+  // investigation run here would read prod data and look healthy.
+  const [accounts, setAccounts] = useState<DatadogAccount[]>([]);
+  const [account, setAccount] = useState<string>("");
+
+  useEffect(() => {
+    datadogService.getStatus().then((status) => {
+      const connected = status?.accounts ?? [];
+      setAccounts(connected);
+      setAccount(connected[0]?.label ?? "");
+    });
+  }, []);
+
   const fetchLogs = async () => {
     try {
       setLogsLoading(true);
@@ -45,7 +59,7 @@ export default function DatadogOverviewPage() {
         from: toISOString(15),
         to: new Date().toISOString(),
         limit: 100,
-      });
+      }, account);
       setLogsResult(JSON.stringify(data, null, 2));
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Failed to fetch logs';
@@ -64,7 +78,7 @@ export default function DatadogOverviewPage() {
         query: metricsQuery,
         fromMs: toMillis(30),
         toMs: Date.now(),
-      });
+      }, account);
       setMetricsResult(JSON.stringify(data, null, 2));
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Failed to query metrics';
@@ -83,7 +97,7 @@ export default function DatadogOverviewPage() {
         start: Math.floor((Date.now() - 3600 * 1000) / 1000).toString(),
         end: Math.floor(Date.now() / 1000).toString(),
       });
-      const data = await datadogService.getEvents(params);
+      const data = await datadogService.getEvents(params, account);
       setEventsResult(JSON.stringify(data, null, 2));
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Failed to fetch events';
@@ -99,9 +113,33 @@ export default function DatadogOverviewPage() {
       <div>
         <h1 className="text-3xl font-bold">Datadog Observability Explorer</h1>
         <p className="text-muted-foreground mt-1">
-          Run ad-hoc queries against your connected Datadog instance without leaving Aurora.
+          Run ad-hoc queries against your connected Datadog organizations without leaving Aurora.
         </p>
       </div>
+
+      {accounts.length > 1 && (
+        <Card>
+          <CardContent className="pt-6 space-y-2">
+            <Label htmlFor="datadog-account">Organization</Label>
+            <select
+              id="datadog-account"
+              className="w-full md:w-72 h-10 px-3 rounded-md border bg-background text-sm"
+              value={account}
+              onChange={(event) => setAccount(event.target.value)}
+            >
+              {accounts.map((entry) => (
+                <option key={entry.label} value={entry.label}>
+                  {entry.label}{entry.site ? ` (${entry.site})` : ''}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Every query below runs against this organization. Data does not cross organizations, so a
+              service present in both returns different results depending on the choice.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
