@@ -24,6 +24,8 @@ export interface DatadogStatus {
   validatedAt?: string;
   label?: string;
   accounts?: DatadogAccount[];
+  /** True when the connect updated an existing organization's keys in place. */
+  replaced?: boolean;
 }
 
 export interface DatadogConnectPayload {
@@ -105,6 +107,7 @@ export const datadogService = {
       validatedAt: (data?.validatedAt as string | undefined) ?? undefined,
       label: (data?.label as string | undefined) ?? payload.label,
       accounts: (data?.accounts as DatadogAccount[] | undefined) ?? [],
+      replaced: Boolean(data?.replaced),
     };
   },
 

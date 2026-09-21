@@ -444,9 +444,38 @@ def connect(user_id):
     # /connect used to silently overwrite the first.
     existing = list_datadog_accounts(user_id)
     new_label = _account_label(token_payload).lower()
-    accounts = [a for a in existing if _account_label(a).lower() != new_label]
-    replaced = len(accounts) != len(existing)
-    accounts.append(token_payload)
+    clash = next((a for a in existing if _account_label(a).lower() == new_label), None)
+
+    # A label collision is either a re-connect of the same org (rotating keys,
+    # which should overwrite) or a different org that happens to resolve to the
+    # same label (which must not). Labels are unreliable here: when get_org()
+    # fails org_name is None and _account_label falls through to the site, so two
+    # distinct orgs on datadoghq.com both resolve to "datadoghq.com". Datadog's
+    # own org id is the only trustworthy identity, so compare on that and refuse
+    # whenever sameness cannot be proven -- guessing wrong destroys the stored
+    # credentials of a working org.
+    if clash is not None:
+        incoming_org = token_payload.get("org_id")
+        existing_org = clash.get("org_id")
+        if not incoming_org or not existing_org or incoming_org != existing_org:
+            return jsonify({
+                "error": (
+                    f"A different Datadog organization is already connected as "
+                    f"'{_account_label(clash)}'. Provide a distinct label to connect this one "
+                    f"alongside it."
+                ),
+                "conflictingLabel": _account_label(clash),
+                "accounts": [_account_summary(a) for a in existing],
+            }), 409
+
+    if clash is not None:
+        # Replace in place. Appending would move a re-connected org to the end of
+        # the list, silently promoting a different org to primary -- so rotating
+        # prod's keys would quietly redirect every unqualified query to dev.
+        accounts = [token_payload if a is clash else a for a in existing]
+    else:
+        accounts = [*existing, token_payload]
+    replaced = clash is not None
 
     try:
         _store_accounts(user_id, accounts)

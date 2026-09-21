@@ -31,6 +31,7 @@ export default function DatadogAuthPage() {
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
   const [removingLabel, setRemovingLabel] = useState<string | null>(null);
+  const [connectError, setConnectError] = useState<string | null>(null);
 
   const updateLocalStorageConnection = (connected: boolean) => {
     if (typeof window === 'undefined') return;
@@ -129,6 +130,8 @@ export default function DatadogAuthPage() {
   const handleConnect = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setLoading(true);
+    let conflict = false;
+    setConnectError(null);
 
     try {
       const payload = {
@@ -150,9 +153,11 @@ export default function DatadogAuthPage() {
       const orgCount = result.accounts?.length ?? 1;
       toast({
         title: 'Success',
-        description: orgCount > 1
-          ? `Datadog organization "${result.label}" connected. ${orgCount} organizations are now connected - make sure the webhook below exists in each one.`
-          : 'Datadog connected successfully. Configure the webhook below to start receiving alerts.',
+        description: result.replaced
+          ? `Credentials for "${result.label}" updated.`
+          : orgCount > 1
+            ? `Datadog organization "${result.label}" connected. ${orgCount} organizations are now connected - make sure the webhook below exists in each one.`
+            : 'Datadog connected successfully. Configure the webhook below to start receiving alerts.',
       });
 
       await loadWebhookUrl();
@@ -174,17 +179,27 @@ export default function DatadogAuthPage() {
     } catch (error: unknown) {
       console.error('[datadog] Connect failed', error);
       const message = getUserFriendlyError(error);
-      toast({
-        title: 'Failed to connect to Datadog',
-        description: message,
-        variant: 'destructive',
-      });
+      // 409 means the label is taken by a different organization. It is fixable
+      // by typing another label, so show it inline on the form and keep the keys
+      // rather than firing a toast that vanishes and clearing the inputs.
+      conflict = (error as { status?: number })?.status === 409;
+      if (conflict) {
+        setConnectError(message);
+      } else {
+        toast({
+          title: 'Failed to connect to Datadog',
+          description: message,
+          variant: 'destructive',
+        });
+      }
     } finally {
       setLoading(false);
-      setApiKey('');
-      setAppKey('');
-      setLabel('');
-      setServiceAccountName('');
+      if (!conflict) {
+        setApiKey('');
+        setAppKey('');
+        setLabel('');
+        setServiceAccountName('');
+      }
     }
   };
 
@@ -375,8 +390,14 @@ export default function DatadogAuthPage() {
                     loading={loading}
                     onConnect={handleConnect}
                     isAdditional
+                    error={connectError}
                   />
-                  <Button variant="ghost" size="sm" onClick={() => setShowAddForm(false)} disabled={loading}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => { setShowAddForm(false); setConnectError(null); }}
+                    disabled={loading}
+                  >
                     Cancel
                   </Button>
                 </div>

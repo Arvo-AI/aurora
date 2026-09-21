@@ -54,13 +54,22 @@ def fake_request(self, method, path, **kwargs):
             raise datadog_routes.DatadogAPIError("403 Forbidden")
         return SimpleNamespace(json=lambda: {"valid": True})
     if path == "/api/v1/org":
-        name = "Acme Prod" if self.api_key == "api-prod" else "Acme Dev"
-        return SimpleNamespace(json=lambda: {"name": name, "id": self.api_key})
+        # Org identity is tied to the org, not to the key pair: rotating a key
+        # must keep the same id, or the rotation path cannot be tested honestly.
+        prod = self.api_key.startswith("api-prod")
+        return SimpleNamespace(json=lambda: {
+            "name": "Acme Prod" if prod else "Acme Dev",
+            "id": "org-prod" if prod else "org-dev",
+        })
     if path == "/api/v2/logs/events/search":
         # Each org returns its own data: the whole point of selecting one.
-        env = "prod" if self.api_key == "api-prod" else "dev"
+        env = "prod" if self.api_key.startswith("api-prod") else "dev"
         return SimpleNamespace(json=lambda: {"data": [{"attributes": {"env": env}}]})
     raise AssertionError(f"unexpected path {path}")
+
+
+def _labels_in_vault():
+    return [datadog_routes._account_label(a) for a in VAULT["blob"]["accounts"]]
 
 
 def check(label, condition, detail=""):
@@ -146,6 +155,35 @@ def test_multi_org_flow():
                                                user_id="u1"))
     check("unknown org errors instead of silently using prod", "error" in out, str(out))
     check("error lists the real organizations", "prod" in out["error"] and "dev" in out["error"])
+
+    print("\n6b. A different org claiming a taken label is refused, not merged")
+    # Simulates the blank-label case: org_name is None so the label falls through
+    # to the site, colliding with an already-connected org on the same site.
+    with app.test_request_context(json={"apiKey": "api-prod", "appKey": "app-prod",
+                                       "site": "datadoghq.com", "label": "dev"}):
+        response = datadog_routes.connect.__wrapped__("u1")
+    body, code = json.loads(response[0].get_data()), response[1]
+    check("rejected with 409", code == 409, str(code))
+    check("names the conflicting label", body["conflictingLabel"] == "dev")
+    check("nothing was overwritten",
+          [a["api_key"] for a in VAULT["blob"]["accounts"]] == ["api-prod", "api-dev"])
+
+    print("\n6c. Re-connecting the SAME org rotates its keys in place")
+    VALID_KEYS.add("api-dev-rotated")
+    with app.test_request_context(json={"apiKey": "api-dev-rotated", "appKey": "app-dev2",
+                                       "site": "datadoghq.eu", "label": "dev"}):
+        body = json.loads(datadog_routes.connect.__wrapped__("u1").get_data())
+    check("reported as a replacement", body["replaced"] is True)
+    check("still two organizations", len(body["accounts"]) == 2, str(len(body["accounts"])))
+    check("key rotated", VAULT["blob"]["accounts"][1]["api_key"] == "api-dev-rotated")
+    check("prod remained primary (position preserved)",
+          _labels_in_vault() == ["prod", "dev"], str(_labels_in_vault()))
+    out = json.loads(datadog_tool.query_datadog(resource_type="logs", user_id="u1"))
+    check("unqualified query still hits prod", out["account"] == "prod")
+    # Restore for the removal steps below.
+    VALID_KEYS.discard("api-dev-rotated")
+    VAULT["blob"]["accounts"][1]["api_key"] = "api-dev"
+    VALID_KEYS.add("api-dev")
 
     print("\n7. Remove one organization")
     with app.test_request_context("/?account=dev"):

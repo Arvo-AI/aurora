@@ -20,6 +20,8 @@ interface DatadogConnectionStepProps {
   onConnect: (e: React.FormEvent<HTMLFormElement>) => void;
   /** True when at least one org is already connected, so copy reads as "add another". */
   isAdditional?: boolean;
+  /** Inline, recoverable failure (e.g. the label is taken by another org). */
+  error?: string | null;
 }
 
 const SITE_HINTS = [
@@ -46,6 +48,7 @@ export function DatadogConnectionStep({
   loading,
   onConnect,
   isAdditional = false,
+  error = null,
 }: DatadogConnectionStepProps) {
   const normalizeSite = (value: string): string => {
     return value
@@ -139,16 +142,29 @@ export function DatadogConnectionStep({
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="datadog-label">Label</Label>
+                    <Label htmlFor="datadog-label">
+                      Label{isAdditional ? '' : ' (optional)'}
+                    </Label>
                     <Input
                       id="datadog-label"
                       placeholder="prod"
                       value={label}
                       onChange={(event) => setLabel(event.target.value)}
+                      required={isAdditional}
+                      aria-invalid={Boolean(error)}
+                      aria-describedby={error ? 'datadog-label-error' : undefined}
+                      className={error ? 'border-destructive' : undefined}
                     />
-                    <p className="text-xs text-muted-foreground">
-                      Names this organization so Aurora can pick the right one when investigating, e.g. <code className="bg-muted px-1 rounded">prod</code> or <code className="bg-muted px-1 rounded">dev</code>. Defaults to the Datadog org name.
-                    </p>
+                    {error ? (
+                      <p id="datadog-label-error" className="text-xs text-destructive">{error}</p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Names this organization so Aurora can pick the right one when investigating, e.g. <code className="bg-muted px-1 rounded">prod</code> or <code className="bg-muted px-1 rounded">dev</code>.
+                        {isAdditional
+                          ? ' Must differ from the organizations already connected.'
+                          : ' Defaults to the Datadog org name.'}
+                      </p>
+                    )}
                   </div>
                 </div>
 
