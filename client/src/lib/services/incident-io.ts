@@ -34,9 +34,7 @@ export interface IncidentIoWebhookUrlResponse {
   instructions: string[];
 }
 
-export type IncidentIoSeverity = 'critical' | 'high' | 'medium' | 'low' | 'unknown';
-
-// A single incident.io org severity (custom names, ranked; lower = less severe).
+// A single incident.io alert priority (org-defined, ranked; higher = more urgent).
 export interface IncidentIoOrgSeverity {
   name: string;
   rank: number;

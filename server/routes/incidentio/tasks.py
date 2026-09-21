@@ -195,6 +195,8 @@ def get_org_severities(user_id: str) -> Dict[str, Any]:
     return {"available": bool(severities), "denied": is_denied, "severities": severities}
 
 
+def _should_trigger_rca(user_id: str) -> bool:
+    """Master switch for RCA on any incident.io event (default on)."""
     from utils.auth.stateless_auth import get_user_preference
     return get_user_preference(user_id, "incidentio_rca_enabled", default=True)
 
