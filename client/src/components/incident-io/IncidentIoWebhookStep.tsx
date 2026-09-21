@@ -18,7 +18,7 @@ import { CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   incidentIoService,
-  IncidentIoSeverity,
+  IncidentIoOrgSeverity,
   IncidentIoWebhookUrlResponse,
 } from "@/lib/services/incident-io";
 import { copyToClipboard } from "@/lib/utils";
@@ -172,7 +172,9 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
   const [rcaEnabled, setRcaEnabled] = useState(true);
   const [postbackEnabled, setPostbackEnabled] = useState(false);
   const [alertRcaEnabled, setAlertRcaEnabled] = useState(true);
-  const [alertMinSeverity, setAlertMinSeverity] = useState<IncidentIoSeverity>("low");
+  const [alertMinSeverity, setAlertMinSeverity] = useState<string>("low");
+  const [orgSeverities, setOrgSeverities] = useState<IncidentIoOrgSeverity[]>([]);
+  const [severitiesAvailable, setSeveritiesAvailable] = useState(false);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [updatingRca, setUpdatingRca] = useState(false);
   const [updatingPostback, setUpdatingPostback] = useState(false);
@@ -190,9 +192,10 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
       setLoadingSettings(true);
 
       try {
-        const [webhookResponse, rcaSettings] = await Promise.all([
+        const [webhookResponse, rcaSettings, severitiesResponse] = await Promise.all([
           incidentIoService.getWebhookUrl(),
           incidentIoService.getRcaSettings(),
+          incidentIoService.getSeverities(),
         ]);
 
         if (isMounted) {
@@ -206,6 +209,8 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
             setAlertRcaEnabled(rcaSettings.alertRcaEnabled ?? true);
             setAlertMinSeverity(rcaSettings.alertMinSeverity ?? "low");
           }
+          setSeveritiesAvailable(severitiesResponse.available);
+          setOrgSeverities(severitiesResponse.severities);
         }
       } catch (_error) {
         console.error("Failed to load incident.io settings:", _error);
@@ -291,7 +296,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
     }
   };
 
-  const handleMinSeverityChange = async (severity: IncidentIoSeverity) => {
+  const handleMinSeverityChange = async (severity: string) => {
     setUpdatingMinSeverity(true);
     try {
       const result = await incidentIoService.updateRcaSettings({ alertMinSeverity: severity });
@@ -313,6 +318,8 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
       setUpdatingMinSeverity(false);
     }
   };
+
+  const copyWebhookUrl = async () => {
     if (!webhookData?.webhookUrl) return;
     try {
       await copyToClipboard(webhookData.webhookUrl);
@@ -430,16 +437,20 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
               )}
             </div>
 
-            {/* Severity filter only applies when alert RCA is on — lets orgs
-                skip high-volume low-severity alert noise. */}
+            {/* Priority filter only applies when alert RCA is on — lets orgs
+                skip high-volume low-priority alert noise. */}
             {alertRcaEnabled && (
               <div className="mt-4 flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label htmlFor="alert-min-severity" className="text-sm font-medium">
-                    Minimum alert severity
+                    Minimum alert priority
                   </Label>
                   <p className="text-sm text-muted-foreground">
-                    Only investigate alerts at or above this severity
+                    {/* Message differs depending on whether we could read the
+                        org's real alert priorities from the incident.io API. */}
+                    {severitiesAvailable
+                      ? "Only investigate alerts at or above this priority"
+                      : "Add the “View data” permission to your incident.io API key to filter by your organization's alert priorities"}
                   </p>
                 </div>
                 {loadingSettings ? (
@@ -447,17 +458,23 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
                 ) : (
                   <Select
                     value={alertMinSeverity}
-                    onValueChange={(v) => handleMinSeverityChange(v as IncidentIoSeverity)}
-                    disabled={updatingMinSeverity}
+                    onValueChange={(v) => handleMinSeverityChange(v)}
+                    // Disabled when we can't read the org's priorities (missing
+                    // API scope) — the filter can't be meaningfully configured.
+                    disabled={updatingMinSeverity || !severitiesAvailable}
                   >
-                    <SelectTrigger id="alert-min-severity" className="w-40">
-                      <SelectValue placeholder="Select severity" />
+                    <SelectTrigger id="alert-min-severity" className="w-48">
+                      <SelectValue placeholder={severitiesAvailable ? "Select priority" : "Unavailable"} />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="low">Low (all alerts)</SelectItem>
-                      <SelectItem value="medium">Medium & above</SelectItem>
-                      <SelectItem value="high">High & above</SelectItem>
-                      <SelectItem value="critical">Critical only</SelectItem>
+                      {/* Real org alert priorities, most-urgent first. "Minimum"
+                          semantics: picking one investigates it and anything
+                          more urgent. */}
+                      {orgSeverities.map((sev) => (
+                        <SelectItem key={sev.name} value={sev.name.toLowerCase()}>
+                          {sev.name} & above
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 )}

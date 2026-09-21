@@ -18,8 +18,183 @@ logger = logging.getLogger(__name__)
 # RCA gate so an org can say e.g. "only investigate high and critical".
 _SEVERITY_ORDER = ("unknown", "low", "medium", "high", "critical")
 
+# incident.io severities are org-customizable, so a name like "Degraded" won't
+# map to our fixed buckets. We cache the org's severity catalog (name → rank)
+# to compare custom severities by the org's own ranking instead of dropping
+# them to "unknown". Short TTL keeps it fresh without an API call per alert.
+_ORG_SEVERITY_CACHE_TTL_SECONDS = 3600
 
-def _should_trigger_rca(user_id: str) -> bool:
+# When the API key lacks the "View data" scope, /v1/severities returns 403
+# forever for that key. Cache a "denied" marker so we stop calling on every
+# alert, but re-check periodically in case the key's scopes are widened.
+_ORG_SEVERITY_DENIED_TTL_SECONDS = 3600
+_ORG_SEVERITY_DENIED_MARKER = "__denied__"
+
+
+def _get_org_severity_ranks(user_id: str) -> Dict[str, int]:
+    """Return the org's alert-priority catalog as {lowercase_name: rank}.
+
+    Alerts are categorized by *priority*, which incident.io models as a ranked
+    Catalog type ("AlertPriority") with entries like "Urgent"/"In-hours". This
+    is a separate taxonomy from incident severities. Higher rank = more urgent,
+    matching this module's "higher rank = more severe" convention (no inversion
+    needed).
+
+    Cached in Redis (per-user) to avoid an API call on every alert; fails open
+    (returns {}) on any error so the caller falls back to name-based mapping
+    rather than dropping the alert.
+
+    Reading the catalog requires the API key's "View data" (viewer) scope. A
+    key without it gets a 403 — a *permanent* condition for that key — so we
+    cache a "denied" marker (short TTL, re-checked in case scopes change)
+    rather than retrying on every alert. Transient errors (timeout/5xx) are
+    NOT cached, so the next alert retries immediately.
+    """
+    import json as _json
+
+    cache_key = f"incidentio:severity_ranks:{user_id}"
+
+    # Serve from cache when available — avoids an API call per alert.
+    try:
+        from utils.cache.redis_client import get_redis_client
+        rc = get_redis_client()
+        if rc is not None:
+            cached = rc.get(cache_key)
+            if cached is not None:
+                # Key is known to lack the required scope — skip the API call.
+                if cached == _ORG_SEVERITY_DENIED_MARKER:
+                    return {}
+                parsed = _json.loads(cached)
+                if isinstance(parsed, dict):
+                    return {str(k): int(v) for k, v in parsed.items()}
+    except Exception:
+        logger.debug("[INCIDENTIO] Severity-rank cache read failed", exc_info=True)
+
+    # Cache miss (or no Redis) — fetch the org's alert priorities from the API.
+    from routes.incidentio.incidentio_routes import IncidentioAPIError
+
+    ranks: Dict[str, int] = {}
+    denied = False
+    try:
+        from utils.auth.token_management import get_token_data
+        from routes.incidentio.incidentio_routes import IncidentioClient
+
+        creds = get_token_data(user_id, "incidentio")
+        if not creds or not creds.get("api_key"):
+            return {}
+
+        client = IncidentioClient(creds["api_key"])
+        data = client.list_alert_priorities()
+        # Alert Priority catalog rank: higher = more urgent (matches our
+        # "higher stored value = more severe" convention, so no inversion).
+        for prio in data.get("severities", []) or []:
+            name = prio.get("name")
+            rank = prio.get("rank")
+            if isinstance(name, str) and isinstance(rank, int):
+                ranks[name.lower().strip()] = rank
+    except IncidentioAPIError as exc:
+        # 401/403 mean the key can't read alert priorities — a persistent,
+        # actionable config problem. Mark it denied so we stop retrying every
+        # alert. All other API errors are transient and must NOT be cached.
+        if exc.code in (IncidentioAPIError.FORBIDDEN, IncidentioAPIError.INVALID_KEY):
+            denied = True
+            logger.warning(
+                "[INCIDENTIO] API key lacks permission to read alert priorities (View data scope) "
+                "for user %s — alert priorities cannot be ranked and will fail open. "
+                "Grant the key the 'View data' permission to enable priority filtering.",
+                user_id,
+            )
+        else:
+            logger.warning(
+                "[INCIDENTIO] Transient error fetching org alert priorities for user %s (%s)",
+                user_id, exc.code,
+            )
+            return {}
+    except Exception:
+        # Unexpected failure — fail open and retry next time (don't cache).
+        logger.warning("[INCIDENTIO] Could not fetch org alert priorities for user %s", user_id)
+        return {}
+
+    # Persist the result: a denied marker for permission failures, otherwise
+    # the fetched catalog. Both are re-checked when their TTL expires.
+    try:
+        from utils.cache.redis_client import get_redis_client
+        rc = get_redis_client()
+        if rc is not None:
+            if denied:
+                rc.set(
+                    cache_key,
+                    _ORG_SEVERITY_DENIED_MARKER,
+                    ex=_ORG_SEVERITY_DENIED_TTL_SECONDS,
+                )
+            else:
+                rc.set(cache_key, _json.dumps(ranks), ex=_ORG_SEVERITY_CACHE_TTL_SECONDS)
+    except Exception:
+        logger.debug("[INCIDENTIO] Severity-rank cache write failed", exc_info=True)
+
+    return ranks
+
+
+def invalidate_org_severity_cache(user_id: str) -> None:
+    """Drop the cached severity catalog (and any denied marker) for a user.
+
+    Called on connect/disconnect so a new or rotated API key re-fetches the
+    catalog instead of serving a stale list or a stale "denied" marker.
+    """
+    try:
+        from utils.cache.redis_client import get_redis_client
+        rc = get_redis_client()
+        if rc is not None:
+            rc.delete(f"incidentio:severity_ranks:{user_id}")
+    except Exception:
+        logger.debug("[INCIDENTIO] Severity cache invalidation failed", exc_info=True)
+
+
+def get_org_severities(user_id: str) -> Dict[str, Any]:
+    """Return the org's alert priorities for display, plus availability metadata.
+
+    Shape: {"available": bool, "denied": bool,
+            "severities": [{"name": str, "rank": int}, ...]} sorted most-urgent
+    first. ``rank`` is the org's Alert Priority catalog rank (higher = more
+    urgent). ``available`` is False when the catalog couldn't be read (e.g. the
+    API key lacks the "View data" scope), so the UI can disable selection and
+    explain why.
+    """
+    is_denied = False
+
+    # Peek at the cache first so a known "denied" key reports unavailable
+    # without another API round-trip.
+    try:
+        from utils.cache.redis_client import get_redis_client
+        rc = get_redis_client()
+        if rc is not None and rc.get(f"incidentio:severity_ranks:{user_id}") == _ORG_SEVERITY_DENIED_MARKER:
+            is_denied = True
+    except Exception:
+        logger.debug("[INCIDENTIO] Severity availability cache read failed", exc_info=True)
+
+    ranks = _get_org_severity_ranks(user_id)
+
+    # Re-check the denied marker: _get_org_severity_ranks may have just set it.
+    if not ranks and not is_denied:
+        try:
+            from utils.cache.redis_client import get_redis_client
+            rc = get_redis_client()
+            if rc is not None and rc.get(f"incidentio:severity_ranks:{user_id}") == _ORG_SEVERITY_DENIED_MARKER:
+                is_denied = True
+        except Exception:
+            logger.debug("[INCIDENTIO] Severity availability cache re-check failed", exc_info=True)
+
+    # Available only when we actually have priorities to show. An empty-but-
+    # not-denied result (transient error) is also reported unavailable so the
+    # UI doesn't render an empty dropdown. Sort by rank descending = most-urgent
+    # first (higher rank = more urgent).
+    severities = [
+        {"name": name, "rank": rank}
+        for name, rank in sorted(ranks.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+    return {"available": bool(severities), "denied": is_denied, "severities": severities}
+
+
     from utils.auth.stateless_auth import get_user_preference
     return get_user_preference(user_id, "incidentio_rca_enabled", default=True)
 
@@ -35,7 +210,49 @@ def _should_trigger_alert_rca(user_id: str) -> bool:
     return get_user_preference(user_id, "incidentio_alert_rca_enabled", default=True)
 
 
-def _severity_passes_filter(user_id: str, normalized_severity: str) -> bool:
+def _normalize_via_org_rank(raw_severity: str, org_ranks: Dict[str, int]) -> Optional[str]:
+    """Map a custom severity name to a normalized bucket using the org's ranks.
+
+    incident.io orgs define arbitrary severity names, but each has a numeric
+    rank (lower = less severe). We bucket the alert's severity into our fixed
+    low/medium/high/critical scale by its *relative position* within the org's
+    own catalog, so a custom "Degraded" between "Minor" and "Major" lands in a
+    sensible bucket instead of "unknown".
+
+    Returns None when the name isn't in the catalog or the catalog is unusable,
+    signalling the caller to fall back to name-based mapping.
+    """
+    if not org_ranks:
+        return None
+
+    key = (raw_severity or "").lower().strip()
+    if key not in org_ranks:
+        return None
+
+    ranks = sorted(set(org_ranks.values()))
+    # A single defined severity can't establish a gradient — treat as high so
+    # it isn't accidentally filtered out as low-severity noise.
+    if len(ranks) < 2:
+        return "high"
+
+    lo, hi = ranks[0], ranks[-1]
+    rank = org_ranks[key]
+    # Position of this severity within the org's range, scaled to [0, 1].
+    fraction = (rank - lo) / (hi - lo)
+
+    # Split the normalized scale into quartiles by relative position.
+    if fraction >= 0.75:
+        return "critical"
+    if fraction >= 0.5:
+        return "high"
+    if fraction >= 0.25:
+        return "medium"
+    return "low"
+
+
+def _severity_passes_filter(
+    user_id: str, normalized_severity: str, raw_severity: str = ""
+) -> bool:
     """Decide whether an alert's severity clears the org's RCA filter.
 
     Two customizable knobs (per-user preferences):
@@ -45,29 +262,60 @@ def _severity_passes_filter(user_id: str, normalized_severity: str) -> bool:
       severities to investigate. When set (non-empty), it takes precedence
       over the minimum-severity threshold.
 
+    Because incident.io severities are org-customizable, we first try to
+    resolve the alert's *raw* severity name against the org's severity catalog
+    (by numeric rank). Only when that isn't possible do we fall back to the
+    fixed name-based mapping.
+
     This lets an org investigate specific critical alerts while ignoring
     high-volume low-severity noise.
     """
     from utils.auth.stateless_auth import get_user_preference
 
     sev = (normalized_severity or "unknown").lower()
+    raw = (raw_severity or "").lower().strip()
 
-    # Explicit allowlist wins when configured — most precise control.
+    # Fetch the org catalog once; used both to rank the incoming alert and to
+    # resolve a real-severity-name threshold below.
+    org_ranks = _get_org_severity_ranks(user_id)
+
+    # A custom severity name maps to "unknown" under the fixed buckets — try
+    # to recover a real bucket from the org's own severity ranks so the filter
+    # actually applies to custom severities instead of always passing them.
+    if sev == "unknown" and raw:
+        recovered = _normalize_via_org_rank(raw, org_ranks)
+        if recovered is not None:
+            sev = recovered
+
+    # Explicit allowlist wins when configured — most precise control. Match
+    # against both the normalized bucket and the raw org-specific name so orgs
+    # can allowlist custom severity labels directly.
     allowlist = get_user_preference(
         user_id, "incidentio_alert_severity_allowlist", default=None
     )
     if isinstance(allowlist, list) and allowlist:
         allowed = {str(s).lower() for s in allowlist}
-        return sev in allowed
+        return sev in allowed or raw in allowed
 
     # Otherwise fall back to a minimum-severity threshold.
     min_sev = str(
         get_user_preference(user_id, "incidentio_alert_min_severity", default="low")
     ).lower()
 
-    # Unknown severities are ambiguous — never filter them out, so a
-    # misconfigured/absent severity still gets investigated rather than
-    # silently dropped.
+    # Threshold is a real org severity name (not one of our fixed buckets):
+    # compare by the org's own rank when we can resolve the alert's rank too.
+    # This is the precise path when the user picked from their real severities.
+    if min_sev in org_ranks:
+        threshold_rank = org_ranks[min_sev]
+        if raw in org_ranks:
+            return org_ranks[raw] >= threshold_rank
+        # Alert severity isn't in the catalog — ambiguous, so fail open rather
+        # than drop it against a real-name threshold.
+        return True
+
+    # Still unknown (custom severity not in catalog, or none provided) —
+    # ambiguous, so never filter it out: better to over-investigate than to
+    # silently drop an alert we couldn't classify.
     if sev == "unknown":
         return True
 
@@ -88,7 +336,9 @@ def _resolve_incident_object(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     incident.io sends two families of events:
     - Incident events: nested under event.incident or payload.incident
-    - Alert events (public_alert.*): alert data is a direct child of the payload
+    - Alert events (public_alert.*/private_alert.*): alert data is a direct
+      child of the payload, either under event.alert/payload.alert or keyed
+      by the event-type topic name
     """
     event = payload.get("event", {}) or {}
     incident = event.get("incident") or payload.get("incident") or None
@@ -104,6 +354,16 @@ def _resolve_incident_object(payload: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(alert, dict):
             return alert
 
+    # Private and public alerts can arrive keyed by their topic name
+    # (e.g. "private_alert.alert_created_v1": {...}) rather than under
+    # event.alert — treat both alert families identically.
+    if not incident:
+        for key, value in payload.items():
+            if ("public_alert." in key or "private_alert." in key) and isinstance(value, dict):
+                alert = value.get("alert") or value
+                if isinstance(alert, dict):
+                    return alert
+
     return incident or {}
 
 
@@ -118,8 +378,9 @@ def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Extract normalized incident fields from the webhook event envelope.
 
     Handles both incident events (event.incident.*) and alert events
-    (public_alert.*). Alert events carry title/description/status/metadata
-    directly on the alert object rather than in incident-shaped fields.
+    (public_alert.*/private_alert.*). Alert events carry
+    title/description/status/metadata directly on the alert object rather
+    than in incident-shaped fields.
     """
     event = payload.get("event", {}) or {}
     incident = _resolve_incident_object(payload)
@@ -197,6 +458,10 @@ _NEW_INCIDENT_EVENTS = frozenset((
     "incident.declared", "public_incident.incident_created",
     "public_incident.incident_created_v2",
     "public_alert.alert_created_v1",
+    # Private alerts fire the same lifecycle as public ones on a separate
+    # topic — process them identically so private-alert RCA isn't silently
+    # dropped at the trigger gate.
+    "private_alert.alert_created_v1",
 ))
 
 
@@ -402,7 +667,9 @@ def _store_and_process_event(user_id: str, event_type: str,
                     conn.commit()
                     logger.info("[INCIDENTIO] Stored alert (alert RCA disabled for user %s)", user_id)
                     return
-                if not _severity_passes_filter(user_id, normalized_severity):
+                if not _severity_passes_filter(
+                    user_id, normalized_severity, raw_severity=fields.get("severity", "")
+                ):
                     conn.commit()
                     logger.info(
                         "[INCIDENTIO] Stored alert (severity=%s filtered out for user %s)",
