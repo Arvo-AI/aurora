@@ -14,10 +14,68 @@ from services.correlation import apply_correlation_outcome
 
 logger = logging.getLogger(__name__)
 
+# Severity levels ordered least → most severe. Used for the "minimum severity"
+# RCA gate so an org can say e.g. "only investigate high and critical".
+_SEVERITY_ORDER = ("unknown", "low", "medium", "high", "critical")
+
 
 def _should_trigger_rca(user_id: str) -> bool:
     from utils.auth.stateless_auth import get_user_preference
     return get_user_preference(user_id, "incidentio_rca_enabled", default=True)
+
+
+def _should_trigger_alert_rca(user_id: str) -> bool:
+    """Whether RCA should run for incident.io *alert* events (public_alert.*).
+
+    Some orgs fire alerts constantly and only want RCA on declared incidents,
+    so this is a separate opt-in (default True) gated behind the master
+    ``incidentio_rca_enabled`` switch.
+    """
+    from utils.auth.stateless_auth import get_user_preference
+    return get_user_preference(user_id, "incidentio_alert_rca_enabled", default=True)
+
+
+def _severity_passes_filter(user_id: str, normalized_severity: str) -> bool:
+    """Decide whether an alert's severity clears the org's RCA filter.
+
+    Two customizable knobs (per-user preferences):
+    - ``incidentio_alert_min_severity``: minimum severity to investigate
+      (e.g. "high" skips low/medium noise). Default "low".
+    - ``incidentio_alert_severity_allowlist``: optional explicit list of
+      severities to investigate. When set (non-empty), it takes precedence
+      over the minimum-severity threshold.
+
+    This lets an org investigate specific critical alerts while ignoring
+    high-volume low-severity noise.
+    """
+    from utils.auth.stateless_auth import get_user_preference
+
+    sev = (normalized_severity or "unknown").lower()
+
+    # Explicit allowlist wins when configured — most precise control.
+    allowlist = get_user_preference(
+        user_id, "incidentio_alert_severity_allowlist", default=None
+    )
+    if isinstance(allowlist, list) and allowlist:
+        allowed = {str(s).lower() for s in allowlist}
+        return sev in allowed
+
+    # Otherwise fall back to a minimum-severity threshold.
+    min_sev = str(
+        get_user_preference(user_id, "incidentio_alert_min_severity", default="low")
+    ).lower()
+
+    # Unknown severities are ambiguous — never filter them out, so a
+    # misconfigured/absent severity still gets investigated rather than
+    # silently dropped.
+    if sev == "unknown":
+        return True
+
+    try:
+        return _SEVERITY_ORDER.index(sev) >= _SEVERITY_ORDER.index(min_sev)
+    # Unrecognized threshold value — fail open rather than drop the alert.
+    except ValueError:
+        return True
 
 
 def _should_postback(user_id: str) -> bool:
@@ -78,18 +136,30 @@ def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
                 severity_raw = str(metadata[key])
                 break
 
+        # Alerts have no incident_id, but they carry a stable identifier we can
+        # use for storage/dedup: the alert's own id or the source dedup key.
+        # Without this the ON CONFLICT (org_id, incident_id) upsert can never
+        # dedup (NULLs are distinct in Postgres) and Svix retries would pile up
+        # duplicate rows.
+        alert_ref = (
+            incident.get("id")
+            or incident.get("deduplication_key")
+            or payload.get("id")
+        )
+
         return {
-            "incident_id": None,
+            "incident_id": alert_ref,
             "incident_name": incident.get("title") or "Untitled Alert",
             "incident_status": incident.get("status") or "firing",
             "severity": severity_raw,
-            "incident_type": metadata.get("source", ""),
+            "incident_type": metadata.get("source") or metadata.get("service") or "",
             "summary": incident.get("description") or "",
             "created_at": incident.get("created_at"),
             "updated_at": incident.get("updated_at"),
-            "permalink": "",
+            "permalink": incident.get("source_url") or "",
             "custom_fields": [],
             "roles": [],
+            "is_alert": True,
         }
 
     return {
@@ -104,6 +174,7 @@ def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
         "permalink": incident.get("permalink") or "",
         "custom_fields": incident.get("custom_field_entries") or [],
         "roles": incident.get("incident_role_assignments") or [],
+        "is_alert": False,
     }
 
 
@@ -278,9 +349,17 @@ def _store_and_process_event(user_id: str, event_type: str,
 
             received_at = datetime.now(timezone.utc)
             normalized_severity = _map_severity(fields["severity"])
+            is_alert = bool(fields.get("is_alert"))
 
+            # Alert events (public_alert.*) carry no incident_id; we synthesize a
+            # stable ref (alert id / dedup key) in _extract_incident_fields. Only
+            # drop if even that is missing, since without any key we can't dedup
+            # or link the event.
             if not fields.get("incident_id"):
-                logger.error("[INCIDENTIO] Alert event has no extractable incident_id, dropping event for user %s", user_id)
+                logger.error(
+                    "[INCIDENTIO] Event has no extractable identifier, dropping event for user %s",
+                    user_id,
+                )
                 return
 
             alert_db_id = _upsert_alert(cursor, conn, user_id=user_id, org_id=org_id,
@@ -299,16 +378,37 @@ def _store_and_process_event(user_id: str, event_type: str,
             service = _extract_service(fields)
             alert_metadata = _build_alert_metadata(fields, event_type)
 
+            # Correlation runs regardless of the RCA gate: attaching a new
+            # event to an existing open incident is useful even when we won't
+            # kick off a fresh investigation (legacy hint-only mode).
             if _try_correlate(cursor, conn, user_id=user_id, alert_db_id=alert_db_id,
                               fields=fields, service=service,
                               normalized_severity=normalized_severity,
                               alert_metadata=alert_metadata, payload=payload, org_id=org_id):
                 return
 
+            # Master RCA switch — off means store only, never investigate.
             if not _should_trigger_rca(user_id):
                 conn.commit()
-                logger.info("[INCIDENTIO] Stored incident (RCA disabled)")
+                logger.info("[INCIDENTIO] Stored event (RCA disabled)")
                 return
+
+            # Alert-specific gating: orgs can disable alert RCA entirely, or
+            # filter by severity to avoid investigating high-volume low-severity
+            # noise while still catching critical alerts. Incident events are
+            # unaffected by these knobs.
+            if is_alert:
+                if not _should_trigger_alert_rca(user_id):
+                    conn.commit()
+                    logger.info("[INCIDENTIO] Stored alert (alert RCA disabled for user %s)", user_id)
+                    return
+                if not _severity_passes_filter(user_id, normalized_severity):
+                    conn.commit()
+                    logger.info(
+                        "[INCIDENTIO] Stored alert (severity=%s filtered out for user %s)",
+                        normalized_severity, user_id,
+                    )
+                    return
 
             incident_id = _create_and_link_incident(
                 cursor, conn, user_id=user_id, org_id=org_id,
@@ -447,8 +547,10 @@ def _trigger_rca_pipeline(
 
         logger.info("[INCIDENTIO] Triggered RCA for incident %s (task=%s)", incident_id, task.id)
 
-        # Post-back RCA summary if enabled (skip for alert-only events with no incident ID)
-        if _should_postback(user_id) and fields.get("incident_id"):
+        # Post-back RCA summary if enabled. Only incident events have an
+        # incident.io timeline to post to — alert events (public_alert.*) have
+        # no /incident_updates endpoint, so skip postback for them.
+        if _should_postback(user_id) and fields.get("incident_id") and not fields.get("is_alert"):
             postback_rca_to_incidentio.delay(user_id, str(incident_id), fields["incident_id"])
 
     except Exception as exc:

@@ -7,9 +7,20 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { incidentIoService, IncidentIoWebhookUrlResponse } from "@/lib/services/incident-io";
+import {
+  incidentIoService,
+  IncidentIoSeverity,
+  IncidentIoWebhookUrlResponse,
+} from "@/lib/services/incident-io";
 import { copyToClipboard } from "@/lib/utils";
 
 interface IncidentIoWebhookStepProps {
@@ -160,9 +171,13 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
   const [loadingWebhook, setLoadingWebhook] = useState(true);
   const [rcaEnabled, setRcaEnabled] = useState(true);
   const [postbackEnabled, setPostbackEnabled] = useState(false);
+  const [alertRcaEnabled, setAlertRcaEnabled] = useState(true);
+  const [alertMinSeverity, setAlertMinSeverity] = useState<IncidentIoSeverity>("low");
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [updatingRca, setUpdatingRca] = useState(false);
   const [updatingPostback, setUpdatingPostback] = useState(false);
+  const [updatingAlertRca, setUpdatingAlertRca] = useState(false);
+  const [updatingMinSeverity, setUpdatingMinSeverity] = useState(false);
   const [webhookSecret, setWebhookSecret] = useState("");
   const [savingSecret, setSavingSecret] = useState(false);
   const [hasWebhookSecret, setHasWebhookSecret] = useState(false);
@@ -188,6 +203,8 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
           if (rcaSettings) {
             setRcaEnabled(rcaSettings.rcaEnabled);
             setPostbackEnabled(rcaSettings.postbackEnabled);
+            setAlertRcaEnabled(rcaSettings.alertRcaEnabled ?? true);
+            setAlertMinSeverity(rcaSettings.alertMinSeverity ?? "low");
           }
         }
       } catch (_error) {
@@ -211,6 +228,8 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
       if (result) {
         setRcaEnabled(result.rcaEnabled);
         setPostbackEnabled(result.postbackEnabled);
+        setAlertRcaEnabled(result.alertRcaEnabled ?? true);
+        setAlertMinSeverity(result.alertMinSeverity ?? "low");
         toast({
           title: enabled ? "Automatic RCA Enabled" : "Automatic RCA Disabled",
           description: enabled
@@ -249,7 +268,51 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
     }
   };
 
-  const copyWebhookUrl = async () => {
+  const handleAlertRcaToggle = async (enabled: boolean) => {
+    setUpdatingAlertRca(true);
+    try {
+      const result = await incidentIoService.updateRcaSettings({ alertRcaEnabled: enabled });
+      if (result) {
+        setAlertRcaEnabled(result.alertRcaEnabled ?? enabled);
+        setAlertMinSeverity(result.alertMinSeverity ?? "low");
+        toast({
+          title: enabled ? "Alert RCA Enabled" : "Alert RCA Disabled",
+          description: enabled
+            ? "Aurora will investigate incident.io alerts (not just declared incidents)"
+            : "incident.io alerts will be stored but not investigated",
+        });
+      } else {
+        toast({ title: "Failed to update settings", description: "Could not update alert RCA setting. Please try again.", variant: "destructive" });
+      }
+    } catch (_error) {
+      toast({ title: "Failed to update settings", description: "Could not update alert RCA setting. Please try again.", variant: "destructive" });
+    } finally {
+      setUpdatingAlertRca(false);
+    }
+  };
+
+  const handleMinSeverityChange = async (severity: IncidentIoSeverity) => {
+    setUpdatingMinSeverity(true);
+    try {
+      const result = await incidentIoService.updateRcaSettings({ alertMinSeverity: severity });
+      if (result) {
+        setAlertMinSeverity(result.alertMinSeverity ?? severity);
+        toast({
+          title: "Alert severity filter updated",
+          description:
+            severity === "low"
+              ? "Aurora will investigate alerts of any severity"
+              : `Aurora will only investigate alerts of severity ${severity} or higher`,
+        });
+      } else {
+        toast({ title: "Failed to update settings", description: "Could not update severity filter. Please try again.", variant: "destructive" });
+      }
+    } catch (_error) {
+      toast({ title: "Failed to update settings", description: "Could not update severity filter. Please try again.", variant: "destructive" });
+    } finally {
+      setUpdatingMinSeverity(false);
+    }
+  };
     if (!webhookData?.webhookUrl) return;
     try {
       await copyToClipboard(webhookData.webhookUrl);
@@ -341,6 +404,65 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
                 />
               )}
             </div>
+          </div>
+        )}
+
+        {rcaEnabled && (
+          <div className="border-t pt-6">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="alert-rca-toggle" className="text-base font-medium">
+                  Investigate Alerts
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  Run RCA on incident.io alerts, not just declared incidents
+                </p>
+              </div>
+              {loadingSettings ? (
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              ) : (
+                <Switch
+                  id="alert-rca-toggle"
+                  checked={alertRcaEnabled}
+                  onCheckedChange={handleAlertRcaToggle}
+                  disabled={updatingAlertRca}
+                />
+              )}
+            </div>
+
+            {/* Severity filter only applies when alert RCA is on — lets orgs
+                skip high-volume low-severity alert noise. */}
+            {alertRcaEnabled && (
+              <div className="mt-4 flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="alert-min-severity" className="text-sm font-medium">
+                    Minimum alert severity
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    Only investigate alerts at or above this severity
+                  </p>
+                </div>
+                {loadingSettings ? (
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                ) : (
+                  <Select
+                    value={alertMinSeverity}
+                    onValueChange={(v) => handleMinSeverityChange(v as IncidentIoSeverity)}
+                    disabled={updatingMinSeverity}
+                  >
+                    <SelectTrigger id="alert-min-severity" className="w-40">
+                      <SelectValue placeholder="Select severity" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="low">Low (all alerts)</SelectItem>
+                      <SelectItem value="medium">Medium & above</SelectItem>
+                      <SelectItem value="high">High & above</SelectItem>
+                      <SelectItem value="critical">Critical only</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            )}
           </div>
         )}
 

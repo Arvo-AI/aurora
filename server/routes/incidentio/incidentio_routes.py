@@ -315,9 +315,10 @@ def get_webhook_url(user_id):
             "1. Go to incident.io → Settings → Webhooks",
             "2. Click 'Add endpoint'",
             "3. Paste the webhook URL above",
-            "4. Select events: incident.created, incident.updated",
+            "4. Select events: incident.created, incident.updated, and (optional) alert created events",
             "5. Save the endpoint, then copy the signing secret from the endpoint settings",
             "6. Paste the signing secret (starts with whsec_) into the field above",
+            "Note: Aurora can run RCA on alert events too — configure alert RCA and severity filtering below.",
         ],
     })
 
@@ -354,7 +355,22 @@ def save_webhook_secret(user_id):
 def get_rca_settings(user_id):
     rca_enabled = get_user_preference(user_id, "incidentio_rca_enabled", default=True)
     postback_enabled = get_user_preference(user_id, "incidentio_postback_enabled", default=False)
-    return jsonify({"rcaEnabled": rca_enabled, "postbackEnabled": postback_enabled})
+    alert_rca_enabled = get_user_preference(user_id, "incidentio_alert_rca_enabled", default=True)
+    alert_min_severity = get_user_preference(user_id, "incidentio_alert_min_severity", default="low")
+    alert_severity_allowlist = get_user_preference(
+        user_id, "incidentio_alert_severity_allowlist", default=None
+    )
+    return jsonify({
+        "rcaEnabled": rca_enabled,
+        "postbackEnabled": postback_enabled,
+        "alertRcaEnabled": alert_rca_enabled,
+        "alertMinSeverity": alert_min_severity,
+        "alertSeverityAllowlist": alert_severity_allowlist,
+    })
+
+
+# Severity labels accepted by the alert RCA filter (normalized values only).
+_VALID_SEVERITIES = frozenset(("critical", "high", "medium", "low", "unknown"))
 
 
 @incidentio_bp.route("/rca-settings", methods=["PUT"])
@@ -367,6 +383,9 @@ def update_rca_settings(user_id):
 
     rca_enabled = data.get("rcaEnabled")
     postback_enabled = data.get("postbackEnabled")
+    alert_rca_enabled = data.get("alertRcaEnabled")
+    alert_min_severity = data.get("alertMinSeverity")
+    alert_severity_allowlist = data.get("alertSeverityAllowlist")
 
     if rca_enabled is not None:
         if not isinstance(rca_enabled, bool):
@@ -378,8 +397,44 @@ def update_rca_settings(user_id):
             return jsonify({"error": "postbackEnabled must be a boolean"}), 400
         store_user_preference(user_id, "incidentio_postback_enabled", postback_enabled)
 
+    if alert_rca_enabled is not None:
+        if not isinstance(alert_rca_enabled, bool):
+            return jsonify({"error": "alertRcaEnabled must be a boolean"}), 400
+        store_user_preference(user_id, "incidentio_alert_rca_enabled", alert_rca_enabled)
+
+    # Minimum-severity threshold: single normalized severity label.
+    if alert_min_severity is not None:
+        if not isinstance(alert_min_severity, str) or alert_min_severity.lower() not in _VALID_SEVERITIES:
+            return jsonify({
+                "error": f"alertMinSeverity must be one of: {', '.join(sorted(_VALID_SEVERITIES))}"
+            }), 400
+        store_user_preference(user_id, "incidentio_alert_min_severity", alert_min_severity.lower())
+
+    # Explicit allowlist: list of normalized severities, or null/empty to clear
+    # it (falls back to the minimum-severity threshold).
+    if alert_severity_allowlist is not None:
+        if not isinstance(alert_severity_allowlist, list):
+            return jsonify({"error": "alertSeverityAllowlist must be a list or null"}), 400
+        normalized = [str(s).lower() for s in alert_severity_allowlist]
+        invalid = [s for s in normalized if s not in _VALID_SEVERITIES]
+        if invalid:
+            return jsonify({
+                "error": f"alertSeverityAllowlist contains invalid severities: {', '.join(invalid)}"
+            }), 400
+        # Store an empty list as None so downstream treats it as "no allowlist".
+        store_user_preference(
+            user_id,
+            "incidentio_alert_severity_allowlist",
+            normalized or None,
+        )
+
     return jsonify({
         "success": True,
         "rcaEnabled": get_user_preference(user_id, "incidentio_rca_enabled", default=True),
         "postbackEnabled": get_user_preference(user_id, "incidentio_postback_enabled", default=False),
+        "alertRcaEnabled": get_user_preference(user_id, "incidentio_alert_rca_enabled", default=True),
+        "alertMinSeverity": get_user_preference(user_id, "incidentio_alert_min_severity", default="low"),
+        "alertSeverityAllowlist": get_user_preference(
+            user_id, "incidentio_alert_severity_allowlist", default=None
+        ),
     })

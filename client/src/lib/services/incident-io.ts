@@ -34,9 +34,18 @@ export interface IncidentIoWebhookUrlResponse {
   instructions: string[];
 }
 
+export type IncidentIoSeverity = 'critical' | 'high' | 'medium' | 'low' | 'unknown';
+
 export interface IncidentIoRcaSettings {
   rcaEnabled: boolean;
   postbackEnabled: boolean;
+  // RCA on incident.io *alert* events (public_alert.*), not just incidents.
+  alertRcaEnabled: boolean;
+  // Minimum severity to investigate when no allowlist is set.
+  alertMinSeverity: IncidentIoSeverity;
+  // Explicit list of severities to investigate; overrides alertMinSeverity.
+  // null/empty means "use the minimum-severity threshold".
+  alertSeverityAllowlist: IncidentIoSeverity[] | null;
 }
 
 const API_BASE = '/api/incident-io';
