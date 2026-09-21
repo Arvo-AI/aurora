@@ -31,7 +31,7 @@ spec:
             {{- include "aurora.containerSecurityContext" (dict "service" "memgraph" "global" $ "defaults" (dict)) | nindent 12 }}
           command: ["/usr/lib/memgraph/memgraph"]
           args:
-            - "--memory-limit={{ .Values.config.MEMGRAPH_MEMORY_LIMIT | default "512" }}"
+            - "--memory-limit={{ .Values.config.MEMGRAPH_MEMORY_LIMIT | default "1536" }}"
             - "--log-level=ERROR"
             - "--also-log-to-stderr"
             - "--log-file="

@@ -181,7 +181,7 @@ config:
   MEMGRAPH_HOST: ""  # Auto-generated if empty: <release>-memgraph
   MEMGRAPH_PORT: "7687"
   MEMGRAPH_SCHEME: "bolt"  # Use "bolt+ssc" for Memgraph Cloud (SSL, self-signed), "bolt+s" for CA-signed SSL
-  MEMGRAPH_MEMORY_LIMIT: "512"  # MB, passed to --memory-limit flag
+  MEMGRAPH_MEMORY_LIMIT: "1536"  # MB, passed to --memory-limit flag; keep below resources.memgraph.limits.memory
   
   # --- SSL/TLS for External Services ---
   # PostgreSQL: "prefer" auto-negotiates TLS (works for RDS/Cloud SQL out of box)
@@ -544,19 +544,19 @@ resources:
       ephemeral-storage: "500Mi"
   celeryWorker:
     requests:
-      cpu: "250m"
+      cpu: "500m"
       memory: "1Gi"
       ephemeral-storage: "1Gi"
     limits:
-      cpu: "1000m"
+      cpu: "2000m"
       memory: "4Gi"
       ephemeral-storage: "2Gi"
   celeryBeat:
     requests:
-      cpu: "50m"
+      cpu: "100m"
       memory: "256Mi"
     limits:
-      cpu: "200m"
+      cpu: "500m"
       memory: "512Mi"
   chatbot:
     requests:
@@ -569,12 +569,12 @@ resources:
       ephemeral-storage: "1Gi"
   frontend:
     requests:
-      cpu: "100m"
-      memory: "256Mi"
+      cpu: "200m"
+      memory: "512Mi"
       ephemeral-storage: "512Mi"
     limits:
-      cpu: "1000m"
-      memory: "1Gi"
+      cpu: "2000m"
+      memory: "2Gi"
       ephemeral-storage: "1Gi"
   redis:
     requests:
@@ -596,12 +596,12 @@ resources:
       ephemeral-storage: "1Gi"
   memgraph:
     requests:
-      cpu: "100m"
-      memory: "512Mi"
+      cpu: "250m"
+      memory: "1Gi"
       ephemeral-storage: "100Mi"
     limits:
-      cpu: "500m"
-      memory: "1Gi"
+      cpu: "1000m"
+      memory: "2Gi"
       ephemeral-storage: "500Mi"
   vault:
     requests:
