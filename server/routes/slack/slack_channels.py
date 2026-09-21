@@ -7,8 +7,15 @@ LLM-generated (and user/agent-editable) description in ``metadata_summary``.
 The agent queries these descriptions to decide which channel(s) are relevant
 for a given incident/notification.
 
-Aurora auto-registers every visible channel (see ``auto_register_channels``);
-users curate by *dismissing* irrelevant ones rather than picking relevant ones.
+Aurora auto-registers every visible channel for *awareness* (see
+``auto_register_channels``), but only **describes** the channels it's actually a
+member of — the teammate model: it engages where it's been invited. Non-member
+channels are registered as an aware, name-only index (``metadata_status =
+'skipped'``); a user can promote one to described/routable at any time via the
+metadata/generate route. Users curate by *dismissing* irrelevant channels
+rather than picking relevant ones. This keeps LLM cost proportional to the
+channels the org cares about, so it scales to workspaces with thousands of
+channels.
 
 Endpoints (all behind ``connectors`` RBAC):
 
@@ -20,6 +27,7 @@ Endpoints (all behind ``connectors`` RBAC):
     PUT    /slack/channels/<id>/metadata         -> human-edit a channel description
     PUT    /slack/channels/<id>/notify           -> toggle notify_enabled for a channel
     POST   /slack/channels/metadata/generate     -> (re)generate a channel description
+    POST   /slack/channels/activate             -> bulk-activate (describe+route) many channels
 """
 import json
 import logging
@@ -46,6 +54,10 @@ MAX_AUTO_CHANNELS = 50
 # than this means we paged through the whole workspace, so a stored channel that's
 # absent can be safely pruned; hitting it means the list is partial (don't prune).
 LIST_CHANNELS_CAP = 2000
+
+# Cap on channels a single bulk-activate request may queue, so a runaway request
+# can't flood the metadata task queue.
+MAX_BULK_ACTIVATE = 200
 
 
 # Word-boundary patterns for incident-platform detection. Using anchored regex
@@ -186,39 +198,72 @@ def _update_one_channel(user_id: str, channel_id: str, set_clause: str, params: 
 
 def auto_register_channels(user_id: str, team_id: str | None = None,
                            describe_limit: int = MAX_AUTO_CHANNELS) -> int:
-    """Auto-register the workspace's channels on connect.
+    """Auto-register the workspace's channels on connect (membership model).
 
-    Registers ALL visible channels so Aurora is aware of every channel (the
-    agent can still route by name even without a description). Descriptions are
-    generated automatically for up to ``describe_limit`` channels: if the
-    workspace has that many or fewer, every channel is described; if it has more,
-    only the most recent ``describe_limit`` (ranked member-first, then recency)
-    are described and the rest stay ``metadata_status='skipped'`` until a user
-    explicitly requests one. Channels the user previously dismissed are never
-    re-added. Channels Slack no longer lists (deleted/archived, or a private
-    channel Aurora was removed from) are pruned from the table when the
-    enumeration is complete — Slack itself is never modified. Best-effort;
-    returns the number of descriptions enqueued.
-    Idempotent — existing rows are updated, not duplicated.
+    Registers ALL visible channels so Aurora is *aware* of every channel (the
+    agent can still search them by name via ``list_slack_channels`` even without
+    a description), but only **describes** the channels Aurora is actually a
+    member of — the teammate model: it engages where it's been invited, not
+    across the whole workspace. This keeps LLM cost proportional to the channels
+    the org cares about (a handful) rather than workspace size (thousands).
+
+    Two enumerations, deliberately separate:
+
+    * Member channels via ``users.conversations`` — small, bounded, and paged
+      to completion (no cap). This is the authoritative "active set" and is
+      never truncated, so a joined channel can never be lost to the safety cap.
+    * All visible channels via ``conversations.list`` — capped at
+      ``LIST_CHANNELS_CAP`` for the searchable index. Hitting the cap means the
+      index is partial (pruning is then skipped so we don't delete real rows).
+
+    ``describe_limit`` still bounds how many member channels get an eager
+    description, in case a workspace has an unusually large membership. Non-member
+    channels register as ``metadata_status='skipped'`` until a user (or the agent)
+    explicitly activates one. Dismissed channels are never resurfaced; channels
+    Slack no longer lists are pruned when the full enumeration is complete (Slack
+    itself is never modified). Best-effort; returns the number of descriptions
+    enqueued. Idempotent.
     """
     try:
         client = get_slack_client_for_user(user_id)
         if not client:
             return 0
-        # Own the cap here so we can tell a complete enumeration (safe to prune
-        # stale rows) from a truncated one (must NOT prune — we'd delete real
-        # channels we simply didn't page through).
-        channels = client.list_all_channels(max_channels=LIST_CHANNELS_CAP)
+        # Member channels: complete (no cap) — the set we actually describe. A
+        # joined channel must never be dropped by the index cap, so fetch it from
+        # the membership API independently.
+        member_channels = client.list_bot_channels()
+        # Full workspace list for awareness/search. Own the cap here so we can
+        # tell a complete enumeration (safe to prune stale rows) from a truncated
+        # one (must NOT prune — we'd delete real channels we didn't page through).
+        all_channels = client.list_all_channels(max_channels=LIST_CHANNELS_CAP)
     except Exception:
         logger.warning("[slack_channels] auto-register: failed to list channels", exc_info=True)
         return 0
 
-    if not channels:
+    if not all_channels and not member_channels:
         return 0
+
+    # Membership is authoritative: users.conversations only returns channels the
+    # bot is in, so force is_member=True for those ids regardless of what the
+    # (sometimes stale) conversations.list payload says.
+    member_ids = {c.get("id") for c in member_channels if c.get("id")}
+
+    # Merge both sources by id (member set wins on conflict so is_member sticks).
+    by_id: dict[str, dict] = {}
+    for c in all_channels:
+        cid = c.get("id")
+        if cid:
+            by_id[cid] = c
+    for c in member_channels:
+        cid = c.get("id")
+        if cid:
+            by_id[cid] = {**by_id.get(cid, {}), **c, "is_member": True}
+    channels = list(by_id.values())
 
     # Only reconcile deletions when we saw the whole workspace. Hitting the cap
     # means the list is partial, so absence doesn't imply the channel is gone.
-    enumeration_complete = len(channels) < LIST_CHANNELS_CAP
+    # (Member channels can't be over the cap — they're fetched completely.)
+    enumeration_complete = len(all_channels) < LIST_CHANNELS_CAP
     live_ids = {c.get("id") for c in channels if c.get("id")}
 
     # Derive team_id from stored creds when the caller didn't supply it (e.g. the
@@ -231,9 +276,11 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
         except Exception:
             team_id = None
 
-    # Rank once; the top slice is what we describe, but we register everything.
+    # We describe member channels (ranked recency-first, bounded by describe_limit
+    # as a safety valve); everything else registers as 'skipped' for awareness.
     ranked = _rank_channels(channels)
-    describe_ids = {c.get("id") for c in ranked[:describe_limit]}
+    ranked_members = [c for c in ranked if c.get("id") in member_ids]
+    describe_ids = {c.get("id") for c in ranked_members[:describe_limit]}
 
     org_id = resolve_org(user_id)
     newly_added_to_describe: list[str] = []
@@ -257,8 +304,8 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
                     # auto-register/refresh (existing dismissed rows are left as-is).
                     if ch["channel_id"] in dismissed_ids:
                         continue
-                    # Describe only the top-N recent channels; register the rest
-                    # for awareness with 'skipped' so the UI doesn't show a
+                    # Describe only channels Aurora is a member of; register the
+                    # rest for awareness with 'skipped' so the UI doesn't show a
                     # perpetual "generating" spinner for them.
                     will_describe = ch["channel_id"] in describe_ids
                     _cid, is_new = _upsert_channel(
@@ -291,8 +338,8 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
     for channel_id in newly_added_to_describe:
         _enqueue_metadata(user_id, channel_id)
     logger.info(
-        "[slack_channels] auto-registered %d channel(s), describing %d",
-        len(ranked), len(newly_added_to_describe),
+        "[slack_channels] auto-registered %d channel(s) (%d member), describing %d",
+        len(ranked), len(member_ids), len(newly_added_to_describe),
     )
     return len(newly_added_to_describe)
 
@@ -509,6 +556,63 @@ def trigger_channel_metadata(user_id):
         return err
     _enqueue_metadata(user_id, channel_id)
     return jsonify({"message": "Metadata generation started"})
+
+
+@slack_channels_bp.route("/channels/activate", methods=["POST"])
+@require_permission("connectors", "write")
+def activate_slack_channels(user_id):
+    """Bulk-activate channels: describe + make them routable.
+
+    Powers the "search a keyword (e.g. 'oncall'), check the matches, activate"
+    flow for large workspaces where Aurora is a member of only a few channels
+    but the org wants a set of channels routable without inviting the bot to
+    each. Flips each id to ``metadata_status='generating'`` and enqueues a
+    description (idempotent — re-activating just regenerates). Unknown/dismissed
+    ids are skipped silently. Returns the number of channels queued.
+    """
+    channel_ids = (request.get_json(silent=True) or {}).get("channel_ids")
+    if not isinstance(channel_ids, list) or not channel_ids:
+        return jsonify({"error": "channel_ids (non-empty list) is required"}), 400
+    # Guard against an unbounded request flooding the metadata queue.
+    if len(channel_ids) > MAX_BULK_ACTIVATE:
+        return jsonify({"error": f"Too many channels; activate at most {MAX_BULK_ACTIVATE} at once"}), 400
+
+    try:
+        activated = _activate_channels(user_id, channel_ids)
+    except Exception:
+        logger.exception("Error activating Slack channels")
+        return jsonify({"error": "Failed to activate channels"}), 500
+
+    return jsonify({"message": "Activation started", "activated": activated})
+
+
+def _activate_channels(user_id: str, channel_ids: list[str]) -> int:
+    """Flip the given (non-dismissed, existing) channels to 'generating' and
+    enqueue a description for each. Returns how many were actually activated.
+
+    Only rows that exist and aren't dismissed are touched (activating a dismissed
+    channel would contradict the user's dismissal); ``RETURNING`` tells us which
+    ids were real so we enqueue exactly those.
+    """
+    activated: list[str] = []
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:activate]")
+            cur.execute(
+                """UPDATE slack_channels
+                      SET metadata_status = 'generating', updated_at = NOW()
+                    WHERE provider = 'slack'
+                      AND is_dismissed = FALSE
+                      AND channel_id = ANY(%s)
+                RETURNING channel_id""",
+                (channel_ids,),
+            )
+            activated = [r[0] for r in cur.fetchall()]
+            conn.commit()
+
+    for channel_id in activated:
+        _enqueue_metadata(user_id, channel_id)
+    return len(activated)
 
 
 def _enqueue_metadata(user_id: str, channel_id: str):

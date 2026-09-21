@@ -78,20 +78,26 @@ def test_rank_handles_missing_created_field():
     assert ranked == ["C1", "C2"]
 
 
-# --- auto_register_channels: register all, describe only top-N --------------
+# --- auto_register_channels: register all, describe only members ------------
 
-def test_auto_register_describes_only_recency_cap():
+def test_auto_register_describes_only_members():
     from unittest.mock import MagicMock
 
-    # 3 channels; cap describe at 2. All 3 should be upserted, only 2 described.
-    channels = [
+    # C1/C2 are members (describe), C3 is not (index-only, 'skipped') even though
+    # it exists in the workspace list. describe_limit is a safety valve, not the
+    # selector — membership is.
+    members = [
         {"id": "C1", "name": "one", "is_member": True, "created": 300},
         {"id": "C2", "name": "two", "is_member": True, "created": 200},
-        {"id": "C3", "name": "three", "is_member": False, "created": 100},
+    ]
+    all_channels = [
+        *members,
+        {"id": "C3", "name": "three", "is_member": False, "created": 999},
     ]
 
     fake_client = MagicMock()
-    fake_client.list_all_channels.return_value = channels
+    fake_client.list_bot_channels.return_value = members
+    fake_client.list_all_channels.return_value = all_channels
 
     # Capture every _upsert_channel call's initial_status.
     upserts = []
@@ -119,15 +125,59 @@ def test_auto_register_describes_only_recency_cap():
          patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
          patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
          patch.object(mod, "_enqueue_metadata", side_effect=lambda uid, cid: enqueued.append(cid)):
-        described = mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=2)
+        described = mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=50)
 
-    # All 3 registered; only the 2 most-recent members described.
+    # All 3 registered; only the 2 members described. The recent non-member C3 is
+    # registered 'skipped' for awareness, NOT described.
     assert {u[0] for u in upserts} == {"C1", "C2", "C3"}
     assert dict(upserts)["C1"] == "pending"
     assert dict(upserts)["C2"] == "pending"
     assert dict(upserts)["C3"] == "skipped"
-    assert enqueued == ["C1", "C2"]
+    assert set(enqueued) == {"C1", "C2"}
     assert described == 2
+
+
+def test_auto_register_describe_limit_caps_members():
+    """describe_limit still bounds an unusually large membership."""
+    from unittest.mock import MagicMock
+
+    members = [
+        {"id": "C1", "name": "one", "is_member": True, "created": 300},
+        {"id": "C2", "name": "two", "is_member": True, "created": 200},
+        {"id": "C3", "name": "three", "is_member": True, "created": 100},
+    ]
+    fake_client = MagicMock()
+    fake_client.list_bot_channels.return_value = members
+    fake_client.list_all_channels.return_value = members
+
+    upserts = []
+
+    def fake_upsert(cur, user_id, org_id, ch, existing, initial_status="pending"):
+        upserts.append((ch["channel_id"], initial_status))
+        existing[ch["channel_id"]] = user_id
+        return ch["channel_id"], True
+
+    enqueued = []
+    conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchall.return_value = []
+    conn.cursor.return_value.__enter__ = lambda s: cur
+    conn.cursor.return_value.__exit__ = lambda s, *a: False
+    dbcm = MagicMock()
+    dbcm.__enter__ = lambda s: conn
+    dbcm.__exit__ = lambda s, *a: False
+
+    with patch.object(mod, "get_slack_client_for_user", return_value=fake_client), \
+         patch.object(mod, "resolve_org", return_value="00000000-0000-0000-0000-000000000000"), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
+         patch.object(mod, "_enqueue_metadata", side_effect=lambda uid, cid: enqueued.append(cid)):
+        described = mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=2)
+
+    # Only the 2 most-recent members described; the oldest member is 'skipped'.
+    assert described == 2
+    assert dict(upserts)["C3"] == "skipped"
 
 
 def test_auto_register_skips_dismissed_channels():
@@ -138,6 +188,7 @@ def test_auto_register_skips_dismissed_channels():
         {"id": "C2", "name": "two", "is_member": True, "created": 200},
     ]
     fake_client = MagicMock()
+    fake_client.list_bot_channels.return_value = channels
     fake_client.list_all_channels.return_value = channels
 
     upserts = []
@@ -178,6 +229,7 @@ def test_auto_register_prunes_channels_gone_from_slack():
     # Slack now lists only C1; C_OLD was deleted/archived (or bot removed).
     channels = [{"id": "C1", "name": "one", "is_member": True, "created": 300}]
     fake_client = MagicMock()
+    fake_client.list_bot_channels.return_value = channels
     fake_client.list_all_channels.return_value = channels
 
     def fake_upsert(cur, user_id, org_id, ch, existing, initial_status="pending"):
@@ -217,6 +269,8 @@ def test_auto_register_does_not_prune_when_enumeration_truncated():
     channels = [{"id": f"C{i}", "name": str(i), "is_member": True, "created": i}
                 for i in range(mod.LIST_CHANNELS_CAP)]
     fake_client = MagicMock()
+    # Members fetched separately; empty here so the test focuses on prune-skip.
+    fake_client.list_bot_channels.return_value = []
     fake_client.list_all_channels.return_value = channels
 
     def fake_upsert(cur, user_id, org_id, ch, existing, initial_status="pending"):
@@ -295,6 +349,52 @@ def test_register_single_channel_restores_dismissed_on_reinvite():
     # An UPDATE that clears is_dismissed must have run.
     assert any("is_dismissed = FALSE" in call.args[0] for call in cur.execute.call_args_list)
     assert enqueued == ["C1"]
+
+
+# --- _activate_channels (bulk activate) -------------------------------------
+
+def _activate_db(returning_rows):
+    """Build (dbcm, cur) where the UPDATE ... RETURNING yields returning_rows."""
+    from unittest.mock import MagicMock
+    conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchall.return_value = returning_rows
+    conn.cursor.return_value.__enter__ = lambda s: cur
+    conn.cursor.return_value.__exit__ = lambda s, *a: False
+    dbcm = MagicMock()
+    dbcm.__enter__ = lambda s: conn
+    dbcm.__exit__ = lambda s, *a: False
+    return dbcm, cur
+
+
+def test_activate_channels_enqueues_only_returned_ids():
+    # DB RETURNING drives what's enqueued: C3 was dismissed/unknown so the UPDATE
+    # didn't touch it and it must NOT be described.
+    dbcm, cur = _activate_db([("C1",), ("C2",)])
+    enqueued = []
+    with patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_enqueue_metadata", side_effect=lambda u, c: enqueued.append(c)):
+        activated = mod._activate_channels("u1", ["C1", "C2", "C3"])
+
+    assert activated == 2
+    assert enqueued == ["C1", "C2"]
+    # The WHERE clause must exclude dismissed rows.
+    sql = cur.execute.call_args.args[0]
+    assert "is_dismissed = FALSE" in sql
+    assert cur.execute.call_args.args[1] == (["C1", "C2", "C3"],)
+
+
+def test_activate_channels_none_matched_enqueues_nothing():
+    dbcm, _cur = _activate_db([])  # no rows matched (all unknown/dismissed)
+    enqueued = []
+    with patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_enqueue_metadata", side_effect=lambda u, c: enqueued.append(c)):
+        activated = mod._activate_channels("u1", ["C_gone"])
+
+    assert activated == 0
+    assert enqueued == []
 
 
 # --- list_all_channels pagination ------------------------------------------

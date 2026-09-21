@@ -84,6 +84,22 @@ on connect and is user- and agent-editable.
   how Aurora learns per-team Slack policy over time.
 - Keep channel-specific preferences under the "Per-channel notes" section.
 
+### Learn the service → channel map
+The single highest-signal routing input is *which team channel owns which
+service*. The `Slack` memory has a "Service -> channel routing map" section for
+exactly this:
+
+- **Consult it FIRST** when routing an incident: if the affected service already
+  has a mapping (e.g. `payments -> #payments-oncall`), post there directly —
+  don't re-scan every channel description.
+- **Record it** when you route an incident to a channel because that channel owns
+  the affected service: `append_to_memory` the mapping (`<service> -> #<channel>`)
+  so the next incident on that service routes instantly.
+- **Correct it** if a team redirects you ("this is actually the checkout team's")
+  — update the mapping rather than leaving the wrong one.
+
+This is learned behaviour: the map starts empty and gets better every incident.
+
 ## Limitations
 - `post_slack_message` posts a plain mrkdwn message (or threaded reply); rich
   interactive cards are still posted by the notification service, not the agent

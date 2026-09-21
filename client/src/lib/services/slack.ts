@@ -123,6 +123,17 @@ export const slackService = {
     });
   },
 
+  // Bulk-activate indexed channels: describe them + make them routable. Powers
+  // the "search a keyword, check matches, activate" flow for large workspaces.
+  async activateChannels(channelIds: string[]): Promise<{ activated: number }> {
+    const data = await apiRequest<{ activated: number }>(`${CHANNELS_BASE}/activate`, {
+      method: 'POST',
+      body: JSON.stringify({ channel_ids: channelIds }),
+      cache: 'no-store',
+    });
+    return { activated: data?.activated ?? 0 };
+  },
+
   // Re-scan the workspace and register any newly-visible channels. Used by the
   // "Refresh channels" button so workspaces connected before auto-registration
   // (or with new channels) get updated without reconnecting.

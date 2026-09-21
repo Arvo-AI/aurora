@@ -78,7 +78,9 @@ def _build_prompt(incident_data: Dict[str, Any], incident_index: str) -> str:
         "never apply a scoped rule outside its scope. When the memory is silent "
         "on something, fall back to the steps below.\n\n"
         "How to act:\n"
-        "1. Read the Slack behaviour memory (context/Slack), then call "
+        "1. Read the Slack behaviour memory (context/Slack). Check its "
+        "\"Service -> channel routing map\" FIRST: if this service already maps "
+        "to a channel, that's your target — skip re-deriving it. Then call "
         "get_connected_slack_channels to see which channels exist and what each "
         "is for. Pick only the channel(s) the memory and descriptions say are "
         "genuinely relevant to this service/team. If none are relevant, or the "
@@ -92,9 +94,12 @@ def _build_prompt(incident_data: Dict[str, Any], incident_index: str) -> str:
         "Otherwise post one short new message. Match the tone, verbosity and "
         "format the memory specifies for that channel/team. Keep it terse and "
         "human unless the memory asks otherwise.\n"
-        "4. Do not post the same thing to multiple channels unless the memory "
-        "says to. Do not post to the main incidents channel — that card is "
-        "already handled."
+        "4. If you posted to a channel because it owns this service and that "
+        "mapping isn't in the memory yet, append_to_memory the "
+        "\"<service> -> #<channel>\" mapping so the next incident routes "
+        "instantly. Do not post the same thing to multiple channels unless the "
+        "memory says to. Do not post to the main incidents channel — that card "
+        "is already handled."
     )
 
 

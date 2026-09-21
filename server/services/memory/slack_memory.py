@@ -46,6 +46,17 @@ relevant to a given incident, service, or team.
 - Default fallback is the shared incidents channel when no better match exists.
 - Record team → channel routing preferences here as they are learned.
 
+## Service -> channel routing map
+Aurora learns, over time, which team channel owns which service/component, and \
+records it here so future incidents route straight to the right place without \
+re-deriving it. When you conclude an incident and post to a channel because it \
+owns the affected service, append the mapping here (e.g. "payments -> \
+#payments-oncall", "checkout-api -> #team-checkout"). On a new incident, consult \
+this map FIRST, before scanning channel descriptions. If a mapping turns out \
+wrong (a team redirects you), correct it here.
+
+(none yet — Aurora fills this in as it learns which channel owns which service)
+
 ## Message format
 - Incident notifications are composed per channel. Some teams want a structured \
 summary (alert, severity, service, root cause, link); others want a short, human \

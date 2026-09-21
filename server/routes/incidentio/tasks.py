@@ -29,20 +29,30 @@ def _resolve_incident_object(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Find the incident dict inside an incident.io webhook payload.
 
     incident.io sends two families of events:
-    - Incident events: nested under event.incident or payload.incident
-    - Alert events (public_alert.*): alert data is a direct child of the payload
+    - Incident events: nested under event.incident or payload.incident, or
+      under a top-level "public_incident.*" key
+    - Alert events (public_alert.*): alert data lives under event.alert /
+      payload.alert, or under a top-level "public_alert.*" key
     """
     event = payload.get("event", {}) or {}
     incident = event.get("incident") or payload.get("incident") or None
 
+    # Incident events nest the incident under a "public_incident.*" envelope key
     if not incident:
         for key, value in payload.items():
             if key.startswith("public_incident.") and isinstance(value, dict):
                 incident = value.get("incident") or value
                 break
 
+    # Alert events carry the alert directly on the envelope or under a
+    # "public_alert.*" key — return it so the caller can extract its id/fields
     if not incident:
         alert = event.get("alert") or payload.get("alert")
+        if not isinstance(alert, dict):
+            for key, value in payload.items():
+                if key.startswith("public_alert.") and isinstance(value, dict):
+                    alert = value.get("alert") or value
+                    break
         if isinstance(alert, dict):
             return alert
 
@@ -79,7 +89,10 @@ def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
                 break
 
         return {
-            "incident_id": None,
+            # Use the alert's own id (or dedup key) as the stable identifier so
+            # the event survives the downstream "no incident_id -> drop" gate and
+            # dedups correctly on re-delivery
+            "incident_id": incident.get("id") or incident.get("deduplication_key"),
             "incident_name": incident.get("title") or "Untitled Alert",
             "incident_status": incident.get("status") or "firing",
             "severity": severity_raw,
@@ -280,7 +293,7 @@ def _store_and_process_event(user_id: str, event_type: str,
             normalized_severity = _map_severity(fields["severity"])
 
             if not fields.get("incident_id"):
-                logger.error("[INCIDENTIO] Alert event has no extractable incident_id, dropping event for user %s", user_id)
+                logger.error("[INCIDENTIO] Event has no extractable id (incident/alert), dropping event for user %s", user_id)
                 return
 
             alert_db_id = _upsert_alert(cursor, conn, user_id=user_id, org_id=org_id,
@@ -447,8 +460,12 @@ def _trigger_rca_pipeline(
 
         logger.info("[INCIDENTIO] Triggered RCA for incident %s (task=%s)", incident_id, task.id)
 
-        # Post-back RCA summary if enabled (skip for alert-only events with no incident ID)
-        if _should_postback(user_id) and fields.get("incident_id"):
+        # Post-back RCA summary if enabled. Only post back to incident.io for
+        # real incidents — alert events carry an alert id, not an incident id,
+        # so post_incident_update() would fail for them.
+        event_type = alert_metadata.get("event_type", "") if alert_metadata else ""
+        is_alert_event = "alert" in event_type.lower()
+        if _should_postback(user_id) and fields.get("incident_id") and not is_alert_event:
             postback_rca_to_incidentio.delay(user_id, str(incident_id), fields["incident_id"])
 
     except Exception as exc:

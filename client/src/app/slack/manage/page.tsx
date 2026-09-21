@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { ArrowLeft, Loader2, LogOut, Bell, Hash, RefreshCw, X, Pencil, ChevronDown, ChevronRight } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ArrowLeft, Loader2, LogOut, Bell, Hash, RefreshCw, X, Pencil, ChevronDown, ChevronRight, Search, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { slackService, type SlackStatus, type SlackConnectedChannel } from "@/lib/services/slack";
 import { useUser } from "@/hooks/useAuthHooks";
@@ -91,6 +93,11 @@ export default function SlackManagePage() {
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
   const [editingDraft, setEditingDraft] = useState("");
   const [showDismissed, setShowDismissed] = useState(false);
+  // "Activate more channels" panel: search query, checked ids, in-flight flag.
+  const [showActivate, setShowActivate] = useState(false);
+  const [activateQuery, setActivateQuery] = useState("");
+  const [activateSelected, setActivateSelected] = useState<Set<string>>(new Set());
+  const [isActivating, setIsActivating] = useState(false);
 
   const loadChannels = useCallback(async () => {
     try {
@@ -289,6 +296,55 @@ export default function SlackManagePage() {
     }
   };
 
+  // Activate the checked indexed channels: describe them + make them routable.
+  const handleActivateSelected = async () => {
+    const ids = Array.from(activateSelected);
+    if (ids.length === 0) return;
+    setIsActivating(true);
+    // Optimistically flip to 'generating' so they jump into the active list.
+    setConnectedChannels((prev) =>
+      prev.map((c) => (activateSelected.has(c.channel_id) ? { ...c, metadata_status: "generating" } : c)),
+    );
+    try {
+      const { activated } = await slackService.activateChannels(ids);
+      setActivateSelected(new Set());
+      setActivateQuery("");
+      pollChannelsUntilSettled();
+      toast({
+        title: "Activating channels",
+        description: `Generating ${activated} description${activated === 1 ? "" : "s"}.`,
+      });
+    } catch {
+      await loadChannels(); // Reconcile optimistic flip on failure.
+      toast({ title: "Error", description: "Failed to activate channels", variant: "destructive" });
+    } finally {
+      setIsActivating(false);
+    }
+  };
+
+  const toggleActivateSelected = (channelId: string) => {
+    setActivateSelected((prev) => {
+      const next = new Set(prev);
+      // Toggle membership so the same click both selects and deselects.
+      if (next.has(channelId)) next.delete(channelId);
+      else next.add(channelId);
+      return next;
+    });
+  };
+
+  // Select/deselect every channel currently matching the search. Operates on the
+  // filtered matches (passed in) so "Select all" after searching "oncall" grabs
+  // exactly those, not the whole index.
+  const toggleSelectAllMatches = (matchIds: string[], allSelected: boolean) => {
+    setActivateSelected((prev) => {
+      const next = new Set(prev);
+      // All matches already selected → this acts as "Clear" for the matches.
+      if (allSelected) matchIds.forEach((id) => next.delete(id));
+      else matchIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+
   const persistPreference = async (key: PreferenceKey, enabled: boolean): Promise<boolean> => {
     const response = await fetch("/api/proxy/user-preferences", {
       method: "POST",
@@ -359,6 +415,16 @@ export default function SlackManagePage() {
     );
   }
 
+  // Split the active set (described / being described — the channels Aurora
+  // actually engages) from the aware-only index ('skipped'). The main list shows
+  // only the active set; indexed channels live under "Activate more channels".
+  const activeChannels = connectedChannels.filter((c) => c.metadata_status !== "skipped");
+  const indexedChannels = connectedChannels.filter((c) => c.metadata_status === "skipped");
+  const activateQ = activateQuery.trim().toLowerCase();
+  const activateMatches = activateQ
+    ? indexedChannels.filter((c) => (c.channel_name || c.channel_id).toLowerCase().includes(activateQ))
+    : indexedChannels;
+
   return (
     <div className="min-h-screen bg-black text-white p-8">
       <div className="max-w-3xl mx-auto">
@@ -373,7 +439,6 @@ export default function SlackManagePage() {
             Back to Connectors
           </Button>
         </div>
-
         <div className="flex items-center gap-3 mb-8">
           <div className="p-2 rounded-lg bg-white">
             <img src="/slack.png" alt="Slack" className="h-8 w-8" />
@@ -484,10 +549,11 @@ export default function SlackManagePage() {
                   Channels
                 </CardTitle>
                 <CardDescription>
-                  Aurora is automatically aware of every channel it can see and describes them (all
-                  of them when you have 50 or fewer; otherwise the 50 most recent). It uses those
-                  descriptions to decide where to post about incidents. Edit a description, generate
-                  one on demand, or dismiss channels that aren&apos;t relevant.
+                  Aurora is automatically aware of every channel it can see, and writes a
+                  description for the ones it&apos;s been invited to — so it engages where it&apos;s a
+                  member, like a teammate. It uses those descriptions to decide where to post about
+                  incidents. For any other channel, generate a description on demand to make it
+                  routable, edit a description, or dismiss channels that aren&apos;t relevant.
                 </CardDescription>
               </div>
               {canWrite && (
@@ -516,16 +582,17 @@ export default function SlackManagePage() {
             ) : (
               <>
                 {/* Active channels: description + inline edit, generate, dismiss */}
-                {connectedChannels.length === 0 ? (
+                {activeChannels.length === 0 ? (
                   <p className="text-xs text-muted-foreground">
-                    No channels yet. Invite Aurora to channels in Slack, then click Refresh channels.
+                    No active channels yet. Invite Aurora to channels in Slack, or activate channels
+                    below, then click Refresh channels.
                   </p>
                 ) : (
                   <div className="space-y-3">
                     <h4 className="text-sm font-medium text-muted-foreground">
-                      Aurora is aware of ({connectedChannels.length})
+                      Aurora is active in ({activeChannels.length})
                     </h4>
-                    {connectedChannels.map((c) => (
+                    {activeChannels.map((c) => (
                       <div key={c.channel_id} className="p-2 rounded-md border border-border space-y-1">
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
@@ -629,6 +696,101 @@ export default function SlackManagePage() {
                         )}
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* Activate more channels: search the aware-only index and
+                    describe+route the ones you pick. For big workspaces where
+                    Aurora is a member of only a few channels. */}
+                {canWrite && indexedChannels.length > 0 && (
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      className="text-sm font-medium text-muted-foreground hover:text-foreground flex items-center gap-1"
+                      onClick={() => setShowActivate((s) => !s)}
+                    >
+                      {showActivate ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      Activate more channels ({indexedChannels.length} aware, not yet active)
+                    </button>
+                    {showActivate && (
+                      <div className="space-y-3 rounded-lg border p-3">
+                        <p className="text-xs text-muted-foreground">
+                          Aurora sees these channels but doesn&apos;t route to them yet. Search, pick
+                          the ones you want (e.g. all your <span className="font-mono">oncall</span>{" "}
+                          channels), and activate — Aurora will describe them and start routing there.
+                        </p>
+                        <div className="relative">
+                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            value={activateQuery}
+                            onChange={(e) => setActivateQuery(e.target.value)}
+                            placeholder="Search channels by name (e.g. oncall, payments, alerts)"
+                            className="pl-9 text-sm"
+                          />
+                        </div>
+                        {activateMatches.length > 0 && (() => {
+                          const matchIds = activateMatches.map((c) => c.channel_id);
+                          const allSelected = matchIds.every((id) => activateSelected.has(id));
+                          return (
+                            <div className="flex items-center gap-2 px-1">
+                              <Checkbox
+                                id="activate-select-all"
+                                checked={allSelected}
+                                onCheckedChange={() => toggleSelectAllMatches(matchIds, allSelected)}
+                              />
+                              <label htmlFor="activate-select-all" className="text-xs text-muted-foreground cursor-pointer">
+                                {allSelected
+                                  ? `Clear all ${matchIds.length}`
+                                  : `Select all ${matchIds.length}${activateQuery.trim() ? " matching" : ""}`}
+                              </label>
+                            </div>
+                          );
+                        })()}
+                        <div className="max-h-64 overflow-y-auto rounded-md border divide-y divide-zinc-800">
+                          {activateMatches.length === 0 ? (
+                            <p className="p-3 text-xs text-muted-foreground">No channels match.</p>
+                          ) : (
+                            activateMatches.map((c) => (
+                              <label
+                                key={c.channel_id}
+                                htmlFor={`activate-${c.channel_id}`}
+                                className="flex items-center gap-2 p-2 cursor-pointer hover:bg-zinc-900/50"
+                              >
+                                <Checkbox
+                                  id={`activate-${c.channel_id}`}
+                                  checked={activateSelected.has(c.channel_id)}
+                                  onCheckedChange={() => toggleActivateSelected(c.channel_id)}
+                                />
+                                <span className="text-sm truncate">#{c.channel_name || c.channel_id}</span>
+                                {c.channel_type && c.channel_type !== "unknown" && (
+                                  <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 ml-auto shrink-0">
+                                    {c.channel_type}
+                                  </span>
+                                )}
+                              </label>
+                            ))
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs text-muted-foreground">
+                            {activateSelected.size} selected
+                          </span>
+                          <Button
+                            size="sm"
+                            className="h-7"
+                            disabled={activateSelected.size === 0 || isActivating}
+                            onClick={handleActivateSelected}
+                          >
+                            {isActivating ? (
+                              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                            ) : (
+                              <Plus className="h-3.5 w-3.5 mr-1.5" />
+                            )}
+                            Activate selected
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
