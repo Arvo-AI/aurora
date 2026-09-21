@@ -451,7 +451,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
                         Shown in red when unavailable to flag the misconfig. */}
                     {severitiesAvailable
                       ? "Only investigate alerts at or above this priority"
-                      : "Add the “View data” permission to your incident.io API key to filter by your organization's alert priorities"}
+                      : "Add the “View data” permission to your incident.io API key to filter by your organization's alert priorities. After updating permissions, allow up to 5 minutes for this to update."}
                   </p>
                 </div>
                 {loadingSettings ? (

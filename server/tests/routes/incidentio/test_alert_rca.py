@@ -100,6 +100,54 @@ class TestExtractAlertFields:
         assert fields["incident_id"] == "dedup-999"
         assert fields["severity"] == "high"
 
+    def test_priority_from_alert_priority_attribute(self):
+        # incident.io surfaces the resolved priority as a structured attribute
+        # (type=AlertPriority) with the name in value.label — not in metadata.
+        payload = {
+            "event_type": "public_alert.alert_created_v1",
+            "public_alert.alert_created_v1": {
+                "id": "alert_attr_1",
+                "title": "Attr priority alert",
+                "status": "firing",
+                "attributes": [
+                    {
+                        "value": {"label": "Urgent", "literal": "01ABC"},
+                        "attribute": {"name": "Priority", "type": "AlertPriority"},
+                    },
+                    {
+                        "value": {"label": "api"},
+                        "attribute": {"name": "Service", "type": "String"},
+                    },
+                ],
+            },
+        }
+        fields = tasks._extract_incident_fields(payload)
+
+        assert fields["is_alert"] is True
+        assert fields["severity"] == "Urgent"
+
+    def test_attribute_priority_preferred_over_metadata(self):
+        # When both exist, the structured AlertPriority attribute wins.
+        payload = {
+            "event_type": "public_alert.alert_created_v1",
+            "event": {
+                "alert": {
+                    "id": "alert_attr_2",
+                    "title": "Both sources",
+                    "metadata": {"priority": "In-hours"},
+                    "attributes": [
+                        {
+                            "value": {"label": "Urgent"},
+                            "attribute": {"name": "Priority", "type": "AlertPriority"},
+                        }
+                    ],
+                }
+            },
+        }
+        fields = tasks._extract_incident_fields(payload)
+
+        assert fields["severity"] == "Urgent"
+
     def test_private_alert_event_parsed_like_public(self):
         payload = {
             "event_type": "private_alert.alert_created_v1",

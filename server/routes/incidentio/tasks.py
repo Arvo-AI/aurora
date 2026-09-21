@@ -14,20 +14,11 @@ from services.correlation import apply_correlation_outcome
 
 logger = logging.getLogger(__name__)
 
-# Severity levels ordered least → most severe. Used for the "minimum severity"
-# RCA gate so an org can say e.g. "only investigate high and critical".
-_SEVERITY_ORDER = ("unknown", "low", "medium", "high", "critical")
-
-# incident.io severities are org-customizable, so a name like "Degraded" won't
-# map to our fixed buckets. We cache the org's severity catalog (name → rank)
-# to compare custom severities by the org's own ranking instead of dropping
-# them to "unknown". Short TTL keeps it fresh without an API call per alert.
+# Org priority catalog is cached (name → rank) so we rank custom priorities by
+# the org's own ranking without an API call per alert; short TTL keeps it fresh.
 _ORG_SEVERITY_CACHE_TTL_SECONDS = 3600
-
-# When the API key lacks the "View data" scope, /v1/severities returns 403
-# forever for that key. Cache a "denied" marker so we stop calling on every
-# alert, but re-check every 5 minutes so the UI/self-heals promptly once the
-# key's scopes are widened (without re-saving the key in Aurora).
+# API keys lacking "View data" scope get 403 forever — cache a "denied" marker
+# to stop hammering, but re-check every 5 min so widened scopes self-heal.
 _ORG_SEVERITY_DENIED_TTL_SECONDS = 300
 _ORG_SEVERITY_DENIED_MARKER = "__denied__"
 
@@ -316,17 +307,11 @@ def _severity_passes_filter(
         # than drop it against a real-name threshold.
         return True
 
-    # Still unknown (custom severity not in catalog, or none provided) —
+    # Threshold couldn't be resolved against the org's real priority ranks
+    # (custom severity not in catalog, none provided, or catalog unavailable) —
     # ambiguous, so never filter it out: better to over-investigate than to
     # silently drop an alert we couldn't classify.
-    if sev == "unknown":
-        return True
-
-    try:
-        return _SEVERITY_ORDER.index(sev) >= _SEVERITY_ORDER.index(min_sev)
-    # Unrecognized threshold value — fail open rather than drop the alert.
-    except ValueError:
-        return True
+    return True
 
 
 def _should_postback(user_id: str) -> bool:
@@ -377,6 +362,39 @@ def _safe_name(obj, default: str = "") -> str:
     return str(obj) if obj else default
 
 
+def _extract_alert_priority(incident: Dict[str, Any]) -> str:
+    """Pull the alert's priority name from an incident.io alert object.
+
+    incident.io surfaces the resolved priority as a structured *attribute*
+    (attribute.type == "AlertPriority") with the human name in value.label —
+    e.g. "Urgent". This is the value that matches the org's Alert Priority
+    catalog names our RCA filter ranks against. Falls back to raw metadata
+    (severity/priority/level) for alert sources that send it that way, then
+    to "unknown".
+    """
+    # Preferred: the structured AlertPriority attribute (value.label).
+    attributes = incident.get("attributes")
+    if isinstance(attributes, list):
+        for attr in attributes:
+            if not isinstance(attr, dict):
+                continue
+            meta = attr.get("attribute") or {}
+            if meta.get("type") == "AlertPriority":
+                value = attr.get("value") or {}
+                label = value.get("label")
+                if isinstance(label, str) and label.strip():
+                    return label
+
+    # Fallback: some alert sources put priority/severity directly in metadata.
+    raw_metadata = incident.get("metadata")
+    metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+    for key in ("severity", "priority", "level"):
+        if key in metadata:
+            return str(metadata[key])
+
+    return "unknown"
+
+
 def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Extract normalized incident fields from the webhook event envelope.
 
@@ -392,13 +410,10 @@ def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
     is_alert_event = "alert" in event_type.lower()
 
     if is_alert_event and not incident.get("name"):
-        severity_raw = "unknown"
+        # Priority comes from the AlertPriority attribute (or metadata fallback).
+        severity_raw = _extract_alert_priority(incident)
         raw_metadata = incident.get("metadata")
         metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
-        for key in ("severity", "priority", "level"):
-            if key in metadata:
-                severity_raw = str(metadata[key])
-                break
 
         # Alerts have no incident_id, but they carry a stable identifier we can
         # use for storage/dedup: the alert's own id or the source dedup key.
