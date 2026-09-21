@@ -112,22 +112,30 @@ class DatadogClient:
         return self._request("GET", "/api/v1/validate").json()
 
     def get_org(self) -> Optional[Dict[str, Any]]:
-        """Current org metadata, flattened.
+        """Name and id of the org these keys belong to, or None if unprovable.
 
-        GET /api/v1/org nests the org under an "org" key and names its
-        identifier `public_id`. Unwrapping and aliasing to `id` here keeps that
-        shape in one place, since callers store the result as org_name/org_id
-        and the label and key-rotation checks both depend on it.
+        GET /api/v1/org answers `{"orgs": [...]}` -- the orgs this key manages --
+        while GET /api/v1/org/{public_id} answers `{"org": {...}}`. Accept either,
+        but only trust a list holding exactly one org: a parent key manages several
+        and nothing in the payload says which one issued the key. The name decides
+        which org the agent queries, so a confident wrong name is worse than none.
+
+        Returns name and id only. The raw payload also carries billing details
+        (cardholder, card last4, payment token) and SAML config, and /status hands
+        this straight to the browser.
         """
         try:
             payload = self._request("GET", "/api/v1/org").json() or {}
         except DatadogAPIError:
             logger.debug("[DATADOG] Unable to fetch org metadata", exc_info=True)
             return None
-        org = payload.get("org") if isinstance(payload.get("org"), dict) else payload
-        if not isinstance(org, dict) or not org:
+        org = payload.get("org")
+        if not isinstance(org, dict):
+            orgs = payload.get("orgs")
+            org = orgs[0] if isinstance(orgs, list) and len(orgs) == 1 and isinstance(orgs[0], dict) else None
+        if not org:
             return None
-        return {**org, "id": org.get("public_id") or org.get("id")}
+        return {"name": org.get("name"), "id": org.get("public_id") or org.get("id")}
 
     def search_logs(self, query: str, start: str, end: str, limit: int, cursor: Optional[str] = None) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -466,12 +474,11 @@ def connect(user_id):
 
     # A label collision is either a re-connect of the same org (rotating keys,
     # which should overwrite) or a different org that happens to resolve to the
-    # same label (which must not). Labels are unreliable here: when get_org()
-    # fails org_name is None and _account_label falls through to the site, so two
-    # distinct orgs on datadoghq.com both resolve to "datadoghq.com". Datadog's
-    # own org id is the only trustworthy identity, so compare on that and refuse
-    # whenever sameness cannot be proven -- guessing wrong destroys the stored
-    # credentials of a working org.
+    # same label (which must not). Labels are unreliable here: get_org() returns
+    # None whenever the org cannot be proven, so org_name is absent and unrelated
+    # orgs all fall through to "default". Datadog's own org id is the only
+    # trustworthy identity, so compare on that and refuse whenever sameness cannot
+    # be proven -- guessing wrong destroys the stored credentials of a working org.
     if clash is not None:
         incoming_org = token_payload.get("org_id")
         existing_org = clash.get("org_id")
