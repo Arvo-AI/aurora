@@ -21,6 +21,7 @@ Pure functions only: no DB, no network, no Datadog credentials.
 
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -90,13 +91,17 @@ def test_legacy_blob_resolves_as_single_account(stored_creds):
     assert _account_label(accounts[0]) == "Acme Prod"
 
 
-def test_label_falls_back_through_org_name_then_site_then_default():
-    assert _account_label({"label": "dev", "org_name": "Acme", "site": "x"}) == "dev"
-    assert _account_label({"org_name": "Acme", "site": "x"}) == "Acme"
-    assert _account_label({"site": "datadoghq.eu"}) == "datadoghq.eu"
+def test_label_falls_back_through_org_name_then_org_id_then_default():
+    assert _account_label({"label": "dev", "org_name": "Acme", "org_id": "abc"}) == "dev"
+    assert _account_label({"org_name": "Acme", "org_id": "abc"}) == "Acme"
+    # public_id is unique per org, so two unlabelled orgs never collide.
+    assert _account_label({"org_id": "abc123"}) == "abc123"
     assert _account_label({}) == "default"
     # Whitespace-only label must not produce an unselectable empty string.
     assert _account_label({"label": "   "}) == "default"
+    # Site is deliberately excluded: every org on datadoghq.com would collide,
+    # and it reads like a deliberate label rather than a missing one.
+    assert _account_label({"site": "datadoghq.eu"}) == "default"
 
 
 def test_no_connection_yields_empty_list(stored_creds):
@@ -187,6 +192,46 @@ def test_account_summary_excludes_credentials():
         "validatedAt": None,
     }
     assert "api_key" not in summary and "app_key" not in summary
+
+
+# ---------------------------------------------------------------------------
+# get_org must unwrap Datadog's envelope
+# ---------------------------------------------------------------------------
+
+
+def test_get_org_unwraps_envelope_and_aliases_public_id(monkeypatch):
+    """GET /api/v1/org returns {"org": {...}} with the identifier named
+    public_id. Reading the outer dict yields None for both name and id, which
+    silently disables org-name labelling and the key-rotation check."""
+    client = datadog_routes.DatadogClient(api_key="a", app_key="b", site="datadoghq.com")
+    monkeypatch.setattr(
+        type(client), "_request",
+        lambda self, m, p, **kw: SimpleNamespace(
+            json=lambda: {"org": {"name": "Acme Prod", "public_id": "abcdef12345"}}
+        ),
+    )
+
+    org = client.get_org()
+
+    assert org["name"] == "Acme Prod"
+    assert org["id"] == "abcdef12345"
+
+
+def test_get_org_tolerates_flat_and_empty_payloads(monkeypatch):
+    client = datadog_routes.DatadogClient(api_key="a", app_key="b", site="datadoghq.com")
+
+    def _payload(body):
+        monkeypatch.setattr(type(client), "_request",
+                            lambda self, m, p, **kw: SimpleNamespace(json=lambda: body))
+
+    _payload({"name": "Flat Org", "id": "xyz"})
+    assert client.get_org()["id"] == "xyz"
+
+    _payload({})
+    assert client.get_org() is None
+
+    _payload({"org": {}})
+    assert client.get_org() is None
 
 
 # ---------------------------------------------------------------------------

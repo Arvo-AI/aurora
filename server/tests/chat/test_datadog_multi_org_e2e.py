@@ -54,12 +54,16 @@ def fake_request(self, method, path, **kwargs):
             raise datadog_routes.DatadogAPIError("403 Forbidden")
         return SimpleNamespace(json=lambda: {"valid": True})
     if path == "/api/v1/org":
-        # Org identity is tied to the org, not to the key pair: rotating a key
-        # must keep the same id, or the rotation path cannot be tested honestly.
+        # Mirrors the real payload: the org is nested under an "org" key and its
+        # identifier is public_id, not id. A flat {name, id} fake here would let
+        # broken envelope handling pass, which is exactly what it did before.
         prod = self.api_key.startswith("api-prod")
         return SimpleNamespace(json=lambda: {
-            "name": "Acme Prod" if prod else "Acme Dev",
-            "id": "org-prod" if prod else "org-dev",
+            "org": {
+                "name": "Acme Prod" if prod else "Acme Dev",
+                # Identity is the org's, not the key pair's, so it survives rotation.
+                "public_id": "org-prod" if prod else "org-dev",
+            }
         })
     if path == "/api/v2/logs/events/search":
         # Each org returns its own data: the whole point of selecting one.

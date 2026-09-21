@@ -3,8 +3,14 @@
 API Key + Application Key authentication for Datadog.
 
 Several Datadog organizations can be connected at once. Each needs its own API +
-application key pair, so repeat the setup below for every organization and give each one a
-label (e.g. `prod`, `dev`) that Aurora uses to pick the right one during an investigation.
+application key pair, so repeat the setup below for every organization.
+
+Aurora labels each organization automatically using the name Datadog reports, and uses that
+label to pick the right one during an investigation. Setting a label by hand is optional and
+only needed to override that name with something your team recognises.
+
+Common reasons to connect more than one: one organization per environment, per region, per
+business unit, or -- for managed service providers -- one per customer.
 
 ## Setup
 
@@ -27,16 +33,16 @@ label (e.g. `prod`, `dev`) that Aurora uses to pick the right one during an inve
 | US5 | `us5.datadoghq.com` |
 | EU | `datadoghq.eu` |
 
-Site is recorded per organization, so a dev org on `datadoghq.eu` and a prod org on
-`datadoghq.com` can both be connected.
+Site is recorded per organization, so organizations on different Datadog sites can be
+connected side by side.
 
 > API and Application keys are entered by users via the UI.
 
 ### 4. Repeat For Each Organization
 
 Switch organization from the bottom-left **Accounts** menu in Datadog and repeat steps 1-3.
-In Aurora, use **Add another organization** on the Datadog integration page and set a label
-for each one.
+In Aurora, use **Add another organization** on the Datadog integration page. Each one is
+named automatically from its Datadog org name; set a label only to override that.
 
 ## Webhook Configuration
 

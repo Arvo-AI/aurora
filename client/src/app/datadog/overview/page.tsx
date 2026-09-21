@@ -36,9 +36,9 @@ export default function DatadogOverviewPage() {
   const [eventsResult, setEventsResult] = useState<string>("");
   const [eventsError, setEventsError] = useState<string | null>(null);
 
-  // Several Datadog orgs can be connected (e.g. dev and prod). Without an
-  // explicit choice every query silently hits the primary, so a dev
-  // investigation run here would read prod data and look healthy.
+  // Several Datadog orgs can be connected, each with its own data. Without an
+  // explicit choice every query silently hits the primary, so a query intended
+  // for one org would read another's data and could look healthy.
   const [accounts, setAccounts] = useState<DatadogAccount[]>([]);
   const [account, setAccount] = useState<string>("");
 
@@ -135,7 +135,7 @@ export default function DatadogOverviewPage() {
             </select>
             <p className="text-xs text-muted-foreground">
               Every query below runs against this organization. Data does not cross organizations, so a
-              service present in both returns different results depending on the choice.
+              service present in more than one returns different results depending on the choice.
             </p>
           </CardContent>
         </Card>

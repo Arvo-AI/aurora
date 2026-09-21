@@ -13,8 +13,8 @@ interface DatadogAccountListProps {
 
 /**
  * Connected Datadog organizations. Each row is one org with its own key pair, so
- * validity is reported per row: a revoked dev key must be visible rather than
- * hidden behind a healthy prod org.
+ * validity is reported per row: a revoked key in one org must be visible rather
+ * than hidden behind the others.
  */
 export function DatadogAccountList({ accounts, onRemove, removingLabel, disabled }: DatadogAccountListProps) {
   if (accounts.length === 0) return null;

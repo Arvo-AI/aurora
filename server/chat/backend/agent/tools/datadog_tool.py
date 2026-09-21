@@ -58,8 +58,9 @@ class QueryDatadogArgs(BaseModel):
     account: Optional[str] = Field(
         default=None,
         description="Which connected Datadog organization to query, by its label from "
-        "resource_type='accounts'. Separate dev and prod Datadogs are commonly both "
-        "connected; omitting this queries the primary, which may be the wrong environment "
+        "resource_type='accounts'. Labels default to the Datadog org name and may be "
+        "overridden. Several orgs are commonly connected (per environment, region, business "
+        "unit or customer); omitting this queries the primary, which may be the wrong org "
         "for the alert under investigation.",
     )
 

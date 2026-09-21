@@ -953,10 +953,15 @@ If you need to ensure PII is never sent to Aurora (for GDPR, SOC 2, or other com
 :::
 
 :::info Multiple organizations
-Several Datadog organizations can be connected at once — commonly one per environment, such
-as a separate dev and prod. Each needs its own API + application key pair, so repeat the
-setup below for every organization and give each a label (e.g. `prod`, `dev`). Aurora uses
-the label to query the organization matching the alert under investigation.
+Several Datadog organizations can be connected at once. Each needs its own API +
+application key pair, so repeat the setup below for every organization.
+
+Aurora names each one automatically from the org name Datadog reports, and uses that to
+query the organization matching the alert under investigation. A custom label is optional —
+set one only to override that name with something your team recognises.
+
+Common reasons to connect more than one: one organization per environment, per region, per
+business unit, or — for managed service providers — one per customer.
 :::
 
 #### 1. Create API Key
@@ -982,14 +987,14 @@ the label to query the organization matching the alert under investigation.
 | US5 | `us5.datadoghq.com` |
 | EU | `datadoghq.eu` |
 
-Users enter API keys, site and label via the Aurora UI. Site is recorded per organization, so
-a dev org on `datadoghq.eu` and a prod org on `datadoghq.com` can both be connected.
+Users enter API keys and site via the Aurora UI, with an optional label. Site is recorded per
+organization, so organizations on different Datadog sites can be connected side by side.
 
 #### 4. Connect Additional Organizations
 
 1. Switch organization from the bottom-left **Accounts** menu in Datadog
 2. Repeat steps 1-3 to create a key pair there
-3. In Aurora, use **Add another organization** on the Datadog page and enter the new keys with a distinct label
+3. In Aurora, use **Add another organization** on the Datadog page and enter the new keys
 
 #### Webhook Configuration
 

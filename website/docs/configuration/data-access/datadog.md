@@ -15,16 +15,16 @@ Aurora connects to your Datadog via two data paths:
 1. **API queries (pull):** Aurora's RCA agent queries your Datadog for logs, metrics, traces, events, monitors, hosts, and incidents.
 
 :::danger Configure every connected organization
-Aurora supports connecting several Datadog organizations at once (e.g. a separate dev and
-prod). Every control in this guide — Sensitive Data Scanner rules, the `Aurora Restricted`
-role, restriction queries, and the dedicated service account — is configured **per
-organization** and does not carry over.
+Aurora supports connecting several Datadog organizations at once. Every control in this
+guide — Sensitive Data Scanner rules, the `Aurora Restricted` role, restriction queries, and
+the dedicated service account — is configured **per organization** and does not carry over.
+Child organizations in a multi-org account do not inherit them from the parent either.
 
-A hardened production organization alongside an unhardened dev organization provides no
-overall guarantee: Aurora queries whichever organization matches the alert, so unfiltered PII
-in any connected organization can reach Aurora. Repeat this entire guide for each one, and
-audit the list of connected organizations on Aurora's Datadog page against the organizations
-you have hardened.
+Hardening some organizations but not others provides no overall guarantee: Aurora queries
+whichever organization matches the alert, so unfiltered PII in **any** connected
+organization can reach Aurora. Repeat this entire guide for each one, and audit the list of
+connected organizations on Aurora's Datadog page against the organizations you have
+hardened.
 :::
 
 ## Architecture

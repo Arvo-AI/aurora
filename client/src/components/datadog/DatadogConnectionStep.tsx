@@ -142,15 +142,12 @@ export function DatadogConnectionStep({
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="datadog-label">
-                      Label{isAdditional ? '' : ' (optional)'}
-                    </Label>
+                    <Label htmlFor="datadog-label">Label (optional)</Label>
                     <Input
                       id="datadog-label"
-                      placeholder="prod"
+                      placeholder="Defaults to your Datadog org name"
                       value={label}
                       onChange={(event) => setLabel(event.target.value)}
-                      required={isAdditional}
                       aria-invalid={Boolean(error)}
                       aria-describedby={error ? 'datadog-label-error' : undefined}
                       className={error ? 'border-destructive' : undefined}
@@ -159,10 +156,7 @@ export function DatadogConnectionStep({
                       <p id="datadog-label-error" className="text-xs text-destructive">{error}</p>
                     ) : (
                       <p className="text-xs text-muted-foreground">
-                        Names this organization so Aurora can pick the right one when investigating, e.g. <code className="bg-muted px-1 rounded">prod</code> or <code className="bg-muted px-1 rounded">dev</code>.
-                        {isAdditional
-                          ? ' Must differ from the organizations already connected.'
-                          : ' Defaults to the Datadog org name.'}
+                        Aurora names this organization from Datadog automatically. Set a label only to override it with something your team recognises &mdash; any name works.
                       </p>
                     )}
                   </div>

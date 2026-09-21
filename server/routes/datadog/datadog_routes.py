@@ -112,11 +112,22 @@ class DatadogClient:
         return self._request("GET", "/api/v1/validate").json()
 
     def get_org(self) -> Optional[Dict[str, Any]]:
+        """Current org metadata, flattened.
+
+        GET /api/v1/org nests the org under an "org" key and names its
+        identifier `public_id`. Unwrapping and aliasing to `id` here keeps that
+        shape in one place, since callers store the result as org_name/org_id
+        and the label and key-rotation checks both depend on it.
+        """
         try:
-            return self._request("GET", "/api/v1/org").json()
+            payload = self._request("GET", "/api/v1/org").json() or {}
         except DatadogAPIError:
             logger.debug("[DATADOG] Unable to fetch org metadata", exc_info=True)
             return None
+        org = payload.get("org") if isinstance(payload.get("org"), dict) else payload
+        if not isinstance(org, dict) or not org:
+            return None
+        return {**org, "id": org.get("public_id") or org.get("id")}
 
     def search_logs(self, query: str, start: str, end: str, limit: int, cursor: Optional[str] = None) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -284,8 +295,15 @@ def _build_client_from_creds(creds: Dict[str, Any]) -> Optional[DatadogClient]:
 
 
 def _account_label(account: Dict[str, Any]) -> str:
-    """Stable, user-facing name for one Datadog connection."""
-    label = account.get("label") or account.get("org_name") or account.get("site") or "default"
+    """Stable, user-facing name for one Datadog connection.
+
+    Falls back to what Datadog itself reports, so a label is almost never needed:
+    org_name is the friendly name, and org_id (public_id) is unique per org, which
+    keeps two unlabelled orgs from colliding. Site is deliberately NOT in the
+    chain -- every org on datadoghq.com would collide, and "datadoghq.com" reads
+    like a deliberate label rather than a missing one.
+    """
+    label = account.get("label") or account.get("org_name") or account.get("org_id") or "default"
     return str(label).strip() or "default"
 
 
@@ -461,8 +479,7 @@ def connect(user_id):
             return jsonify({
                 "error": (
                     f"A different Datadog organization is already connected as "
-                    f"'{_account_label(clash)}'. Provide a distinct label to connect this one "
-                    f"alongside it."
+                    f"'{_account_label(clash)}'. Set a label to tell them apart."
                 ),
                 "conflictingLabel": _account_label(clash),
                 "accounts": [_account_summary(a) for a in existing],

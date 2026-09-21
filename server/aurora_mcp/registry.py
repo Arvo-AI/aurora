@@ -184,9 +184,9 @@ class DispatchEntry:
 # WAF surfaces (the assert at import time will reject those).
 DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
     # ----- Datadog (prefix: /datadog) -----
-    # More than one Datadog org can be connected (e.g. separate dev and prod), so
-    # every entry advertises `account`. It belongs in query_keys even on the POST
-    # entries: the backend reads it from the query string, not the body.
+    # More than one Datadog org can be connected, so every entry advertises
+    # `account`. It belongs in query_keys even on the POST entries: the backend
+    # reads it from the query string, not the body.
     DispatchEntry(
         name="datadog_logs_search",
         description="Search Datadog logs by query, time range, and tags. Pass account=<label> to target a specific connected organization.",
