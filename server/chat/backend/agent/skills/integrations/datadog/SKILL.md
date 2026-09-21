@@ -46,29 +46,19 @@ Datadog integration for querying observability data during Root Cause Analysis. 
 
 ### Multiple Organizations
 
-An organization may have several Datadog instances connected. They are distinct Datadog orgs
-with their own data: a service that exists in more than one has different logs, metrics and
-hosts in each. Common splits are per environment, per region, per business unit, or one per
-customer for managed service providers.
+Several Datadog orgs may be connected. They hold separate data: a service present in more
+than one has different logs, metrics and hosts in each.
 
-`resource_type='accounts'` returns the connected orgs with their labels, sites and org
-names. Pass `account=<label>` on any other resource type to query that one. Omitting
-`account` uses the first (primary) org.
+`resource_type='accounts'` returns the connected orgs with their labels, sites and org names.
+Pass `account=<label>` on any other resource type to query one; omitting it uses the primary.
+Every response carries an `account` field naming the org that answered.
 
-Labels default to the organization's own Datadog name and can be overridden by the user, so
-do not assume any particular naming scheme or count. Read the labels returned by `accounts`
-and match them against the alert's own context (its environment, region, service or tenant
-tags). If no label clearly matches, say which org you queried rather than guessing at a
-mapping.
-
-This matters because alerts from every org can arrive through a single alerting pipeline, so
-the alert under investigation is not necessarily from the primary org. Querying the wrong
-org does not return an error -- it returns that org's healthy data, which reads as "the
-service is fine" and sends the investigation somewhere else entirely.
-
-So when more than one org is connected: check `accounts`, match the alert to a label, pass
-`account`, and state which org the evidence came from. Every response carries an `account`
-field naming the org that answered.
+Labels default to each org's own Datadog name and can be overridden, so assume no particular
+naming scheme or count. Match the labels from `accounts` against the alert's own context (its
+environment, region, service or tenant tags). This matters because alerts from every org can
+arrive through one pipeline, and querying the wrong one does not error -- it returns that
+org's healthy data, which reads as "the service is fine" and derails the investigation. If no
+label clearly matches, query the primary and say so rather than guessing.
 
 ### The `interval` Parameter
 
@@ -161,9 +151,8 @@ These are two different questions and must not be conflated:
 **Step 0 -- Confirm which organization to investigate:**
 `query_datadog(resource_type='accounts')`
 
-If only one is connected, continue without `account`. If several are, match the alert to a
-label and pass `account=<label>` on every subsequent step, so the investigation does not read
-one organization's data while explaining another's alert.
+With one connected, continue without `account`. With several, match the alert to a label and
+pass `account=<label>` on every subsequent step.
 
 **Step 1 -- Search logs for errors around the alert time:**
 `query_datadog(resource_type='logs', query='service:affected-service status:error', time_from='-1h')`
@@ -187,9 +176,8 @@ one organization's data while explaining another's alert.
 
 - Datadog is a REMOTE service. Use ONLY the `query_datadog` API tool.
 - The `resource_type` parameter is required and must be one of: accounts, logs, metrics, metric_stats, monitors, events, traces, hosts, incidents.
-- When several organizations are connected, name the one you queried in any finding you
-  report. An unattributed Datadog number is ambiguous, and a number from the wrong
-  organization looks identical to a correct one.
+- With several organizations connected, name the one you queried in any finding. A number from
+  the wrong organization looks identical to a correct one.
 - Time parameters accept relative strings (`'-1h'`, `'-24h'`, `'-7d'`) or ISO 8601 timestamps.
 - The `incidents` resource type requires Datadog Incident Management to be enabled; may return 403 if not.
 - Results are truncated at the output size limit. Use more specific queries to narrow results.

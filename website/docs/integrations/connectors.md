@@ -953,15 +953,10 @@ If you need to ensure PII is never sent to Aurora (for GDPR, SOC 2, or other com
 :::
 
 :::info Multiple organizations
-Several Datadog organizations can be connected at once. Each needs its own API +
-application key pair, so repeat the setup below for every organization.
-
-Aurora names each one automatically from the org name Datadog reports, and uses that to
-query the organization matching the alert under investigation. A custom label is optional —
-set one only to override that name with something your team recognises.
-
-Common reasons to connect more than one: one organization per environment, per region, per
-business unit, or — for managed service providers — one per customer.
+Several Datadog organizations can be connected at once, each needing its own API +
+application key pair. Aurora names each one from the org name Datadog reports and queries
+whichever matches the alert under investigation; a custom label is optional, to override that
+name with something your team recognises.
 :::
 
 #### 1. Create API Key
@@ -988,7 +983,7 @@ business unit, or — for managed service providers — one per customer.
 | EU | `datadoghq.eu` |
 
 Users enter API keys and site via the Aurora UI, with an optional label. Site is recorded per
-organization, so organizations on different Datadog sites can be connected side by side.
+organization, so organizations on different Datadog sites can coexist.
 
 #### 4. Connect Additional Organizations
 
@@ -1004,10 +999,10 @@ organization, so organizations on different Datadog sites can be connected side 
 4. In monitors, add `@webhook-aurora` to notifications
 
 :::warning One URL, every organization
-The webhook URL is per Aurora **user**, not per Datadog organization. When several
-organizations are connected, create this same webhook inside **each** of them — otherwise
-Aurora receives no alerts from the others, while still appearing connected. Using the name
-`aurora` everywhere keeps `@webhook-aurora` working uniformly.
+The webhook URL is per Aurora **user**, not per Datadog organization. With several connected,
+create this same webhook inside **each** of them — otherwise Aurora receives none of their
+alerts while still appearing connected. Keeping the name `aurora` everywhere keeps
+`@webhook-aurora` uniform.
 :::
 
 ---
