@@ -755,6 +755,7 @@ def initialize_tables():
                          analyzed_at TIMESTAMP,
                          slack_message_ts VARCHAR(50),
                          google_chat_message_name VARCHAR(255),
+                         pagerduty_note_id VARCHAR(64),
                          active_tab VARCHAR(10) DEFAULT 'thoughts',
                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -2386,6 +2387,22 @@ def initialize_tables():
             except Exception as e:
                 logging.error(
                     f"Failed to add google_chat_message_name column to incidents: {e}"
+                )
+                conn.rollback()
+
+            # Add pagerduty_note_id column to incidents: id of the RCA note posted back
+            # to the PagerDuty incident ('pending' while a post is in flight)
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS pagerduty_note_id VARCHAR(64);
+                    """
+                )
+                conn.commit()
+            except Exception as e:
+                logging.error(
+                    f"Failed to add pagerduty_note_id column to incidents: {e}"
                 )
                 conn.rollback()
 
