@@ -120,17 +120,24 @@ def refresh_and_store_if_needed(user_id: str, token_data: Dict) -> Tuple[bool, D
     """refresh_token_if_needed, persisting a refreshed token before it is used.
 
     Returns (token still valid, token data with any refreshed fields merged).
-    PagerDuty may rotate the refresh token, so the new one is stored first; a
-    failed store is logged, not raised, since the in-memory token is good for
-    this request and the next refresh retries the write.
+    PagerDuty rotates the refresh token, so the new one is stored before use,
+    with one retry. If both writes fail the in-memory token still serves this
+    request, but the stored refresh token is stale and the next refresh will
+    fail, so the failure is logged as an error rather than raised.
     """
     success, refreshed = refresh_token_if_needed(token_data)
     if not success:
         return False, token_data
     if refreshed:
         token_data = {**token_data, **refreshed}
-        try:
-            store_tokens_in_db(user_id, token_data, "pagerduty")
-        except Exception:
-            logger.exception("[PAGERDUTY] Failed to persist refreshed OAuth token")
+        for attempt in (1, 2):
+            try:
+                store_tokens_in_db(user_id, token_data, "pagerduty")
+                break
+            except Exception:
+                if attempt == 2:
+                    logger.exception(
+                        "[PAGERDUTY] Failed to persist refreshed OAuth token; the stored refresh token "
+                        "is stale and this connection will need to be reconnected"
+                    )
     return True, token_data

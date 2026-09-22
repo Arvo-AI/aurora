@@ -29,7 +29,9 @@ MIN_SUMMARY_CHARS = 80
 _PENDING = "pending"
 _LOG = "[PagerDutyNote]"
 
-_CITATION_RE = re.compile(r"\s*\[\d+(?:\s*,\s*\d+)*\]")
+_CITATION_RE = re.compile(r"\[\d+(?:,\s*\d+)*\]")
+# The space a removed citation leaves before punctuation ("spiked [2].": "spiked .")
+_SPACE_BEFORE_PUNCT_RE = re.compile(r" ([.,;:!?])(?=\s|$)")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 _BOLD_RE = re.compile(r"\*\*((?:[^*\n]|\*(?!\*))+)\*\*|__([^_\n]+)__")
 # A star glued to a word char is not emphasis (p95*2, 3*4 nodes); only a delimiter-bounded pair is
@@ -74,7 +76,7 @@ def _to_plain_text(text: str, max_chars: Optional[int] = NOTE_MAX_CHARS) -> str:
     text = _BOLD_RE.sub(lambda m: m.group(1) or m.group(2), text)
     text = _STAR_ITALIC_RE.sub(r"\1", text)
     text = _UNDERSCORE_ITALIC_RE.sub(r"\1", text)
-    paragraphs = [" ".join(p.split()) for p in re.split(r"\n\s*\n", text)]
+    paragraphs = [_SPACE_BEFORE_PUNCT_RE.sub(r"\1", " ".join(p.split())) for p in re.split(r"\n\s*\n", text)]
     text = "\n\n".join(p for p in paragraphs if p)
     return _truncate(text, max_chars) if max_chars else text
 
