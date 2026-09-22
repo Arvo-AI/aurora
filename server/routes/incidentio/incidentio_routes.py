@@ -125,16 +125,30 @@ class IncidentioClient:
         Returns {"severities": [{"name": str, "rank": int}, ...]} to match the
         shape the caller expects. Raises IncidentioAPIError on API failure.
         """
-        # Find the AlertPriority catalog type — its id is org-specific.
-        types = self._request("GET", "/catalog_types").json()
-        type_id = next(
-            (
-                t.get("id")
-                for t in types.get("catalog_types", []) or []
-                if t.get("type_name") == "AlertPriority"
-            ),
-            None,
-        )
+        # Find the AlertPriority catalog type — its id is org-specific. Orgs
+        # with many catalog types paginate, so page through until we find it
+        # rather than reading only the first page (else priority filtering is
+        # silently disabled for orgs where AlertPriority isn't on page 1).
+        type_id = None
+        after = None
+        for _ in range(20):  # hard cap: 20 pages × 250 = 5000 types
+            params: Dict[str, Any] = {"page_size": 250}
+            if after:
+                params["after"] = after
+            types = self._request("GET", "/catalog_types", params=params).json()
+            batch = types.get("catalog_types", []) or []
+            type_id = next(
+                (t.get("id") for t in batch if t.get("type_name") == "AlertPriority"),
+                None,
+            )
+            if type_id:
+                break
+            after = (types.get("pagination_meta") or {}).get("after")
+            # incident.io returns `after` even on the final page, so stop when a
+            # page came back short (fewer than page_size) or empty.
+            if len(batch) < 250 or not after:
+                break
+
         # Org has no alert-priority catalog configured — nothing to rank by.
         if not type_id:
             return {"severities": []}
@@ -143,7 +157,7 @@ class IncidentioClient:
         entries: list = []
         after = None
         for _ in range(20):  # hard cap: 20 pages × 250 = 5000 entries
-            params = {"catalog_type_id": type_id, "page_size": 250}
+            params: Dict[str, Any] = {"catalog_type_id": type_id, "page_size": 250}
             if after:
                 params["after"] = after
             page = self._request("GET", "/catalog_entries", params=params).json()
@@ -500,10 +514,18 @@ def update_rca_settings(user_id):
         if not isinstance(alert_severity_allowlist, list):
             return jsonify({"error": "alertSeverityAllowlist must be a list or null"}), 400
         normalized = [str(s).lower() for s in alert_severity_allowlist]
-        invalid = [s for s in normalized if s not in _VALID_SEVERITIES]
+        # Accept a fixed bucket, or a real severity name from the org catalog
+        # (mirrors alertMinSeverity). Only resolve the org catalog for names
+        # that aren't already a known fixed bucket to avoid a needless API call.
+        unknown = [s for s in normalized if s not in _VALID_SEVERITIES]
+        org_ranks = _get_org_severity_ranks(user_id) if unknown else {}
+        invalid = [s for s in unknown if s not in org_ranks]
         if invalid:
             return jsonify({
-                "error": f"alertSeverityAllowlist contains invalid severities: {', '.join(invalid)}"
+                "error": (
+                    "alertSeverityAllowlist contains invalid severities: "
+                    f"{', '.join(invalid)}"
+                )
             }), 400
         # Store an empty list as None so downstream treats it as "no allowlist".
         store_user_preference(

@@ -175,6 +175,11 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
   const [alertMinSeverity, setAlertMinSeverity] = useState<string>("low");
   const [orgSeverities, setOrgSeverities] = useState<IncidentIoOrgSeverity[]>([]);
   const [severitiesAvailable, setSeveritiesAvailable] = useState(false);
+  // Distinguishes a genuine "missing scope" (denied) from a transient load
+  // failure, so we don't tell the user to change API-key scopes on a network
+  // blip. Both leave `severitiesAvailable` false, but only `denied` warrants
+  // the permission guidance.
+  const [severitiesDenied, setSeveritiesDenied] = useState(false);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [updatingRca, setUpdatingRca] = useState(false);
   const [updatingPostback, setUpdatingPostback] = useState(false);
@@ -210,6 +215,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
             setAlertMinSeverity(rcaSettings.alertMinSeverity ?? "low");
           }
           setSeveritiesAvailable(severitiesResponse.available);
+          setSeveritiesDenied(severitiesResponse.denied);
           setOrgSeverities(severitiesResponse.severities);
         }
       } catch (_error) {
@@ -451,7 +457,9 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
                         Shown in red when unavailable to flag the misconfig. */}
                     {severitiesAvailable
                       ? "Only investigate alerts at or above this priority"
-                      : "Add the “View data” permission to your incident.io API key to filter by your organization's alert priorities. After updating permissions, allow up to 5 minutes for this to update."}
+                      : severitiesDenied
+                        ? "Add the “View data” permission to your incident.io API key to filter by your organization's alert priorities. After updating permissions, allow up to 5 minutes for this to update."
+                        : "Could not load your organization's alert priorities. Reload the page to try again."}
                   </p>
                 </div>
                 {loadingSettings ? (
@@ -468,6 +476,10 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
                       <SelectValue placeholder={severitiesAvailable ? "Select priority" : "Unavailable"} />
                     </SelectTrigger>
                     <SelectContent>
+                      {/* Fixed bucket matching the server default ("low") so the
+                          default threshold has a selectable item and the user
+                          can clear the filter back to investigating everything. */}
+                      <SelectItem value="low">All priorities</SelectItem>
                       {/* Real org alert priorities, most-urgent first. "Minimum"
                           semantics: picking one investigates it and anything
                           more urgent. */}

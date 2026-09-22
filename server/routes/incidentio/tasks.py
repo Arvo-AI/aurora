@@ -22,6 +22,11 @@ _ORG_SEVERITY_CACHE_TTL_SECONDS = 3600
 _ORG_SEVERITY_DENIED_TTL_SECONDS = 300
 _ORG_SEVERITY_DENIED_MARKER = "__denied__"
 
+# Fixed severity buckets ordered least → most severe. Used to compare a minimum
+# threshold against an alert's severity when both are recognized fixed buckets
+# (i.e. we can't or don't need to consult the org's custom priority catalog).
+_SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
 
 def _get_org_severity_ranks(user_id: str) -> Dict[str, int]:
     """Return the org's alert-priority catalog as {lowercase_name: rank}.
@@ -307,10 +312,19 @@ def _severity_passes_filter(
         # than drop it against a real-name threshold.
         return True
 
+    # Both threshold and alert severity are recognized fixed buckets: compare
+    # them on the fixed low<medium<high<critical scale. This must run before the
+    # catalog fallback so that (e.g.) a "low"/"medium" alert is correctly
+    # dropped against a "high" threshold even when the org catalog is empty or
+    # custom (previously these leaked through the unconditional fail-open below).
+    if min_sev in _SEVERITY_ORDER and sev in _SEVERITY_ORDER:
+        return _SEVERITY_ORDER[sev] >= _SEVERITY_ORDER[min_sev]
+
     # Threshold couldn't be resolved against the org's real priority ranks
-    # (custom severity not in catalog, none provided, or catalog unavailable) —
-    # ambiguous, so never filter it out: better to over-investigate than to
-    # silently drop an alert we couldn't classify.
+    # (custom severity not in catalog, none provided, or catalog unavailable)
+    # and it isn't a recognized fixed bucket either — ambiguous, so never
+    # filter it out: better to over-investigate than to silently drop an alert
+    # we couldn't classify.
     return True
 
 
@@ -362,35 +376,57 @@ def _safe_name(obj, default: str = "") -> str:
     return str(obj) if obj else default
 
 
-def _extract_alert_priority(incident: Dict[str, Any]) -> str:
-    """Pull the alert's priority name from an incident.io alert object.
+def _priority_from_attributes(incident: Dict[str, Any]) -> Optional[str]:
+    """Read the resolved priority from the structured AlertPriority attribute.
 
-    incident.io surfaces the resolved priority as a structured *attribute*
+    incident.io surfaces the resolved priority as an attribute
     (attribute.type == "AlertPriority") with the human name in value.label —
-    e.g. "Urgent". This is the value that matches the org's Alert Priority
-    catalog names our RCA filter ranks against. Falls back to raw metadata
-    (severity/priority/level) for alert sources that send it that way, then
-    to "unknown".
+    e.g. "Urgent". Returns None when no such attribute carries a usable label.
     """
-    # Preferred: the structured AlertPriority attribute (value.label).
     attributes = incident.get("attributes")
-    if isinstance(attributes, list):
-        for attr in attributes:
-            if not isinstance(attr, dict):
-                continue
-            meta = attr.get("attribute") or {}
-            if meta.get("type") == "AlertPriority":
-                value = attr.get("value") or {}
-                label = value.get("label")
-                if isinstance(label, str) and label.strip():
-                    return label
+    if not isinstance(attributes, list):
+        return None
 
-    # Fallback: some alert sources put priority/severity directly in metadata.
+    for attr in attributes:
+        if not isinstance(attr, dict):
+            continue
+        meta = attr.get("attribute") or {}
+        if meta.get("type") != "AlertPriority":
+            continue
+        value = attr.get("value") or {}
+        label = value.get("label")
+        if isinstance(label, str) and label.strip():
+            return label
+    return None
+
+
+def _priority_from_metadata(incident: Dict[str, Any]) -> Optional[str]:
+    """Fall back to raw metadata (severity/priority/level) for alert sources
+    that send priority inline rather than as a structured attribute."""
     raw_metadata = incident.get("metadata")
     metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
     for key in ("severity", "priority", "level"):
         if key in metadata:
             return str(metadata[key])
+    return None
+
+
+def _extract_alert_priority(incident: Dict[str, Any]) -> str:
+    """Pull the alert's priority name from an incident.io alert object.
+
+    Prefers the structured AlertPriority attribute (whose label matches the
+    org's Alert Priority catalog names our RCA filter ranks against), then
+    falls back to raw metadata, then to "unknown".
+    """
+    # Preferred: the structured AlertPriority attribute (value.label).
+    label = _priority_from_attributes(incident)
+    if label is not None:
+        return label
+
+    # Fallback: some alert sources put priority/severity directly in metadata.
+    from_metadata = _priority_from_metadata(incident)
+    if from_metadata is not None:
+        return from_metadata
 
     return "unknown"
 
