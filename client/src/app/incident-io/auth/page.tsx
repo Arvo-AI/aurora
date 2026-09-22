@@ -146,7 +146,7 @@ export default function IncidentIoAuthPage() {
                     required
                   />
                   <p className="text-xs text-muted-foreground">
-                    The API key needs these permissions: <strong>View all incident data (including private incidents)</strong> and <strong>Create incidents</strong>. Keys are stored securely in Vault.
+                    The API key needs these permissions: <strong>View all incident data (including private incidents)</strong>, <strong>Create incidents</strong>, and <strong>View data</strong> (lets Aurora read your organization&apos;s alert priorities for severity filtering; without it, RCA still runs on all alerts). Keys are stored securely in Vault.
                   </p>
                 </div>
 
