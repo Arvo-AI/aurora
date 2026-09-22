@@ -36,13 +36,16 @@ def _update_metadata(user_id: str, channel_id: str, summary, status: str,
             if not set_rls_context(cur, conn, user_id, log_prefix="[SlackChannelMeta]"):
                 return
             # Status-only update (generating / error) — don't clobber a summary.
+            # Scoped by the RLS org context (set above), NOT user_id: the row may
+            # be owned by a different org member, so a user_id predicate would
+            # match zero rows and silently drop the write.
             if summary is None:
                 cur.execute(
                     """UPDATE slack_channels
                        SET metadata_status = %s, updated_at = NOW()
-                       WHERE user_id = %s AND provider = 'slack' AND channel_id = %s
+                       WHERE provider = 'slack' AND channel_id = %s
                          AND metadata_status IN ('pending', 'generating')""",
-                    (status, user_id, channel_id),
+                    (status, channel_id),
                 )
             else:
                 cur.execute(
@@ -51,9 +54,9 @@ def _update_metadata(user_id: str, channel_id: str, summary, status: str,
                            channel_type = COALESCE(%s, channel_type),
                            detected_platform = COALESCE(%s, detected_platform),
                            updated_at = NOW()
-                       WHERE user_id = %s AND provider = 'slack' AND channel_id = %s
+                       WHERE provider = 'slack' AND channel_id = %s
                          AND metadata_status IN ('pending', 'generating')""",
-                    (summary, status, channel_type, platform, user_id, channel_id),
+                    (summary, status, channel_type, platform, channel_id),
                 )
             conn.commit()
 
@@ -125,9 +128,11 @@ def generate_channel_metadata(self, user_id: str, channel_id: str):
         _update_metadata(user_id, channel_id, None, "limit_reached")
         return
 
-    _update_metadata(user_id, channel_id, None, "generating")
-
     try:
+        # Inside the try so a DB/connection failure on this initial status write
+        # is retried (not left silently stuck as 'pending').
+        _update_metadata(user_id, channel_id, None, "generating")
+
         from connectors.slack_connector.client import get_slack_client_for_user
         client = get_slack_client_for_user(user_id)
         if not client:

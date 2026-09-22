@@ -646,6 +646,7 @@ export function MemorySettings() {
                           size="icon"
                           onClick={() => setViewingEntry(entry)}
                           title="View memory entry"
+                          aria-label="View memory entry"
                         >
                           <Eye className="h-4 w-4 text-muted-foreground hover:text-primary" />
                         </Button>

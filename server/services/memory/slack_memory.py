@@ -41,7 +41,7 @@ here per-channel and honour it.
 
 ## Which channels / teams to notify
 - Aurora keeps a list of the Slack channels it can see, each with a description \
-(see the get_slack_channels tool). Use those descriptions to pick the channel(s) \
+(see the get_connected_slack_channels tool). Use those descriptions to pick the channel(s) \
 relevant to a given incident, service, or team.
 - Default fallback is the shared incidents channel when no better match exists.
 - Record team → channel routing preferences here as they are learned.

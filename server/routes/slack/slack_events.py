@@ -70,14 +70,18 @@ def _handle_member_joined(event: dict, team_id: str | None) -> None:
             return
 
         # Only react to Aurora's OWN join. If we stored the bot user id, match on
-        # it directly. Older installs without it fall back to a membership check:
-        # only register if Aurora is actually a member of the channel now (so a
-        # human joining a channel Aurora isn't in won't create a row).
+        # it directly (a positive identity confirmation). Older installs without
+        # it fall back to a membership check: only register if Aurora is actually
+        # a member now — but that can't distinguish Aurora joining from a human
+        # joining a channel Aurora is already in, so we must NOT let that path
+        # restore a dismissed channel.
         bot_user_id = (get_user_token_data(aurora_user_id, "slack") or {}).get("bot_user_id")
+        confirmed_bot_join = False
         if bot_user_id:
             # Not Aurora's join — ignore.
             if joined_user != bot_user_id:
                 return
+            confirmed_bot_join = True
         else:
             client = get_slack_client_for_user(aurora_user_id)
             info = client.get_channel_info(channel_id) if client else None
@@ -87,7 +91,10 @@ def _handle_member_joined(event: dict, team_id: str | None) -> None:
                 return
 
         from routes.slack.slack_channels import register_single_channel
-        register_single_channel(aurora_user_id, channel_id, team_id=team_id)
+        # allow_restore only on a confirmed bot join; the membership fallback is
+        # ambiguous, so it must not resurrect a user-dismissed channel.
+        register_single_channel(aurora_user_id, channel_id, team_id=team_id,
+                                allow_restore=confirmed_bot_join)
     except Exception:
         logger.warning("Error handling member_joined_channel", exc_info=True)
 

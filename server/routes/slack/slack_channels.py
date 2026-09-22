@@ -345,7 +345,8 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
 
 
 def register_single_channel(user_id: str, channel_id: str,
-                            team_id: str | None = None) -> bool:
+                            team_id: str | None = None,
+                            allow_restore: bool = True) -> bool:
     """Register (and describe) one channel Aurora was just added to.
 
     Lightweight counterpart to auto_register_channels for the
@@ -354,6 +355,12 @@ def register_single_channel(user_id: str, channel_id: str,
     description. Idempotent. A re-invite is treated as the latest signal: a
     channel the user previously dismissed is restored (un-dismissed) and
     re-described. Returns True if a new row was created.
+
+    ``allow_restore`` gates the un-dismiss behaviour. The caller must only pass
+    True when it has POSITIVELY confirmed the joiner is Aurora's own bot (matched
+    bot_user_id). On the weaker membership-based fallback, an unrelated human
+    joining a channel Aurora is already in must NOT resurrect a channel the user
+    dismissed, so callers there pass False.
     """
     if not channel_id:
         return False
@@ -382,10 +389,15 @@ def register_single_channel(user_id: str, channel_id: str,
                 row = cur.fetchone()
                 # A re-invite is the latest signal — un-dismiss so the channel
                 # comes back (we always go by the most recent event, not history).
-                was_dismissed = bool(row and row[1])
+                # Only when the caller confirmed this is Aurora's own join; on the
+                # membership fallback we can't, so a human join won't resurrect it.
+                was_dismissed = bool(row and row[1]) and allow_restore
                 if was_dismissed:
                     cur.execute(
-                        """UPDATE slack_channels SET is_dismissed = FALSE, updated_at = NOW()
+                        """UPDATE slack_channels
+                              SET is_dismissed = FALSE,
+                                  metadata_status = 'generating',
+                                  updated_at = NOW()
                            WHERE provider = 'slack' AND channel_id = %s""",
                         (channel_id,),
                     )
@@ -573,6 +585,10 @@ def activate_slack_channels(user_id):
     channel_ids = (request.get_json(silent=True) or {}).get("channel_ids")
     if not isinstance(channel_ids, list) or not channel_ids:
         return jsonify({"error": "channel_ids (non-empty list) is required"}), 400
+    # Every entry must be a non-empty string — otherwise psycopg2 adaptation of
+    # ANY(%s) can fail at execute() and surface as a 500 instead of a 400.
+    if not all(isinstance(cid, str) and cid.strip() for cid in channel_ids):
+        return jsonify({"error": "channel_ids must all be non-empty strings"}), 400
     # Guard against an unbounded request flooding the metadata queue.
     if len(channel_ids) > MAX_BULK_ACTIVATE:
         return jsonify({"error": f"Too many channels; activate at most {MAX_BULK_ACTIVATE} at once"}), 400

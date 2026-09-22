@@ -434,6 +434,5 @@ def test_list_all_channels_respects_safety_cap():
     with patch.object(client, "_make_request", side_effect=fake_request):
         result = client.list_all_channels(max_channels=300)
 
-    # Stops once the cap is reached rather than looping forever.
-    assert len(result) >= 300
-    assert len(result) < 600
+    # Stops once the cap is reached and returns exactly the cap (not a full page over it).
+    assert len(result) == 300

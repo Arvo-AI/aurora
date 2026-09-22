@@ -88,7 +88,9 @@ def _build_prompt(incident_data: Dict[str, Any], incident_index: str) -> str:
         "2. For each relevant channel, read its recent history "
         "(get_channel_history) to see if this incident is already being "
         "discussed (your own earlier message, an incident.io/PagerDuty thread, "
-        "or a human asking). \n"
+        "or a human asking). Never post to a channel whose notify_enabled is "
+        "false — the user has opted it out of proactive notifications; skip it "
+        "even if it looks relevant.\n"
         "3. If it's already being discussed or is a recurrence, reply in that "
         "thread with a short follow-up via post_slack_message(thread_ts=...). "
         "Otherwise post one short new message. Match the tone, verbosity and "
@@ -131,10 +133,20 @@ def trigger_team_routing_agent(user_id: str, incident_data: Dict[str, Any]) -> b
             logger.debug("%s Could not read Incident Index", _LOG_PREFIX, exc_info=True)
 
         prompt = _build_prompt(incident_data, incident_index)
-        # Guardrail sees only the externally-controlled incident fields.
-        rail_text = (
-            f"{incident_data.get('alert_title') or ''}\n"
-            f"{incident_data.get('aurora_summary') or ''}"
+        # The input rail must see EVERY externally-derived value we interpolate
+        # into the prompt — otherwise an injection hidden in service, severity,
+        # the recurrence anchor, or the incident index bypasses the check and
+        # this agent runs in mode="agent" with post_slack_message available.
+        # Only fixed instruction scaffolding is excluded.
+        rail_text = "\n".join(
+            str(v) for v in (
+                incident_data.get("alert_title"),
+                incident_data.get("aurora_summary"),
+                incident_data.get("service"),
+                incident_data.get("severity"),
+                incident_data.get("anchor_alert_title"),
+                incident_index,
+            ) if v
         ).strip() or None
 
         from chat.background.task import (
@@ -164,20 +176,33 @@ def trigger_team_routing_agent(user_id: str, incident_data: Dict[str, Any]) -> b
             incident_id=str(incident_id),
         )
 
-        run_background_chat.delay(
-            user_id=user_id,
-            session_id=session_id,
-            initial_message=prompt,
-            trigger_metadata=trigger_metadata,
-            # Link for context, but this is a fresh Q&A-style session (like a
-            # Slack @mention), NOT the incident's RCA session — pass no
-            # incident_id to run_background_chat so it doesn't re-run the RCA
-            # lifecycle. The session row is still linked via chat_sessions.
-            incident_id=None,
-            send_notifications=False,
-            mode="agent",  # required so post_slack_message (a write tool) is available
-            rail_text=rail_text,
-        )
+        try:
+            run_background_chat.delay(
+                user_id=user_id,
+                session_id=session_id,
+                initial_message=prompt,
+                trigger_metadata=trigger_metadata,
+                # Link for context, but this is a fresh Q&A-style session (like a
+                # Slack @mention), NOT the incident's RCA session — pass no
+                # incident_id to run_background_chat so it doesn't re-run the RCA
+                # lifecycle. The session row is still linked via chat_sessions.
+                incident_id=None,
+                send_notifications=False,
+                mode="agent",  # required so post_slack_message (a write tool) is available
+                rail_text=rail_text,
+            )
+        except Exception:
+            # Session was created 'in_progress'; if Celery dispatch fails it would
+            # sit stuck until the 20-min stale-session cleanup. Mark it failed now.
+            logger.warning("%s Celery dispatch failed; marking session %s failed",
+                           _LOG_PREFIX, session_id, exc_info=True)
+            try:
+                from chat.background.task import _update_session_status
+                _update_session_status(session_id, "failed", user_id=user_id)
+            except Exception:
+                logger.debug("%s Could not mark session failed", _LOG_PREFIX, exc_info=True)
+            return False
+
         logger.info("%s Dispatched team-routing agent for incident %s (session=%s)",
                     _LOG_PREFIX, incident_id, session_id)
         return True

@@ -104,6 +104,12 @@ export default function SlackManagePage() {
       const data = await slackService.getChannels();
       setConnectedChannels(data.connected);
       setDismissedChannels(data.dismissed);
+      // The OAuth callback can redirect while descriptions are still generating.
+      // If the initial load shows any pending/generating rows, start polling so
+      // the spinner resolves without needing a manual refresh.
+      if (data.connected.some((c) => c.metadata_status === "generating" || c.metadata_status === "pending")) {
+        pollChannelsUntilSettled();
+      }
     } catch (error) {
       console.error("Error loading Slack channels:", error);
     } finally {
@@ -307,7 +313,12 @@ export default function SlackManagePage() {
     );
     try {
       const { activated } = await slackService.activateChannels(ids);
-      setActivateSelected(new Set());
+      // Remove only the ids we just submitted — preserve any selections the user
+      // made while the request was in flight.
+      setActivateSelected((prev) => {
+        const requested = new Set(ids);
+        return new Set([...prev].filter((id) => !requested.has(id)));
+      });
       setActivateQuery("");
       pollChannelsUntilSettled();
       toast({

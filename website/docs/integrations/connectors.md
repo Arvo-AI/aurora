@@ -682,8 +682,9 @@ In **OAuth & Permissions** > **Scopes** > **Bot Token Scopes**, add (these must 
 In **Event Subscriptions**, toggle **Enable Events** on.
 
 - **Request URL**: `https://your-ngrok-url.ngrok-free.app/slack/events`
-  (or `http://localhost:5080/slack/events` if reachable). The server must be
-  running so Slack's one-time `url_verification` challenge succeeds.
+  Slack validates this URL from its own infrastructure, so it must be a publicly
+  reachable HTTPS tunnel (not `localhost`). The server must be running so
+  Slack's one-time `url_verification` challenge succeeds.
 - Under **Subscribe to bot events**, add:
 
 | Event | Purpose |

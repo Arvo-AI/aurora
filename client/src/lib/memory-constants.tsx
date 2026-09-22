@@ -26,12 +26,12 @@ export const SYSTEM_CATEGORY = "artifact";
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 export const CATEGORY_META: Record<MemoryCategory, { label: string; icon: React.ReactNode; color: string }> = {
-  context: { label: "Context", icon: <Brain className="h-3.5 w-3.5" />, color: "bg-purple-500/10 text-purple-400 border-purple-500/20" },
-  runbook: { label: "Runbook", icon: <BookOpen className="h-3.5 w-3.5" />, color: "bg-blue-500/10 text-blue-400 border-blue-500/20" },
-  infrastructure: { label: "Infrastructure", icon: <Server className="h-3.5 w-3.5" />, color: "bg-green-500/10 text-green-400 border-green-500/20" },
-  learned: { label: "Learned", icon: <Lightbulb className="h-3.5 w-3.5" />, color: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20" },
-  postmortem: { label: "Postmortem", icon: <ScrollText className="h-3.5 w-3.5" />, color: "bg-red-500/10 text-red-400 border-red-500/20" },
-  artifact: { label: "Artifact", icon: <Package className="h-3.5 w-3.5" />, color: "bg-zinc-500/10 text-zinc-300 border-zinc-500/20" },
+  context: { label: "Context", icon: <Brain className="h-3.5 w-3.5" />, color: "bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/20" },
+  runbook: { label: "Runbook", icon: <BookOpen className="h-3.5 w-3.5" />, color: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20" },
+  infrastructure: { label: "Infrastructure", icon: <Server className="h-3.5 w-3.5" />, color: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20" },
+  learned: { label: "Learned", icon: <Lightbulb className="h-3.5 w-3.5" />, color: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/20" },
+  postmortem: { label: "Postmortem", icon: <ScrollText className="h-3.5 w-3.5" />, color: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20" },
+  artifact: { label: "Artifact", icon: <Package className="h-3.5 w-3.5" />, color: "bg-zinc-500/10 text-zinc-700 dark:text-zinc-300 border-zinc-500/20" },
 };
 
 export interface MemoryEntry {

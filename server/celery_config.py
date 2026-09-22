@@ -67,7 +67,12 @@ try:
         content_type="application/x-json-tolerant",
         content_encoding="utf-8",
     )
+    _RESULT_SERIALIZER = "json-tolerant"
 except Exception as _ser_err:  # pragma: no cover - never block worker startup
+    # Registration failed — fall back to the built-in 'json' serializer so the
+    # config below never references an unregistered serializer (which would make
+    # result storage fail at lookup time).
+    _RESULT_SERIALIZER = "json"
     logging.getLogger(__name__).warning(
         "Could not register tolerant JSON serializer; falling back to 'json': %s", _ser_err
     )
@@ -100,7 +105,7 @@ if redis_url.startswith('rediss://'):
 celery_app.conf.update(
     task_serializer='json',
     accept_content=['json', 'json-tolerant'],
-    result_serializer='json-tolerant',
+    result_serializer=_RESULT_SERIALIZER,
     result_accept_content=['json', 'json-tolerant'],
     timezone='UTC',
     enable_utc=True,

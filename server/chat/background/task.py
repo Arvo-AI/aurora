@@ -856,13 +856,12 @@ def run_background_chat(
         if trigger_metadata and trigger_metadata.get('source') in ['google_chat', 'google_chat_button']:
             try:
                 gchat_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
-                # _send_response_to_google_chat returns None; a raised exception
-                # (caught below) is the only failure signal, so a clean return means
-                # the reply attempt completed — mark sent to avoid a double fallback.
-                _send_response_to_google_chat(
+                # Only treat as sent when a message was actually posted/updated, so
+                # the finally-block fallback still fires (resolving "Thinking…") if
+                # delivery was skipped (no space / no text / no client).
+                _chat_reply_sent = bool(_send_response_to_google_chat(
                     user_id, session_id, trigger_metadata, fallback_text=gchat_fallback,
-                )
-                _chat_reply_sent = True
+                ))
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
         
@@ -2194,8 +2193,13 @@ def _send_response_to_google_chat(
     session_id: str,
     trigger_metadata: Dict[str, Any],
     fallback_text: Optional[str] = None,
-) -> None:
-    """Send Aurora's response back to Google Chat after background chat completes."""
+) -> bool:
+    """Send Aurora's response back to Google Chat after background chat completes.
+
+    Returns True only when a message was actually posted/updated, False on the
+    early-return paths (no space, no assistant text, no client) so the caller can
+    fall back (resolve the "Thinking…" placeholder) instead of assuming success.
+    """
     try:
         from routes.google_chat.google_chat_events_helpers import format_response_for_google_chat
 
@@ -2206,7 +2210,7 @@ def _send_response_to_google_chat(
 
         if not space_name:
             logger.warning(f"[BackgroundChat] No Google Chat space in trigger_metadata for session {session_id}")
-            return
+            return False
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -2237,7 +2241,7 @@ def _send_response_to_google_chat(
                         logger.warning(
                             f"[BackgroundChat] No assistant message found in session {session_id}"
                         )
-                        return
+                        return False
 
         formatted_message = format_response_for_google_chat(last_assistant_message)
 
@@ -2263,7 +2267,7 @@ def _send_response_to_google_chat(
         client = get_chat_app_client()
         if not client:
             logger.error(f"[BackgroundChat] Could not get Google Chat client for user {user_id}")
-            return
+            return False
 
         if thinking_message_name:
             client.update_message(
@@ -2276,6 +2280,9 @@ def _send_response_to_google_chat(
                 text=formatted_message,
                 thread_key=thread_key
             )
+
+        # A message was actually posted/updated.
+        return True
 
     except Exception as e:
         logger.error(f"[BackgroundChat] Error sending response to Google Chat: {e}", exc_info=True)

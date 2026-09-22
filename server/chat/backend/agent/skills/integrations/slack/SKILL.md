@@ -23,7 +23,12 @@ metadata:
 # Slack Tools
 
 ## Overview
-Read-only tools for searching Slack conversations. Used during postmortem generation to gather human context (deployment decisions, communication gaps, resolution steps) and during interactive chat for incident investigation.
+Tools for working in Slack. The investigation tools (`list_slack_channels`,
+`get_channel_history`, `get_thread_replies`, `get_connected_slack_channels`) are
+read-only and used during postmortem generation and interactive investigation to
+gather human context (deployment decisions, communication gaps, resolution
+steps). In **Agent mode** you also get `post_slack_message` to post a message or
+threaded reply.
 
 The tool signatures and parameters are provided to you in the tool schema — this
 skill only covers *when* to use each and Slack-specific behaviour.

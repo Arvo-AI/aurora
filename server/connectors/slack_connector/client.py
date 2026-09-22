@@ -205,7 +205,7 @@ class SlackClient:
 
             if len(all_channels) >= max_channels:
                 logger.warning("list_all_channels hit safety cap of %d channels", max_channels)
-                break
+                return all_channels[:max_channels]
 
             cursor = result.get('response_metadata', {}).get('next_cursor')
             if not cursor:
