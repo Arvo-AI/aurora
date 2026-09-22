@@ -123,7 +123,7 @@ export default function SlackManagePage() {
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (pollTimerRef.current) clearTimeout(pollTimerRef.current); }, []);
 
-  const pollChannelsUntilSettled = useCallback((attempt = 0) => {
+  const pollChannelsUntilSettled = useCallback((attempt = 0, keepGoingWhileEmpty = false) => {
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     // ~30s ceiling (15 tries × 2s) — generation is normally a few seconds.
     if (attempt >= 15) return;
@@ -135,7 +135,13 @@ export default function SlackManagePage() {
         const stillWorking = data.connected.some(
           (c) => c.metadata_status === "generating" || c.metadata_status === "pending",
         );
-        if (stillWorking) pollChannelsUntilSettled(attempt + 1);
+        // keepGoingWhileEmpty: right after connect the background registration
+        // task may not have inserted any rows yet, so an empty list isn't "done"
+        // — keep polling until rows appear (then normal settle logic takes over).
+        const waitingForFirstRows = keepGoingWhileEmpty && data.connected.length === 0;
+        if (stillWorking || waitingForFirstRows) {
+          pollChannelsUntilSettled(attempt + 1, keepGoingWhileEmpty);
+        }
       } catch (error) {
         console.error("Error polling Slack channels:", error);
       }
@@ -187,7 +193,14 @@ export default function SlackManagePage() {
     loadStatus();
     loadPreferences();
     loadChannels();
-  }, [loadStatus, loadPreferences, loadChannels]);
+    // Just connected: channel auto-registration runs on the worker now, so the
+    // table may be empty for a moment. Poll so rows + descriptions appear
+    // without a manual refresh.
+    if (globalThis.window !== undefined &&
+        new URLSearchParams(globalThis.window.location.search).get("slack_auth") === "success") {
+      pollChannelsUntilSettled(0, true);
+    }
+  }, [loadStatus, loadPreferences, loadChannels, pollChannelsUntilSettled]);
 
   const handleDismissChannel = async (channelId: string) => {
     // Optimistically move from active to dismissed.

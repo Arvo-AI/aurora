@@ -110,6 +110,33 @@ def _build_context(client, channel_id: str) -> tuple[str, str, dict]:
 
 
 @celery_app.task(
+    name="routes.slack.slack_channel_metadata.auto_register_channels_task",
+    bind=True,
+    max_retries=2,
+)
+def auto_register_channels_task(self, user_id: str, team_id: str | None = None):
+    """Background wrapper for auto_register_channels.
+
+    Slack OAuth stores credentials then needs to enumerate + describe the
+    workspace's channels. For large workspaces that paginated Slack I/O plus DB
+    writes can exceed the OAuth callback's request budget, timing out the
+    redirect after the connection was already saved. Running it here keeps the
+    callback fast; the manage page polls for the channels as descriptions land.
+    """
+    try:
+        from routes.slack.slack_channels import auto_register_channels
+        auto_register_channels(user_id, team_id=team_id)
+    except Exception as exc:
+        logger.warning("[SlackAutoRegister] task failed for user %s; retrying", sanitize(user_id))
+        # Retry a couple of times (e.g. transient Slack 429/5xx); give up quietly
+        # after that — the user can hit "Refresh channels" on the manage page.
+        try:
+            self.retry(countdown=30, exc=exc)
+        except self.MaxRetriesExceededError:
+            logger.warning("[SlackAutoRegister] gave up after retries for user %s", sanitize(user_id))
+
+
+@celery_app.task(
     name="routes.slack.slack_channel_metadata.generate_channel_metadata",
     bind=True,
     max_retries=2,

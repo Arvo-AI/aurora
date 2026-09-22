@@ -192,12 +192,15 @@ def slack_callback():
 
             # Auto-register the workspace's channels (all, capped to the 50 most
             # recent) so Aurora is immediately aware of them and generates cheap
-            # descriptions. Best-effort — never fail the connection over this.
+            # descriptions. Enqueued as a background task — a large workspace's
+            # paginated Slack I/O + DB writes can exceed the OAuth callback's
+            # request budget and time out the redirect. Best-effort dispatch;
+            # never fail the connection over this (the manage page can Refresh).
             try:
-                from routes.slack.slack_channels import auto_register_channels
-                auto_register_channels(user_id, team_id=team_info.get('id'))
+                from routes.slack.slack_channel_metadata import auto_register_channels_task
+                auto_register_channels_task.delay(user_id, team_info.get('id'))
             except Exception:
-                logging.warning("Failed to auto-register Slack channels (non-fatal)", exc_info=True)
+                logging.warning("Failed to enqueue Slack channel auto-registration (non-fatal)", exc_info=True)
 
             logging.info("Incidents channel ready, Slack credentials stored successfully")
         except Exception as e:
