@@ -917,6 +917,7 @@ OAuth 2.0 or API Token authentication.
    - Category: Operations
    - Enable **OAuth 2.0**
    - Redirect URL: `http://localhost:5080/pagerduty/oauth/callback`
+   - Scopes: `openid`, `users.read`, `incidents.read`, `incidents.write`, `services.read`
 3. Copy **Client ID** and **Client Secret**
 
 ```bash
@@ -925,11 +926,27 @@ PAGERDUTY_CLIENT_ID=your-client-id
 PAGERDUTY_CLIENT_SECRET=your-client-secret
 ```
 
+All five scopes must be registered on the app. PagerDuty silently drops any scope that is not registered, and a token issued without `users.read` fails validation when connecting.
+
 #### Option B: API Token
 
-1. Go to [PagerDuty](https://app.pagerduty.com/) > **Integrations** > **API Access Keys**
-2. Click **Create New API Key**
+Use a **user API token** from a PagerDuty user with write access (Responder or higher). A dedicated "Aurora" user is recommended so notes are attributed clearly.
+
+1. In PagerDuty, go to **User Icon** > **My Profile** > **User Settings** > **API Access**
+2. Click **Create API User Token**
 3. Users enter the token via the Aurora UI
+
+A read-only or account-level key still works for reading incidents and triggering RCA, but cannot post RCA notes back to PagerDuty.
+
+#### Posting RCA notes back to PagerDuty
+
+When enabled, Aurora adds one plain-text note to the originating PagerDuty incident when an investigation completes: the root cause, a link to the full investigation, and a disclaimer. Recurrences of an earlier incident and re-summaries after a follow-up chat do not post.
+
+- **Where**: the toggle lives on the PagerDuty connector page under **RCA Notes**. It is off by default and org-wide.
+- **Credential requirement**: the toggle can only be turned on when the stored credentials were proven able to write incidents (user token from a user with write access, or an OAuth token granted `incidents.write`). Account-level keys and read-only users are rejected with a reason.
+- **Notes are permanent**: PagerDuty has no API to edit or delete notes. Aurora posts at most one note per incident.
+- **Existing OAuth connections**: connections made before `incidents.write` was requested keep their read-only token. Disconnect and reconnect PagerDuty to grant it.
+- **Rotating to a read-only token** turns the toggle off automatically.
 
 #### Webhook Configuration
 
