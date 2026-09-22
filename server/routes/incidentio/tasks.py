@@ -337,7 +337,8 @@ def _resolve_incident_object(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Find the incident dict inside an incident.io webhook payload.
 
     incident.io sends two families of events:
-    - Incident events: nested under event.incident or payload.incident
+    - Incident events (public_incident.*/private_incident.*): nested under
+      event.incident, payload.incident, or keyed by the event-type topic name
     - Alert events (public_alert.*/private_alert.*): alert data is a direct
       child of the payload, either under event.alert/payload.alert or keyed
       by the event-type topic name
@@ -345,9 +346,12 @@ def _resolve_incident_object(payload: Dict[str, Any]) -> Dict[str, Any]:
     event = payload.get("event", {}) or {}
     incident = event.get("incident") or payload.get("incident") or None
 
+    # Public and private incidents can arrive keyed by their topic name
+    # (e.g. "private_incident.incident_created_v2": {"incident": {...}}) — treat
+    # both families identically so private declared incidents aren't dropped.
     if not incident:
         for key, value in payload.items():
-            if key.startswith("public_incident.") and isinstance(value, dict):
+            if ("public_incident." in key or "private_incident." in key) and isinstance(value, dict):
                 incident = value.get("incident") or value
                 break
 
@@ -434,8 +438,8 @@ def _extract_alert_priority(incident: Dict[str, Any]) -> str:
 def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Extract normalized incident fields from the webhook event envelope.
 
-    Handles both incident events (event.incident.*) and alert events
-    (public_alert.*/private_alert.*). Alert events carry
+    Handles both incident events (public_incident.*/private_incident.*) and
+    alert events (public_alert.*/private_alert.*). Alert events carry
     title/description/status/metadata directly on the alert object rather
     than in incident-shaped fields.
     """
@@ -511,6 +515,11 @@ _NEW_INCIDENT_EVENTS = frozenset((
     "incident.created", "v2.incidents.created",
     "incident.declared", "public_incident.incident_created",
     "public_incident.incident_created_v2",
+    # Private incidents fire the same lifecycle as public ones on a separate
+    # topic — process them identically so private declared incidents aren't
+    # silently dropped at the trigger gate.
+    "private_incident.incident_created",
+    "private_incident.incident_created_v2",
     "public_alert.alert_created_v1",
     # Private alerts fire the same lifecycle as public ones on a separate
     # topic — process them identically so private-alert RCA isn't silently

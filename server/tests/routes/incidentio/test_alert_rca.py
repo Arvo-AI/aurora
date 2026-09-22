@@ -17,20 +17,19 @@ from unittest.mock import MagicMock, patch
 
 
 def _install_import_stubs() -> None:
-    """Stub the heavy modules ``tasks.py`` imports at module load time."""
+    """Stub the heavy modules ``tasks.py`` imports at module load time.
+
+    Only the genuinely heavy, celery-backed imports are stubbed. We must NOT
+    stub ``services.correlation.*`` here: those modules import fine on their
+    own, and replacing them in ``sys.modules`` would poison the real modules
+    for every other test in the session (e.g. the correlation suite would then
+    fail to import ``bump_incident_alert_stats``/``CorrelationResult`` from a
+    stub that never defined them).
+    """
     # build_rca_prompt lives behind the LangGraph-heavy chat.background package.
     rca_pb = ModuleType("chat.background.rca_prompt_builder")
     rca_pb.build_rca_prompt = lambda *a, **k: ("prompt", "rail")  # type: ignore[attr-defined]
     sys.modules.setdefault("chat.background.rca_prompt_builder", rca_pb)
-
-    # services.correlation.* — only the symbols tasks.py imports.
-    corr_pkg = sys.modules.get("services.correlation") or ModuleType("services.correlation")
-    corr_pkg.apply_correlation_outcome = lambda *a, **k: False  # type: ignore[attr-defined]
-    sys.modules["services.correlation"] = corr_pkg
-
-    corr_mod = ModuleType("services.correlation.alert_correlator")
-    corr_mod.AlertCorrelator = MagicMock  # type: ignore[attr-defined]
-    sys.modules["services.correlation.alert_correlator"] = corr_mod
 
     # celery_config.celery_app must expose a .task decorator that returns the fn.
     celery_cfg = ModuleType("celery_config")
@@ -208,6 +207,33 @@ class TestExtractAlertFields:
         assert fields["is_alert"] is False
         assert fields["incident_id"] == "inc_1"
         assert fields["incident_name"] == "Checkout down"
+
+    def test_private_incident_keyed_by_topic_name(self):
+        # Private declared incidents arrive keyed by their topic name rather
+        # than under event.incident — they must be resolved like public ones,
+        # not dropped as "no extractable identifier".
+        payload = {
+            "event_type": "private_incident.incident_created_v2",
+            "private_incident.incident_created_v2": {
+                "incident": {
+                    "id": "inc_priv_1",
+                    "name": "Private outage",
+                    "status": "open",
+                    "severity": {"name": "critical"},
+                }
+            },
+        }
+        fields = tasks._extract_incident_fields(payload)
+
+        assert fields["is_alert"] is False
+        assert fields["incident_id"] == "inc_priv_1"
+        assert fields["incident_name"] == "Private outage"
+        assert fields["severity"] == "critical"
+
+    def test_private_incident_created_triggers_rca(self):
+        # The trigger gate must treat private incidents identically to public.
+        assert "private_incident.incident_created_v2" in tasks._NEW_INCIDENT_EVENTS
+        assert "public_incident.incident_created_v2" in tasks._NEW_INCIDENT_EVENTS
 
 
 # ---------------------------------------------------------------------------
