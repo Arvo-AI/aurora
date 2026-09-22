@@ -20,6 +20,8 @@ export interface PagerDutyStatus {
   };
   /** Set by connect/rotate when the new token cannot post notes and the org toggle was turned off. */
   notesDisabled?: boolean;
+  /** Present when can_write_incidents is false: why, and what to do about it. */
+  notesUnwritableReason?: string;
 }
 
 const API_BASE = '/api/pagerduty';

@@ -7,6 +7,7 @@ import urllib.parse
 from time import time
 from typing import Dict, Optional, Tuple
 from utils.flags.feature_flags import is_pagerduty_oauth_enabled
+from utils.auth.token_management import store_tokens_in_db
 
 logger = logging.getLogger(__name__)
 
@@ -114,3 +115,22 @@ def refresh_token_if_needed(token_data: Dict) -> Tuple[bool, Optional[Dict]]:
         refreshed["granted_scopes"] = new_tokens["scope"]
     return True, refreshed
 
+
+def refresh_and_store_if_needed(user_id: str, token_data: Dict) -> Tuple[bool, Dict]:
+    """refresh_token_if_needed, persisting a refreshed token before it is used.
+
+    Returns (token still valid, token data with any refreshed fields merged).
+    PagerDuty may rotate the refresh token, so the new one is stored first; a
+    failed store is logged, not raised, since the in-memory token is good for
+    this request and the next refresh retries the write.
+    """
+    success, refreshed = refresh_token_if_needed(token_data)
+    if not success:
+        return False, token_data
+    if refreshed:
+        token_data = {**token_data, **refreshed}
+        try:
+            store_tokens_in_db(user_id, token_data, "pagerduty")
+        except Exception:
+            logger.exception("[PAGERDUTY] Failed to persist refreshed OAuth token")
+    return True, token_data

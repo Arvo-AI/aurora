@@ -21,7 +21,7 @@ from utils.auth.stateless_auth import (
     store_org_preference,
 )
 from utils.log_sanitizer import sanitize
-from routes.pagerduty.oauth_utils import get_auth_url, exchange_code_for_token, refresh_token_if_needed
+from routes.pagerduty.oauth_utils import get_auth_url, exchange_code_for_token, refresh_and_store_if_needed
 from routes.pagerduty.pagerduty_helpers import (
     PD_READ_ONLY_ROLES,
     PagerDutyClient,
@@ -43,19 +43,56 @@ def _capabilities(creds: dict) -> dict:
     return {"can_read_incidents": True, "can_write_incidents": False, **(creds.get("capabilities") or {})}
 
 
+def _unwritable_reason(creds: dict, capabilities: dict) -> tuple[str, str]:
+    """(message, code) explaining why these credentials cannot post notes."""
+    access = capabilities.get("api_key_access")
+    role = creds.get("external_user_role")
+    if access == "account":
+        return (
+            "This is an account-level API key. PagerDuty notes need a user API token "
+            "from a user with write access.",
+            "account_level_key",
+        )
+    if role in PD_READ_ONLY_ROLES:
+        # Checked before the OAuth scope: no re-consent by this user can add write access
+        remedy = (
+            "Reconnect as a user with write access." if access == "oauth"
+            else "Use a token from a user with write access."
+        )
+        return (
+            f"The PagerDuty user behind this connection has the {role} role, which cannot add notes. {remedy}",
+            "read_only_role",
+        )
+    if access == "oauth" and "incidents.write" not in (creds.get("granted_scopes") or "").split():
+        return (
+            "This PagerDuty connection was authorized without incident write access. "
+            "Disconnect and reconnect PagerDuty to grant it.",
+            "oauth_scope_missing",
+        )
+    return (
+        "This PagerDuty token cannot post notes. Use a user API token from a user with write access.",
+        "read_only_key",
+    )
+
+
 def _status_payload(creds: dict) -> dict:
     """The connection status the client stores as PagerDutyStatus (status, connect and rotate)."""
-    return {
+    capabilities = _capabilities(creds)
+    payload = {
         "connected": True,
         "displayName": creds.get("display_name", "PagerDuty"),
         "validatedAt": creds.get("validated_at"),
         "authType": creds.get("auth_type", "api_token"),
-        "capabilities": _capabilities(creds),
+        "capabilities": capabilities,
         "externalUserEmail": creds.get("external_user_email"),
         "externalUserName": creds.get("external_user_name"),
         "externalUserRole": creds.get("external_user_role"),
         "accountSubdomain": creds.get("account_subdomain"),
     }
+    if capabilities.get("can_write_incidents") is not True:
+        # Single source for the client's "why can't I turn notes on" text
+        payload["notesUnwritableReason"] = _unwritable_reason(creds, capabilities)[0]
+    return payload
 
 
 def _disable_notes_if_unwritable(org_id, capabilities: dict) -> bool:
@@ -105,18 +142,10 @@ def pagerduty_status(user_id):
     if not creds:
         return jsonify({"connected": False})
 
-    if creds.get("auth_type") == "oauth":
-        from routes.pagerduty.oauth_utils import is_pagerduty_oauth_enabled
-        if is_pagerduty_oauth_enabled():
-            success, refreshed = refresh_token_if_needed(creds)
-            if not success:
-                return jsonify({"connected": False, "error": "OAuth token expired, please reconnect"})
-            if refreshed:
-                try:
-                    store_tokens_in_db(user_id, {**creds, **refreshed}, "pagerduty")
-                    creds.update(refreshed)
-                except Exception:
-                    logger.exception("[PAGERDUTY] Failed to persist refreshed OAuth token")
+    if creds.get("auth_type") == "oauth" and is_pagerduty_oauth_enabled():
+        success, creds = refresh_and_store_if_needed(user_id, creds)
+        if not success:
+            return jsonify({"connected": False, "error": "OAuth token expired, please reconnect"})
 
     return jsonify(_status_payload(creds))
 
@@ -262,6 +291,16 @@ def oauth_callback():
         return redirect(f"{callback_url}?oauth=failed&error=unexpected")
 
 
+def _oauth_client_for(user_id: str, creds: dict):
+    """(client, creds, error_response) for an OAuth connection; refreshes and persists the token first."""
+    if not is_pagerduty_oauth_enabled():
+        return None, creds, (jsonify({"error": "PagerDuty OAuth is not enabled", "code": "oauth_disabled"}), 403)
+    success, creds = refresh_and_store_if_needed(user_id, creds)
+    if not success:
+        return None, creds, (jsonify({"error": "OAuth token expired, please reconnect", "code": "token_expired"}), 401)
+    return PagerDutyClient(oauth_token=creds.get("access_token")), creds, None
+
+
 @pagerduty_bp.route("/notes/enable", methods=["POST"])
 @require_permission("connectors", "write")
 def enable_incident_notes(user_id):
@@ -282,19 +321,9 @@ def enable_incident_notes(user_id):
         return jsonify({"error": "PagerDuty is not connected. Connect PagerDuty first.", "code": "not_connected"}), 404
 
     if creds.get("auth_type") == "oauth":
-        if not is_pagerduty_oauth_enabled():
-            return jsonify({"error": "PagerDuty OAuth is not enabled", "code": "oauth_disabled"}), 403
-        success, refreshed = refresh_token_if_needed(creds)
-        if not success:
-            return jsonify({"error": "OAuth token expired, please reconnect", "code": "token_expired"}), 401
-        if refreshed:
-            # Persist before validating: PagerDuty may have rotated the refresh token
-            creds = {**creds, **refreshed}
-            try:
-                store_tokens_in_db(user_id, creds, "pagerduty")
-            except Exception:
-                logger.exception("[PAGERDUTY] Failed to persist refreshed OAuth token")
-        client = PagerDutyClient(oauth_token=creds.get("access_token"))
+        client, creds, error = _oauth_client_for(user_id, creds)
+        if error:
+            return error
     else:
         client = PagerDutyClient(api_token=creds.get("api_token"))
 
@@ -313,31 +342,7 @@ def enable_incident_notes(user_id):
 
     capabilities = token_info["capabilities"]
     if capabilities.get("can_write_incidents") is not True:
-        access = capabilities.get("api_key_access")
-        role = creds.get("external_user_role")
-        if access == "account":
-            message, code = (
-                "This is an account-level API key. PagerDuty notes need a user API token "
-                "from a user with write access.",
-                "account_level_key",
-            )
-        elif access == "oauth" and "incidents.write" not in (creds.get("granted_scopes") or "").split():
-            message, code = (
-                "This PagerDuty connection was authorized without incident write access. "
-                "Disconnect and reconnect PagerDuty to grant it.",
-                "oauth_scope_missing",
-            )
-        elif role in PD_READ_ONLY_ROLES:
-            message, code = (
-                f"The PagerDuty user behind this token has the {role} role, which cannot add notes. "
-                "Use a token from a user with write access.",
-                "read_only_role",
-            )
-        else:
-            message, code = (
-                "This PagerDuty token cannot post notes. Use a user API token from a user with write access.",
-                "read_only_key",
-            )
+        message, code = _unwritable_reason(creds, capabilities)
         # The toggle may still be on from a previous, writable credential
         _disable_notes_if_unwritable(org_id, capabilities)
         return jsonify({"error": message, "code": code}), 403

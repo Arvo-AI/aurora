@@ -109,6 +109,36 @@ class PagerDutyClient:
             return None
 
 
+def _user_identity(user: Dict[str, Any]) -> Dict[str, Any]:
+    """Identity fields from a /users/me payload (email, name, subdomain, role)."""
+    info: Dict[str, Any] = {}
+    if email := user.get("email"):
+        info["external_user_email"] = email
+    if name := (user.get("name") or user.get("summary")):
+        info["external_user_name"] = name
+    if url := user.get("html_url"):
+        hostname = urlparse(url).hostname
+        if hostname and hostname.endswith(".pagerduty.com"):
+            info["account_subdomain"] = hostname.replace(".pagerduty.com", "")
+    if role := user.get("role"):
+        info["external_user_role"] = role
+    return info
+
+
+def _can_write_incidents(role: Optional[str], is_oauth: bool, granted_scopes: Optional[str]) -> bool:
+    """Default-deny: a write role is required; OAuth also needs the incidents.write scope."""
+    if not role or role in PD_READ_ONLY_ROLES:
+        return False
+    if is_oauth:
+        return "incidents.write" in (granted_scopes or "").split()
+    return True
+
+
+def _is_account_level_error(exc: PagerDutyAPIError) -> bool:
+    msg = str(exc).lower()
+    return "account-level" in msg or "user's identity" in msg
+
+
 def validate_token(client: PagerDutyClient, granted_scopes: Optional[str] = None) -> Dict[str, Any]:
     """Validate token and extract info, including whether it can write incidents.
 
@@ -125,34 +155,19 @@ def validate_token(client: PagerDutyClient, granted_scopes: Optional[str] = None
         "api_key_access": "oauth" if client.is_oauth else "user",
     }
     result = {"validated_at": datetime.now(timezone.utc).isoformat(), "capabilities": capabilities}
-    
+
     try:
         user = client.get_current_user().get("user", {})
-        if email := user.get("email"):
-            result["external_user_email"] = email
-        if name := (user.get("name") or user.get("summary")):
-            result["external_user_name"] = name
-        if url := user.get("html_url"):
-            parsed_url = urlparse(url)
-            if parsed_url.hostname and parsed_url.hostname.endswith(".pagerduty.com"):
-                result["account_subdomain"] = parsed_url.hostname.replace(".pagerduty.com", "")
-        role = user.get("role")
-        if role:
-            result["external_user_role"] = role
-        role_ok = bool(role) and role not in PD_READ_ONLY_ROLES
-        if client.is_oauth:
-            capabilities["can_write_incidents"] = role_ok and "incidents.write" in (granted_scopes or "").split()
-        else:
-            capabilities["can_write_incidents"] = role_ok
     except PagerDutyAPIError as e:
-        error_msg = str(e).lower()
-        if "account-level" in error_msg or "user's identity" in error_msg:
-            capabilities["api_key_access"] = "account"
-            if subdomain := client.get_subdomain():
-                result["account_subdomain"] = subdomain
-        else:
+        if not _is_account_level_error(e):
             raise
-    
+        capabilities["api_key_access"] = "account"
+        if subdomain := client.get_subdomain():
+            result["account_subdomain"] = subdomain
+        return result
+
+    result.update(_user_identity(user))
+    capabilities["can_write_incidents"] = _can_write_incidents(user.get("role"), client.is_oauth, granted_scopes)
     return result
 
 

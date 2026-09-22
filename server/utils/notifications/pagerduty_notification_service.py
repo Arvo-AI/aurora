@@ -31,8 +31,12 @@ _LOG = "[PagerDutyNote]"
 
 _CITATION_RE = re.compile(r"\s*\[\d+(?:\s*,\s*\d+)*\]")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
-_BOLD_RE = re.compile(r"\*\*(.+?)\*\*|__(.+?)__")
-_ITALIC_RE = re.compile(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])|(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])")
+_BOLD_RE = re.compile(r"\*\*((?:[^*\n]|\*(?!\*))+)\*\*|__([^_\n]+)__")
+# A star glued to a word char is not emphasis (p95*2, 3*4 nodes); only a delimiter-bounded pair is
+_STAR_ITALIC_RE = re.compile(r"(?<![\w*])\*(?!\s)([^*\n]+)(?<!\s)\*(?![\w*])")
+_UNDERSCORE_ITALIC_RE = re.compile(r"(?<!\w)_(?!\s)([^_\n]+)(?<!\s)_(?!\w)")
+# PagerDuty object ids are short alphanumerics; anything else must not reach the request path
+_PD_ID_RE = re.compile(r"[A-Za-z0-9]{1,32}")
 _HEADING_RE = re.compile(r"^[ \t]*#{1,6}[ \t]+", re.MULTILINE)
 _BULLET_RE = re.compile(r"^[ \t]*[*+][ \t]+", re.MULTILINE)
 _RULE_RE = re.compile(r"^[-*_]{3,}$")
@@ -68,7 +72,8 @@ def _to_plain_text(text: str, max_chars: Optional[int] = NOTE_MAX_CHARS) -> str:
     text = _HEADING_RE.sub("", text)
     text = _BULLET_RE.sub("- ", text)
     text = _BOLD_RE.sub(lambda m: m.group(1) or m.group(2), text)
-    text = _ITALIC_RE.sub(lambda m: m.group(1) or m.group(2), text)
+    text = _STAR_ITALIC_RE.sub(r"\1", text)
+    text = _UNDERSCORE_ITALIC_RE.sub(r"\1", text)
     paragraphs = [" ".join(p.split()) for p in re.split(r"\n\s*\n", text)]
     text = "\n\n".join(p for p in paragraphs if p)
     return _truncate(text, max_chars) if max_chars else text
@@ -121,8 +126,8 @@ def _pd_incident_id(incident_data: Dict[str, Any]) -> Optional[str]:
             return None
     if not isinstance(meta, dict):
         return None
-    value = meta.get("incidentId")
-    return str(value) if value else None
+    value = str(meta.get("incidentId") or "")
+    return value if _PD_ID_RE.fullmatch(value) else None
 
 
 def _should_post(incident_data: Dict[str, Any]) -> Tuple[bool, str]:
@@ -217,23 +222,38 @@ def _disable_write_capability(user_id: str, creds: Dict[str, Any]) -> None:
 def _build_client(user_id: str, creds: Dict[str, Any]) -> Tuple[Optional[PagerDutyClient], Dict[str, Any]]:
     """Client for the stored credentials; refreshes an OAuth token first."""
     if creds.get("auth_type") == "oauth":
-        from routes.pagerduty.oauth_utils import refresh_token_if_needed
+        from routes.pagerduty.oauth_utils import refresh_and_store_if_needed
 
-        success, refreshed = refresh_token_if_needed(creds)
+        success, creds = refresh_and_store_if_needed(user_id, creds)
         if not success:
             logger.warning("%s OAuth token expired for user %s; note not posted", _LOG, user_id)
             return None, creds
-        if refreshed:
-            creds = {**creds, **refreshed}
-            try:
-                store_tokens_in_db(user_id, creds, "pagerduty")
-            except Exception:
-                logger.exception("%s Failed to persist refreshed OAuth token", _LOG)
         token_kwargs = {"oauth_token": creds.get("access_token")}
     else:
         token_kwargs = {"api_token": creds.get("api_token")}
     from_email = creds.get("external_user_email") or None
     return PagerDutyClient(from_email=from_email, **token_kwargs), creds
+
+
+def _handle_post_error(e: PagerDutyAPIError, incident_id: str, user_id: str, creds: Dict[str, Any]) -> None:
+    """Release the claim only when PagerDuty definitively answered; a 403 also disables the capability."""
+    if e.status_code is None:
+        # No response: the note may have landed. Keep the claim (a lost
+        # note beats a duplicate one; notes cannot be deleted).
+        logger.warning(
+            "%s No response from PagerDuty for incident %s; claim kept to avoid a duplicate: %s",
+            _LOG, incident_id, e,
+        )
+        return
+    _release(incident_id, user_id)
+    if e.status_code == 403:
+        _disable_write_capability(user_id, creds)
+        logger.warning(
+            "%s PagerDuty refused the note for incident %s (forbidden); write capability disabled",
+            _LOG, incident_id,
+        )
+    else:
+        logger.warning("%s PagerDuty rejected the note for incident %s: %s", _LOG, incident_id, e)
 
 
 def send_pagerduty_incident_note(user_id: str, incident_data: Dict[str, Any]) -> bool:
@@ -269,23 +289,7 @@ def send_pagerduty_incident_note(user_id: str, incident_data: Dict[str, Any]) ->
         try:
             response = client.create_note(pd_incident_id, content)
         except PagerDutyAPIError as e:
-            if e.status_code is None:
-                # No response: the note may have landed. Keep the claim (a lost
-                # note beats a duplicate one; notes cannot be deleted).
-                logger.warning(
-                    "%s No response from PagerDuty for incident %s; claim kept to avoid a duplicate: %s",
-                    _LOG, incident_id, e,
-                )
-                return False
-            _release(incident_id, user_id)
-            if e.status_code == 403:
-                _disable_write_capability(user_id, creds)
-                logger.warning(
-                    "%s PagerDuty refused the note for incident %s (forbidden); write capability disabled",
-                    _LOG, incident_id,
-                )
-            else:
-                logger.warning("%s PagerDuty rejected the note for incident %s: %s", _LOG, incident_id, e)
+            _handle_post_error(e, incident_id, user_id, creds)
             return False
 
         note_id = ((response or {}).get("note") or {}).get("id") or "posted"

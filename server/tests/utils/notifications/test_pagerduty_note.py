@@ -53,6 +53,11 @@ def test_plain_text_strips_markdown_citations_and_links():
     assert svc._to_plain_text(text) == "Root cause: the pod was OOMKilled after memory spiked. See runbook (https://x.y/z)."
 
 
+def test_plain_text_keeps_stars_glued_to_words():
+    text = "p95*2 latency across 3*4 nodes; **a*b** is bold and *.log* is a glob"
+    assert svc._to_plain_text(text) == "p95*2 latency across 3*4 nodes; a*b is bold and .log is a glob"
+
+
 def test_plain_text_keeps_paragraph_breaks_and_drops_heading_marks():
     assert svc._to_plain_text("## Summary\n\nA b\nc.\n\n\n* item\n") == "Summary\n\nA b c.\n\n- item"
 
@@ -77,6 +82,9 @@ def test_truncate_hard_cuts_when_no_early_space():
     ({"pagerduty_note_id": "pending"}, "already posted"),
     ({"alert_metadata": {"incidentUrl": "https://x"}}, "no PagerDuty incident id"),
     ({"alert_metadata": None}, "no PagerDuty incident id"),
+    ({"alert_metadata": {"incidentId": "../users/PX"}}, "no PagerDuty incident id"),
+    ({"alert_metadata": {"incidentId": "PABC123/notes?x=1"}}, "no PagerDuty incident id"),
+    ({"alert_metadata": {"incidentId": "P" * 33}}, "no PagerDuty incident id"),
     ({"aurora_summary": "Short summary."}, "too short"),
     ({"aurora_summary": None}, "too short"),
 ])
@@ -102,7 +110,7 @@ def test_root_cause_is_the_second_paragraph():
 def test_report_format_skips_decoration_and_picks_the_root_cause_paragraph():
     assert svc._narrative_paragraphs(REPORT) == [
         "A high-severity PagerDuty alert titled \"checkout API 5xx spike\" fired at 05:35:35 UTC, "
-        "attributed to the Default Service. No application logs or traces were present.",
+        + "attributed to the Default Service. No application logs or traces were present.",
         REPORT_ROOT_CAUSE,
         "No production impact was identified. The Fleet Server reported one healthy agent through 05:37:59 UTC.",
     ]
@@ -264,7 +272,8 @@ def wired(monkeypatch, patched_db):
     return SimpleNamespace(pool=patched_db, client=client, built=built, stored=stored, creds=creds)
 
 
-def test_happy_path_claims_posts_then_records(wired):
+def test_happy_path_claims_posts_then_records(wired, monkeypatch):
+    monkeypatch.setattr(svc, "FRONTEND_URL", "http://localhost:3000")
     assert svc.send_pagerduty_incident_note("u1", _anchor()) is True
     assert wired.pool.updates == [CLAIM, RECORD]
     wired.client.create_note.assert_called_once()

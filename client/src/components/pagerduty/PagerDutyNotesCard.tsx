@@ -15,25 +15,14 @@ const TOGGLE_DESCRIPTION =
   "Post RCA notes to PagerDuty incidents. Aurora adds one note per incident when an investigation completes. " +
   "Notes cannot be edited or deleted once posted, and require a PagerDuty user token with write access.";
 
-function unwritableReason(status: PagerDutyStatus): string {
-  const access = status.capabilities?.api_key_access;
-  if (access === "account") {
-    return "This connection uses an account-level API key, which cannot post notes. Rotate to a user API token from a user with write access.";
-  }
-  if (access === "oauth") {
-    return "This OAuth connection was authorized without incident write access. Disconnect and reconnect PagerDuty to grant it.";
-  }
-  if (status.externalUserRole) {
-    return `The PagerDuty user behind this token has the ${status.externalUserRole} role, which cannot add notes. Rotate to a token from a user with write access.`;
-  }
-  return "This token cannot post notes. Rotate to a user API token from a user with write access.";
-}
+// Fallback for a cached status saved before the server sent notesUnwritableReason.
+const UNWRITABLE_FALLBACK = "This token cannot post notes. Rotate to a user API token from a user with write access.";
 
 interface PagerDutyNotesCardProps {
   status: PagerDutyStatus;
 }
 
-export function PagerDutyNotesCard({ status }: PagerDutyNotesCardProps) {
+export function PagerDutyNotesCard({ status }: Readonly<PagerDutyNotesCardProps>) {
   const { toast } = useToast();
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
@@ -93,7 +82,9 @@ export function PagerDutyNotesCard({ status }: PagerDutyNotesCardProps) {
     }
   };
 
-  const description = tokenCanWrite ? TOGGLE_DESCRIPTION : `${TOGGLE_DESCRIPTION} ${unwritableReason(status)}`;
+  const description = tokenCanWrite
+    ? TOGGLE_DESCRIPTION
+    : `${TOGGLE_DESCRIPTION} ${status.notesUnwritableReason ?? UNWRITABLE_FALLBACK}`;
 
   return (
     <Card>

@@ -2400,10 +2400,8 @@ def initialize_tables():
                     """
                 )
                 conn.commit()
-            except Exception as e:
-                logging.error(
-                    f"Failed to add pagerduty_note_id column to incidents: {e}"
-                )
+            except Exception:
+                logging.exception("Failed to add pagerduty_note_id column to incidents")
                 conn.rollback()
 
             # Migration: Add active_tab column to incidents for UI state persistence
