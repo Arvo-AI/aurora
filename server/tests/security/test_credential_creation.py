@@ -96,11 +96,24 @@ class TestCredentialFileAccess:
         ("cat ~/.ssh/id_rsa", "cred-ssh"),
         ("cat ~/.ssh/id_ed25519", "cred-ssh"),
         ("cat /var/run/secrets/kubernetes.io/serviceaccount/token", "cred-k8s-sa"),
+        # The cached `az login` directory holds a service principal secret in plaintext.
+        ("ls /tmp/aurora-az-login-cache", "cred-az-login-cache"),
+        ("cat /tmp/aurora-az-login-cache/ab12/service_principal_entries.json", "cred-az-login-cache"),
+        ("cat /tmp/*/service_principal_entries.json", "cred-az-cli-files"),
+        ("cat /tmp/aurora-az-x1/msal_token_cache.json", "cred-az-cli-files"),
     ])
     def test_credential_file_read_blocked(self, cmd, expected_rule):
         v = check_signature(cmd)
         assert v.matched, f"Credential file read not caught: {cmd!r}"
         assert v.rule_id == expected_rule
+
+    @pytest.mark.parametrize("cmd", [
+        "az vm list --subscription 00000000-0000-0000-0000-000000000000",
+        "az aks show --name aurora-az-prod --resource-group rg",
+        "az account get-access-token",
+    ])
+    def test_ordinary_azure_commands_not_caught(self, cmd):
+        assert not check_signature(cmd).matched, f"Benign az command blocked: {cmd!r}"
 
 
 # ---------------------------------------------------------------------------
