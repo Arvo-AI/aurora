@@ -389,22 +389,14 @@ def get_webhook_url(user_id):
             "1. Go to incident.io → Settings → Webhooks",
             "2. Click 'Add endpoint'",
             "3. Paste the webhook URL above",
-            "4. Subscribe to the event types below (each is a separate subscription)",
+            "4. Subscribe to these event types (each is a separate subscription):\n"
+            "    • public_incident.incident_created_v2  (required)\n"
+            "    • public_alert.alert_created_v1  (required)\n"
+            "    • private_incident.incident_created_v2  (only if you use private incidents)\n"
+            "    • private_alert.alert_created_v1  (only if you use private alerts)",
             "5. Save the endpoint, then copy the signing secret from the endpoint settings",
             "6. Paste the signing secret (starts with whsec_) into the field above",
             "Note: Aurora can run RCA on alert events too — configure alert RCA and severity filtering below.",
-        ],
-        # Structured list of the exact topics to tick, so the UI can render them
-        # as a scannable checklist instead of a run-on sentence in step 4.
-        "eventTopics": [
-            {"topic": "public_incident.incident_created_v2", "required": True,
-             "label": "Incidents"},
-            {"topic": "public_alert.alert_created_v1", "required": True,
-             "label": "Alerts"},
-            {"topic": "private_incident.incident_created_v2", "required": False,
-             "label": "Private incidents"},
-            {"topic": "private_alert.alert_created_v1", "required": False,
-             "label": "Private alerts"},
         ],
     })
 

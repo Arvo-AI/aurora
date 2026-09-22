@@ -94,7 +94,6 @@ function WebhookConfig({
   savingSecret,
   onSaveSecret,
   onCopyUrl,
-  onCopyTopic,
 }: {
   readonly webhookData: IncidentIoWebhookUrlResponse | null;
   readonly loadingWebhook: boolean;
@@ -104,7 +103,6 @@ function WebhookConfig({
   readonly savingSecret: boolean;
   readonly onSaveSecret: () => void;
   readonly onCopyUrl: () => void;
-  readonly onCopyTopic: (topic: string) => void;
 }) {
   if (loadingWebhook) {
     return (
@@ -148,48 +146,12 @@ function WebhookConfig({
       <div className="bg-muted/50 rounded-lg p-4">
         <p className="font-medium text-sm mb-3">Setup Instructions:</p>
         <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
-          {webhookData.instructions.map((instruction) => {
-            const text = instruction.replace(/^\d+\.\s*/, '');
-            // Render the event-topic checklist as a nested list right under the
-            // "subscribe to the event types below" step so the topics are
-            // scannable and individually copyable instead of a run-on sentence.
-            const isTopicStep = /subscribe to the event types/i.test(text);
-            return (
-              <li key={instruction}>
-                {text}
-                {isTopicStep && webhookData.eventTopics && webhookData.eventTopics.length > 0 && (
-                  <ul className="mt-2 ml-1 space-y-1.5 list-none">
-                    {webhookData.eventTopics.map((t) => (
-                      <li key={t.topic} className="flex items-center gap-2">
-                        <code className="bg-muted px-1.5 py-0.5 rounded text-xs break-all">
-                          {t.topic}
-                        </code>
-                        <span
-                          className={
-                            t.required
-                              ? "text-[10px] font-medium uppercase tracking-wide text-foreground/70"
-                              : "text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
-                          }
-                        >
-                          {t.required ? "Required" : "Optional"}
-                        </span>
-                        <span className="text-xs text-muted-foreground">— {t.label}</span>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6"
-                          onClick={() => onCopyTopic(t.topic)}
-                          aria-label={`Copy ${t.topic}`}
-                        >
-                          <Copy className="h-3 w-3" />
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </li>
-            );
-          })}
+          {webhookData.instructions.map((instruction) => (
+            // whitespace-pre-line keeps the newlines in multi-line steps
+            // (e.g. the event-type list in step 4) so each topic is on its
+            // own line instead of one run-on sentence.
+            <li key={instruction} className="whitespace-pre-line">{instruction.replace(/^\d+\.\s*/, '')}</li>
+          ))}
         </ol>
       </div>
 
@@ -376,15 +338,6 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
     }
   };
 
-  const copyTopic = async (topic: string) => {
-    try {
-      await copyToClipboard(topic);
-      toast({ title: "Copied", description: `Event type "${topic}" copied to clipboard` });
-    } catch (_error) {
-      toast({ title: "Copy failed", description: "Could not copy to clipboard.", variant: "destructive" });
-    }
-  };
-
   const handleSaveWebhookSecret = async () => {
     if (!webhookSecret.trim()) return;
     setSavingSecret(true);
@@ -557,7 +510,6 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
             savingSecret={savingSecret}
             onSaveSecret={handleSaveWebhookSecret}
             onCopyUrl={copyWebhookUrl}
-            onCopyTopic={copyTopic}
           />
         </div>
 
