@@ -98,7 +98,7 @@ def test_incident_index_injected_when_present():
 def test_untrusted_fields_are_delimited():
     # Every externally-derived value must sit inside <<...>> data fences so
     # injected text can't be read as instructions.
-    result, run_mock = _run(folded_incident(alert_title="High CPU", service="api"))
+    _, run_mock = _run(folded_incident(alert_title="High CPU", service="api"))
     prompt = run_mock.delay.call_args.kwargs["initial_message"]
     for fence in ("<<INCIDENT_TITLE>>", "<<SERVICE>>", "<<SEVERITY>>",
                   "<<CONCLUSION>>", "<<ANCHOR_TITLE>>"):
@@ -106,7 +106,7 @@ def test_untrusted_fields_are_delimited():
 
 
 def test_rail_text_covers_all_interpolated_fields():
-    result, run_mock = _run(
+    _, run_mock = _run(
         folded_incident(alert_title="High CPU", aurora_summary="Root cause: disk full.",
                         service="payments", severity="sev1", anchor_alert_title="Orig CPU"),
     )

@@ -202,9 +202,13 @@ def get_channel_history(
             "count": len(formatted),
         })
 
-    except ValueError as e:
-        if "not_in_channel" in str(e):
+    except SlackAPIError as e:
+        # Private channel Aurora hasn't been invited to (join couldn't recover it).
+        if getattr(e, "error", None) == "not_in_channel":
             return json.dumps({"error": f"Channel {channel_id} is private and the bot hasn't been invited. Invite the bot to read it."})
+        return json.dumps({"error": f"Slack API error: {e}"})
+    except ValueError as e:
+        # Transport failure (SlackAPIError's non-membership sibling).
         return json.dumps({"error": f"Slack API error: {e}"})
     except Exception as e:
         logger.info("[SlackTool] Failed to get channel history for %s", channel_id)
@@ -223,9 +227,11 @@ def _read_with_public_join_retry(client, channel_id: str, fetch):
     """
     try:
         return fetch()
-    except ValueError as e:
-        # Only not_in_channel is recoverable by joining; re-raise anything else.
-        if "not_in_channel" not in str(e):
+    except SlackAPIError as e:
+        # Only not_in_channel is recoverable by joining; match the error code
+        # structurally (not substring) so transport errors / other API errors
+        # don't accidentally trigger a join+retry. Re-raise everything else.
+        if getattr(e, "error", None) != "not_in_channel":
             raise
         joined = client.join_channel(channel_id)  # None ⇒ private / can't join
         if not joined:
@@ -279,9 +285,13 @@ def get_thread_replies(
             "count": len(formatted),
         })
 
-    except ValueError as e:
-        if "not_in_channel" in str(e):
+    except SlackAPIError as e:
+        # Private channel Aurora hasn't been invited to (join couldn't recover it).
+        if getattr(e, "error", None) == "not_in_channel":
             return json.dumps({"error": f"Channel {channel_id} is private and the bot hasn't been invited. Invite the bot to read it."})
+        return json.dumps({"error": f"Slack API error: {e}"})
+    except ValueError as e:
+        # Transport failure (SlackAPIError's non-membership sibling).
         return json.dumps({"error": f"Slack API error: {e}"})
     except Exception as e:
         logger.info("[SlackTool] Failed to get thread replies for %s/%s", channel_id, thread_ts)
