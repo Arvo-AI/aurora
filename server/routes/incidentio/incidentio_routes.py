@@ -397,6 +397,9 @@ def get_webhook_url(user_id):
             "5. Save the endpoint, then copy the signing secret from the endpoint settings",
             "6. Paste the signing secret (starts with whsec_) into the field above",
             "Note: Aurora can run RCA on alert events too — configure alert RCA and severity filtering below.",
+            "Tip: To filter alerts by priority, your incident.io API key also needs the "
+            "\u201cView data\u201d permission (so Aurora can read your org's alert priorities). "
+            "Without it, priority filtering is disabled but RCA still runs on all alerts.",
         ],
     })
 
