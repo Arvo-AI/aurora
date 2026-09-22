@@ -15,8 +15,6 @@ import sys
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 def _install_import_stubs() -> None:
     """Stub the heavy modules ``tasks.py`` imports at module load time."""
