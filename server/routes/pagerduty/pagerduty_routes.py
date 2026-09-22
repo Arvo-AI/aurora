@@ -13,15 +13,60 @@ from flask import Blueprint, jsonify, request, redirect
 from utils.flags.feature_flags import is_pagerduty_oauth_enabled
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.enforcer import enforce_with_reload
+from utils.auth.stateless_auth import (
+    get_org_id_from_request,
+    get_org_id_for_user,
+    get_org_preference,
+    store_org_preference,
+)
 from utils.log_sanitizer import sanitize
 from routes.pagerduty.oauth_utils import get_auth_url, exchange_code_for_token, refresh_token_if_needed
-from routes.pagerduty.pagerduty_helpers import PagerDutyClient, PagerDutyAPIError, validate_token, error_response
+from routes.pagerduty.pagerduty_helpers import (
+    PD_READ_ONLY_ROLES,
+    PagerDutyClient,
+    PagerDutyAPIError,
+    validate_token,
+    error_response,
+)
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
 pagerduty_bp = Blueprint("pagerduty", __name__)
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
+NOTES_PREFERENCE_KEY = "pagerduty_incident_notes"
+
+
+def _capabilities(creds: dict) -> dict:
+    """Stored capabilities, defaulted for credentials saved before write detection existed."""
+    return {"can_read_incidents": True, "can_write_incidents": False, **(creds.get("capabilities") or {})}
+
+
+def _status_payload(creds: dict) -> dict:
+    """The connection status the client stores as PagerDutyStatus (status, connect and rotate)."""
+    return {
+        "connected": True,
+        "displayName": creds.get("display_name", "PagerDuty"),
+        "validatedAt": creds.get("validated_at"),
+        "authType": creds.get("auth_type", "api_token"),
+        "capabilities": _capabilities(creds),
+        "externalUserEmail": creds.get("external_user_email"),
+        "externalUserName": creds.get("external_user_name"),
+        "externalUserRole": creds.get("external_user_role"),
+        "accountSubdomain": creds.get("account_subdomain"),
+    }
+
+
+def _disable_notes_if_unwritable(org_id, capabilities: dict) -> bool:
+    """Turn the org's notes toggle off when the active credentials cannot post notes."""
+    if not org_id or capabilities.get("can_write_incidents") is True:
+        return False
+    if not get_org_preference(org_id, NOTES_PREFERENCE_KEY, default=False):
+        return False
+    store_org_preference(org_id, NOTES_PREFERENCE_KEY, False)
+    logger.info("[PAGERDUTY] Disabled incident notes for org: credentials cannot write incidents")
+    return True
 
 
 def _validate_v3_webhook(payload: dict) -> tuple[bool, str]:
@@ -73,7 +118,7 @@ def pagerduty_status(user_id):
                 except Exception:
                     logger.exception("[PAGERDUTY] Failed to persist refreshed OAuth token")
 
-    return jsonify({"connected": True, "displayName": creds.get("display_name", "PagerDuty"), "validatedAt": creds.get("validated_at"), "authType": creds.get("auth_type", "api_token"), "capabilities": creds.get("capabilities", {}), "externalUserEmail": creds.get("external_user_email"), "externalUserName": creds.get("external_user_name"), "accountSubdomain": creds.get("account_subdomain")})
+    return jsonify(_status_payload(creds))
 
 
 @pagerduty_bp.route("", methods=["POST", "PATCH"])
@@ -119,7 +164,15 @@ def pagerduty_connect(user_id):
         logger.exception("[PAGERDUTY] Failed to store token data for user %s", user_id)
         return jsonify({"error": "Storage failed"}), 500
 
-    return jsonify({"success": True, "connected": True, "displayName": display_name, **token_info})
+    # A key rotated to one that cannot post notes must not leave the toggle on
+    notes_disabled = False
+    try:
+        org_id = get_org_id_from_request() or get_org_id_for_user(user_id)
+        notes_disabled = _disable_notes_if_unwritable(org_id, token_info["capabilities"])
+    except Exception:
+        logger.exception("[PAGERDUTY] Failed to reconcile incident-notes preference")
+
+    return jsonify({"success": True, "notesDisabled": notes_disabled, **_status_payload(token_data)})
 
 
 @pagerduty_bp.route("", methods=["DELETE"])
@@ -180,8 +233,10 @@ def oauth_callback():
         from time import time
         expires_at = int(time()) + token_data.get("expires_in", 3600)
         
+        # PagerDuty silently drops unregistered scopes, so keep what was actually granted
+        granted_scopes = token_data.get("scope", "")
         try:
-            token_info = validate_token(PagerDutyClient(oauth_token=access_token))
+            token_info = validate_token(PagerDutyClient(oauth_token=access_token), granted_scopes=granted_scopes)
         except PagerDutyAPIError:
             return redirect(f"{callback_url}?oauth=failed&error=validation_failed")
         
@@ -192,13 +247,109 @@ def oauth_callback():
             "refresh_token": token_data.get("refresh_token"),
             "expires_at": expires_at,
             "display_name": "PagerDuty",
+            "granted_scopes": granted_scopes,
             **token_info
         }
         
         store_tokens_in_db(user_id, oauth_token_data, "pagerduty")
+        # A reconnect without incidents.write must not leave the toggle on
+        try:
+            _disable_notes_if_unwritable(get_org_id_for_user(user_id), token_info["capabilities"])
+        except Exception:
+            logger.exception("[PAGERDUTY] Failed to reconcile incident-notes preference after OAuth")
         return redirect(f"{callback_url}?oauth=success")
     except Exception:
         return redirect(f"{callback_url}?oauth=failed&error=unexpected")
+
+
+@pagerduty_bp.route("/notes/enable", methods=["POST"])
+@require_permission("connectors", "write")
+def enable_incident_notes(user_id):
+    """Turn on RCA notes for the org after re-proving the credentials can write incidents.
+
+    This is the only way to set the pagerduty_incident_notes preference to
+    true; the generic preference endpoints reject it. Disabling goes through
+    the generic endpoints.
+    """
+    org_id = get_org_id_from_request() or get_org_id_for_user(user_id)
+    if not org_id:
+        return jsonify({"error": "Could not resolve organization"}), 400
+    if not enforce_with_reload(user_id, org_id, "notification_settings", "write"):
+        return jsonify({"error": "Forbidden - editor or admin role required"}), 403
+
+    creds = get_token_data(user_id, "pagerduty")
+    if not creds:
+        return jsonify({"error": "PagerDuty is not connected. Connect PagerDuty first.", "code": "not_connected"}), 404
+
+    if creds.get("auth_type") == "oauth":
+        if not is_pagerduty_oauth_enabled():
+            return jsonify({"error": "PagerDuty OAuth is not enabled", "code": "oauth_disabled"}), 403
+        success, refreshed = refresh_token_if_needed(creds)
+        if not success:
+            return jsonify({"error": "OAuth token expired, please reconnect", "code": "token_expired"}), 401
+        if refreshed:
+            # Persist before validating: PagerDuty may have rotated the refresh token
+            creds = {**creds, **refreshed}
+            try:
+                store_tokens_in_db(user_id, creds, "pagerduty")
+            except Exception:
+                logger.exception("[PAGERDUTY] Failed to persist refreshed OAuth token")
+        client = PagerDutyClient(oauth_token=creds.get("access_token"))
+    else:
+        client = PagerDutyClient(api_token=creds.get("api_token"))
+
+    try:
+        token_info = validate_token(client, granted_scopes=creds.get("granted_scopes", ""))
+    except PagerDutyAPIError as e:
+        logger.warning("[PAGERDUTY] Re-validation for notes failed for user %s: %s", user_id, e)
+        return error_response(e)
+
+    creds = {**creds, **token_info}
+    try:
+        store_tokens_in_db(user_id, creds, "pagerduty")
+    except Exception:
+        logger.exception("[PAGERDUTY] Failed to store re-validated token data for user %s", user_id)
+        return jsonify({"error": "Storage failed"}), 500
+
+    capabilities = token_info["capabilities"]
+    if capabilities.get("can_write_incidents") is not True:
+        access = capabilities.get("api_key_access")
+        role = creds.get("external_user_role")
+        if access == "account":
+            message, code = (
+                "This is an account-level API key. PagerDuty notes need a user API token "
+                "from a user with write access.",
+                "account_level_key",
+            )
+        elif access == "oauth" and "incidents.write" not in (creds.get("granted_scopes") or "").split():
+            message, code = (
+                "This PagerDuty connection was authorized without incident write access. "
+                "Disconnect and reconnect PagerDuty to grant it.",
+                "oauth_scope_missing",
+            )
+        elif role in PD_READ_ONLY_ROLES:
+            message, code = (
+                f"The PagerDuty user behind this token has the {role} role, which cannot add notes. "
+                "Use a token from a user with write access.",
+                "read_only_role",
+            )
+        else:
+            message, code = (
+                "This PagerDuty token cannot post notes. Use a user API token from a user with write access.",
+                "read_only_key",
+            )
+        # The toggle may still be on from a previous, writable credential
+        _disable_notes_if_unwritable(org_id, capabilities)
+        return jsonify({"error": message, "code": code}), 403
+
+    store_org_preference(org_id, NOTES_PREFERENCE_KEY, True)
+    # store_org_preference swallows DB errors; confirm the write landed
+    if get_org_preference(org_id, NOTES_PREFERENCE_KEY, default=False) is not True:
+        logger.error("[PAGERDUTY] Incident-notes preference did not persist for org")
+        return jsonify({"error": "Failed to save preference"}), 500
+
+    logger.info("[PAGERDUTY] Incident notes enabled for org by user %s", user_id)
+    return jsonify({"enabled": True})
 
 
 @pagerduty_bp.route("/webhook-url", methods=["GET"])
@@ -271,7 +422,9 @@ def webhook(user_id: str):
         logger.debug("[PAGERDUTY] Ignoring non-incident event: %s", resource_type)
         return jsonify({"received": True, "reason": "non-incident event"})
     
-    # Filter for specific incident event types (including custom field updates)
+    # Filter for specific incident event types (including custom field updates).
+    # Never add incident.annotated here: Aurora posts RCA notes back to PagerDuty
+    # incidents, and reacting to note events would loop.
     if event_type not in ["incident.triggered", "incident.acknowledged", "incident.resolved", "incident.custom_field_values.updated"]:
         logger.debug("[PAGERDUTY] Ignoring incident event type: %s", event_type)
         return jsonify({"received": True, "reason": "event type not monitored"})

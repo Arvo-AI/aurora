@@ -12,8 +12,11 @@ logger = logging.getLogger(__name__)
 
 PAGERDUTY_AUTH_URL = "https://app.pagerduty.com/oauth/authorize"
 PAGERDUTY_TOKEN_URL = "https://app.pagerduty.com/oauth/token"
-# Aurora reads incidents and services; it does not create, acknowledge, or resolve incidents.
-DEFAULT_SCOPES = "openid users.read incidents.read services.read"
+# Aurora reads incidents and services and writes incident notes (RCA results);
+# it does not create, acknowledge, or resolve incidents. incidents.write must be
+# registered on the PagerDuty OAuth app: an unregistered scope is silently
+# dropped and PagerDuty issues an openid-only token.
+DEFAULT_SCOPES = "openid users.read incidents.read incidents.write services.read"
 
 # Only load OAuth credentials if feature flag is enabled
 if is_pagerduty_oauth_enabled():
@@ -101,9 +104,13 @@ def refresh_token_if_needed(token_data: Dict) -> Tuple[bool, Optional[Dict]]:
     if not new_tokens:
         return False, None
     
-    return True, {
+    refreshed = {
         "access_token": new_tokens["access_token"],
         "expires_at": int(time()) + new_tokens.get("expires_in", 3600),
         "refresh_token": new_tokens.get("refresh_token", refresh_token),
     }
+    # PagerDuty echoes the granted scopes on refresh; keep the stored copy truthful
+    if new_tokens.get("scope"):
+        refreshed["granted_scopes"] = new_tokens["scope"]
+    return True, refreshed
 

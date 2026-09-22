@@ -26,7 +26,14 @@ ORG_SCOPED_PREFERENCE_KEYS = frozenset({
     'slack_action_start_notifications',
     'slack_action_complete_notifications',
     'google_chat_investigation_notifications',
+    'pagerduty_incident_notes',
 })
+
+# Enabling grants Aurora write access to the org's paging system, so it must go
+# through POST /pagerduty/notes/enable (live capability check); disabling is free.
+ENABLE_VIA_DEDICATED_ENDPOINT = {
+    'pagerduty_incident_notes': "Use POST /pagerduty/notes/enable to enable PagerDuty notes",
+}
 
 EDITOR_ONLY_PREFERENCE_KEYS = ORG_SCOPED_PREFERENCE_KEYS
 
@@ -64,6 +71,9 @@ def set_user_preferences(user_id):
     if not key:
         logger.warning(f"Missing preference key for user {user_id}")
         return jsonify({"error": "Missing preference key"}), 400
+
+    if key in ENABLE_VIA_DEDICATED_ENDPOINT and value:
+        return jsonify({"error": ENABLE_VIA_DEDICATED_ENDPOINT[key]}), 400
 
     if key in ORG_SCOPED_PREFERENCE_KEYS:
         org_id = get_org_id_from_request() or get_org_id_for_user(user_id)
@@ -199,6 +209,10 @@ def set_batch_preferences(user_id):
 
     if not isinstance(preferences, dict):
         return jsonify({"error": "preferences must be a dictionary"}), 400
+
+    for key, value in preferences.items():
+        if key in ENABLE_VIA_DEDICATED_ENDPOINT and value:
+            return jsonify({"error": ENABLE_VIA_DEDICATED_ENDPOINT[key]}), 400
 
     protected_keys = set(preferences.keys()) & EDITOR_ONLY_PREFERENCE_KEYS
     if protected_keys:
