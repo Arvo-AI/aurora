@@ -313,6 +313,10 @@ services:
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
       NGROK_URL: ${NGROK_URL}
 
+      # PagerDuty OAuth (refreshing an OAuth token before posting an RCA note)
+      PAGERDUTY_CLIENT_ID: ${PAGERDUTY_CLIENT_ID}
+      PAGERDUTY_CLIENT_SECRET: ${PAGERDUTY_CLIENT_SECRET}
+
       # Cloud Provider Cache Settings (applies to all providers)
       AURORA_SETUP_CACHE_ENABLED: ${AURORA_SETUP_CACHE_ENABLED}
       AURORA_SETUP_CACHE_TTL: ${AURORA_SETUP_CACHE_TTL}
