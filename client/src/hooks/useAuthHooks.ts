@@ -23,6 +23,7 @@ export function useUser() {
     orgId: session.user.orgId || null,
     orgName: session.user.orgName || null,
     isGithubProvisioned: session.user.isGithubProvisioned || false,
+    mustChangePassword: session.user.mustChangePassword || false,
   } : null;
 
   return {

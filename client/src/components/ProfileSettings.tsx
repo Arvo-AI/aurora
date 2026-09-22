@@ -67,14 +67,14 @@ export function ProfileSettings() {
     return <div className="text-muted-foreground">Not signed in</div>
   }
 
-  const isGithub = user.isGithubProvisioned
+  const needsPasswordSet = user.isGithubProvisioned && user.mustChangePassword
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
     setSuccess("")
 
-    if (!isGithub && !currentPassword) {
+    if (!needsPasswordSet && !currentPassword) {
       setError("Current password is required")
       return
     }
@@ -207,15 +207,15 @@ export function ProfileSettings() {
 
       {/* Password Change Section */}
       <div className="border-t pt-6">
-        <h3 className="text-lg font-semibold mb-4">{isGithub ? "Set Password" : "Change Password"}</h3>
+        <h3 className="text-lg font-semibold mb-4">{needsPasswordSet ? "Set Password" : "Change Password"}</h3>
 
         {!isChangingPassword ? (
           <Button onClick={() => setIsChangingPassword(true)} variant="outline">
-            {isGithub ? "Set Password" : "Change Password"}
+            {needsPasswordSet ? "Set Password" : "Change Password"}
           </Button>
         ) : (
           <form onSubmit={handlePasswordChange} className="space-y-4">
-            {!isGithub && (
+            {!needsPasswordSet && (
               <div>
                 <Label htmlFor="current-password">Current Password</Label>
                 <Input

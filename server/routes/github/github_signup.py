@@ -528,9 +528,10 @@ def _provision_and_handoff(identity: dict, install_data: dict):
                     unusable = bcrypt.hashpw(os.urandom(32), bcrypt.gensalt())
                     cur.execute(
                         """INSERT INTO users (email, password_hash, name, role,
-                                              email_verified, github_user_id,
+                                              email_verified, must_change_password,
+                                              github_user_id,
                                               github_login, created_at)
-                           VALUES (%s, %s, %s, 'admin', TRUE, %s, %s, NOW())
+                           VALUES (%s, %s, %s, 'admin', TRUE, TRUE, %s, %s, NOW())
                            RETURNING id""",
                         (
                             identity["email"],

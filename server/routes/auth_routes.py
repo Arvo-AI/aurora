@@ -540,8 +540,9 @@ def change_password(user_id):
 
                 # GitHub-provisioned users have an unusable password (hash of
                 # random bytes). Allow them to set their first password without
-                # providing the current one. Non-GitHub users must always prove
-                # they know the current password.
+                # providing the current one — but only while must_change_password
+                # is still TRUE. Once they've set a real password the normal
+                # current-password check applies.
                 if current_password:
                     if not bcrypt.checkpw(current_password.encode('utf-8'), password_hash.encode('utf-8')):
                         record_audit_event(
@@ -549,7 +550,7 @@ def change_password(user_id):
                             "user", user_id, {"reason": "wrong_current_password"}, request,
                         )
                         return jsonify({"error": "Current password is incorrect"}), 401
-                elif not github_user_id:
+                elif not (github_user_id and was_must_change):
                     return jsonify({"error": "Current password is required"}), 400
                 
                 # Hash and update new password
