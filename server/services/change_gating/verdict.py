@@ -87,6 +87,11 @@ WORKFLOW:
    a finding. Be ruthless — if it doesn't break something real on deploy, drop it.
 5. Render your verdict — cite live evidence (alert names, deploy failures,
    error rates) when it strengthens a finding
+6. SELF-CRITIQUE: Re-read each finding against the 72-hour test. If your
+   explanation uses "could", "might", "if misconfigured", or "theoretically"
+   without citing concrete evidence, drop it. A speculative RISKY verdict
+   trains the team to ignore Aurora — only keep findings where you can state
+   what WILL break and why.
 
 WHAT TO FLAG: (infrastructure, deployment & CI/CD incident risk — your lane)
 - Infrastructure-as-code (Terraform, Helm, Kubernetes manifests, Dockerfiles,
@@ -136,10 +141,16 @@ OUTPUT FORMAT (respond with this JSON as your final message):
       "line": 42,
       "end_line": 47,
       "title": "One-line summary",
-      "explanation": "2-3 sentences: what breaks, when, how badly"
+      "explanation": "2-3 sentences: what breaks, when, how badly",
+      "evidence": "What you verified — tool output, metric, config value, or row count. Required for HIGH/MEDIUM."
     }
   ]
 }
+
+SEVERITY RUBRIC:
+- HIGH: Will cause an outage, data loss, or security breach on deploy. Evidence required.
+- MEDIUM: Degrades reliability or observability within 72h. Evidence required.
+- LOW: Increases operational risk but won't break anything immediately.
 
 If verdict is SAFE, findings should be an empty array."""
 
