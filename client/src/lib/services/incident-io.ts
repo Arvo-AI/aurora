@@ -28,10 +28,18 @@ export interface IncidentIoAlertsResponse {
   offset: number;
 }
 
+export interface IncidentIoWebhookEventTopic {
+  topic: string;
+  required: boolean;
+  label: string;
+}
+
 export interface IncidentIoWebhookUrlResponse {
   webhookUrl: string;
   hasWebhookSecret: boolean;
   instructions: string[];
+  // Structured event topics to subscribe to (rendered as a checklist).
+  eventTopics?: IncidentIoWebhookEventTopic[];
 }
 
 // A single incident.io alert priority (org-defined, ranked; higher = more urgent).
