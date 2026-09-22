@@ -357,12 +357,19 @@ export default function SlackManagePage() {
   };
 
   const persistPreference = async (key: PreferenceKey, enabled: boolean): Promise<boolean> => {
-    const response = await fetch("/api/proxy/user-preferences", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key, value: enabled }),
-    });
-    return response.ok;
+    try {
+      const response = await fetch("/api/proxy/user-preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, value: enabled }),
+      });
+      return response.ok;
+    } catch {
+      // Network/transport failure — treat as a failed write so the caller can
+      // roll back this key specifically (rather than throwing and losing the
+      // per-key success info from the other concurrent write).
+      return false;
+    }
   };
 
   const handleGroupModeChange = async (
@@ -378,13 +385,23 @@ export default function SlackManagePage() {
     setSavingPrefs((prev) => ({ ...prev, [group.id]: true }));
 
     try {
+      // One dropdown maps to two prefs (start + end), so this is two writes.
       const [okStart, okEnd] = await Promise.all([
         persistPreference(group.startKey, start),
         persistPreference(group.endKey, end),
       ]);
-      if (!okStart || !okEnd) throw new Error("Failed to save preference");
+      if (!okStart || !okEnd) {
+        // Partial success: only roll back the key(s) whose write actually
+        // failed — the succeeded one is already persisted on the backend, so
+        // reverting it in the UI would desync the two.
+        setPreferences((prev) => ({
+          ...prev,
+          ...(okStart ? {} : { [group.startKey]: prevStart }),
+          ...(okEnd ? {} : { [group.endKey]: prevEnd }),
+        }));
+        throw new Error("Failed to save preference");
+      }
     } catch {
-      setPreferences((prev) => ({ ...prev, [group.startKey]: prevStart, [group.endKey]: prevEnd }));
       toast({
         title: "Error",
         description: "Failed to save notification preference",
