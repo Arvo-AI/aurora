@@ -389,17 +389,21 @@ def get_webhook_url(user_id):
             "1. Go to incident.io → Settings → Webhooks",
             "2. Click 'Add endpoint'",
             "3. Paste the webhook URL above",
-            "4. Subscribe to these event types (each is a separate subscription):\n"
-            "    • public_incident.incident_created_v2  (required)\n"
-            "    • public_alert.alert_created_v1  (required)\n"
-            "    • private_incident.incident_created_v2  (only if you use private incidents)\n"
-            "    • private_alert.alert_created_v1  (only if you use private alerts)",
+            "\n".join([
+                "4. Subscribe to these event types (each is a separate subscription):",
+                "    • public_incident.incident_created_v2  (required)",
+                "    • public_alert.alert_created_v1  (required)",
+                "    • private_incident.incident_created_v2  (only if you use private incidents)",
+                "    • private_alert.alert_created_v1  (only if you use private alerts)",
+            ]),
             "5. Save the endpoint, then copy the signing secret from the endpoint settings",
             "6. Paste the signing secret (starts with whsec_) into the field above",
             "Note: Aurora can run RCA on alert events too — configure alert RCA and severity filtering below.",
-            "Tip: To filter alerts by priority, your incident.io API key also needs the "
-            "\u201cView data\u201d permission (so Aurora can read your org's alert priorities). "
-            "Without it, priority filtering is disabled but RCA still runs on all alerts.",
+            (
+                "Tip: To filter alerts by priority, your incident.io API key also needs the "
+                "\u201cView data\u201d permission (so Aurora can read your org's alert priorities). "
+                "Without it, priority filtering is disabled but RCA still runs on all alerts."
+            ),
         ],
     })
 
