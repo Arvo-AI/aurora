@@ -11,7 +11,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from utils.notifications import dispatcher, slack_notification_service, slack_threading
+from utils.notifications import (
+    dispatcher,
+    pagerduty_notification_service,
+    slack_notification_service,
+    slack_threading,
+)
 
 from .slack_fakes import FakePool, FakeSlackClient, folded_incident, standalone_incident
 
@@ -39,7 +44,7 @@ def fake_pool():
 @pytest.fixture
 def patched_db(fake_pool, monkeypatch):
     """Route every incidents write in the notification modules to fake_pool."""
-    for module in (slack_notification_service, slack_threading, dispatcher):
+    for module in (slack_notification_service, slack_threading, dispatcher, pagerduty_notification_service):
         monkeypatch.setattr(module, "db_pool", fake_pool.pool)
         monkeypatch.setattr(module, "set_rls_context", lambda *a, **k: "org-1")
     return fake_pool

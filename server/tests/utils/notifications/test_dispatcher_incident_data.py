@@ -24,6 +24,7 @@ def _row(incident_id, *, recurrence_of=None, anchor_ts=None, anchor_title=None, 
         uuid.UUID(incident_id), "u1", "datadog", "investigating", "critical", "High CPU",
         "api", "completed", "summary text", _T0, _T0, _T0, "1700000000.000100", None,
         uuid.UUID(recurrence_of) if recurrence_of else None, anchor_ts, anchor_title, n, size, last_fired,
+        {"incidentId": "PABC123"}, None,
     )
 
 
@@ -62,6 +63,8 @@ def test_standalone_row_keeps_existing_keys(patched_db):
     assert data['incident_id'] == A
     assert data['slack_message_ts'] == "1700000000.000100"
     assert data['service'] == "api"
+    assert data['alert_metadata'] == {"incidentId": "PABC123"}
+    assert data['pagerduty_note_id'] is None
 
 
 def test_no_row_returns_none(patched_db, caplog):

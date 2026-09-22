@@ -1,5 +1,6 @@
 """dispatcher.notify_investigation_completed(refresh_only=True): a follow-up
-re-summary refreshes the Google Chat card in place and announces nothing."""
+re-summary refreshes the Google Chat card in place and announces nothing
+(no email, no Slack post, no PagerDuty note)."""
 
 import sys
 import types
@@ -12,7 +13,10 @@ from utils.notifications import dispatcher, slack_notification_service as svc
 
 @pytest.fixture
 def wired(monkeypatch):
-    calls = {"slack": MagicMock(return_value=True), "gchat": MagicMock(return_value=True), "email": MagicMock()}
+    calls = {
+        "slack": MagicMock(return_value=True), "gchat": MagicMock(return_value=True),
+        "email": MagicMock(), "pd": MagicMock(return_value=True),
+    }
     monkeypatch.setattr(dispatcher, "get_org_id_for_user", lambda user_id: "org-1")
     monkeypatch.setattr(dispatcher, "get_org_preference", lambda org_id, key, default=None: True)
     monkeypatch.setattr(dispatcher, "_has_slack_connected", lambda user_id: True)
@@ -23,6 +27,9 @@ def wired(monkeypatch):
     gchat = types.ModuleType("utils.notifications.google_chat_notification_service")
     gchat.send_google_chat_investigation_completed_notification = calls["gchat"]
     monkeypatch.setitem(sys.modules, "utils.notifications.google_chat_notification_service", gchat)
+    pd = types.ModuleType("utils.notifications.pagerduty_notification_service")
+    pd.send_pagerduty_incident_note = calls["pd"]
+    monkeypatch.setitem(sys.modules, "utils.notifications.pagerduty_notification_service", pd)
     return calls
 
 
@@ -38,6 +45,7 @@ def test_first_completion_announces_everywhere(wired, monkeypatch):
     wired["email"].assert_called_once()
     wired["slack"].assert_called_once()
     wired["gchat"].assert_called_once_with("u1", _incident(), allow_new_message=True)
+    wired["pd"].assert_called_once_with("u1", _incident())
 
 
 def test_refresh_only_edits_the_google_chat_card_and_posts_nothing(wired, monkeypatch):
@@ -46,6 +54,18 @@ def test_refresh_only_edits_the_google_chat_card_and_posts_nothing(wired, monkey
     wired["email"].assert_not_called()
     wired["slack"].assert_not_called()
     wired["gchat"].assert_called_once_with("u1", _incident(), allow_new_message=False)
+    wired["pd"].assert_not_called()
+
+
+def test_pagerduty_note_needs_the_org_opt_in(wired, monkeypatch):
+    monkeypatch.setattr(dispatcher, "_get_incident_data", lambda incident_id, user_id: _incident())
+    monkeypatch.setattr(
+        dispatcher, "get_org_preference",
+        lambda org_id, key, default=None: default if key == "pagerduty_incident_notes" else True,
+    )
+    dispatcher.notify_investigation_completed("u1", "i1", session_id="s1")
+    wired["slack"].assert_called_once()
+    wired["pd"].assert_not_called()
 
 
 def test_refresh_only_without_a_card_skips_google_chat(wired, monkeypatch):
