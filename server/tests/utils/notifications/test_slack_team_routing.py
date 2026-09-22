@@ -91,8 +91,31 @@ def test_standalone_has_no_recurrence_block():
 def test_incident_index_injected_when_present():
     result, run_mock = _run(standalone_incident(), index="- [INC 1 | d | api | resolved] disk full")
     prompt = run_mock.delay.call_args.kwargs["initial_message"]
-    assert "Incident Index" in prompt
+    assert "INCIDENT_INDEX" in prompt
     assert "disk full" in prompt
+
+
+def test_untrusted_fields_are_delimited():
+    # Every externally-derived value must sit inside <<...>> data fences so
+    # injected text can't be read as instructions.
+    result, run_mock = _run(folded_incident(alert_title="High CPU", service="api"))
+    prompt = run_mock.delay.call_args.kwargs["initial_message"]
+    for fence in ("<<INCIDENT_TITLE>>", "<<SERVICE>>", "<<SEVERITY>>",
+                  "<<CONCLUSION>>", "<<ANCHOR_TITLE>>"):
+        assert fence in prompt
+
+
+def test_rail_text_covers_all_interpolated_fields():
+    result, run_mock = _run(
+        folded_incident(alert_title="High CPU", aurora_summary="Root cause: disk full.",
+                        service="payments", severity="sev1", anchor_alert_title="Orig CPU"),
+    )
+    rail = run_mock.delay.call_args.kwargs["rail_text"]
+    # Every untrusted value interpolated into the prompt is present in rail_text.
+    for field in ("High CPU", "disk full", "payments", "sev1", "Orig CPU"):
+        assert field in rail
+    # Recurrence counts (occurrence 2 of 3) are covered too.
+    assert "2" in rail and "3" in rail
 
 
 def test_rail_text_is_incident_fields_only():

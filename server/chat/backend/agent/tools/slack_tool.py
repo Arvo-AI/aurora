@@ -171,19 +171,26 @@ def get_channel_history(
 
     limit = max(1, min(limit, 200))
 
-    try:
-        params = {
-            "channel": channel_id,
-            "limit": limit,
-        }
-        oldest_ts = _iso_to_slack_ts(oldest)
-        latest_ts = _iso_to_slack_ts(latest)
-        if oldest_ts:
-            params["oldest"] = oldest_ts
-        if latest_ts:
-            params["latest"] = latest_ts
+    params = {
+        "channel": channel_id,
+        "limit": limit,
+    }
+    oldest_ts = _iso_to_slack_ts(oldest)
+    latest_ts = _iso_to_slack_ts(latest)
+    if oldest_ts:
+        params["oldest"] = oldest_ts
+    if latest_ts:
+        params["latest"] = latest_ts
 
-        result = client._make_request("GET", "conversations.history", params)
+    def _fetch():
+        return client._make_request("GET", "conversations.history", params)
+
+    try:
+        # Public channels can be read without an invite: on not_in_channel we
+        # join (conversations.join works for PUBLIC channels only) and retry, so
+        # Aurora can read any public channel it can see — matching how a human
+        # teammate would just open it. Private channels still require an invite.
+        result = _read_with_public_join_retry(client, channel_id, _fetch)
         messages = result.get("messages", [])
 
         formatted = [_format_message(m) for m in messages]
@@ -197,11 +204,34 @@ def get_channel_history(
 
     except ValueError as e:
         if "not_in_channel" in str(e):
-            return json.dumps({"error": f"Bot is not a member of channel {channel_id}. The bot must be invited to the channel first."})
+            return json.dumps({"error": f"Channel {channel_id} is private and the bot hasn't been invited. Invite the bot to read it."})
         return json.dumps({"error": f"Slack API error: {e}"})
     except Exception as e:
         logger.info("[SlackTool] Failed to get channel history for %s", channel_id)
         return json.dumps({"error": f"Failed to fetch channel history: {e}"})
+
+
+def _read_with_public_join_retry(client, channel_id: str, fetch):
+    """Run ``fetch`` (a read call); on not_in_channel, join the PUBLIC channel
+    once and retry.
+
+    Slack's conversations.history/replies require membership. For public
+    channels a bot can self-join via conversations.join (no human invite needed),
+    so Aurora can read any public channel it can see. join_channel returns None
+    for private channels (join isn't supported), so the original not_in_channel
+    error propagates and the caller reports the "invite required" message.
+    """
+    try:
+        return fetch()
+    except ValueError as e:
+        # Only not_in_channel is recoverable by joining; re-raise anything else.
+        if "not_in_channel" not in str(e):
+            raise
+        joined = client.join_channel(channel_id)  # None ⇒ private / can't join
+        if not joined:
+            raise
+        logger.info("[SlackTool] Joined public channel %s to read it", channel_id)
+        return fetch()
 
 
 def get_thread_replies(
@@ -224,14 +254,19 @@ def get_thread_replies(
 
     limit = max(1, min(limit, 200))
 
-    try:
-        params = {
-            "channel": channel_id,
-            "ts": thread_ts,
-            "limit": limit,
-        }
+    params = {
+        "channel": channel_id,
+        "ts": thread_ts,
+        "limit": limit,
+    }
 
-        result = client._make_request("GET", "conversations.replies", params)
+    def _fetch():
+        return client._make_request("GET", "conversations.replies", params)
+
+    try:
+        # Same public-channel self-join as get_channel_history — read any public
+        # thread even if Aurora hasn't been invited.
+        result = _read_with_public_join_retry(client, channel_id, _fetch)
         messages = result.get("messages", [])
 
         formatted = [_format_message(m) for m in messages]
@@ -245,6 +280,8 @@ def get_thread_replies(
         })
 
     except ValueError as e:
+        if "not_in_channel" in str(e):
+            return json.dumps({"error": f"Channel {channel_id} is private and the bot hasn't been invited. Invite the bot to read it."})
         return json.dumps({"error": f"Slack API error: {e}"})
     except Exception as e:
         logger.info("[SlackTool] Failed to get thread replies for %s/%s", channel_id, thread_ts)
