@@ -145,7 +145,61 @@ class TestExtractAlertFields:
 
         assert fields["severity"] == "Urgent"
 
-    def test_private_alert_event_parsed_like_public(self):
+    def test_alert_service_and_environment_from_attributes(self):
+        # Service/environment are read generically from the alert's attributes,
+        # not by one org's exact label names, and surfaced on the fields.
+        payload = {
+            "event_type": "public_alert.alert_created_v1",
+            "event": {
+                "alert": {
+                    "id": "alert_svc_1",
+                    "title": "Attr service alert",
+                    "attributes": [
+                        {
+                            "value": {"label": "Urgent"},
+                            "attribute": {"name": "Priority", "type": "AlertPriority"},
+                        },
+                        {
+                            "value": {"label": "checkout-api"},
+                            "attribute": {"name": "Labels.service", "type": "String"},
+                        },
+                        {
+                            "value": {"label": "production"},
+                            "attribute": {"name": "Environment", "type": "String"},
+                        },
+                    ],
+                }
+            },
+        }
+        fields = tasks._extract_incident_fields(payload)
+
+        # incident_type carries the resolved service (feeds _extract_service).
+        assert fields["incident_type"] == "checkout-api"
+        assert fields["environment"] == "production"
+        assert fields["priority"] == "Urgent"
+        assert fields["alert_attributes"]["labels.service"] == "checkout-api"
+        assert tasks._extract_service(fields) == "checkout-api"
+
+    def test_alert_multiselect_attribute_joined(self):
+        # Multi-select attribute values (a list) are joined into one string.
+        payload = {
+            "event_type": "public_alert.alert_created_v1",
+            "event": {
+                "alert": {
+                    "id": "alert_multi_1",
+                    "title": "Multi team alert",
+                    "attributes": [
+                        {
+                            "value": [{"label": "payments"}, {"label": "sre"}],
+                            "attribute": {"name": "Team", "type": "String"},
+                        }
+                    ],
+                }
+            },
+        }
+        fields = tasks._extract_incident_fields(payload)
+
+        assert fields["alert_attributes"]["team"] == "payments, sre"
         payload = {
             "event_type": "private_alert.alert_created_v1",
             "event": {
@@ -319,6 +373,57 @@ class TestNormalizeViaOrgRank:
     def test_single_severity_defaults_high(self):
         # No gradient possible — don't accidentally classify as low noise.
         assert tasks._normalize_via_org_rank("OnlyOne", {"onlyone": 1}) == "high"
+
+
+class TestNormalizeAlertSeverity:
+    # Minor(1) < Degraded(2) < Major(3) < Critical(4)
+    _RANKS = {"minor": 1, "degraded": 2, "major": 3, "critical": 4}
+
+    def test_incident_uses_fixed_mapping(self):
+        # Incident events carry standard names — no catalog lookup needed.
+        assert tasks._normalize_alert_severity("u1", "high", is_alert=False) == "high"
+        assert tasks._normalize_alert_severity("u1", "Bogus", is_alert=False) == "unknown"
+
+    def test_alert_standard_name_maps_directly(self):
+        # An alert priority that happens to use a standard name still maps.
+        assert tasks._normalize_alert_severity("u1", "critical", is_alert=True) == "critical"
+
+    def test_alert_priority_name_ranked_against_catalog(self):
+        # "Urgent" isn't a fixed bucket; rank it via the org catalog.
+        ranks = {"urgent": 4, "in-hours": 1}
+        with patch.object(tasks, "_get_org_severity_ranks", return_value=ranks):
+            # Urgent is top of range -> critical (not flattened to "unknown").
+            assert tasks._normalize_alert_severity("u1", "Urgent", is_alert=True) == "critical"
+            assert tasks._normalize_alert_severity("u1", "In-hours", is_alert=True) == "low"
+
+    def test_alert_priority_unresolvable_stays_unknown(self):
+        # Not in the catalog and not a fixed bucket -> unknown (fail-open filter).
+        with patch.object(tasks, "_get_org_severity_ranks", return_value={}):
+            assert tasks._normalize_alert_severity("u1", "Mystery", is_alert=True) == "unknown"
+
+
+class TestExtractAlertAttributes:
+    def test_reads_labels_generically(self):
+        incident = {
+            "attributes": [
+                {"value": {"label": "api"}, "attribute": {"name": "Service"}},
+                {"value": {"literal": "prod"}, "attribute": {"name": "Env"}},
+                {"value": [{"label": "a"}, {"label": "b"}], "attribute": {"name": "Team"}},
+                {"value": {"label": ""}, "attribute": {"name": "Empty"}},
+                {"value": {"label": "x"}, "attribute": {}},  # no name -> skipped
+            ]
+        }
+        attrs = tasks._extract_alert_attributes(incident)
+        assert attrs["service"] == "api"
+        assert attrs["env"] == "prod"
+        assert attrs["team"] == "a, b"
+        assert "empty" not in attrs
+
+    def test_service_matched_by_keyword(self):
+        attrs = {"labels.service": "checkout", "environment": "prod"}
+        assert tasks._service_from_alert_attributes(attrs) == "checkout"
+        assert tasks._attr_by_keywords(attrs, ("environment",)) == "prod"
+        assert tasks._attr_by_keywords(attrs, ("nope",)) == ""
 
 
 class TestCustomSeverityFilter:

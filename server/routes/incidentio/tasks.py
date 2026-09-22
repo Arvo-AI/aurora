@@ -435,6 +435,24 @@ def _extract_alert_priority(incident: Dict[str, Any]) -> str:
     return "unknown"
 
 
+def _attr_by_keywords(attrs: Dict[str, str], keywords: tuple) -> str:
+    """Return the first attribute whose name contains any of ``keywords``.
+
+    Attribute names are org-specific (e.g. "Labels.service", "Affected service"),
+    so we match on substrings rather than exact names. Returns "" when none
+    match.
+    """
+    for name, value in attrs.items():
+        if any(kw in name for kw in keywords):
+            return value
+    return ""
+
+
+def _service_from_alert_attributes(attrs: Dict[str, str]) -> str:
+    """Best-effort service name from an alert's structured attributes."""
+    return _attr_by_keywords(attrs, ("service", "component", "application", "app"))
+
+
 def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Extract normalized incident fields from the webhook event envelope.
 
@@ -455,6 +473,14 @@ def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
         raw_metadata = incident.get("metadata")
         metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
 
+        # Read all structured alert attributes generically (service/environment/
+        # team/etc.) so the RCA sees real context instead of "unknown". Attribute
+        # names are org-specific, so match on common name substrings rather than
+        # one org's exact labels.
+        alert_attributes = _extract_alert_attributes(incident)
+        service = _service_from_alert_attributes(alert_attributes)
+        environment = _attr_by_keywords(alert_attributes, ("environment", "env", "stage"))
+
         # Alerts have no incident_id, but they carry a stable identifier we can
         # use for storage/dedup: the alert's own id or the source dedup key.
         # Without this the ON CONFLICT (org_id, incident_id) upsert can never
@@ -471,7 +497,8 @@ def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
             "incident_name": incident.get("title") or "Untitled Alert",
             "incident_status": incident.get("status") or "firing",
             "severity": severity_raw,
-            "incident_type": metadata.get("source") or metadata.get("service") or "",
+            # Prefer a real service attribute; fall back to metadata source/service.
+            "incident_type": service or metadata.get("source") or metadata.get("service") or "",
             "summary": incident.get("description") or "",
             "created_at": incident.get("created_at"),
             "updated_at": incident.get("updated_at"),
@@ -479,6 +506,10 @@ def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
             "custom_fields": [],
             "roles": [],
             "is_alert": True,
+            # Alert-specific context surfaced to the RCA (empty for incidents).
+            "priority": severity_raw if severity_raw != "unknown" else "",
+            "environment": environment,
+            "alert_attributes": alert_attributes,
         }
 
     return {
@@ -511,6 +542,28 @@ def _map_severity(severity_name: str) -> str:
     return "unknown"
 
 
+def _normalize_alert_severity(user_id: str, raw_severity: str, *, is_alert: bool) -> str:
+    """Normalize a stored/RCA severity from an incident.io severity/priority name.
+
+    Incident events carry standard severity names (critical/high/...) that
+    ``_map_severity`` handles directly. Alert events instead carry the org's
+    Alert Priority name (e.g. "Urgent", "In-hours"), which isn't in the fixed
+    scale — so for alerts we first try to rank the priority against the org's
+    catalog (top→critical, bottom→low) and only fall back to name-based mapping
+    when the catalog can't resolve it. This keeps a real priority from being
+    flattened to "unknown" in both the stored row and the RCA summary.
+    """
+    # Fixed-name mapping is correct for incident events and for alert priorities
+    # that happen to use standard names (e.g. "Critical").
+    mapped = _map_severity(raw_severity)
+    if not is_alert or mapped != "unknown":
+        return mapped
+
+    # Alert priority isn't a fixed bucket — rank it against the org catalog.
+    recovered = _normalize_via_org_rank(raw_severity, _get_org_severity_ranks(user_id))
+    return recovered if recovered is not None else "unknown"
+
+
 _NEW_INCIDENT_EVENTS = frozenset((
     "incident.created", "v2.incidents.created",
     "incident.declared", "public_incident.incident_created",
@@ -528,12 +581,66 @@ _NEW_INCIDENT_EVENTS = frozenset((
 ))
 
 
+def _extract_alert_attributes(incident: Dict[str, Any]) -> Dict[str, str]:
+    """Read an alert's structured attributes into a flat {name: label} map.
+
+    incident.io alerts carry a list of ``attributes``, each shaped like
+    ``{"attribute": {"name": "...", "type": "..."}, "value": {"label": "..."}}``
+    (values can also be a list for multi-select attributes). We read them
+    generically by attribute name — rather than hard-coding one org's labels —
+    so downstream code can pull service/environment/team from whatever the org
+    actually configured (e.g. "Labels.service", "Team", "Environment").
+
+    Keys are lowercased attribute names; values are the human-readable labels.
+    """
+    result: Dict[str, str] = {}
+    attributes = incident.get("attributes")
+    if not isinstance(attributes, list):
+        return result
+
+    for attr in attributes:
+        if not isinstance(attr, dict):
+            continue
+        meta = attr.get("attribute") or {}
+        name = meta.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+
+        # Value can be a single object or a list (multi-select) — collect labels.
+        raw_value = attr.get("value")
+        labels: list = []
+        if isinstance(raw_value, dict):
+            labels = [raw_value.get("label") or raw_value.get("literal")]
+        elif isinstance(raw_value, list):
+            labels = [
+                (v.get("label") or v.get("literal"))
+                for v in raw_value
+                if isinstance(v, dict)
+            ]
+
+        clean = [str(v).strip() for v in labels if isinstance(v, str) and v.strip()]
+        if clean:
+            result[name.lower().strip()] = ", ".join(clean)
+
+    return result
+
+
 def _build_alert_metadata(fields: Dict[str, Any], event_type: str) -> Dict[str, Any]:
     meta: Dict[str, Any] = {
         "permalink": fields["permalink"],
         "summary": fields["summary"],
         "event_type": event_type,
     }
+    # Surface the alert's own priority/service/environment (and any other
+    # structured attributes) so the RCA prompt sees them instead of only the
+    # permalink/summary. Empty for incident events (no alert attributes).
+    if fields.get("priority"):
+        meta["priority"] = fields["priority"]
+    if fields.get("environment"):
+        meta["environment"] = fields["environment"]
+    alert_attrs = fields.get("alert_attributes")
+    if isinstance(alert_attrs, dict) and alert_attrs:
+        meta["alert_attributes"] = alert_attrs
     if fields["roles"]:
         meta["roles"] = [
             {"role": r.get("role", {}).get("name", ""),
@@ -579,12 +686,14 @@ def _create_and_link_incident(cursor, conn, *, user_id, org_id, alert_db_id,
                               fields, service, normalized_severity,
                               alert_metadata, received_at) -> Optional[str]:
     """Create Aurora incident record and link the alert. Returns incident_id or None."""
+    # Environment (prod/staging/…) from the alert's attributes, when present.
+    environment = fields.get("environment") or None
     cursor.execute(
         """
         INSERT INTO incidents
         (user_id, org_id, source_type, source_alert_id, alert_title,
-         alert_service, severity, status, started_at, alert_metadata)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+         alert_service, alert_environment, severity, status, started_at, alert_metadata)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
         SET updated_at = CURRENT_TIMESTAMP,
             alert_metadata = EXCLUDED.alert_metadata
@@ -592,7 +701,7 @@ def _create_and_link_incident(cursor, conn, *, user_id, org_id, alert_db_id,
         """,
         (
             user_id, org_id, "incidentio", alert_db_id,
-            fields["incident_name"], service, normalized_severity,
+            fields["incident_name"], service, environment, normalized_severity,
             "investigating", received_at, json.dumps(alert_metadata),
         ),
     )
@@ -676,8 +785,15 @@ def _store_and_process_event(user_id: str, event_type: str,
                 return
 
             received_at = datetime.now(timezone.utc)
-            normalized_severity = _map_severity(fields["severity"])
             is_alert = bool(fields.get("is_alert"))
+            # For alerts, the "severity" is really the org's Alert Priority name
+            # (e.g. "Urgent"), which _map_severity can't understand and would
+            # flatten to "unknown". Rank it against the org's catalog so a real
+            # priority maps to a real bucket (top→critical, bottom→low) and the
+            # stored severity / RCA summary reflect the true priority.
+            normalized_severity = _normalize_alert_severity(
+                user_id, fields["severity"], is_alert=is_alert
+            )
 
             # Alert events (public_alert.*) carry no incident_id; we synthesize a
             # stable ref (alert id / dedup key) in _extract_incident_fields. Only
@@ -800,6 +916,26 @@ def _extract_service(fields: Dict[str, Any]) -> str:
     return fields.get("incident_type") or "unknown"
 
 
+def _mark_rca_skipped(incident_id: str, reason: str) -> None:
+    """Record on the incident that RCA was intentionally skipped (with reason).
+
+    Surfaces skips (e.g. rate limiting) on the dashboard instead of leaving the
+    operator with only a log line and an incident stuck at 'idle'.
+    """
+    from utils.db.connection_pool import db_pool
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE incidents SET aurora_status = %s, aurora_summary = %s, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+                    ("skipped", reason, str(incident_id)),
+                )
+                conn.commit()
+    except Exception as exc:
+        logger.warning("[INCIDENTIO] Failed to mark RCA skipped for incident %s: %s", incident_id, exc)
+
+
 def _trigger_rca_pipeline(
     user_id: str,
     incident_id: str,
@@ -831,7 +967,15 @@ def _trigger_rca_pipeline(
         )
 
         if not is_background_chat_allowed(user_id):
+            # Rate limited: don't silently drop the alert. Record the reason on
+            # the incident so it's visible on the dashboard instead of just an
+            # INFO log the operator never sees. RCA can be re-run manually.
             logger.info("[INCIDENTIO] Background RCA rate-limited for user %s", user_id)
+            _mark_rca_skipped(
+                incident_id,
+                "RCA skipped: background-investigation rate limit reached. "
+                "Re-run the investigation manually from this incident.",
+            )
             return
 
         chat_title = f"RCA: {fields['incident_name']}"
