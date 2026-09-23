@@ -51,6 +51,54 @@ _GITHUB_CLOSE_TIMEOUT = 5
 _HPA_VPA_VIEW_PR_PREFIX = "hpa_vpa_view_pr_"
 
 
+def _handle_member_joined(event: dict, team_id: str | None) -> None:
+    """Register a channel when Aurora itself is added to it.
+
+    member_joined_channel fires for *every* user joining *any* channel, so we
+    act only when the joiner is Aurora's own bot user. Best-effort and fully
+    swallowed — a Slack webhook must always return 200 quickly.
+    """
+    try:
+        joined_user = event.get('user')
+        channel_id = event.get('channel')
+        if not joined_user or not channel_id or not team_id:
+            return
+
+        # Resolve the Aurora account that owns this workspace's Slack connection.
+        aurora_user_id = get_user_id_from_slack_team(team_id)
+        if not aurora_user_id:
+            return
+
+        # Only react to Aurora's OWN join. If we stored the bot user id, match on
+        # it directly (a positive identity confirmation). Older installs without
+        # it fall back to a membership check: only register if Aurora is actually
+        # a member now — but that can't distinguish Aurora joining from a human
+        # joining a channel Aurora is already in, so we must NOT let that path
+        # restore a dismissed channel.
+        bot_user_id = (get_user_token_data(aurora_user_id, "slack") or {}).get("bot_user_id")
+        confirmed_bot_join = False
+        if bot_user_id:
+            # Not Aurora's join — ignore.
+            if joined_user != bot_user_id:
+                return
+            confirmed_bot_join = True
+        else:
+            client = get_slack_client_for_user(aurora_user_id)
+            info = client.get_channel_info(channel_id) if client else None
+            if not info or not info.get("is_member"):
+                logger.debug("member_joined_channel: bot not a member of %s; skipping",
+                             sanitize(channel_id))
+                return
+
+        from routes.slack.slack_channels import register_single_channel
+        # allow_restore only on a confirmed bot join; the membership fallback is
+        # ambiguous, so it must not resurrect a user-dismissed channel.
+        register_single_channel(aurora_user_id, channel_id, team_id=team_id,
+                                allow_restore=confirmed_bot_join)
+    except Exception:
+        logger.warning("Error handling member_joined_channel", exc_info=True)
+
+
 @slack_events_bp.route("/events", methods=["POST"])
 def slack_events():
     """
@@ -247,7 +295,13 @@ def slack_events():
                              pass
                 
                 return jsonify({"ok": True}), 200
-        
+
+            # Aurora was added to a channel (e.g. an incident.io-created one) —
+            # auto-register + describe it so it becomes a routing target.
+            if event_type == 'member_joined_channel':
+                _handle_member_joined(event, data.get('team_id'))
+                return jsonify({"ok": True}), 200
+
         # Acknowledge other events
         return jsonify({"ok": True}), 200
         

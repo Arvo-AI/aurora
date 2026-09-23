@@ -435,13 +435,21 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
             _send_emails(org_id, user_id, 'send_investigation_completed_email', incident_data)
 
         # --- Slack ---
-        slack_enabled = bool(get_org_preference(org_id, 'slack_investigation_complete_notifications', default=True))
-        if slack_enabled and not refresh_only and _has_slack_connected(user_id):
+        # The "Investigation Complete" org toggle governs ONLY the structured
+        # card posted to the incidents channel. Routed teammate messages (Aurora
+        # posting a conclusion to the relevant team channels) are the core
+        # teammate behaviour and always send when an RCA concludes — they're
+        # gated per-channel by the Slack memory, not by this toggle. So call the
+        # notifier whenever Slack is connected and pass whether the card is on.
+        card_enabled = bool(get_org_preference(org_id, 'slack_investigation_complete_notifications', default=True))
+        if not refresh_only and _has_slack_connected(user_id):
             try:
                 from utils.notifications.slack_notification_service import (
                     send_slack_investigation_completed_notification,
                 )
-                send_slack_investigation_completed_notification(user_id, incident_data)
+                send_slack_investigation_completed_notification(
+                    user_id, incident_data, post_primary_card=card_enabled,
+                )
             except Exception:
                 logger.exception("[Dispatcher] Slack completed notification failed")
 

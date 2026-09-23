@@ -30,6 +30,43 @@ from chat.backend.agent.utils.message_content import extract_text_from_content
 logger = logging.getLogger(__name__)
 
 
+def _json_safe_result(result: Any) -> Dict[str, Any]:
+    """Coerce a Celery task return value into something the result backend can
+    JSON-serialize.
+
+    The background workflow runs a lot of async streaming; a cancelled task or
+    stray object (e.g. ``asyncio.CancelledError``) can end up embedded in the
+    result (typically inside ``tool_calls``). Celery then dies at result-encoding
+    time with ``EncodeError: Object of type CancelledError is not JSON
+    serializable`` — AFTER the task body ran, which orphans downstream side
+    effects (like the Slack "Thinking…" update). Round-trip through json with a
+    stringifying default so encoding can never fail; on any problem, fall back to
+    a minimal status dict. Never raises.
+    """
+    if not isinstance(result, dict):
+        return {"status": "completed"}
+    try:
+        # str default turns any non-serializable leaf (exceptions, objects) into
+        # its repr instead of blowing up the encoder.
+        return json.loads(json.dumps(result, default=str))
+    except Exception:
+        logger.warning("[BackgroundChat] Result not JSON-serializable; returning minimal status",
+                       exc_info=True)
+        # Preserve the few fields callers/telemetry rely on, coerced to safe types.
+        safe: Dict[str, Any] = {}
+        for key in ("session_id", "status", "error", "guardrail_blocked",
+                    "slack_sent_early", "after_rca_dispatched", "action_notification_sent"):
+            val = result.get(key)
+            try:
+                json.dumps(val)
+                safe[key] = val
+            except Exception:
+                safe[key] = str(val)
+        safe.setdefault("status", "completed")
+        return safe
+
+
+
 # ---------------------------------------------------------------------------
 # Per-worker Agent singleton: avoids recreating PostgreSQLClient
 # and LLMManager on every background chat task (~2s cold-start savings).
@@ -266,6 +303,11 @@ _ACTION_GUARDRAIL_USER_MSG = (
     "This action was blocked by safety guardrails. "
     "The instructions may need to be rephrased to pass input validation."
 )
+# Last-resort reply when the workflow finished (or crashed) without leaving any
+# assistant text — used only so a chat "Thinking…" placeholder is never orphaned.
+_CHAT_ERROR_FALLBACK = (
+    "Sorry — I hit an error finishing that request. Please try again."
+)
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -485,6 +527,10 @@ def run_background_chat(
             logger.warning(f"[BackgroundChat] Failed to eagerly persist user message: {e}")
     
     completed_successfully = False
+    # Tracks whether a chat reply (Slack/Google Chat) has been delivered so the
+    # finally block can guarantee the "Thinking…" placeholder is never orphaned
+    # if the happy-path send is skipped (task crash, cancellation, serialization).
+    _chat_reply_sent = False
     
     try:
         # Link session and Celery task ID to incident if provided
@@ -791,22 +837,31 @@ def run_background_chat(
         
         # Send response back to Slack if this was triggered from Slack
         # Skip if already sent inside _execute_background_chat (early send for lower latency)
-        if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button'] and not result.get('slack_sent_early'):
-            try:
-                slack_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
-                _send_response_to_slack(
-                    user_id, session_id, trigger_metadata, fallback_text=slack_fallback,
-                )
-            except Exception as e:
-                logger.error(f"[BackgroundChat] Failed to send response to Slack: {e}", exc_info=True)
+        if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
+            if result.get('slack_sent_early'):
+                _chat_reply_sent = True
+            else:
+                try:
+                    slack_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
+                    # Only treat as sent if a message was actually posted — a False
+                    # return (e.g. no assistant text + no fallback) must still let the
+                    # finally-block fallback fire so "Thinking…" isn't orphaned.
+                    _chat_reply_sent = bool(_send_response_to_slack(
+                        user_id, session_id, trigger_metadata, fallback_text=slack_fallback,
+                    ))
+                except Exception as e:
+                    logger.error(f"[BackgroundChat] Failed to send response to Slack: {e}", exc_info=True)
         
         # Send response back to Google Chat if this was triggered from Google Chat
         if trigger_metadata and trigger_metadata.get('source') in ['google_chat', 'google_chat_button']:
             try:
                 gchat_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
-                _send_response_to_google_chat(
+                # Only treat as sent when a message was actually posted/updated, so
+                # the finally-block fallback still fires (resolving "Thinking…") if
+                # delivery was skipped (no space / no text / no client).
+                _chat_reply_sent = bool(_send_response_to_google_chat(
                     user_id, session_id, trigger_metadata, fallback_text=gchat_fallback,
-                )
+                ))
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
         
@@ -831,7 +886,7 @@ def run_background_chat(
 
         logger.info(f"[BackgroundChat] Completed for session {session_id}")
         
-        return result
+        return _json_safe_result(result)
     
     except SoftTimeLimitExceeded:
         logger.error(f"[BackgroundChat] Timeout after 30 minutes for session {session_id}")
@@ -894,6 +949,30 @@ def run_background_chat(
         }
     
     finally:
+        # Guarantee the chat "Thinking…" placeholder is always resolved. If the
+        # happy-path send was skipped (task crash, cancellation, result
+        # serialization failure), post a best-effort reply here so a Slack/
+        # Google Chat mention never hangs on "Thinking…" forever.
+        try:
+            src = (trigger_metadata or {}).get("source")
+            if src in ("slack", "slack_button") and not _chat_reply_sent:
+                logger.warning("[BackgroundChat] Reply not sent on happy path for session %s; "
+                               "sending fallback so Slack isn't stuck on 'Thinking…'", session_id)
+                _send_response_to_slack(
+                    user_id, session_id, trigger_metadata,
+                    fallback_text=_CHAT_ERROR_FALLBACK,
+                )
+            elif src in ("google_chat", "google_chat_button") and not _chat_reply_sent:
+                logger.warning("[BackgroundChat] Reply not sent on happy path for session %s; "
+                               "sending fallback so Google Chat isn't stuck on 'Thinking…'", session_id)
+                _send_response_to_google_chat(
+                    user_id, session_id, trigger_metadata,
+                    fallback_text=_CHAT_ERROR_FALLBACK,
+                )
+        except Exception as _final_reply_err:
+            logger.error("[BackgroundChat] Fallback chat reply failed for session %s: %s",
+                         session_id, _final_reply_err, exc_info=True)
+
         # Release dedup lock so Celery retries can re-acquire after failure
         if _dedup_acquired and _dedup_redis is not None:
             try:
@@ -2114,8 +2193,13 @@ def _send_response_to_google_chat(
     session_id: str,
     trigger_metadata: Dict[str, Any],
     fallback_text: Optional[str] = None,
-) -> None:
-    """Send Aurora's response back to Google Chat after background chat completes."""
+) -> bool:
+    """Send Aurora's response back to Google Chat after background chat completes.
+
+    Returns True only when a message was actually posted/updated, False on the
+    early-return paths (no space, no assistant text, no client) so the caller can
+    fall back (resolve the "Thinking…" placeholder) instead of assuming success.
+    """
     try:
         from routes.google_chat.google_chat_events_helpers import format_response_for_google_chat
 
@@ -2126,7 +2210,7 @@ def _send_response_to_google_chat(
 
         if not space_name:
             logger.warning(f"[BackgroundChat] No Google Chat space in trigger_metadata for session {session_id}")
-            return
+            return False
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -2157,7 +2241,7 @@ def _send_response_to_google_chat(
                         logger.warning(
                             f"[BackgroundChat] No assistant message found in session {session_id}"
                         )
-                        return
+                        return False
 
         formatted_message = format_response_for_google_chat(last_assistant_message)
 
@@ -2183,7 +2267,7 @@ def _send_response_to_google_chat(
         client = get_chat_app_client()
         if not client:
             logger.error(f"[BackgroundChat] Could not get Google Chat client for user {user_id}")
-            return
+            return False
 
         if thinking_message_name:
             client.update_message(
@@ -2196,6 +2280,9 @@ def _send_response_to_google_chat(
                 text=formatted_message,
                 thread_key=thread_key
             )
+
+        # A message was actually posted/updated.
+        return True
 
     except Exception as e:
         logger.error(f"[BackgroundChat] Error sending response to Google Chat: {e}", exc_info=True)

@@ -53,3 +53,24 @@ def test_refresh_only_without_a_card_skips_google_chat(wired, monkeypatch):
     dispatcher.notify_investigation_completed("u1", "i1", refresh_only=True)
     wired["gchat"].assert_not_called()
     wired["slack"].assert_not_called()
+
+
+def test_card_toggle_off_still_runs_slack_for_routing(wired, monkeypatch):
+    """The "Investigation Complete" toggle governs only the incidents-channel
+    card. With it off, the dispatcher must STILL invoke the Slack notifier so
+    description-driven team-channel routing runs — just with post_primary_card
+    False."""
+    monkeypatch.setattr(dispatcher, "_get_incident_data", lambda incident_id, user_id: _incident())
+    # Card toggle off; everything else (slack connected) unchanged.
+    monkeypatch.setattr(
+        dispatcher, "get_org_preference",
+        lambda org_id, key, default=None: False if key == "slack_investigation_complete_notifications" else True,
+    )
+    dispatcher.notify_investigation_completed("u1", "i1", session_id="s1")
+    wired["slack"].assert_called_once_with("u1", _incident(), post_primary_card=False)
+
+
+def test_card_toggle_on_passes_primary_card_true(wired, monkeypatch):
+    monkeypatch.setattr(dispatcher, "_get_incident_data", lambda incident_id, user_id: _incident())
+    dispatcher.notify_investigation_completed("u1", "i1", session_id="s1")
+    wired["slack"].assert_called_once_with("u1", _incident(), post_primary_card=True)

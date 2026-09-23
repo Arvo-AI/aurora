@@ -16,7 +16,27 @@ export interface SlackConnectResponse {
   message: string;
 }
 
+export interface SlackConnectedChannel {
+  channel_id: string;
+  channel_name?: string;
+  is_private?: boolean;
+  is_member?: boolean;
+  channel_type?: string;
+  detected_platform?: string | null;
+  metadata_summary?: string | null;
+  metadata_status?: string;
+  is_dismissed?: boolean;
+}
+
+export interface SlackChannelsResponse {
+  connected: SlackConnectedChannel[];
+  dismissed: SlackConnectedChannel[];
+  // The single channel that receives the structured incident card, or null.
+  card_channel_id?: string | null;
+}
+
 const API_BASE = '/api/slack';
+const CHANNELS_BASE = '/api/slack/channels';
 
 export const slackService = {
   async getStatus(): Promise<SlackStatus | null> {
@@ -53,5 +73,79 @@ export const slackService = {
       method: 'DELETE',
       cache: 'no-store',
     });
+  },
+
+  async getChannels(): Promise<SlackChannelsResponse> {
+    const data = await apiRequest<SlackChannelsResponse>(`${CHANNELS_BASE}`, {
+      cache: 'no-store',
+    });
+    return {
+      connected: data?.connected ?? [],
+      dismissed: data?.dismissed ?? [],
+      card_channel_id: data?.card_channel_id ?? null,
+    };
+  },
+
+  // Dismiss = hide from routing/UI; does NOT leave the Slack channel.
+  async dismissChannel(channelId: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/${channelId}/dismiss`, {
+      method: 'POST',
+      cache: 'no-store',
+    });
+  },
+
+  async restoreChannel(channelId: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/${channelId}/restore`, {
+      method: 'POST',
+      cache: 'no-store',
+    });
+  },
+
+  async updateChannelDescription(channelId: string, summary: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/${channelId}/metadata`, {
+      method: 'PUT',
+      body: JSON.stringify({ metadata_summary: summary }),
+      cache: 'no-store',
+    });
+  },
+
+  // Designate the single channel that receives the structured incident card.
+  // Must be an active channel; the backend 409s otherwise.
+  async setCardChannel(channelId: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/card-channel`, {
+      method: 'PUT',
+      body: JSON.stringify({ channel_id: channelId }),
+      cache: 'no-store',
+    });
+  },
+
+  async regenerateChannelDescription(channelId: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/metadata/generate`, {
+      method: 'POST',
+      body: JSON.stringify({ channel_id: channelId }),
+      cache: 'no-store',
+    });
+  },
+
+  // Bulk-activate indexed channels: describe them + make them routable. Powers
+  // the "search a keyword, check matches, activate" flow for large workspaces.
+  async activateChannels(channelIds: string[]): Promise<{ activated: number }> {
+    const data = await apiRequest<{ activated: number }>(`${CHANNELS_BASE}/activate`, {
+      method: 'POST',
+      body: JSON.stringify({ channel_ids: channelIds }),
+      cache: 'no-store',
+    });
+    return { activated: data?.activated ?? 0 };
+  },
+
+  // Re-scan the workspace and register any newly-visible channels. Used by the
+  // "Refresh channels" button so workspaces connected before auto-registration
+  // (or with new channels) get updated without reconnecting.
+  async refreshChannels(): Promise<{ described: number }> {
+    const data = await apiRequest<{ described: number }>(`${CHANNELS_BASE}/refresh`, {
+      method: 'POST',
+      cache: 'no-store',
+    });
+    return { described: data?.described ?? 0 };
   },
 };

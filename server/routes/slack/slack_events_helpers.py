@@ -679,6 +679,34 @@ def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
         return None, None
 
 
+def _resolve_channel_label(user_id: str, channel_id: str) -> str:
+    """Return a human 'name (id)' label for a Slack channel so the agent knows
+    which channel a message came from — critical for scoped directives like
+    "in this channel". Prefers our registered slack_channels row (no API call),
+    falls back to the bare id. Never raises."""
+    if not channel_id:
+        return "unknown"
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[SlackChannelLabel]")
+                cursor.execute(
+                    """SELECT channel_name FROM slack_channels
+                       WHERE user_id = %s AND channel_id = %s AND provider = 'slack'
+                       LIMIT 1""",
+                    (user_id, channel_id),
+                )
+                row = cursor.fetchone()
+        # Registered channel — use its name so it matches routing/descriptions.
+        if row and row[0]:
+            return f"#{row[0]} ({channel_id})"
+    except Exception:
+        logger.warning("[SlackChannelLabel] Could not resolve channel name for %s",
+                       sanitize(channel_id), exc_info=True)
+    # Unregistered or lookup failed — the id alone still anchors "this channel".
+    return channel_id
+
+
 def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread_ts: str = None, 
                            incident_id: str = None, session_id: str = None, context_messages: list = None,
                            channel_context: str | None = None, thinking_message_ts: str | None = None):
@@ -738,8 +766,12 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
             # Channel context - includes recent messages and thread summaries
             context_str = f"\n\n--- Recent channel context (last 5 messages with thread summaries) ---\n{channel_context}\n--- End of channel context ---\n"
         
-        # Prepare the message with context
-        full_message = f"{message_text}{context_str}"
+        # Prepare the message with context. Lead with an explicit channel identity
+        # so the agent can resolve references like "this channel" and scope any
+        # directive it saves to the right channel (matches routing/descriptions).
+        channel_label = _resolve_channel_label(user_id, channel)
+        channel_header = f"[Slack message from channel {channel_label}]\n\n"
+        full_message = f"{channel_header}{message_text}{context_str}"
         
         # Trigger metadata for tracking and response
         trigger_metadata = {

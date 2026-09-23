@@ -34,9 +34,12 @@ interface MemoryEditDialogProps {
   onOpenChange: (open: boolean) => void;
   // Called after a successful save so the parent can refresh its list.
   onSaved: () => void | Promise<void>;
+  // View-only mode for system-managed entries: same content fetch, but all
+  // fields are disabled and there's no Save button.
+  readOnly?: boolean;
 }
 
-export function MemoryEditDialog({ entry, onOpenChange, onSaved }: MemoryEditDialogProps) {
+export function MemoryEditDialog({ entry, onOpenChange, onSaved, readOnly = false }: MemoryEditDialogProps) {
   const { toast } = useToast();
 
   const [title, setTitle] = useState("");
@@ -134,9 +137,11 @@ export function MemoryEditDialog({ entry, onOpenChange, onSaved }: MemoryEditDia
     <Dialog open={!!entry} onOpenChange={(open) => { if (!open) onOpenChange(false); }}>
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Edit Memory Entry</DialogTitle>
+          <DialogTitle>{readOnly ? "View Memory Entry" : "Edit Memory Entry"}</DialogTitle>
           <DialogDescription>
-            Review and modify this entry&apos;s content. Changes are versioned.
+            {readOnly
+              ? "This entry is maintained by Aurora and is read-only. You can inspect its content here."
+              : "Review and modify this entry's content. Changes are versioned."}
           </DialogDescription>
         </DialogHeader>
 
@@ -154,22 +159,33 @@ export function MemoryEditDialog({ entry, onOpenChange, onSaved }: MemoryEditDia
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="Title"
+                  disabled={readOnly}
                 />
               </div>
               <div className="space-y-1">
                 <label htmlFor="edit-memory-category" className="text-sm font-medium">Category</label>
-                <Select value={category} onValueChange={(v) => setCategory(v as MemoryCategory)}>
-                  <SelectTrigger id="edit-memory-category">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {USER_WRITABLE_CATEGORIES.map((cat) => (
-                      <SelectItem key={cat} value={cat}>
-                        {CATEGORY_META[cat].label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {readOnly ? (
+                  // System entries use the 'artifact' category, which isn't in the
+                  // writable list — render a static label instead of an empty Select.
+                  <Input
+                    id="edit-memory-category"
+                    value={CATEGORY_META[category]?.label ?? category}
+                    disabled
+                  />
+                ) : (
+                  <Select value={category} onValueChange={(v) => setCategory(v as MemoryCategory)}>
+                    <SelectTrigger id="edit-memory-category">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {USER_WRITABLE_CATEGORIES.map((cat) => (
+                        <SelectItem key={cat} value={cat}>
+                          {CATEGORY_META[cat].label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
             </div>
             <div className="space-y-1">
@@ -179,6 +195,7 @@ export function MemoryEditDialog({ entry, onOpenChange, onSaved }: MemoryEditDia
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Brief summary of what this contains"
+                disabled={readOnly}
               />
             </div>
             <div className="space-y-1">
@@ -188,6 +205,7 @@ export function MemoryEditDialog({ entry, onOpenChange, onSaved }: MemoryEditDia
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 className="min-h-[300px] font-mono text-sm"
+                disabled={readOnly}
               />
             </div>
           </div>
@@ -195,21 +213,23 @@ export function MemoryEditDialog({ entry, onOpenChange, onSaved }: MemoryEditDia
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={isSaving}>
-            Cancel
+            {readOnly ? "Close" : "Cancel"}
           </Button>
-          <Button
-            onClick={handleSave}
-            disabled={isSaving || isLoadingContent || !title.trim() || !content.trim()}
-          >
-            {isSaving ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Saving...
-              </>
-            ) : (
-              "Save Changes"
-            )}
-          </Button>
+          {!readOnly && (
+            <Button
+              onClick={handleSave}
+              disabled={isSaving || isLoadingContent || !title.trim() || !content.trim()}
+            >
+              {isSaving ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save Changes"
+              )}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

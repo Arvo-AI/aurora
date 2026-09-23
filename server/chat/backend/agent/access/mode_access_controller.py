@@ -49,6 +49,7 @@ class ModeAccessController:
         "iac_tool",
         "github_commit",
         "send_hpa_vpa_recommendation",
+        "post_slack_message",
     })
 
     _POLICY = ReadOnlyPolicy(

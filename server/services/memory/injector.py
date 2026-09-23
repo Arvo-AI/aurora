@@ -71,10 +71,20 @@ Select 0-5 memories. Only include those you are certain will help. JSON only."""
 class MemoryPrefetch:
     """Handle for an in-flight memory prefetch operation."""
 
-    def __init__(self, user_id: str, session_id: str, user_message: str):
+    def __init__(
+        self,
+        user_id: str,
+        session_id: str,
+        user_message: str,
+        force_entries: Optional[List[Tuple[str, str]]] = None,
+    ):
         self.user_id = user_id
         self.session_id = session_id
         self.user_message = user_message
+        # (category, title) pairs to ALWAYS inject regardless of the LLM
+        # selector — used for source-specific policy memories (e.g. the "Slack"
+        # entry on Slack-sourced sessions) that must always steer behaviour.
+        self.force_entries = force_entries or []
         self._task: Optional[asyncio.Task] = None
         self._result: Optional[str] = None
         self._started_at: float = 0
@@ -114,13 +124,28 @@ class MemoryPrefetch:
             if not entries:
                 return ""
 
-            # Remove already-surfaced entries (don't waste selection slots)
-            available = [e for e in entries if _entry_key(e) not in already_surfaced]
-            if not available:
-                return ""
+            # Forced entries always inject (bypass selector + dedup) so
+            # source-specific policy (e.g. the "Slack" memory) is guaranteed
+            # present. Match against the real index so we never inject a
+            # title that doesn't exist.
+            forced_keys = {f"{c}/{t}" for c, t in self.force_entries}
+            forced = [e for e in entries if _entry_key(e) in forced_keys]
 
-            # Single async LLM pass: select up to 5
-            selected = await _select_relevant_memories_async(self.user_message, available)
+            # Remove already-surfaced entries (don't waste selection slots).
+            # Forced entries are excluded from the selector pool since they're
+            # added unconditionally below.
+            available = [
+                e for e in entries
+                if _entry_key(e) not in already_surfaced
+                and _entry_key(e) not in forced_keys
+            ]
+
+            selected: List[Dict] = list(forced)
+            if available:
+                # Single async LLM pass: select up to 5
+                llm_selected = await _select_relevant_memories_async(self.user_message, available)
+                selected.extend(llm_selected)
+
             if not selected:
                 return ""
 

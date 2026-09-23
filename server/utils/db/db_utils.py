@@ -325,6 +325,35 @@ def initialize_tables():
                         UNIQUE(user_id, provider, repo_full_name)
                     );
                 """,
+                # Slack channels Aurora can see. Mirrors connected_repos: each
+                # channel carries an LLM-generated (and user/agent-editable)
+                # description in metadata_summary so the agent can decide which
+                # channel(s) are relevant for a given incident/notification.
+                # channel_type is a best-effort classification
+                # ('incident'/'team'/'general') from the description task.
+                "slack_channels": """
+                    CREATE TABLE IF NOT EXISTS slack_channels (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        provider VARCHAR(20) NOT NULL DEFAULT 'slack',
+                        team_id VARCHAR(64),
+                        channel_id VARCHAR(64) NOT NULL,
+                        channel_name VARCHAR(512),
+                        is_private BOOLEAN DEFAULT false,
+                        is_member BOOLEAN DEFAULT false,
+                        is_archived BOOLEAN DEFAULT false,
+                        channel_type VARCHAR(20) DEFAULT 'unknown',
+                        detected_platform VARCHAR(40),
+                        is_dismissed BOOLEAN DEFAULT false,
+                        metadata_summary TEXT,
+                        metadata_status VARCHAR(20) DEFAULT 'pending',
+                        channel_data JSONB,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, provider, channel_id)
+                    );
+                """,
                 "github_installations": """
                     CREATE TABLE IF NOT EXISTS github_installations (
                         id SERIAL PRIMARY KEY,
@@ -1585,6 +1614,7 @@ def initialize_tables():
             rls_tables.append("postmortem_exports")
             rls_tables.append("incident_lifecycle_events")
             rls_tables.append("connected_repos")
+            rls_tables.append("slack_channels")
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
             rls_tables.append("org_tool_permissions")
@@ -1775,6 +1805,23 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(
                     f"Error adding change_gating_enabled column to connected_repos: {e}"
+                )
+                conn.rollback()
+
+            # Migration: Add is_dismissed to slack_channels so users can hide
+            # irrelevant channels from routing/UI without leaving them on Slack.
+            # Dismissed channels are also not re-added by auto-register/refresh.
+            try:
+                cursor.execute(
+                    "ALTER TABLE slack_channels ADD COLUMN IF NOT EXISTS is_dismissed BOOLEAN DEFAULT FALSE;"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured is_dismissed column exists on slack_channels table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding is_dismissed column to slack_channels: {e}"
                 )
                 conn.rollback()
 
@@ -3035,6 +3082,7 @@ def initialize_tables():
                 "postmortems",
                 "incident_lifecycle_events",
                 "connected_repos",
+                "slack_channels",
             ]
             for tbl in org_id_tables:
                 try:

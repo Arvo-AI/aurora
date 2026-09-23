@@ -10,6 +10,7 @@ from datetime import datetime
 import pytest
 
 from utils.notifications import slack_notification_service as svc
+from utils.notifications import slack_team_routing
 
 from utils.notifications.slack_threading import RECURRENCE_FOOTER_BLOCK_ID
 from .slack_fakes import ANCHOR_ID, ANCHOR_TS, CHAN, CHILD_ID, CHILD_TS, FIRST_POSTED_TS
@@ -95,10 +96,12 @@ class TestStandalone:
         assert patched_db.updates == []
 
     def test_other_rejection_is_a_single_attempt(self, run, make_client, patched_db, standalone):
-        # not_in_channel fails the same way for update and post: no retry as a post.
-        client = make_client(fail_all=True, reject_with="not_in_channel")
+        # A non-not_in_channel rejection (e.g. cannot_reply_to_message) is NOT
+        # retried — single post attempt, no join.
+        client = make_client(fail_all=True, reject_with="cannot_reply_to_message")
         assert run(standalone(), client) is False
         assert client.update_attempts + client.attempts == 1
+        assert client.joined == []
         assert patched_db.updates == []
 
     def test_transport_error_is_a_single_attempt(self, run, make_client, patched_db, standalone):
@@ -427,3 +430,102 @@ class TestStarted:
         section = _section_text(client.sent[0]["blocks"])
         assert "<!channel>" not in section
         assert "&lt;!channel&gt; down" in section
+
+
+class TestNotInChannelRecovery:
+    """not_in_channel on a post → join the channel once and retry (teammate behaviour)."""
+
+    def test_completed_joins_and_retries_primary(self, run, make_client, patched_db, standalone):
+        # No stored ts → straight to a top-level post, which first hits
+        # not_in_channel, then succeeds after an auto-join.
+        client = make_client(not_in_channel_until_joined=True)
+        assert run(standalone(slack_message_ts=None), client) is True
+        assert client.joined == [CHAN]          # joined the incidents channel
+        assert len(client.sent) == 1            # retry landed the card
+
+    def test_started_joins_and_retries(self, run, make_client, patched_db, standalone):
+        client = make_client(not_in_channel_until_joined=True)
+        assert run(standalone(slack_message_ts=None), client, kind="started") is True
+        assert client.joined == [CHAN]
+        assert len(client.sent) == 1
+
+    def test_primary_failure_when_join_fails_is_non_fatal(self, run, make_client, patched_db, standalone):
+        # Private channel we can't self-join: primary never lands (returns False)
+        # but the call still completes cleanly rather than throwing.
+        client = make_client(not_in_channel_until_joined=True, join_succeeds=False)
+        assert run(standalone(slack_message_ts=None), client) is False
+        assert client.joined == [CHAN]          # attempted the join
+        assert client.sent == []                # nothing delivered
+
+
+class TestCardToggleVsRouting:
+    """The "Investigation Complete" card toggle (post_primary_card) governs only
+    the incidents-channel card. Team-channel routing (now the background agent)
+    always runs regardless."""
+
+    def test_card_off_skips_incidents_card_but_still_routes(self, monkeypatch, make_client, patched_db,
+                                                             standalone, slack_helpers_stub):
+        client = make_client()
+        monkeypatch.setattr(svc, "get_slack_client_for_user", lambda user_id: client)
+        monkeypatch.setattr(svc, "_get_incidents_channel_id", lambda user_id, c: CHAN)
+        # The team-routing agent is dispatched (fire-and-forget) instead of the
+        # old deterministic compose+send loop.
+        calls = []
+        monkeypatch.setattr(
+            slack_team_routing, "trigger_team_routing_agent",
+            lambda user_id, data: calls.append((user_id, data.get("incident_id"))) or True,
+        )
+
+        ok = svc.send_slack_investigation_completed_notification(
+            "u1", standalone(), post_primary_card=False,
+        )
+        assert ok is True
+        # No incidents-channel card: no update in place, and nothing posted to CHAN.
+        assert client.updated == []
+        assert all(m["channel"] != CHAN for m in client.sent), client.sent
+        # Routing was still dispatched to the agent.
+        assert len(calls) == 1
+
+    def test_card_on_posts_incidents_card_and_routes(self, monkeypatch, make_client, patched_db,
+                                                      standalone, slack_helpers_stub):
+        client = make_client()
+        monkeypatch.setattr(svc, "get_slack_client_for_user", lambda user_id: client)
+        monkeypatch.setattr(svc, "_get_incidents_channel_id", lambda user_id, c: CHAN)
+        calls = []
+        monkeypatch.setattr(
+            slack_team_routing, "trigger_team_routing_agent",
+            lambda user_id, data: calls.append(user_id) or True,
+        )
+
+        ok = svc.send_slack_investigation_completed_notification(
+            "u1", standalone(), post_primary_card=True,
+        )
+        assert ok is True
+        # Card updated the incidents-channel Started message in place …
+        assert len(client.updated) == 1 and client.updated[0]["ts"] == ANCHOR_TS
+        # … and the routing agent was still dispatched.
+        assert len(calls) == 1
+
+    def test_card_off_folded_child_skips_reply_but_routes(self, monkeypatch, make_client, patched_db,
+                                                           folded, slack_helpers_stub):
+        # A folded recurrence with cards off must NOT post the "Still firing"
+        # reply (that's a card) but must still dispatch team routing.
+        client = make_client()
+        monkeypatch.setattr(svc, "get_slack_client_for_user", lambda user_id: client)
+        monkeypatch.setattr(svc, "_get_incidents_channel_id", lambda user_id, c: CHAN)
+        calls = []
+        monkeypatch.setattr(
+            slack_team_routing, "trigger_team_routing_agent",
+            lambda user_id, data: calls.append(user_id) or True,
+        )
+
+        ok = svc.send_slack_investigation_completed_notification(
+            "u1", folded(), post_primary_card=False,
+        )
+        assert ok is True
+        # No compact reply into the incidents channel, and the child's Started
+        # message is NOT retired (that retirement is part of card placement).
+        assert all(m["channel"] != CHAN for m in client.sent), client.sent
+        assert client.deleted == []
+        # Routing still dispatched.
+        assert len(calls) == 1
