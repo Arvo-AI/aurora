@@ -47,11 +47,14 @@ SUBSCRIPTIONS_MOD = "connectors/azure_connector/subscriptions.py"
 
 @pytest.fixture(scope="module")
 def helpers():
-    return _load(
+    from utils.cloud import azure_login_cache
+    ns = _load(
         ["is_read_only_command", "_apply_azure_subscription", "_is_azure_cli_command",
          "_azure_can_fan_out"],
         CLOUD_EXEC,
     )
+    ns["azure_login_cache"] = azure_login_cache
+    return ns
 
 
 @pytest.mark.parametrize("command,read_only", [
@@ -82,15 +85,18 @@ def test_unparseable_command_is_not_read_only(helpers):
     ("az vm list --subscription OTHER", "az vm list --subscription OTHER"),
     # Resource Graph takes --subscriptions (plural) and is scoped by the caller.
     ('az graph query -q "Resources"', 'az graph query -q "Resources"'),
-    # Tenant-level and CLI-state `az account` subcommands reject --subscription.
+    # Tenant-level `az account` subcommands reject --subscription and answer the
+    # same for every subscription.
     ("az account list -o table", "az account list -o table"),
     ("account list", "az account list"),
     ("az account tenant list", "az account tenant list"),
     ("az account management-group list", "az account management-group list"),
-    ("az account clear", "az account clear"),
-    # The rest take it; unpinned they would answer for the default subscription N times.
+    # The rest are pinned; unpinned they would answer for the default subscription N times.
     ("az account show", "az account show --subscription SUB1"),
     ("az account get-access-token", "az account get-access-token --subscription SUB1"),
+    # `az account lock` reads the active subscription and rejects the flag: pinned,
+    # az fails loudly rather than mislabelling the default subscription's locks.
+    ("az account lock list", "az account lock list --subscription SUB1"),
 ])
 def test_apply_azure_subscription(helpers, command, expected):
     assert helpers["_apply_azure_subscription"](command, "SUB1") == expected
@@ -113,6 +119,18 @@ def test_get_credentials_never_fans_out(helpers):
     assert helpers["_azure_can_fan_out"]("az vm list") is True
     assert helpers["_azure_can_fan_out"](
         "az aks get-credentials --name c --resource-group r") is False
+
+
+@pytest.mark.parametrize("command", [
+    "az account clear",
+    "az account set --subscription x",
+    "az login --service-principal",
+    "az logout",
+    "az config set core.output=json",
+])
+def test_cli_state_commands_never_fan_out(helpers, command):
+    """Every worker shares one config dir; a CLI-state command would rewrite it under the others."""
+    assert helpers["_azure_can_fan_out"](command) is False
 
 
 def test_resource_graph_query_is_ordered():

@@ -1361,27 +1361,34 @@ def _azure_can_fan_out(command: str) -> bool:
 
     `aks get-credentials` writes the shared kubeconfig, so running it in parallel
     would race and leave a context from an arbitrary subscription. It must target
-    one subscription explicitly.
+    one subscription explicitly. Commands that change the CLI's own state
+    (`az login`, `az account clear`, ...) would have every worker rewriting the
+    one config dir the fan-out shares, so they take the single-subscription path.
     """
-    return _is_azure_cli_command(command) and "get-credentials" not in command
+    return (
+        _is_azure_cli_command(command)
+        and "get-credentials" not in command
+        and not azure_login_cache.uses_local_cli_state(command)
+    )
 
 
 def _apply_azure_subscription(command: str, subscription_id: str) -> str:
     """Pin an `az` command to one subscription.
 
     `az graph query` takes --subscriptions (plural) and is scoped by the caller,
-    so it is left alone. The `az account` subcommands that work at the tenant
-    level (`list`, `tenant`, `management-group`) or on the CLI's own state
-    (`clear`, `lock`) reject `--subscription` with "unrecognized arguments"
-    (checked against az 2.90.0), so they are left alone too. The rest (`show`,
-    `get-access-token`, ...) take it, and pinning them is what makes their
-    answer correct for each subscription in a fan-out.
+    so it is left alone. The tenant-level `az account` subcommands (`list`,
+    `tenant`, `management-group`) reject `--subscription` with "unrecognized
+    arguments" (checked against az 2.90.0) and answer the same for every
+    subscription, so they are left alone too. Everything else is pinned: `show`
+    and `get-access-token` take the flag, and `az account lock` rejects it but
+    reads the *active* subscription, so an unpinned copy would report the default
+    subscription's locks N times. Pinned, az refuses it loudly instead.
     """
     cmd = command if command.startswith("az ") else f"az {command}"
     words = cmd.split()
     unpinnable_account = (
         len(words) >= 3 and words[1] == "account"
-        and words[2] in {"list", "tenant", "management-group", "clear", "lock"}
+        and words[2] in {"list", "tenant", "management-group"}
     )
     # Already pinned by the caller, or a command that doesn't take --subscription.
     if "--subscription" in cmd or cmd.startswith("az graph") or unpinnable_account:
