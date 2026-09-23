@@ -4,6 +4,24 @@ entries:
   - annotations:
       org.opencontainers.image.source: https://github.com/Arvo-AI/aurora
     apiVersion: v2
+    appVersion: 1.4.0
+    created: "2026-09-23T14:34:21.665412658Z"
+    description: Aurora – AI-powered cloud operations platform (on-prem deployment)
+    digest: 88e7bbd8dc6c8f1d580205ea5ed339d309423a189f34f3cbeaef4239db92e291
+    home: https://github.com/Arvo-AI/aurora
+    maintainers:
+    - name: Arvo AI
+      url: https://github.com/Arvo-AI
+    name: aurora-oss
+    sources:
+    - https://github.com/Arvo-AI/aurora
+    type: application
+    urls:
+    - https://github.com/Arvo-AI/aurora/releases/download/aurora-oss-1.4.0/aurora-oss-1.4.0.tgz
+    version: 1.4.0
+  - annotations:
+      org.opencontainers.image.source: https://github.com/Arvo-AI/aurora
+    apiVersion: v2
     appVersion: 1.3.0
     created: "2026-09-15T16:14:25.2542613Z"
     description: Aurora – AI-powered cloud operations platform (on-prem deployment)
@@ -303,4 +321,4 @@ entries:
     urls:
     - https://github.com/Arvo-AI/aurora/releases/download/aurora-oss-1.2.7/aurora-oss-1.2.7.tgz
     version: 1.2.7
-generated: "2026-09-15T16:14:25.25442171Z"
+generated: "2026-09-23T14:34:21.665552869Z"
