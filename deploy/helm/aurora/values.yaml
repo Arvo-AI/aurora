@@ -147,6 +147,7 @@ replicaCounts:
   
   # Single-instance services (do NOT increase without additional config)
   celeryBeat: 1      # Task scheduler - only 1 to avoid duplicate tasks
+  slackSocketMode: 1 # Slack Socket Mode listener - keep at 1 (each replica opens its own socket; duplicates = duplicate event handling)
   redis: 1           # Redis - single instance, no clustering configured
   memgraph: 1        # Graph database - single instance, in-memory
   vault: 1           # Secrets manager - single instance, HA requires additional config
@@ -380,6 +381,12 @@ secrets:
     SLACK_CLIENT_ID: ""          # Get from: https://api.slack.com/apps
     SLACK_CLIENT_SECRET: ""
     SLACK_SIGNING_SECRET: ""
+    # Socket Mode: for private/self-hosted clusters with NO public webhook URL.
+    # Set SLACK_APP_TOKEN to an app-level token (xapp-...) with connections:write
+    # to make Aurora open an outbound WebSocket to Slack (no ingress/TLS endpoint
+    # needed) and render the slack-socket-mode deployment. Leave empty for HTTP
+    # webhooks. Also enable Socket Mode in the Slack app config.
+    SLACK_APP_TOKEN: ""
 
     # --- Optional: Google Chat Integration ---
     GOOGLE_CHAT_CLIENT_ID: ""              # OAuth client ID (for setup flow)
@@ -559,6 +566,15 @@ resources:
       memory: "256Mi"
     limits:
       cpu: "500m"
+      memory: "512Mi"
+  # Slack Socket Mode listener: lightweight, just holds a WebSocket and
+  # dispatches events into the same background chat pipeline as the webhook.
+  slackSocketMode:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "300m"
       memory: "512Mi"
   chatbot:
     requests:
