@@ -47,11 +47,14 @@ SUBSCRIPTIONS_MOD = "connectors/azure_connector/subscriptions.py"
 
 @pytest.fixture(scope="module")
 def helpers():
-    return _load(
+    from utils.cloud import azure_login_cache
+    ns = _load(
         ["is_read_only_command", "_apply_azure_subscription", "_is_azure_cli_command",
          "_azure_can_fan_out"],
         CLOUD_EXEC,
     )
+    ns["azure_login_cache"] = azure_login_cache
+    return ns
 
 
 @pytest.mark.parametrize("command,read_only", [
@@ -82,6 +85,18 @@ def test_unparseable_command_is_not_read_only(helpers):
     ("az vm list --subscription OTHER", "az vm list --subscription OTHER"),
     # Resource Graph takes --subscriptions (plural) and is scoped by the caller.
     ('az graph query -q "Resources"', 'az graph query -q "Resources"'),
+    # Tenant-level `az account` subcommands reject --subscription and answer the
+    # same for every subscription.
+    ("az account list -o table", "az account list -o table"),
+    ("account list", "az account list"),
+    ("az account tenant list", "az account tenant list"),
+    ("az account management-group list", "az account management-group list"),
+    # The rest are pinned; unpinned they would answer for the default subscription N times.
+    ("az account show", "az account show --subscription SUB1"),
+    ("az account get-access-token", "az account get-access-token --subscription SUB1"),
+    # `az account lock` reads the active subscription and rejects the flag: pinned,
+    # az fails loudly rather than mislabelling the default subscription's locks.
+    ("az account lock list", "az account lock list --subscription SUB1"),
 ])
 def test_apply_azure_subscription(helpers, command, expected):
     assert helpers["_apply_azure_subscription"](command, "SUB1") == expected
@@ -104,6 +119,18 @@ def test_get_credentials_never_fans_out(helpers):
     assert helpers["_azure_can_fan_out"]("az vm list") is True
     assert helpers["_azure_can_fan_out"](
         "az aks get-credentials --name c --resource-group r") is False
+
+
+@pytest.mark.parametrize("command", [
+    "az account clear",
+    "az account set --subscription x",
+    "az login --service-principal",
+    "az logout",
+    "az config set core.output=json",
+])
+def test_cli_state_commands_never_fan_out(helpers, command):
+    """Every worker shares one config dir; a CLI-state command would rewrite it under the others."""
+    assert helpers["_azure_can_fan_out"](command) is False
 
 
 def test_resource_graph_query_is_ordered():
@@ -212,7 +239,19 @@ def test_read_only_mode_fails_closed_without_distinct_identity():
 # boundaries are faked: credential setup and subprocess execution.
 # ---------------------------------------------------------------------------
 
-def _load_fanout(run_command, config_dirs, fail_subs=(), mode="agent"):
+class _NoLoginCache:
+    """Login cache switched off: the fan-out keeps its own private directory."""
+
+    @staticmethod
+    def attach(env, command):
+        return None
+
+    @staticmethod
+    def is_cached_dir(path):
+        return False
+
+
+def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent", login_cache=_NoLoginCache):
     """Exec the real fan-out function with faked module-level dependencies."""
     src = _read(CLOUD_EXEC)
     ns = {"shlex": shlex, "json": __import__("json"), "time": __import__("time"),
@@ -220,19 +259,25 @@ def _load_fanout(run_command, config_dirs, fail_subs=(), mode="agent"):
           "Optional": typing.Optional, "logger": __import__("logging").getLogger("test")}
 
     for fn in ["is_read_only_command", "_apply_azure_subscription",
-               "_cloud_exec_azure_multi_subscription"]:
+               "_run_azure_on_subscription", "_fan_out_azure",
+               "_subscriptions_needing_relogin", "_azure_login_ok",
+               "_retry_stale_subscriptions", "_cloud_exec_azure_multi_subscription"]:
         match = re.search(r"^def " + fn + r"\(.*?(?=^def )", src, re.S | re.M)
         ns_src = match.group(0)
         exec(ns_src, ns)
 
     def fake_setup(user_id, sub_id):
-        if sub_id in fail_subs:
+        # The fan-out authenticates once for the whole tenant, so it is called with
+        # sub_id=None and must NOT allocate a dir per subscription.
+        if fail_setup:
             return False, None, None, None, None
         cfg = tempfile.mkdtemp(prefix="aurora-az-test-")
         config_dirs.append(cfg)
         # argv list, matching setup_azure_environment_isolated's real contract. A
         # string here would let a regression back into shlex-parsing the secret pass.
-        return True, sub_id, "service_principal", {"AZURE_CONFIG_DIR": cfg}, [
+        env = {"AZURE_CONFIG_DIR": cfg, "AZURE_TENANT_ID": "tenant",
+               "AZURE_CLIENT_ID": "client", "AZURE_CLIENT_SECRET": "s3c ret"}
+        return True, sub_id, "service_principal", env, [
             "az", "login", "--service-principal", "--password", "s3c ret", "--output", "none",
         ]
 
@@ -242,6 +287,7 @@ def _load_fanout(run_command, config_dirs, fail_subs=(), mode="agent"):
 
     ns.update({
         "setup_azure_environment_isolated": fake_setup,
+        "azure_login_cache": login_cache,
         "terminal_run": run_command,
         "get_command_timeout": lambda c, t: t or 60,
         "get_mode_from_context": lambda: mode,
@@ -254,8 +300,15 @@ def _load_fanout(run_command, config_dirs, fail_subs=(), mode="agent"):
     return ns["_cloud_exec_azure_multi_subscription"], Result
 
 
-def test_fanout_across_30_subscriptions_isolates_config_dirs():
-    """Each subscription needs its own AZURE_CONFIG_DIR or `az login` races."""
+def test_fanout_authenticates_once_and_pins_every_subscription():
+    """The whole point of the single-login fan-out: one `az login`, one config dir.
+
+    All connected subscriptions share the same service principal, so re-running
+    `az login` per subscription (the old behaviour) was pure waste: 2N subprocesses
+    and N temp dirs for what one tenant login covers. This locks in N+1 subprocesses
+    and a single shared config dir, while still pinning every command to its own
+    subscription so concurrent workers never contend on the active-subscription state.
+    """
     import json as _json
     config_dirs = []
     seen_dirs, seen_cmds, lock = [], [], threading.Lock()
@@ -266,8 +319,8 @@ def test_fanout_across_30_subscriptions_isolates_config_dirs():
         with lock:
             seen_dirs.append(env["AZURE_CONFIG_DIR"])
             seen_argvs.append(list(argv))
-            # argv is a list, so join to inspect it. Auth runs as its own
-            # invocation now, so both it and the command land here.
+            # argv is a list, so join to inspect it. The single auth login lands
+            # here too, alongside every per-subscription command.
             seen_cmds.append(" ".join(argv))
         time.sleep(0.01)  # widen the window for a real race
         return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
@@ -278,9 +331,13 @@ def test_fanout_across_30_subscriptions_isolates_config_dirs():
 
     assert out["success"] is True
     assert len(out["results_by_subscription"]) == 30, "every subscription must report"
-    # The core invariant: no two concurrent invocations shared a config dir.
-    assert len(set(seen_dirs)) == 30, "AZURE_CONFIG_DIR was reused across threads"
-    # Every command was pinned to its own subscription.
+    # Single login for the whole tenant, not one per subscription.
+    assert len(config_dirs) == 1, "fan-out authenticated more than once"
+    auth_argvs = [a for a in seen_argvs if "login" in a]
+    assert len(auth_argvs) == 1, "expected exactly one `az login` for the whole fan-out"
+    # Every worker reused the one shared, already-authenticated config dir.
+    assert set(seen_dirs) == set(config_dirs), "workers did not reuse the shared config dir"
+    # Every command was still pinned to its own subscription.
     for i in range(30):
         assert any(f"--subscription sub-{i:02d}" in c for c in seen_cmds), \
             f"sub-{i:02d} command was not pinned to its subscription"
@@ -293,15 +350,13 @@ def test_fanout_across_30_subscriptions_isolates_config_dirs():
     # The secret must reach az byte-for-byte. The stub's secret contains a space, so
     # any re-lexing of the auth argv (e.g. shlex.split on a joined string) truncates
     # it and this fails.
-    auth_argvs = [a for a in seen_argvs if "login" in a]
-    assert len(auth_argvs) == 30, "each subscription must authenticate exactly once"
     for argv in auth_argvs:
         assert argv[argv.index("--password") + 1] == "s3c ret", \
             "client secret was re-parsed and corrupted before reaching az"
 
 
-def test_fanout_cleans_up_every_temp_dir():
-    """A leaked tempdir per exec would accumulate unboundedly in the worker."""
+def test_fanout_cleans_up_its_shared_temp_dir():
+    """The one shared config dir must be removed after every worker finishes."""
     config_dirs = []
 
     def run_command(argv, **kw):
@@ -310,8 +365,8 @@ def test_fanout_cleans_up_every_temp_dir():
     fanout, _ = _load_fanout(run_command, config_dirs)
     fanout("u", [{"account_id": f"s{i}"} for i in range(8)], "vm list")
 
-    assert len(config_dirs) == 8
-    assert not [d for d in config_dirs if os.path.exists(d)], "temp dirs leaked"
+    assert len(config_dirs) == 1, "fan-out must allocate exactly one shared config dir"
+    assert not [d for d in config_dirs if os.path.exists(d)], "temp dir leaked"
 
 
 def test_fanout_isolates_per_subscription_failures():
@@ -320,24 +375,173 @@ def test_fanout_isolates_per_subscription_failures():
     config_dirs = []
 
     def run_command(argv, **kw):
-        cmd = argv[-1]
+        # The single login succeeds; only the sub-bad command returns an error.
+        if "login" in argv:
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        cmd = " ".join(argv)
         if "sub-bad" in cmd:
             return type("R", (), {
                 "returncode": 1, "stdout": "",
                 "stderr": "(SubscriptionNotFound) The subscription could not be found."})()
         return type("R", (), {"returncode": 0, "stdout": '{"ok":true}', "stderr": ""})()
 
-    fanout, _ = _load_fanout(run_command, config_dirs, fail_subs=("sub-noauth",))
-    conns = [{"account_id": s} for s in ("sub-ok", "sub-bad", "sub-noauth")]
+    fanout, _ = _load_fanout(run_command, config_dirs)
+    conns = [{"account_id": s} for s in ("sub-ok", "sub-bad")]
     out = _json.loads(fanout("u", conns, "vm list"))
     res = out["results_by_subscription"]
 
-    assert out["success"] is False           # aggregate reflects the failures
+    assert out["success"] is False           # aggregate reflects the failure
     assert res["sub-ok"]["success"] is True  # but the good one still returned data
     assert "SubscriptionNotFound" in res["sub-bad"]["output"]
-    assert res["sub-noauth"]["error"] == "Failed to authenticate"
-    # Auth failure happens before a tempdir is made, so only 2 were created.
-    assert len(config_dirs) == 2
+
+
+def test_fanout_fails_closed_when_shared_login_fails():
+    """If the single up-front authentication fails, no command may run."""
+    import json as _json
+
+    def run_command(argv, **kw):
+        raise AssertionError("no command may run when authentication failed")
+
+    fanout, _ = _load_fanout(run_command, [], fail_setup=True)
+    out = _json.loads(fanout("u", [{"account_id": "s1"}], "vm list"))
+    assert out["success"] is False
+    assert "Failed to authenticate" in out["error"]
+    assert out["multi_subscription"] is True
+
+
+@pytest.fixture
+def login_cache(tmp_path, monkeypatch):
+    """The real login cache, rooted in a throwaway directory."""
+    from utils.cloud import azure_login_cache
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setenv("FLASK_SECRET_KEY", "test-key")
+    monkeypatch.setenv("ENABLE_POD_ISOLATION", "false")  # unset means on, which disables the cache
+    monkeypatch.setattr(azure_login_cache, "_last_sweep", 0.0)
+    return azure_login_cache
+
+
+def test_warm_fanout_spawns_no_login_and_keeps_the_cached_directory(login_cache):
+    """With a cached login the whole fan-out is N commands and zero logins."""
+    import json as _json
+    seen, lock = [], threading.Lock()
+
+    def run_command(argv, **kw):
+        with lock:
+            seen.append((list(argv), kw["env"]["AZURE_CONFIG_DIR"]))
+        return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+
+    private_dirs = []
+    fanout, _ = _load_fanout(run_command, private_dirs, login_cache=login_cache)
+    conns = [{"account_id": f"sub-{i}"} for i in range(6)]
+
+    assert _json.loads(fanout("u", conns, "vm list"))["success"] is True
+    cold_logins = [a for a, _d in seen if "login" in a]
+    assert len(cold_logins) == 1, "a cold cache still logs in exactly once"
+
+    seen.clear()
+    assert _json.loads(fanout("u", conns, "vm list"))["success"] is True
+
+    assert not [a for a, _d in seen if "login" in a], "a warm fan-out must not log in"
+    assert len(seen) == 6
+    dirs = {d for _a, d in seen}
+    assert len(dirs) == 1
+    assert login_cache.is_cached_dir(next(iter(dirs)))
+    assert os.path.isdir(next(iter(dirs))), "the fan-out must not delete a shared login"
+    assert not [d for d in private_dirs if os.path.exists(d)], "unused private dirs leaked"
+    for i in range(6):
+        assert any(f"--subscription sub-{i}" in " ".join(a) for a, _d in seen)
+
+
+def test_fanout_recovers_from_a_dead_cached_login_with_one_relogin(login_cache):
+    """A swept or replaced login fails every subscription at once; heal it once."""
+    import json as _json
+    state = {"logged_in": False, "logins": 0, "commands": 0}
+    lock = threading.Lock()
+
+    def run_command(argv, **kw):
+        with lock:
+            if "login" in argv:
+                state["logins"] += 1
+                state["logged_in"] = True
+                return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            state["commands"] += 1
+            if not state["logged_in"]:
+                return type("R", (), {"returncode": 1, "stdout": "",
+                                      "stderr": "ERROR: Please run 'az login' to setup account."})()
+        return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+
+    fanout, _ = _load_fanout(run_command, [], login_cache=login_cache)
+    conns = [{"account_id": f"sub-{i}"} for i in range(5)]
+    fanout("u", conns, "vm list")
+    assert state["logins"] == 1
+
+    # The directory's login dies behind the cache's back (az state wiped, marker intact).
+    state.update(logged_in=False, commands=0)
+    out = _json.loads(fanout("u", conns, "vm list"))
+
+    assert out["success"] is True, "every subscription must succeed after the relogin"
+    assert state["logins"] == 2, "one relogin for the whole fan-out, not one per subscription"
+    assert state["commands"] == 10, "only the failed subscriptions are re-run, once"
+
+
+def test_fanout_reports_auth_failure_when_login_raises(login_cache):
+    """A login that raises must fail the fan-out cleanly, not escape it."""
+    import json as _json
+
+    def run_command(argv, **kw):
+        if "login" in argv:
+            raise OSError("no space left on device")
+        raise AssertionError("no command may run without a login")
+
+    fanout, _ = _load_fanout(run_command, [], login_cache=login_cache)
+    out = _json.loads(fanout("u", [{"account_id": "s1"}, {"account_id": "s2"}], "vm list"))
+
+    assert out["success"] is False
+    assert out["error"] == "Azure authentication failed"
+    assert out["multi_subscription"] is True
+
+
+def test_fanout_keeps_first_pass_results_when_relogin_raises(login_cache):
+    """A relogin that raises must not throw away the subscriptions that succeeded."""
+    import json as _json
+    state = {"logins": 0}
+    lock = threading.Lock()
+
+    def run_command(argv, **kw):
+        with lock:
+            if "login" in argv:
+                state["logins"] += 1
+                if state["logins"] > 1:
+                    raise OSError("lock file unwritable")
+                return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if "--subscription sub-0" in " ".join(argv):
+                return type("R", (), {"returncode": 1, "stdout": "",
+                                      "stderr": "ERROR: Please run 'az login' to setup account."})()
+        return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+
+    fanout, _ = _load_fanout(run_command, [], login_cache=login_cache)
+    conns = [{"account_id": f"sub-{i}"} for i in range(3)]
+    out = _json.loads(fanout("u", conns, "vm list"))
+
+    assert state["logins"] == 2, "one cold login plus the relogin attempt"
+    results = out["results_by_subscription"]
+    assert results["sub-0"]["success"] is False
+    assert results["sub-1"]["success"] is True
+    assert results["sub-2"]["success"] is True
+    assert out["success"] is False
+
+
+def test_cloud_exec_never_deletes_a_cached_login_directory():
+    """cloud_exec's converging cleanup must skip the shared directory.
+
+    Deleting it would silently turn every command back into login-plus-command and
+    pull the login out from under other requests mid-flight.
+    """
+    src = _read(CLOUD_EXEC)
+    cleanup = src[src.rindex("finally:"):]
+    assert "is_cached_dir" in cleanup
+    assert "rmtree" in cleanup
+    assert cleanup.index("is_cached_dir") < cleanup.index("rmtree")
 
 
 def test_fanout_blocks_write_commands_in_ask_mode():
@@ -717,7 +921,8 @@ def test_fan_out_propagates_contextvars_to_workers():
 def test_both_fan_outs_copy_context():
     """Both providers must copy context; a bare submit reintroduces exit-126 blocks."""
     src = _read(CLOUD_EXEC)
-    for fn in ("_cloud_exec_aws_multi_account", "_cloud_exec_azure_multi_subscription"):
+    # Azure submits from its _fan_out_azure helper rather than the entry function.
+    for fn in ("_cloud_exec_aws_multi_account", "_fan_out_azure"):
         match = re.search(r"^def " + fn + r"\(.*?(?=^def )", src, re.S | re.M)
         assert match, f"{fn} not found"
         submits = re.findall(r"pool\.submit\(\s*([^,]+)", match.group(0))
