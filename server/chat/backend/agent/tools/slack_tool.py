@@ -205,10 +205,13 @@ def get_channel_history(
     except SlackAPIError as e:
         # Private channel Aurora hasn't been invited to (join couldn't recover it).
         if getattr(e, "error", None) == "not_in_channel":
+            logger.info("[SlackTool] channel history read blocked (private, not invited) for %s", channel_id)
             return json.dumps({"error": f"Channel {channel_id} is private and the bot hasn't been invited. Invite the bot to read it."})
+        logger.info("[SlackTool] Slack API error reading channel history for %s: %s", channel_id, getattr(e, "error", e))
         return json.dumps({"error": f"Slack API error: {e}"})
     except ValueError as e:
         # Transport failure (SlackAPIError's non-membership sibling).
+        logger.info("[SlackTool] transport error reading channel history for %s: %s", channel_id, e)
         return json.dumps({"error": f"Slack API error: {e}"})
     except Exception as e:
         logger.info("[SlackTool] Failed to get channel history for %s", channel_id)
@@ -288,10 +291,13 @@ def get_thread_replies(
     except SlackAPIError as e:
         # Private channel Aurora hasn't been invited to (join couldn't recover it).
         if getattr(e, "error", None) == "not_in_channel":
+            logger.info("[SlackTool] thread read blocked (private, not invited) for %s/%s", channel_id, thread_ts)
             return json.dumps({"error": f"Channel {channel_id} is private and the bot hasn't been invited. Invite the bot to read it."})
+        logger.info("[SlackTool] Slack API error reading thread %s/%s: %s", channel_id, thread_ts, getattr(e, "error", e))
         return json.dumps({"error": f"Slack API error: {e}"})
     except ValueError as e:
         # Transport failure (SlackAPIError's non-membership sibling).
+        logger.info("[SlackTool] transport error reading thread %s/%s: %s", channel_id, thread_ts, e)
         return json.dumps({"error": f"Slack API error: {e}"})
     except Exception as e:
         logger.info("[SlackTool] Failed to get thread replies for %s/%s", channel_id, thread_ts)
