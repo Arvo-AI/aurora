@@ -512,6 +512,8 @@ PAGERDUTY_CLIENT_ID=your-client-id
 PAGERDUTY_CLIENT_SECRET=your-client-secret
 ```
 
+OAuth now requests `incidents.write` (for posting RCA notes); register it on the PagerDuty app, and existing OAuth connections must disconnect and reconnect to receive it.
+
 ### OVH
 
 | Variable | Default | Description |

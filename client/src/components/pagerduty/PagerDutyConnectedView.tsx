@@ -100,10 +100,10 @@ export function PagerDutyConnectedView({
               {capabilities.can_write_incidents ? (
                 <Check className="h-4 w-4 text-green-600" />
               ) : (
-                <X className="h-4 w-4 text-red-600" />
+                <X className="h-4 w-4 text-muted-foreground" />
               )}
-              <span className={capabilities.can_write_incidents ? "text-foreground" : "text-red-600 font-medium"}>
-                Write incidents {!capabilities.can_write_incidents && "- not allowed with this token"}
+              <span className={capabilities.can_write_incidents ? "text-foreground" : "text-muted-foreground"}>
+                Write incidents {!capabilities.can_write_incidents && "- required for posting RCA notes"}
               </span>
             </div>
           </div>

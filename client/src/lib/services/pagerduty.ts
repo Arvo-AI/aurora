@@ -2,18 +2,26 @@
 
 import { apiRequest } from '@/lib/services/api-client';
 
+export type PagerDutyApiKeyAccess = 'user' | 'account' | 'oauth';
+
 export interface PagerDutyStatus {
   connected: boolean;
   displayName?: string;
   externalUserEmail?: string;
   externalUserName?: string;
+  externalUserRole?: string;
   accountSubdomain?: string;
   validatedAt?: string;
   authType?: 'api_token' | 'oauth';
   capabilities?: {
     can_read_incidents: boolean;
     can_write_incidents: boolean;
+    api_key_access?: PagerDutyApiKeyAccess;
   };
+  /** Set by connect/rotate when the new token cannot post notes and the org toggle was turned off. */
+  notesDisabled?: boolean;
+  /** Present when can_write_incidents is false: why, and what to do about it. */
+  notesUnwritableReason?: string;
 }
 
 const API_BASE = '/api/pagerduty';
@@ -53,5 +61,14 @@ export const pagerdutyService = {
 
   async disconnect(): Promise<void> {
     await apiRequest(API_BASE, { method: 'DELETE', cache: 'no-store' });
+  },
+
+  /** Re-validates write capability server-side, then turns on RCA notes for the org. Throws with the server's reason. */
+  async enableNotes(): Promise<{ enabled: boolean }> {
+    return apiRequest<{ enabled: boolean }>(`${API_BASE}/notes/enable`, {
+      method: 'POST',
+      body: '{}',
+      cache: 'no-store',
+    });
   },
 };

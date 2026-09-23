@@ -5,7 +5,8 @@ All notification events (investigation start/complete, action start/complete) ro
 through this module. It handles preference checking, recipient resolution, and dispatch
 to enabled channels.
 
-Investigation notifications dispatch to: email, Slack, Google Chat.
+Investigation notifications dispatch to: email, Slack, Google Chat, and (on
+completion only) a note on the originating PagerDuty incident.
 Action notifications dispatch to: email, Slack.
 
 Callers (task.py, summarization.py) make a single one-line call and remain unaware
@@ -108,7 +109,8 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                            i.alert_service, i.aurora_status, i.aurora_summary, i.started_at,
                            i.analyzed_at, i.created_at, i.slack_message_ts, i.google_chat_message_name,
                            i.recurrence_of_incident_id, anchor.slack_message_ts, anchor.alert_title,
-                           grp.occurrence_number, grp.group_size, grp.last_fired_at
+                           grp.occurrence_number, grp.group_size, grp.last_fired_at,
+                           i.alert_metadata, i.pagerduty_note_id
                     FROM incidents i
                     LEFT JOIN incidents anchor ON anchor.id = i.recurrence_of_incident_id
                     JOIN grp ON grp.id = i.id
@@ -118,6 +120,12 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                 )
                 result = cursor.fetchone()
                 if result:
+                    alert_metadata = result[20] or {}
+                    if isinstance(alert_metadata, str):
+                        try:
+                            alert_metadata = json.loads(alert_metadata)
+                        except (ValueError, TypeError):
+                            alert_metadata = {}
                     return {
                         'incident_id': str(result[0]),
                         'user_id': result[1],
@@ -139,6 +147,8 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                         'occurrence_number': int(result[17]),
                         'group_size': int(result[18]),
                         'group_last_fired_at': result[19],
+                        'alert_metadata': alert_metadata,
+                        'pagerduty_note_id': result[21],
                     }
         return None
     except Exception:
@@ -467,6 +477,16 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
                 )
             except Exception:
                 logger.exception("[Dispatcher] Google Chat completed notification failed")
+
+        # --- PagerDuty note --- (completion only, anchors only, once; opt-in per org;
+        # the service itself checks the stored credentials can write, default-deny)
+        pd_enabled = bool(get_org_preference(org_id, 'pagerduty_incident_notes', default=False))
+        if pd_enabled and not refresh_only:
+            try:
+                from utils.notifications.pagerduty_notification_service import send_pagerduty_incident_note
+                send_pagerduty_incident_note(user_id, incident_data)
+            except Exception:
+                logger.exception("[Dispatcher] PagerDuty note failed")
 
     except Exception:
         logger.exception("[Dispatcher] Error in notify_investigation_completed")
