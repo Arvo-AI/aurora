@@ -266,8 +266,9 @@ def process_event_callback(data: dict) -> None:
                                     text="Sorry, something went wrong while processing your request.", 
                                     thread_ts=thread_ts
                                 )
-                            except:
-                                pass
+                            # Best-effort fallback notice; nothing left to do if even this fails.
+                            except Exception:
+                                logger.warning("Failed to send fallback error message to Slack", exc_info=True)
 
             except Exception as e:
                 logger.error(f"Error processing app_mention: {e}", exc_info=True)
@@ -279,8 +280,9 @@ def process_event_callback(data: dict) -> None:
                              text="Sorry, something went wrong processing your request.", 
                              thread_ts=thread_ts
                          )
-                     except:
-                         pass
+                     # Best-effort fallback notice; nothing left to do if even this fails.
+                     except Exception:
+                         logger.warning("Failed to send fallback error message to Slack", exc_info=True)
             
                 return
 
