@@ -34,8 +34,6 @@ class ConnectorRegistry {
       storageKey: "isDatadogConnected",
       alertsPath: "/datadog/events",
       alertsLabel: "View Events",
-      overviewPath: "/datadog/overview",
-      overviewLabel: "Overview",
       useCustomConnection: true,
     });
 

@@ -12,8 +12,11 @@ from pydantic import BaseModel, Field
 from routes.datadog.config import MAX_OUTPUT_SIZE, MAX_RESULTS_CAP
 from routes.datadog.datadog_routes import (
     DatadogAPIError,
-    _get_stored_datadog_credentials,
+    account_label,
+    _account_summary,
     _build_client_from_creds,
+    list_datadog_accounts,
+    select_datadog_account,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,8 +24,9 @@ logger = logging.getLogger(__name__)
 
 class QueryDatadogArgs(BaseModel):
     resource_type: str = Field(
-        description="Type of data to query: 'logs', 'metrics', 'metric_stats', 'monitors', "
-        "'events', 'traces', 'hosts', or 'incidents'"
+        description="Type of data to query: 'accounts', 'logs', 'metrics', 'metric_stats', "
+        "'monitors', 'events', 'traces', 'hosts', or 'incidents'. Use 'accounts' to list the "
+        "connected Datadog organizations before querying, since more than one may be connected."
     )
     query: str = Field(
         default="",
@@ -50,6 +54,14 @@ class QueryDatadogArgs(BaseModel):
         "granularity that keeps each series under ~1000 points (a 30-day window "
         "auto-picks 1h). For 'metrics', omitting it leaves Datadog's own default "
         "resolution in place.",
+    )
+    account: Optional[str] = Field(
+        default=None,
+        description="Which connected Datadog organization to query, by its label from "
+        "resource_type='accounts'. Labels default to the Datadog org name and may be "
+        "overridden. Several orgs are commonly connected (per environment, region, business "
+        "unit or customer); omitting this queries the primary, which may be the wrong org "
+        "for the alert under investigation.",
     )
 
 
@@ -110,9 +122,12 @@ def _to_unix_ms(time_str: str) -> int:
 
 
 def is_datadog_connected(user_id: str) -> bool:
-    """Check if a user has valid Datadog credentials stored."""
-    creds = _get_stored_datadog_credentials(user_id)
-    return _build_client_from_creds(creds) is not None if creds else False
+    """Check if a user has at least one usable Datadog connection.
+
+    Must stay list-aware: returning False here silently removes query_datadog
+    from the agent's toolset, with no error anywhere to explain the absence.
+    """
+    return bool(list_datadog_accounts(user_id))
 
 
 # ---------------------------------------------------------------------------
@@ -561,6 +576,11 @@ _HANDLERS = {
     "incidents": _query_incidents,
 }
 
+# 'accounts' is deliberately not in _HANDLERS: it reads local credential metadata
+# and needs no DatadogClient, so it is served before account resolution (which
+# would otherwise have to pick an org just to be told which orgs exist).
+_ACCOUNTS_RESOURCE = "accounts"
+
 
 # ---------------------------------------------------------------------------
 # Main entry point
@@ -574,6 +594,7 @@ def query_datadog(
     time_to: str = "now",
     limit: int = 100,
     interval: Optional[int] = None,
+    account: Optional[str] = None,
     user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
@@ -581,21 +602,44 @@ def query_datadog(
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
-    creds = _get_stored_datadog_credentials(user_id)
-    if not creds:
+    resource_type = resource_type.lower().strip()
+
+    accounts = list_datadog_accounts(user_id)
+    if not accounts:
         return json.dumps({"error": "Datadog not connected. Please connect Datadog first."})
 
-    client = _build_client_from_creds(creds)
+    if resource_type == _ACCOUNTS_RESOURCE:
+        summaries = [_account_summary(a) for a in accounts]
+        return json.dumps({
+            "resource_type": _ACCOUNTS_RESOURCE,
+            "success": True,
+            "count": len(summaries),
+            "results": summaries,
+            "default_account": summaries[0]["label"],
+            "note": (
+                "Pass account=<label> to query a specific organization. Omitting it uses "
+                f"'{summaries[0]['label']}'."
+            ) if len(summaries) > 1 else None,
+        })
+
+    handler = _HANDLERS.get(resource_type)
+    if not handler:
+        valid = ", ".join([_ACCOUNTS_RESOURCE, *_HANDLERS])
+        return json.dumps({"error": f"Invalid resource_type '{resource_type}'. Must be one of: {valid}"})
+
+    selected = select_datadog_account(accounts, account)
+    if not selected:
+        known = ", ".join(account_label(a) for a in accounts)
+        return json.dumps({"error": f"Unknown Datadog account '{account}'. Connected: {known}"})
+
+    client = _build_client_from_creds(selected)
     if not client:
         return json.dumps({"error": "Datadog credentials are incomplete. Please reconnect Datadog."})
 
-    resource_type = resource_type.lower().strip()
-    handler = _HANDLERS.get(resource_type)
-    if not handler:
-        return json.dumps({"error": f"Invalid resource_type '{resource_type}'. Must be one of: {', '.join(_HANDLERS)}"})
-
+    selected_label = account_label(selected)
     limit = min(max(limit, 1), MAX_RESULTS_CAP)
-    logger.info("[DATADOG-TOOL] user=%s resource=%s query=%s", user_id, resource_type, query[:100] if query else "")
+    logger.info("[DATADOG-TOOL] user=%s account=%s resource=%s query=%s",
+                user_id, selected_label, resource_type, query[:100] if query else "")
 
     try:
         # Forward **kwargs so internal-only handler options (e.g. metric_stats'
@@ -605,6 +649,9 @@ def query_datadog(
         result = handler(client, query, time_from, time_to, limit, interval=interval, **_handler_kwargs)
         result["success"] = True
         result["time_range"] = f"{time_from} to {time_to}"
+        # Name the org that answered: with several connected, an answer from the
+        # wrong environment is otherwise indistinguishable from a correct one.
+        result["account"] = selected_label
 
         results_list = result.get("results", [])
         serialized = [json.dumps(item) for item in results_list]
