@@ -69,8 +69,10 @@ export default auth((req) => {
     return sanitizeResponse(NextResponse.redirect(new URL("/", nextUrl)))
   }
 
-  // Force password change: redirect to /sign-in?mode=change-password if flag is set
-  if (isLoggedIn && req.auth?.user?.mustChangePassword && !isChangePasswordRoute && !isApiRoute) {
+  // Force password change: redirect to /sign-in?mode=change-password if flag is set.
+  // GitHub-provisioned users also have mustChangePassword (unusable password) but
+  // are NOT forced — they can set a password later from Profile Settings.
+  if (isLoggedIn && req.auth?.user?.mustChangePassword && !req.auth?.user?.isGithubProvisioned && !isChangePasswordRoute && !isApiRoute) {
     return sanitizeResponse(NextResponse.redirect(new URL("/sign-in?mode=change-password", nextUrl)))
   }
 

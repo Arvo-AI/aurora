@@ -7,9 +7,20 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { incidentIoService, IncidentIoWebhookUrlResponse } from "@/lib/services/incident-io";
+import {
+  incidentIoService,
+  IncidentIoOrgSeverity,
+  IncidentIoWebhookUrlResponse,
+} from "@/lib/services/incident-io";
 import { copyToClipboard } from "@/lib/utils";
 
 interface IncidentIoWebhookStepProps {
@@ -136,7 +147,10 @@ function WebhookConfig({
         <p className="font-medium text-sm mb-3">Setup Instructions:</p>
         <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
           {webhookData.instructions.map((instruction) => (
-            <li key={instruction}>{instruction.replace(/^\d+\.\s*/, '')}</li>
+            // whitespace-pre-line keeps the newlines in multi-line steps
+            // (e.g. the event-type list in step 4) so each topic is on its
+            // own line instead of one run-on sentence.
+            <li key={instruction} className="whitespace-pre-line">{instruction.replace(/^\d+\.\s*/, '')}</li>
           ))}
         </ol>
       </div>
@@ -160,9 +174,20 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
   const [loadingWebhook, setLoadingWebhook] = useState(true);
   const [rcaEnabled, setRcaEnabled] = useState(true);
   const [postbackEnabled, setPostbackEnabled] = useState(false);
+  const [alertRcaEnabled, setAlertRcaEnabled] = useState(true);
+  const [alertMinSeverity, setAlertMinSeverity] = useState<string>("low");
+  const [orgSeverities, setOrgSeverities] = useState<IncidentIoOrgSeverity[]>([]);
+  const [severitiesAvailable, setSeveritiesAvailable] = useState(false);
+  // Distinguishes a genuine "missing scope" (denied) from a transient load
+  // failure, so we don't tell the user to change API-key scopes on a network
+  // blip. Both leave `severitiesAvailable` false, but only `denied` warrants
+  // the permission guidance.
+  const [severitiesDenied, setSeveritiesDenied] = useState(false);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [updatingRca, setUpdatingRca] = useState(false);
   const [updatingPostback, setUpdatingPostback] = useState(false);
+  const [updatingAlertRca, setUpdatingAlertRca] = useState(false);
+  const [updatingMinSeverity, setUpdatingMinSeverity] = useState(false);
   const [webhookSecret, setWebhookSecret] = useState("");
   const [savingSecret, setSavingSecret] = useState(false);
   const [hasWebhookSecret, setHasWebhookSecret] = useState(false);
@@ -175,9 +200,10 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
       setLoadingSettings(true);
 
       try {
-        const [webhookResponse, rcaSettings] = await Promise.all([
+        const [webhookResponse, rcaSettings, severitiesResponse] = await Promise.all([
           incidentIoService.getWebhookUrl(),
           incidentIoService.getRcaSettings(),
+          incidentIoService.getSeverities(),
         ]);
 
         if (isMounted) {
@@ -188,7 +214,12 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
           if (rcaSettings) {
             setRcaEnabled(rcaSettings.rcaEnabled);
             setPostbackEnabled(rcaSettings.postbackEnabled);
+            setAlertRcaEnabled(rcaSettings.alertRcaEnabled ?? true);
+            setAlertMinSeverity(rcaSettings.alertMinSeverity ?? "low");
           }
+          setSeveritiesAvailable(severitiesResponse.available);
+          setSeveritiesDenied(severitiesResponse.denied);
+          setOrgSeverities(severitiesResponse.severities);
         }
       } catch (_error) {
         console.error("Failed to load incident.io settings:", _error);
@@ -211,6 +242,8 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
       if (result) {
         setRcaEnabled(result.rcaEnabled);
         setPostbackEnabled(result.postbackEnabled);
+        setAlertRcaEnabled(result.alertRcaEnabled ?? true);
+        setAlertMinSeverity(result.alertMinSeverity ?? "low");
         toast({
           title: enabled ? "Automatic RCA Enabled" : "Automatic RCA Disabled",
           description: enabled
@@ -246,6 +279,52 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
       toast({ title: "Failed to update settings", description: "Could not update post-back setting. Please try again.", variant: "destructive" });
     } finally {
       setUpdatingPostback(false);
+    }
+  };
+
+  const handleAlertRcaToggle = async (enabled: boolean) => {
+    setUpdatingAlertRca(true);
+    try {
+      const result = await incidentIoService.updateRcaSettings({ alertRcaEnabled: enabled });
+      if (result) {
+        setAlertRcaEnabled(result.alertRcaEnabled ?? enabled);
+        setAlertMinSeverity(result.alertMinSeverity ?? "low");
+        toast({
+          title: enabled ? "Alert RCA Enabled" : "Alert RCA Disabled",
+          description: enabled
+            ? "Aurora will investigate incident.io alerts (not just declared incidents)"
+            : "incident.io alerts will be stored but not investigated",
+        });
+      } else {
+        toast({ title: "Failed to update settings", description: "Could not update alert RCA setting. Please try again.", variant: "destructive" });
+      }
+    } catch (_error) {
+      toast({ title: "Failed to update settings", description: "Could not update alert RCA setting. Please try again.", variant: "destructive" });
+    } finally {
+      setUpdatingAlertRca(false);
+    }
+  };
+
+  const handleMinSeverityChange = async (severity: string) => {
+    setUpdatingMinSeverity(true);
+    try {
+      const result = await incidentIoService.updateRcaSettings({ alertMinSeverity: severity });
+      if (result) {
+        setAlertMinSeverity(result.alertMinSeverity ?? severity);
+        toast({
+          title: "Alert severity filter updated",
+          description:
+            severity === "low"
+              ? "Aurora will investigate alerts of any severity"
+              : `Aurora will only investigate alerts of severity ${severity} or higher`,
+        });
+      } else {
+        toast({ title: "Failed to update settings", description: "Could not update severity filter. Please try again.", variant: "destructive" });
+      }
+    } catch (_error) {
+      toast({ title: "Failed to update settings", description: "Could not update severity filter. Please try again.", variant: "destructive" });
+    } finally {
+      setUpdatingMinSeverity(false);
     }
   };
 
@@ -341,6 +420,82 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
                 />
               )}
             </div>
+          </div>
+        )}
+
+        {rcaEnabled && (
+          <div className="border-t pt-6">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="alert-rca-toggle" className="text-base font-medium">
+                  Investigate Alerts
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  Run RCA on incident.io alerts, not just declared incidents
+                </p>
+              </div>
+              {loadingSettings ? (
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              ) : (
+                <Switch
+                  id="alert-rca-toggle"
+                  checked={alertRcaEnabled}
+                  onCheckedChange={handleAlertRcaToggle}
+                  disabled={updatingAlertRca}
+                />
+              )}
+            </div>
+
+            {/* Priority filter only applies when alert RCA is on — lets orgs
+                skip high-volume low-priority alert noise. */}
+            {alertRcaEnabled && (
+              <div className="mt-4 flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="alert-min-severity" className="text-sm font-medium">
+                    Minimum alert priority
+                  </Label>
+                  <p className={severitiesAvailable ? "text-sm text-muted-foreground" : "text-sm text-red-600 dark:text-red-400"}>
+                    {/* Message differs depending on whether we could read the
+                        org's real alert priorities from the incident.io API.
+                        Shown in red when unavailable to flag the misconfig. */}
+                    {severitiesAvailable
+                      ? "Only investigate alerts at or above this priority"
+                      : severitiesDenied
+                        ? "Add the “View data” permission to your incident.io API key to filter by your organization's alert priorities. After updating permissions, allow up to 5 minutes for this to update."
+                        : "Could not load your organization's alert priorities. Reload the page to try again."}
+                  </p>
+                </div>
+                {loadingSettings ? (
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                ) : (
+                  <Select
+                    value={alertMinSeverity}
+                    onValueChange={(v) => handleMinSeverityChange(v)}
+                    // Disabled when we can't read the org's priorities (missing
+                    // API scope) — the filter can't be meaningfully configured.
+                    disabled={updatingMinSeverity || !severitiesAvailable}
+                  >
+                    <SelectTrigger id="alert-min-severity" className="w-48">
+                      <SelectValue placeholder={severitiesAvailable ? "Select priority" : "Unavailable"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {/* Fixed bucket matching the server default ("low") so the
+                          default threshold has a selectable item and the user
+                          can clear the filter back to investigating everything. */}
+                      <SelectItem value="low">All priorities</SelectItem>
+                      {/* Real org alert priorities, most-urgent first. "Minimum"
+                          semantics: picking one investigates it and anything
+                          more urgent. */}
+                      {orgSeverities.map((sev) => (
+                        <SelectItem key={sev.name} value={sev.name.toLowerCase()}>
+                          {sev.name} & above
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            )}
           </div>
         )}
 

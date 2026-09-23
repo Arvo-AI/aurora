@@ -181,7 +181,7 @@ config:
   MEMGRAPH_HOST: ""  # Auto-generated if empty: <release>-memgraph
   MEMGRAPH_PORT: "7687"
   MEMGRAPH_SCHEME: "bolt"  # Use "bolt+ssc" for Memgraph Cloud (SSL, self-signed), "bolt+s" for CA-signed SSL
-  MEMGRAPH_MEMORY_LIMIT: "512"  # MB, passed to --memory-limit flag
+  MEMGRAPH_MEMORY_LIMIT: "1536"  # MB, passed to --memory-limit flag; keep below resources.memgraph.limits.memory
   
   # --- SSL/TLS for External Services ---
   # PostgreSQL: "prefer" auto-negotiates TLS (works for RDS/Cloud SQL out of box)
@@ -308,6 +308,7 @@ config:
   NEXT_PUBLIC_ENABLE_NOTION: "false"         # Notion integration
   NEXT_PUBLIC_ENABLE_SPINNAKER: "false"      # Spinnaker integration
   NEXT_PUBLIC_ENABLE_VISUALIZATION: "false"  # Incident infra visualization UI (pairs with VISUALIZATION_ENABLED)
+  HOSTED_SIGNUP_ENABLED: "false"             # One-click GitHub App signup from website (requires GITHUB_APP_CLIENT_SECRET)
   
   # --- Pod Isolation Settings ---
   # When enabled, the chart automatically creates:
@@ -393,6 +394,7 @@ secrets:
     NEXT_PUBLIC_GITHUB_APP_SLUG: ""        # URL slug (e.g. aurora-acme-prod)
     GITHUB_APP_WEBHOOK_URL: ""             # https://<your-host>/github/webhook
     GITHUB_APP_SETUP_URL: ""               # https://<your-host>/github
+    GITHUB_APP_CLIENT_SECRET: ""            # OAuth client secret (for hosted signup flow)
     GITHUB_APP_WEBHOOK_SECRET: ""          # openssl rand -hex 32 (also stored in secrets backend)
 
     # --- GitHub OAuth (only when GITHUB_AUTH_MODE=oauth or hybrid) ---
@@ -544,19 +546,19 @@ resources:
       ephemeral-storage: "500Mi"
   celeryWorker:
     requests:
-      cpu: "250m"
+      cpu: "500m"
       memory: "1Gi"
       ephemeral-storage: "1Gi"
     limits:
-      cpu: "1000m"
+      cpu: "2000m"
       memory: "4Gi"
       ephemeral-storage: "2Gi"
   celeryBeat:
     requests:
-      cpu: "50m"
+      cpu: "100m"
       memory: "256Mi"
     limits:
-      cpu: "200m"
+      cpu: "500m"
       memory: "512Mi"
   chatbot:
     requests:
@@ -569,12 +571,12 @@ resources:
       ephemeral-storage: "1Gi"
   frontend:
     requests:
-      cpu: "100m"
-      memory: "256Mi"
+      cpu: "200m"
+      memory: "512Mi"
       ephemeral-storage: "512Mi"
     limits:
-      cpu: "1000m"
-      memory: "1Gi"
+      cpu: "2000m"
+      memory: "2Gi"
       ephemeral-storage: "1Gi"
   redis:
     requests:
@@ -596,12 +598,12 @@ resources:
       ephemeral-storage: "1Gi"
   memgraph:
     requests:
-      cpu: "100m"
-      memory: "512Mi"
+      cpu: "250m"
+      memory: "1Gi"
       ephemeral-storage: "100Mi"
     limits:
-      cpu: "500m"
-      memory: "1Gi"
+      cpu: "1000m"
+      memory: "2Gi"
       ephemeral-storage: "500Mi"
   vault:
     requests:

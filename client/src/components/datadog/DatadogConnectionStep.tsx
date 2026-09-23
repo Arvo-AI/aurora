@@ -14,8 +14,14 @@ interface DatadogConnectionStepProps {
   setSite: (value: string) => void;
   serviceAccountName: string;
   setServiceAccountName: (value: string) => void;
+  label: string;
+  setLabel: (value: string) => void;
   loading: boolean;
   onConnect: (e: React.FormEvent<HTMLFormElement>) => void;
+  /** True when at least one org is already connected, so copy reads as "add another". */
+  isAdditional?: boolean;
+  /** Inline, recoverable failure (e.g. the label is taken by another org). */
+  error?: string | null;
 }
 
 const SITE_HINTS = [
@@ -37,8 +43,12 @@ export function DatadogConnectionStep({
   setSite,
   serviceAccountName,
   setServiceAccountName,
+  label,
+  setLabel,
   loading,
   onConnect,
+  isAdditional = false,
+  error = null,
 }: DatadogConnectionStepProps) {
   const normalizeSite = (value: string): string => {
     return value
@@ -53,8 +63,14 @@ export function DatadogConnectionStep({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Step 1: Connect Your Datadog Organization</CardTitle>
-        <CardDescription>Use a Datadog service account with API + application keys to authorise Aurora</CardDescription>
+        <CardTitle>
+          {isAdditional ? 'Connect Another Datadog Organization' : 'Step 1: Connect Your Datadog Organization'}
+        </CardTitle>
+        <CardDescription>
+          {isAdditional
+            ? 'Each organization needs its own API and application key pair. Aurora keeps them separate and queries whichever matches the alert.'
+            : 'Use a Datadog service account with API + application keys to authorise Aurora'}
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="border rounded-lg">
@@ -126,6 +142,28 @@ export function DatadogConnectionStep({
                     </div>
                   </div>
                   <div className="space-y-2">
+                    <Label htmlFor="datadog-label">Label (optional)</Label>
+                    <Input
+                      id="datadog-label"
+                      placeholder="Defaults to your Datadog org name"
+                      value={label}
+                      onChange={(event) => setLabel(event.target.value)}
+                      aria-invalid={Boolean(error)}
+                      aria-describedby={error ? 'datadog-label-error' : undefined}
+                      className={error ? 'border-destructive' : undefined}
+                    />
+                    {error ? (
+                      <p id="datadog-label-error" className="text-xs text-destructive">{error}</p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Aurora names this organization from Datadog automatically. Set a label only to override it with something your team recognises &mdash; any name works.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
                     <Label htmlFor="datadog-service-account">Service Account (optional)</Label>
                     <Input
                       id="datadog-service-account"
@@ -164,7 +202,7 @@ export function DatadogConnectionStep({
 
                 <div className="pt-2">
                   <Button type="submit" disabled={loading} className="w-full md:w-auto">
-                    {loading ? "Connecting…" : "Connect Datadog"}
+                    {loading ? "Connecting…" : isAdditional ? "Add Organization" : "Connect Datadog"}
                   </Button>
                 </div>
               </form>

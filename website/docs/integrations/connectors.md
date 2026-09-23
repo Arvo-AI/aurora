@@ -449,6 +449,33 @@ default Helm ingress that's the `api.<domain>` host (`ingress.hosts.api`, e.g.
 Only the **Homepage URL** uses the frontend hostname (`<FRONTEND_URL>`).
 :::
 
+:::note Hosted deployments only — one-click website signup
+If you run a hosted Aurora and want the marketing site's "Install" CTA to
+provision an account straight from the GitHub install screen
+(`HOSTED_SIGNUP_ENABLED=true`, see [Environment](../configuration/environment.md)),
+configure the App additionally as follows:
+
+| Setting | Value |
+|---|---|
+| Callback URLs | Add `<API_URL>/github/app/signup/callback` and make it the **first** entry. Keep `<API_URL>/github/callback` as a later entry. |
+| Request user authorization (OAuth) during installation | **Checked** |
+| Client secret | Generate one and set `GITHUB_APP_CLIENT_SECRET` on the server |
+| Account permissions → Email addresses | Read-only (lets Aurora use the installer's verified primary email; without it the account gets a `@users.noreply.github.com` address) |
+
+With that checkbox on, GitHub **ignores the Setup URL** and sends every
+install — including logged-in users clicking Install inside Aurora — to the
+first Callback URL, which is why the signup callback must be first. It
+recognises in-app installs by their signed state and hands them to the
+regular install handler, so both flows keep working. Self-hosted installs
+should leave all of this alone.
+
+After the GitHub install screen the visitor lands here for a second or two
+while the one-time handoff token is exchanged for a session, then arrives on
+the Connectors page signed in:
+
+![One-click signup landing](/img/one-click-signup-landing.jpg)
+:::
+
 **Repository permissions** (set in Permissions & events tab):
 
 | Permission | Access level | Why |
@@ -969,6 +996,17 @@ API Key + Application Key authentication.
 If you need to ensure PII is never sent to Aurora (for GDPR, SOC 2, or other compliance requirements), see the [Datadog PII Filtering guide](../configuration/data-access/datadog.md) after completing the setup below.
 :::
 
+:::info Multiple organizations
+Several Datadog organizations can be connected at once, each needing its own API +
+application key pair. Aurora names each one from the org name Datadog reports and queries
+whichever matches the alert under investigation; a custom label is optional, to override that
+name with something your team recognises.
+
+Where the name cannot be read — a key managing several organizations, or one without the
+`org_management` permission — Aurora falls back to the organization id, then to `default`.
+Set a label in that case so the organizations stay tellable apart.
+:::
+
 #### 1. Create API Key
 
 1. Go to [Datadog](https://app.datadoghq.com/) > avatar > **Organization Settings** > **API Keys**
@@ -992,7 +1030,14 @@ If you need to ensure PII is never sent to Aurora (for GDPR, SOC 2, or other com
 | US5 | `us5.datadoghq.com` |
 | EU | `datadoghq.eu` |
 
-Users enter API keys and site via the Aurora UI.
+Users enter API keys and site via the Aurora UI, with an optional label. Site is recorded per
+organization, so organizations on different Datadog sites can coexist.
+
+#### 4. Connect Additional Organizations
+
+1. Switch organization from the bottom-left **Accounts** menu in Datadog
+2. Repeat steps 1-3 to create a key pair there
+3. In Aurora, use **Add another organization** on the Datadog page and enter the new keys
 
 #### Webhook Configuration
 
@@ -1000,6 +1045,13 @@ Users enter API keys and site via the Aurora UI.
 2. Name: `aurora`
 3. URL: `https://your-aurora-domain/datadog/webhook/{user_id}`
 4. In monitors, add `@webhook-aurora` to notifications
+
+:::warning One URL, every organization
+The webhook URL is per Aurora **user**, not per Datadog organization. With several connected,
+create this same webhook inside **each** of them — otherwise Aurora receives none of their
+alerts while still appearing connected. Keeping the name `aurora` everywhere keeps
+`@webhook-aurora` uniform.
+:::
 
 ---
 
