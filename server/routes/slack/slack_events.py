@@ -488,7 +488,7 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
         # 2. PARSE ACTION: Extract incident_id and suggestion_id
         value = action.get('value', '')  # Format: "incident_id:suggestion_id"
         if ':' not in value:
-            logger.error(f"Invalid action value format: {value}")
+            logger.error(f"Invalid action value format: {sanitize(value)}")
             return {"text": "Invalid action format"}
         
         incident_id, suggestion_id = value.split(':', 1)
@@ -645,7 +645,7 @@ def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, 
         value = action.get('value', '')
         
         if ':details' not in value:
-            logger.error(f"Invalid details value format: {value}")
+            logger.error(f"Invalid details value format: {sanitize(value)}")
             return {"text": ""}
         
         # Format: "incident_id:suggestion_id:details"
