@@ -16,7 +16,8 @@ metadata:
 Multiple subscriptions may be connected. Omitting `account_id` fans a
 `cloud_exec('azure', ...)` call out across **every** connected subscription and
 returns `results_by_subscription`. That fan-out is **expensive** — it runs the
-command once per subscription so use it wisely.
+command once per subscription so use it wisely. Once you know which subscription
+owns the resource, pass it as `account_id` on every later call.
 
 - Check cluster status: `cloud_exec('azure', 'aks show --name CLUSTER_NAME --resource-group RG_NAME', account_id='SUBSCRIPTION_ID')`
 - **IMPORTANT**: Get cluster credentials first, always with an explicit subscription: `cloud_exec('azure', 'aks get-credentials --name CLUSTER_NAME --resource-group RG_NAME', account_id='SUBSCRIPTION_ID')`

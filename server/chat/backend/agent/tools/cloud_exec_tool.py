@@ -1370,17 +1370,21 @@ def _apply_azure_subscription(command: str, subscription_id: str) -> str:
     """Pin an `az` command to one subscription.
 
     `az graph query` takes --subscriptions (plural) and is scoped by the caller,
-    so it is left alone. `az account` commands operate at the tenant/management
-    plane (e.g. `az account list` enumerates every subscription) and reject
-    `--subscription` with "unrecognized arguments", so they are left alone too.
+    so it is left alone. The `az account` subcommands that work at the tenant
+    level (`list`, `tenant`, `management-group`) or on the CLI's own state
+    (`clear`, `lock`) reject `--subscription` with "unrecognized arguments"
+    (checked against az 2.90.0), so they are left alone too. The rest (`show`,
+    `get-access-token`, ...) take it, and pinning them is what makes their
+    answer correct for each subscription in a fan-out.
     """
     cmd = command if command.startswith("az ") else f"az {command}"
+    words = cmd.split()
+    unpinnable_account = (
+        len(words) >= 3 and words[1] == "account"
+        and words[2] in {"list", "tenant", "management-group", "clear", "lock"}
+    )
     # Already pinned by the caller, or a command that doesn't take --subscription.
-    if (
-        "--subscription" in cmd
-        or cmd.startswith("az graph")
-        or cmd.startswith("az account")
-    ):
+    if "--subscription" in cmd or cmd.startswith("az graph") or unpinnable_account:
         return cmd
     return f"{cmd} --subscription {shlex.quote(subscription_id)}"
 
@@ -1441,6 +1445,36 @@ def _subscriptions_needing_relogin(azure_login, connections: list, results: dict
         if not res.get("success") and azure_login.should_relogin(res.get("output", "")):
             stale.append(conn)
     return stale
+
+
+def _azure_login_ok(azure_login, run_login) -> bool:
+    """Log in, or reuse the cached login. An exception counts as a failed login."""
+    try:
+        if azure_login:
+            return azure_login.ensure(run_login)[0]
+        return run_login().returncode == 0
+    except Exception as e:
+        logger.error("Azure authentication error: %s", e)
+        return False
+
+
+def _retry_stale_subscriptions(azure_login, connections: list, results: dict,
+                               run_login, run_one, started_at: float) -> None:
+    """Log in again once and re-run only the subscriptions a dead cached login failed.
+
+    A relogin that fails or raises leaves the first pass's results as they are.
+    """
+    stale = _subscriptions_needing_relogin(azure_login, connections, results)
+    if not stale:
+        return
+    try:
+        relogin_ok = azure_login.relogin(run_login, started_at)[0]
+    except Exception as e:
+        logger.error("Azure relogin error: %s", e)
+        return
+    if relogin_ok:
+        logger.info("Cached Azure login was unusable; logged in again, retrying %d subscription(s)", len(stale))
+        results.update(_fan_out_azure(stale, run_one))
 
 
 def _cloud_exec_azure_multi_subscription(
@@ -1511,11 +1545,7 @@ def _cloud_exec_azure_multi_subscription(
         )
 
     try:
-        if azure_login:
-            auth_ok, _ = azure_login.ensure(_run_azure_login)
-        else:
-            auth_ok = _run_azure_login().returncode == 0
-        if not auth_ok:
+        if not _azure_login_ok(azure_login, _run_azure_login):
             return json.dumps({
                 "success": False,
                 "error": "Azure authentication failed",
@@ -1533,10 +1563,8 @@ def _cloud_exec_azure_multi_subscription(
         # A cached login can be gone (swept, expired) or predate a newly connected
         # subscription. Log in again once and re-run only the subscriptions it failed.
         if azure_login:
-            stale = _subscriptions_needing_relogin(azure_login, connections, results)
-            if stale and azure_login.relogin(_run_azure_login, fan_out_started_at)[0]:
-                logger.info("Cached Azure login was unusable; logged in again, retrying %d subscription(s)", len(stale))
-                results.update(_fan_out_azure(stale, _run_one))
+            _retry_stale_subscriptions(azure_login, connections, results,
+                                       _run_azure_login, _run_one, fan_out_started_at)
     finally:
         # A private tempdir is removed once every worker is done. A cached login
         # directory is shared and outlives the fan-out; the login cache expires it.

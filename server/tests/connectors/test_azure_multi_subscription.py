@@ -82,11 +82,15 @@ def test_unparseable_command_is_not_read_only(helpers):
     ("az vm list --subscription OTHER", "az vm list --subscription OTHER"),
     # Resource Graph takes --subscriptions (plural) and is scoped by the caller.
     ('az graph query -q "Resources"', 'az graph query -q "Resources"'),
-    # `az account` commands are tenant/management-plane and reject --subscription.
+    # Tenant-level and CLI-state `az account` subcommands reject --subscription.
     ("az account list -o table", "az account list -o table"),
     ("account list", "az account list"),
-    ("az account show", "az account show"),
     ("az account tenant list", "az account tenant list"),
+    ("az account management-group list", "az account management-group list"),
+    ("az account clear", "az account clear"),
+    # The rest take it; unpinned they would answer for the default subscription N times.
+    ("az account show", "az account show --subscription SUB1"),
+    ("az account get-access-token", "az account get-access-token --subscription SUB1"),
 ])
 def test_apply_azure_subscription(helpers, command, expected):
     assert helpers["_apply_azure_subscription"](command, "SUB1") == expected
@@ -238,7 +242,8 @@ def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent", login
 
     for fn in ["is_read_only_command", "_apply_azure_subscription",
                "_run_azure_on_subscription", "_fan_out_azure",
-               "_subscriptions_needing_relogin", "_cloud_exec_azure_multi_subscription"]:
+               "_subscriptions_needing_relogin", "_azure_login_ok",
+               "_retry_stale_subscriptions", "_cloud_exec_azure_multi_subscription"]:
         match = re.search(r"^def " + fn + r"\(.*?(?=^def )", src, re.S | re.M)
         ns_src = match.group(0)
         exec(ns_src, ns)
@@ -459,6 +464,53 @@ def test_fanout_recovers_from_a_dead_cached_login_with_one_relogin(login_cache):
     assert out["success"] is True, "every subscription must succeed after the relogin"
     assert state["logins"] == 2, "one relogin for the whole fan-out, not one per subscription"
     assert state["commands"] == 10, "only the failed subscriptions are re-run, once"
+
+
+def test_fanout_reports_auth_failure_when_login_raises(login_cache):
+    """A login that raises must fail the fan-out cleanly, not escape it."""
+    import json as _json
+
+    def run_command(argv, **kw):
+        if "login" in argv:
+            raise OSError("no space left on device")
+        raise AssertionError("no command may run without a login")
+
+    fanout, _ = _load_fanout(run_command, [], login_cache=login_cache)
+    out = _json.loads(fanout("u", [{"account_id": "s1"}, {"account_id": "s2"}], "vm list"))
+
+    assert out["success"] is False
+    assert out["error"] == "Azure authentication failed"
+    assert out["multi_subscription"] is True
+
+
+def test_fanout_keeps_first_pass_results_when_relogin_raises(login_cache):
+    """A relogin that raises must not throw away the subscriptions that succeeded."""
+    import json as _json
+    state = {"logins": 0}
+    lock = threading.Lock()
+
+    def run_command(argv, **kw):
+        with lock:
+            if "login" in argv:
+                state["logins"] += 1
+                if state["logins"] > 1:
+                    raise OSError("lock file unwritable")
+                return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if "--subscription sub-0" in " ".join(argv):
+                return type("R", (), {"returncode": 1, "stdout": "",
+                                      "stderr": "ERROR: Please run 'az login' to setup account."})()
+        return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+
+    fanout, _ = _load_fanout(run_command, [], login_cache=login_cache)
+    conns = [{"account_id": f"sub-{i}"} for i in range(3)]
+    out = _json.loads(fanout("u", conns, "vm list"))
+
+    assert state["logins"] == 2, "one cold login plus the relogin attempt"
+    results = out["results_by_subscription"]
+    assert results["sub-0"]["success"] is False
+    assert results["sub-1"]["success"] is True
+    assert results["sub-2"]["success"] is True
+    assert out["success"] is False
 
 
 def test_cloud_exec_never_deletes_a_cached_login_directory():
