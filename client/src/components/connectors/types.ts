@@ -16,6 +16,4 @@ export interface ConnectorConfig {
   useCustomConnection?: boolean;
   alertsPath?: string;
   alertsLabel?: string;
-  overviewPath?: string;
-  overviewLabel?: string;
 }

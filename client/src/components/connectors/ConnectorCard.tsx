@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Check, ExternalLink, AlertCircle, Loader2, BarChart2, LogOut, KeyRound, Settings, Lock } from "lucide-react";
+import { Check, ExternalLink, AlertCircle, Loader2, LogOut, KeyRound, Settings, Lock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConnectorStatus } from "@/hooks/use-connector-status";
 import { googleChatService } from "@/lib/services/google-chat";
@@ -213,12 +213,6 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const handleViewAlerts = () => {
     if (connector.alertsPath) {
       router.push(connector.alertsPath);
-    }
-  };
-
-  const handleOverview = () => {
-    if (connector.overviewPath) {
-      router.push(connector.overviewPath);
     }
   };
 
@@ -440,29 +434,15 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
             </>
           )}
           
-          {isConnected && (connector.alertsPath || connector.overviewPath) && (
-            <div className="flex w-full flex-col gap-2">
-              {connector.alertsPath && (
-                <Button
-                  onClick={handleViewAlerts}
-                  className="w-full sm:flex-1"
-                  variant="secondary"
-                >
-                  <AlertCircle className="h-4 w-4 mr-2" />
-                  {connector.alertsLabel ?? "View Alerts"}
-                </Button>
-              )}
-              {connector.overviewPath && (
-                <Button
-                  onClick={handleOverview}
-                  className="w-full sm:flex-1"
-                  variant="secondary"
-                >
-                  <BarChart2 className="h-4 w-4 mr-2" />
-                  {connector.overviewLabel ?? "Overview"}
-                </Button>
-              )}
-            </div>
+          {isConnected && connector.alertsPath && (
+            <Button
+              onClick={handleViewAlerts}
+              className="w-full"
+              variant="secondary"
+            >
+              <AlertCircle className="h-4 w-4 mr-2" />
+              {connector.alertsLabel ?? "View Alerts"}
+            </Button>
           )}
         </CardFooter>
       </Card>
