@@ -308,6 +308,7 @@ config:
   NEXT_PUBLIC_ENABLE_NOTION: "false"         # Notion integration
   NEXT_PUBLIC_ENABLE_SPINNAKER: "false"      # Spinnaker integration
   NEXT_PUBLIC_ENABLE_VISUALIZATION: "false"  # Incident infra visualization UI (pairs with VISUALIZATION_ENABLED)
+  HOSTED_SIGNUP_ENABLED: "false"             # One-click GitHub App signup from website (requires GITHUB_APP_CLIENT_SECRET)
   
   # --- Pod Isolation Settings ---
   # When enabled, the chart automatically creates:
@@ -393,6 +394,7 @@ secrets:
     NEXT_PUBLIC_GITHUB_APP_SLUG: ""        # URL slug (e.g. aurora-acme-prod)
     GITHUB_APP_WEBHOOK_URL: ""             # https://<your-host>/github/webhook
     GITHUB_APP_SETUP_URL: ""               # https://<your-host>/github
+    GITHUB_APP_CLIENT_SECRET: ""            # OAuth client secret (for hosted signup flow)
     GITHUB_APP_WEBHOOK_SECRET: ""          # openssl rand -hex 32 (also stored in secrets backend)
 
     # --- GitHub OAuth (only when GITHUB_AUTH_MODE=oauth or hybrid) ---
