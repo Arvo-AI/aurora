@@ -368,8 +368,8 @@ def _activate_db(returning_rows):
 
 
 def test_activate_channels_enqueues_only_returned_ids():
-    # DB RETURNING drives what's enqueued: C3 was dismissed/unknown so the UPDATE
-    # didn't touch it and it must NOT be described.
+    # DB RETURNING drives what's enqueued: only rows the UPDATE actually touched
+    # (existing ids) come back, so only those are described.
     dbcm, cur = _activate_db([("C1",), ("C2",)])
     enqueued = []
     with patch.object(mod, "set_rls_context", return_value="org"), \
@@ -379,7 +379,8 @@ def test_activate_channels_enqueues_only_returned_ids():
 
     assert activated == 2
     assert enqueued == ["C1", "C2"]
-    # The WHERE clause must exclude dismissed rows.
+    # Activation supersedes dismissal: the UPDATE un-dismisses the rows it flips
+    # (rather than excluding dismissed ones).
     sql = cur.execute.call_args.args[0]
     assert "is_dismissed = FALSE" in sql
     assert cur.execute.call_args.args[1] == (["C1", "C2", "C3"],)

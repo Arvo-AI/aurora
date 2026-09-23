@@ -100,7 +100,6 @@ export default function SlackManagePage() {
   const [editingDraft, setEditingDraft] = useState("");
   // Search box over the active channel list (mirrors the activate panel search).
   const [activeQuery, setActiveQuery] = useState("");
-  const [showDismissed, setShowDismissed] = useState(false);
   // "Activate more channels" panel: search query, checked ids, in-flight flag.
   // Open by default so the aware-but-inactive channels are discoverable.
   const [showActivate, setShowActivate] = useState(true);
@@ -256,20 +255,6 @@ export default function SlackManagePage() {
       });
     } finally {
       setIsSettingCard(false);
-    }
-  };
-
-  const handleRestoreChannel = async (channelId: string) => {
-    const target = dismissedChannels.find((c) => c.channel_id === channelId);
-    setDismissedChannels((prev) => prev.filter((c) => c.channel_id !== channelId));
-    if (target) {
-      setConnectedChannels((prev) => [...prev, { ...target, is_dismissed: false }]);
-    }
-    try {
-      await slackService.restoreChannel(channelId);
-    } catch {
-      await loadChannels();
-      toast({ title: "Error", description: "Failed to restore channel", variant: "destructive" });
     }
   };
 
@@ -499,7 +484,15 @@ export default function SlackManagePage() {
   const activeMatches = activeQ
     ? activeChannels.filter((c) => (c.channel_name || c.channel_id).toLowerCase().includes(activeQ))
     : activeChannels;
-  const indexedChannels = connectedChannels.filter((c) => c.metadata_status === "skipped");
+  // Inactive = everything the user can promote to Active: aware-only channels
+  // (never activated, 'skipped', which arrive in `connected`) AND channels the
+  // user deactivated (`dismissed`, a separate array from the API). Both are
+  // silent to Aurora and share one "Inactive" section — activating either
+  // restores + describes it.
+  const inactiveChannels = [
+    ...connectedChannels.filter((c) => c.metadata_status === "skipped"),
+    ...dismissedChannels,
+  ];
   // Display name for the currently-selected card channel (used in the picker
   // trigger). Falls back to the id if we don't have a name row.
   const cardChannel = activeChannels.find((c) => c.channel_id === cardChannelId);
@@ -517,8 +510,8 @@ export default function SlackManagePage() {
   );
   const activateQ = activateQuery.trim().toLowerCase();
   const activateMatches = activateQ
-    ? indexedChannels.filter((c) => (c.channel_name || c.channel_id).toLowerCase().includes(activateQ))
-    : indexedChannels;
+    ? inactiveChannels.filter((c) => (c.channel_name || c.channel_id).toLowerCase().includes(activateQ))
+    : inactiveChannels;
 
   return (
     <div className="min-h-screen bg-black text-white p-8">
@@ -886,10 +879,10 @@ export default function SlackManagePage() {
                   </div>
                 )}
 
-                {/* Activate more channels: search the aware-only index and
-                    describe+route the ones you pick. For big workspaces where
-                    Aurora is a member of only a few channels. */}
-                {canWrite && indexedChannels.length > 0 && (
+                {/* Inactive channels: aware-only index + user-deactivated
+                    channels, together. Search, pick, and activate to promote
+                    any of them to Active (describe + route). */}
+                {canWrite && inactiveChannels.length > 0 && (
                   <div className="space-y-2 pt-4 mt-4 border-t border-border">
                     <button
                       type="button"
@@ -900,15 +893,16 @@ export default function SlackManagePage() {
                       <span className="h-2 w-2 rounded-full bg-zinc-500" />
                       <h3 className="text-base font-semibold text-foreground group-hover:text-white">
                         Inactive channels
-                        <span className="ml-1.5 text-sm font-normal text-muted-foreground">({indexedChannels.length} aware, not yet active)</span>
+                        <span className="ml-1.5 text-sm font-normal text-muted-foreground">({inactiveChannels.length} aware, not active)</span>
                       </h3>
                     </button>
                     {showActivate && (
                       <div className="space-y-3 rounded-lg border p-3">
                         <p className="text-xs text-muted-foreground">
-                          Aurora sees these channels but doesn&apos;t route to them yet. Search, pick
-                          the ones you want (e.g. all your <span className="font-mono">oncall</span>{" "}
-                          channels), and activate — Aurora will describe them and start routing there.
+                          Channels Aurora is aware of but doesn&apos;t post to — either not activated
+                          yet, or deactivated. Search, pick the ones you want (e.g. all your{" "}
+                          <span className="font-mono">oncall</span> channels), and activate — Aurora
+                          will describe them and start posting there.
                         </p>
                         <div className="relative">
                           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -980,41 +974,6 @@ export default function SlackManagePage() {
                             Activate selected
                           </Button>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Dismissed channels: collapsible, with restore */}
-                {dismissedChannels.length > 0 && (
-                  <div className="space-y-2 pt-4 mt-4 border-t border-border">
-                    <button
-                      type="button"
-                      className="text-sm font-medium text-muted-foreground hover:text-foreground flex items-center gap-1"
-                      onClick={() => setShowDismissed((s) => !s)}
-                    >
-                      {showDismissed ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                      Dismissed channels ({dismissedChannels.length})
-                    </button>
-                    {showDismissed && (
-                      <div className="border rounded-lg divide-y divide-zinc-800">
-                        {dismissedChannels.map((c) => (
-                          <div key={c.channel_id} className="flex items-center justify-between gap-2 p-3">
-                            <span className="text-sm text-muted-foreground truncate">
-                              #{c.channel_name || c.channel_id}
-                            </span>
-                            {canWrite && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 px-2 text-xs text-zinc-400 hover:text-white shrink-0"
-                                onClick={() => handleRestoreChannel(c.channel_id)}
-                              >
-                                Restore
-                              </Button>
-                            )}
-                          </div>
-                        ))}
                       </div>
                     )}
                   </div>

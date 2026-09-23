@@ -751,12 +751,14 @@ def activate_slack_channels(user_id):
 
 
 def _activate_channels(user_id: str, channel_ids: list[str]) -> int:
-    """Flip the given (non-dismissed, existing) channels to 'generating' and
-    enqueue a description for each. Returns how many were actually activated.
+    """Flip the given (existing) channels to 'generating', un-dismissing any that
+    were dismissed, and enqueue a description for each. Returns how many were
+    actually activated.
 
-    Only rows that exist and aren't dismissed are touched (activating a dismissed
-    channel would contradict the user's dismissal); ``RETURNING`` tells us which
-    ids were real so we enqueue exactly those.
+    Activation is an explicit "I want Aurora engaging here" signal, so it
+    supersedes a prior dismissal (the Inactive list shows aware-only and
+    dismissed channels together — activating either promotes it to Active).
+    ``RETURNING`` tells us which ids were real so we enqueue exactly those.
     """
     activated: list[str] = []
     with db_pool.get_admin_connection() as conn:
@@ -764,9 +766,10 @@ def _activate_channels(user_id: str, channel_ids: list[str]) -> int:
             set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:activate]")
             cur.execute(
                 """UPDATE slack_channels
-                      SET metadata_status = 'generating', updated_at = NOW()
+                      SET metadata_status = 'generating',
+                          is_dismissed = FALSE,
+                          updated_at = NOW()
                     WHERE provider = 'slack'
-                      AND is_dismissed = FALSE
                       AND channel_id = ANY(%s)
                 RETURNING channel_id""",
                 (channel_ids,),
