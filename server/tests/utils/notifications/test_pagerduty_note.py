@@ -364,6 +364,14 @@ def test_no_response_keeps_the_claim(wired):
     wired.stored.assert_not_called()
 
 
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_server_error_keeps_the_claim(wired, status):
+    wired.client.create_note.side_effect = PagerDutyAPIError(f"HTTP {status}", status)
+    assert svc.send_pagerduty_incident_note("u1", _anchor()) is False
+    assert wired.pool.updates == [CLAIM]
+    wired.stored.assert_not_called()
+
+
 def test_unexpected_error_keeps_the_claim_and_does_not_raise(wired):
     wired.client.create_note.side_effect = ValueError("boom")
     assert svc.send_pagerduty_incident_note("u1", _anchor()) is False

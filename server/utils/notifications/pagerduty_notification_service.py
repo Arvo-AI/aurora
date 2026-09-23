@@ -302,12 +302,13 @@ def _build_client(user_id: str, creds: Dict[str, Any]) -> Tuple[Optional[PagerDu
 
 
 def _handle_post_error(e: PagerDutyAPIError, incident_id: str, user_id: str, creds: Dict[str, Any]) -> None:
-    """Release the claim only when PagerDuty definitively answered; a 403 also disables the capability."""
-    if e.status_code is None:
-        # No response: the note may have landed. Keep the claim (a lost
-        # note beats a duplicate one; notes cannot be deleted).
+    """Release the claim only when PagerDuty definitively rejected the POST (4xx); a 403 also disables the capability."""
+    if e.status_code is None or e.status_code >= 500:
+        # No response, or a 5xx that a gateway may have returned after PagerDuty
+        # stored the note: the outcome is unknown. Keep the claim (a lost note
+        # beats a duplicate one; notes cannot be deleted).
         logger.warning(
-            "%s No response from PagerDuty for incident %s; claim kept to avoid a duplicate: %s",
+            "%s No definitive answer from PagerDuty for incident %s; claim kept to avoid a duplicate: %s",
             _LOG, incident_id, e,
         )
         return
