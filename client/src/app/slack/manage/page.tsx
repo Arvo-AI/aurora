@@ -98,7 +98,8 @@ export default function SlackManagePage() {
   const [activeQuery, setActiveQuery] = useState("");
   const [showDismissed, setShowDismissed] = useState(false);
   // "Activate more channels" panel: search query, checked ids, in-flight flag.
-  const [showActivate, setShowActivate] = useState(false);
+  // Open by default so the aware-but-inactive channels are discoverable.
+  const [showActivate, setShowActivate] = useState(true);
   const [activateQuery, setActivateQuery] = useState("");
   const [activateSelected, setActivateSelected] = useState<Set<string>>(new Set());
   const [isActivating, setIsActivating] = useState(false);
@@ -661,10 +662,14 @@ export default function SlackManagePage() {
                   </p>
                 ) : (
                   <div className="space-y-3">
-                    <h4 className="text-sm font-medium text-muted-foreground">
-                      Aurora is active in ({activeChannels.length})
-                    </h4>
-                    <p className="text-xs text-muted-foreground -mt-2">
+                    <div className="flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                      <h3 className="text-base font-semibold text-foreground">
+                        Active channels
+                        <span className="ml-1.5 text-sm font-normal text-muted-foreground">({activeChannels.length})</span>
+                      </h3>
+                    </div>
+                    <p className="text-xs text-muted-foreground -mt-1">
                       Aurora posts free-form teammate messages in these channels when relevant.
                       The <Star className="inline h-3 w-3 fill-yellow-400 text-yellow-400" /> channel
                       also receives the structured incident card — exactly one channel gets it.
@@ -811,14 +816,18 @@ export default function SlackManagePage() {
                     describe+route the ones you pick. For big workspaces where
                     Aurora is a member of only a few channels. */}
                 {canWrite && indexedChannels.length > 0 && (
-                  <div className="space-y-2">
+                  <div className="space-y-2 pt-4 mt-4 border-t border-border">
                     <button
                       type="button"
-                      className="text-sm font-medium text-muted-foreground hover:text-foreground flex items-center gap-1"
+                      className="group flex items-center gap-2 w-full text-left"
                       onClick={() => setShowActivate((s) => !s)}
                     >
-                      {showActivate ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                      Activate more channels ({indexedChannels.length} aware, not yet active)
+                      {showActivate ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                      <span className="h-2 w-2 rounded-full bg-zinc-500" />
+                      <h3 className="text-base font-semibold text-foreground group-hover:text-white">
+                        Inactive channels
+                        <span className="ml-1.5 text-sm font-normal text-muted-foreground">({indexedChannels.length} aware, not yet active)</span>
+                      </h3>
                     </button>
                     {showActivate && (
                       <div className="space-y-3 rounded-lg border p-3">
@@ -904,7 +913,7 @@ export default function SlackManagePage() {
 
                 {/* Dismissed channels: collapsible, with restore */}
                 {dismissedChannels.length > 0 && (
-                  <div className="space-y-2">
+                  <div className="space-y-2 pt-4 mt-4 border-t border-border">
                     <button
                       type="button"
                       className="text-sm font-medium text-muted-foreground hover:text-foreground flex items-center gap-1"
