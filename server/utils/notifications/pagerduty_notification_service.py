@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 NOTE_MAX_CHARS = 700
+ROOT_CAUSE_MAX_CHARS = 1200
+IMPACT_MAX_CHARS = 500
 MIN_SUMMARY_CHARS = 80
 _PENDING = "pending"
 _LOG = "[PagerDutyNote]"
@@ -43,12 +45,23 @@ _HEADING_RE = re.compile(r"^[ \t]*#{1,6}[ \t]+", re.MULTILINE)
 _BULLET_RE = re.compile(r"^[ \t]*[*+][ \t]+", re.MULTILINE)
 _RULE_RE = re.compile(r"^[-*_]{3,}$")
 _LIST_ITEM_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s")
-# Section titles that end the narrative when they appear as a paragraph (bold or bare)
-_END_MARKER_RE = re.compile(
-    r"^[*_\s]*(?:Ruled Out|Not Checked|Suggested Next Steps|Next Steps|Recommendations|"
-    r"Action Items|Proposed Actions|Remediation Steps)\b",
+# Section headings. The summarizer is asked for three paragraphs (what happened,
+# root cause, impact & timeline) followed by "## Ruled Out" / "## Not Checked";
+# models render the paragraph labels as "## X", "**X**" or bare "X" lines, or not at all.
+_MD_HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t#]*$")
+_BOLD_LINE_RE = re.compile(r"^(?:\*\*|__)([^*_.|]{1,80}?)(?:\*\*|__):?$")
+_KNOWN_TITLE_RE = re.compile(
+    r"^(?:summary|what happened|root cause|impact|timeline|incident report|ruled out|not checked|"
+    r"suggested next steps|next steps|recommendations|action items|proposed actions|remediation steps)\b",
     re.IGNORECASE,
 )
+_END_SECTION_RE = re.compile(
+    r"^(?:ruled out|not checked|suggested next steps|next steps|recommendations|action items|"
+    r"proposed actions|remediation steps)\b",
+    re.IGNORECASE,
+)
+_ROOT_HEADING_RE = re.compile(r"root cause", re.IGNORECASE)
+_IMPACT_HEADING_RE = re.compile(r"impact|timeline", re.IGNORECASE)
 # Opening phrases the summarizer is told to use for the root-cause paragraph
 _ROOT_CAUSE_RE = re.compile(r"^(?:the )?(?:root cause|most likely cause)\b|^evidence suggests\b", re.IGNORECASE)
 MIN_PROSE_CHARS = 40
@@ -81,41 +94,90 @@ def _to_plain_text(text: str, max_chars: Optional[int] = NOTE_MAX_CHARS) -> str:
     return _truncate(text, max_chars) if max_chars else text
 
 
-def _narrative_paragraphs(summary: str) -> list:
-    """Prose paragraphs of the report body, in order, as plain text.
+def _heading_text(line: str) -> Optional[str]:
+    """Lower-case title if the line is a section heading ("## X", "**X**", or a bare known title)."""
+    m = _MD_HEADING_RE.match(line)
+    if m:
+        return m.group(1).strip("*_ :").lower()
+    m = _BOLD_LINE_RE.match(line)
+    if m:
+        return m.group(1).strip(" :").lower()
+    if len(line) <= 60 and "." not in line and _KNOWN_TITLE_RE.match(line):
+        return line.strip(" :").lower()
+    return None
 
-    The summary is "## Incident Report" + a metadata line + "---" + 2-3
-    prose paragraphs (what happened, root cause, impact) + "## Ruled Out" /
-    "## Not Checked" bullet sections (summarization.py). Decoration and list
-    sections are skipped; the walk stops at the first heading or end-marker
-    after the narrative, so the bullet sections never leak into a note.
+
+def _sections(summary: str) -> list:
+    """[(heading, [prose paragraphs])] in document order; the first entry has heading "".
+
+    Line-based so a heading directly followed by its paragraph (no blank line)
+    still splits. Rules, list items, pipe-metadata lines and stubs shorter than
+    MIN_PROSE_CHARS are dropped.
     """
-    paragraphs = []
-    for raw in re.split(r"\n\s*\n", summary):
-        raw = raw.strip()
-        if not raw:
-            continue
-        if raw.startswith("#") or _END_MARKER_RE.match(raw):
-            if paragraphs:
-                break
-            continue
-        if _RULE_RE.match(raw) or _LIST_ITEM_RE.match(raw) or raw.count(" | ") >= 2:
-            continue
+    sections = [["", []]]
+    buffer: list = []
+
+    def flush() -> None:
+        if not buffer:
+            return
+        first = buffer[0]
+        raw = " ".join(buffer)
+        buffer.clear()
+        if _LIST_ITEM_RE.match(first) or raw.count(" | ") >= 2:
+            return
         text = _to_plain_text(raw, max_chars=None)
         if len(text) >= MIN_PROSE_CHARS:
-            paragraphs.append(text)
-    return paragraphs
+            sections[-1][1].append(text)
+
+    for line in summary.splitlines():
+        line = line.strip()
+        if not line or _RULE_RE.match(line):
+            flush()
+            continue
+        heading = _heading_text(line)
+        if heading is not None:
+            flush()
+            sections.append([heading, []])
+            continue
+        buffer.append(line)
+    flush()
+    return [(heading, paragraphs) for heading, paragraphs in sections]
+
+
+def _extract_note_body(summary: Optional[str]) -> Tuple[str, str]:
+    """(root cause, impact) paragraphs as plain text; impact may be "".
+
+    Headed reports are read by section title. Unheaded ones fall back to the
+    summarizer's paragraph order: the root-cause paragraph is the one opening
+    with its prescribed phrase (else the 2nd), and impact is the paragraph
+    after it. Nothing after "Ruled Out" / "Not Checked" / next-steps is used.
+    """
+    root: Optional[str] = None
+    impact: Optional[str] = None
+    narrative: list = []
+    for heading, paragraphs in _sections(summary or ""):
+        if _END_SECTION_RE.match(heading):
+            break
+        if root is None and _ROOT_HEADING_RE.search(heading):
+            root = paragraphs[0] if paragraphs else None
+        elif impact is None and _IMPACT_HEADING_RE.search(heading):
+            impact = paragraphs[0] if paragraphs else None
+        else:
+            narrative.extend(paragraphs)
+
+    if root is None and narrative:
+        index = next((i for i, p in enumerate(narrative) if _ROOT_CAUSE_RE.match(p)), None)
+        if index is None:
+            index = 1 if len(narrative) >= 2 else 0
+        root = narrative[index]
+        if impact is None and index + 1 < len(narrative):
+            impact = narrative[index + 1]
+
+    return _truncate(root or "", ROOT_CAUSE_MAX_CHARS), _truncate(impact or "", IMPACT_MAX_CHARS)
 
 
 def _pick_root_cause_paragraph(summary: Optional[str]) -> str:
-    """The root-cause paragraph: by its opening phrase, else the 2nd prose paragraph, else the 1st."""
-    paragraphs = _narrative_paragraphs(summary or "")
-    if not paragraphs:
-        return ""
-    chosen = next((p for p in paragraphs if _ROOT_CAUSE_RE.match(p)), None)
-    if chosen is None:
-        chosen = paragraphs[1] if len(paragraphs) >= 2 else paragraphs[0]
-    return _truncate(chosen)
+    return _extract_note_body(summary)[0]
 
 
 def _pd_incident_id(incident_data: Dict[str, Any]) -> Optional[str]:
@@ -134,29 +196,31 @@ def _pd_incident_id(incident_data: Dict[str, Any]) -> Optional[str]:
 
 def _should_post(incident_data: Dict[str, Any]) -> Tuple[bool, str]:
     """Pure eligibility check. Returns (ok, reason-when-not-ok)."""
-    ok, reason, _, _ = _eligibility(incident_data)
+    ok, reason, *_ = _eligibility(incident_data)
     return ok, reason
 
 
-def _eligibility(incident_data: Dict[str, Any]) -> Tuple[bool, str, Optional[str], str]:
-    """(ok, reason-when-not-ok, PagerDuty incident id, root-cause paragraph)."""
+def _eligibility(incident_data: Dict[str, Any]) -> Tuple[bool, str, Optional[str], str, str]:
+    """(ok, reason-when-not-ok, PagerDuty incident id, root cause, impact)."""
     if incident_data.get("source_type") != "pagerduty":
-        return False, "not a PagerDuty incident", None, ""
+        return False, "not a PagerDuty incident", None, "", ""
     if incident_data.get("recurrence_of"):
-        return False, f"recurrence of {incident_data['recurrence_of']}; only anchors get a note", None, ""
+        return False, f"recurrence of {incident_data['recurrence_of']}; only anchors get a note", None, "", ""
     if incident_data.get("pagerduty_note_id"):
-        return False, "note already posted or in flight", None, ""
+        return False, "note already posted or in flight", None, "", ""
     pd_incident_id = _pd_incident_id(incident_data)
     if not pd_incident_id:
-        return False, "no PagerDuty incident id in alert_metadata", None, ""
-    root_cause = _pick_root_cause_paragraph(incident_data.get("aurora_summary"))
+        return False, "no PagerDuty incident id in alert_metadata", None, "", ""
+    root_cause, impact = _extract_note_body(incident_data.get("aurora_summary"))
     if len(root_cause) < MIN_SUMMARY_CHARS:
-        return False, "summary too short to post", pd_incident_id, root_cause
-    return True, "", pd_incident_id, root_cause
+        return False, "summary too short to post", pd_incident_id, root_cause, impact
+    return True, "", pd_incident_id, root_cause, impact
 
 
-def _compose_note(root_cause: str, incident_id: str) -> str:
-    lines = ["Aurora RCA", "", root_cause, ""]
+def _compose_note(root_cause: str, incident_id: str, impact: str = "") -> str:
+    lines = ["Aurora RCA", "", "Root cause", root_cause, ""]
+    if impact:
+        lines += ["Impact", impact, ""]
     base_url = (FRONTEND_URL or "").rstrip("/")
     if base_url:
         lines += [f"Full investigation: {base_url}/incidents/{incident_id}", ""]
@@ -265,7 +329,7 @@ def send_pagerduty_incident_note(user_id: str, incident_data: Dict[str, Any]) ->
     """
     incident_id = incident_data.get("incident_id")
     try:
-        ok, reason, pd_incident_id, root_cause = _eligibility(incident_data)
+        ok, reason, pd_incident_id, root_cause, impact = _eligibility(incident_data)
         if not ok:
             logger.info("%s Skipping incident %s: %s", _LOG, incident_id, reason)
             return False
@@ -282,7 +346,7 @@ def send_pagerduty_incident_note(user_id: str, incident_data: Dict[str, Any]) ->
         if client is None:
             return False
 
-        content = _compose_note(root_cause, incident_id)
+        content = _compose_note(root_cause, incident_id, impact)
 
         if not _claim(incident_id, user_id):
             logger.info("%s Incident %s already has a note posted or in flight", _LOG, incident_id)

@@ -91,7 +91,7 @@ export function PagerDutyNotesCard({ status }: Readonly<PagerDutyNotesCardProps>
       <CardHeader>
         <CardTitle>RCA Notes</CardTitle>
         <CardDescription>
-          Write Aurora&apos;s root cause back onto the PagerDuty incident that triggered the investigation.
+          Write Aurora&apos;s root cause and impact back onto the PagerDuty incident that triggered the investigation.
         </CardDescription>
       </CardHeader>
       <CardContent>

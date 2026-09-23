@@ -940,7 +940,7 @@ A read-only or account-level key still works for reading incidents and triggerin
 
 #### Posting RCA notes back to PagerDuty
 
-When enabled, Aurora adds one plain-text note to the originating PagerDuty incident when an investigation completes: the root cause, a link to the full investigation, and a disclaimer. Recurrences of an earlier incident and re-summaries after a follow-up chat do not post.
+When enabled, Aurora adds one plain-text note to the originating PagerDuty incident when an investigation completes: the root cause, the impact (when the report has one), a link to the full investigation, and a disclaimer. Recurrences of an earlier incident and re-summaries after a follow-up chat do not post.
 
 - **Where**: the toggle lives on the PagerDuty connector page under **RCA Notes**. It is off by default and org-wide.
 - **Credential requirement**: the toggle can only be turned on when the stored credentials were proven able to write incidents (user token from a user with write access, or an OAuth token granted `incidents.write`). Account-level keys and read-only users are rejected with a reason.

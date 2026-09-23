@@ -35,6 +35,35 @@ REPORT_ROOT_CAUSE = (
     "The most likely cause is a stale client bundle sending requests to deprecated Server Action IDs "
     "after the 12:59 UTC deployment, though direct confirmation was not obtained."
 )
+REPORT_IMPACT = "No production impact was identified. The Fleet Server reported one healthy agent through 05:37:59 UTC."
+
+# The same report with the paragraph labels rendered as bold-only heading lines and no blank
+# line before each paragraph (seen in the dev DB), and as markdown headings (a teammate's run).
+HEADED_BOLD = (
+    "## Incident Report — Checkout API 5xx Spike\n"
+    "**2026-09-22 05:35:35 UTC | High | Default Service**\n\n---\n\n"
+    "**What Happened**\n"
+    "A high-severity PagerDuty alert titled \"checkout API 5xx spike\" fired at 05:35:35 UTC, "
+    "attributed to the Default Service [33].\n\n"
+    "**Root Cause**\n"
+    "The **most likely cause** is a stale client bundle sending requests to deprecated Server Action IDs "
+    "after the 12:59 UTC deployment [7, 11], though direct confirmation was not obtained.\n\n"
+    "**Impact & Timeline**\n"
+    "No production impact was identified. The Fleet Server reported one healthy agent through 05:37:59 UTC [28].\n\n"
+    "---\n\n## Ruled Out\n\n- **Real checkout API failure** — nothing deployed [16].\n"
+)
+HEADED_MD = (
+    "## Incident Report: Test Incident – Default Service\n\n"
+    "### Summary\n"
+    "A PagerDuty alert titled \"Test incident\" was triggered on 2026-09-22 at 20:44:11 UTC with medium severity, "
+    "assigned to the Default Service [1].\n\n"
+    "### Root Cause\n"
+    "**Root cause confirmed: This is a test or validation alert with no production impact.** The alert references "
+    "\"Default Service,\" which does not exist in the infrastructure inventory [7].\n\n"
+    "### Impact & Timeline\n"
+    "No operational impact. The alert was triggered at 20:44:11 UTC and remains in triggered status.\n\n"
+    "## Ruled Out\n- **Real outage** — nothing deployed [7].\n"
+)
 
 
 def _anchor(**over):
@@ -107,14 +136,32 @@ def test_root_cause_is_the_second_paragraph():
     assert svc._pick_root_cause_paragraph(ROOT_CAUSE) == ROOT_CAUSE
 
 
-def test_report_format_skips_decoration_and_picks_the_root_cause_paragraph():
-    assert svc._narrative_paragraphs(REPORT) == [
-        "A high-severity PagerDuty alert titled \"checkout API 5xx spike\" fired at 05:35:35 UTC, "
-        + "attributed to the Default Service. No application logs or traces were present.",
-        REPORT_ROOT_CAUSE,
-        "No production impact was identified. The Fleet Server reported one healthy agent through 05:37:59 UTC.",
-    ]
+def test_unheaded_report_yields_root_cause_and_the_paragraph_after_it_as_impact():
+    assert svc._extract_note_body(REPORT) == (REPORT_ROOT_CAUSE, REPORT_IMPACT)
     assert svc._pick_root_cause_paragraph(REPORT) == REPORT_ROOT_CAUSE
+
+
+def test_bold_headed_report_is_read_by_section_title():
+    assert svc._extract_note_body(HEADED_BOLD) == (REPORT_ROOT_CAUSE, REPORT_IMPACT)
+
+
+def test_markdown_headed_report_is_read_by_section_title():
+    root, impact = svc._extract_note_body(HEADED_MD)
+    assert root.startswith("Root cause confirmed: This is a test or validation alert with no production impact. The alert references")
+    assert root.endswith("does not exist in the infrastructure inventory.")
+    assert impact == "No operational impact. The alert was triggered at 20:44:11 UTC and remains in triggered status."
+
+
+def test_two_paragraph_summary_has_no_impact():
+    assert svc._extract_note_body(SUMMARY) == (ROOT_CAUSE, "")
+
+
+def test_bold_metadata_line_is_not_a_heading():
+    assert svc._heading_text("**2026-09-08 13:49:02 UTC | Critical | payments-api**") is None
+    assert svc._heading_text("**Root cause confirmed: nothing was deployed.**") is None
+    assert svc._heading_text("**Impact & Timeline**") == "impact & timeline"
+    assert svc._heading_text("### Root Cause") == "root cause"
+    assert svc._heading_text("Summary") == "summary"
 
 
 def test_root_cause_undetermined_paragraph_is_preferred_wherever_it_sits():
@@ -128,18 +175,26 @@ def test_root_cause_undetermined_paragraph_is_preferred_wherever_it_sits():
 
 
 def test_bullet_sections_never_leak_when_no_prose_precedes_them():
-    assert svc._narrative_paragraphs("## Ruled Out\n\n- **Hypothesis** — killed by evidence [1].\n") == []
+    assert svc._extract_note_body("## Ruled Out\n\n- **Hypothesis** — killed by evidence [1].\n") == ("", "")
 
 
 # --- _compose_note ------------------------------------------------------------
 
-def test_note_has_header_link_and_disclaimer(monkeypatch):
+def test_note_has_root_cause_impact_link_and_disclaimer(monkeypatch):
     monkeypatch.setattr(svc, "FRONTEND_URL", "https://aurora.example.com/")
-    note = svc._compose_note("Because X.", "i1")
+    note = svc._compose_note("Because X.", "i1", "Nobody noticed.")
     assert note == (
-        "Aurora RCA\n\nBecause X.\n\nFull investigation: https://aurora.example.com/incidents/i1\n\n"
+        "Aurora RCA\n\nRoot cause\nBecause X.\n\nImpact\nNobody noticed.\n\n"
+        "Full investigation: https://aurora.example.com/incidents/i1\n\n"
         "Generated automatically by Aurora. Verify before acting."
     )
+
+
+def test_note_omits_impact_block_when_none_was_found(monkeypatch):
+    monkeypatch.setattr(svc, "FRONTEND_URL", "https://aurora.example.com")
+    note = svc._compose_note("Because X.", "i1")
+    assert "Impact" not in note
+    assert note.startswith("Aurora RCA\n\nRoot cause\nBecause X.\n\nFull investigation:")
 
 
 def test_note_omits_link_when_frontend_url_unset(monkeypatch):
@@ -279,7 +334,7 @@ def test_happy_path_claims_posts_then_records(wired, monkeypatch):
     wired.client.create_note.assert_called_once()
     pd_incident_id, content = wired.client.create_note.call_args.args
     assert pd_incident_id == "PABC123"
-    assert content.startswith("Aurora RCA\n\n" + ROOT_CAUSE + "\n\n")
+    assert content.startswith("Aurora RCA\n\nRoot cause\n" + ROOT_CAUSE + "\n\n")
     assert "Full investigation: http://localhost:3000/incidents/i1" in content
     assert content.endswith("Generated automatically by Aurora. Verify before acting.")
     assert "**" not in content
