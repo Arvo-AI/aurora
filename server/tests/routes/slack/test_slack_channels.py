@@ -436,3 +436,67 @@ def test_list_all_channels_respects_safety_cap():
 
     # Stops once the cap is reached and returns exactly the cap (not a full page over it).
     assert len(result) == 300
+
+
+# --- card channel: helpers + dismiss guard ----------------------------------
+
+def test_is_active_channel_true_only_for_ready_undismissed():
+    from unittest.mock import MagicMock
+    conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.return_value = (1,)  # a matching ready/undismissed row
+    conn.cursor.return_value.__enter__ = lambda s: cur
+    conn.cursor.return_value.__exit__ = lambda s, *a: False
+    dbcm = MagicMock()
+    dbcm.__enter__ = lambda s: conn
+    dbcm.__exit__ = lambda s, *a: False
+    with patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm):
+        assert mod._is_active_channel("u1", "C1") is True
+    # The guard predicate must require ready + not dismissed.
+    sql = cur.execute.call_args.args[0]
+    assert "metadata_status = 'ready'" in sql
+    assert "NOT is_dismissed" in sql
+
+
+def test_is_active_channel_false_when_no_row():
+    from unittest.mock import MagicMock
+    conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.return_value = None
+    conn.cursor.return_value.__enter__ = lambda s: cur
+    conn.cursor.return_value.__exit__ = lambda s, *a: False
+    dbcm = MagicMock()
+    dbcm.__enter__ = lambda s: conn
+    dbcm.__exit__ = lambda s, *a: False
+    with patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm):
+        assert mod._is_active_channel("u1", "C1") is False
+
+
+def test_dismiss_blocks_the_card_channel():
+    """The card channel can't be deactivated — the endpoint 409s with a hint."""
+    from flask import Flask
+    app = Flask(__name__)
+    app.register_blueprint(mod.slack_channels_bp, url_prefix="/slack")
+    # Bypass RBAC: call the undecorated function via a request context, patching
+    # the card-channel resolver to claim C_CARD is the current card channel.
+    with patch.object(mod, "_get_card_channel_id", return_value="C_CARD"), \
+         patch.object(mod, "_update_one_channel") as upd:
+        with app.test_request_context("/slack/channels/C_CARD/dismiss", method="POST"):
+            resp, status = mod.dismiss_slack_channel.__wrapped__("u1", "C_CARD")
+    assert status == 409
+    assert resp.get_json()["code"] == "is_card_channel"
+    upd.assert_not_called()  # never reached the DB write
+
+
+def test_dismiss_allows_non_card_channel():
+    from flask import Flask
+    app = Flask(__name__)
+    app.register_blueprint(mod.slack_channels_bp, url_prefix="/slack")
+    with patch.object(mod, "_get_card_channel_id", return_value="C_CARD"), \
+         patch.object(mod, "_update_one_channel", return_value=None) as upd:
+        with app.test_request_context("/slack/channels/C_OTHER/dismiss", method="POST"):
+            resp = mod.dismiss_slack_channel.__wrapped__("u1", "C_OTHER")
+    assert resp.get_json()["is_dismissed"] is True
+    upd.assert_called_once()

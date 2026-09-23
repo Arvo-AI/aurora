@@ -365,11 +365,13 @@ class GetConnectedSlackChannelsArgs(BaseModel):
 
 
 def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
-    """Return the Slack channels Aurora is aware of, each with its description.
+    """Return the ACTIVE Slack channels Aurora may post to, each with its description.
 
-    This is the routing-decision source: use the descriptions to choose which
-    channel(s) are relevant for a given incident/notification. Distinct from
-    list_slack_channels (a live, description-less listing of bot memberships).
+    This is the routing-decision source: only channels the user has activated
+    (described, ``metadata_status='ready'``, not dismissed) are returned, so the
+    agent never routes to an aware-only/indexed channel. Use the descriptions to
+    choose which channel(s) are relevant. Distinct from list_slack_channels (a
+    live, description-less listing of bot memberships).
     """
     if not user_id:
         return json.dumps({"error": _ERR_NO_USER})
@@ -384,13 +386,18 @@ def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[SlackTool:connected]")
+                # Active = described + not dismissed: a channel being active IS
+                # the permission to post teammate messages here (the structured
+                # incident card is separate — it goes only to the single
+                # configured incidents channel).
                 cur.execute(
                     f"""SELECT DISTINCT ON (channel_id)
                               channel_id, channel_name, channel_type,
-                              detected_platform, notify_enabled,
-                              metadata_summary, metadata_status, is_member
+                              detected_platform, metadata_summary, is_member
                          FROM slack_channels
-                        WHERE provider = 'slack' AND NOT is_dismissed AND {predicate}
+                        WHERE provider = 'slack' AND NOT is_dismissed
+                          AND metadata_status = 'ready'
+                          AND {predicate}
                         ORDER BY channel_id, updated_at DESC""",
                     pred_params,
                 )
@@ -402,13 +409,8 @@ def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
                 "channel_name": r[1],
                 "channel_type": r[2],
                 "detected_platform": r[3],
-                "notify_enabled": r[4],
-                "description": r[5] or (
-                    "(no description — call generate if needed)" if r[6] == "skipped"
-                    else "(description generating...)" if r[6] != "ready"
-                    else "(no description)"
-                ),
-                "is_member": r[7],
+                "description": r[4] or "(no description)",
+                "is_member": r[5],
             }
             for r in rows
         ]
@@ -417,9 +419,10 @@ def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
             return json.dumps({
                 "channels": [],
                 "message": (
-                    "No Slack channels registered yet. Ask the user to invite "
-                    "Aurora to channels in Slack and refresh, or use "
-                    "list_slack_channels for a live listing."
+                    "No active Slack channels yet. Ask the user to activate "
+                    "channels on the Slack manage page (or invite Aurora to them "
+                    "in Slack and refresh), or use list_slack_channels for a live "
+                    "listing."
                 ),
             })
         return json.dumps({"channels": channels})

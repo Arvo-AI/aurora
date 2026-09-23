@@ -4,10 +4,9 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, Loader2, LogOut, Bell, Hash, RefreshCw, X, Pencil, ChevronDown, ChevronRight, Search, Plus } from "lucide-react";
+import { ArrowLeft, Loader2, LogOut, Bell, Hash, RefreshCw, X, Pencil, ChevronDown, ChevronRight, Search, Plus, Star } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { slackService, type SlackStatus, type SlackConnectedChannel } from "@/lib/services/slack";
 import { useUser } from "@/hooks/useAuthHooks";
@@ -87,6 +86,9 @@ export default function SlackManagePage() {
 
   const [connectedChannels, setConnectedChannels] = useState<SlackConnectedChannel[]>([]);
   const [dismissedChannels, setDismissedChannels] = useState<SlackConnectedChannel[]>([]);
+  // The single channel that receives the structured incident card.
+  const [cardChannelId, setCardChannelId] = useState<string | null>(null);
+  const [isSettingCard, setIsSettingCard] = useState(false);
   const [isLoadingChannels, setIsLoadingChannels] = useState(true);
   const [isRefreshingChannels, setIsRefreshingChannels] = useState(false);
   // channel_id currently being edited inline (description pen), plus its draft
@@ -104,6 +106,7 @@ export default function SlackManagePage() {
       const data = await slackService.getChannels();
       setConnectedChannels(data.connected);
       setDismissedChannels(data.dismissed);
+      setCardChannelId(data.card_channel_id ?? null);
       // The OAuth callback can redirect while descriptions are still generating.
       // If the initial load shows any pending/generating rows, start polling so
       // the spinner resolves without needing a manual refresh.
@@ -132,6 +135,7 @@ export default function SlackManagePage() {
         const data = await slackService.getChannels();
         setConnectedChannels(data.connected);
         setDismissedChannels(data.dismissed);
+        setCardChannelId(data.card_channel_id ?? null);
         const stillWorking = data.connected.some(
           (c) => c.metadata_status === "generating" || c.metadata_status === "pending",
         );
@@ -203,17 +207,45 @@ export default function SlackManagePage() {
   }, [loadStatus, loadPreferences, loadChannels, pollChannelsUntilSettled]);
 
   const handleDismissChannel = async (channelId: string) => {
+    // The card channel must stay active — block here with a clear message
+    // (the backend also 409s as a safety net).
+    if (channelId === cardChannelId) {
+      toast({
+        title: "Can't deactivate the card channel",
+        description: "This channel receives the incident card. Point the card at another channel first.",
+        variant: "destructive",
+      });
+      return;
+    }
     // Optimistically move from active to dismissed.
     const target = connectedChannels.find((c) => c.channel_id === channelId);
     setConnectedChannels((prev) => prev.filter((c) => c.channel_id !== channelId));
     if (target) {
-      setDismissedChannels((prev) => [{ ...target, is_dismissed: true, notify_enabled: false }, ...prev]);
+      setDismissedChannels((prev) => [{ ...target, is_dismissed: true }, ...prev]);
     }
     try {
       await slackService.dismissChannel(channelId);
     } catch {
       await loadChannels(); // Reconcile on failure.
-      toast({ title: "Error", description: "Failed to dismiss channel", variant: "destructive" });
+      toast({ title: "Error", description: "Failed to deactivate channel", variant: "destructive" });
+    }
+  };
+
+  const handleSetCardChannel = async (channelId: string) => {
+    const prev = cardChannelId;
+    setCardChannelId(channelId); // optimistic
+    setIsSettingCard(true);
+    try {
+      await slackService.setCardChannel(channelId);
+    } catch {
+      setCardChannelId(prev);
+      toast({
+        title: "Error",
+        description: "Failed to set the incident card channel. It must be an active channel.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSettingCard(false);
     }
   };
 
@@ -262,21 +294,6 @@ export default function SlackManagePage() {
   const handleGenerateFromEditor = (channelId: string) => {
     setEditingChannelId(null);
     handleRegenerateDescription(channelId);
-  };
-
-  const handleChannelNotifyToggle = async (channelId: string, enabled: boolean) => {
-    setConnectedChannels((prev) =>
-      prev.map((c) => (c.channel_id === channelId ? { ...c, notify_enabled: enabled } : c)),
-    );
-    try {
-      await slackService.setChannelNotify(channelId, enabled);
-    } catch {
-      // Revert on failure.
-      setConnectedChannels((prev) =>
-        prev.map((c) => (c.channel_id === channelId ? { ...c, notify_enabled: !enabled } : c)),
-      );
-      toast({ title: "Error", description: "Failed to update channel notification setting", variant: "destructive" });
-    }
   };
 
   const handleRegenerateDescription = async (channelId: string) => {
@@ -633,6 +650,11 @@ export default function SlackManagePage() {
                     <h4 className="text-sm font-medium text-muted-foreground">
                       Aurora is active in ({activeChannels.length})
                     </h4>
+                    <p className="text-xs text-muted-foreground -mt-2">
+                      Aurora posts free-form teammate messages in these channels when relevant.
+                      The <Star className="inline h-3 w-3 fill-yellow-400 text-yellow-400" /> channel
+                      also receives the structured incident card — exactly one channel gets it.
+                    </p>
                     {activeChannels.map((c) => (
                       <div key={c.channel_id} className="p-2 rounded-md border border-border space-y-1">
                         <div className="flex items-center justify-between gap-2">
@@ -649,13 +671,22 @@ export default function SlackManagePage() {
                               </span>
                             )}
                           </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-xs text-muted-foreground">Notify</span>
-                            <Switch
-                              checked={Boolean(c.notify_enabled)}
-                              onCheckedChange={(checked) => handleChannelNotifyToggle(c.channel_id, checked)}
-                              disabled={!canWrite}
-                            />
+                          <div className="flex items-center gap-1 shrink-0">
+                            {/* Card-channel star: exactly one active channel gets
+                                the structured incident card. Filled = this one. */}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className={`h-7 w-7 p-0 ${c.channel_id === cardChannelId ? "text-yellow-400" : "text-zinc-500 hover:text-yellow-400"}`}
+                              title={c.channel_id === cardChannelId
+                                ? "Incident card channel (the structured card posts here)"
+                                : "Make this the incident card channel"}
+                              aria-label={c.channel_id === cardChannelId ? "Incident card channel" : "Set as incident card channel"}
+                              disabled={!canWrite || isSettingCard || c.channel_id === cardChannelId}
+                              onClick={() => handleSetCardChannel(c.channel_id)}
+                            >
+                              <Star className={`h-4 w-4 ${c.channel_id === cardChannelId ? "fill-yellow-400" : ""}`} />
+                            </Button>
                             {canWrite && (
                               <>
                                 <Button
@@ -670,8 +701,11 @@ export default function SlackManagePage() {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-7 w-7 p-0 text-zinc-400 hover:text-destructive"
-                                  title="Dismiss (hide from Aurora; stays in Slack)"
+                                  className="h-7 w-7 p-0 text-zinc-400 hover:text-destructive disabled:opacity-40"
+                                  title={c.channel_id === cardChannelId
+                                    ? "This is the incident card channel — point the card elsewhere before deactivating"
+                                    : "Deactivate (Aurora stays in Slack but stops posting here)"}
+                                  disabled={c.channel_id === cardChannelId}
                                   onClick={() => handleDismissChannel(c.channel_id)}
                                 >
                                   <X className="h-4 w-4" />

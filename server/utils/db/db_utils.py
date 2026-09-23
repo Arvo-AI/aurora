@@ -345,7 +345,6 @@ def initialize_tables():
                         is_archived BOOLEAN DEFAULT false,
                         channel_type VARCHAR(20) DEFAULT 'unknown',
                         detected_platform VARCHAR(40),
-                        notify_enabled BOOLEAN DEFAULT false,
                         is_dismissed BOOLEAN DEFAULT false,
                         metadata_summary TEXT,
                         metadata_status VARCHAR(20) DEFAULT 'pending',

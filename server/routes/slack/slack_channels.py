@@ -19,15 +19,25 @@ channels.
 
 Endpoints (all behind ``connectors`` RBAC):
 
-    GET    /slack/channels                       -> stored channels {connected, dismissed}
+    GET    /slack/channels                       -> stored channels {connected, dismissed, card_channel_id}
     POST   /slack/channels/refresh               -> re-scan: add new & prune deleted channels
     DELETE /slack/channels                       -> forget all channels
-    POST   /slack/channels/<id>/dismiss          -> hide a channel from routing (stays in Slack)
-    POST   /slack/channels/<id>/restore          -> un-dismiss a channel
+    POST   /slack/channels/<id>/dismiss          -> deactivate a channel (stays in Slack)
+    POST   /slack/channels/<id>/restore          -> reactivate a dismissed channel
     PUT    /slack/channels/<id>/metadata         -> human-edit a channel description
-    PUT    /slack/channels/<id>/notify           -> toggle notify_enabled for a channel
+    GET/PUT /slack/channels/card-channel         -> get/set the single incident-card channel
     POST   /slack/channels/metadata/generate     -> (re)generate a channel description
     POST   /slack/channels/activate             -> bulk-activate (describe+route) many channels
+
+Channel model (two states + one designation):
+    * Active   — described (``metadata_status='ready'``), not dismissed. Aurora
+      engages: it may post free-form teammate messages here.
+    * Inactive — aware only (``skipped``) or dismissed. Aurora stays silent
+      (reads on demand for public channels, but never posts proactively).
+    * Card channel — exactly one active channel receives the structured incident
+      card (the template). Stored as the ``slack_incidents_channel_id`` pref /
+      creds field, not a per-channel flag. (Active-ness alone is the routing
+      permission — there is no separate per-channel notify flag.)
 """
 import json
 import logging
@@ -132,8 +142,8 @@ def _upsert_channel(cur, user_id: str, org_id: str | None, ch: dict,
         """INSERT INTO slack_channels
                (user_id, org_id, provider, team_id, channel_id, channel_name,
                 is_private, is_member, channel_type, detected_platform,
-                notify_enabled, channel_data, metadata_status)
-           VALUES (%s, %s, 'slack', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                channel_data, metadata_status)
+           VALUES (%s, %s, 'slack', %s, %s, %s, %s, %s, %s, %s, %s, %s)
            ON CONFLICT (user_id, provider, channel_id) DO UPDATE SET
                channel_name = EXCLUDED.channel_name,
                is_private = EXCLUDED.is_private,
@@ -147,7 +157,6 @@ def _upsert_channel(cur, user_id: str, org_id: str | None, ch: dict,
             ch.get("channel_name") or ch.get("name"),
             ch.get("is_private", False), ch.get("is_member", False),
             channel_type, platform,
-            bool(ch.get("notify_enabled", False)),
             json.dumps(ch),
             initial_status,
         ),
@@ -172,7 +181,7 @@ def _rank_channels(channels: list[dict]) -> list[dict]:
 def _update_one_channel(user_id: str, channel_id: str, set_clause: str, params: tuple):
     """Run a single-row ``UPDATE slack_channels ... WHERE channel_id`` and return
     a JSON response. Centralises the RLS + 404 + commit boilerplate shared by the
-    dismiss/restore/metadata/notify routes.
+    dismiss/restore/metadata routes.
 
     ``set_clause`` is the ``SET`` body (without ``updated_at``, which is always
     appended); ``params`` are its bind values, followed here by ``channel_id``.
@@ -423,7 +432,12 @@ def register_single_channel(user_id: str, channel_id: str,
 @slack_channels_bp.route("/channels", methods=["GET"])
 @require_permission("connectors", "read")
 def get_slack_channels(user_id):
-    """Return the org's stored channels split into {connected, dismissed}."""
+    """Return the org's stored channels split into {connected, dismissed}.
+
+    Also returns ``card_channel_id`` — the single channel that receives the
+    structured incident card. Every other active channel can still get free-form
+    teammate messages, but only this one gets the card template.
+    """
     try:
         org_id = resolve_org(user_id)
         predicate, pred_params = org_read_predicate(user_id, org_id)
@@ -435,7 +449,7 @@ def get_slack_channels(user_id):
                 cur.execute(
                     f"""SELECT DISTINCT ON (channel_id)
                               channel_id, channel_name, is_private, is_member,
-                              channel_type, detected_platform, notify_enabled,
+                              channel_type, detected_platform,
                               metadata_summary, metadata_status, is_dismissed
                          FROM slack_channels
                         WHERE provider = 'slack' AND {predicate}
@@ -455,17 +469,20 @@ def get_slack_channels(user_id):
                 "is_member": r[3],
                 "channel_type": r[4],
                 "detected_platform": r[5],
-                "notify_enabled": r[6],
-                "metadata_summary": r[7],
-                "metadata_status": r[8],
-                "is_dismissed": r[9],
+                "metadata_summary": r[6],
+                "metadata_status": r[7],
+                "is_dismissed": r[8],
             }
-            if r[9]:
+            if r[8]:
                 dismissed.append(entry)
             else:
                 connected.append(entry)
 
-        return jsonify({"connected": connected, "dismissed": dismissed})
+        return jsonify({
+            "connected": connected,
+            "dismissed": dismissed,
+            "card_channel_id": _get_card_channel_id(user_id),
+        })
     except Exception:
         logger.exception("Error getting Slack channels")
         return jsonify({"error": "Failed to get Slack channels"}), 500
@@ -474,15 +491,23 @@ def get_slack_channels(user_id):
 @slack_channels_bp.route("/channels/<channel_id>/dismiss", methods=["POST"])
 @require_permission("connectors", "write")
 def dismiss_slack_channel(user_id, channel_id):
-    """Mark a channel as dismissed (irrelevant).
+    """Mark a channel as dismissed (inactive).
 
-    Does NOT touch Slack — Aurora stays in the channel. It just stops routing/
-    notifying there, hides it from the main list, and prevents auto-register/
-    refresh from resurfacing it. Reversible via the restore route.
+    Does NOT touch Slack — Aurora stays in the channel. It just stops routing
+    teammate messages there, hides it from the active list, and prevents
+    auto-register/refresh from resurfacing it. Reversible via the restore route.
+
+    Blocked for the incident card channel: that channel must stay active so the
+    structured card has somewhere to go. The user has to point the card at
+    another channel first.
     """
-    err = _update_one_channel(
-        user_id, channel_id, "is_dismissed = TRUE, notify_enabled = FALSE", ()
-    )
+    if _get_card_channel_id(user_id) == channel_id:
+        return jsonify({
+            "error": "This is your incident card channel. Pick a different card "
+                     "channel before deactivating this one.",
+            "code": "is_card_channel",
+        }), 409
+    err = _update_one_channel(user_id, channel_id, "is_dismissed = TRUE", ())
     return err or jsonify({"channel_id": channel_id, "is_dismissed": True})
 
 
@@ -544,15 +569,114 @@ def update_channel_metadata(user_id, channel_id):
     return err or jsonify({"message": "Metadata updated"})
 
 
-@slack_channels_bp.route("/channels/<channel_id>/notify", methods=["PUT"])
+@slack_channels_bp.route("/channels/card-channel", methods=["GET", "PUT"])
 @require_permission("connectors", "write")
-def update_channel_notify(user_id, channel_id):
-    """Toggle whether Aurora may proactively notify a channel."""
-    enabled = (request.get_json(silent=True) or {}).get("enabled")
-    if not isinstance(enabled, bool):
-        return jsonify({"error": "enabled must be a boolean"}), 400
-    err = _update_one_channel(user_id, channel_id, "notify_enabled = %s", (enabled,))
-    return err or jsonify({"channel_id": channel_id, "notify_enabled": enabled})
+def card_channel(user_id):
+    """Get or set the single channel that receives the structured incident card.
+
+    GET  -> {"card_channel_id": <id or null>}
+    PUT  {"channel_id": <id>} -> designate that channel as the card channel.
+
+    The card channel must be an ACTIVE channel (described, not dismissed): the
+    card is the one structured template Aurora posts, and it only goes here.
+    Every other active channel can still receive free-form teammate messages.
+    Writing both the org preference and the stored creds field keeps the
+    notification service's resolver (creds-first) in sync with the UI choice.
+    """
+    if request.method == "GET":
+        return jsonify({"card_channel_id": _get_card_channel_id(user_id)})
+
+    channel_id = (request.get_json(silent=True) or {}).get("channel_id")
+    if not channel_id or not isinstance(channel_id, str):
+        return jsonify({"error": "channel_id is required"}), 400
+
+    # Must be an active channel — the card needs a live, engaged destination.
+    if not _is_active_channel(user_id, channel_id):
+        return jsonify({
+            "error": "The incident card channel must be an active channel. "
+                     "Activate it first, then set it as the card channel.",
+            "code": "not_active",
+        }), 409
+
+    try:
+        _set_card_channel(user_id, channel_id)
+    except Exception:
+        logger.exception("Error setting card channel")
+        return jsonify({"error": "Failed to set card channel"}), 500
+    return jsonify({"card_channel_id": channel_id})
+
+
+def _get_card_channel_id(user_id: str) -> str | None:
+    """Resolve the current incident card channel (creds-first, org-pref fallback),
+    mirroring the notification service's resolver. Best-effort; None on error."""
+    try:
+        from utils.auth.stateless_auth import (
+            get_credentials_from_db, get_org_id_for_user, get_org_preference,
+        )
+        creds = get_credentials_from_db(user_id, "slack") or {}
+        if creds.get("incidents_channel_id"):
+            return creds["incidents_channel_id"]
+        org_id = get_org_id_for_user(user_id)
+        if org_id:
+            return get_org_preference(org_id, 'slack_incidents_channel_id') or None
+    except Exception:
+        logger.debug("Could not resolve card channel id", exc_info=True)
+    return None
+
+
+def _is_active_channel(user_id: str, channel_id: str) -> bool:
+    """True if the channel is described + not dismissed (i.e. Aurora engages there)."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:isactive]")
+                cur.execute(
+                    """SELECT 1 FROM slack_channels
+                        WHERE provider = 'slack' AND channel_id = %s
+                          AND NOT is_dismissed AND metadata_status = 'ready'
+                        LIMIT 1""",
+                    (channel_id,),
+                )
+                return cur.fetchone() is not None
+    except Exception:
+        logger.exception("Error checking active channel %s", sanitize(channel_id))
+        return False
+
+
+def _set_card_channel(user_id: str, channel_id: str) -> None:
+    """Persist the card channel to both the org preference and stored creds so
+    the notification resolver (which reads creds first) honors the UI choice."""
+    from utils.auth.stateless_auth import get_org_id_for_user, store_org_preference
+    from utils.auth.token_management import store_tokens_in_db
+    from utils.auth.stateless_auth import get_credentials_from_db
+
+    # Look up the channel name for a friendlier stored label (best-effort).
+    channel_name = ""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:cardname]")
+                cur.execute(
+                    """SELECT channel_name FROM slack_channels
+                        WHERE provider = 'slack' AND channel_id = %s LIMIT 1""",
+                    (channel_id,),
+                )
+                row = cur.fetchone()
+                channel_name = (row[0] if row else "") or ""
+    except Exception:
+        logger.debug("Could not read channel name for card channel", exc_info=True)
+
+    org_id = get_org_id_for_user(user_id)
+    if org_id:
+        store_org_preference(org_id, 'slack_incidents_channel_id', channel_id)
+        store_org_preference(org_id, 'slack_incidents_channel_name', channel_name)
+
+    # Update the creds copy too — the resolver checks creds before the org pref,
+    # so leaving a stale creds value would silently override the new choice.
+    creds = get_credentials_from_db(user_id, "slack") or {}
+    creds["incidents_channel_id"] = channel_id
+    creds["incidents_channel_name"] = channel_name
+    store_tokens_in_db(user_id, creds, "slack")
 
 
 @slack_channels_bp.route("/channels/metadata/generate", methods=["POST"])

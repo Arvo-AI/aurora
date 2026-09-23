@@ -3,7 +3,7 @@ import { forwardRequest } from '@/lib/backend-proxy';
 
 // Proxies /api/slack/channels/** to the Flask backend /slack/channels/**.
 // Kept separate from /api/slack (base connect/status/disconnect) so the
-// channel-management endpoints (list/refresh/dismiss/restore/metadata/notify)
+// channel-management endpoints (list/refresh/dismiss/restore/metadata/card-channel)
 // are reachable through the required backend proxy boundary.
 async function handler(
   request: NextRequest,
