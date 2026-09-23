@@ -368,8 +368,8 @@ def _activate_db(returning_rows):
 
 
 def test_activate_channels_enqueues_only_returned_ids():
-    # DB RETURNING drives what's enqueued: C3 was dismissed/unknown so the UPDATE
-    # didn't touch it and it must NOT be described.
+    # DB RETURNING drives what's enqueued: only rows the UPDATE actually touched
+    # (existing ids) come back, so only those are described.
     dbcm, cur = _activate_db([("C1",), ("C2",)])
     enqueued = []
     with patch.object(mod, "set_rls_context", return_value="org"), \
@@ -379,7 +379,8 @@ def test_activate_channels_enqueues_only_returned_ids():
 
     assert activated == 2
     assert enqueued == ["C1", "C2"]
-    # The WHERE clause must exclude dismissed rows.
+    # Activation supersedes dismissal: the UPDATE un-dismisses the rows it flips
+    # (rather than excluding dismissed ones).
     sql = cur.execute.call_args.args[0]
     assert "is_dismissed = FALSE" in sql
     assert cur.execute.call_args.args[1] == (["C1", "C2", "C3"],)
@@ -436,3 +437,69 @@ def test_list_all_channels_respects_safety_cap():
 
     # Stops once the cap is reached and returns exactly the cap (not a full page over it).
     assert len(result) == 300
+
+
+# --- card channel: helpers + dismiss guard ----------------------------------
+
+def test_is_active_channel_true_only_for_ready_undismissed():
+    from unittest.mock import MagicMock
+    conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.return_value = (1,)  # a matching ready/undismissed row
+    conn.cursor.return_value.__enter__ = lambda s: cur
+    conn.cursor.return_value.__exit__ = lambda s, *a: False
+    dbcm = MagicMock()
+    dbcm.__enter__ = lambda s: conn
+    dbcm.__exit__ = lambda s, *a: False
+    with patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm):
+        assert mod._is_active_channel("u1", "C1") is True
+    # The guard predicate must require ready + not dismissed.
+    sql = cur.execute.call_args.args[0]
+    assert "metadata_status = 'ready'" in sql
+    assert "NOT is_dismissed" in sql
+
+
+def test_is_active_channel_false_when_no_row():
+    from unittest.mock import MagicMock
+    conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.return_value = None
+    conn.cursor.return_value.__enter__ = lambda s: cur
+    conn.cursor.return_value.__exit__ = lambda s, *a: False
+    dbcm = MagicMock()
+    dbcm.__enter__ = lambda s: conn
+    dbcm.__exit__ = lambda s, *a: False
+    with patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm):
+        assert mod._is_active_channel("u1", "C1") is False
+
+
+def test_dismiss_card_channel_clears_designation_and_proceeds():
+    """Deactivating the card channel is allowed: it clears the card designation
+    (so the card has no stale destination) and still dismisses the row."""
+    from flask import Flask
+    app = Flask(__name__)
+    app.register_blueprint(mod.slack_channels_bp, url_prefix="/slack")
+    with patch.object(mod, "_get_card_channel_id", return_value="C_CARD"), \
+         patch.object(mod, "_clear_card_channel") as clear, \
+         patch.object(mod, "_update_one_channel", return_value=None) as upd:
+        with app.test_request_context("/slack/channels/C_CARD/dismiss", method="POST"):
+            resp = mod.dismiss_slack_channel.__wrapped__("u1", "C_CARD")
+    assert resp.get_json()["is_dismissed"] is True
+    clear.assert_called_once_with("u1")  # card designation cleared
+    upd.assert_called_once()              # and the row is dismissed
+
+
+def test_dismiss_non_card_channel_does_not_touch_card():
+    from flask import Flask
+    app = Flask(__name__)
+    app.register_blueprint(mod.slack_channels_bp, url_prefix="/slack")
+    with patch.object(mod, "_get_card_channel_id", return_value="C_CARD"), \
+         patch.object(mod, "_clear_card_channel") as clear, \
+         patch.object(mod, "_update_one_channel", return_value=None) as upd:
+        with app.test_request_context("/slack/channels/C_OTHER/dismiss", method="POST"):
+            resp = mod.dismiss_slack_channel.__wrapped__("u1", "C_OTHER")
+    assert resp.get_json()["is_dismissed"] is True
+    clear.assert_not_called()  # a non-card channel never clears the card
+    upd.assert_called_once()

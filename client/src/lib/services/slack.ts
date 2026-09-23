@@ -23,7 +23,6 @@ export interface SlackConnectedChannel {
   is_member?: boolean;
   channel_type?: string;
   detected_platform?: string | null;
-  notify_enabled?: boolean;
   metadata_summary?: string | null;
   metadata_status?: string;
   is_dismissed?: boolean;
@@ -32,6 +31,8 @@ export interface SlackConnectedChannel {
 export interface SlackChannelsResponse {
   connected: SlackConnectedChannel[];
   dismissed: SlackConnectedChannel[];
+  // The single channel that receives the structured incident card, or null.
+  card_channel_id?: string | null;
 }
 
 const API_BASE = '/api/slack';
@@ -81,6 +82,7 @@ export const slackService = {
     return {
       connected: data?.connected ?? [],
       dismissed: data?.dismissed ?? [],
+      card_channel_id: data?.card_channel_id ?? null,
     };
   },
 
@@ -107,10 +109,12 @@ export const slackService = {
     });
   },
 
-  async setChannelNotify(channelId: string, enabled: boolean): Promise<void> {
-    await apiRequest(`${CHANNELS_BASE}/${channelId}/notify`, {
+  // Designate the single channel that receives the structured incident card.
+  // Must be an active channel; the backend 409s otherwise.
+  async setCardChannel(channelId: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/card-channel`, {
       method: 'PUT',
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify({ channel_id: channelId }),
       cache: 'no-store',
     });
   },
