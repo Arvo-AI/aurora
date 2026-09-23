@@ -2389,6 +2389,25 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Ensure alert_environment exists on incidents. It's in the base
+            # CREATE TABLE, but that only helps fresh installs; older databases
+            # created before the column was added need this idempotent backfill
+            # so inserts that populate it (incident.io/jenkins alert ingestion)
+            # don't fail.
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS alert_environment TEXT;
+                    """
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error adding alert_environment column to incidents: {e}"
+                )
+                conn.rollback()
+
             # Migration: Add active_tab column to incidents for UI state persistence
             try:
                 cursor.execute(

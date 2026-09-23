@@ -34,9 +34,32 @@ export interface IncidentIoWebhookUrlResponse {
   instructions: string[];
 }
 
+// A single incident.io alert priority (org-defined, ranked; higher = more urgent).
+export interface IncidentIoOrgSeverity {
+  name: string;
+  rank: number;
+}
+
+export interface IncidentIoSeveritiesResponse {
+  // False when the API key lacks the "View data" scope to read severities.
+  available: boolean;
+  // True specifically when the catalog read was denied (missing scope).
+  denied: boolean;
+  // Sorted most-severe first.
+  severities: IncidentIoOrgSeverity[];
+}
+
 export interface IncidentIoRcaSettings {
   rcaEnabled: boolean;
   postbackEnabled: boolean;
+  // RCA on incident.io *alert* events (public_alert.*), not just incidents.
+  alertRcaEnabled: boolean;
+  // Minimum severity to investigate when no allowlist is set. Either a fixed
+  // bucket (low/medium/high/critical) or a real org severity name.
+  alertMinSeverity: string;
+  // Explicit list of severities to investigate; overrides alertMinSeverity.
+  // null/empty means "use the minimum-severity threshold".
+  alertSeverityAllowlist: string[] | null;
 }
 
 const API_BASE = '/api/incident-io';
@@ -102,6 +125,18 @@ export const incidentIoService = {
     } catch (error) {
       console.error('[incidentIoService] Failed to save webhook secret:', error);
       return false;
+    }
+  },
+
+  async getSeverities(): Promise<IncidentIoSeveritiesResponse> {
+    try {
+      const raw = await apiRequest<IncidentIoSeveritiesResponse>(`${API_BASE}/severities`, {
+        cache: 'no-store',
+      });
+      return raw ?? { available: false, denied: false, severities: [] };
+    } catch (error) {
+      console.error('[incidentIoService] Failed to fetch severities:', error);
+      return { available: false, denied: false, severities: [] };
     }
   },
 

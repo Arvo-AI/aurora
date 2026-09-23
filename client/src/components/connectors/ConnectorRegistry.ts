@@ -173,7 +173,7 @@ class ConnectorRegistry {
     this.register({
         id: "incidentio",
         name: "incident.io",
-        description: "Connect incident.io for real-time incident lifecycle tracking. Receive webhook events, investigate incidents with timeline data, and post RCA results back automatically.",
+        description: "Connect incident.io for real-time incident lifecycle tracking. Receive webhook events, run RCA on incidents and alerts (with customizable severity filtering), and post RCA results back automatically.",
         iconPath: "/incidentio.svg",
         iconBgColor: "bg-white dark:bg-white",
         category: "Incident Management",
