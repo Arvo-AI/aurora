@@ -214,22 +214,23 @@ export default function SlackManagePage() {
   }, [loadStatus, loadPreferences, loadChannels, pollChannelsUntilSettled]);
 
   const handleDismissChannel = async (channelId: string) => {
-    // The card channel must stay active — block here with a clear message
-    // (the backend also 409s as a safety net).
-    if (channelId === cardChannelId) {
-      toast({
-        title: "Can't deactivate the card channel",
-        description: "This channel receives the incident card. Point the card at another channel first.",
-        variant: "destructive",
-      });
+    const isCard = channelId === cardChannelId;
+    // Deactivating the card channel is allowed, but warn: the card then has no
+    // destination until the user picks a new one.
+    if (isCard && globalThis.window !== undefined &&
+        !globalThis.window.confirm(
+          "This is your incident card channel. Deactivating it means the incident card won't be posted to any channel until you pick a new one. Continue?",
+        )) {
       return;
     }
-    // Optimistically move from active to dismissed.
+    // Optimistically move from active to dismissed (and clear the card
+    // designation locally if this was the card channel — the backend clears it too).
     const target = connectedChannels.find((c) => c.channel_id === channelId);
     setConnectedChannels((prev) => prev.filter((c) => c.channel_id !== channelId));
     if (target) {
       setDismissedChannels((prev) => [{ ...target, is_dismissed: true }, ...prev]);
     }
+    if (isCard) setCardChannelId(null);
     try {
       await slackService.dismissChannel(channelId);
     } catch {
@@ -509,6 +510,11 @@ export default function SlackManagePage() {
   const cardPickerMatches = cardPickerQ
     ? activeChannels.filter((c) => (c.channel_name || c.channel_id).toLowerCase().includes(cardPickerQ))
     : activeChannels;
+  // Only surface the card-channel picker when the card is actually posted for
+  // something — if both event groups are "never", there's nothing to route.
+  const anyCardEventEnabled = NOTIFICATION_GROUPS.some(
+    (g) => modeFromBooleans(preferences[g.startKey], preferences[g.endKey]) !== "never",
+  );
   const activateQ = activateQuery.trim().toLowerCase();
   const activateMatches = activateQ
     ? indexedChannels.filter((c) => (c.channel_name || c.channel_id).toLowerCase().includes(activateQ))
@@ -597,63 +603,8 @@ export default function SlackManagePage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* Searchable single-select: which active channel gets the card. */}
-            <div className="flex items-center justify-between gap-4 p-4 border rounded-lg">
-              <div className="space-y-1 flex-1 min-w-0">
-                <h4 className="font-medium text-sm">Card channel</h4>
-                <p className="text-xs text-muted-foreground">
-                  Where Aurora posts the structured incident card. Must be an active channel.
-                </p>
-              </div>
-              <Popover open={cardPickerOpen} onOpenChange={setCardPickerOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={cardPickerOpen}
-                    className="w-56 justify-between shrink-0"
-                    disabled={!canWrite || isSettingCard || activeChannels.length === 0}
-                  >
-                    <span className="truncate">
-                      {cardChannelName ? `#${cardChannelName}` : "Select a channel…"}
-                    </span>
-                    {isSettingCard
-                      ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-                      : <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-56 p-0" align="end">
-                  <div className="relative border-b">
-                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <input
-                      autoFocus
-                      value={cardPickerQuery}
-                      onChange={(e) => setCardPickerQuery(e.target.value)}
-                      placeholder="Search channels…"
-                      className="w-full bg-transparent py-2 pl-9 pr-2 text-sm outline-none"
-                    />
-                  </div>
-                  <div className="max-h-56 overflow-y-auto py-1">
-                    {cardPickerMatches.length === 0 ? (
-                      <p className="px-3 py-2 text-xs text-muted-foreground">No channels match.</p>
-                    ) : cardPickerMatches.map((c) => (
-                      <button
-                        key={c.channel_id}
-                        type="button"
-                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent"
-                        onClick={() => handleSetCardChannel(c.channel_id)}
-                      >
-                        <Check className={`h-4 w-4 shrink-0 ${c.channel_id === cardChannelId ? "opacity-100" : "opacity-0"}`} />
-                        <span className="truncate">#{c.channel_name || c.channel_id}</span>
-                      </button>
-                    ))}
-                  </div>
-                </PopoverContent>
-              </Popover>
-            </div>
-
             {/* Per-event card behaviour: never / on start / on end / both. */}
-            <div className="pt-1">
+            <div>
               <h4 className="text-sm font-medium mb-1">When to post the card</h4>
               <p className="text-xs text-muted-foreground mb-3">
                 Choose when the card is posted to the card channel for investigations and actions.
@@ -691,6 +642,64 @@ export default function SlackManagePage() {
             })}
               </div>
             </div>
+
+            {/* Card channel picker — only relevant once the card is posted for
+                at least one event (both "never" ⇒ nothing to route, so hide it). */}
+            {anyCardEventEnabled && (
+              <div className="flex items-center justify-between gap-4 p-4 border rounded-lg">
+                <div className="space-y-1 flex-1 min-w-0">
+                  <h4 className="font-medium text-sm">Card channel</h4>
+                  <p className="text-xs text-muted-foreground">
+                    Where Aurora posts the structured incident card. Must be an active channel.
+                  </p>
+                </div>
+                <Popover open={cardPickerOpen} onOpenChange={setCardPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={cardPickerOpen}
+                      className="w-56 justify-between shrink-0"
+                      disabled={!canWrite || isSettingCard || activeChannels.length === 0}
+                    >
+                      <span className="truncate">
+                        {cardChannelName ? `#${cardChannelName}` : "Select a channel…"}
+                      </span>
+                      {isSettingCard
+                        ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                        : <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-56 p-0" align="end">
+                    <div className="relative border-b">
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <input
+                        autoFocus
+                        value={cardPickerQuery}
+                        onChange={(e) => setCardPickerQuery(e.target.value)}
+                        placeholder="Search channels…"
+                        className="w-full bg-transparent py-2 pl-9 pr-2 text-sm outline-none"
+                      />
+                    </div>
+                    <div className="max-h-56 overflow-y-auto py-1">
+                      {cardPickerMatches.length === 0 ? (
+                        <p className="px-3 py-2 text-xs text-muted-foreground">No channels match.</p>
+                      ) : cardPickerMatches.map((c) => (
+                        <button
+                          key={c.channel_id}
+                          type="button"
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent"
+                          onClick={() => handleSetCardChannel(c.channel_id)}
+                        >
+                          <Check className={`h-4 w-4 shrink-0 ${c.channel_id === cardChannelId ? "opacity-100" : "opacity-0"}`} />
+                          <span className="truncate">#{c.channel_name || c.channel_id}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -753,8 +762,7 @@ export default function SlackManagePage() {
                     </div>
                     <p className="text-xs text-muted-foreground -mt-1">
                       Aurora posts free-form teammate messages in these channels when relevant.
-                      The channel tagged <span className="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-950 text-amber-300">Card</span>{" "}
-                      also receives the structured incident card — set it in the Incident Card section above.
+                      The structured incident card goes to the card channel set in the Incident Card section above.
                     </p>
                     {/* Search over the active list, so a long membership stays
                         manageable (mirrors the activate panel's search). */}
@@ -789,12 +797,6 @@ export default function SlackManagePage() {
                                 {c.detected_platform}
                               </span>
                             )}
-                            {c.channel_id === cardChannelId && (
-                              <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 shrink-0"
-                                    title="Receives the structured incident card">
-                                Card
-                              </span>
-                            )}
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
                             {canWrite && (
@@ -811,11 +813,10 @@ export default function SlackManagePage() {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-7 w-7 p-0 text-zinc-400 hover:text-destructive disabled:opacity-40"
+                                  className="h-7 w-7 p-0 text-zinc-400 hover:text-destructive"
                                   title={c.channel_id === cardChannelId
-                                    ? "This is the incident card channel — point the card elsewhere before deactivating"
+                                    ? "Deactivate (this is the card channel — the card will stop posting until you pick a new one)"
                                     : "Deactivate (Aurora stays in Slack but stops posting here)"}
-                                  disabled={c.channel_id === cardChannelId}
                                   onClick={() => handleDismissChannel(c.channel_id)}
                                 >
                                   <X className="h-4 w-4" />

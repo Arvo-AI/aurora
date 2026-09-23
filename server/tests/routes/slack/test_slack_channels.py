@@ -474,29 +474,31 @@ def test_is_active_channel_false_when_no_row():
         assert mod._is_active_channel("u1", "C1") is False
 
 
-def test_dismiss_blocks_the_card_channel():
-    """The card channel can't be deactivated — the endpoint 409s with a hint."""
+def test_dismiss_card_channel_clears_designation_and_proceeds():
+    """Deactivating the card channel is allowed: it clears the card designation
+    (so the card has no stale destination) and still dismisses the row."""
     from flask import Flask
     app = Flask(__name__)
     app.register_blueprint(mod.slack_channels_bp, url_prefix="/slack")
-    # Bypass RBAC: call the undecorated function via a request context, patching
-    # the card-channel resolver to claim C_CARD is the current card channel.
     with patch.object(mod, "_get_card_channel_id", return_value="C_CARD"), \
-         patch.object(mod, "_update_one_channel") as upd:
+         patch.object(mod, "_clear_card_channel") as clear, \
+         patch.object(mod, "_update_one_channel", return_value=None) as upd:
         with app.test_request_context("/slack/channels/C_CARD/dismiss", method="POST"):
-            resp, status = mod.dismiss_slack_channel.__wrapped__("u1", "C_CARD")
-    assert status == 409
-    assert resp.get_json()["code"] == "is_card_channel"
-    upd.assert_not_called()  # never reached the DB write
+            resp = mod.dismiss_slack_channel.__wrapped__("u1", "C_CARD")
+    assert resp.get_json()["is_dismissed"] is True
+    clear.assert_called_once_with("u1")  # card designation cleared
+    upd.assert_called_once()              # and the row is dismissed
 
 
-def test_dismiss_allows_non_card_channel():
+def test_dismiss_non_card_channel_does_not_touch_card():
     from flask import Flask
     app = Flask(__name__)
     app.register_blueprint(mod.slack_channels_bp, url_prefix="/slack")
     with patch.object(mod, "_get_card_channel_id", return_value="C_CARD"), \
+         patch.object(mod, "_clear_card_channel") as clear, \
          patch.object(mod, "_update_one_channel", return_value=None) as upd:
         with app.test_request_context("/slack/channels/C_OTHER/dismiss", method="POST"):
             resp = mod.dismiss_slack_channel.__wrapped__("u1", "C_OTHER")
     assert resp.get_json()["is_dismissed"] is True
+    clear.assert_not_called()  # a non-card channel never clears the card
     upd.assert_called_once()

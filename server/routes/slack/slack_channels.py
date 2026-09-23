@@ -497,16 +497,18 @@ def dismiss_slack_channel(user_id, channel_id):
     teammate messages there, hides it from the active list, and prevents
     auto-register/refresh from resurfacing it. Reversible via the restore route.
 
-    Blocked for the incident card channel: that channel must stay active so the
-    structured card has somewhere to go. The user has to point the card at
-    another channel first.
+    If the dismissed channel was the incident card channel, its card designation
+    is cleared too — the card then has no destination until the user picks a new
+    one (the UI warns before this happens). We don't block it: the user is
+    allowed to turn the card off by deactivating its channel.
     """
+    # Clear the card designation first so we never leave it pointing at an
+    # inactive channel (which would silently drop the card).
     if _get_card_channel_id(user_id) == channel_id:
-        return jsonify({
-            "error": "This is your incident card channel. Pick a different card "
-                     "channel before deactivating this one.",
-            "code": "is_card_channel",
-        }), 409
+        try:
+            _clear_card_channel(user_id)
+        except Exception:
+            logger.warning("Failed to clear card channel on dismiss", exc_info=True)
     err = _update_one_channel(user_id, channel_id, "is_dismissed = TRUE", ())
     return err or jsonify({"channel_id": channel_id, "is_dismissed": True})
 
@@ -677,6 +679,28 @@ def _set_card_channel(user_id: str, channel_id: str) -> None:
     creds["incidents_channel_id"] = channel_id
     creds["incidents_channel_name"] = channel_name
     store_tokens_in_db(user_id, creds, "slack")
+
+
+def _clear_card_channel(user_id: str) -> None:
+    """Unset the incident card channel in both the org preference and creds.
+
+    Called when the card channel is deactivated: the card then has no
+    destination (the notification resolver returns None and the card is skipped)
+    until the user picks a new one. Clears both stores so the creds-first
+    resolver doesn't keep serving a stale value."""
+    from utils.auth.stateless_auth import get_org_id_for_user, store_org_preference, get_credentials_from_db
+    from utils.auth.token_management import store_tokens_in_db
+
+    org_id = get_org_id_for_user(user_id)
+    if org_id:
+        store_org_preference(org_id, 'slack_incidents_channel_id', "")
+        store_org_preference(org_id, 'slack_incidents_channel_name', "")
+
+    creds = get_credentials_from_db(user_id, "slack") or {}
+    if creds:
+        creds.pop("incidents_channel_id", None)
+        creds.pop("incidents_channel_name", None)
+        store_tokens_in_db(user_id, creds, "slack")
 
 
 @slack_channels_bp.route("/channels/metadata/generate", methods=["POST"])
