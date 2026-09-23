@@ -94,6 +94,8 @@ export default function SlackManagePage() {
   // channel_id currently being edited inline (description pen), plus its draft
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
   const [editingDraft, setEditingDraft] = useState("");
+  // Search box over the active channel list (mirrors the activate panel search).
+  const [activeQuery, setActiveQuery] = useState("");
   const [showDismissed, setShowDismissed] = useState(false);
   // "Activate more channels" panel: search query, checked ids, in-flight flag.
   const [showActivate, setShowActivate] = useState(false);
@@ -476,7 +478,19 @@ export default function SlackManagePage() {
   // Split the active set (described / being described — the channels Aurora
   // actually engages) from the aware-only index ('skipped'). The main list shows
   // only the active set; indexed channels live under "Activate more channels".
-  const activeChannels = connectedChannels.filter((c) => c.metadata_status !== "skipped");
+  // The card channel (⭐) is pinned to the top so it's always visible even when
+  // the list is long/scrolled; the rest keep their existing (recency) order.
+  const activeChannels = connectedChannels
+    .filter((c) => c.metadata_status !== "skipped")
+    .sort((a, b) => {
+      if (a.channel_id === cardChannelId) return -1;
+      if (b.channel_id === cardChannelId) return 1;
+      return 0;
+    });
+  const activeQ = activeQuery.trim().toLowerCase();
+  const activeMatches = activeQ
+    ? activeChannels.filter((c) => (c.channel_name || c.channel_id).toLowerCase().includes(activeQ))
+    : activeChannels;
   const indexedChannels = connectedChannels.filter((c) => c.metadata_status === "skipped");
   const activateQ = activateQuery.trim().toLowerCase();
   const activateMatches = activateQ
@@ -655,7 +669,25 @@ export default function SlackManagePage() {
                       The <Star className="inline h-3 w-3 fill-yellow-400 text-yellow-400" /> channel
                       also receives the structured incident card — exactly one channel gets it.
                     </p>
-                    {activeChannels.map((c) => (
+                    {/* Search over the active list, so a long membership stays
+                        manageable (mirrors the activate panel's search). */}
+                    {activeChannels.length > 5 && (
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          value={activeQuery}
+                          onChange={(e) => setActiveQuery(e.target.value)}
+                          placeholder="Search active channels by name"
+                          className="pl-9 text-sm"
+                        />
+                      </div>
+                    )}
+                    {/* Scrollable so a large active set doesn't stretch the page;
+                        the section keeps a fixed max height and scrolls inside. */}
+                    <div className="max-h-96 overflow-y-auto space-y-3 pr-1">
+                    {activeMatches.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No active channels match.</p>
+                    ) : activeMatches.map((c) => (
                       <div key={c.channel_id} className="p-2 rounded-md border border-border space-y-1">
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
@@ -771,6 +803,7 @@ export default function SlackManagePage() {
                         )}
                       </div>
                     ))}
+                    </div>
                   </div>
                 )}
 
