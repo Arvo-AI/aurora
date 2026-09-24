@@ -235,6 +235,21 @@ class SlackClient:
         except Exception:
             logger.warning("Could not join channel via conversations.join", exc_info=True)
             return None
+
+    def leave_channel(self, channel: str) -> bool:
+        """Leave a channel by ID. Returns True on success, False on failure.
+
+        Used when a user deactivates a channel: membership is Aurora's source of
+        truth for "active", so deactivating must actually remove the bot from the
+        channel in Slack (not just flip a local flag). Best-effort — a failure
+        (e.g. already not a member, archived) is logged and reported so callers
+        can decide whether to proceed."""
+        try:
+            self._make_request("POST", "conversations.leave", {"channel": channel})
+            return True
+        except Exception:
+            logger.warning("Could not leave channel via conversations.leave", exc_info=True)
+            return False
     
 
 

@@ -373,11 +373,12 @@ class GetConnectedSlackChannelsArgs(BaseModel):
 def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
     """Return the ACTIVE Slack channels Aurora may post to, each with its description.
 
-    This is the routing-decision source: only channels the user has activated
-    (described, ``metadata_status='ready'``, not dismissed) are returned, so the
-    agent never routes to an aware-only/indexed channel. Use the descriptions to
-    choose which channel(s) are relevant. Distinct from list_slack_channels (a
-    live, description-less listing of bot memberships).
+    This is the routing-decision source: only channels Aurora is a member of
+    (membership is the source of truth) that have been described
+    (``metadata_status='ready'``) are returned, so the agent routes only to
+    channels it's actually in. Use the descriptions to choose which channel(s)
+    are relevant. Distinct from list_slack_channels (a live, description-less
+    listing of bot memberships).
     """
     if not user_id:
         return json.dumps({"error": _ERR_NO_USER})
