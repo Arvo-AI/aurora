@@ -168,6 +168,51 @@ def test_auto_register_describe_limit_caps_members():
     assert dict(upserts)["C3"] == "pending"
 
 
+def _run_reconcile_with_existing(rows):
+    """Run auto_register for a single member C1 whose stored row is `rows[0]`,
+    returning the list of channel_ids enqueued for description."""
+    members = [{"id": "C1", "name": "one", "is_member": True, "created": 300}]
+    fake_client = MagicMock()
+    fake_client.list_bot_channels.return_value = members
+    enqueued = []
+
+    def fake_upsert(cur, user_id, org_id, ch, existing, initial_status="pending"):
+        existing[ch["channel_id"]] = user_id
+        # Existing row -> is_new False (the interesting re-enqueue path).
+        return ch["channel_id"], False
+
+    dbcm, _cur = _db(fetchall_rows=rows)
+    with patch.object(mod, "get_slack_client_for_user", return_value=fake_client), \
+         patch.object(mod, "resolve_org", return_value="00000000-0000-0000-0000-000000000000"), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_get_card_channel_id", return_value=None), \
+         patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
+         patch.object(mod, "_enqueue_metadata", side_effect=lambda uid, cid: enqueued.append(cid)):
+        mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=50)
+    return enqueued
+
+
+def test_reconcile_skips_fresh_pending_but_reenqueues_stale():
+    """A freshly-queued 'pending' row (task in flight) is NOT re-enqueued; a
+    stale one (worker died) IS — so we don't spam duplicate LLM calls."""
+    # (channel_id, user_id, status, is_stale)
+    assert _run_reconcile_with_existing([("C1", "u", "pending", False)]) == []
+    assert _run_reconcile_with_existing([("C1", "u", "pending", True)]) == ["C1"]
+
+
+def test_reconcile_does_not_reenqueue_error_or_ready_or_generating():
+    """'error' is left for an explicit regenerate (the task's own retries bound
+    transient failures); 'ready'/'generating' are already done/in progress."""
+    for status in ("error", "ready", "generating"):
+        assert _run_reconcile_with_existing([("C1", "u", status, True)]) == [], status
+
+
+def test_reconcile_reenqueues_skipped():
+    """A 'skipped' row (legacy over-cap) is always re-enqueued so it reaches ready."""
+    assert _run_reconcile_with_existing([("C1", "u", "skipped", False)]) == ["C1"]
+
+
 def test_auto_register_prunes_non_member_channels():
     """A stored row Aurora is no longer a member of is pruned (self-healing)."""
     members = [{"id": "C1", "name": "one", "is_member": True, "created": 300}]
@@ -179,8 +224,8 @@ def test_auto_register_prunes_non_member_channels():
         return ch["channel_id"], False
 
     # Stored rows: C1 (still a member) and C_OLD (no longer a member).
-    # Third tuple element is metadata_status (the reconcile query now selects it).
-    dbcm, cur = _db(fetchall_rows=[("C1", "u", "ready"), ("C_OLD", "u", "ready")])
+    # 4-tuple: (channel_id, user_id, metadata_status, is_stale).
+    dbcm, cur = _db(fetchall_rows=[("C1", "u", "ready", False), ("C_OLD", "u", "ready", False)])
 
     with patch.object(mod, "get_slack_client_for_user", return_value=fake_client), \
          patch.object(mod, "resolve_org", return_value="00000000-0000-0000-0000-000000000000"), \
@@ -410,6 +455,26 @@ def test_deactivate_keeps_row_and_409s_when_leave_fails():
     assert not any("DELETE FROM slack_channels" in c.args[0] for c in cur.execute.call_args_list)
 
 
+def test_deactivate_does_not_clear_card_when_leave_fails():
+    """If the leave fails (409), the channel is still Active — the card
+    designation must NOT be cleared, or the card silently stops posting."""
+    from flask import Flask
+    app = Flask(__name__)
+    app.register_blueprint(mod.slack_channels_bp, url_prefix="/slack")
+    client = MagicMock()
+    client.leave_channel.return_value = False  # e.g. cant_leave_general
+    dbcm, _cur = _db(fetchall_rows=[])
+    with patch.object(mod, "_get_card_channel_id", return_value="C1"), \
+         patch.object(mod, "_clear_card_channel") as clear, \
+         patch.object(mod, "get_slack_client_for_user", return_value=client), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm):
+        with app.test_request_context("/slack/channels/C1/dismiss", method="POST"):
+            resp = mod.dismiss_slack_channel.__wrapped__("u1", "C1")
+    assert resp[1] == 409
+    clear.assert_not_called()
+
+
 def test_auto_register_clears_card_channel_when_pruned():
     """A pruned channel that was the card channel gets its designation cleared,
     so the resolver doesn't keep serving a dead destination."""
@@ -422,7 +487,8 @@ def test_auto_register_clears_card_channel_when_pruned():
         return ch["channel_id"], False
 
     # C_CARD is stored, is the card channel, and is no longer a member -> pruned.
-    dbcm, _cur = _db(fetchall_rows=[("C1", "u", "ready"), ("C_CARD", "u", "ready")])
+    # 4-tuple: (channel_id, user_id, metadata_status, is_stale).
+    dbcm, _cur = _db(fetchall_rows=[("C1", "u", "ready", False), ("C_CARD", "u", "ready", False)])
 
     with patch.object(mod, "get_slack_client_for_user", return_value=fake_client), \
          patch.object(mod, "resolve_org", return_value="00000000-0000-0000-0000-000000000000"), \

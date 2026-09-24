@@ -131,7 +131,11 @@ export default function SlackManagePage() {
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (pollTimerRef.current) clearTimeout(pollTimerRef.current); }, []);
 
-  const pollChannelsUntilSettled = useCallback((attempt = 0, keepGoingWhileEmpty = false) => {
+  const pollChannelsUntilSettled = useCallback((
+    attempt = 0,
+    keepGoingWhileEmpty = false,
+    awaitingIds: string[] = [],
+  ) => {
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     // ~30s ceiling (15 tries × 2s) — generation is normally a few seconds.
     if (attempt >= 15) return;
@@ -141,11 +145,17 @@ export default function SlackManagePage() {
         // settle as the worker describes channels, so this must not fire the
         // rate-limited workspace re-list on every 2s tick. It also means the
         // response's `dismissed` (available-to-join) list is empty by design, so
-        // we deliberately do NOT touch dismissedChannels here — only the active
-        // rows and card id, which is all the poll cares about.
+        // we deliberately do NOT refetch dismissedChannels here.
         const data = await slackService.getChannels(true);
         setConnectedChannels(data.connected);
         setCardChannelId(data.card_channel_id ?? null);
+        // A channel that just became active (e.g. bulk-activate joined it) must
+        // drop out of the Inactive list, otherwise it shows in both places and
+        // can be "activated" again. Poll mode doesn't refetch `dismissed`, so
+        // prune it locally against the fresh connected set.
+        const connectedIds = new Set(data.connected.map((c) => c.channel_id));
+        setDismissedChannels((prev) => prev.filter((c) => !connectedIds.has(c.channel_id)));
+
         const stillWorking = data.connected.some(
           (c) => c.metadata_status === "generating" || c.metadata_status === "pending",
         );
@@ -153,8 +163,12 @@ export default function SlackManagePage() {
         // task may not have inserted any rows yet, so an empty list isn't "done"
         // — keep polling until rows appear (then normal settle logic takes over).
         const waitingForFirstRows = keepGoingWhileEmpty && data.connected.length === 0;
-        if (stillWorking || waitingForFirstRows) {
-          pollChannelsUntilSettled(attempt + 1, keepGoingWhileEmpty);
+        // Bulk-activate returns BEFORE the worker inserts the joined rows, so an
+        // absence of pending rows isn't "done" yet — keep polling until every
+        // submitted id has actually shown up in the connected list.
+        const waitingForQueuedIds = awaitingIds.some((id) => !connectedIds.has(id));
+        if (stillWorking || waitingForFirstRows || waitingForQueuedIds) {
+          pollChannelsUntilSettled(attempt + 1, keepGoingWhileEmpty, awaitingIds);
         }
       } catch (error) {
         console.error("Error polling Slack channels:", error);
@@ -327,7 +341,10 @@ export default function SlackManagePage() {
         return new Set([...prev].filter((id) => !requested.has(id)));
       });
       setActivateQuery("");
-      pollChannelsUntilSettled();
+      // Bulk-activate returns before the worker inserts the joined rows, so tell
+      // the poller to keep going until each submitted id actually appears in the
+      // connected list (not just until pending rows clear).
+      pollChannelsUntilSettled(0, false, ids);
       toast({
         title: "Activating channels",
         description: `Joining and describing ${queued} channel${queued === 1 ? "" : "s"}.`,

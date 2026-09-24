@@ -276,12 +276,18 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:auto]")
+                # Include updated_at so we can tell a freshly-queued 'pending' row
+                # (task likely still in flight) from one that's been stuck for a
+                # while (worker restart / lost task) and genuinely needs re-queuing.
                 cur.execute(
-                    "SELECT channel_id, user_id, metadata_status FROM slack_channels WHERE provider = 'slack'"
+                    """SELECT channel_id, user_id, metadata_status,
+                              (updated_at < NOW() - INTERVAL '10 minutes') AS is_stale
+                         FROM slack_channels WHERE provider = 'slack'"""
                 )
                 rows = cur.fetchall()
                 existing = {r[0]: r[1] for r in rows}
                 status_by_id = {r[0]: r[2] for r in rows}
+                is_stale_by_id = {r[0]: bool(r[3]) for r in rows}
 
                 for ch in ranked_members:
                     ch = {**ch, "channel_id": ch.get("id"), "channel_name": ch.get("name"),
@@ -291,11 +297,19 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
                     # are still 'pending' (a member channel is always describable)
                     # so a subsequent reconcile picks them up.
                     describe_now = cid in describe_ids
-                    # Existing member channels that never got described (stuck
-                    # 'pending'/'skipped' from a prior over-cap pass) still need a
-                    # description — re-enqueue them so they reach 'ready' and
-                    # become routable. Skip ones already 'ready'/'generating'.
-                    needs_describe = status_by_id.get(cid) in (None, "pending", "skipped", "error")
+                    status = status_by_id.get(cid)
+                    # Decide whether this existing row still needs a description
+                    # enqueued, WITHOUT spamming duplicate LLM calls on every load:
+                    #   * None/'skipped' — never scheduled, enqueue.
+                    #   * 'pending'      — only if STALE; a fresh pending row is a
+                    #     task still in flight (re-queuing = duplicate LLM call).
+                    #   * 'error'/'generating'/'ready' — never auto-retry here
+                    #     ('error' is left for an explicit regenerate; the task's
+                    #     own max_retries already bounds transient failures).
+                    needs_describe = (
+                        status in (None, "skipped")
+                        or (status == "pending" and is_stale_by_id.get(cid, False))
+                    )
                     _cid, is_new = _upsert_channel(
                         cur, user_id, org_id, ch, existing,
                         initial_status="pending",
@@ -550,17 +564,9 @@ def dismiss_slack_channel(user_id, channel_id):
     system message).
 
     If the dismissed channel was the incident card channel, its card designation
-    is cleared too — the card then has no destination until the user picks a new
-    one (the UI warns before this happens).
+    is cleared too (only after Aurora has actually left) — the card then has no
+    destination until the user picks a new one (the UI warns before this happens).
     """
-    # Clear the card designation first so we never leave it pointing at a channel
-    # Aurora is no longer in (which would silently drop the card).
-    if _get_card_channel_id(user_id) == channel_id:
-        try:
-            _clear_card_channel(user_id)
-        except Exception:
-            logger.warning("Failed to clear card channel on dismiss", exc_info=True)
-
     # Leave the channel in Slack. Membership is the source of truth, so we only
     # prune the local row once Aurora is actually out — otherwise the next
     # reconcile re-adds it and the channel flaps back to Active. leave_channel
@@ -578,7 +584,8 @@ def dismiss_slack_channel(user_id, channel_id):
 
     # Couldn't leave (e.g. #general, or Slack/transport error): Aurora is still a
     # member, so keep the row and tell the user instead of silently deleting a
-    # row that the next GET would just recreate.
+    # row that the next GET would just recreate. Do NOT clear the card here —
+    # the channel is still Active, so clearing it would silently stop the card.
     if not left:
         return jsonify({
             "error": "Aurora couldn't leave this channel. Some channels (like "
@@ -587,8 +594,16 @@ def dismiss_slack_channel(user_id, channel_id):
             "code": "leave_failed",
         }), 409
 
-    # Left successfully — prune the row: it's no longer a member channel, so it
-    # belongs in the live Inactive list, not the stored Active set.
+    # Confirmed out: now it's safe to clear the card designation so it never
+    # points at a channel Aurora is no longer in (which would drop the card).
+    if _get_card_channel_id(user_id) == channel_id:
+        try:
+            _clear_card_channel(user_id)
+        except Exception:
+            logger.warning("Failed to clear card channel on dismiss", exc_info=True)
+
+    # Prune the row: it's no longer a member channel, so it belongs in the live
+    # Inactive list, not the stored Active set.
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
