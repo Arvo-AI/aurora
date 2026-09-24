@@ -16,8 +16,14 @@ metadata:
   labels:
     {{- include "aurora.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.replicaCounts.slackSocketMode }}
-  # Only one socket at a time: recreate on update rather than briefly running two.
+  # NOT parametrized on purpose. Socket Mode is single-connection by design:
+  # Slack load-balances an app's events across every open socket, so a second
+  # replica would double-process events (duplicate replies, double command
+  # execution). This is a correctness constraint, not a scaling knob — the
+  # listener only acks and hands off to Celery, so scale `celeryWorker` (not
+  # this) if event *processing* is ever the bottleneck.
+  replicas: 1
+  # Never run two sockets even briefly: tear the old pod down before the new one.
   strategy:
     type: Recreate
   selector:

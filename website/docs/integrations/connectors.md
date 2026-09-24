@@ -763,8 +763,11 @@ recommended path when a public webhook URL with valid TLS is not available.
      stays idle unless `SLACK_APP_TOKEN` is set.
    - **Kubernetes (Helm)**: set `config.SLACK_APP_TOKEN` (or reference an existing
      secret). The chart renders the `slack-socket-mode` deployment whenever the
-     token is non-empty. Keep `replicaCounts.slackSocketMode` at `1` — each
-     replica opens its own socket and would double-process events.
+     token is non-empty. It is fixed at a single replica by design — Slack
+     load-balances events across an app's open sockets, so a second replica
+     would double-process events. Scale `celeryWorker` instead if event
+     processing is ever the bottleneck (the listener only acks and hands off to
+     Celery).
 6. Restart Aurora. The listener logs `Slack Socket Mode listener connected.` once
    the outbound WebSocket is established.
 

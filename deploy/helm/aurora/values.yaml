@@ -147,7 +147,6 @@ replicaCounts:
   
   # Single-instance services (do NOT increase without additional config)
   celeryBeat: 1      # Task scheduler - only 1 to avoid duplicate tasks
-  slackSocketMode: 1 # Slack Socket Mode listener - keep at 1 (each replica opens its own socket; duplicates = duplicate event handling)
   redis: 1           # Redis - single instance, no clustering configured
   memgraph: 1        # Graph database - single instance, in-memory
   vault: 1           # Secrets manager - single instance, HA requires additional config
