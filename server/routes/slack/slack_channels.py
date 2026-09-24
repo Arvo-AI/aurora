@@ -29,14 +29,15 @@ State transitions mirror Slack membership directly:
     * **Invited in Slack** (``member_joined_channel``) -> auto-registers as
       active (optional real-time hook).
 
-The Active list is reconciled against real Slack membership on every load of
-:func:`get_slack_channels` (not just via the Refresh button), so a channel
-Aurora was removed from drops off Active — and a newly-joined one appears —
-without needing a dedicated ``member_left_channel`` event.
+The Active list is reconciled against real Slack membership on a genuine load of
+:func:`get_slack_channels` (not on the status poll, which passes ``?live=0`` and
+reads stored rows straight from the DB), so a channel Aurora was removed from
+drops off Active — and a newly-joined one appears — without needing a dedicated
+``member_left_channel`` event.
 
 Endpoints (all behind ``connectors`` RBAC):
 
-    GET    /slack/channels                       -> {connected (members), dismissed (available-to-join), card_channel_id}
+    GET    /slack/channels                       -> {connected (members), dismissed (available-to-join), card_channel_id}  (?live=0 = DB-only, no Slack)
     POST   /slack/channels/refresh               -> reconcile the active list against real Slack membership
     DELETE /slack/channels                       -> forget all channels
     POST   /slack/channels/<id>/dismiss          -> deactivate: LEAVE the channel in Slack
@@ -259,7 +260,13 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
         except Exception:
             team_id = None
 
-    # Describe member channels, recency-first, bounded by describe_limit.
+    # Describe member channels, recency-first. describe_limit bounds how many we
+    # ENQUEUE per pass (an LLM-cost safety valve for unusually large
+    # memberships), NOT which channels are describable: under membership-as-truth
+    # every member channel is active and routable, so any not described this pass
+    # stay 'pending' (never 'skipped') and a later reconcile finishes them. This
+    # keeps _is_active_channel and the agent's ready-only routing in agreement —
+    # a member channel is never permanently stuck invisible to the agent.
     ranked_members = _rank_channels(member_channels)
     describe_ids = {c.get("id") for c in ranked_members[:describe_limit]}
 
@@ -270,28 +277,46 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:auto]")
                 cur.execute(
-                    "SELECT channel_id, user_id FROM slack_channels WHERE provider = 'slack'"
+                    "SELECT channel_id, user_id, metadata_status FROM slack_channels WHERE provider = 'slack'"
                 )
-                existing = {r[0]: r[1] for r in cur.fetchall()}
+                rows = cur.fetchall()
+                existing = {r[0]: r[1] for r in rows}
+                status_by_id = {r[0]: r[2] for r in rows}
 
                 for ch in ranked_members:
                     ch = {**ch, "channel_id": ch.get("id"), "channel_name": ch.get("name"),
                           "team_id": team_id, "is_member": True}
-                    will_describe = ch["channel_id"] in describe_ids
+                    cid = ch["channel_id"]
+                    # Enqueue a description this pass only up to the cap; the rest
+                    # are still 'pending' (a member channel is always describable)
+                    # so a subsequent reconcile picks them up.
+                    describe_now = cid in describe_ids
+                    # Existing member channels that never got described (stuck
+                    # 'pending'/'skipped' from a prior over-cap pass) still need a
+                    # description — re-enqueue them so they reach 'ready' and
+                    # become routable. Skip ones already 'ready'/'generating'.
+                    needs_describe = status_by_id.get(cid) in (None, "pending", "skipped", "error")
                     _cid, is_new = _upsert_channel(
                         cur, user_id, org_id, ch, existing,
-                        initial_status="pending" if will_describe else "skipped",
+                        initial_status="pending",
                     )
-                    if is_new and _cid and will_describe:
+                    if _cid and describe_now and (is_new or needs_describe):
                         newly_added_to_describe.append(_cid)
 
                 # Reconcile membership: any stored row that is NOT in the current
                 # member set means Aurora left / was removed from that channel, so
                 # prune it (Slack is never modified — this deletes Aurora's own
                 # rows only). The channel reappears in the live Inactive list.
+                pruned_card = False
                 if existing:
                     stale_ids = [cid for cid in existing if cid not in member_ids]
                     if stale_ids:
+                        # If the card channel is being pruned, remember it so we
+                        # can clear the pref after commit — otherwise the pref
+                        # keeps pointing at a channel Aurora left and the card
+                        # silently stops posting (same cleanup dismiss() does).
+                        card_id = _get_card_channel_id(user_id)
+                        pruned_card = bool(card_id and card_id in stale_ids)
                         cur.execute(
                             """DELETE FROM slack_channels
                                WHERE provider = 'slack' AND channel_id = ANY(%s)""",
@@ -303,6 +328,15 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
     except Exception:
         logger.warning("[slack_channels] auto-register: DB upsert failed", exc_info=True)
         return 0
+
+    # Card channel was pruned (Aurora left/was removed from it): clear the
+    # designation so the resolver doesn't keep serving a dead destination.
+    if pruned_card:
+        try:
+            _clear_card_channel(user_id)
+            logger.info("[slack_channels] cleared card channel — Aurora is no longer a member")
+        except Exception:
+            logger.warning("[slack_channels] failed to clear pruned card channel", exc_info=True)
 
     for channel_id in newly_added_to_describe:
         _enqueue_metadata(user_id, channel_id)
@@ -384,23 +418,33 @@ def get_slack_channels(user_id):
         picker; activating one makes Aurora join it. Named ``dismissed`` purely
         to preserve the existing response contract the frontend consumes.
 
-    Membership is reconciled against Slack on every load (not just via the
-    Refresh button): we re-list the bot's member channels, prune rows Aurora is
-    no longer in, and register newly-joined ones — so the Active list is always
-    accurate even without the member_joined/left_channel events. Best-effort:
-    if the reconcile call fails we still serve whatever is stored.
+    Membership is reconciled against Slack on a genuine page load: we re-list the
+    bot's member channels, prune rows Aurora is no longer in, register
+    newly-joined ones, and live-list the workspace's available-to-join channels.
+    Best-effort: if the reconcile call fails we still serve whatever is stored.
+
+    ``?live=0`` skips ALL Slack calls and serves stored rows straight from the DB
+    (no membership reconcile, no available-channel listing). The manage page's
+    status poll uses this: it only watches the DB ``metadata_status`` while the
+    worker generates descriptions, so it must not drag Slack's rate-limited
+    ``conversations.list`` (Tier 2) along on every 2s tick.
 
     Also returns ``card_channel_id`` — the single channel that receives the
     structured incident card.
     """
+    # Poll mode (?live=0): DB-only, no Slack. Anything other than an explicit
+    # "0"/"false" keeps the full reconcile (default), so real page loads are
+    # unaffected.
+    live = (request.args.get("live", "1").lower() not in ("0", "false", "no"))
     try:
-        # Reconcile stored rows against live Slack membership before reading, so a
-        # channel Aurora was removed from drops off Active (and a newly-joined one
-        # appears) without waiting for a manual refresh. Best-effort.
-        try:
-            auto_register_channels(user_id)
-        except Exception:
-            logger.warning("[slack_channels] membership reconcile on load failed", exc_info=True)
+        # Full page load: reconcile stored rows against live Slack membership
+        # before reading, so a channel Aurora was removed from drops off Active
+        # (and a newly-joined one appears). Skipped in poll mode. Best-effort.
+        if live:
+            try:
+                auto_register_channels(user_id)
+            except Exception:
+                logger.warning("[slack_channels] membership reconcile on load failed", exc_info=True)
 
         org_id = resolve_org(user_id)
         predicate, pred_params = org_read_predicate(user_id, org_id)
@@ -442,7 +486,10 @@ def get_slack_channels(user_id):
         # is_dismissed=True so the existing frontend slots them into its
         # "Inactive / activate" section unchanged. Best-effort — if Slack can't
         # be reached we just return an empty available list rather than failing.
-        dismissed = _list_available_channels(user_id, member_ids)
+        # Skipped entirely in poll mode (?live=0): the status poll only cares
+        # about stored rows' metadata_status, and this is the expensive Tier-2
+        # conversations.list call we must not fire on every 2s tick.
+        dismissed = _list_available_channels(user_id, member_ids) if live else []
 
         return jsonify({
             "connected": connected,
@@ -514,17 +561,34 @@ def dismiss_slack_channel(user_id, channel_id):
         except Exception:
             logger.warning("Failed to clear card channel on dismiss", exc_info=True)
 
-    # Leave the channel in Slack (best-effort — a failure to leave, e.g. already
-    # not a member, shouldn't block removing our local row).
+    # Leave the channel in Slack. Membership is the source of truth, so we only
+    # prune the local row once Aurora is actually out — otherwise the next
+    # reconcile re-adds it and the channel flaps back to Active. leave_channel
+    # returns True when the bot is confirmed out (including "already not a
+    # member"), False when it's likely still in (e.g. #general can't be left).
+    left = False
     try:
         client = get_slack_client_for_user(user_id)
+        # No client means we can't verify we left — don't prune on a guess.
         if client:
-            client.leave_channel(channel_id)
+            left = client.leave_channel(channel_id)
     except Exception:
         logger.warning("[slack_channels] failed to leave channel on deactivate", exc_info=True)
+        left = False
 
-    # Prune the row: it's no longer a member channel, so it belongs in the live
-    # Inactive list, not the stored Active set.
+    # Couldn't leave (e.g. #general, or Slack/transport error): Aurora is still a
+    # member, so keep the row and tell the user instead of silently deleting a
+    # row that the next GET would just recreate.
+    if not left:
+        return jsonify({
+            "error": "Aurora couldn't leave this channel. Some channels (like "
+                     "#general) can't be left; remove Aurora from the channel in "
+                     "Slack instead.",
+            "code": "leave_failed",
+        }), 409
+
+    # Left successfully — prune the row: it's no longer a member channel, so it
+    # belongs in the live Inactive list, not the stored Active set.
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
@@ -577,14 +641,14 @@ def restore_slack_channel(user_id, channel_id):
 @slack_channels_bp.route("/channels/refresh", methods=["POST"])
 @require_permission("connectors", "write")
 def refresh_slack_channels(user_id):
-    """Re-scan the workspace and register any channels Aurora can now see.
+    """Reconcile the stored channel list against real Slack membership.
 
-    For workspaces connected before auto-registration existed (or when new
-    channels have appeared), this brings the stored channel list up to date
-    without requiring a reconnect. Idempotent: existing rows/descriptions are
-    preserved and dismissed channels stay dismissed. New channels are added (the
-    most recent also get a description); channels Slack no longer lists
-    (deleted/archived) are pruned from Aurora's table (Slack is never modified).
+    Same reconcile that ``GET /slack/channels`` runs on a genuine page load
+    (member channels are (re)registered + described, and rows Aurora is no longer
+    in are pruned). Retained as an explicit endpoint even though the manage page
+    no longer surfaces a "Refresh" button — the on-load reconcile covers the UI —
+    so other clients / scripts can still force a re-scan. Idempotent; Slack is
+    never modified.
     """
     try:
         described = auto_register_channels(user_id)
@@ -680,7 +744,13 @@ def _get_card_channel_id(user_id: str) -> str | None:
 
 
 def _is_active_channel(user_id: str, channel_id: str) -> bool:
-    """True if the channel is an active (member) channel Aurora engages with."""
+    """True if the channel is an active (member) channel Aurora engages with.
+
+    Membership alone is the bar here — this gates the *card* channel, which only
+    needs Aurora to be a member (it posts a fixed template, no LLM description
+    required). Agent *routing* is stricter (it also requires
+    metadata_status='ready'); auto_register_channels keeps every member channel
+    progressing toward 'ready' so the two views don't drift."""
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
@@ -794,13 +864,18 @@ def activate_slack_channels(user_id):
     if len(channel_ids) > MAX_BULK_ACTIVATE:
         return jsonify({"error": f"Too many channels; activate at most {MAX_BULK_ACTIVATE} at once"}), 400
 
+    # Join + describe runs on the worker: each join is a rate-limited Slack call,
+    # so a large batch done inline would serialize against Slack and could
+    # rate-limit/timeout the request. Enqueue and return immediately; the manage
+    # page polls the channel list as rows/descriptions land.
     try:
-        activated = _activate_channels(user_id, channel_ids)
+        from routes.slack.slack_channel_metadata import bulk_activate_channels_task
+        bulk_activate_channels_task.delay(user_id, channel_ids)
     except Exception:
-        logger.exception("Error activating Slack channels")
+        logger.exception("Error enqueuing Slack channel activation")
         return jsonify({"error": "Failed to activate channels"}), 500
 
-    return jsonify({"message": "Activation started", "activated": activated})
+    return jsonify({"message": "Activation started", "queued": len(channel_ids)})
 
 
 def _activate_channels(user_id: str, channel_ids: list[str]) -> int:

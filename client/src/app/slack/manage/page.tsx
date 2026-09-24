@@ -94,7 +94,6 @@ export default function SlackManagePage() {
   const [cardPickerOpen, setCardPickerOpen] = useState(false);
   const [cardPickerQuery, setCardPickerQuery] = useState("");
   const [isLoadingChannels, setIsLoadingChannels] = useState(true);
-  const [isRefreshingChannels, setIsRefreshingChannels] = useState(false);
   // channel_id currently being edited inline (description pen), plus its draft
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
   const [editingDraft, setEditingDraft] = useState("");
@@ -138,9 +137,14 @@ export default function SlackManagePage() {
     if (attempt >= 15) return;
     pollTimerRef.current = setTimeout(async () => {
       try {
-        const data = await slackService.getChannels();
+        // Poll mode: DB-only read (no Slack). We're only watching metadata_status
+        // settle as the worker describes channels, so this must not fire the
+        // rate-limited workspace re-list on every 2s tick. It also means the
+        // response's `dismissed` (available-to-join) list is empty by design, so
+        // we deliberately do NOT touch dismissedChannels here — only the active
+        // rows and card id, which is all the poll cares about.
+        const data = await slackService.getChannels(true);
         setConnectedChannels(data.connected);
-        setDismissedChannels(data.dismissed);
         setCardChannelId(data.card_channel_id ?? null);
         const stillWorking = data.connected.some(
           (c) => c.metadata_status === "generating" || c.metadata_status === "pending",
@@ -305,28 +309,6 @@ export default function SlackManagePage() {
     }
   };
 
-  // Re-scan the workspace so already-connected orgs (or ones with new channels)
-  // pick up channels without reconnecting. Reloads the list after.
-  const handleRefreshChannels = async () => {
-    setIsRefreshingChannels(true);
-    try {
-      const { described } = await slackService.refreshChannels();
-      await loadChannels();
-      // New channels get descriptions generated async — poll so they settle.
-      if (described > 0) pollChannelsUntilSettled();
-      toast({
-        title: "Channels refreshed",
-        description: described > 0
-          ? `Found new channels — generating ${described} description${described === 1 ? "" : "s"}.`
-          : "Channel list is up to date.",
-      });
-    } catch {
-      toast({ title: "Error", description: "Failed to refresh channels", variant: "destructive" });
-    } finally {
-      setIsRefreshingChannels(false);
-    }
-  };
-
   // Activate the checked indexed channels: describe them + make them routable.
   const handleActivateSelected = async () => {
     const ids = Array.from(activateSelected);
@@ -337,7 +319,7 @@ export default function SlackManagePage() {
       prev.map((c) => (activateSelected.has(c.channel_id) ? { ...c, metadata_status: "generating" } : c)),
     );
     try {
-      const { activated } = await slackService.activateChannels(ids);
+      const { queued } = await slackService.activateChannels(ids);
       // Remove only the ids we just submitted — preserve any selections the user
       // made while the request was in flight.
       setActivateSelected((prev) => {
@@ -348,7 +330,7 @@ export default function SlackManagePage() {
       pollChannelsUntilSettled();
       toast({
         title: "Activating channels",
-        description: `Generating ${activated} description${activated === 1 ? "" : "s"}.`,
+        description: `Joining and describing ${queued} channel${queued === 1 ? "" : "s"}.`,
       });
     } catch {
       await loadChannels(); // Reconcile optimistic flip on failure.
@@ -699,36 +681,18 @@ export default function SlackManagePage() {
         {/* Channel Awareness */}
         <Card className="mb-6">
           <CardHeader>
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Hash className="h-5 w-5" />
-                  Channels
-                </CardTitle>
-                <CardDescription>
-                  Aurora is automatically aware of every channel it can see, and writes a
-                  description for the ones it&apos;s been invited to — so it engages where it&apos;s a
-                  member, like a teammate. It uses those descriptions to decide where to post about
-                  incidents. For any other channel, generate a description on demand to make it
-                  routable, edit a description, or dismiss channels that aren&apos;t relevant.
-                </CardDescription>
-              </div>
-              {canWrite && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0"
-                  onClick={handleRefreshChannels}
-                  disabled={isRefreshingChannels}
-                >
-                  {isRefreshingChannels ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  ) : (
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                  )}
-                  Refresh channels
-                </Button>
-              )}
+            <div className="min-w-0">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Hash className="h-5 w-5" />
+                Channels
+              </CardTitle>
+              <CardDescription>
+                Aurora is automatically aware of every channel it can see, and writes a
+                description for the ones it&apos;s been invited to — so it engages where it&apos;s a
+                member, like a teammate. It uses those descriptions to decide where to post about
+                incidents. For any other channel, generate a description on demand to make it
+                routable, edit a description, or dismiss channels that aren&apos;t relevant.
+              </CardDescription>
             </div>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -742,7 +706,7 @@ export default function SlackManagePage() {
                 {activeChannels.length === 0 ? (
                   <p className="text-xs text-muted-foreground">
                     No active channels yet. Invite Aurora to channels in Slack, or activate channels
-                    below, then click Refresh channels.
+                    below.
                   </p>
                 ) : (
                   <div className="space-y-3">

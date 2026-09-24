@@ -237,17 +237,33 @@ class SlackClient:
             return None
 
     def leave_channel(self, channel: str) -> bool:
-        """Leave a channel by ID. Returns True on success, False on failure.
+        """Leave a channel by ID. Returns True if Aurora is no longer in the
+        channel afterward, False if the leave genuinely failed.
 
         Used when a user deactivates a channel: membership is Aurora's source of
         truth for "active", so deactivating must actually remove the bot from the
-        channel in Slack (not just flip a local flag). Best-effort — a failure
-        (e.g. already not a member, archived) is logged and reported so callers
-        can decide whether to proceed."""
+        channel in Slack (not just flip a local flag).
+
+        A True result means "Aurora is out" — either the leave succeeded, or
+        Slack reported a state that already means it's not a member
+        (``channel_not_found``/``not_in_channel``/archived), which is safe to
+        treat as left so the caller can prune its row. A False result means the
+        bot is likely still in the channel (e.g. ``cant_leave_general`` for
+        #general, or a transport error), so the caller must NOT prune — otherwise
+        the next reconcile re-adds the row and the UI flaps."""
         try:
             self._make_request("POST", "conversations.leave", {"channel": channel})
             return True
+        except SlackAPIError as e:
+            # These all mean "Aurora isn't a member anymore" — treat as left.
+            if e.error in ("channel_not_found", "not_in_channel", "is_archived", "already_left"):
+                return True
+            # Anything else (notably cant_leave_general) means we're still in it.
+            logger.warning("Could not leave channel via conversations.leave: %s", e.error)
+            return False
         except Exception:
+            # Transport error — the request may or may not have landed, so assume
+            # the bot is still a member and let the caller keep the row.
             logger.warning("Could not leave channel via conversations.leave", exc_info=True)
             return False
     

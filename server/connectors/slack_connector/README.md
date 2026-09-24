@@ -61,4 +61,4 @@ The `NGROK_URL` env var tells the backend to use the tunnel URL for the OAuth re
 
 **Aurora doesn't reply to @mentions** — Confirm **Event Subscriptions** is enabled, the Request URL (`/slack/events`) verified successfully, and `app_mention` is listed under **Subscribe to bot events**. Reinstall the app after adding events.
 
-**Channels Aurora is added to aren't auto-registered instantly** — Real-time pickup needs the `member_joined_channel` bot event; add it under **Subscribe to bot events** and reinstall the app. Without it, channels are still registered on connect and via the **Refresh channels** button — just not the moment Aurora joins.
+**Channels Aurora is added to aren't auto-registered instantly** — Real-time pickup needs the `member_joined_channel` bot event; add it under **Subscribe to bot events** and reinstall the app. Without it, channels are still registered on connect and whenever the Slack manage page is loaded (it reconciles membership against Slack on every load) — just not the moment Aurora joins.

@@ -1808,25 +1808,15 @@ def initialize_tables():
                 )
                 conn.rollback()
 
-            # Migration: Drop the now-unused is_dismissed column from
-            # slack_channels. Channel membership is the single source of truth
-            # (a channel is Active iff Aurora is a member of it), so the old
-            # "dismiss without leaving" flag no longer exists — deactivating a
-            # channel leaves it in Slack and prunes the row instead. Dropping the
-            # column keeps the schema in sync with the code (no schema drift).
-            try:
-                cursor.execute(
-                    "ALTER TABLE slack_channels DROP COLUMN IF EXISTS is_dismissed;"
-                )
-                conn.commit()
-                logging.info(
-                    "Dropped unused is_dismissed column from slack_channels table."
-                )
-            except Exception as e:
-                logging.warning(
-                    f"Error dropping is_dismissed column from slack_channels: {e}"
-                )
-                conn.rollback()
+            # NOTE: The slack_channels.is_dismissed column is now unused —
+            # channel membership is the single source of truth (a channel is
+            # Active iff Aurora is a member of it), so the old "dismiss without
+            # leaving" flag no longer exists. We intentionally do NOT drop it here
+            # yet: dropping a column at startup breaks any still-running pods from
+            # the previous release during a rolling deploy (their INSERT/SELECT of
+            # is_dismissed would error until the rollout completes). Leaving the
+            # column in place is harmless (nothing reads or writes it). Drop it in
+            # a follow-up release once all pods are on this version.
 
             # Migration: Bitbucket Incident Prevention (DEV-1439).
             # - webhook_hook_uuid: the Bitbucket repo hook UUID (when Aurora
