@@ -49,7 +49,15 @@ _CODE_TOOLS = frozenset({
 
 _VALID_TYPES = frozenset({"mitigation", "diagnostic", "remediate", "prevent"})
 _VALID_RISKS = frozenset({"safe", "low", "medium", "high"})
-_ENRICHMENT_MODEL = os.environ.get("ENRICHMENT_MODEL", "anthropic/claude-haiku-4.5")
+# Cheap model for suggestion enrichment. Prefer ENRICHMENT_MODEL, else the
+# client's MAIN_MODEL (so a non-Anthropic OSS deployment doesn't hit a hardcoded
+# Anthropic model and RuntimeError at create_chat_model), else Haiku when the
+# client is on the default Anthropic stack.
+_ENRICHMENT_MODEL = (
+    os.environ.get("ENRICHMENT_MODEL")
+    or os.environ.get("MAIN_MODEL")
+    or "anthropic/claude-haiku-4.5"
+)
 
 _TYPE_SORT_ORDER = {"mitigation": 0, "diagnostic": 1, "remediate": 2, "prevent": 3}
 
