@@ -286,11 +286,11 @@ def process_event_callback(data: dict) -> None:
             
                 return
 
-            # Aurora was added to a channel (e.g. an incident.io-created one) —
-            # auto-register + describe it so it becomes a routing target.
-            if event_type == 'member_joined_channel':
-                _handle_member_joined(event, data.get('team_id'))
-                return
+        # Aurora was added to a channel (e.g. an incident.io-created one) —
+        # auto-register + describe it so it becomes a routing target.
+        if event_type == 'member_joined_channel':
+            _handle_member_joined(event, data.get('team_id'))
+            return
 
         # Nothing to do for other event types.
         return

@@ -77,9 +77,10 @@ over plain HTTPS regardless.)
 
 The listener runs as its own process (`python -m services.slack.socket_mode`);
 in Docker Compose it's the `slack_socket_mode` service, and in Helm it's the
-`slack-socket-mode` deployment (rendered only when `config.SLACK_APP_TOKEN` is
-set). It stays idle when `SLACK_APP_TOKEN` is empty, and reuses the same
-event/interaction handlers as the HTTP webhook path.
+`slack-socket-mode` deployment (rendered when `slackSocketMode.enabled=true` or
+`secrets.backend.SLACK_APP_TOKEN` is set). It stays idle when `SLACK_APP_TOKEN`
+is empty, and reuses the same event/interaction handlers as the HTTP webhook
+path.
 
 See `docs/integrations/connectors.md` for full setup details.
 

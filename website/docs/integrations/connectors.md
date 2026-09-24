@@ -761,10 +761,13 @@ recommended path when a public webhook URL with valid TLS is not available.
 
    - **Docker Compose**: the `slack_socket_mode` service starts automatically and
      stays idle unless `SLACK_APP_TOKEN` is set.
-   - **Kubernetes (Helm)**: set `config.SLACK_APP_TOKEN` (or reference an existing
-     secret). The chart renders the `slack-socket-mode` deployment whenever the
-     token is non-empty. It is fixed at a single replica by design — Slack
-     load-balances events across an app's open sockets, so a second replica
+   - **Kubernetes (Helm)**: set the app token under `secrets.backend.SLACK_APP_TOKEN`
+     (it's a secret — never put it in `config`). The chart renders the
+     `slack-socket-mode` deployment whenever that token is set. If you supply the
+     token via an **existing secret** instead of inline, set
+     `slackSocketMode.enabled: true` so the listener still renders (the chart
+     can't read inside your secret). It is fixed at a single replica by design —
+     Slack load-balances events across an app's open sockets, so a second replica
      would double-process events. Scale `celeryWorker` instead if event
      processing is ever the bottleneck (the listener only acks and hands off to
      Celery).

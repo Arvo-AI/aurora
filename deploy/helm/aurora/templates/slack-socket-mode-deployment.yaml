@@ -1,14 +1,17 @@
 {{- /*
 Slack Socket Mode listener deployment.
 
-Only rendered when a Slack app-level token is configured
-(config.SLACK_APP_TOKEN is non-empty). Socket Mode opens an OUTBOUND WebSocket
-to Slack, so Slack events/interactions work without a public inbound webhook
-URL — the intended path for private / self-hosted clusters that are not
+Rendered when Socket Mode is requested: either slackSocketMode.enabled is true
+(the flag existingSecret users must set, since we can't peek inside their
+secret) OR the app-level token is provided inline via
+secrets.backend.SLACK_APP_TOKEN. The token is a SECRET (xapp-...), so it lives
+under secrets.backend — never in the ConfigMap. Socket Mode opens an OUTBOUND
+WebSocket to Slack, so Slack events/interactions work without a public inbound
+webhook URL — the intended path for private / self-hosted clusters that are not
 reachable from the internet. Keep replicas at 1: each replica opens its own
 socket and would double-process every event.
 */ -}}
-{{- if .Values.config.SLACK_APP_TOKEN }}
+{{- if or .Values.slackSocketMode.enabled .Values.secrets.backend.SLACK_APP_TOKEN }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -77,6 +77,10 @@ x-common-env: &common-env
   SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
   SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
   SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
+  # Socket Mode app-level token (xapp-...). In an air-gapped deployment there is
+  # no public inbound webhook URL, so Socket Mode's OUTBOUND WebSocket is the
+  # only way Slack events can reach Aurora. No-op unless set.
+  SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
 
   # Confluence OAuth
   CONFLUENCE_CLIENT_ID: ${CONFLUENCE_CLIENT_ID}
@@ -312,6 +316,28 @@ services:
         --loglevel=info
     depends_on:
       - redis
+    restart: unless-stopped
+
+  # Slack Socket Mode listener. In an air-gapped/private deployment there is no
+  # public inbound webhook URL, so this OUTBOUND WebSocket is the only transport
+  # for Slack events/interactions. Runs the server image with the listener entry
+  # point (same alias pattern as the other backend services). No-op unless
+  # SLACK_APP_TOKEN (xapp-...) is set, so it is safe to leave running.
+  slack_socket_mode:
+    image: aurora_server:latest
+    pull_policy: never
+    logging: *default-logging
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["python", "-m", "services.slack.socket_mode"]
+    environment:
+      <<: *common-env
+      OTEL_SERVICE_NAME: slack_socket_mode
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
+      FRONTEND_URL: ${FRONTEND_URL}
+    depends_on:
+      - redis
+      - vault
     restart: unless-stopped
 
   redis:
