@@ -1,6 +1,6 @@
 """Unit tests for Slack channel classification and full-listing pagination."""
 
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from connectors.slack_connector.client import SlackClient
 from routes.slack import slack_channels as mod
@@ -372,7 +372,10 @@ def test_activate_channels_enqueues_only_returned_ids():
     # (existing ids) come back, so only those are described.
     dbcm, cur = _activate_db([("C1",), ("C2",)])
     enqueued = []
+    # No Slack client → the best-effort join step is a no-op, keeping this test
+    # focused on the enqueue/RETURNING contract.
     with patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod, "get_slack_client_for_user", return_value=None), \
          patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
          patch.object(mod, "_enqueue_metadata", side_effect=lambda u, c: enqueued.append(c)):
         activated = mod._activate_channels("u1", ["C1", "C2", "C3"])
@@ -380,22 +383,64 @@ def test_activate_channels_enqueues_only_returned_ids():
     assert activated == 2
     assert enqueued == ["C1", "C2"]
     # Activation supersedes dismissal: the UPDATE un-dismisses the rows it flips
-    # (rather than excluding dismissed ones).
-    sql = cur.execute.call_args.args[0]
-    assert "is_dismissed = FALSE" in sql
-    assert cur.execute.call_args.args[1] == (["C1", "C2", "C3"],)
+    # (rather than excluding dismissed ones). Assert against the full call list
+    # since the join step may add later, unrelated execute() calls.
+    activate_calls = [
+        c for c in cur.execute.call_args_list if "is_dismissed = FALSE" in c.args[0]
+    ]
+    assert activate_calls, "expected an UPDATE that clears is_dismissed"
+    assert activate_calls[0].args[1] == (["C1", "C2", "C3"],)
 
 
 def test_activate_channels_none_matched_enqueues_nothing():
     dbcm, _cur = _activate_db([])  # no rows matched (all unknown/dismissed)
     enqueued = []
     with patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod, "get_slack_client_for_user", return_value=None), \
          patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
          patch.object(mod, "_enqueue_metadata", side_effect=lambda u, c: enqueued.append(c)):
         activated = mod._activate_channels("u1", ["C_gone"])
 
     assert activated == 0
     assert enqueued == []
+
+
+def test_activate_channels_joins_and_marks_member():
+    # Activating a public channel should conversations.join it and flip is_member
+    # so the UI reflects real Slack membership, not just the Active flag.
+    dbcm, cur = _activate_db([("C1",), ("C2",)])
+    client = MagicMock()
+    client.join_channel.return_value = {"id": "ok"}  # join succeeds for both
+    with patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod, "get_slack_client_for_user", return_value=client), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_enqueue_metadata"):
+        mod._activate_channels("u1", ["C1", "C2"])
+
+    # Both activated channels were joined.
+    assert sorted(c.args[0] for c in client.join_channel.call_args_list) == ["C1", "C2"]
+    # An UPDATE marking is_member = TRUE ran for the joined ids.
+    member_calls = [
+        c for c in cur.execute.call_args_list if "is_member = TRUE" in c.args[0]
+    ]
+    assert member_calls, "expected an UPDATE setting is_member = TRUE"
+    assert member_calls[0].args[1] == (["C1", "C2"],)
+
+
+def test_activate_channels_join_failure_does_not_mark_member():
+    # A private channel can't be self-joined (join_channel returns None); activation
+    # still proceeds but no is_member UPDATE should run.
+    dbcm, cur = _activate_db([("C1",)])
+    client = MagicMock()
+    client.join_channel.return_value = None  # join fails (e.g. private channel)
+    with patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod, "get_slack_client_for_user", return_value=client), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_enqueue_metadata"):
+        activated = mod._activate_channels("u1", ["C1"])
+
+    assert activated == 1  # activation not blocked by join failure
+    assert not any("is_member = TRUE" in c.args[0] for c in cur.execute.call_args_list)
 
 
 # --- list_all_channels pagination ------------------------------------------
