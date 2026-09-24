@@ -352,8 +352,18 @@ def github_app_install_callback():
     # MUST be a token signed by ``_sign_install_state`` for the user that
     # initiated the install — a raw user_id would let any caller link an
     # arbitrary installation to a victim account.
+    #
+    # When "Request user authorization during installation" is enabled on
+    # the GitHub App, *new* installs redirect to the Callback URL (handled
+    # by github_signup.py). But updates to *existing* installs (e.g. adding
+    # repos) still redirect to this Setup URL. If the user started from the
+    # website signup flow, the state carries a signup salt — delegate to
+    # the signup callback so the flow completes correctly.
     user_id = _verify_install_state(state)
     if user_id is None:
+        from routes.github.github_signup import _verify_signup_state, github_app_signup_callback
+        if _verify_signup_state(state):
+            return github_app_signup_callback()
         return _render_error(_ERROR_INVALID_STATE)
     if not validate_user_exists(user_id):
         logger.warning("[GITHUB-APP-CALLBACK] state user no longer exists")
