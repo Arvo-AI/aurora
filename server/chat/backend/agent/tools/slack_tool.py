@@ -393,16 +393,17 @@ def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[SlackTool:connected]")
-                # Active = described + not dismissed: a channel being active IS
+                # Active = described member channels: a channel being active IS
                 # the permission to post teammate messages here (the structured
                 # incident card is separate — it goes only to the single
-                # configured incidents channel).
+                # configured incidents channel). Membership is the source of
+                # truth, so there's no separate "dismissed" flag to filter on.
                 cur.execute(
                     f"""SELECT DISTINCT ON (channel_id)
                               channel_id, channel_name, channel_type,
                               detected_platform, metadata_summary, is_member
                          FROM slack_channels
-                        WHERE provider = 'slack' AND NOT is_dismissed
+                        WHERE provider = 'slack'
                           AND metadata_status = 'ready'
                           AND {predicate}
                         ORDER BY channel_id, updated_at DESC""",

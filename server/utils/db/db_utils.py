@@ -345,7 +345,6 @@ def initialize_tables():
                         is_archived BOOLEAN DEFAULT false,
                         channel_type VARCHAR(20) DEFAULT 'unknown',
                         detected_platform VARCHAR(40),
-                        is_dismissed BOOLEAN DEFAULT false,
                         metadata_summary TEXT,
                         metadata_status VARCHAR(20) DEFAULT 'pending',
                         channel_data JSONB,
@@ -1809,20 +1808,23 @@ def initialize_tables():
                 )
                 conn.rollback()
 
-            # Migration: Add is_dismissed to slack_channels so users can hide
-            # irrelevant channels from routing/UI without leaving them on Slack.
-            # Dismissed channels are also not re-added by auto-register/refresh.
+            # Migration: Drop the now-unused is_dismissed column from
+            # slack_channels. Channel membership is the single source of truth
+            # (a channel is Active iff Aurora is a member of it), so the old
+            # "dismiss without leaving" flag no longer exists — deactivating a
+            # channel leaves it in Slack and prunes the row instead. Dropping the
+            # column keeps the schema in sync with the code (no schema drift).
             try:
                 cursor.execute(
-                    "ALTER TABLE slack_channels ADD COLUMN IF NOT EXISTS is_dismissed BOOLEAN DEFAULT FALSE;"
+                    "ALTER TABLE slack_channels DROP COLUMN IF EXISTS is_dismissed;"
                 )
                 conn.commit()
                 logging.info(
-                    "Ensured is_dismissed column exists on slack_channels table."
+                    "Dropped unused is_dismissed column from slack_channels table."
                 )
             except Exception as e:
                 logging.warning(
-                    f"Error adding is_dismissed column to slack_channels: {e}"
+                    f"Error dropping is_dismissed column from slack_channels: {e}"
                 )
                 conn.rollback()
 
