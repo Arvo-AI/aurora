@@ -1093,6 +1093,27 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_bigpanda_events_status ON bigpanda_events(incident_status);
                     CREATE INDEX IF NOT EXISTS idx_bigpanda_events_received_at ON bigpanda_events(received_at DESC);
                 """,
+                "splunk_on_call_events": """
+                    CREATE TABLE IF NOT EXISTS splunk_on_call_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255) NOT NULL,
+                        incident_number VARCHAR(255) NOT NULL,
+                        incident_phase VARCHAR(50),
+                        incident_title TEXT,
+                        routing_key VARCHAR(255),
+                        service VARCHAR(255),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (org_id, user_id, incident_number)
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_splunk_on_call_events_user_id
+                        ON splunk_on_call_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_splunk_on_call_events_phase
+                        ON splunk_on_call_events(incident_phase);
+                """,
                 "kubectl_agent_tokens": """
                     CREATE TABLE IF NOT EXISTS kubectl_agent_tokens (
                         id SERIAL PRIMARY KEY,
@@ -1601,6 +1622,7 @@ def initialize_tables():
             rls_tables.append("elastic_alerts")
             rls_tables.append("incidentio_alerts")
             rls_tables.append("bigpanda_events")
+            rls_tables.append("splunk_on_call_events")
             rls_tables.append("jenkins_deployment_events")
             rls_tables.append("spinnaker_deployment_events")
             rls_tables.append("dynatrace_problems")
@@ -3086,7 +3108,7 @@ def initialize_tables():
                 "pagerduty_events", "opsgenie_events", "incidents", "incident_alerts",
                 "rca_notification_emails", "splunk_alerts", "elastic_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
-                "bigpanda_events", "kubectl_agent_tokens",
+                "bigpanda_events", "splunk_on_call_events", "kubectl_agent_tokens",
                 "cloudwatch_alarms",
                 "mcp_tokens", "kubeconfig_clusters",
                 "k8s_pods", "k8s_nodes", "k8s_node_conditions",

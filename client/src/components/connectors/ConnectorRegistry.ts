@@ -158,6 +158,17 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "splunk_on_call",
+      name: "Splunk On-Call",
+      description: "Connect Splunk On-Call to ingest incidents and trigger root cause analysis.",
+      iconPath: "/splunk.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Incident Management",
+      path: "/splunk-on-call/auth",
+      storageKey: "isSplunkOnCallConnected",
+    });
+
+    this.register({
       id: "opsgenie",
       name: "OpsGenie / JSM",
       description: "Connect OpsGenie or Jira Service Management for alert tracking and on-call schedules",

@@ -122,6 +122,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                           "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                             "Authorization", "X-Provider-Preference"],
                           "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/splunk-on-call/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                            "Authorization", "X-Provider-Preference", "X-Aurora-Webhook-Secret"],
+                          "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/pagerduty/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                            "Authorization", "X-Provider-Preference"],
@@ -232,6 +236,7 @@ _OPEN_PREFIXES = (
     "/elastic/alerts/webhook/",
     "/netdata/alerts/webhook/",
     "/bigpanda/webhook/",
+    "/splunk-on-call/webhook/",
     "/dynatrace/webhook/",
     "/newrelic/webhook/",
     "/sentry/webhook/",
@@ -481,6 +486,11 @@ app.register_blueprint(dynatrace_bp, url_prefix="/dynatrace")
 from routes.bigpanda import bp as bigpanda_bp  # noqa: F401
 import routes.bigpanda.tasks  # noqa: F401
 app.register_blueprint(bigpanda_bp, url_prefix="/bigpanda")
+
+# --- Splunk On-Call Integration Routes ---
+from routes.splunk_on_call import bp as splunk_on_call_bp  # noqa: F401
+import routes.splunk_on_call.tasks  # noqa: F401
+app.register_blueprint(splunk_on_call_bp, url_prefix="/splunk-on-call")
 
 # --- New Relic Integration Routes ---
 from routes.newrelic import bp as newrelic_bp  # noqa: F401
