@@ -1,12 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { Radar, HeartPulse, Timer, ShieldCheck, BookOpen } from 'lucide-react';
+import { Radar, DollarSign, HeartPulse, Timer, ShieldCheck, ShieldAlert, BookOpen } from 'lucide-react';
 import { PeriodSelector, type Period } from './components/charts';
 import FleetTab from './components/fleet-tab';
 import SreTab from './components/sre-tab';
 import WaterfallTab from './components/waterfall-tab';
 import AuditTab from './components/audit-tab';
+import SecurityHubTab from './components/security-hub-tab';
 import ArtifactsTab from './components/artifacts-tab';
 
 const TABS = [
@@ -15,6 +16,7 @@ const TABS = [
   { id: 'waterfall', label: 'Execution', icon: Timer },
   { id: 'artifacts', label: 'Artifacts', icon: BookOpen },
   { id: 'audit', label: 'Audit Log', icon: ShieldCheck },
+  { id: 'securityhub', label: 'AWS Security', icon: ShieldAlert },
 ] as const;
 
 type TabId = typeof TABS[number]['id'];
@@ -63,6 +65,7 @@ export default function MonitorPage() {
         {tab === 'waterfall' && <WaterfallTab period={period} />}
         {tab === 'artifacts' && <ArtifactsTab />}
         {tab === 'audit' && <AuditTab period={period} />}
+        {tab === 'securityhub' && <SecurityHubTab period={period} />}
       </div>
     </div>
   );
