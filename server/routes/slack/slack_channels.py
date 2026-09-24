@@ -752,13 +752,19 @@ def activate_slack_channels(user_id):
 
 def _activate_channels(user_id: str, channel_ids: list[str]) -> int:
     """Flip the given (existing) channels to 'generating', un-dismissing any that
-    were dismissed, and enqueue a description for each. Returns how many were
-    actually activated.
+    were dismissed, join them in Slack, and enqueue a description for each.
+    Returns how many were actually activated.
 
     Activation is an explicit "I want Aurora engaging here" signal, so it
     supersedes a prior dismissal (the Inactive list shows aware-only and
     dismissed channels together — activating either promotes it to Active).
     ``RETURNING`` tells us which ids were real so we enqueue exactly those.
+
+    Aurora also *joins* each activated public channel (``conversations.join``)
+    so it actually becomes a member — otherwise the channel shows as Active in
+    the UI while the bot is absent from it in Slack and cannot post there.
+    Joining is best-effort: private channels can't be self-joined (they need a
+    human invite), so a failure there never blocks activation.
     """
     activated: list[str] = []
     with db_pool.get_admin_connection() as conn:
@@ -777,9 +783,55 @@ def _activate_channels(user_id: str, channel_ids: list[str]) -> int:
             activated = [r[0] for r in cur.fetchall()]
             conn.commit()
 
+    # Join each activated channel so the bot is actually a member. Best-effort:
+    # conversations.join only works for public channels, so private ones (which
+    # require a human invite) are expected to fail and must not block activation.
+    _join_activated_channels(user_id, activated)
+
     for channel_id in activated:
         _enqueue_metadata(user_id, channel_id)
     return len(activated)
+
+
+def _join_activated_channels(user_id: str, channel_ids: list[str]) -> None:
+    """Best-effort join of each activated channel, updating is_member on success.
+
+    A public channel is joined via conversations.join; a private channel cannot
+    be self-joined and is skipped silently (the human who activated it must
+    invite Aurora, and the member_joined_channel event will pick it up then).
+    """
+    if not channel_ids:
+        return
+    client = get_slack_client_for_user(user_id)
+    if not client:
+        logger.warning("[slack_channels] cannot join activated channels: no Slack client for user")
+        return
+
+    joined: list[str] = []
+    for channel_id in channel_ids:
+        # join_channel swallows its own errors and returns None on failure
+        # (e.g. private channel / already gone), so a skip here is a no-op.
+        if client.join_channel(channel_id):
+            joined.append(channel_id)
+
+    if not joined:
+        return
+
+    # Reflect membership in the UI: the row is Active *and* the bot is in it.
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:activate_join]")
+                cur.execute(
+                    """UPDATE slack_channels
+                          SET is_member = TRUE, updated_at = NOW()
+                        WHERE provider = 'slack' AND channel_id = ANY(%s)""",
+                    (joined,),
+                )
+                conn.commit()
+        logger.info("[slack_channels] joined %d activated channel(s)", len(joined))
+    except Exception:
+        logger.warning("[slack_channels] failed to mark joined channels as member", exc_info=True)
 
 
 def _enqueue_metadata(user_id: str, channel_id: str):
