@@ -766,11 +766,11 @@ recommended path when a public webhook URL with valid TLS is not available.
      `slack-socket-mode` deployment whenever that token is set. If you supply the
      token via an **existing secret** instead of inline, set
      `slackSocketMode.enabled: true` so the listener still renders (the chart
-     can't read inside your secret). It is fixed at a single replica by design —
-     Slack load-balances events across an app's open sockets, so a second replica
-     would double-process events. Scale `celeryWorker` instead if event
-     processing is ever the bottleneck (the listener only acks and hands off to
-     Celery).
+     can't read inside your secret). It is fixed at a single replica by design.
+     Slack distributes an app's events across its open sockets (and tolerates
+     briefly overlapping connections during restarts), so extra replicas add no
+     throughput here — the listener only acks and hands off to Celery. Scale
+     `celeryWorker` instead if event *processing* is ever the bottleneck.
 6. Restart Aurora. The listener logs `Slack Socket Mode listener connected.` once
    the outbound WebSocket is established.
 

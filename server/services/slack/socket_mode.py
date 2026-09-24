@@ -38,6 +38,7 @@ logging.getLogger("websocket").setLevel(logging.WARNING)
 logging.getLogger("websockets").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
+import json
 import os
 import signal
 import threading
@@ -47,20 +48,64 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _post_response_url(response_url: str, body: dict) -> None:
+    """Deliver an interaction result to Slack via the payload's response_url.
+
+    Slack's documented follow-up mechanism for interactive components: after
+    acking the envelope, POST the message body to the ``response_url`` (valid
+    for ~30 min). ``replace_original`` makes it update the originating message,
+    matching what returning the body in the HTTP interactivity response does.
+    """
+    import urllib.request
+
+    data = json.dumps({**body, "replace_original": True}).encode("utf-8")
+    request = urllib.request.Request(
+        response_url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=10) as resp:
+        resp.read()
+
+
+def _process_interaction_async(payload: dict) -> None:
+    """Run the (potentially slow) interaction handler off the ack path.
+
+    The handlers do DB queries + Slack API calls and queue background work, so
+    running them inline would blow Slack's ~3s ack deadline. We already acked
+    the envelope in :func:`_dispatch`; here we do the work and, if the handler
+    returns a non-empty body, deliver it through the interaction's
+    ``response_url`` (Slack's follow-up mechanism) instead of the ack.
+    """
+    from routes.slack.slack_events import process_interaction
+
+    try:
+        response_payload = process_interaction(payload)
+
+        # Only a non-empty text should update the originating message; an empty
+        # body is the "leave the message as-is" ack we already sent.
+        response_url = payload.get("response_url")
+        if response_url and response_payload and response_payload.get("text"):
+            _post_response_url(response_url, response_payload)
+    except Exception:
+        # Never let a handler error kill the worker thread.
+        logger.exception("Error processing Socket Mode interaction asynchronously")
+
+
 def _dispatch(client, req) -> None:
     """Route one Socket Mode request to the shared Slack handlers.
 
     ``req`` is a slack_sdk ``SocketModeRequest``. We ack every envelope first
     (Slack disconnects a client that does not ack within ~3s), then process.
-    For ``interactive`` requests the handler returns the same response body the
-    HTTP interactivity endpoint would send, which we include in the ack so
-    Block Kit message updates behave identically to the webhook path.
+    Interactions are handed to a background thread and their result is delivered
+    via the payload's ``response_url`` so a slow handler never delays the ack.
     """
     from slack_sdk.socket_mode.response import SocketModeResponse
 
     # Imported lazily so importing this module never drags in the Flask app
     # unless the listener actually runs.
-    from routes.slack.slack_events import process_event_callback, process_interaction
+    from routes.slack.slack_events import process_event_callback
 
     try:
         payload = req.payload or {}
@@ -75,13 +120,16 @@ def _dispatch(client, req) -> None:
 
         # Interactivity (button clicks: Run/Details/Dismiss/View PR).
         if req.type == "interactive":
-            # process_interaction returns the body Slack expects. An empty-text
-            # body is the "do not replace the message" ack; a non-empty text
-            # updates the originating message, same as the HTTP path.
-            response_payload = process_interaction(payload)
-            client.send_socket_mode_response(
-                SocketModeResponse(envelope_id=req.envelope_id, payload=response_payload)
-            )
+            # Ack the envelope FIRST — the handler runs DB queries + Slack API
+            # calls that can exceed Slack's ~3s deadline. The result is
+            # delivered later via response_url, not this ack.
+            client.send_socket_mode_response(SocketModeResponse(envelope_id=req.envelope_id))
+            threading.Thread(
+                target=_process_interaction_async,
+                args=(payload,),
+                name="slack-interaction",
+                daemon=True,
+            ).start()
             return
 
         # slash_commands / other request types are not used by Aurora today —

@@ -77,10 +77,11 @@ x-common-env: &common-env
   SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
   SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
   SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
-  # Socket Mode app-level token (xapp-...). In an air-gapped deployment there is
-  # no public inbound webhook URL, so Socket Mode's OUTBOUND WebSocket is the
-  # only way Slack events can reach Aurora. No-op unless set.
-  SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+  # Socket Mode app-level token (xapp-...) is intentionally NOT in this shared
+  # env — it is a sensitive secret only the slack_socket_mode listener needs, so
+  # it is scoped to that service alone (below). In an air-gapped deployment
+  # Socket Mode's OUTBOUND WebSocket is the only way Slack events can reach
+  # Aurora.
 
   # Confluence OAuth
   CONFLUENCE_CLIENT_ID: ${CONFLUENCE_CLIENT_ID}
@@ -332,6 +333,8 @@ services:
     command: ["python", "-m", "services.slack.socket_mode"]
     environment:
       <<: *common-env
+      # Scoped here (not in *common-env) — only the listener needs this secret.
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
       OTEL_SERVICE_NAME: slack_socket_mode
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}

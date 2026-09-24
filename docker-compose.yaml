@@ -131,11 +131,10 @@ x-common-env: &common-env
   SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
   SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
   SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
-  # Slack Socket Mode (private/self-hosted deployments with no public webhook
-  # URL). Set SLACK_APP_TOKEN to an app-level xapp-... token with
-  # connections:write to enable the listener; leave it empty to use HTTP
-  # webhooks. Shared here so the dedicated listener service picks it up.
-  SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+  # Slack Socket Mode: SLACK_APP_TOKEN is intentionally NOT in this shared env —
+  # it is a sensitive app-level secret that only the slack_socket_mode listener
+  # needs, so it is scoped to that service alone (below) to avoid leaking it to
+  # every service that inherits *common-env.
 
   # Atlassian OAuth (Confluence + Jira)
   ATLASSIAN_CLIENT_ID: ${ATLASSIAN_CLIENT_ID}
@@ -489,6 +488,10 @@ services:
       - ./server:/app
     environment:
       <<: *common-env
+      # Scoped here (not in *common-env) — only the listener needs this secret.
+      # Set to an app-level xapp-... token with connections:write to enable
+      # Socket Mode; leave empty to use HTTP webhooks.
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}
     depends_on:
