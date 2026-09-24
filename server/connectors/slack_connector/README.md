@@ -35,11 +35,8 @@ OAuth 2.0 authentication for Slack workspaces.
      - `app_mention` — required so Aurora replies when @mentioned
      - `member_joined_channel` — enables *instant* activation of channels
        Aurora is added to (e.g. incident.io-created channels). Without it,
-       those channels are still picked up on connect and via **Refresh
-       channels**, just not in real time.
-     - `member_left_channel` — enables *instant* deactivation when Aurora is
-       removed from a channel, keeping the Active list in sync with Slack.
-       Without it, **Refresh channels** reconciles membership on demand.
+       the connector page still reconciles membership every time it loads,
+       just not in real time.
    - Save changes. If you already installed the app, Slack will prompt you to
      **reinstall** so the new events/scopes take effect.
 6. Go to **Basic Information** and copy:

@@ -409,15 +409,3 @@ def test_restore_join_failure_returns_409():
     assert status == 409
     assert body.get_json()["code"] == "join_failed"
     reg.assert_not_called()
-
-
-# --- deactivate_channel_row (member_left_channel path) ----------------------
-
-def test_deactivate_channel_row_prunes_without_leaving():
-    dbcm, cur = _db(fetchall_rows=[])
-    with patch.object(mod, "_get_card_channel_id", return_value=None), \
-         patch.object(mod, "set_rls_context", return_value="org"), \
-         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm):
-        mod.deactivate_channel_row("u1", "C1")
-    # Slack already removed us, so this only prunes the row (no leave call here).
-    assert any("DELETE FROM slack_channels" in c.args[0] for c in cur.execute.call_args_list)

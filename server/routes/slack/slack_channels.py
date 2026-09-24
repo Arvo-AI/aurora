@@ -27,7 +27,12 @@ State transitions mirror Slack membership directly:
     * **Deactivate** -> ``conversations.leave``. The bot leaves; the row is
       pruned so the channel falls back into the live Inactive list.
     * **Invited in Slack** (``member_joined_channel``) -> auto-registers as
-      active. **Removed in Slack** (``member_left_channel``) -> marked inactive.
+      active (optional real-time hook).
+
+The Active list is reconciled against real Slack membership on every load of
+:func:`get_slack_channels` (not just via the Refresh button), so a channel
+Aurora was removed from drops off Active — and a newly-joined one appears —
+without needing a dedicated ``member_left_channel`` event.
 
 Endpoints (all behind ``connectors`` RBAC):
 
@@ -379,10 +384,24 @@ def get_slack_channels(user_id):
         picker; activating one makes Aurora join it. Named ``dismissed`` purely
         to preserve the existing response contract the frontend consumes.
 
+    Membership is reconciled against Slack on every load (not just via the
+    Refresh button): we re-list the bot's member channels, prune rows Aurora is
+    no longer in, and register newly-joined ones — so the Active list is always
+    accurate even without the member_joined/left_channel events. Best-effort:
+    if the reconcile call fails we still serve whatever is stored.
+
     Also returns ``card_channel_id`` — the single channel that receives the
     structured incident card.
     """
     try:
+        # Reconcile stored rows against live Slack membership before reading, so a
+        # channel Aurora was removed from drops off Active (and a newly-joined one
+        # appears) without waiting for a manual refresh. Best-effort.
+        try:
+            auto_register_channels(user_id)
+        except Exception:
+            logger.warning("[slack_channels] membership reconcile on load failed", exc_info=True)
+
         org_id = resolve_org(user_id)
         predicate, pred_params = org_read_predicate(user_id, org_id)
 
@@ -658,34 +677,6 @@ def _get_card_channel_id(user_id: str) -> str | None:
     except Exception:
         logger.debug("Could not resolve card channel id", exc_info=True)
     return None
-
-
-def deactivate_channel_row(user_id: str, channel_id: str) -> None:
-    """Prune a channel's stored row (deactivate) WITHOUT touching Slack.
-
-    Used by the ``member_left_channel`` event handler: Slack has already removed
-    Aurora from the channel, so we only need to drop our local row (calling
-    conversations.leave again would be redundant). Also clears the card
-    designation if this was the card channel. Best-effort.
-    """
-    if _get_card_channel_id(user_id) == channel_id:
-        try:
-            _clear_card_channel(user_id)
-        except Exception:
-            logger.warning("Failed to clear card channel on member_left", exc_info=True)
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:left]")
-                cur.execute(
-                    """DELETE FROM slack_channels
-                        WHERE provider = 'slack' AND channel_id = %s""",
-                    (channel_id,),
-                )
-                conn.commit()
-        logger.info("[slack_channels] deactivated channel %s (Aurora left)", sanitize(channel_id))
-    except Exception:
-        logger.warning("[slack_channels] failed to prune row on member_left", exc_info=True)
 
 
 def _is_active_channel(user_id: str, channel_id: str) -> bool:

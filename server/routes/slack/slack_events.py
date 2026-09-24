@@ -99,38 +99,6 @@ def _handle_member_joined(event: dict, team_id: str | None) -> None:
         logger.warning("Error handling member_joined_channel", exc_info=True)
 
 
-def _handle_member_left(event: dict, team_id: str | None) -> None:
-    """Deactivate a channel when Aurora itself is removed from it.
-
-    The inverse of _handle_member_joined: membership is the source of truth, so
-    when Aurora's own bot user leaves/ is removed from a channel, prune the
-    stored row so it drops out of the Active list (and back into the live
-    Inactive list). Best-effort and fully swallowed — a Slack webhook must
-    always return 200 quickly.
-    """
-    try:
-        left_user = event.get('user')
-        channel_id = event.get('channel')
-        if not left_user or not channel_id or not team_id:
-            return
-
-        aurora_user_id = get_user_id_from_slack_team(team_id)
-        if not aurora_user_id:
-            return
-
-        # Only react to Aurora's OWN departure. Without a stored bot_user_id we
-        # can't confirm it's us, so we skip rather than risk pruning a channel a
-        # human merely left.
-        bot_user_id = (get_user_token_data(aurora_user_id, "slack") or {}).get("bot_user_id")
-        if not bot_user_id or left_user != bot_user_id:
-            return
-
-        from routes.slack.slack_channels import deactivate_channel_row
-        deactivate_channel_row(aurora_user_id, channel_id)
-    except Exception:
-        logger.warning("Error handling member_left_channel", exc_info=True)
-
-
 @slack_events_bp.route("/events", methods=["POST"])
 def slack_events():
     """
@@ -332,12 +300,6 @@ def slack_events():
             # auto-register + describe it so it becomes a routing target.
             if event_type == 'member_joined_channel':
                 _handle_member_joined(event, data.get('team_id'))
-                return jsonify({"ok": True}), 200
-
-            # Aurora was removed from a channel — deactivate it (membership is the
-            # source of truth for the Active list).
-            if event_type == 'member_left_channel':
-                _handle_member_left(event, data.get('team_id'))
                 return jsonify({"ok": True}), 200
 
         # Acknowledge other events
