@@ -956,6 +956,7 @@ async def handle_connection(websocket) -> None:
         logger.error("Workflow Initialization Error: %s", e, exc_info=True)
         await websocket.send(json.dumps({
             "type": "error",
+            "session_id": session_id,
             "data": {
                 "text": f"Unexpected error: {str(e)}",
                 "session_id": session_id,
@@ -975,17 +976,21 @@ async def handle_connection(websocket) -> None:
     try:
         # Main message loop. Will run each time a message is received from the frontend (aka sent by the user)
         async for message in websocket:
+            session_id = None
+            data = json.loads(message)
+            session_id = data.get('session_id')
+
             # Rate limit check
             if not rate_limiter.is_allowed(client_id):
                 logger.warning(f"Rate limit exceeded for client {client_id}")
                 await websocket.send(json.dumps({
                     "type": "error",
+                    "session_id": session_id,
                     "data": {"text": f"Rate limit exceeded. Please wait and try again."},
                 }))
                 continue
 
             logger.debug(f"Received message from client {client_id}: {message}")
-            data = json.loads(message)
 
             # Handle connection initialization for the websocket
             if data.get('type') == 'init':
@@ -1153,7 +1158,6 @@ async def handle_connection(websocket) -> None:
             logger.info(f"Processing question: {question}")
             
             user_id = data.get('user_id')  # Extract user_id from the incoming data
-            session_id = data.get('session_id')  # Extract session_id from the incoming data
 
             # Server-side validation: token identity is authoritative when present.
             if current_user_id:
@@ -1165,6 +1169,7 @@ async def handle_connection(websocket) -> None:
                     )
                     await websocket.send(json.dumps({
                         "type": "error",
+                        "session_id": session_id,
                         "data": {"text": "Authentication failed: user identity mismatch."}
                     }))
                     continue
@@ -1174,6 +1179,7 @@ async def handle_connection(websocket) -> None:
                     logger.warning(f"Message rejected: unverified user_id {user_id!r}")
                     await websocket.send(json.dumps({
                         "type": "error",
+                        "session_id": session_id,
                         "data": {"text": "Authentication failed: invalid user identity."}
                     }))
                     continue
@@ -1205,6 +1211,7 @@ async def handle_connection(websocket) -> None:
                             )
                             await websocket.send(json.dumps({
                                 "type": "error",
+                                "session_id": session_id,
                                 "data": {"text": "You do not have permission to interact with incident investigations."}
                             }))
                             continue
@@ -1253,6 +1260,7 @@ async def handle_connection(websocket) -> None:
             if not user_id:
                 await websocket.send(json.dumps({
                     "type": "error",
+                    "session_id": session_id,
                     "data": {"text": "Missing user_id in the message."}
                 }))
                 continue
@@ -1272,6 +1280,7 @@ async def handle_connection(websocket) -> None:
                         warning_msg = "github_commit is not available in Ask mode. Switch to Agent mode to push changes."
                         await websocket.send(json.dumps({
                             "type": "error",
+                            "session_id": session_id,
                             "data": {
                                 "text": warning_msg,
                                 "session_id": session_id,
@@ -1279,7 +1288,7 @@ async def handle_connection(websocket) -> None:
                             }
                         }))
                         continue
-                    
+
                     # Import and execute the tool
                     try:
                         from chat.backend.agent.tools.github_commit_tool import github_commit
@@ -1320,6 +1329,7 @@ async def handle_connection(websocket) -> None:
                         logger.error(f"Error executing direct tool call {tool_name}: {e}")
                         await websocket.send(json.dumps({
                             "type": "error",
+                            "session_id": session_id,
                             "data": {
                                 "text": f"Failed to execute {tool_name}: {str(e)}",
                                 "session_id": session_id
@@ -1349,6 +1359,7 @@ async def handle_connection(websocket) -> None:
                         if not is_allowed_action:
                             await websocket.send(json.dumps({
                                 "type": "error",
+                                "session_id": session_id,
                                 "data": {
                                     "text": denial_message,
                                     "session_id": session_id,
@@ -1399,6 +1410,7 @@ async def handle_connection(websocket) -> None:
                         logger.error(f"Error executing direct tool call {tool_name}: {e}")
                         await websocket.send(json.dumps({
                             "type": "error",
+                            "session_id": session_id,
                             "data": {
                                 "text": f"Failed to execute {tool_name}: {str(e)}",
                                 "session_id": session_id
@@ -1428,6 +1440,7 @@ async def handle_connection(websocket) -> None:
                 logger.error("Failed to set user context: %s", e, exc_info=True)
                 await websocket.send(json.dumps({
                     "type": "error",
+                    "session_id": session_id,
                     "data": {"text": "Internal error setting user context.", "session_id": session_id}
                 }))
                 continue
@@ -1443,6 +1456,7 @@ async def handle_connection(websocket) -> None:
                     logger.warning(f"User input exceeds 20k token limit: {input_token_count} tokens")
                     await websocket.send(json.dumps({
                         "type": "error",
+                        "session_id": session_id,
                         "data": {
                             "text": f"Your message is too long ({input_token_count} tokens). Please limit your message to 20,000 tokens (approximately 80,000 characters).",
                             "severity": "error",
@@ -1450,12 +1464,13 @@ async def handle_connection(websocket) -> None:
                         }
                     }))
                     continue  # Skip processing this message
-                    
-            except Exception as e:
-                logger.error(f"Error counting input tokens: {e}")
+
+            except Exception:
+                logger.exception("Error counting input tokens")
                 # Block processing if token counting fails for safety
                 await websocket.send(json.dumps({
                     "type": "error",
+                    "session_id": session_id,
                     "data": {
                         "text": "Unable to process message due to token counting error. Please try again or contact support if this persists.",
                         "severity": "error",
@@ -1616,6 +1631,7 @@ async def handle_connection(websocket) -> None:
         try:
             await websocket.send(json.dumps({
                 "type": "error",
+                "session_id": session_id,
                 "data": {"text": f"Unexpected error: {str(e)}", "session_id": session_id},
             }))
         except websockets.exceptions.ConnectionClosed:
