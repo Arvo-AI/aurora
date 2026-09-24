@@ -163,7 +163,17 @@ def _upsert_channel(cur, user_id: str, org_id: str | None, ch: dict,
                channel_type = EXCLUDED.channel_type,
                detected_platform = EXCLUDED.detected_platform,
                channel_data = EXCLUDED.channel_data,
-               updated_at = NOW()""",
+               -- Don't bump updated_at for rows still 'pending': auto_register
+               -- upserts every member on each reconcile, and we use updated_at
+               -- as "time since the description was queued" to detect a lost
+               -- task (see the staleness check). Bumping it here would keep a
+               -- stuck 'pending' row looking fresh forever, so it'd never be
+               -- re-enqueued. Every other status advances the timestamp normally.
+               updated_at = CASE
+                   WHEN slack_channels.metadata_status = 'pending'
+                   THEN slack_channels.updated_at
+                   ELSE NOW()
+               END""",
         (
             owner_id, org_id, ch.get("team_id"), channel_id,
             ch.get("channel_name") or ch.get("name"),
@@ -260,15 +270,15 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
         except Exception:
             team_id = None
 
-    # Describe member channels, recency-first. describe_limit bounds how many we
-    # ENQUEUE per pass (an LLM-cost safety valve for unusually large
-    # memberships), NOT which channels are describable: under membership-as-truth
-    # every member channel is active and routable, so any not described this pass
-    # stay 'pending' (never 'skipped') and a later reconcile finishes them. This
-    # keeps _is_active_channel and the agent's ready-only routing in agreement —
-    # a member channel is never permanently stuck invisible to the agent.
+    # Describe member channels, recency-first. describe_limit bounds how many
+    # descriptions we ENQUEUE per pass (an LLM-cost safety valve for unusually
+    # large memberships), NOT which channels are eligible: under
+    # membership-as-truth every member channel is active and routable. Channels
+    # past the cap this pass stay 'pending' (never 'skipped'); because a 'pending'
+    # row's updated_at is NOT bumped on reconcile (see _upsert_channel), it goes
+    # stale after ~10 min and a later pass enqueues it — so no member channel is
+    # ever permanently stuck invisible to the agent (which routes to 'ready' only).
     ranked_members = _rank_channels(member_channels)
-    describe_ids = {c.get("id") for c in ranked_members[:describe_limit]}
 
     org_id = resolve_org(user_id)
     newly_added_to_describe: list[str] = []
@@ -276,9 +286,10 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:auto]")
-                # Include updated_at so we can tell a freshly-queued 'pending' row
-                # (task likely still in flight) from one that's been stuck for a
-                # while (worker restart / lost task) and genuinely needs re-queuing.
+                # Include a staleness flag so we can tell a freshly-queued
+                # 'pending' row (task likely still in flight) from one that's been
+                # stuck for a while (worker restart / lost task) and genuinely
+                # needs re-queuing.
                 cur.execute(
                     """SELECT channel_id, user_id, metadata_status,
                               (updated_at < NOW() - INTERVAL '10 minutes') AS is_stale
@@ -293,13 +304,9 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
                     ch = {**ch, "channel_id": ch.get("id"), "channel_name": ch.get("name"),
                           "team_id": team_id, "is_member": True}
                     cid = ch["channel_id"]
-                    # Enqueue a description this pass only up to the cap; the rest
-                    # are still 'pending' (a member channel is always describable)
-                    # so a subsequent reconcile picks them up.
-                    describe_now = cid in describe_ids
                     status = status_by_id.get(cid)
-                    # Decide whether this existing row still needs a description
-                    # enqueued, WITHOUT spamming duplicate LLM calls on every load:
+                    # Decide whether this row still needs a description enqueued,
+                    # WITHOUT spamming duplicate LLM calls on every load:
                     #   * None/'skipped' — never scheduled, enqueue.
                     #   * 'pending'      — only if STALE; a fresh pending row is a
                     #     task still in flight (re-queuing = duplicate LLM call).
@@ -314,7 +321,11 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
                         cur, user_id, org_id, ch, existing,
                         initial_status="pending",
                     )
-                    if _cid and describe_now and (is_new or needs_describe):
+                    # Cap the number of descriptions ENQUEUED per pass (not which
+                    # members are eligible), so over-cap channels are picked up by
+                    # a later reconcile once they go stale — never stranded.
+                    if (_cid and (is_new or needs_describe)
+                            and len(newly_added_to_describe) < describe_limit):
                         newly_added_to_describe.append(_cid)
 
                 # Reconcile membership: any stored row that is NOT in the current

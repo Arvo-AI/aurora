@@ -129,13 +129,25 @@ export default function SlackManagePage() {
   // until nothing is still 'generating'/'pending' (capped so we never poll
   // forever). Cleared on unmount.
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (pollTimerRef.current) clearTimeout(pollTimerRef.current); }, []);
+  // Each polling chain gets a generation token. Starting a new chain (or
+  // unmounting) bumps the token, so a callback from a superseded chain — e.g. a
+  // loadChannels poll still in flight when handleActivateSelected starts one
+  // with awaitingIds — bails out instead of clobbering the newer chain or
+  // firing setState after unmount.
+  const pollGenRef = useRef(0);
+  useEffect(() => () => {
+    pollGenRef.current += 1; // invalidate any in-flight poll on unmount
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+  }, []);
 
   const pollChannelsUntilSettled = useCallback((
     attempt = 0,
     keepGoingWhileEmpty = false,
     awaitingIds: string[] = [],
+    gen?: number,
   ) => {
+    // First call in a chain claims a fresh generation; recursive calls carry it.
+    const myGen = gen ?? ++pollGenRef.current;
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     // ~30s ceiling (15 tries × 2s) — generation is normally a few seconds.
     if (attempt >= 15) return;
@@ -147,6 +159,9 @@ export default function SlackManagePage() {
         // response's `dismissed` (available-to-join) list is empty by design, so
         // we deliberately do NOT refetch dismissedChannels here.
         const data = await slackService.getChannels(true);
+        // This chain was superseded (or the component unmounted) while awaiting —
+        // drop the result so we don't stomp newer state or reschedule.
+        if (myGen !== pollGenRef.current) return;
         setConnectedChannels(data.connected);
         setCardChannelId(data.card_channel_id ?? null);
         // A channel that just became active (e.g. bulk-activate joined it) must
@@ -168,7 +183,7 @@ export default function SlackManagePage() {
         // submitted id has actually shown up in the connected list.
         const waitingForQueuedIds = awaitingIds.some((id) => !connectedIds.has(id));
         if (stillWorking || waitingForFirstRows || waitingForQueuedIds) {
-          pollChannelsUntilSettled(attempt + 1, keepGoingWhileEmpty, awaitingIds);
+          pollChannelsUntilSettled(attempt + 1, keepGoingWhileEmpty, awaitingIds, myGen);
         }
       } catch (error) {
         console.error("Error polling Slack channels:", error);

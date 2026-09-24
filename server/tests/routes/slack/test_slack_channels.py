@@ -213,6 +213,49 @@ def test_reconcile_reenqueues_skipped():
     assert _run_reconcile_with_existing([("C1", "u", "skipped", False)]) == ["C1"]
 
 
+def test_over_cap_member_is_picked_up_on_a_later_pass():
+    """A member ranked past describe_limit isn't described on the first pass, but
+    once its 'pending' row goes stale a later reconcile enqueues it (so it's never
+    permanently invisible to the agent)."""
+    members = [
+        {"id": "C1", "name": "one", "is_member": True, "created": 300},
+        {"id": "C2", "name": "two", "is_member": True, "created": 200},
+        {"id": "C3", "name": "three", "is_member": True, "created": 100},
+    ]
+    fake_client = MagicMock()
+    fake_client.list_bot_channels.return_value = members
+
+    def fake_upsert(cur, user_id, org_id, ch, existing, initial_status="pending"):
+        # Simulate all rows already existing (so describe decisions ride on status).
+        existing[ch["channel_id"]] = user_id
+        return ch["channel_id"], False
+
+    def run(rows):
+        enqueued = []
+        dbcm, _cur = _db(fetchall_rows=rows)
+        with patch.object(mod, "get_slack_client_for_user", return_value=fake_client), \
+             patch.object(mod, "resolve_org", return_value="00000000-0000-0000-0000-000000000000"), \
+             patch.object(mod, "set_rls_context", return_value="org"), \
+             patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+             patch.object(mod, "_get_card_channel_id", return_value=None), \
+             patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
+             patch.object(mod, "_enqueue_metadata", side_effect=lambda uid, cid: enqueued.append(cid)):
+            mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=2)
+        return enqueued
+
+    # First pass: C1/C2 fresh pending (in flight, skipped), C3 also pending but
+    # NOT stale yet -> nothing enqueued (cap doesn't matter, none are eligible).
+    first = run([("C1", "u", "pending", False), ("C2", "u", "pending", False),
+                 ("C3", "u", "pending", False)])
+    assert first == []
+
+    # Later pass: C1/C2 finished (ready), C3's pending row has gone stale ->
+    # the over-cap channel is finally enqueued.
+    later = run([("C1", "u", "ready", False), ("C2", "u", "ready", False),
+                 ("C3", "u", "pending", True)])
+    assert later == ["C3"]
+
+
 def test_auto_register_prunes_non_member_channels():
     """A stored row Aurora is no longer a member of is pruned (self-healing)."""
     members = [{"id": "C1", "name": "one", "is_member": True, "created": 300}]
