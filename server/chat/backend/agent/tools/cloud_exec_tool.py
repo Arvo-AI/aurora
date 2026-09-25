@@ -1162,16 +1162,15 @@ def is_read_only_command(command: str) -> bool:
     Matches on the command's verb tokens, not a substring scan: a bare
     `verb in command` test classifies `az group delete --name my-logs-rg` as
     read-only because "logs" appears in the resource name. Defaults to False.
+    
+    Handles hyphenated verbs by splitting on both spaces and hyphens:
+    `describe-health-check` becomes ['describe', 'health', 'check'], and we
+    check if 'describe' is a read-only verb. 
     """
     READ_ONLY_VERBS = frozenset({
         'list', 'describe', 'get', 'show', 'config', 'version', 'info', 'status',
         'read', 'view', 'help', 'logs', 'log', 'top', 'explain', 'diff', 'search',
-        'query', 'export', 'devices', 'keys', 'routes', 'settings',
-        # Hyphenated subcommands are single tokens, so they need listing outright.
-        # `aks get-credentials` only writes a local kubeconfig and is the required
-        # first step of AKS investigation, so Ask mode must allow it.
-        'get-credentials', 'list-keys', 'show-connection-string', 'get-versions',
-        'list-deleted', 'check-name', 'show-usage',
+        'query', 'export', 'devices', 'keys', 'routes', 'settings', 'check',
     })
     WRITE_VERBS = frozenset({
         'delete', 'destroy', 'remove', 'rm', 'create', 'apply', 'update', 'set',
@@ -1181,23 +1180,25 @@ def is_read_only_command(command: str) -> bool:
     })
 
     try:
-        tokens = [t.lower() for t in shlex.split(command) if not t.startswith('-')]
-    except ValueError:
+        # Split on both spaces and hyphens to handle hyphenated verbs like
+        # 'describe-health-check' → ['describe', 'health', 'check']
+        tokens = [t.lower() for t in re.split(r'[\s\-]+', command) if t and not t.startswith('-')]
+    except (ValueError, re.error):
         return False
 
     # Some reads return credentials. They pass a verb check ("list", "show") but
     # hand back keys, secrets or connection strings, so Ask mode must refuse them
     # even though they mutate nothing.
     CREDENTIAL_READS = (
-        ('storage', 'account', 'keys'), ('storage', 'account', 'show-connection-string'),
+        ('storage', 'account', 'keys'), ('storage', 'account', 'show', 'connection', 'string'),
         ('keyvault', 'secret'), ('keyvault', 'key'), ('keyvault', 'certificate'),
         ('ad', 'sp', 'credential'), ('ad', 'app', 'credential'),
-        ('redis', 'list-keys'), ('cosmosdb', 'keys'),
-        ('servicebus', 'namespace', 'authorization-rule', 'keys'),
-        ('eventhubs', 'namespace', 'authorization-rule', 'keys'),
+        ('redis', 'list', 'keys'), ('cosmosdb', 'keys'),
+        ('servicebus', 'namespace', 'authorization', 'rule', 'keys'),
+        ('eventhubs', 'namespace', 'authorization', 'rule', 'keys'),
         ('acr', 'credential'), ('batch', 'account', 'keys'),
         ('secrets', 'get'), ('secrets', 'versions'),   # gcloud
-        ('secretsmanager', 'get-secret-value'), ('iam', 'create-access-key'),  # aws
+        ('secretsmanager', 'get', 'secret', 'value'), ('iam', 'create', 'access', 'key'),  # aws
     )
     if any(all(part in tokens for part in combo) for combo in CREDENTIAL_READS):
         return False
@@ -1205,8 +1206,12 @@ def is_read_only_command(command: str) -> bool:
     # Any write verb anywhere disqualifies the command outright.
     if any(t in WRITE_VERBS for t in tokens):
         return False
+    
+    # Check if any token is a read-only verb (handles both base verbs and
+    # hyphenated variants like 'describe-health-check' → 'describe')
     if any(t in READ_ONLY_VERBS for t in tokens):
         return True
+    
     if '--dry-run' in command.lower():
         return True
 
