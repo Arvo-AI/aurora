@@ -27,8 +27,12 @@ class ChatContextManager:
     # Model context limits (tokens) - leaving some buffer for system prompts and tool calls
     # Keys use OpenRouter format (dot notation) since ModelMapper resolves to this
     MODEL_CONTEXT_LIMITS = {
+        "openai/gpt-6-astra": 1000000,  # 1.05M - 50K buffer
+        "openai/gpt-5.6-sol": 950000,  # 1M - 50K buffer
         "openai/gpt-5.5": 1000000,  # 1.05M - 50K buffer
         "openai/gpt-5.2": 950000,  # 1M - 50K buffer
+        "anthropic/claude-opus-5.5": 950000,  # 1M - 50K buffer
+        "anthropic/claude-sonnet-5": 950000,  # 1M - 50K buffer
         "anthropic/claude-sonnet-4.6": 950000,  # 1M - 50K buffer
         "anthropic/claude-sonnet-4.5": 950000,  # 1M - 50K buffer
         "anthropic/claude-opus-4.8": 950000,  # 1M - 50K buffer
@@ -36,6 +40,7 @@ class ChatContextManager:
         "anthropic/claude-opus-4.6": 950000,  # 1M - 50K buffer
         "anthropic/claude-opus-4.5": 180000,  # 200K - 20K buffer
         "anthropic/claude-3-haiku": 180000,  # 200K - 20K buffer
+        "google/gemini-3.8-flash": 1000000,  # 1M context
         "google/gemini-3.6-flash": 1000000,  # 1M context
         "google/gemini-3.5-flash-lite": 1000000,  # 1M context
         "google/gemini-3.5-flash": 1000000,  # 1M context
@@ -43,6 +48,7 @@ class ChatContextManager:
         "google/gemini-3-flash": 1000000,  # legacy alias for 3.5-flash
         "google/gemini-2.5-pro": 1000000,  # 1M context
         "google/gemini-2.5-flash": 1000000,  # 1M context
+        "vertex/gemini-3.8-flash": 1000000,  # 1M context
         "vertex/gemini-3.6-flash": 1000000,  # 1M context
         "vertex/gemini-3.5-flash-lite": 1000000,  # 1M context
         "vertex/gemini-3.5-flash": 1000000,  # 1M context
@@ -51,6 +57,8 @@ class ChatContextManager:
         "vertex/gemini-2.5-pro": 1000000,  # 1M context
         "vertex/gemini-2.5-flash": 1000000,  # 1M context
         # Bedrock-hosted Claude (same models/windows as the direct Anthropic entries above)
+        "bedrock/us.anthropic.claude-opus-5-5": 950000,  # 1M - 50K buffer
+        "bedrock/us.anthropic.claude-sonnet-5": 950000,  # 1M - 50K buffer
         "bedrock/us.anthropic.claude-sonnet-4-6": 950000,  # 1M - 50K buffer
         "bedrock/us.anthropic.claude-opus-4-6-v1": 950000,  # 1M - 50K buffer
         "bedrock/us.anthropic.claude-opus-4-8": 950000,  # 1M - 50K buffer

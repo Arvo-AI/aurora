@@ -37,7 +37,7 @@ class ModelConfig:
     Change these values to switch providers across the entire application.
     """
     
-    _DEFAULT_MODEL = "anthropic/claude-sonnet-4.6"
+    _DEFAULT_MODEL = "anthropic/claude-opus-5.5"
 
     # Primary models - configurable via env vars
     MAIN_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
@@ -46,7 +46,7 @@ class ModelConfig:
     # Background RCA model - configurable via RCA_MODEL env var, falls back to cost-based selection
     RCA_MODEL = os.getenv("RCA_MODEL") or (
         "anthropic/claude-haiku-4.5" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
-        else "anthropic/claude-opus-4.6"
+        else "anthropic/claude-opus-5.5"
     )
 
     # Multi-agent RCA orchestrator — required when ORCHESTRATOR_ENABLED=true.

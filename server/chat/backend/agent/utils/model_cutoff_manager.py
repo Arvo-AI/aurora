@@ -49,6 +49,12 @@ class ModelCutoffManager:
 
         # OpenAI Models (via OpenRouter)
         openai_models = {
+            "openai/gpt-6-astra": ModelInfo(
+                "gpt-6-astra", "openai", cutoff_date(2026, 4, 30), True, True
+            ),
+            "openai/gpt-5.6-sol": ModelInfo(
+                "gpt-5.6-sol", "openai", cutoff_date(2026, 4, 1), True, True
+            ),
             "openai/gpt-5.2": ModelInfo(
                 "gpt-5.2", "openai", cutoff_date(2025, 8, 1), True, True
             ),
@@ -56,6 +62,12 @@ class ModelCutoffManager:
 
         # Anthropic Models (via OpenRouter)
         anthropic_models = {
+            "anthropic/claude-opus-5-5": ModelInfo(
+                "claude-opus-5-5", "anthropic", cutoff_date(2026, 6, 1), True, True
+            ),
+            "anthropic/claude-sonnet-5": ModelInfo(
+                "claude-sonnet-5", "anthropic", cutoff_date(2026, 1, 1), True, True
+            ),
             "anthropic/claude-sonnet-4-5": ModelInfo(
                 "claude-sonnet-4-5", "anthropic", cutoff_date(2025, 9, 1), True, True
             ),
@@ -66,6 +78,9 @@ class ModelCutoffManager:
 
         # Google / Vertex AI Models
         google_models = {
+            "google/gemini-3.8-flash": ModelInfo(
+                "gemini-3.8-flash", "google", cutoff_date(2026, 3, 1), True, True
+            ),
             "google/gemini-3.6-flash": ModelInfo(
                 "gemini-3.6-flash", "google", cutoff_date(2026, 3, 1), True, True
             ),
@@ -83,6 +98,9 @@ class ModelCutoffManager:
             ),
             "google/gemini-2.5-flash": ModelInfo(
                 "gemini-2.5-flash", "google", cutoff_date(2025, 3, 1), True, True
+            ),
+            "vertex/gemini-3.8-flash": ModelInfo(
+                "gemini-3.8-flash", "vertex", cutoff_date(2026, 3, 1), True, True
             ),
             "vertex/gemini-3.6-flash": ModelInfo(
                 "gemini-3.6-flash", "vertex", cutoff_date(2026, 3, 1), True, True
@@ -119,9 +137,9 @@ class ModelCutoffManager:
         # This allows partial matching for models not explicitly listed
         # These are conservative estimates
         fallback_patterns = {
-            "gpt": datetime(2025, 8, 1, tzinfo=timezone.utc),
-            "claude": datetime(2025, 11, 1, tzinfo=timezone.utc),
-            "gemini": datetime(2025, 11, 1, tzinfo=timezone.utc),
+            "gpt": datetime(2026, 4, 1, tzinfo=timezone.utc),
+            "claude": datetime(2026, 6, 1, tzinfo=timezone.utc),
+            "gemini": datetime(2026, 3, 1, tzinfo=timezone.utc),
         }
 
         self.fallback_patterns = fallback_patterns
