@@ -33,10 +33,10 @@ OAuth 2.0 authentication for Slack workspaces.
      running and reachable for the URL to verify.)
    - Under **Subscribe to bot events**, add:
      - `app_mention` — required so Aurora replies when @mentioned
-     - `member_joined_channel` — enables *instant* registration of channels
+     - `member_joined_channel` — enables *instant* activation of channels
        Aurora is added to (e.g. incident.io-created channels). Without it,
-       those channels are still picked up on connect and via **Refresh
-       channels**, just not in real time.
+       the connector page still reconciles membership every time it loads,
+       just not in real time.
    - Save changes. If you already installed the app, Slack will prompt you to
      **reinstall** so the new events/scopes take effect.
 6. Go to **Basic Information** and copy:
@@ -61,4 +61,4 @@ The `NGROK_URL` env var tells the backend to use the tunnel URL for the OAuth re
 
 **Aurora doesn't reply to @mentions** — Confirm **Event Subscriptions** is enabled, the Request URL (`/slack/events`) verified successfully, and `app_mention` is listed under **Subscribe to bot events**. Reinstall the app after adding events.
 
-**Channels Aurora is added to aren't auto-registered instantly** — Real-time pickup needs the `member_joined_channel` bot event; add it under **Subscribe to bot events** and reinstall the app. Without it, channels are still registered on connect and via the **Refresh channels** button — just not the moment Aurora joins.
+**Channels Aurora is added to aren't auto-registered instantly** — Real-time pickup needs the `member_joined_channel` bot event; add it under **Subscribe to bot events** and reinstall the app. Without it, channels are still registered on connect and whenever the Slack manage page is loaded (it reconciles membership against Slack on every load) — just not the moment Aurora joins.
