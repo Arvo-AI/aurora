@@ -14,134 +14,159 @@ from typing import Dict, Optional, Tuple
 MODEL_MAPPINGS = {
     "openai/gpt-5.5": {
         "openrouter": "openai/gpt-5.5",
+        "requesty": "openai/gpt-5.5",
         "openai": "gpt-5.5",
         "provider": "openai",
     },
     "openai/gpt-5.2": {
         "openrouter": "openai/gpt-5.2",
+        "requesty": "openai/gpt-5.2",
         "openai": "gpt-5.2",
         "provider": "openai",
     },
     "anthropic/claude-sonnet-4-5": {
         "openrouter": "anthropic/claude-sonnet-4.5",  # OpenRouter uses dot, not dash
+        "requesty": "anthropic/claude-sonnet-4-5",
         "anthropic": "claude-sonnet-4-5",
         "provider": "anthropic",
     },
     # Alias for OpenRouter format (with dot) - maps to same canonical name
     "anthropic/claude-sonnet-4.5": {
         "openrouter": "anthropic/claude-sonnet-4.5",
+        "requesty": "anthropic/claude-sonnet-4-5",
         "anthropic": "claude-sonnet-4-5",
         "provider": "anthropic",
     },
     "anthropic/claude-opus-4-5": {
         "openrouter": "anthropic/claude-opus-4.5",  # OpenRouter uses dot, not dash
+        "requesty": "anthropic/claude-opus-4-5",
         "anthropic": "claude-opus-4-5",
         "provider": "anthropic",
     },
     # Alias for OpenRouter format (with dot) - maps to same canonical name
     "anthropic/claude-opus-4.5": {
         "openrouter": "anthropic/claude-opus-4.5",
+        "requesty": "anthropic/claude-opus-4-5",
         "anthropic": "claude-opus-4-5",
         "provider": "anthropic",
     },
     "google/gemini-3.1-pro-preview": {
         "openrouter": "google/gemini-3.1-pro-preview",
+        "requesty": "google/gemini-3.1-pro-preview",
         "google": "gemini-3.1-pro-preview",
         "vertex": "gemini-3.1-pro-preview",
         "provider": "google",
     },
     "vertex/gemini-3.1-pro-preview": {
         "openrouter": "google/gemini-3.1-pro-preview",
+        "requesty": "google/gemini-3.1-pro-preview",
         "vertex": "gemini-3.1-pro-preview",
         "provider": "vertex",
     },
     "google/gemini-3.6-flash": {
         "openrouter": "google/gemini-3.6-flash",
+        "requesty": "google/gemini-3.6-flash",
         "google": "gemini-3.6-flash",
         "vertex": "gemini-3.6-flash",
         "provider": "google",
     },
     "vertex/gemini-3.6-flash": {
         "openrouter": "google/gemini-3.6-flash",
+        "requesty": "google/gemini-3.6-flash",
         "vertex": "gemini-3.6-flash",
         "provider": "vertex",
     },
     "google/gemini-3.5-flash-lite": {
         "openrouter": "google/gemini-3.5-flash-lite",
+        "requesty": "google/gemini-3.5-flash-lite",
         "google": "gemini-3.5-flash-lite",
         "vertex": "gemini-3.5-flash-lite",
         "provider": "google",
     },
     "vertex/gemini-3.5-flash-lite": {
         "openrouter": "google/gemini-3.5-flash-lite",
+        "requesty": "google/gemini-3.5-flash-lite",
         "vertex": "gemini-3.5-flash-lite",
         "provider": "vertex",
     },
     "google/gemini-3.5-flash": {
         "openrouter": "google/gemini-3.5-flash",
+        "requesty": "google/gemini-3.5-flash",
         "google": "gemini-3.5-flash",
         "vertex": "gemini-3.5-flash",
         "provider": "google",
     },
     "vertex/gemini-3.5-flash": {
         "openrouter": "google/gemini-3.5-flash",
+        "requesty": "google/gemini-3.5-flash",
         "vertex": "gemini-3.5-flash",
         "provider": "vertex",
     },
     "google/gemini-2.5-pro": {
         "openrouter": "google/gemini-2.5-pro",
+        "requesty": "google/gemini-2.5-pro",
         "google": "gemini-2.5-pro",
         "vertex": "gemini-2.5-pro",
         "provider": "google",
     },
     "vertex/gemini-2.5-pro": {
         "openrouter": "google/gemini-2.5-pro",
+        "requesty": "google/gemini-2.5-pro",
         "vertex": "gemini-2.5-pro",
         "provider": "vertex",
     },
     "google/gemini-2.5-flash": {
         "openrouter": "google/gemini-2.5-flash",
+        "requesty": "google/gemini-2.5-flash",
         "google": "gemini-2.5-flash",
         "vertex": "gemini-2.5-flash",
         "provider": "google",
     },
     "vertex/gemini-2.5-flash": {
         "openrouter": "google/gemini-2.5-flash",
+        "requesty": "google/gemini-2.5-flash",
         "vertex": "gemini-2.5-flash",
         "provider": "vertex",
     },
     "anthropic/claude-sonnet-4.6": {
         "openrouter": "anthropic/claude-sonnet-4.6",
+        "requesty": "anthropic/claude-sonnet-4-6",
         "anthropic": "claude-sonnet-4-6",
         "provider": "anthropic",
     },
     "anthropic/claude-sonnet-4-6": {
         "openrouter": "anthropic/claude-sonnet-4.6",
+        "requesty": "anthropic/claude-sonnet-4-6",
         "anthropic": "claude-sonnet-4-6",
         "provider": "anthropic",
     },
     "anthropic/claude-opus-4.7": {
         "openrouter": "anthropic/claude-opus-4.7",
+        "requesty": "anthropic/claude-opus-4-7",
         "anthropic": "claude-opus-4-7",
         "provider": "anthropic",
     },
     "anthropic/claude-opus-4.6": {
         "openrouter": "anthropic/claude-opus-4.6",
+        "requesty": "anthropic/claude-opus-4-6",
         "anthropic": "claude-opus-4-6",
         "provider": "anthropic",
     },
     "anthropic/claude-opus-4-6": {
         "openrouter": "anthropic/claude-opus-4.6",
+        "requesty": "anthropic/claude-opus-4-6",
         "anthropic": "claude-opus-4-6",
         "provider": "anthropic",
     },
     "anthropic/claude-haiku-4.5": {
         "openrouter": "anthropic/claude-haiku-4.5",
+        "requesty": "anthropic/claude-haiku-4-5",
         "anthropic": "claude-haiku-4-5",
         "provider": "anthropic",
     },
     "anthropic/claude-haiku-4-5": {
         "openrouter": "anthropic/claude-haiku-4.5",
+        "requesty": "anthropic/claude-haiku-4-5",
         "anthropic": "claude-haiku-4-5",
         "provider": "anthropic",
     },
@@ -161,7 +186,7 @@ MODEL_MAPPINGS = {
 _NATIVE_TO_OPENROUTER = {}
 for or_name, mappings in MODEL_MAPPINGS.items():
     for provider, native_name in mappings.items():
-        if provider not in ("openrouter", "provider"):
+        if provider not in ("openrouter", "requesty", "provider"):
             _NATIVE_TO_OPENROUTER[(provider, native_name)] = or_name
 
 

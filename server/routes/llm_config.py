@@ -16,7 +16,7 @@ from utils.auth.rbac_decorators import require_permission
 
 logger = logging.getLogger(__name__)
 
-PROVIDER_NAMES = ["openrouter", "openai", "anthropic", "google", "vertex", "ollama", "bedrock"]
+PROVIDER_NAMES = ["openrouter", "requesty", "openai", "anthropic", "google", "vertex", "ollama", "bedrock"]
 
 # Env vars that mean "this provider was actually configured" for the chat picker.
 # Bedrock ignores AWS_DEFAULT_REGION — that is set for cloud connectors, not LLM.
@@ -33,12 +33,12 @@ def picker_prefixes(mode: str | None, env: dict) -> list[str] | None:
     """Which model-id prefixes the chat picker should show.
 
     Returns None to show the full catalog:
-    - OpenRouter mode (one key, every provider)
+    - OpenRouter or Requesty mode (one key, every provider)
     - Ollama mode (local runner; model ids still use provider prefixes)
     - Direct mode with no LLM credentials set (fail at call time)
     """
     mode = (mode or "direct").strip().lower()
-    if mode in ("openrouter", "ollama"):
+    if mode in ("openrouter", "requesty", "ollama"):
         return None
     if mode not in ("direct", "auto"):
         return [mode]
