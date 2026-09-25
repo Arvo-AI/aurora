@@ -220,7 +220,7 @@ config:
   AWS_SM_SECRET_ACCESS_KEY: ""  # Falls back to default boto3 chain if both are empty
   
   # --- LLM Configuration ---
-  LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
+  LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, requesty, openai, anthropic, google
   AGENT_RECURSION_LIMIT: "240" #Maximum number of steps an agent can take
 
   # --- AI Safety Guardrails ---
@@ -472,9 +472,10 @@ secrets:
     # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
     # When set, the chart will not create secret-llm and all pods will reference
     # this secret directly. It must contain at least one of: OPENROUTER_API_KEY,
-    # OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY.
+    # REQUESTY_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY.
     # existingSecret: ""
     OPENROUTER_API_KEY: ""       # Get from: https://openrouter.ai/keys
+    REQUESTY_API_KEY: ""         # Get from: https://app.requesty.ai/api-keys
     OPENAI_API_KEY: ""           # Get from: https://platform.openai.com/api-keys
     ANTHROPIC_API_KEY: ""        # Get from: https://console.anthropic.com/
     GOOGLE_AI_API_KEY: ""        # Get from: https://makersuite.google.com/app/apikey

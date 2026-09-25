@@ -50,6 +50,7 @@ x-common-env: &common-env
 
   # LLM & AI Services (needed for background chats)
   OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+  REQUESTY_API_KEY: ${REQUESTY_API_KEY}
   OPENAI_API_KEY: ${OPENAI_API_KEY}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
   GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY}
