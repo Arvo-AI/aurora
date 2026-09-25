@@ -345,7 +345,6 @@ def initialize_tables():
                         is_archived BOOLEAN DEFAULT false,
                         channel_type VARCHAR(20) DEFAULT 'unknown',
                         detected_platform VARCHAR(40),
-                        is_dismissed BOOLEAN DEFAULT false,
                         metadata_summary TEXT,
                         metadata_status VARCHAR(20) DEFAULT 'pending',
                         channel_data JSONB,
@@ -1809,22 +1808,15 @@ def initialize_tables():
                 )
                 conn.rollback()
 
-            # Migration: Add is_dismissed to slack_channels so users can hide
-            # irrelevant channels from routing/UI without leaving them on Slack.
-            # Dismissed channels are also not re-added by auto-register/refresh.
-            try:
-                cursor.execute(
-                    "ALTER TABLE slack_channels ADD COLUMN IF NOT EXISTS is_dismissed BOOLEAN DEFAULT FALSE;"
-                )
-                conn.commit()
-                logging.info(
-                    "Ensured is_dismissed column exists on slack_channels table."
-                )
-            except Exception as e:
-                logging.warning(
-                    f"Error adding is_dismissed column to slack_channels: {e}"
-                )
-                conn.rollback()
+            # NOTE: The slack_channels.is_dismissed column is now unused —
+            # channel membership is the single source of truth (a channel is
+            # Active iff Aurora is a member of it), so the old "dismiss without
+            # leaving" flag no longer exists. We intentionally do NOT drop it here
+            # yet: dropping a column at startup breaks any still-running pods from
+            # the previous release during a rolling deploy (their INSERT/SELECT of
+            # is_dismissed would error until the rollout completes). Leaving the
+            # column in place is harmless (nothing reads or writes it). Drop it in
+            # a follow-up release once all pods are on this version.
 
             # Migration: Bitbucket Incident Prevention (DEV-1439).
             # - webhook_hook_uuid: the Bitbucket repo hook UUID (when Aurora

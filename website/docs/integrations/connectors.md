@@ -717,7 +717,7 @@ In **Event Subscriptions**, toggle **Enable Events** on.
 | Event | Purpose |
 |-------|---------|
 | `app_mention` | Aurora replies when @mentioned (required) |
-| `member_joined_channel` | *Instant* registration of channels Aurora is added to, e.g. incident.io channels (optional — connect and **Refresh channels** also register them, just not in real time) |
+| `member_joined_channel` | *Instant* activation of channels Aurora is added to, e.g. incident.io channels (optional — the connector page also reconciles membership on load) |
 
 Save changes. If the app is already installed, Slack will prompt you to
 **reinstall** so the new events and scopes take effect.
@@ -744,7 +744,8 @@ SLACK_SIGNING_SECRET=your-signing-secret
 | "bad_redirect_uri" | Redirect URL must match exactly in Slack App settings |
 | "Slack OAuth credentials not configured" | Set `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` in `.env` |
 | Aurora doesn't reply to @mentions | Enable **Event Subscriptions**, verify the `/slack/events` Request URL, and subscribe to the `app_mention` bot event, then reinstall the app |
-| Channels Aurora is added to aren't auto-registered instantly | Subscribe to the `member_joined_channel` bot event for real-time pickup, then reinstall. Otherwise channels are still registered on connect and via **Refresh channels** |
+| Channels Aurora is added to aren't auto-registered instantly | Subscribe to the `member_joined_channel` bot event for real-time pickup, then reinstall. Otherwise the connector page reconciles membership on load |
+| Deactivating a channel doesn't remove Aurora from it / a channel stays Active after Aurora is kicked | Membership is the source of truth: deactivating calls `conversations.leave`, and the connector page reconciles membership every time it loads, so a channel Aurora was removed from drops off the Active list automatically |
 
 ---
 

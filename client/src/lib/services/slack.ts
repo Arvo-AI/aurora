@@ -75,8 +75,14 @@ export const slackService = {
     });
   },
 
-  async getChannels(): Promise<SlackChannelsResponse> {
-    const data = await apiRequest<SlackChannelsResponse>(`${CHANNELS_BASE}`, {
+  // Fetch the org's channels. `pollMode` (?live=0) serves stored rows straight
+  // from the DB with NO Slack calls — used by the status poll, which only needs
+  // to watch metadata_status while descriptions generate and must not trigger
+  // the rate-limited workspace re-list on every tick. A normal load omits it so
+  // the backend reconciles membership + live-lists available channels.
+  async getChannels(pollMode = false): Promise<SlackChannelsResponse> {
+    const url = pollMode ? `${CHANNELS_BASE}?live=0` : `${CHANNELS_BASE}`;
+    const data = await apiRequest<SlackChannelsResponse>(url, {
       cache: 'no-store',
     });
     return {
@@ -127,25 +133,15 @@ export const slackService = {
     });
   },
 
-  // Bulk-activate indexed channels: describe them + make them routable. Powers
-  // the "search a keyword, check matches, activate" flow for large workspaces.
-  async activateChannels(channelIds: string[]): Promise<{ activated: number }> {
-    const data = await apiRequest<{ activated: number }>(`${CHANNELS_BASE}/activate`, {
+  // Bulk-activate indexed channels: joins + describes them on the worker (so a
+  // large batch can't rate-limit/timeout the request). Returns how many were
+  // queued; rows/descriptions land asynchronously and the manage page polls.
+  async activateChannels(channelIds: string[]): Promise<{ queued: number }> {
+    const data = await apiRequest<{ queued: number }>(`${CHANNELS_BASE}/activate`, {
       method: 'POST',
       body: JSON.stringify({ channel_ids: channelIds }),
       cache: 'no-store',
     });
-    return { activated: data?.activated ?? 0 };
-  },
-
-  // Re-scan the workspace and register any newly-visible channels. Used by the
-  // "Refresh channels" button so workspaces connected before auto-registration
-  // (or with new channels) get updated without reconnecting.
-  async refreshChannels(): Promise<{ described: number }> {
-    const data = await apiRequest<{ described: number }>(`${CHANNELS_BASE}/refresh`, {
-      method: 'POST',
-      cache: 'no-store',
-    });
-    return { described: data?.described ?? 0 };
+    return { queued: data?.queued ?? 0 };
   },
 };
