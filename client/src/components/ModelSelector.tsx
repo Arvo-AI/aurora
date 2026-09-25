@@ -40,7 +40,12 @@ interface ModelSelectorProps {
 // Pricing information mapping (input/output per 1M tokens)
 const modelPricing: Record<string, string> = {
   'openai/gpt-6-astra': 'Premium Cost ($10/$50 per 1M)',
+  'openai/gpt-5.6-sol': 'High Cost ($4/$20 per 1M)',
+  'openai/gpt-5.6-terra': 'Medium Cost ($2/$12 per 1M)',
+  'openai/gpt-5.6-luna': 'Lowest Cost ($0.20/$1.20 per 1M)',
   'openai/gpt-5.5': 'Premium Cost ($5/$30 per 1M)',
+  'anthropic/claude-fable-5.1': 'Premium Cost ($10/$50 per 1M)',
+  'anthropic/claude-fable-5': 'Premium Cost ($10/$50 per 1M)',
   'anthropic/claude-opus-5.5': 'High Cost ($4/$20 per 1M)',
   'anthropic/claude-sonnet-5': 'Medium Cost ($2/$10 per 1M)',
   'anthropic/claude-sonnet-4.6': 'Medium Cost ($3/$15 per 1M)',
@@ -56,6 +61,26 @@ const modelPricing: Record<string, string> = {
 };
 
 const modelOptions: ModelOption[] = [
+  {
+    id: 'anthropic/claude-fable-5.1',
+    name: 'claude-fable-5.1',
+    displayName: 'Claude Fable 5.1',
+    provider: 'Anthropic',
+    tier: 'premium',
+    contextLength: '1M',
+    hasReasoning: true,
+    isSlow: true
+  },
+  {
+    id: 'anthropic/claude-fable-5',
+    name: 'claude-fable-5',
+    displayName: 'Claude Fable 5',
+    provider: 'Anthropic',
+    tier: 'premium',
+    contextLength: '1M',
+    hasReasoning: true,
+    isSlow: true
+  },
   {
     id: 'anthropic/claude-opus-5.5',
     name: 'claude-opus-5.5',
@@ -81,6 +106,33 @@ const modelOptions: ModelOption[] = [
     displayName: 'GPT-6 Astra',
     provider: 'OpenAI',
     tier: 'premium',
+    contextLength: '1M',
+    hasReasoning: true
+  },
+  {
+    id: 'openai/gpt-5.6-sol',
+    name: 'gpt-5.6-sol',
+    displayName: 'GPT-5.6 Sol',
+    provider: 'OpenAI',
+    tier: 'premium',
+    contextLength: '1M',
+    hasReasoning: true
+  },
+  {
+    id: 'openai/gpt-5.6-terra',
+    name: 'gpt-5.6-terra',
+    displayName: 'GPT-5.6 Terra',
+    provider: 'OpenAI',
+    tier: 'pro',
+    contextLength: '1M',
+    hasReasoning: true
+  },
+  {
+    id: 'openai/gpt-5.6-luna',
+    name: 'gpt-5.6-luna',
+    displayName: 'GPT-5.6 Luna',
+    provider: 'OpenAI',
+    tier: 'free',
     contextLength: '1M',
     hasReasoning: true
   },

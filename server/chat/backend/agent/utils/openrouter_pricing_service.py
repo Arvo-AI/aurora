@@ -53,6 +53,8 @@ class OpenRouterPricingService:
             # Anthropic
             "anthropic/claude-opus-5-5": {"input": 0.004, "output": 0.020},
             "anthropic/claude-sonnet-5": {"input": 0.002, "output": 0.010},
+            "anthropic/claude-fable-5-1": {"input": 0.010, "output": 0.050},
+            "anthropic/claude-fable-5": {"input": 0.010, "output": 0.050},
             "anthropic/claude-opus-4-7": {"input": 0.005, "output": 0.025},
             "anthropic/claude-opus-4-6": {"input": 0.005, "output": 0.025},
             "anthropic/claude-sonnet-4-6": {"input": 0.003, "output": 0.015},

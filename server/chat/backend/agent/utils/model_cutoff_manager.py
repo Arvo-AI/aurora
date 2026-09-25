@@ -55,6 +55,12 @@ class ModelCutoffManager:
             "openai/gpt-5.6-sol": ModelInfo(
                 "gpt-5.6-sol", "openai", cutoff_date(2026, 4, 1), True, True
             ),
+            "openai/gpt-5.6-terra": ModelInfo(
+                "gpt-5.6-terra", "openai", cutoff_date(2026, 4, 1), True, True
+            ),
+            "openai/gpt-5.6-luna": ModelInfo(
+                "gpt-5.6-luna", "openai", cutoff_date(2026, 4, 1), True, True
+            ),
             "openai/gpt-5.2": ModelInfo(
                 "gpt-5.2", "openai", cutoff_date(2025, 8, 1), True, True
             ),
@@ -67,6 +73,12 @@ class ModelCutoffManager:
             ),
             "anthropic/claude-sonnet-5": ModelInfo(
                 "claude-sonnet-5", "anthropic", cutoff_date(2026, 1, 1), True, True
+            ),
+            "anthropic/claude-fable-5-1": ModelInfo(
+                "claude-fable-5-1", "anthropic", cutoff_date(2026, 6, 1), True, True
+            ),
+            "anthropic/claude-fable-5": ModelInfo(
+                "claude-fable-5", "anthropic", cutoff_date(2026, 1, 1), True, True
             ),
             "anthropic/claude-sonnet-4-5": ModelInfo(
                 "claude-sonnet-4-5", "anthropic", cutoff_date(2025, 9, 1), True, True
