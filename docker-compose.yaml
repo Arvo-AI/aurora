@@ -131,6 +131,10 @@ x-common-env: &common-env
   SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
   SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
   SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
+  # Slack Socket Mode: SLACK_APP_TOKEN is intentionally NOT in this shared env —
+  # it is a sensitive app-level secret that only the slack_socket_mode listener
+  # needs, so it is scoped to that service alone (below) to avoid leaking it to
+  # every service that inherits *common-env.
 
   # Atlassian OAuth (Confluence + Jira)
   ATLASSIAN_CLIENT_ID: ${ATLASSIAN_CLIENT_ID}
@@ -464,6 +468,37 @@ services:
         condition: service_healthy
     ports:
       - "5006:5006"
+
+  # Slack Socket Mode listener. Opens an OUTBOUND WebSocket to Slack so Slack
+  # events/interactions work without a public inbound webhook URL — for private
+  # / self-hosted deployments where the backend is not reachable from the
+  # internet. No-op unless SLACK_APP_TOKEN (xapp-...) is set, so it is safe to
+  # leave running in every deployment.
+  slack_socket_mode:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: dev
+    image: aurora_slack_socket_mode:latest
+    logging: *default-logging
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["python", "-m", "services.slack.socket_mode"]
+    volumes:
+      - ./server:/app
+    environment:
+      <<: *common-env
+      # Scoped here (not in *common-env) — only the listener needs this secret.
+      # Set to an app-level xapp-... token with connections:write to enable
+      # Socket Mode; leave empty to use HTTP webhooks.
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
+      FRONTEND_URL: ${FRONTEND_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
 
   postgres:
     image: postgres:15-alpine

@@ -115,3 +115,9 @@ mcp[cli]>=1.27.0
 # GitHub App authentication (JWT mint + installation tokens)
 PyGithub>=2.5  # advisories on <2.5
 PyJWT[crypto]>=2.12.0  # avoid CVE in <2.12.0 (unknown crit header acceptance)
+
+# Slack Socket Mode (private/self-hosted deployments with no public webhook URL)
+# Provides SocketModeClient which opens an OUTBOUND WebSocket to Slack, so no
+# inbound ingress/TLS endpoint is required. The HTTP Events API path is
+# unaffected and remains the default.
+slack_sdk>=3.27.0

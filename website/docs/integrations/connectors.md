@@ -722,6 +722,58 @@ In **Event Subscriptions**, toggle **Enable Events** on.
 Save changes. If the app is already installed, Slack will prompt you to
 **reinstall** so the new events and scopes take effect.
 
+:::tip Private / self-hosted deployments — use Socket Mode instead
+Steps 3's Request URL requires Aurora's backend to be reachable from the public
+internet (with valid TLS), because Slack POSTs events to it. If Aurora runs
+somewhere Slack cannot reach — a private VPC/Kubernetes cluster, behind a
+firewall, air-gapped from inbound traffic, or on a laptop — enable
+[Socket Mode](#socket-mode-private--self-hosted) instead. Aurora then opens an
+*outbound* WebSocket to Slack, so no public URL, ingress, or TLS endpoint is
+needed. Note that a dev `ngrok`/`cloudflared` tunnel only *fakes* a public URL
+and is not appropriate for a real private production deployment — Socket Mode
+is.
+:::
+
+#### Socket Mode (private / self-hosted) {#socket-mode-private--self-hosted}
+
+Socket Mode replaces the inbound HTTP webhook with an outbound WebSocket that
+Aurora opens to Slack, so Slack `@mentions` and interactive buttons work even
+when Aurora's backend has no public inbound endpoint. Outbound messages (incident
+alerts, replies) already work over plain HTTPS and are unaffected. This is the
+recommended path when a public webhook URL with valid TLS is not available.
+
+1. In your Slack app, go to **Socket Mode** and toggle **Enable Socket Mode** on.
+2. When prompted, generate an **App-Level Token** with the `connections:write`
+   scope. Copy the token — it starts with `xapp-`.
+3. Keep **Event Subscriptions** enabled and subscribe to the same bot events as
+   above (`app_mention`, optionally `member_joined_channel`). With Socket Mode
+   on, Slack ignores the Request URL, so you do **not** need a public one.
+4. If you use interactive buttons (Aurora's suggestion / right-sizing cards), go
+   to **Interactivity & Shortcuts** and toggle it on. As with events, no Request
+   URL is required under Socket Mode.
+5. Configure Aurora's environment. Setting the app-level token is all that's
+   needed — its presence turns Socket Mode on:
+
+   ```bash
+   SLACK_APP_TOKEN=xapp-...        # app-level token from step 2
+   # SLACK_CLIENT_ID / SLACK_CLIENT_SECRET / SLACK_SIGNING_SECRET stay as-is
+   ```
+
+   - **Docker Compose**: the `slack_socket_mode` service starts automatically and
+     stays idle unless `SLACK_APP_TOKEN` is set.
+   - **Kubernetes (Helm)**: set the app token under `secrets.backend.SLACK_APP_TOKEN`
+     (it's a secret — never put it in `config`). The chart renders the
+     `slack-socket-mode` deployment whenever that token is set. If you supply the
+     token via an **existing secret** instead of inline, set
+     `slackSocketMode.enabled: true` so the listener still renders (the chart
+     can't read inside your secret). It is fixed at a single replica by design.
+     Slack distributes an app's events across its open sockets (and tolerates
+     briefly overlapping connections during restarts), so extra replicas add no
+     throughput here — the listener only acks and hands off to Celery. Scale
+     `celeryWorker` instead if event *processing* is ever the bottleneck.
+6. Restart Aurora. The listener logs `Slack Socket Mode listener connected.` once
+   the outbound WebSocket is established.
+
 #### 4. Get Credentials
 
 In **Basic Information**, copy:
@@ -735,6 +787,11 @@ In **Basic Information**, copy:
 SLACK_CLIENT_ID=your-slack-client-id
 SLACK_CLIENT_SECRET=your-slack-client-secret
 SLACK_SIGNING_SECRET=your-signing-secret
+
+# Optional — only for private/self-hosted deployments with no public webhook URL
+# (see "Socket Mode" above). Setting this enables Socket Mode; leave empty for
+# HTTP webhooks.
+SLACK_APP_TOKEN=          # xapp-... app-level token
 ```
 
 #### Troubleshooting
@@ -746,6 +803,9 @@ SLACK_SIGNING_SECRET=your-signing-secret
 | Aurora doesn't reply to @mentions | Enable **Event Subscriptions**, verify the `/slack/events` Request URL, and subscribe to the `app_mention` bot event, then reinstall the app |
 | Channels Aurora is added to aren't auto-registered instantly | Subscribe to the `member_joined_channel` bot event for real-time pickup, then reinstall. Otherwise the connector page reconciles membership on load |
 | Deactivating a channel doesn't remove Aurora from it / a channel stays Active after Aurora is kicked | Membership is the source of truth: deactivating calls `conversations.leave`, and the connector page reconciles membership every time it loads, so a channel Aurora was removed from drops off the Active list automatically |
+| Aurora's backend has no public URL (private VPC/cluster, firewall, air-gapped inbound) | Use [Socket Mode](#socket-mode-private--self-hosted): set `SLACK_APP_TOKEN` (`xapp-...`) and enable Socket Mode in the Slack app |
+| "SLACK_APP_TOKEN does not look like an app-level token" in logs | You supplied a bot/user token (`xoxb-`/`xoxp-`). Socket Mode needs the **App-Level Token** (`xapp-`) with `connections:write` |
+| Socket Mode listener starts but no events arrive | Confirm Socket Mode is enabled in the Slack app, the app is reinstalled, and the bot events are subscribed. Duplicate replies mean more than one listener replica is running — keep it at a single instance |
 
 ---
 
