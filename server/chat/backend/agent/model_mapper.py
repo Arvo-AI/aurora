@@ -12,6 +12,26 @@ from typing import Dict, Optional, Tuple
 
 # Model name mappings from OpenRouter format to native provider formats
 MODEL_MAPPINGS = {
+    "openai/gpt-6-astra": {
+        "openrouter": "openai/gpt-6-astra",
+        "openai": "gpt-6-astra",
+        "provider": "openai",
+    },
+    "openai/gpt-5.6-sol": {
+        "openrouter": "openai/gpt-5.6-sol",
+        "openai": "gpt-5.6-sol",
+        "provider": "openai",
+    },
+    "openai/gpt-5.6-terra": {
+        "openrouter": "openai/gpt-5.6-terra",
+        "openai": "gpt-5.6-terra",
+        "provider": "openai",
+    },
+    "openai/gpt-5.6-luna": {
+        "openrouter": "openai/gpt-5.6-luna",
+        "openai": "gpt-5.6-luna",
+        "provider": "openai",
+    },
     "openai/gpt-5.5": {
         "openrouter": "openai/gpt-5.5",
         "openai": "gpt-5.5",
@@ -53,6 +73,17 @@ MODEL_MAPPINGS = {
     "vertex/gemini-3.1-pro-preview": {
         "openrouter": "google/gemini-3.1-pro-preview",
         "vertex": "gemini-3.1-pro-preview",
+        "provider": "vertex",
+    },
+    "google/gemini-3.8-flash": {
+        "openrouter": "google/gemini-3.8-flash",
+        "google": "gemini-3.8-flash",
+        "vertex": "gemini-3.8-flash",
+        "provider": "google",
+    },
+    "vertex/gemini-3.8-flash": {
+        "openrouter": "google/gemini-3.8-flash",
+        "vertex": "gemini-3.8-flash",
         "provider": "vertex",
     },
     "google/gemini-3.6-flash": {
@@ -118,6 +149,36 @@ MODEL_MAPPINGS = {
     "anthropic/claude-sonnet-4-6": {
         "openrouter": "anthropic/claude-sonnet-4.6",
         "anthropic": "claude-sonnet-4-6",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-opus-5.5": {
+        "openrouter": "anthropic/claude-opus-5.5",
+        "anthropic": "claude-opus-5-5",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-opus-5-5": {
+        "openrouter": "anthropic/claude-opus-5.5",
+        "anthropic": "claude-opus-5-5",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-sonnet-5": {
+        "openrouter": "anthropic/claude-sonnet-5",
+        "anthropic": "claude-sonnet-5",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-fable-5.1": {
+        "openrouter": "anthropic/claude-fable-5.1",
+        "anthropic": "claude-fable-5-1",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-fable-5-1": {
+        "openrouter": "anthropic/claude-fable-5.1",
+        "anthropic": "claude-fable-5-1",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-fable-5": {
+        "openrouter": "anthropic/claude-fable-5",
+        "anthropic": "claude-fable-5",
         "provider": "anthropic",
     },
     "anthropic/claude-opus-4.7": {

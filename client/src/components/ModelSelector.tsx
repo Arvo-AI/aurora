@@ -39,18 +39,103 @@ interface ModelSelectorProps {
 
 // Pricing information mapping (input/output per 1M tokens)
 const modelPricing: Record<string, string> = {
+  'openai/gpt-6-astra': 'Premium Cost ($10/$50 per 1M)',
+  'openai/gpt-5.6-sol': 'High Cost ($4/$20 per 1M)',
+  'openai/gpt-5.6-terra': 'Medium Cost ($2/$12 per 1M)',
+  'openai/gpt-5.6-luna': 'Lowest Cost ($0.20/$1.20 per 1M)',
   'openai/gpt-5.5': 'Premium Cost ($5/$30 per 1M)',
+  'anthropic/claude-fable-5.1': 'Premium Cost ($10/$50 per 1M)',
+  'anthropic/claude-fable-5': 'Premium Cost ($10/$50 per 1M)',
+  'anthropic/claude-opus-5.5': 'High Cost ($4/$20 per 1M)',
+  'anthropic/claude-sonnet-5': 'Medium Cost ($2/$10 per 1M)',
   'anthropic/claude-sonnet-4.6': 'Medium Cost ($3/$15 per 1M)',
   'anthropic/claude-opus-4.7': 'High Cost ($5/$25 per 1M)',
+  'google/gemini-3.8-flash': 'Low Cost ($0.75/$3.75 per 1M)',
   'google/gemini-3.5-flash': 'Low Cost ($0.50/$3 per 1M)',
   'google/gemini-3.1-pro-preview': 'Medium Cost ($2/$12 per 1M)',
   'google/gemini-2.5-pro': 'Medium Cost ($1.25/$10 per 1M)',
   'google/gemini-2.5-flash': 'Low Cost ($0.30/$2.50 per 1M)',
+  'vertex/gemini-3.8-flash': 'Low Cost ($0.75/$3.75 per 1M)',
   'vertex/gemini-3.6-flash': 'Low Cost ($0.75/$3.75 per 1M)',
   'vertex/gemini-3.5-flash-lite': 'Lowest Cost ($0.30/$2.50 per 1M)',
 };
 
 const modelOptions: ModelOption[] = [
+  {
+    id: 'anthropic/claude-fable-5.1',
+    name: 'claude-fable-5.1',
+    displayName: 'Claude Fable 5.1',
+    provider: 'Anthropic',
+    tier: 'premium',
+    contextLength: '1M',
+    hasReasoning: true,
+    isSlow: true
+  },
+  {
+    id: 'anthropic/claude-fable-5',
+    name: 'claude-fable-5',
+    displayName: 'Claude Fable 5',
+    provider: 'Anthropic',
+    tier: 'premium',
+    contextLength: '1M',
+    hasReasoning: true,
+    isSlow: true
+  },
+  {
+    id: 'anthropic/claude-opus-5.5',
+    name: 'claude-opus-5.5',
+    displayName: 'Claude Opus 5.5',
+    provider: 'Anthropic',
+    tier: 'premium',
+    contextLength: '1M',
+    hasReasoning: true,
+    isSlow: true
+  },
+  {
+    id: 'anthropic/claude-sonnet-5',
+    name: 'claude-sonnet-5',
+    displayName: 'Claude Sonnet 5',
+    provider: 'Anthropic',
+    tier: 'pro',
+    contextLength: '1M',
+    hasReasoning: true
+  },
+  {
+    id: 'openai/gpt-6-astra',
+    name: 'gpt-6-astra',
+    displayName: 'GPT-6 Astra',
+    provider: 'OpenAI',
+    tier: 'premium',
+    contextLength: '1M',
+    hasReasoning: true
+  },
+  {
+    id: 'openai/gpt-5.6-sol',
+    name: 'gpt-5.6-sol',
+    displayName: 'GPT-5.6 Sol',
+    provider: 'OpenAI',
+    tier: 'premium',
+    contextLength: '1M',
+    hasReasoning: true
+  },
+  {
+    id: 'openai/gpt-5.6-terra',
+    name: 'gpt-5.6-terra',
+    displayName: 'GPT-5.6 Terra',
+    provider: 'OpenAI',
+    tier: 'pro',
+    contextLength: '1M',
+    hasReasoning: true
+  },
+  {
+    id: 'openai/gpt-5.6-luna',
+    name: 'gpt-5.6-luna',
+    displayName: 'GPT-5.6 Luna',
+    provider: 'OpenAI',
+    tier: 'free',
+    contextLength: '1M',
+    hasReasoning: true
+  },
   {
     id: 'openai/gpt-5.5',
     name: 'gpt-5.5',
@@ -78,6 +163,15 @@ const modelOptions: ModelOption[] = [
     contextLength: '1M',
     hasReasoning: true,
     isSlow: true
+  },
+  {
+    id: 'google/gemini-3.8-flash',
+    name: 'gemini-3.8-flash',
+    displayName: 'Gemini 3.8 Flash',
+    provider: 'Google',
+    tier: 'free',
+    contextLength: '1M',
+    hasReasoning: true
   },
   {
     id: 'google/gemini-3.5-flash',

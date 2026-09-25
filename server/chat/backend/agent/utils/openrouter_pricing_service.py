@@ -36,6 +36,10 @@ class OpenRouterPricingService:
 
         self.fallback_pricing = {
             # OpenAI (OpenRouter pricing per 1K tokens)
+            "openai/gpt-6-astra": {"input": 0.010, "output": 0.050},
+            "openai/gpt-5.6-sol": {"input": 0.004, "output": 0.020},
+            "openai/gpt-5.6-terra": {"input": 0.002, "output": 0.012},
+            "openai/gpt-5.6-luna": {"input": 0.0002, "output": 0.0012},
             "openai/gpt-5.5": {"input": 0.005, "output": 0.030},
             "openai/gpt-5.4": {"input": 0.0025, "output": 0.015},
             "openai/gpt-5.2": {"input": 0.00175, "output": 0.014},
@@ -47,6 +51,14 @@ class OpenRouterPricingService:
             "openai/gpt-4o": {"input": 0.0025, "output": 0.01},
             "openai/gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
             # Anthropic
+            # Register dotted aliases too: get_model_pricing uses exact/prefix matching,
+            # so the dotted default IDs would otherwise miss the dashed entries.
+            "anthropic/claude-opus-5.5": {"input": 0.004, "output": 0.020},
+            "anthropic/claude-opus-5-5": {"input": 0.004, "output": 0.020},
+            "anthropic/claude-sonnet-5": {"input": 0.002, "output": 0.010},
+            "anthropic/claude-fable-5.1": {"input": 0.010, "output": 0.050},
+            "anthropic/claude-fable-5-1": {"input": 0.010, "output": 0.050},
+            "anthropic/claude-fable-5": {"input": 0.010, "output": 0.050},
             "anthropic/claude-opus-4-7": {"input": 0.005, "output": 0.025},
             "anthropic/claude-opus-4-6": {"input": 0.005, "output": 0.025},
             "anthropic/claude-sonnet-4-6": {"input": 0.003, "output": 0.015},
@@ -56,6 +68,7 @@ class OpenRouterPricingService:
             "anthropic/claude-3.5-sonnet": {"input": 0.003, "output": 0.015},
             "anthropic/claude-3-haiku": {"input": 0.00025, "output": 0.00125},
             # Google AI / Vertex AI — verified against Google Cloud Billing Catalog API
+            "google/gemini-3.8-flash": {"input": 0.00075, "output": 0.00375},
             "google/gemini-3.6-flash": {"input": 0.00075, "output": 0.00375},
             "google/gemini-3.5-flash-lite": {"input": 0.0003, "output": 0.0025},
             "google/gemini-3.5-flash": {"input": 0.0015, "output": 0.009},
@@ -65,6 +78,7 @@ class OpenRouterPricingService:
             "google/gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
             "google/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
             "google/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004},
+            "vertex/gemini-3.8-flash": {"input": 0.00075, "output": 0.00375},
             "vertex/gemini-3.6-flash": {"input": 0.00075, "output": 0.00375},
             "vertex/gemini-3.5-flash-lite": {"input": 0.0003, "output": 0.0025},
             "vertex/gemini-3.5-flash": {"input": 0.0015, "output": 0.009},

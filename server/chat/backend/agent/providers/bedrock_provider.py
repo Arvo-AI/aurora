@@ -33,9 +33,9 @@ logger = logging.getLogger(__name__)
 
 # Anthropic native model name (dashed) -> Bedrock inference-profile base (without the
 # region/geo prefix). Only models whose Bedrock id carries a version/date suffix that
-# can't be derived from the name are listed here; bare models (e.g. claude-opus-4-7)
-# derive `anthropic.<name>` automatically. The geo prefix (us./eu./apac.) is prepended
-# at runtime from the configured region, so this stays region-agnostic.
+# can't be derived from the name are listed here; bare models (e.g. claude-opus-5-5,
+# claude-sonnet-5) derive `anthropic.<name>` automatically. The geo prefix (us./eu./apac.)
+# is prepended at runtime from the configured region, so this stays region-agnostic.
 _ANTHROPIC_TO_BEDROCK_BASE = {
     "claude-opus-4-6": "anthropic.claude-opus-4-6-v1",
     "claude-opus-4-5": "anthropic.claude-opus-4-5-20251101-v1:0",

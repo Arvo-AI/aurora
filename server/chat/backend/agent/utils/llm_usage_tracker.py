@@ -37,6 +37,10 @@ class LLMUsageTracker:
     MODEL_PRICING = {
         # OpenAI (direct API pricing per 1K tokens)
         # cached_input = automatic prompt caching discount
+        "openai/gpt-6-astra": {"input": 0.010, "output": 0.050, "cached_input": 0.001},
+        "openai/gpt-5.6-sol": {"input": 0.004, "output": 0.020, "cached_input": 0.0004},
+        "openai/gpt-5.6-terra": {"input": 0.002, "output": 0.012, "cached_input": 0.0002},
+        "openai/gpt-5.6-luna": {"input": 0.0002, "output": 0.0012, "cached_input": 0.00002},
         "openai/gpt-5.5": {"input": 0.005, "output": 0.030, "cached_input": 0.00125},
         "openai/gpt-5.4": {"input": 0.0025, "output": 0.015, "cached_input": 0.000625},
         "openai/gpt-5.2": {"input": 0.00175, "output": 0.014, "cached_input": 0.0004375},
@@ -48,6 +52,12 @@ class LLMUsageTracker:
         "openai/gpt-4o": {"input": 0.0025, "output": 0.01, "cached_input": 0.00125},
         "openai/gpt-4o-mini": {"input": 0.00015, "output": 0.0006, "cached_input": 0.000075},
         # Anthropic (cached input = 90% discount)
+        "anthropic/claude-opus-5.5": {"input": 0.004, "output": 0.020, "cached_input": 0.0002},
+        "anthropic/claude-opus-5-5": {"input": 0.004, "output": 0.020, "cached_input": 0.0002},
+        "anthropic/claude-sonnet-5": {"input": 0.002, "output": 0.010, "cached_input": 0.0002},
+        "anthropic/claude-fable-5.1": {"input": 0.010, "output": 0.050, "cached_input": 0.00025},
+        "anthropic/claude-fable-5-1": {"input": 0.010, "output": 0.050, "cached_input": 0.00025},
+        "anthropic/claude-fable-5": {"input": 0.010, "output": 0.050, "cached_input": 0.001},
         "anthropic/claude-opus-4.7": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
         "anthropic/claude-opus-4-7": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
         "anthropic/claude-opus-4.6": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
@@ -63,6 +73,7 @@ class LLMUsageTracker:
         "anthropic/claude-3.5-sonnet": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
         "anthropic/claude-3-haiku": {"input": 0.00025, "output": 0.00125, "cached_input": 0.000025},
         # Google AI / Vertex AI (cached input = 75% discount)
+        "google/gemini-3.8-flash": {"input": 0.00075, "output": 0.00375, "cached_input": 0.000075},
         "google/gemini-3.6-flash": {"input": 0.00075, "output": 0.00375, "cached_input": 0.000075},
         "google/gemini-3.5-flash-lite": {"input": 0.0003, "output": 0.0025, "cached_input": 0.00003},
         "google/gemini-3.5-flash": {"input": 0.0015, "output": 0.009, "cached_input": 0.00015},
@@ -72,6 +83,7 @@ class LLMUsageTracker:
         "google/gemini-2.5-pro": {"input": 0.00125, "output": 0.01, "cached_input": 0.0003125},
         "google/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025, "cached_input": 0.000075},
         "google/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004, "cached_input": 0.000025},
+        "vertex/gemini-3.8-flash": {"input": 0.00075, "output": 0.00375, "cached_input": 0.000075},
         "vertex/gemini-3.6-flash": {"input": 0.00075, "output": 0.00375, "cached_input": 0.000075},
         "vertex/gemini-3.5-flash-lite": {"input": 0.0003, "output": 0.0025, "cached_input": 0.00003},
         "vertex/gemini-3.5-flash": {"input": 0.0015, "output": 0.009, "cached_input": 0.00015},
@@ -152,6 +164,43 @@ class LLMUsageTracker:
             logger.warning(f"Error counting tokens from messages: {e}")
             return cls.count_tokens(str(messages), model_name)
 
+    # Cross-region premium charged by Bedrock geo CRIS profiles and Vertex non-global
+    # endpoints, relative to the global/direct list price. AWS + Google both publish ~10%.
+    _REGIONAL_PREMIUM = 1.10
+
+    @classmethod
+    def _regional_premium(cls, provider_mode: Optional[str], model_name: str) -> float:
+        """Return the price multiplier for the deployment's endpoint (1.0 = no premium).
+
+        Only regional endpoints carry a premium; global endpoints bill at the direct rate.
+        """
+        mode = (provider_mode or "").lower()
+
+        # Bedrock: Aurora routes through geo CRIS (us./eu./apac.) which is +10% over global.
+        # Region falls back the same way the Bedrock provider resolves it. An explicit
+        # global profile (region "global") bills at the direct rate, so no premium there.
+        if mode == "bedrock":
+            region = (
+                os.getenv("BEDROCK_REGION")
+                or os.getenv("AWS_REGION")
+                or os.getenv("AWS_DEFAULT_REGION")
+                or ""
+            ).lower()
+            if region == "global":
+                return 1.0
+            return cls._REGIONAL_PREMIUM
+
+        # Vertex: non-global (regional/EU) endpoints are +10%. The provider defaults to
+        # the global endpoint (VERTEX_AI_LOCATION=global), which bills at the direct rate.
+        if mode == "vertex" and "vertex" in model_name.lower():
+            location = os.getenv("VERTEX_AI_LOCATION", "global").lower()
+            if location and location != "global":
+                return cls._REGIONAL_PREMIUM
+            return 1.0
+
+        # Direct / OpenRouter / everything else: no cloud-reseller premium.
+        return 1.0
+
     @classmethod
     def calculate_cost(
         cls,
@@ -172,12 +221,23 @@ class LLMUsageTracker:
 
         When cached_input_tokens > 0, those tokens are charged at the
         discounted cached_input rate instead of the full input rate.
+
+        Platform surcharge: Bedrock and Vertex resell Anthropic/Google models at
+        the same rate as direct ONLY on their global endpoints. Aurora's Bedrock
+        provider routes through *regional* cross-region inference profiles
+        (us./eu./apac.), and Vertex non-global endpoints are billed at a ~10%
+        premium over the global/direct list price. When the deployment is on such
+        a regional endpoint we scale the static rate up by that premium so billing
+        matches the customer's actual cloud invoice.
         """
         if provider_mode is None:
             provider_mode = os.getenv("LLM_PROVIDER_MODE")
 
         try:
             pricing = None
+            # The regional premium is baked into the static list price only; dynamic
+            # OpenRouter / GCP-billing rates already reflect the real per-endpoint price.
+            using_static_pricing = False
 
             if use_dynamic_pricing:
                 if provider_mode == "openrouter":
@@ -202,6 +262,7 @@ class LLMUsageTracker:
                         )
 
             if not pricing:
+                using_static_pricing = True
                 pricing = cls.MODEL_PRICING.get(model_name)
 
                 if not pricing:
@@ -215,6 +276,18 @@ class LLMUsageTracker:
                     )
                 else:
                     logger.debug(f"Using static pricing for {model_name}: {pricing}")
+
+            # Regional cloud endpoints (Bedrock geo CRIS, Vertex non-global) bill ~10%
+            # above the global/direct list price baked into the static table. Only adjust
+            # the static path: the OpenRouter/GCP-billing dynamic paths already return the
+            # real per-endpoint rate. A global endpoint (BEDROCK_REGION=global) has no
+            # premium, so skip it there.
+            premium = cls._regional_premium(provider_mode, model_name)
+            if using_static_pricing and premium != 1.0:
+                pricing = {k: v * premium for k, v in pricing.items()}
+                logger.debug(
+                    f"Applied {premium:.2f}x regional endpoint premium for {model_name} ({provider_mode})"
+                )
 
             non_cached_input = max(input_tokens - cached_input_tokens, 0)
             input_cost = (non_cached_input / 1000) * pricing["input"]
