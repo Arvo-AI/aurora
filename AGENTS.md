@@ -44,6 +44,51 @@ Aurora uses S3-compatible object storage via `server/utils/storage/storage.py`. 
 - **S3 API**: http://localhost:8333 (credentials: admin/admin)
 - **Supports**: AWS S3, Cloudflare R2, Backblaze B2, GCS (via S3 interop), MinIO, any S3-compatible service
 
+## RCA Mode & Ask Mode
+
+RCA (Root Cause Analysis) investigations are **explicitly read-only** per AGENTS.md guidelines. The agent can execute diagnostic queries in Ask mode during RCA without requiring Agent mode.
+
+### How It Works
+
+The `is_read_only_command()` function now handles hyphenated verbs by splitting on both spaces and hyphens:
+- `describe-health-check` → `['describe', 'health', 'check']` → matches `'describe'` verb ✅
+- `get-metric-statistics` → `['get', 'metric', 'statistics']` → matches `'get'` verb ✅
+- `list-nodegroups` → `['list', 'nodegroups']` → matches `'list'` verb ✅
+
+This general approach works for **any** hyphenated diagnostic verb, not just hardcoded ones.
+
+### Allowed RCA Diagnostic Commands (Ask Mode)
+
+The following diagnostic queries are **always allowed** in Ask mode during RCA investigations:
+
+**AWS Route 53 Health Checks:**
+```bash
+aws route53 describe-health-check --health-check-id <id>
+aws route53 get-health-check-status --health-check-id <id>
+```
+
+**AWS CloudWatch Metrics:**
+```bash
+aws cloudwatch get-metric-statistics --namespace AWS/Route53 --metric-name HealthCheckStatus ...
+aws cloudwatch describe-alarms --alarm-names <name>
+aws cloudwatch list-metrics --namespace AWS/Route53
+```
+
+**AWS EKS Cluster Info:**
+```bash
+aws eks describe-cluster --name <cluster-name> --region <region>
+aws eks describe-nodegroup --cluster-name <cluster> --nodegroup-name <nodegroup>
+aws eks list-nodegroups --cluster-name <cluster>
+```
+
+**Kubernetes Diagnostics:**
+```bash
+kubectl get statefulsets -n <namespace>
+kubectl describe pod <pod-name> -n <namespace>
+kubectl logs <pod-name> -n <namespace>
+kubectl top nodes
+```
+
 ## New Connector Checklist
 
 Every new connector (or connector route file) **must** satisfy all of the following before merge. CI enforces RBAC via `server/tests/architectural/test_connector_rbac.py`.
