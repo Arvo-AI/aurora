@@ -68,11 +68,21 @@ class ModelCutoffManager:
 
         # Anthropic Models (via OpenRouter)
         anthropic_models = {
+            # Default model ID uses dotted form; ModelCutoffManager doesn't normalize
+            # dots to dashes, so register both so lookup keeps Anthropic capabilities.
+            "anthropic/claude-opus-5.5": ModelInfo(
+                "claude-opus-5-5", "anthropic", cutoff_date(2026, 6, 1), True, True
+            ),
             "anthropic/claude-opus-5-5": ModelInfo(
                 "claude-opus-5-5", "anthropic", cutoff_date(2026, 6, 1), True, True
             ),
             "anthropic/claude-sonnet-5": ModelInfo(
                 "claude-sonnet-5", "anthropic", cutoff_date(2026, 1, 1), True, True
+            ),
+            # ModelMapper preserves the dotted Fable ID for OpenRouter; register both
+            # dotted and dashed so cutoff lookup keeps the Anthropic provider/vision/reasoning.
+            "anthropic/claude-fable-5.1": ModelInfo(
+                "claude-fable-5-1", "anthropic", cutoff_date(2026, 6, 1), True, True
             ),
             "anthropic/claude-fable-5-1": ModelInfo(
                 "claude-fable-5-1", "anthropic", cutoff_date(2026, 6, 1), True, True

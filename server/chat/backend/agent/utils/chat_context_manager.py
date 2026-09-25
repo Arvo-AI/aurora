@@ -29,6 +29,8 @@ class ChatContextManager:
     MODEL_CONTEXT_LIMITS = {
         "openai/gpt-6-astra": 1000000,  # 1.05M - 50K buffer
         "openai/gpt-5.6-sol": 950000,  # 1M - 50K buffer
+        "openai/gpt-5.6-terra": 950000,  # 1M - 50K buffer
+        "openai/gpt-5.6-luna": 950000,  # 1M - 50K buffer
         "openai/gpt-5.5": 1000000,  # 1.05M - 50K buffer
         "openai/gpt-5.2": 950000,  # 1M - 50K buffer
         "anthropic/claude-opus-5.5": 950000,  # 1M - 50K buffer

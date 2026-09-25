@@ -51,8 +51,12 @@ class OpenRouterPricingService:
             "openai/gpt-4o": {"input": 0.0025, "output": 0.01},
             "openai/gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
             # Anthropic
+            # Register dotted aliases too: get_model_pricing uses exact/prefix matching,
+            # so the dotted default IDs would otherwise miss the dashed entries.
+            "anthropic/claude-opus-5.5": {"input": 0.004, "output": 0.020},
             "anthropic/claude-opus-5-5": {"input": 0.004, "output": 0.020},
             "anthropic/claude-sonnet-5": {"input": 0.002, "output": 0.010},
+            "anthropic/claude-fable-5.1": {"input": 0.010, "output": 0.050},
             "anthropic/claude-fable-5-1": {"input": 0.010, "output": 0.050},
             "anthropic/claude-fable-5": {"input": 0.010, "output": 0.050},
             "anthropic/claude-opus-4-7": {"input": 0.005, "output": 0.025},

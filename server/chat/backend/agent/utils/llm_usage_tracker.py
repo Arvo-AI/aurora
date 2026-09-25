@@ -235,6 +235,9 @@ class LLMUsageTracker:
 
         try:
             pricing = None
+            # The regional premium is baked into the static list price only; dynamic
+            # OpenRouter / GCP-billing rates already reflect the real per-endpoint price.
+            using_static_pricing = False
 
             if use_dynamic_pricing:
                 if provider_mode == "openrouter":
@@ -259,6 +262,7 @@ class LLMUsageTracker:
                         )
 
             if not pricing:
+                using_static_pricing = True
                 pricing = cls.MODEL_PRICING.get(model_name)
 
                 if not pricing:
@@ -279,7 +283,7 @@ class LLMUsageTracker:
             # real per-endpoint rate. A global endpoint (BEDROCK_REGION=global) has no
             # premium, so skip it there.
             premium = cls._regional_premium(provider_mode, model_name)
-            if premium != 1.0:
+            if using_static_pricing and premium != 1.0:
                 pricing = {k: v * premium for k, v in pricing.items()}
                 logger.debug(
                     f"Applied {premium:.2f}x regional endpoint premium for {model_name} ({provider_mode})"
