@@ -11,6 +11,7 @@ Aurora requires an LLM provider for its AI-powered investigation and Root Cause 
 | Provider | Mode | Environment Variable | Get API Key |
 |----------|------|---------------------|-------------|
 | **OpenRouter** | `openrouter` | `OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) |
+| **Requesty** | `requesty` | `REQUESTY_API_KEY` | [app.requesty.ai/api-keys](https://app.requesty.ai/api-keys) |
 | **OpenAI** | Direct | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com/api-keys) |
 | **Anthropic** | Direct | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com/) |
 | **Google AI** | Direct | `GOOGLE_AI_API_KEY` | [ai.google.dev](https://ai.google.dev/) |
@@ -31,6 +32,15 @@ Routes all LLM requests through [OpenRouter](https://openrouter.ai), giving you 
 ```bash
 LLM_PROVIDER_MODE=openrouter
 OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+### Requesty Mode
+
+Routes all LLM requests through [Requesty](https://requesty.ai), an OpenAI-compatible gateway to multiple model providers with a single API key.
+
+```bash
+LLM_PROVIDER_MODE=requesty
+REQUESTY_API_KEY=rqsty-...
 ```
 
 ### Direct Mode
@@ -101,6 +111,15 @@ The easiest way to get started. One API key gives you access to models from Open
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-...
 LLM_PROVIDER_MODE=openrouter
+```
+
+### Requesty
+
+One API key gives you access to models from OpenAI, Anthropic, Google, and more through an OpenAI-compatible gateway. Model ids use the same `provider/model` format (e.g. `openai/gpt-5.5`, `anthropic/claude-sonnet-4.6`). See [docs.requesty.ai](https://docs.requesty.ai) for the full model list.
+
+```bash
+REQUESTY_API_KEY=rqsty-...
+LLM_PROVIDER_MODE=requesty
 ```
 
 ### OpenAI
