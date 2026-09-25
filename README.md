@@ -133,7 +133,7 @@ Visualize your entire infrastructure as a dependency graph. When an incident occ
 </tr>
 </table>
 
-**More capabilities:** Knowledge Base RAG &bull; Multi-Cloud (AWS, Azure, GCP, OVH, Scaleway, Cloudflare) &bull; Any LLM (OpenAI, Anthropic, Gemini, Vertex AI, OpenRouter, Ollama) &bull; Terraform/IaC Analysis &bull; MCP Server (Cursor, Claude Desktop, Windsurf) &bull; Org-level Command Policies &bull; SigmaHQ Guardrails &bull; NeMo Input Rail
+**More capabilities:** Knowledge Base RAG &bull; Multi-Cloud (AWS, Azure, GCP, OVH, Scaleway, Cloudflare) &bull; Any LLM (OpenAI, Anthropic, Gemini, Vertex AI, OpenRouter, Requesty, Ollama) &bull; Terraform/IaC Analysis &bull; MCP Server (Cursor, Claude Desktop, Windsurf) &bull; Org-level Command Policies &bull; SigmaHQ Guardrails &bull; NeMo Input Rail
 
 ---
 
@@ -248,7 +248,7 @@ Also available via OCI: `oci://ghcr.io/arvo-ai/charts/aurora-oss`
 ![CloudBees](https://img.shields.io/badge/CloudBees-1997B5?style=flat-square&logoColor=white)
 ![Tailscale](https://img.shields.io/badge/Tailscale-242424?style=flat-square&logo=tailscale&logoColor=white)
 
-**LLMs:** OpenAI &bull; Anthropic &bull; Google Gemini &bull; Vertex AI &bull; AWS Bedrock &bull; OpenRouter &bull; Ollama (air-gapped)
+**LLMs:** OpenAI &bull; Anthropic &bull; Google Gemini &bull; Vertex AI &bull; AWS Bedrock &bull; OpenRouter &bull; Requesty &bull; Ollama (air-gapped)
 
 </div>
 
