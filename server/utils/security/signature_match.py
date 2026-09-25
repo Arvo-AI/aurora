@@ -69,6 +69,13 @@ _r(r"~/\.aws/credentials|\.aws/credentials", T_CRED_CLOUD, "cred-aws", "AWS cred
 _r(r"~/\.ssh/(id_|authorized_keys)|\.ssh/(id_|authorized_keys)", T_CRED_SSH, "cred-ssh", "SSH key/authorized_keys access")
 _r(r"/var/run/secrets/kubernetes\.io", T_CRED_CONTAINER_API, "cred-k8s-sa", "Kubernetes service account token access")
 _r(r"\blsass\b", T_OS_CRED_LSASS, "cred-lsass", "LSASS memory access")
+# `az login` leaves the service principal secret and its tokens in these files.
+# Aurora only ever passes the directory through AZURE_CONFIG_DIR, so a command that
+# spells out the cache directory or a file name is reading credentials. Like every
+# rule here these match the literals only; a path that avoids them (a bare glob
+# over /tmp) is left to the LLM safety judge.
+_r(r"aurora-az-login-cache", T_CRED_CLOUD, "cred-az-login-cache", "Azure CLI login cache access")
+_r(r"service_principal_entries|msal_token_cache", T_CRED_CLOUD, "cred-az-cli-files", "Azure CLI credential file access")
 
 # --- Persistence (T1053 / T1136) ---
 # persist-shell-rc (writes to ~/.bashrc) and persist-systemd (systemctl enable
