@@ -39,102 +39,76 @@ interface ModelSelectorProps {
 
 // Pricing information mapping (input/output per 1M tokens)
 const modelPricing: Record<string, string> = {
+  'openai/gpt-6-astra': 'Premium Cost ($10/$50 per 1M)',
+  'openai/gpt-5.6-sol': 'High Cost ($4/$20 per 1M)',
+  'openai/gpt-5.6-terra': 'Medium Cost ($2/$12 per 1M)',
+  'openai/gpt-5.6-luna': 'Lowest Cost ($0.20/$1.20 per 1M)',
   'openai/gpt-5.5': 'Premium Cost ($5/$30 per 1M)',
+  'anthropic/claude-fable-5.1': 'Premium Cost ($10/$50 per 1M)',
+  'anthropic/claude-fable-5': 'Premium Cost ($10/$50 per 1M)',
+  'anthropic/claude-opus-5.5': 'High Cost ($4/$20 per 1M)',
+  'anthropic/claude-sonnet-5': 'Medium Cost ($2/$10 per 1M)',
   'anthropic/claude-sonnet-4.6': 'Medium Cost ($3/$15 per 1M)',
   'anthropic/claude-opus-4.7': 'High Cost ($5/$25 per 1M)',
+  'google/gemini-3.8-flash': 'Low Cost ($0.75/$3.75 per 1M)',
   'google/gemini-3.5-flash': 'Low Cost ($0.50/$3 per 1M)',
   'google/gemini-3.1-pro-preview': 'Medium Cost ($2/$12 per 1M)',
   'google/gemini-2.5-pro': 'Medium Cost ($1.25/$10 per 1M)',
   'google/gemini-2.5-flash': 'Low Cost ($0.30/$2.50 per 1M)',
+  'vertex/gemini-3.8-flash': 'Low Cost ($0.75/$3.75 per 1M)',
   'vertex/gemini-3.6-flash': 'Low Cost ($0.75/$3.75 per 1M)',
   'vertex/gemini-3.5-flash-lite': 'Lowest Cost ($0.30/$2.50 per 1M)',
 };
 
-const modelOptions: ModelOption[] = [
-  {
-    id: 'openai/gpt-5.5',
-    name: 'gpt-5.5',
-    displayName: 'GPT-5.5',
-    provider: 'OpenAI',
-    tier: 'premium',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'anthropic/claude-sonnet-4.6',
-    name: 'claude-sonnet-4.6',
-    displayName: 'Claude Sonnet 4.6',
-    provider: 'Anthropic',
-    tier: 'pro',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'anthropic/claude-opus-4.7',
-    name: 'claude-opus-4.7',
-    displayName: 'Claude Opus 4.7',
-    provider: 'Anthropic',
-    tier: 'premium',
+type ModelTier = ModelOption['tier'];
+type ModelOverrides = Partial<Pick<ModelOption, 'hasReasoning' | 'isSlow' | 'contextLength'>>;
+
+// Display label for each id prefix, so rows below don't repeat the provider name.
+const providerLabels: Record<string, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  google: 'Google',
+  vertex: 'Vertex',
+};
+
+// Catalog rows: [id, displayName, tier, overrides?]. `name`, `provider`, and the
+// 1M context / reasoning defaults are derived from the id below, so adding a model
+// stays a one-liner instead of another near-identical object literal.
+const modelCatalog: Array<[string, string, ModelTier, ModelOverrides?]> = [
+  ['anthropic/claude-fable-5.1', 'Claude Fable 5.1', 'premium', { isSlow: true }],
+  ['anthropic/claude-fable-5', 'Claude Fable 5', 'premium', { isSlow: true }],
+  ['anthropic/claude-opus-5.5', 'Claude Opus 5.5', 'premium', { isSlow: true }],
+  ['anthropic/claude-sonnet-5', 'Claude Sonnet 5', 'pro'],
+  ['openai/gpt-6-astra', 'GPT-6 Astra', 'premium'],
+  ['openai/gpt-5.6-sol', 'GPT-5.6 Sol', 'premium'],
+  ['openai/gpt-5.6-terra', 'GPT-5.6 Terra', 'pro'],
+  ['openai/gpt-5.6-luna', 'GPT-5.6 Luna', 'free'],
+  ['openai/gpt-5.5', 'GPT-5.5', 'premium'],
+  ['anthropic/claude-sonnet-4.6', 'Claude Sonnet 4.6', 'pro'],
+  ['anthropic/claude-opus-4.7', 'Claude Opus 4.7', 'premium', { isSlow: true }],
+  ['google/gemini-3.8-flash', 'Gemini 3.8 Flash', 'free'],
+  ['google/gemini-3.5-flash', 'Gemini 3.5 Flash', 'free'],
+  ['google/gemini-3.1-pro-preview', 'Gemini 3.1 Pro', 'pro'],
+  ['google/gemini-2.5-pro', 'Gemini 2.5 Pro', 'pro'],
+  ['google/gemini-2.5-flash', 'Gemini 2.5 Flash', 'free'],
+  // Vertex-only — 3.6 Flash and 3.5 Flash-Lite were tested on Vertex, not Google AI.
+  ['vertex/gemini-3.6-flash', 'Gemini 3.6 Flash', 'free'],
+  ['vertex/gemini-3.5-flash-lite', 'Gemini 3.5 Flash-Lite', 'free', { hasReasoning: false }],
+];
+
+const modelOptions: ModelOption[] = modelCatalog.map(([id, displayName, tier, overrides]) => {
+  const [prefix, name] = id.split('/');
+  return {
+    id,
+    name,
+    displayName,
+    provider: providerLabels[prefix] ?? prefix,
+    tier,
     contextLength: '1M',
     hasReasoning: true,
-    isSlow: true
-  },
-  {
-    id: 'google/gemini-3.5-flash',
-    name: 'gemini-3.5-flash',
-    displayName: 'Gemini 3.5 Flash',
-    provider: 'Google',
-    tier: 'free',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'google/gemini-3.1-pro-preview',
-    name: 'gemini-3.1-pro-preview',
-    displayName: 'Gemini 3.1 Pro',
-    provider: 'Google',
-    tier: 'pro',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'google/gemini-2.5-pro',
-    name: 'gemini-2.5-pro',
-    displayName: 'Gemini 2.5 Pro',
-    provider: 'Google',
-    tier: 'pro',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'google/gemini-2.5-flash',
-    name: 'gemini-2.5-flash',
-    displayName: 'Gemini 2.5 Flash',
-    provider: 'Google',
-    tier: 'free',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  // Vertex-only — 3.6 Flash and 3.5 Flash-Lite were tested on Vertex, not Google AI.
-  {
-    id: 'vertex/gemini-3.6-flash',
-    name: 'gemini-3.6-flash',
-    displayName: 'Gemini 3.6 Flash',
-    provider: 'Vertex',
-    tier: 'free',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'vertex/gemini-3.5-flash-lite',
-    name: 'gemini-3.5-flash-lite',
-    displayName: 'Gemini 3.5 Flash-Lite',
-    provider: 'Vertex',
-    tier: 'free',
-    contextLength: '1M',
-    hasReasoning: false
-  },
-];
+    ...overrides,
+  };
+});
 
 interface PickerConfig {
   prefixes: string[] | null;
