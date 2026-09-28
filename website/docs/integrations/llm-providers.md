@@ -66,8 +66,11 @@ A clean pick like **Claude Opus 4.7** is then translated to that provider's nati
 | | `openai/gpt-4.1-mini` | Fast and affordable |
 | | `openai/gpt-4o` | Multimodal (text + vision) |
 | | `openai/gpt-4o-mini` | Cheapest OpenAI option |
-| **Anthropic** | `anthropic/claude-opus-4.6` | Most capable, 1M context |
-| | `anthropic/claude-sonnet-4.6` | Near Opus quality at lower cost |
+| **Anthropic** | `anthropic/claude-fable-5.1` | Most capable, 1M context |
+| | `anthropic/claude-opus-5.5` | Default — high capability, 1M context |
+| | `anthropic/claude-sonnet-5` | Near Opus quality at lower cost |
+| | `anthropic/claude-opus-4.6` | Previous generation flagship |
+| | `anthropic/claude-sonnet-4.6` | Previous generation balanced |
 | | `anthropic/claude-opus-4.5` | Previous generation flagship |
 | | `anthropic/claude-sonnet-4.5` | Balanced quality and speed |
 | | `anthropic/claude-haiku-4.5` | Fast, affordable |
@@ -250,8 +253,15 @@ BEDROCK_SECRET_ACCESS_KEY=...
 
 # Recommended: route every model pick through Bedrock with clean model names.
 LLM_PROVIDER_MODE=bedrock
-MAIN_MODEL=anthropic/claude-sonnet-4.6   # auto-translated to us.anthropic.claude-sonnet-4-6
+MAIN_MODEL=anthropic/claude-sonnet-5   # auto-translated to us.anthropic.claude-sonnet-5
 ```
+
+**Inference-profile geo:** the geo prefix (`us.` / `eu.` / `apac.`) is derived from
+`BEDROCK_REGION`. Set `BEDROCK_REGION=global` to use the `global.` profiles instead,
+which bill at the direct list price rather than the ~10% cross-region (geo CRIS)
+premium; boto3 still signs against `AWS_REGION` / `AWS_DEFAULT_REGION` (default
+`us-east-1`). Claude Fable 5 / 5.1 are only published as `us.` and `global.` profiles,
+so on an EU or APAC install those two automatically route to `global.`.
 
 **Requirements (native mode):**
 - A Bedrock-enabled AWS account with access to the chosen model granted in the Bedrock console.
@@ -298,7 +308,7 @@ RCA_MODEL=bedrock/us.anthropic.claude-haiku-4-5-v1:0
 
 When `RCA_MODEL` is not set, the default depends on `RCA_OPTIMIZE_COSTS`:
 - `RCA_OPTIMIZE_COSTS=true` (default): Uses `anthropic/claude-haiku-4.5`
-- `RCA_OPTIMIZE_COSTS=false`: Uses `anthropic/claude-opus-4.6`
+- `RCA_OPTIMIZE_COSTS=false`: Uses `anthropic/claude-opus-5.5`
 
 ### Multi-agent orchestrator
 

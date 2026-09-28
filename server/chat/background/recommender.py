@@ -1131,7 +1131,10 @@ def generate_recommendations(
             model_name=ModelConfig.SUGGESTION_MODEL,
             request_type="recommendation",
         )
-        suggestions = _parse_recommendations(response.content, executed_commands)
+        # Thinking-capable models return content blocks, not a str — flatten before parsing.
+        suggestions = _parse_recommendations(
+            extract_text_from_content(response.content), executed_commands
+        )
         suggestions = _post_process_suggestions(
             suggestions, existing_fixes, resource_inventory, user_id, session_id,
         )

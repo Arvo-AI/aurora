@@ -38,6 +38,15 @@ class ModelCutoffManager:
         self.models = self._initialize_model_mappings()
         logger.info(f"Initialized ModelCutoffManager with {len(self.models)} models")
 
+    @staticmethod
+    def _normalize(model_name: str) -> str:
+        """Collapse the dotted/dashed version spellings to one comparable form.
+
+        ``anthropic/claude-opus-5.5`` (picker / OpenRouter) and
+        ``anthropic/claude-opus-5-5`` (native Anthropic / Bedrock) are the same model.
+        """
+        return model_name.replace(".", "-")
+
     def _initialize_model_mappings(self) -> Dict[str, ModelInfo]:
         """Initialize the comprehensive model mapping with knowledge cutoffs"""
 
@@ -48,78 +57,117 @@ class ModelCutoffManager:
         models = {}
 
         # OpenAI Models (via OpenRouter)
+        # Dates are the "knowledge cutoff" published on each model's page at
+        # developers.openai.com/api/docs/models/<id> — verified, not inferred.
         openai_models = {
+            # developers.openai.com/api/docs/models — "Knowledge cutoff Apr 30, 2026"
             "openai/gpt-6-astra": ModelInfo(
                 "gpt-6-astra", "openai", cutoff_date(2026, 4, 30), True, True
             ),
+            # All three GPT-5.6 tiers publish the same Feb 16, 2026 cutoff.
             "openai/gpt-5.6-sol": ModelInfo(
-                "gpt-5.6-sol", "openai", cutoff_date(2026, 4, 1), True, True
+                "gpt-5.6-sol", "openai", cutoff_date(2026, 2, 16), True, True
             ),
             "openai/gpt-5.6-terra": ModelInfo(
-                "gpt-5.6-terra", "openai", cutoff_date(2026, 4, 1), True, True
+                "gpt-5.6-terra", "openai", cutoff_date(2026, 2, 16), True, True
             ),
             "openai/gpt-5.6-luna": ModelInfo(
-                "gpt-5.6-luna", "openai", cutoff_date(2026, 4, 1), True, True
+                "gpt-5.6-luna", "openai", cutoff_date(2026, 2, 16), True, True
             ),
+            # models/gpt-5.5 — "Dec 01, 2025 knowledge cutoff"
+            "openai/gpt-5.5": ModelInfo(
+                "gpt-5.5", "openai", cutoff_date(2025, 12, 1), True, True
+            ),
+            # models/gpt-5.2 — "Aug 31, 2025 knowledge cutoff"
             "openai/gpt-5.2": ModelInfo(
-                "gpt-5.2", "openai", cutoff_date(2025, 8, 1), True, True
+                "gpt-5.2", "openai", cutoff_date(2025, 8, 31), True, True
             ),
         }
 
         # Anthropic Models (via OpenRouter)
+        # Dates are the *reliable knowledge cutoff* published in Anthropic's
+        # Transparency Hub (anthropic.com/transparency/model-report) and the models
+        # overview table — verified, not inferred. Anthropic publishes two numbers per
+        # model; we use the reliable-knowledge one (always <= training-data cutoff)
+        # because it is the date past which the model stops answering dependably, which
+        # is exactly the threshold that should trigger a web search.
+        # Ids use the dotted (picker / OpenRouter) spelling; get_model_info normalizes
+        # dots to dashes, so the native Anthropic / Bedrock spellings resolve here too
+        # without a duplicate row per model.
         anthropic_models = {
-            # Default model ID uses dotted form; ModelCutoffManager doesn't normalize
-            # dots to dashes, so register both so lookup keeps Anthropic capabilities.
             "anthropic/claude-opus-5.5": ModelInfo(
-                "claude-opus-5-5", "anthropic", cutoff_date(2026, 6, 1), True, True
-            ),
-            "anthropic/claude-opus-5-5": ModelInfo(
                 "claude-opus-5-5", "anthropic", cutoff_date(2026, 6, 1), True, True
             ),
             "anthropic/claude-sonnet-5": ModelInfo(
                 "claude-sonnet-5", "anthropic", cutoff_date(2026, 1, 1), True, True
             ),
-            # ModelMapper preserves the dotted Fable ID for OpenRouter; register both
-            # dotted and dashed so cutoff lookup keeps the Anthropic provider/vision/reasoning.
             "anthropic/claude-fable-5.1": ModelInfo(
-                "claude-fable-5-1", "anthropic", cutoff_date(2026, 6, 1), True, True
-            ),
-            "anthropic/claude-fable-5-1": ModelInfo(
                 "claude-fable-5-1", "anthropic", cutoff_date(2026, 6, 1), True, True
             ),
             "anthropic/claude-fable-5": ModelInfo(
                 "claude-fable-5", "anthropic", cutoff_date(2026, 1, 1), True, True
             ),
+            # Previous generations — kept so a pinned older model still costs and
+            # web-searches correctly. The 4.6/4.5 generation is much older than its
+            # release date suggests: Anthropic lists May 2025 reliable knowledge for
+            # Opus 4.6, Sonnet 4.6 and Opus 4.5, and Jan 2025 for Sonnet 4.5.
+            "anthropic/claude-opus-4.7": ModelInfo(
+                "claude-opus-4-7", "anthropic", cutoff_date(2026, 1, 1), True, True
+            ),
+            "anthropic/claude-opus-4.6": ModelInfo(
+                "claude-opus-4-6", "anthropic", cutoff_date(2025, 5, 1), True, True
+            ),
+            "anthropic/claude-sonnet-4.6": ModelInfo(
+                "claude-sonnet-4-6", "anthropic", cutoff_date(2025, 5, 1), True, True
+            ),
+            "anthropic/claude-haiku-4.5": ModelInfo(
+                "claude-haiku-4-5", "anthropic", cutoff_date(2025, 2, 1), True, True
+            ),
             "anthropic/claude-sonnet-4-5": ModelInfo(
-                "claude-sonnet-4-5", "anthropic", cutoff_date(2025, 9, 1), True, True
+                "claude-sonnet-4-5", "anthropic", cutoff_date(2025, 1, 1), True, True
             ),
             "anthropic/claude-opus-4-5": ModelInfo(
-                "claude-opus-4-5", "anthropic", cutoff_date(2025, 11, 1), True, True
+                "claude-opus-4-5", "anthropic", cutoff_date(2025, 5, 1), True, True
             ),
         }
 
         # Google / Vertex AI Models
+        # Dates are the "knowledge cutoff" published on each DeepMind model card /
+        # ai.google.dev model page — verified, not inferred.
+        #
+        # Caveat straight from Google: every Gemini 3.x card that lists a 2026 cutoff
+        # adds "users can expect updated information for some domains while in others
+        # they may experience the model's knowledge is limited to January 2025". We
+        # store the headline date because that is what Google publishes, but the split
+        # is why cloud/API queries should stay grounded via search regardless — the
+        # cloud-keyword boosts in should_auto_search() cover that.
         google_models = {
+            # Gemini 3.8 Flash card: "knowledge cutoff date ... is March 2026"
             "google/gemini-3.8-flash": ModelInfo(
                 "gemini-3.8-flash", "google", cutoff_date(2026, 3, 1), True, True
             ),
+            # Gemini 3.6 Flash card: March 2026 (up from Jan 2025 on 3.5 Flash)
             "google/gemini-3.6-flash": ModelInfo(
                 "gemini-3.6-flash", "google", cutoff_date(2026, 3, 1), True, True
             ),
+            # Gemini 3.5 Flash-Lite card: March 2026
             "google/gemini-3.5-flash-lite": ModelInfo(
-                "gemini-3.5-flash-lite", "google", cutoff_date(2025, 4, 1), True, True
+                "gemini-3.5-flash-lite", "google", cutoff_date(2026, 3, 1), True, True
             ),
+            # 3.5 Flash / 3.1 Pro defer their limitations to the Gemini 3 Pro card,
+            # which states January 2025.
             "google/gemini-3.5-flash": ModelInfo(
-                "gemini-3.5-flash", "google", cutoff_date(2025, 4, 1), True, True
+                "gemini-3.5-flash", "google", cutoff_date(2025, 1, 1), True, True
             ),
             "google/gemini-3.1-pro-preview": ModelInfo(
-                "gemini-3.1-pro-preview", "google", cutoff_date(2025, 4, 1), True, True
+                "gemini-3.1-pro-preview", "google", cutoff_date(2025, 1, 1), True, True
             ),
+            # ai.google.dev lists "Knowledge cutoff January 2025" for both 2.5 models.
             "google/gemini-2.5-pro": ModelInfo(
-                "gemini-2.5-pro", "google", cutoff_date(2025, 3, 1), True, True
+                "gemini-2.5-pro", "google", cutoff_date(2025, 1, 1), True, True
             ),
             "google/gemini-2.5-flash": ModelInfo(
-                "gemini-2.5-flash", "google", cutoff_date(2025, 3, 1), True, True
+                "gemini-2.5-flash", "google", cutoff_date(2025, 1, 1), True, True
             ),
             "vertex/gemini-3.8-flash": ModelInfo(
                 "gemini-3.8-flash", "vertex", cutoff_date(2026, 3, 1), True, True
@@ -128,19 +176,19 @@ class ModelCutoffManager:
                 "gemini-3.6-flash", "vertex", cutoff_date(2026, 3, 1), True, True
             ),
             "vertex/gemini-3.5-flash-lite": ModelInfo(
-                "gemini-3.5-flash-lite", "vertex", cutoff_date(2025, 4, 1), True, True
+                "gemini-3.5-flash-lite", "vertex", cutoff_date(2026, 3, 1), True, True
             ),
             "vertex/gemini-3.5-flash": ModelInfo(
-                "gemini-3.5-flash", "vertex", cutoff_date(2025, 4, 1), True, True
+                "gemini-3.5-flash", "vertex", cutoff_date(2025, 1, 1), True, True
             ),
             "vertex/gemini-3.1-pro-preview": ModelInfo(
-                "gemini-3.1-pro-preview", "vertex", cutoff_date(2025, 4, 1), True, True
+                "gemini-3.1-pro-preview", "vertex", cutoff_date(2025, 1, 1), True, True
             ),
             "vertex/gemini-2.5-pro": ModelInfo(
-                "gemini-2.5-pro", "vertex", cutoff_date(2025, 3, 1), True, True
+                "gemini-2.5-pro", "vertex", cutoff_date(2025, 1, 1), True, True
             ),
             "vertex/gemini-2.5-flash": ModelInfo(
-                "gemini-2.5-flash", "vertex", cutoff_date(2025, 3, 1), True, True
+                "gemini-2.5-flash", "vertex", cutoff_date(2025, 1, 1), True, True
             ),
         }
 
@@ -156,12 +204,20 @@ class ModelCutoffManager:
 
     def _add_fallback_patterns(self, models: Dict[str, ModelInfo]) -> None:
         """Add fallback patterns for model name matching"""
-        # This allows partial matching for models not explicitly listed
-        # These are conservative estimates
+        # Only reached by models with no explicit entry above — which, by construction,
+        # are always *older* than the newest listed generation, and in practice are
+        # legacy ids (gpt-4o, claude-3-*, gemini-2.0-*). Each date below is the oldest
+        # cutoff the vendor still publishes for that family, so an unlisted id errs
+        # toward triggering web search instead of silently skipping it:
+        #   gpt    — GPT-4o, "Oct 01, 2023 knowledge cutoff" (OpenAI model page)
+        #   claude — Claude Opus 3, August 2023 (Anthropic Transparency Hub)
+        #   gemini — Gemini 2.0 Flash, June 2024 (Google model docs)
+        # Every current flagship has its own entry above, so raising these would only
+        # ever mis-date legacy ids as fresher than they are.
         fallback_patterns = {
-            "gpt": datetime(2026, 4, 1, tzinfo=timezone.utc),
-            "claude": datetime(2026, 6, 1, tzinfo=timezone.utc),
-            "gemini": datetime(2026, 3, 1, tzinfo=timezone.utc),
+            "gpt": datetime(2023, 10, 1, tzinfo=timezone.utc),
+            "claude": datetime(2023, 8, 1, tzinfo=timezone.utc),
+            "gemini": datetime(2024, 6, 1, tzinfo=timezone.utc),
         }
 
         self.fallback_patterns = fallback_patterns
@@ -187,6 +243,15 @@ class ModelCutoffManager:
         model_name_lower = model_name.lower()
         for key, model_info in self.models.items():
             if key.lower() == model_name_lower:
+                return model_info
+
+        # Providers spell the same model both ways — OpenRouter/the picker use dots
+        # (claude-opus-4.5) while native Anthropic/Bedrock ids use dashes
+        # (claude-opus-4-5). Match across both spellings before falling back, or a
+        # listed model silently loses its real cutoff and its vision/reasoning flags.
+        normalized = self._normalize(model_name_lower)
+        for key, model_info in self.models.items():
+            if self._normalize(key.lower()) == normalized:
                 return model_info
 
         # Try partial matching for fallback patterns
