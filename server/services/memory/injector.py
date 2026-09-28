@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from utils.cache.redis_client import get_redis_client
 from services.memory.queries import get_memory_entries, fetch_memory_content
 from chat.backend.agent.providers import create_chat_model
+from chat.backend.agent.utils.message_content import extract_text_from_content
 from langchain_core.messages import SystemMessage, HumanMessage
 from chat.backend.agent.llm import ModelConfig
 
@@ -201,7 +202,9 @@ async def _select_relevant_memories_async(user_message: str, entries: List[Dict]
             config={"run_name": "memory_selector"},
         )
 
-        content = response.content if hasattr(response, "content") else str(response)
+        # Thinking-capable models return a list of content blocks, not a str —
+        # extract_text_from_content normalizes both so .strip() can't blow up.
+        content = extract_text_from_content(getattr(response, "content", response))
         json_str = content.strip()
         if json_str.startswith("```"):
             json_str = json_str.split("\n", 1)[1] if "\n" in json_str else json_str

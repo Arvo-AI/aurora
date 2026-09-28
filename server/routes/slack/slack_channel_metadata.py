@@ -137,6 +137,35 @@ def auto_register_channels_task(self, user_id: str, team_id: str | None = None):
 
 
 @celery_app.task(
+    name="routes.slack.slack_channel_metadata.bulk_activate_channels_task",
+    bind=True,
+    max_retries=2,
+)
+def bulk_activate_channels_task(self, user_id: str, channel_ids: list[str]):
+    """Join + register/describe many channels in the background.
+
+    Bulk-activate joins each channel via conversations.join (Tier 3, rate
+    limited) and enqueues a description. Doing that inline in the HTTP request
+    means a large batch (e.g. 50+ channels) serially hits Slack and can
+    rate-limit/timeout the request. Running it here keeps the endpoint instant;
+    the manage page polls the channel list as rows/descriptions land.
+    """
+    try:
+        from routes.slack.slack_channels import _activate_channels
+        activated = _activate_channels(user_id, channel_ids)
+        logger.info("[SlackBulkActivate] activated %d/%d channel(s) for user %s",
+                    activated, len(channel_ids), sanitize(user_id))
+    except Exception as exc:
+        logger.warning("[SlackBulkActivate] task failed for user %s; retrying", sanitize(user_id))
+        # Retry on transient Slack 429/5xx; _activate_channels is idempotent
+        # (join + describe both no-op on already-member channels).
+        try:
+            self.retry(countdown=30, exc=exc)
+        except self.MaxRetriesExceededError:
+            logger.warning("[SlackBulkActivate] gave up after retries for user %s", sanitize(user_id))
+
+
+@celery_app.task(
     name="routes.slack.slack_channel_metadata.generate_channel_metadata",
     bind=True,
     max_retries=2,

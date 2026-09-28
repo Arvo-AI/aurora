@@ -15,6 +15,12 @@ One provider, two modes, auto-selected from configuration:
    Bedrock requires an inference-profile id (e.g. ``us.anthropic.claude-...``),
    not the bare model id.
 
+Set ``BEDROCK_REGION=global`` to route through Bedrock's ``global.`` inference
+profiles, which bill at the direct list price instead of the ~10% cross-region
+premium. ``global`` names a profile geo rather than an AWS endpoint, so boto3 is
+still signed against a real region (``AWS_REGION`` / ``AWS_DEFAULT_REGION``,
+defaulting to us-east-1).
+
 Configuration is environment-variable based, like Ollama and Vertex. Bedrock-
 specific ``BEDROCK_*`` vars take precedence over the standard ``AWS_*`` vars.
 """
@@ -33,9 +39,9 @@ logger = logging.getLogger(__name__)
 
 # Anthropic native model name (dashed) -> Bedrock inference-profile base (without the
 # region/geo prefix). Only models whose Bedrock id carries a version/date suffix that
-# can't be derived from the name are listed here; bare models (e.g. claude-opus-4-7)
-# derive `anthropic.<name>` automatically. The geo prefix (us./eu./apac.) is prepended
-# at runtime from the configured region, so this stays region-agnostic.
+# can't be derived from the name are listed here; bare models (e.g. claude-opus-5-5,
+# claude-sonnet-5) derive `anthropic.<name>` automatically. The geo prefix (us./eu./apac.)
+# is prepended at runtime from the configured region, so this stays region-agnostic.
 _ANTHROPIC_TO_BEDROCK_BASE = {
     "claude-opus-4-6": "anthropic.claude-opus-4-6-v1",
     "claude-opus-4-5": "anthropic.claude-opus-4-5-20251101-v1:0",
@@ -43,15 +49,48 @@ _ANTHROPIC_TO_BEDROCK_BASE = {
     "claude-haiku-4-5": "anthropic.claude-haiku-4-5-20251001-v1:0",
 }
 
+# Models AWS publishes only as `us.` and `global.` inference profiles — no `eu.` or
+# `apac.` variant exists. Deriving one from the region would yield a 404 on an EU/APAC
+# install, so those geos route to the `global.` profile, which is listed in every region.
+_GLOBAL_ONLY_GEO_MODELS = {
+    "claude-fable-5-1",
+    "claude-fable-5",
+}
+
+# `BEDROCK_REGION=global` selects Bedrock's global inference profiles (billed at the
+# direct rate, no cross-region premium). It names a profile geo, not an AWS endpoint.
+_GLOBAL_GEO = "global"
+# boto3 still has to sign against a real region when the global profile is in use.
+_GLOBAL_HOME_REGION_FALLBACK = "us-east-1"
+
 
 def _geo_prefix_for(region: str) -> str:
     """Bedrock cross-region inference-profile geo prefix derived from the AWS region."""
     r = (region or "us-east-1").lower()
+    # Opt-in global routing — `global.` profiles bill at the direct list price.
+    if r == _GLOBAL_GEO:
+        return _GLOBAL_GEO
     if r.startswith("eu"):
         return "eu"
     if r.startswith("ap"):
         return "apac"
     return "us"
+
+
+def _resolve_client_region(region: str | None) -> str | None:
+    """Real AWS region for boto3, given a possibly-``global`` profile geo.
+
+    ``global`` is not an AWS region: passing it to boto3 produces an unresolvable
+    endpoint. Fall back to the standard AWS region vars, then to us-east-1, so
+    ``BEDROCK_REGION=global`` is actually a configuration the provider supports —
+    and so pricing (which treats ``global`` as premium-free) matches routing.
+    """
+    if (region or "").lower() != _GLOBAL_GEO:
+        return region
+    for candidate in (os.getenv("AWS_REGION"), os.getenv("AWS_DEFAULT_REGION")):
+        if candidate and candidate.lower() != _GLOBAL_GEO:
+            return candidate
+    return _GLOBAL_HOME_REGION_FALLBACK
 
 
 def _adaptive_bedrock_converse():
@@ -141,7 +180,8 @@ class BedrockProvider(BaseLLMProvider):
         config = {
             "model": native_model,
             "temperature": temperature,
-            "region_name": self.region,
+            # `global` is a profile geo, not an AWS region — boto3 needs a real one to sign against.
+            "region_name": _resolve_client_region(self.region),
         }
         # Pass explicit credentials only if set; otherwise rely on boto3's default
         # chain (env / shared config / IAM role).
@@ -182,7 +222,16 @@ class BedrockProvider(BaseLLMProvider):
         key = anth.replace(".", "-").lower()
         if key.startswith("claude"):
             base = _ANTHROPIC_TO_BEDROCK_BASE.get(key, f"anthropic.{key}")
-            return f"{_geo_prefix_for(self.region)}.{base}"
+            geo = _geo_prefix_for(self.region)
+            # No eu./apac. profile exists for these — use the globally-listed one instead
+            # of deriving an id AWS would 404 on.
+            if geo not in ("us", _GLOBAL_GEO) and key in _GLOBAL_ONLY_GEO_MODELS:
+                logger.info(
+                    "Bedrock has no '%s.' inference profile for %s; using the 'global.' profile.",
+                    geo, key,
+                )
+                geo = _GLOBAL_GEO
+            return f"{geo}.{base}"
         # Not a recognized Anthropic model — pass through (Bedrock will surface a clear error).
         return model
 

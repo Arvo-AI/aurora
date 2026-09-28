@@ -88,7 +88,11 @@ def _build_db_url() -> str:
     db_password = urllib.parse.quote_plus(os.getenv("POSTGRES_PASSWORD", ""))
     db_host = os.environ["POSTGRES_HOST"]
     db_port = os.environ["POSTGRES_PORT"]
-    url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+    # Name the DBAPI explicitly instead of relying on the bare "postgresql://"
+    # default: SQLAlchemy 2.1 changed that default from psycopg2 to psycopg (v3),
+    # which we don't install, so a bare URL raises ModuleNotFoundError there and
+    # takes the whole Casbin enforcer (and every RBAC-guarded route) down with it.
+    url = f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
     query_params = {}
     pg_sslmode = os.getenv("POSTGRES_SSLMODE", "prefer")
     if pg_sslmode:

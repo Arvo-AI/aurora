@@ -373,11 +373,12 @@ class GetConnectedSlackChannelsArgs(BaseModel):
 def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
     """Return the ACTIVE Slack channels Aurora may post to, each with its description.
 
-    This is the routing-decision source: only channels the user has activated
-    (described, ``metadata_status='ready'``, not dismissed) are returned, so the
-    agent never routes to an aware-only/indexed channel. Use the descriptions to
-    choose which channel(s) are relevant. Distinct from list_slack_channels (a
-    live, description-less listing of bot memberships).
+    This is the routing-decision source: only channels Aurora is a member of
+    (membership is the source of truth) that have been described
+    (``metadata_status='ready'``) are returned, so the agent routes only to
+    channels it's actually in. Use the descriptions to choose which channel(s)
+    are relevant. Distinct from list_slack_channels (a live, description-less
+    listing of bot memberships).
     """
     if not user_id:
         return json.dumps({"error": _ERR_NO_USER})
@@ -392,16 +393,17 @@ def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[SlackTool:connected]")
-                # Active = described + not dismissed: a channel being active IS
+                # Active = described member channels: a channel being active IS
                 # the permission to post teammate messages here (the structured
                 # incident card is separate — it goes only to the single
-                # configured incidents channel).
+                # configured incidents channel). Membership is the source of
+                # truth, so there's no separate "dismissed" flag to filter on.
                 cur.execute(
                     f"""SELECT DISTINCT ON (channel_id)
                               channel_id, channel_name, channel_type,
                               detected_platform, metadata_summary, is_member
                          FROM slack_channels
-                        WHERE provider = 'slack' AND NOT is_dismissed
+                        WHERE provider = 'slack'
                           AND metadata_status = 'ready'
                           AND {predicate}
                         ORDER BY channel_id, updated_at DESC""",

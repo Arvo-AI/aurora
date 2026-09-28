@@ -28,8 +28,8 @@ REDIRECT_URI = f"{base_url}/slack/callback"
 SLACK_SCOPES = [
     "app_mentions:read",    # Listen for @Aurora mentions in channels
     "chat:write",           # Send messages
-    "channels:join",        # Join public channels (required to join aurora_incidents)
-    "channels:manage",      # Create channels, invite users, set topics
+    "channels:join",        # Join public channels (activate -> conversations.join)
+    "channels:manage",      # Create channels, invite users, set topics; leave public channels (deactivate -> conversations.leave)
     "channels:read",        # List public channels
     "channels:history",     # Read public channel history
     "groups:read",          # List private channels

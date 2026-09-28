@@ -37,7 +37,10 @@ class ModelConfig:
     Change these values to switch providers across the entire application.
     """
     
-    _DEFAULT_MODEL = "anthropic/claude-sonnet-4.6"
+    # Opus 5.5 rejects a forced tool_choice, which Trigger RCA and /action pin on their
+    # first turn. ForceToolChoice detects that rejection and retries with tool_choice=auto
+    # plus an explicit prompt directive, so both flows still reach their tool.
+    _DEFAULT_MODEL = "anthropic/claude-opus-5.5"
 
     # Primary models - configurable via env vars
     MAIN_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
@@ -46,7 +49,7 @@ class ModelConfig:
     # Background RCA model - configurable via RCA_MODEL env var, falls back to cost-based selection
     RCA_MODEL = os.getenv("RCA_MODEL") or (
         "anthropic/claude-haiku-4.5" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
-        else "anthropic/claude-opus-4.6"
+        else _DEFAULT_MODEL
     )
 
     # Multi-agent RCA orchestrator — required when ORCHESTRATOR_ENABLED=true.

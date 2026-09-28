@@ -1540,17 +1540,36 @@ async def handle_connection(websocket) -> None:
                 human_message = HumanMessage(content=question)
 
             # Prepare messages list
-            if trigger_rca_requested:
-                rca_instruction = (
+            # Prompt-level belt for the two UI-initiated flows. ForceToolChoice also pins
+            # tool_choice on the first turn, but newer Claude models (Opus 5.5, Fable 5.1)
+            # reject forcing and fall back to tool_choice=auto — at which point this
+            # instruction is what still gets the tool called. Prepended to the message
+            # only, never to state.question, so guardrails and chat history keep the
+            # user's original text (see workflow._get_input_rail_text).
+            # Precedence matches agent.py: a pinned action wins over the RCA button.
+            routing_instruction = ""
+            if trigger_action_id:
+                routing_instruction = (
+                    "[ACTION RUN REQUESTED]\n"
+                    "The user explicitly triggered an Aurora Action from the UI. "
+                    f'You MUST call the trigger_action tool with action_id="{trigger_action_id}". '
+                    "Do not answer with prose and do not ask a follow-up question first.\n\n"
+                )
+            elif trigger_rca_requested:
+                routing_instruction = (
                     "[RCA INVESTIGATION REQUESTED]\n"
                     "The user has explicitly requested a Root Cause Analysis investigation. "
                     "You MUST call the trigger_rca tool with their message as the issue_description. "
                     "Extract a short title, affected service, and severity from their description.\n\n"
                 )
+
+            if routing_instruction:
                 if isinstance(human_message.content, str):
-                    human_message = HumanMessage(content=rca_instruction + human_message.content)
+                    human_message = HumanMessage(content=routing_instruction + human_message.content)
                 elif isinstance(human_message.content, list):
-                    human_message = HumanMessage(content=[{"type": "text", "text": rca_instruction}] + human_message.content)
+                    human_message = HumanMessage(
+                        content=[{"type": "text", "text": routing_instruction}] + human_message.content
+                    )
 
             messages_list = [human_message]
 

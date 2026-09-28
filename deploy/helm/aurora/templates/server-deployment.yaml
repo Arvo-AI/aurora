@@ -73,28 +73,43 @@ spec:
               mountPath: {{ .Values.ssl.caCertMountPath }}
               readOnly: true
             {{- end }}
+          {{- $probes := (.Values.server | default dict).probes | default dict }}
+          {{- $startup := $probes.startup | default dict }}
+          {{- $readiness := $probes.readiness | default dict }}
+          {{- $liveness := $probes.liveness | default dict }}
           startupProbe:
             httpGet:
               path: /health/liveness
               port: 5080
-            initialDelaySeconds: 10
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 30
+            initialDelaySeconds: {{ $startup.initialDelaySeconds | default 10 }}
+            periodSeconds: {{ $startup.periodSeconds | default 10 }}
+            timeoutSeconds: {{ $startup.timeoutSeconds | default 5 }}
+            failureThreshold: {{ $startup.failureThreshold | default 30 }}
           readinessProbe:
             httpGet:
               path: /health/readiness
               port: 5080
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
+            periodSeconds: {{ $readiness.periodSeconds | default 10 }}
+            timeoutSeconds: {{ $readiness.timeoutSeconds | default 10 }}
+            failureThreshold: {{ $readiness.failureThreshold | default 3 }}
           livenessProbe:
+            {{- if eq ($liveness.type | default "tcp") "http" }}
+            # "http": needs one free gunicorn thread, so a pod saturated by an
+            # alert burst is restarted after failureThreshold x periodSeconds.
             httpGet:
               path: /health/liveness
               port: 5080
-            periodSeconds: 20
-            timeoutSeconds: 5
-            failureThreshold: 3
+            {{- else }}
+            # "tcp" (default): restart only when the process stops listening.
+            # Survives any amount of request-thread saturation (readiness takes
+            # the pod out of the Service meanwhile); a worker whose main loop
+            # hangs is replaced by gunicorn's own --timeout heartbeat.
+            tcpSocket:
+              port: 5080
+            {{- end }}
+            periodSeconds: {{ $liveness.periodSeconds | default 20 }}
+            timeoutSeconds: {{ $liveness.timeoutSeconds | default 10 }}
+            failureThreshold: {{ $liveness.failureThreshold | default 6 }}
           resources:
             {{- toYaml .Values.resources.server | nindent 12 }}
       volumes:

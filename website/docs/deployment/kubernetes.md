@@ -542,29 +542,73 @@ autoscaling:
   server:
     enabled: true
     minReplicas: 2
-    maxReplicas: 6
+    maxReplicas: 3
     targetCPU: 70
     targetMemory: 80
   celeryWorker:
     enabled: true
     minReplicas: 2
-    maxReplicas: 6
+    maxReplicas: 3
     targetCPU: 70
 ```
 
 When enabled, `replicaCounts.*` values are ignored -- HPA manages replicas.
+Size the Postgres connection budget below for `maxReplicas` before enabling it;
+`helm` refuses to render otherwise.
 
-### Per-pod concurrency
+### Per-pod concurrency and the Postgres connection budget
 
 ```yaml
 config:
-  GUNICORN_WORKERS: "4"    # 1 per vCPU
-  GUNICORN_THREADS: "4"    # threads per worker
-  DB_POOL_MAX: "20"        # connections per worker process
-  CELERY_CONCURRENCY: "4"  # parallel tasks per pod
+  GUNICORN_WORKERS: "2"             # processes per API server pod
+  GUNICORN_THREADS: "32"            # request threads per process
+  DB_POOL_MAX: "20"                 # connections per Python process (server, worker, chatbot, beat)
+  DB_POOL_WAIT_TIMEOUT: "5"         # seconds a request waits for a pooled connection
+  DB_CONNECT_TIMEOUT: "10"          # seconds before an unreachable Postgres fails the connect
+  CELERY_CONCURRENCY: "4"           # parallel tasks (processes) per worker pod
+  SSE_MAX_STREAMS_PER_PROCESS: "8"  # open Incidents tabs per server process
+services:
+  postgres:
+    maxConnections: 300             # in-cluster Postgres only; the image default is 100
 ```
 
-Ensure PostgreSQL `max_connections` can handle `pods x DB_POOL_MAX`.
+Every Python process opens its own pool, so the worst case the configured pods
+can open is:
+
+```
+  server pods   x GUNICORN_WORKERS   x (DB_POOL_MAX + 15)   # +15 for the RBAC engine
++ worker pods   x CELERY_CONCURRENCY x DB_POOL_MAX
++ chatbot pods  x DB_POOL_MAX
++ celery-beat   x DB_POOL_MAX
++ mcp           x 10
+```
+
+With the defaults above one replica of each service is 200 connections, two
+server plus two worker replicas is 350, and the HPA's `maxReplicas` 3 + 3 is
+500. `helm` refuses to render when the worst case for your replica counts (or
+`maxReplicas`) exceeds `services.postgres.maxConnections`: raise it first, and
+size `resources.postgres.limits.memory` with it (about 10Mi per connection on
+top of `shared_buffers`). The check covers the in-cluster Postgres only; with
+an external one set `max_connections` there. Changing `maxConnections` restarts
+the in-cluster Postgres pod once.
+
+Each open Incidents tab (the list and every incident page) holds one server
+thread for its Server-Sent Events stream. `SSE_MAX_STREAMS_PER_PROCESS`
+(default 8, never more than `GUNICORN_THREADS - 2`) caps them per process; a
+tab beyond the cap is told to reconnect in 15s, and streams rotate every ~5
+minutes so it gets a slot.
+
+### API server probes
+
+Liveness is a TCP check on port 5080 (`server.probes.liveness.type: tcp`), so
+a pod whose threads are all busy is not restarted: readiness
+(`/health/readiness`, 10s timeout, 3 failures) takes it out of the Service
+until it drains, and gunicorn's `--timeout` replaces a worker whose main loop
+hangs. Set `type: http` to restart a pod that cannot answer
+`GET /health/liveness` for `failureThreshold x periodSeconds` (120s by
+default). `/health/readiness` checks Postgres and Redis with short bounded
+waits and reports a busy connection pool as `degraded` (HTTP 200) rather than
+taking the pod out of the Service.
 
 ## Using Pre-Existing Kubernetes Secrets
 
