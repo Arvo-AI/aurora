@@ -315,8 +315,16 @@ def post_slack_message(
 
     The one write tool on the Slack surface. Never raises — a failure here must
     not abort the agent loop; it returns a JSON error the agent can react to.
+
+    Server-side routing guard: the destination must be one of the org's ACTIVE
+    channels (a ``slack_channels`` row — i.e. a channel the user activated /
+    Aurora is a member of). The prompt already tells the agent to post only to
+    channels from get_connected_slack_channels, but a stale "service -> #channel"
+    mapping in the Slack memory, or a name resolved via the live
+    list_slack_channels, could otherwise still land a message in a channel the
+    user deactivated. Enforcing it here makes deactivation actually stop posts.
     Auto-joins the channel once on not_in_channel and retries, mirroring the
-    notification service, so a channel Aurora can see but hasn't joined still works.
+    notification service.
     """
     if not user_id:
         return json.dumps({"error": _ERR_NO_USER})
@@ -329,6 +337,18 @@ def post_slack_message(
     # Trim rather than fail: a slightly long teammate note should still land.
     if len(text) > _MAX_POST_CHARS:
         text = text[: _MAX_POST_CHARS - 3] + "..."
+
+    if not _is_active_channel(user_id, channel_id):
+        logger.info("[SlackTool] Refused post to inactive/unknown channel %s", channel_id)
+        return json.dumps({
+            "error": (
+                f"Channel {channel_id} is not an active Aurora channel (deactivated, "
+                "or Aurora is not a member). Only post to channels returned by "
+                "get_connected_slack_channels; if the Slack memory maps a service to "
+                "this channel, that mapping is stale — correct it instead of posting."
+            ),
+            "code": "channel_not_active",
+        })
 
     client = get_slack_client_for_user(user_id)
     if not client:
@@ -363,6 +383,36 @@ def post_slack_message(
         # not add a new top-level message.
         "threaded": bool(thread_ts),
     })
+
+
+def _is_active_channel(user_id: str, channel_id: str) -> bool:
+    """True if ``channel_id`` is one of the org's active Slack channels.
+
+    Membership is the source of truth for the ``slack_channels`` table (a row
+    exists iff the channel is active for the org), so a row lookup is the
+    check. Fails CLOSED on a DB error: dropping one teammate message is better
+    than posting into a channel the user asked Aurora to stay out of.
+    """
+    try:
+        from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
+        from utils.db.org_scope import resolve_org, org_read_predicate
+
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[SlackTool:active]")
+                cur.execute(
+                    f"""SELECT 1 FROM slack_channels
+                         WHERE provider = 'slack' AND channel_id = %s AND {predicate}
+                         LIMIT 1""",
+                    (channel_id, *pred_params),
+                )
+                return cur.fetchone() is not None
+    except Exception:
+        logger.exception("[SlackTool] Could not verify channel %s is active; refusing post", channel_id)
+        return False
 
 
 class GetConnectedSlackChannelsArgs(BaseModel):

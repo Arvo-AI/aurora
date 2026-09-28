@@ -342,3 +342,29 @@ class TestProviderCanonicalizedInSQL:
                 f"Raw provider {raw_provider!r} found in SQL params {params}; "
                 f"only lowercase provider_base should reach the query"
             )
+
+
+# ---------------------------------------------------------------------------
+# store_secret invalidates the shared cache
+# ---------------------------------------------------------------------------
+
+
+class TestStoreSecretCacheInvalidation:
+    """Re-storing a secret under the same name returns the same reference, so
+    the shared Redis cache must be purged or every container keeps serving the
+    previous value for the TTL (e.g. a Slack credential blob still carrying a
+    card channel the user just removed)."""
+
+    def test_store_secret_clears_cached_copy(self, monkeypatch):
+        mgr = SecretRefManager()
+        backend = MagicMock()
+        backend.store_secret.return_value = "vault:kv/data/aurora/users/x"
+        mgr._backend = backend
+        cleared = []
+        monkeypatch.setattr(sru, "clear_secret_cache", lambda ref=None: cleared.append(ref))
+
+        ref = mgr.store_secret("x", "new-value")
+
+        assert ref == "vault:kv/data/aurora/users/x"
+        backend.store_secret.assert_called_once_with(secret_name="x", secret_value="new-value")
+        assert cleared == ["vault:kv/data/aurora/users/x"]

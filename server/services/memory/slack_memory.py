@@ -19,6 +19,10 @@ SLACK_MEMORY_DESCRIPTION = (
     "Slack behaviour: tone, when Aurora speaks, and which teams/channels to "
     "notify. Aurora reads and updates this whenever Slack is involved."
 )
+# Background-session sources that speak in Slack and must always have this
+# memory injected (not left to the LLM memory selector): @mention replies and
+# the post-RCA team-routing agent that picks which team channels to post to.
+SLACK_POLICY_SOURCES = frozenset({"slack", "team_routing"})
 
 # Default teammate policy — a conservative starting point users/agent refine over time.
 SLACK_MEMORY_DEFAULT_CONTENT = """\
