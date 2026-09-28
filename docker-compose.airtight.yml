@@ -197,6 +197,10 @@ services:
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: aurora-server
+      # The SSE stream cap in routes/incidents_sse.py is bounded by the thread
+      # count; pass it in so the cap matches the command line above.
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+      GUNICORN_THREADS: ${GUNICORN_THREADS:-32}
       FLASK_PORT: ${FLASK_PORT}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}

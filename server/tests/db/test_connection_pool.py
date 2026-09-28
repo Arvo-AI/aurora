@@ -403,3 +403,27 @@ class TestPostForkPoolRecreation:
 
         assert pool._get_pool() is pool._get_pool()
         assert factory.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Connection parameters: fail fast on an unreachable Postgres, notice a dead one
+# ---------------------------------------------------------------------------
+
+def test_connect_kwargs_fail_fast_and_keep_alive(monkeypatch):
+    monkeypatch.setenv("DB_CONNECT_TIMEOUT", "7")
+    params = cp_module._connect_kwargs_from_env()
+    assert params["connect_timeout"] == 7
+    assert params["keepalives"] == 1
+    assert params["dbname"] == os.environ["POSTGRES_DB"]
+
+
+def test_connect_timeout_defaults_when_env_is_unusable(monkeypatch):
+    monkeypatch.setenv("DB_CONNECT_TIMEOUT", "soon")
+    assert cp_module._connect_kwargs_from_env()["connect_timeout"] == 10
+
+
+def test_pool_wait_timeout_is_env_configurable(monkeypatch):
+    monkeypatch.setenv("DB_POOL_WAIT_TIMEOUT", "2.5")
+    assert cp_module._pool_wait_timeout() == 2.5
+    monkeypatch.setenv("DB_POOL_WAIT_TIMEOUT", "garbage")
+    assert cp_module._pool_wait_timeout() == cp_module._POOL_WAIT_TIMEOUT

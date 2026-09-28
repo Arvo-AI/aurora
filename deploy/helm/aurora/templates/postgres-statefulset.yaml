@@ -1,4 +1,27 @@
 {{- if .Values.services.postgres.enabled }}
+{{- /*
+Refuse to render when the pods this values file describes can open more
+Postgres connections than the in-cluster Postgres allows: a helm error now
+instead of "FATAL: sorry, too many clients already" at the next alert burst.
+Mirrors the budget documented at services.postgres.maxConnections in values.yaml.
+*/}}
+{{- $cfg := .Values.config }}
+{{- $workers := default "2" $cfg.GUNICORN_WORKERS | int }}
+{{- $pool := default "20" $cfg.DB_POOL_MAX | int }}
+{{- $concurrency := default "4" $cfg.CELERY_CONCURRENCY | int }}
+{{- $serverPods := ternary .Values.autoscaling.server.maxReplicas .Values.replicaCounts.server (eq (toString .Values.autoscaling.server.enabled) "true") | int }}
+{{- $workerPods := ternary .Values.autoscaling.celeryWorker.maxReplicas .Values.replicaCounts.celeryWorker (eq (toString .Values.autoscaling.celeryWorker.enabled) "true") | int }}
+{{- $chatbotPods := .Values.replicaCounts.chatbot | int }}
+{{- $beatPods := .Values.replicaCounts.celeryBeat | int }}
+{{- $mcpPods := .Values.replicaCounts.mcp | int }}
+{{- $budget := add (mul $serverPods $workers (add $pool 15)) (mul $workerPods $concurrency $pool) (mul $chatbotPods $pool) (mul $beatPods $pool) (mul $mcpPods 10) }}
+{{- $limit := 100 }}
+{{- $managedElsewhere := false }}
+{{- with .Values.services.postgres.maxConnections }}{{ $limit = int . }}{{ end }}
+{{- range .Values.services.postgres.extraArgs }}{{ if contains "max_connections=" (toString .) }}{{ $managedElsewhere = true }}{{ end }}{{ end }}
+{{- if and (not $managedElsewhere) (gt $budget $limit) }}
+{{- fail (printf "Postgres connection budget: the configured pods can open up to %d connections (server %d x GUNICORN_WORKERS %d x (DB_POOL_MAX %d + 15) + celery-worker %d x CELERY_CONCURRENCY %d x %d + chatbot %d x %d + celery-beat %d x %d + mcp %d x 10) but the in-cluster Postgres allows %d. Raise services.postgres.maxConnections (and resources.postgres.limits.memory, about 10Mi per connection) or lower the replica counts, autoscaling maxReplicas or config.DB_POOL_MAX." $budget $serverPods $workers $pool $workerPods $concurrency $pool $chatbotPods $pool $beatPods $pool $mcpPods $limit) }}
+{{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:

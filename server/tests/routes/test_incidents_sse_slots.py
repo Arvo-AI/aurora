@@ -2,10 +2,11 @@
 
 Each SSE stream pins one gunicorn gthread thread for the life of the browser
 tab. Unbounded, a few Incidents tabs took every thread, ``/health/liveness``
-(which only needs a free thread) timed out and the pod was killed. The cap
-keeps streams to a quarter of the thread budget, refuses extra streams with a
-503 the browser retries, ends streams after a fixed lifetime so slots rotate,
-and releases a slot exactly once however the stream ends.
+(which only needs a free thread) timed out and the pod was killed. The cap is
+its own setting bounded by the thread budget; a tab beyond it gets a 200
+``text/event-stream`` body that only sets ``retry`` and ends (EventSource
+gives up for good on any non-200); streams end after a jittered lifetime so
+slots rotate; and a slot is released exactly once however the stream ends.
 """
 
 import sys
@@ -19,6 +20,7 @@ from flask import Flask
 @pytest.fixture
 def sse(monkeypatch):
     monkeypatch.setenv("GUNICORN_THREADS", "8")
+    monkeypatch.delenv("SSE_MAX_STREAMS_PER_PROCESS", raising=False)
     sys.modules.pop("routes.incidents_sse", None)
     import routes.incidents_sse as module
 
@@ -27,17 +29,38 @@ def sse(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "threads, expected",
-    [("4", 2), ("8", 2), ("16", 4), ("32", 8), ("64", 16), ("not-a-number", 8)],
+    "streams, threads, expected",
+    [
+        (None, "32", 8),        # default cap
+        (None, "4", 2),         # bounded by threads - 2
+        (None, "8", 6),
+        ("16", "32", 16),       # its own value
+        ("16", "8", 6),         # its own value, still bounded by threads - 2
+        ("0", "32", 1),         # never below one
+        ("garbage", "garbage", 8),
+    ],
 )
-def test_stream_cap_is_a_quarter_of_the_thread_budget(monkeypatch, sse, threads, expected):
+def test_stream_cap_is_its_own_value_bounded_by_threads(monkeypatch, sse, streams, threads, expected):
+    if streams is None:
+        monkeypatch.delenv("SSE_MAX_STREAMS_PER_PROCESS", raising=False)
+    else:
+        monkeypatch.setenv("SSE_MAX_STREAMS_PER_PROCESS", streams)
     monkeypatch.setenv("GUNICORN_THREADS", threads)
     assert sse._max_streams_per_process() == expected
 
 
-def test_stream_cap_defaults_to_the_chart_thread_default(monkeypatch, sse):
+def test_stream_cap_defaults_without_any_env(monkeypatch, sse):
     monkeypatch.delenv("GUNICORN_THREADS", raising=False)
-    assert sse._max_streams_per_process() == 32 // 4
+    monkeypatch.delenv("SSE_MAX_STREAMS_PER_PROCESS", raising=False)
+    assert sse._max_streams_per_process() == 8
+
+
+def test_stream_lifetime_is_jittered_around_the_base(monkeypatch, sse):
+    monkeypatch.setattr(sse, "_STREAM_MAX_LIFETIME_SECONDS", 100.0)
+    monkeypatch.setattr(sse.random, "uniform", lambda lo, hi: hi)
+    assert sse._stream_lifetime_seconds() == pytest.approx(120.0)
+    monkeypatch.setattr(sse.random, "uniform", lambda lo, hi: lo)
+    assert sse._stream_lifetime_seconds() == pytest.approx(80.0)
 
 
 def _one_slot(monkeypatch, sse):
@@ -54,6 +77,21 @@ def test_iterator_releases_slot_when_stream_ends(monkeypatch, sse):
     assert list(it) == ["a", "b"]
 
     assert sem.acquire(blocking=False), "slot must be free after StopIteration"
+
+
+def test_iterator_releases_slot_when_the_generator_raises(monkeypatch, sse):
+    sem = _one_slot(monkeypatch, sse)
+    assert sem.acquire(blocking=False)
+
+    def gen():
+        raise ConnectionError("redis down")
+        yield  # pragma: no cover - makes this a generator
+
+    it = sse._SlotReleasingIterator(gen())
+    with pytest.raises(ConnectionError):
+        next(it)
+
+    assert sem.acquire(blocking=False), "a failing stream must not leak its slot"
 
 
 def test_iterator_releases_slot_on_close_without_iteration(monkeypatch, sse):
@@ -99,7 +137,7 @@ def _call_view(sse):
         return sse.incident_stream.__wrapped__("user-1")
 
 
-def test_view_refuses_with_503_when_no_slot_is_free(monkeypatch, sse):
+def test_view_refuses_with_a_retry_only_stream_when_no_slot_is_free(monkeypatch, sse):
     sem = _one_slot(monkeypatch, sse)
     assert sem.acquire(blocking=False)
     monkeypatch.setattr(sse, "get_org_id_from_request", lambda: "org-1")
@@ -107,8 +145,11 @@ def test_view_refuses_with_503_when_no_slot_is_free(monkeypatch, sse):
 
     resp = _call_view(sse)
 
-    assert resp.status_code == 503
-    assert resp.headers["Retry-After"] == sse._STREAM_RETRY_AFTER_SECONDS
+    # A non-200 status makes EventSource fail the connection for good; a 200
+    # stream that ends cleanly is what makes it reconnect after ``retry`` ms.
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/event-stream"
+    assert resp.get_data(as_text=True) == f"retry: {sse._STREAM_REFUSED_RETRY_MS}\n\n"
     assert not sem.acquire(blocking=False), "refusal must not consume the held slot"
 
 
@@ -125,6 +166,7 @@ def test_view_streams_then_releases_slot_on_close(monkeypatch, sse):
 
     body = resp.response
     assert isinstance(body, sse._SlotReleasingIterator)
+    assert next(body) == f"retry: {sse._STREAM_RETRY_MS}\n\n"
     assert next(body) == ": keepalive\n\n"
     body.close()
 
@@ -142,5 +184,5 @@ def test_view_ends_stream_after_max_lifetime(monkeypatch, sse):
     resp = _call_view(sse)
     chunks = list(resp.response)
 
-    assert chunks == []
+    assert chunks == [f"retry: {sse._STREAM_RETRY_MS}\n\n"]
     assert sem.acquire(blocking=False), "slot released when the lifetime ends"

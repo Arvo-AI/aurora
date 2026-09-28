@@ -20,8 +20,11 @@ Environment (all optional):
 2. `sse_starve.sh [streams]` -- opens N incident SSE streams (one gunicorn thread
    each), then times the liveness probe. Before the fix every stream is accepted and
    liveness times out once N >= workers x threads. After the fix at most
-   `threads / 4` streams per worker are accepted, the rest get 503, and liveness
-   answers in milliseconds.
+   `SSE_MAX_STREAMS_PER_PROCESS` (default 8, never more than threads - 2) streams
+   per worker are accepted, the rest get a 200 `text/event-stream` body that only
+   says `retry: 15000` and ends (EventSource reconnects after a clean end of
+   stream but gives up for good on any non-200), and liveness answers in
+   milliseconds.
 3. `pool_exhaust.sh [requests]` -- holds an exclusive lock on `incidents` and fires
    N concurrent `GET /api/incidents`, which park on the lock holding a pooled
    connection each. Before the fix readiness waits the full pool timeout (5s) and

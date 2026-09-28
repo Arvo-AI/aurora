@@ -93,15 +93,18 @@ spec:
             timeoutSeconds: {{ $readiness.timeoutSeconds | default 10 }}
             failureThreshold: {{ $readiness.failureThreshold | default 3 }}
           livenessProbe:
-            {{- if eq ($liveness.type | default "http") "tcp" }}
-            # "tcp": restart only when the process stops listening. Survives any
-            # amount of request-thread saturation; a wedged-but-listening worker is
-            # left to gunicorn's own --timeout heartbeat instead.
-            tcpSocket:
-              port: 5080
-            {{- else }}
+            {{- if eq ($liveness.type | default "tcp") "http" }}
+            # "http": needs one free gunicorn thread, so a pod saturated by an
+            # alert burst is restarted after failureThreshold x periodSeconds.
             httpGet:
               path: /health/liveness
+              port: 5080
+            {{- else }}
+            # "tcp" (default): restart only when the process stops listening.
+            # Survives any amount of request-thread saturation (readiness takes
+            # the pod out of the Service meanwhile); a worker whose main loop
+            # hangs is replaced by gunicorn's own --timeout heartbeat.
+            tcpSocket:
               port: 5080
             {{- end }}
             periodSeconds: {{ $liveness.periodSeconds | default 20 }}
