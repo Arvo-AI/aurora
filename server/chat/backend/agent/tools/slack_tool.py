@@ -388,10 +388,11 @@ def post_slack_message(
 def _is_active_channel(user_id: str, channel_id: str) -> bool:
     """True if ``channel_id`` is one of the org's active Slack channels.
 
-    Membership is the source of truth for the ``slack_channels`` table (a row
-    exists iff the channel is active for the org), so a row lookup is the
-    check. Fails CLOSED on a DB error: dropping one teammate message is better
-    than posting into a channel the user asked Aurora to stay out of.
+    Same eligibility as get_connected_slack_channels: a ``slack_channels`` row
+    (membership is the source of truth) whose description is ``ready``, so the
+    guard and the list the agent picks from can't disagree. Fails CLOSED on a
+    DB error: dropping one teammate message is better than posting into a
+    channel the user asked Aurora to stay out of.
     """
     try:
         from utils.db.connection_pool import db_pool
@@ -406,6 +407,7 @@ def _is_active_channel(user_id: str, channel_id: str) -> bool:
                 cur.execute(
                     f"""SELECT 1 FROM slack_channels
                          WHERE provider = 'slack' AND channel_id = %s AND {predicate}
+                           AND metadata_status = 'ready'
                          LIMIT 1""",
                     (channel_id, *pred_params),
                 )
