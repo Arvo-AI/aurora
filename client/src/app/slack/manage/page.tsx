@@ -723,7 +723,8 @@ export default function SlackManagePage() {
                 description for the ones it&apos;s been invited to — so it engages where it&apos;s a
                 member, like a teammate. It uses those descriptions to decide where to post about
                 incidents. For any other channel, generate a description on demand to make it
-                routable, edit a description, or dismiss channels that aren&apos;t relevant.
+                routable, edit a description, or deactivate channels that aren&apos;t relevant —
+                Aurora leaves those channels, so re-invite it to bring one back.
               </CardDescription>
             </div>
           </CardHeader>
@@ -805,7 +806,7 @@ export default function SlackManagePage() {
                                   className="h-7 w-7 p-0 text-zinc-400 hover:text-destructive"
                                   title={c.channel_id === cardChannelId
                                     ? "Deactivate (this is the card channel — the card will stop posting until you pick a new one)"
-                                    : "Deactivate (Aurora stays in Slack but stops posting here)"}
+                                    : "Deactivate (Aurora leaves this channel — re-invite it to reactivate)"}
                                   onClick={() => handleDismissChannel(c.channel_id)}
                                 >
                                   <X className="h-4 w-4" />

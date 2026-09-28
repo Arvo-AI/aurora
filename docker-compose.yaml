@@ -501,6 +501,9 @@ services:
         condition: service_healthy
       vault:
         condition: service_healthy
+    # Parity with the prod-local/airtight variants: a malformed app token or a
+    # dropped WebSocket must not leave the listener down until a manual restart.
+    restart: unless-stopped
 
   postgres:
     image: postgres:15-alpine

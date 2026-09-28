@@ -723,7 +723,7 @@ Save changes. If the app is already installed, Slack will prompt you to
 **reinstall** so the new events and scopes take effect.
 
 :::tip Private / self-hosted deployments — use Socket Mode instead
-Steps 3's Request URL requires Aurora's backend to be reachable from the public
+Step 3's Request URL requires Aurora's backend to be reachable from the public
 internet (with valid TLS), because Slack POSTs events to it. If Aurora runs
 somewhere Slack cannot reach — a private VPC/Kubernetes cluster, behind a
 firewall, air-gapped from inbound traffic, or on a laptop — enable

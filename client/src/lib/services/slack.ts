@@ -92,7 +92,9 @@ export const slackService = {
     };
   },
 
-  // Dismiss = hide from routing/UI; does NOT leave the Slack channel.
+  // Deactivate = Aurora calls conversations.leave and the stored row is pruned.
+  // Membership is the source of truth, so hiding without leaving would just flap
+  // back to Active on the next reconcile. Re-invite the bot to re-activate.
   async dismissChannel(channelId: string): Promise<void> {
     await apiRequest(`${CHANNELS_BASE}/${channelId}/dismiss`, {
       method: 'POST',
