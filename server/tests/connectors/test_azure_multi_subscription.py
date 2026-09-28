@@ -74,6 +74,70 @@ def test_read_only_classifier(helpers, command, read_only):
     assert helpers["is_read_only_command"](command) is read_only
 
 
+@pytest.mark.parametrize("command", [
+    # Hyphenated diagnostic verbs: RCA in Ask mode needs these.
+    "aws route53 describe-health-check --health-check-id abc",
+    "aws route53 get-health-check-status --health-check-id abc",
+    "aws cloudwatch get-metric-statistics --namespace AWS/Route53",
+    "aws cloudwatch describe-alarms --alarm-names foo",
+    "aws eks describe-cluster --name c --region us-east-1",
+    "aws eks list-nodegroups --cluster-name c",
+    "kubectl get statefulsets -n ns",
+    "kubectl top nodes",
+    # `aks get-credentials` only writes a local kubeconfig and starts every
+    # AKS investigation, so it has to stay allowed.
+    "az aks get-credentials --name c --resource-group r",
+    "az appservice plan check-name --name foo",
+    # An un-decrypted SSM parameter read is an ordinary read.
+    "aws ssm get-parameter --name /app/feature-flag",
+])
+def test_hyphenated_diagnostic_verbs_are_read_only(helpers, command):
+    assert helpers["is_read_only_command"](command) is True, command
+
+
+@pytest.mark.parametrize("command", [
+    # Credential/token minting: mutates nothing but hands back usable creds, so
+    # the 'get' in `get-session-token` must not clear it.
+    "aws sts get-session-token",
+    "aws sts get-federation-token --name bob",
+    "aws sts assume-role --role-arn arn --role-session-name s",
+    "aws eks get-token --cluster-name c",
+    "aws ecr get-login-password --region us-east-1",
+    "aws ecr get-authorization-token",
+    "aws secretsmanager get-secret-value --secret-id s",
+    "aws rds generate-db-auth-token --hostname h --port 5432 --username u",
+    "gcloud auth print-access-token",
+    "gcloud secrets versions access latest --secret=s",
+    "az account get-access-token",
+    "az storage account keys list -n acct",
+    "az storage account show-connection-string -n acct",
+    "az redis list-keys --name r --resource-group g",
+    "az acr credential show -n reg",
+    # --with-decryption returns the plaintext secret, not just the parameter.
+    "aws ssm get-parameter --name /db/password --with-decryption",
+])
+def test_credential_reads_are_not_read_only(helpers, command):
+    assert helpers["is_read_only_command"](command) is False, command
+
+
+@pytest.mark.parametrize("command", [
+    # Option names and values must never supply the verb: 'query' and 'check'
+    # are read-only verbs, but the operation is a mutation.
+    "aws ec2 terminate-instances --instance-ids i-1 --query Reservations",
+    "aws ec2 modify-instance-attribute --instance-id i-1 --no-source-dest-check",
+    "aws ec2 reboot-instances --instance-ids i-1",
+    "kubectl delete pod x --output json",
+    "helm upgrade rel chart",
+    "terraform apply -auto-approve",
+    # Unknown operations fail closed rather than being assumed harmless.
+    "aws ec2 frobnicate-instances",
+    # --dry-run doesn't rescue a write verb.
+    "kubectl apply -f x.yaml --dry-run=client",
+])
+def test_mutating_operations_are_not_read_only(helpers, command):
+    assert helpers["is_read_only_command"](command) is False, command
+
+
 def test_unparseable_command_is_not_read_only(helpers):
     assert helpers["is_read_only_command"]('az vm list --name "unclosed') is False
 

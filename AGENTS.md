@@ -50,12 +50,27 @@ RCA (Root Cause Analysis) investigations are **explicitly read-only** per AGENTS
 
 ### How It Works
 
-The `is_read_only_command()` function now handles hyphenated verbs by splitting on both spaces and hyphens:
-- `describe-health-check` → `['describe', 'health', 'check']` → matches `'describe'` verb ✅
-- `get-metric-statistics` → `['get', 'metric', 'statistics']` → matches `'get'` verb ✅
-- `list-nodegroups` → `['list', 'nodegroups']` → matches `'list'` verb ✅
+`is_read_only_command()` classifies the command's **operation** (its positional
+arguments) and ignores option names and option values, then matches the leading
+word of a hyphenated operation against the verb sets:
+- `describe-health-check` → leading word `describe` → read-only ✅
+- `get-metric-statistics` → leading word `get` → read-only ✅
+- `list-nodegroups` → leading word `list` → read-only ✅
+- `terminate-instances --query Reservations` → leading word `terminate` → blocked ✅
+  (the `--query` option can never supply the verb)
 
 This general approach works for **any** hyphenated diagnostic verb, not just hardcoded ones.
+
+Three rules keep the gate fail-closed:
+1. **Credential/token reads are denied** even though they mutate nothing —
+   `sts get-session-token`, `sts assume-role`, `eks get-token`,
+   `ecr get-login-password`, `secretsmanager get-secret-value`,
+   `gcloud auth print-access-token`, `az account get-access-token`,
+   `az storage account keys list`, and any `--with-decryption` SSM read.
+2. **Any write verb in the operation blocks the command**, including
+   hyphenated mutations (`modify-*`, `terminate-*`, `reboot-*`, `delete-*`).
+3. **Unknown operations default to blocked**, and an unparseable command
+   (unbalanced quotes) is blocked rather than guessed at.
 
 ### Allowed RCA Diagnostic Commands (Ask Mode)
 
@@ -88,6 +103,10 @@ kubectl describe pod <pod-name> -n <namespace>
 kubectl logs <pod-name> -n <namespace>
 kubectl top nodes
 ```
+
+**Blocked in Ask mode (use Agent mode):** any mutation, and any credential- or
+token-returning read such as `aws sts get-session-token`, `aws eks get-token`,
+`aws ecr get-login-password`, or `aws ssm get-parameter --with-decryption`.
 
 ## New Connector Checklist
 

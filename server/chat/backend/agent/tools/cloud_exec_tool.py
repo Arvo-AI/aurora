@@ -1162,10 +1162,12 @@ def is_read_only_command(command: str) -> bool:
     Matches on the command's verb tokens, not a substring scan: a bare
     `verb in command` test classifies `az group delete --name my-logs-rg` as
     read-only because "logs" appears in the resource name. Defaults to False.
-    
-    Handles hyphenated verbs by splitting on both spaces and hyphens:
-    `describe-health-check` becomes ['describe', 'health', 'check'], and we
-    check if 'describe' is a read-only verb. 
+
+    Classification only looks at the *operation* — the positional arguments —
+    so neither an option name nor an option value can supply the verb
+    (`aws ec2 terminate-instances --query Reservations` stays blocked). A
+    hyphenated operation matches on its leading word, so hyphenated diagnostic
+    verbs work: `describe-health-check` → 'describe' → read-only.
     """
     READ_ONLY_VERBS = frozenset({
         'list', 'describe', 'get', 'show', 'config', 'version', 'info', 'status',
@@ -1177,19 +1179,57 @@ def is_read_only_command(command: str) -> bool:
         'patch', 'replace', 'edit', 'scale', 'drain', 'cordon', 'uncordon', 'exec',
         'attach', 'port-forward', 'cp', 'run', 'restart', 'start', 'stop', 'add',
         'put', 'write', 'invoke', 'rollout', 'taint', 'label', 'annotate', 'login',
+        # Hyphen-splitting means a mutating verb is only caught if its leading
+        # word is listed here, so the common cloud mutation verbs are explicit.
+        'modify', 'terminate', 'reboot', 'enable', 'disable', 'detach', 'associate',
+        'disassociate', 'register', 'deregister', 'authorize', 'revoke', 'import',
+        'reset', 'restore', 'purge', 'promote', 'publish', 'cancel', 'deploy',
+        'install', 'uninstall', 'upgrade', 'rollback', 'grant', 'resize', 'resume',
+        'suspend', 'migrate', 'move', 'rename', 'reimage', 'redeploy', 'reinstall',
     })
 
     try:
-        # Split on both spaces and hyphens to handle hyphenated verbs like
-        # 'describe-health-check' → ['describe', 'health', 'check']
-        tokens = [t.lower() for t in re.split(r'[\s\-]+', command) if t and not t.startswith('-')]
-    except (ValueError, re.error):
+        raw_tokens = shlex.split(command)
+    except ValueError:
+        # Unbalanced quotes: the command cannot be parsed, so fail closed.
         return False
 
-    # Some reads return credentials. They pass a verb check ("list", "show") but
-    # hand back keys, secrets or connection strings, so Ask mode must refuse them
-    # even though they mutate nothing.
+    # Flag names are kept separately from the operation: they gate the command
+    # (`--with-decryption`, `--dry-run`) but must never provide a read-only verb.
+    flag_names = {
+        t.split('=', 1)[0].lower() for t in raw_tokens
+        if t.startswith('-') and t != '--'
+    }
+
+    operation: list[str] = []
+    skip_next = False
+    for token in raw_tokens:
+        # Everything after `--` is passed to the target process, not the CLI.
+        if token == '--':
+            break
+        # Previous token was `--flag`, so this is its value, not an operation word.
+        if skip_next:
+            skip_next = False
+            continue
+        # An option: `--flag value` consumes the next token, `--flag=value` does not.
+        if token.startswith('-'):
+            skip_next = '=' not in token
+            continue
+        operation.append(token.lower())
+
+    # Component words let hyphenated operations match the credential deny list.
+    words = [w for token in operation for w in token.split('-') if w]
+    # Verb matching uses only each token's leading word, since cloud CLIs put the
+    # verb first (`terminate-instances`, `describe-health-check`). A resource name
+    # that happens to contain a verb (`pod-restart-test`) therefore can't flip the
+    # classification in either direction.
+    verb_words = {t for t in operation} | {t.split('-', 1)[0] for t in operation}
+
+    # Some reads mutate nothing but hand back usable credentials, keys, secrets,
+    # connection strings or bearer tokens. Ask mode must refuse them outright,
+    # including hyphenated forms whose leading word ('get') looks read-only.
     CREDENTIAL_READS = (
+        # azure
         ('storage', 'account', 'keys'), ('storage', 'account', 'show', 'connection', 'string'),
         ('keyvault', 'secret'), ('keyvault', 'key'), ('keyvault', 'certificate'),
         ('ad', 'sp', 'credential'), ('ad', 'app', 'credential'),
@@ -1197,22 +1237,38 @@ def is_read_only_command(command: str) -> bool:
         ('servicebus', 'namespace', 'authorization', 'rule', 'keys'),
         ('eventhubs', 'namespace', 'authorization', 'rule', 'keys'),
         ('acr', 'credential'), ('batch', 'account', 'keys'),
-        ('secrets', 'get'), ('secrets', 'versions'),   # gcloud
-        ('secretsmanager', 'get', 'secret', 'value'), ('iam', 'create', 'access', 'key'),  # aws
+        ('account', 'get', 'access', 'token'),
+        # gcloud
+        ('secrets', 'get'), ('secrets', 'versions'),
+        ('auth', 'print', 'access', 'token'), ('auth', 'print', 'identity', 'token'),
+        # aws
+        ('secretsmanager', 'get', 'secret', 'value'), ('iam', 'create', 'access', 'key'),
+        ('sts', 'get', 'session', 'token'), ('sts', 'get', 'federation', 'token'),
+        ('sts', 'assume', 'role'), ('eks', 'get', 'token'),
+        ('ecr', 'get', 'login', 'password'), ('ecr', 'get', 'authorization', 'token'),
+        ('ecr', 'public', 'get', 'login', 'password'),
+        ('rds', 'generate', 'db', 'auth', 'token'),
+        ('lightsail', 'get', 'instance', 'access', 'details'),
+        ('cognito', 'idp', 'initiate', 'auth'),
     )
-    if any(all(part in tokens for part in combo) for combo in CREDENTIAL_READS):
+    if any(all(part in words for part in combo) for combo in CREDENTIAL_READS):
         return False
 
-    # Any write verb anywhere disqualifies the command outright.
-    if any(t in WRITE_VERBS for t in tokens):
+    # `aws ssm get-parameter --with-decryption` returns plaintext secrets even
+    # though the operation itself is a read.
+    if '--with-decryption' in flag_names:
         return False
-    
-    # Check if any token is a read-only verb (handles both base verbs and
-    # hyphenated variants like 'describe-health-check' → 'describe')
-    if any(t in READ_ONLY_VERBS for t in tokens):
+
+    # Any write verb in the operation disqualifies the command outright.
+    if any(w in WRITE_VERBS for w in verb_words):
+        return False
+
+    # A read-only verb in the operation (base verb or the leading word of a
+    # hyphenated one, e.g. 'describe-health-check' → 'describe') clears it.
+    if any(w in READ_ONLY_VERBS for w in verb_words):
         return True
-    
-    if '--dry-run' in command.lower():
+
+    if '--dry-run' in flag_names:
         return True
 
     # Default to **not** read-only to err on the side of caution.
