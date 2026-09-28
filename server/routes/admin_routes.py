@@ -94,7 +94,13 @@ def create_user(user_id):
 
             # Normalized comparison so "add user" finds an existing mixed-case
             # account instead of inserting a second row for the same person.
-            cur.execute("SELECT id, email, name, org_id FROM users WHERE LOWER(email) = %s", (email,))
+            # Ordered so a legacy duplicate pair resolves predictably (oldest
+            # first) rather than by arbitrary row order.
+            cur.execute(
+                "SELECT id, email, name, org_id FROM users WHERE LOWER(email) = %s "
+                "ORDER BY created_at ASC LIMIT 1",
+                (email,),
+            )
             existing = cur.fetchone()
 
             # Step 1: Dry-run check used by the 2-step "Add Member" dialog.

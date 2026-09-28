@@ -90,10 +90,13 @@ def get_org_google_chat_credentials(sender_email: str) -> Optional[Tuple[str, st
             with conn.cursor() as cursor:
                 # No RLS needed — users not RLS-protected
                 # Google sends whatever case is on the Workspace profile, so
-                # normalize both sides to keep the sender resolvable.
+                # normalize both sides to keep the sender resolvable. Ordered
+                # so a legacy duplicate pair resolves predictably (exact case
+                # first, then oldest) rather than by arbitrary row order.
                 cursor.execute(
-                    "SELECT id, org_id FROM users WHERE LOWER(email) = LOWER(%s)",
-                    (sender_email,),
+                    "SELECT id, org_id FROM users WHERE LOWER(email) = LOWER(%s) "
+                    "ORDER BY (email = %s) DESC, created_at ASC LIMIT 1",
+                    (sender_email, sender_email),
                 )
                 user_row = cursor.fetchone()
                 if not user_row or not user_row[1]:
