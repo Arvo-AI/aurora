@@ -60,175 +60,55 @@ const modelPricing: Record<string, string> = {
   'vertex/gemini-3.5-flash-lite': 'Lowest Cost ($0.30/$2.50 per 1M)',
 };
 
-const modelOptions: ModelOption[] = [
-  {
-    id: 'anthropic/claude-fable-5.1',
-    name: 'claude-fable-5.1',
-    displayName: 'Claude Fable 5.1',
-    provider: 'Anthropic',
-    tier: 'premium',
-    contextLength: '1M',
-    hasReasoning: true,
-    isSlow: true
-  },
-  {
-    id: 'anthropic/claude-fable-5',
-    name: 'claude-fable-5',
-    displayName: 'Claude Fable 5',
-    provider: 'Anthropic',
-    tier: 'premium',
-    contextLength: '1M',
-    hasReasoning: true,
-    isSlow: true
-  },
-  {
-    id: 'anthropic/claude-opus-5.5',
-    name: 'claude-opus-5.5',
-    displayName: 'Claude Opus 5.5',
-    provider: 'Anthropic',
-    tier: 'premium',
-    contextLength: '1M',
-    hasReasoning: true,
-    isSlow: true
-  },
-  {
-    id: 'anthropic/claude-sonnet-5',
-    name: 'claude-sonnet-5',
-    displayName: 'Claude Sonnet 5',
-    provider: 'Anthropic',
-    tier: 'pro',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'openai/gpt-6-astra',
-    name: 'gpt-6-astra',
-    displayName: 'GPT-6 Astra',
-    provider: 'OpenAI',
-    tier: 'premium',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'openai/gpt-5.6-sol',
-    name: 'gpt-5.6-sol',
-    displayName: 'GPT-5.6 Sol',
-    provider: 'OpenAI',
-    tier: 'premium',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'openai/gpt-5.6-terra',
-    name: 'gpt-5.6-terra',
-    displayName: 'GPT-5.6 Terra',
-    provider: 'OpenAI',
-    tier: 'pro',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'openai/gpt-5.6-luna',
-    name: 'gpt-5.6-luna',
-    displayName: 'GPT-5.6 Luna',
-    provider: 'OpenAI',
-    tier: 'free',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'openai/gpt-5.5',
-    name: 'gpt-5.5',
-    displayName: 'GPT-5.5',
-    provider: 'OpenAI',
-    tier: 'premium',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'anthropic/claude-sonnet-4.6',
-    name: 'claude-sonnet-4.6',
-    displayName: 'Claude Sonnet 4.6',
-    provider: 'Anthropic',
-    tier: 'pro',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'anthropic/claude-opus-4.7',
-    name: 'claude-opus-4.7',
-    displayName: 'Claude Opus 4.7',
-    provider: 'Anthropic',
-    tier: 'premium',
-    contextLength: '1M',
-    hasReasoning: true,
-    isSlow: true
-  },
-  {
-    id: 'google/gemini-3.8-flash',
-    name: 'gemini-3.8-flash',
-    displayName: 'Gemini 3.8 Flash',
-    provider: 'Google',
-    tier: 'free',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'google/gemini-3.5-flash',
-    name: 'gemini-3.5-flash',
-    displayName: 'Gemini 3.5 Flash',
-    provider: 'Google',
-    tier: 'free',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'google/gemini-3.1-pro-preview',
-    name: 'gemini-3.1-pro-preview',
-    displayName: 'Gemini 3.1 Pro',
-    provider: 'Google',
-    tier: 'pro',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'google/gemini-2.5-pro',
-    name: 'gemini-2.5-pro',
-    displayName: 'Gemini 2.5 Pro',
-    provider: 'Google',
-    tier: 'pro',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'google/gemini-2.5-flash',
-    name: 'gemini-2.5-flash',
-    displayName: 'Gemini 2.5 Flash',
-    provider: 'Google',
-    tier: 'free',
-    contextLength: '1M',
-    hasReasoning: true
-  },
+type ModelTier = ModelOption['tier'];
+type ModelOverrides = Partial<Pick<ModelOption, 'hasReasoning' | 'isSlow' | 'contextLength'>>;
+
+// Display label for each id prefix, so rows below don't repeat the provider name.
+const providerLabels: Record<string, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  google: 'Google',
+  vertex: 'Vertex',
+};
+
+// Catalog rows: [id, displayName, tier, overrides?]. `name`, `provider`, and the
+// 1M context / reasoning defaults are derived from the id below, so adding a model
+// stays a one-liner instead of another near-identical object literal.
+const modelCatalog: Array<[string, string, ModelTier, ModelOverrides?]> = [
+  ['anthropic/claude-fable-5.1', 'Claude Fable 5.1', 'premium', { isSlow: true }],
+  ['anthropic/claude-fable-5', 'Claude Fable 5', 'premium', { isSlow: true }],
+  ['anthropic/claude-opus-5.5', 'Claude Opus 5.5', 'premium', { isSlow: true }],
+  ['anthropic/claude-sonnet-5', 'Claude Sonnet 5', 'pro'],
+  ['openai/gpt-6-astra', 'GPT-6 Astra', 'premium'],
+  ['openai/gpt-5.6-sol', 'GPT-5.6 Sol', 'premium'],
+  ['openai/gpt-5.6-terra', 'GPT-5.6 Terra', 'pro'],
+  ['openai/gpt-5.6-luna', 'GPT-5.6 Luna', 'free'],
+  ['openai/gpt-5.5', 'GPT-5.5', 'premium'],
+  ['anthropic/claude-sonnet-4.6', 'Claude Sonnet 4.6', 'pro'],
+  ['anthropic/claude-opus-4.7', 'Claude Opus 4.7', 'premium', { isSlow: true }],
+  ['google/gemini-3.8-flash', 'Gemini 3.8 Flash', 'free'],
+  ['google/gemini-3.5-flash', 'Gemini 3.5 Flash', 'free'],
+  ['google/gemini-3.1-pro-preview', 'Gemini 3.1 Pro', 'pro'],
+  ['google/gemini-2.5-pro', 'Gemini 2.5 Pro', 'pro'],
+  ['google/gemini-2.5-flash', 'Gemini 2.5 Flash', 'free'],
   // Vertex-only — 3.6 Flash and 3.5 Flash-Lite were tested on Vertex, not Google AI.
-  {
-    id: 'vertex/gemini-3.6-flash',
-    name: 'gemini-3.6-flash',
-    displayName: 'Gemini 3.6 Flash',
-    provider: 'Vertex',
-    tier: 'free',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'vertex/gemini-3.5-flash-lite',
-    name: 'gemini-3.5-flash-lite',
-    displayName: 'Gemini 3.5 Flash-Lite',
-    provider: 'Vertex',
-    tier: 'free',
-    contextLength: '1M',
-    hasReasoning: false
-  },
+  ['vertex/gemini-3.6-flash', 'Gemini 3.6 Flash', 'free'],
+  ['vertex/gemini-3.5-flash-lite', 'Gemini 3.5 Flash-Lite', 'free', { hasReasoning: false }],
 ];
+
+const modelOptions: ModelOption[] = modelCatalog.map(([id, displayName, tier, overrides]) => {
+  const [prefix, name] = id.split('/');
+  return {
+    id,
+    name,
+    displayName,
+    provider: providerLabels[prefix] ?? prefix,
+    tier,
+    contextLength: '1M',
+    hasReasoning: true,
+    ...overrides,
+  };
+});
 
 interface PickerConfig {
   prefixes: string[] | null;

@@ -166,10 +166,10 @@ class LLMUsageTracker:
 
     # Cross-region premium charged by Bedrock geo CRIS profiles and Vertex non-global
     # endpoints, relative to the global/direct list price. AWS + Google both publish ~10%.
-    _REGIONAL_PREMIUM = 1.10
+    _REGIONAL_PREMIUM_MULTIPLIER = 1.10
 
     @classmethod
-    def _regional_premium(cls, provider_mode: Optional[str], model_name: str) -> float:
+    def _resolve_regional_premium(cls, provider_mode: Optional[str], model_name: str) -> float:
         """Return the price multiplier for the deployment's endpoint (1.0 = no premium).
 
         Only regional endpoints carry a premium; global endpoints bill at the direct rate.
@@ -188,14 +188,14 @@ class LLMUsageTracker:
             ).lower()
             if region == "global":
                 return 1.0
-            return cls._REGIONAL_PREMIUM
+            return cls._REGIONAL_PREMIUM_MULTIPLIER
 
         # Vertex: non-global (regional/EU) endpoints are +10%. The provider defaults to
         # the global endpoint (VERTEX_AI_LOCATION=global), which bills at the direct rate.
         if mode == "vertex" and "vertex" in model_name.lower():
             location = os.getenv("VERTEX_AI_LOCATION", "global").lower()
             if location and location != "global":
-                return cls._REGIONAL_PREMIUM
+                return cls._REGIONAL_PREMIUM_MULTIPLIER
             return 1.0
 
         # Direct / OpenRouter / everything else: no cloud-reseller premium.
@@ -280,10 +280,10 @@ class LLMUsageTracker:
             # Regional cloud endpoints (Bedrock geo CRIS, Vertex non-global) bill ~10%
             # above the global/direct list price baked into the static table. Only adjust
             # the static path: the OpenRouter/GCP-billing dynamic paths already return the
-            # real per-endpoint rate. A global endpoint (BEDROCK_REGION=global) has no
-            # premium, so skip it there.
-            premium = cls._regional_premium(provider_mode, model_name)
-            if using_static_pricing and premium != 1.0:
+            # real per-endpoint rate. A global endpoint (BEDROCK_REGION=global) resolves to
+            # 1.0, so the `> 1.0` guard skips it without an exact float equality check.
+            premium = cls._resolve_regional_premium(provider_mode, model_name)
+            if using_static_pricing and premium > 1.0:
                 pricing = {k: v * premium for k, v in pricing.items()}
                 logger.debug(
                     f"Applied {premium:.2f}x regional endpoint premium for {model_name} ({provider_mode})"
