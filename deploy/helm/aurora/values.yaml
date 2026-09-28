@@ -32,6 +32,21 @@ services:
     enabled: false   # Set true for local dev (provides S3-compatible storage in-cluster)
 
 # ------------------------------------------------------------------------------
+# Slack Socket Mode (optional)
+# ------------------------------------------------------------------------------
+# Socket Mode runs a listener that opens an OUTBOUND WebSocket to Slack, so
+# Slack events/interactions work with NO public inbound webhook URL — the path
+# for private / self-hosted clusters. The listener deployment renders when
+# either of these is true:
+#   - slackSocketMode.enabled: true, OR
+#   - secrets.backend.SLACK_APP_TOKEN is set inline (see secrets.backend below).
+# If you provide the app token via an EXISTING SECRET (secrets.backend.existingSecret),
+# the chart can't see the value, so you MUST set slackSocketMode.enabled: true to
+# render the listener. The secret must contain SLACK_APP_TOKEN (xapp-...).
+slackSocketMode:
+  enabled: false
+
+# ------------------------------------------------------------------------------
 # ServiceAccount configuration
 # ------------------------------------------------------------------------------
 # Each service gets its own ServiceAccount for proper RBAC
@@ -380,6 +395,14 @@ secrets:
     SLACK_CLIENT_ID: ""          # Get from: https://api.slack.com/apps
     SLACK_CLIENT_SECRET: ""
     SLACK_SIGNING_SECRET: ""
+    # Socket Mode: for private/self-hosted clusters with NO public webhook URL.
+    # Set SLACK_APP_TOKEN to an app-level token (xapp-...) with connections:write
+    # to make Aurora open an outbound WebSocket to Slack (no ingress/TLS endpoint
+    # needed) and render the slack-socket-mode deployment. Leave empty for HTTP
+    # webhooks. Also enable Socket Mode in the Slack app config. If you supply this
+    # token via existingSecret instead of inline, set slackSocketMode.enabled: true
+    # (above) so the listener still renders.
+    SLACK_APP_TOKEN: ""
 
     # --- Optional: Google Chat Integration ---
     GOOGLE_CHAT_CLIENT_ID: ""              # OAuth client ID (for setup flow)
@@ -559,6 +582,15 @@ resources:
       memory: "256Mi"
     limits:
       cpu: "500m"
+      memory: "512Mi"
+  # Slack Socket Mode listener: lightweight, just holds a WebSocket and
+  # dispatches events into the same background chat pipeline as the webhook.
+  slackSocketMode:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "300m"
       memory: "512Mi"
   chatbot:
     requests:

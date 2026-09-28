@@ -477,11 +477,15 @@ See the [Bitbucket connector guide](../integrations/connectors.md#bitbucket) for
 | `SLACK_CLIENT_ID` | Slack App Client ID |
 | `SLACK_CLIENT_SECRET` | Slack App Client Secret |
 | `SLACK_SIGNING_SECRET` | Slack App Signing Secret |
+| `SLACK_APP_TOKEN` | App-level token (`xapp-...`) with `connections:write`. Set it to enable Socket Mode (outbound WebSocket) instead of HTTP webhooks — for private/self-hosted deployments with no public URL. Leave empty to use HTTP webhooks. |
 
 ```bash
 SLACK_CLIENT_ID=your-client-id
 SLACK_CLIENT_SECRET=your-client-secret
 SLACK_SIGNING_SECRET=your-signing-secret
+
+# Private/self-hosted only (no public webhook URL) — see the Slack connector docs
+SLACK_APP_TOKEN=
 ```
 
 ### Google Chat
