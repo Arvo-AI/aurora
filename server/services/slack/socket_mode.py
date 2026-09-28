@@ -48,6 +48,48 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+class SocketModeConfigError(RuntimeError):
+    """Socket Mode was asked for (token present) but the config is unusable."""
+
+
+# Resolved once at startup by _load_handlers(), never on the hot path. Importing
+# routes.slack.slack_events builds the Flask app and registers every Celery task
+# (~5s observed), so paying that on the first envelope pushed the ack past
+# Slack's ~3s deadline — Slack retried and the event was handled twice
+# (duplicate replies). Warmed in run() before connecting.
+_handlers: dict = {}
+_handlers_lock = threading.Lock()
+
+
+def _load_handlers() -> dict:
+    """Import and cache the shared handlers + SDK response class.
+
+    Not done at module import so ``import services.slack.socket_mode`` stays
+    cheap for tooling/tests; warmed before ``client.connect()`` so no Slack
+    envelope ever pays the import cost.
+    """
+    # Warm already — the common path, hit on every envelope.
+    if _handlers:
+        return _handlers
+
+    with _handlers_lock:
+        # Another thread warmed it while we waited on the lock.
+        if _handlers:
+            return _handlers
+
+        from slack_sdk.socket_mode.response import SocketModeResponse
+
+        from routes.slack.slack_events import process_event_callback, process_interaction
+
+        _handlers.update(
+            SocketModeResponse=SocketModeResponse,
+            process_event_callback=process_event_callback,
+            process_interaction=process_interaction,
+        )
+
+    return _handlers
+
+
 def _post_response_url(response_url: str, body: dict) -> None:
     """Deliver an interaction result to Slack via the payload's response_url.
 
@@ -78,7 +120,7 @@ def _process_interaction_async(payload: dict) -> None:
     returns a non-empty body, deliver it through the interaction's
     ``response_url`` (Slack's follow-up mechanism) instead of the ack.
     """
-    from routes.slack.slack_events import process_interaction
+    process_interaction = _load_handlers()["process_interaction"]
 
     try:
         response_payload = process_interaction(payload)
@@ -100,12 +142,14 @@ def _dispatch(client, req) -> None:
     (Slack disconnects a client that does not ack within ~3s), then process.
     Interactions are handed to a background thread and their result is delivered
     via the payload's ``response_url`` so a slow handler never delays the ack.
-    """
-    from slack_sdk.socket_mode.response import SocketModeResponse
 
-    # Imported lazily so importing this module never drags in the Flask app
-    # unless the listener actually runs.
-    from routes.slack.slack_events import process_event_callback
+    Handlers come from the pre-warmed cache — nothing on this path may import
+    ``routes.slack.slack_events``, or the first envelope pays a multi-second
+    import and Slack retries it as a duplicate.
+    """
+    handlers = _load_handlers()
+    SocketModeResponse = handlers["SocketModeResponse"]
+    process_event_callback = handlers["process_event_callback"]
 
     try:
         payload = req.payload or {}
@@ -152,8 +196,12 @@ def build_client():
 
     Socket Mode is enabled purely by the presence of an app-level token:
     set ``SLACK_APP_TOKEN`` (an ``xapp-...`` token with the
-    ``connections:write`` scope) to turn the listener on. Returns None when the
-    token is absent or malformed, so callers can log and skip.
+    ``connections:write`` scope) to turn the listener on.
+
+    Returns None when the token is absent (Socket Mode simply off — the HTTP
+    Events API handles Slack). Raises :class:`SocketModeConfigError` when a
+    token *is* set but malformed, so the operator gets a crashing pod instead of
+    a healthy-looking one that never connected.
     """
     app_token = os.getenv("SLACK_APP_TOKEN", "").strip()
     if not app_token:
@@ -166,11 +214,10 @@ def build_client():
     # An app-level token always starts with xapp-; a bot token (xoxb-) here is a
     # common misconfiguration that fails with a confusing handshake error.
     if not app_token.startswith("xapp-"):
-        logger.error(
+        raise SocketModeConfigError(
             "SLACK_APP_TOKEN does not look like an app-level token (expected 'xapp-' prefix). "
             "Socket Mode needs the App-Level Token, not the bot/user OAuth token."
         )
-        return None
 
     from slack_sdk.socket_mode import SocketModeClient
     from slack_sdk.web import WebClient
@@ -190,16 +237,32 @@ def build_client():
 def run() -> None:
     """Blocking entrypoint: connect and serve until interrupted.
 
-    Safe to call unconditionally — it returns immediately if Socket Mode is not
-    enabled, so the container can always run this command.
+    Safe to call unconditionally — with no token set it idles instead of
+    connecting, so the container can always run this command. A *broken* token,
+    by contrast, exits non-zero.
     """
-    client = build_client()
+    try:
+        client = build_client()
+    except SocketModeConfigError as exc:
+        # Token set but unusable: exit non-zero so the misconfig surfaces in pod
+        # status / `docker ps` (CrashLoopBackOff, Restarting) instead of hiding
+        # in the logs of a "healthy" container. Private deployments rely on
+        # Socket Mode as their only Slack transport, so silence is the worst
+        # outcome here.
+        logger.error("Slack Socket Mode is misconfigured: %s", exc)
+        raise SystemExit(1)
+
+    # No token at all: HTTP webhooks are the intended transport, so stay idle
+    # rather than crash-looping a service the deployment simply is not using.
     if client is None:
-        # Enabled-but-broken already logged; keep the process alive so a
-        # restart loop does not hammer the scheduler, but do nothing.
         logger.info("Slack Socket Mode listener not started.")
         _sleep_forever()
         return
+
+    # Pay the (slow) handler import here, before any Slack event can arrive, so
+    # the first envelope is acked within Slack's ~3s deadline.
+    logger.info("Preloading Slack event handlers...")
+    _load_handlers()
 
     logger.info("Starting Slack Socket Mode listener (outbound WebSocket to Slack)...")
     client.connect()

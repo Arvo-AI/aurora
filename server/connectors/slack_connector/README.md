@@ -79,10 +79,12 @@ The listener runs as its own process (`python -m services.slack.socket_mode`);
 in Docker Compose it's the `slack_socket_mode` service, and in Helm it's the
 `slack-socket-mode` deployment (rendered when `slackSocketMode.enabled=true` or
 `secrets.backend.SLACK_APP_TOKEN` is set). It stays idle when `SLACK_APP_TOKEN`
-is empty, and reuses the same event/interaction handlers as the HTTP webhook
-path.
+is empty, exits non-zero if the token is set but malformed (so the misconfig
+shows up in container/pod status rather than only in logs), and reuses the same
+event/interaction handlers as the HTTP webhook path.
 
-See `docs/integrations/connectors.md` for full setup details.
+See [the connectors guide](../../../website/docs/integrations/connectors.md#socket-mode-private--self-hosted)
+for full setup details.
 
 ## Troubleshooting
 

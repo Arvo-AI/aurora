@@ -339,8 +339,10 @@ services:
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}
     depends_on:
-      - redis
-      - vault
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
     restart: unless-stopped
 
   redis:

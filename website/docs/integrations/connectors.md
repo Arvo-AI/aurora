@@ -772,7 +772,9 @@ recommended path when a public webhook URL with valid TLS is not available.
      throughput here — the listener only acks and hands off to Celery. Scale
      `celeryWorker` instead if event *processing* is ever the bottleneck.
 6. Restart Aurora. The listener logs `Slack Socket Mode listener connected.` once
-   the outbound WebSocket is established.
+   the outbound WebSocket is established. If the token is set but malformed, the
+   listener exits non-zero instead of idling, so the misconfiguration shows up in
+   pod/container status rather than only in the logs.
 
 #### 4. Get Credentials
 
@@ -804,8 +806,9 @@ SLACK_APP_TOKEN=          # xapp-... app-level token
 | Channels Aurora is added to aren't auto-registered instantly | Subscribe to the `member_joined_channel` bot event for real-time pickup, then reinstall. Otherwise the connector page reconciles membership on load |
 | Deactivating a channel doesn't remove Aurora from it / a channel stays Active after Aurora is kicked | Membership is the source of truth: deactivating calls `conversations.leave`, and the connector page reconciles membership every time it loads, so a channel Aurora was removed from drops off the Active list automatically |
 | Aurora's backend has no public URL (private VPC/cluster, firewall, air-gapped inbound) | Use [Socket Mode](#socket-mode-private--self-hosted): set `SLACK_APP_TOKEN` (`xapp-...`) and enable Socket Mode in the Slack app |
-| "SLACK_APP_TOKEN does not look like an app-level token" in logs | You supplied a bot/user token (`xoxb-`/`xoxp-`). Socket Mode needs the **App-Level Token** (`xapp-`) with `connections:write` |
-| Socket Mode listener starts but no events arrive | Confirm Socket Mode is enabled in the Slack app, the app is reinstalled, and the bot events are subscribed. Duplicate replies mean more than one listener replica is running — keep it at a single instance |
+| "SLACK_APP_TOKEN does not look like an app-level token" in logs | You supplied a bot/user token (`xoxb-`/`xoxp-`). Socket Mode needs the **App-Level Token** (`xapp-`) with `connections:write`. The listener exits non-zero on this, so the pod/container will show as crashing until it's corrected |
+| Socket Mode listener starts but no events arrive | Confirm Socket Mode is enabled in the Slack app, the app is reinstalled, and the bot events are subscribed |
+| Aurora replies twice to the same `@mention` | Slack retried the event because the listener did not ack within ~3s, so it was delivered (and handled) twice. Check the gap between the arrival and completion log lines — this is an ack-latency problem, not a duplicate-listener one: Slack distributes events across an app's sockets rather than duplicating them |
 
 ---
 
