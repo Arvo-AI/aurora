@@ -49,7 +49,8 @@ def bedrock_module(monkeypatch):
     mapper_mod.ModelMapper = ModelMapper
     monkeypatch.setitem(sys.modules, "_bedrock_parent_model_mapper", mapper_mod)
 
-    source = open(_PROVIDER_PATH, encoding="utf-8").read()
+    with open(_PROVIDER_PATH, encoding="utf-8") as f:
+        source = f.read()
     source = source.replace("from ..model_mapper import", "from _bedrock_parent_model_mapper import")
 
     spec = importlib.util.spec_from_loader(f"{pkg_name}.bedrock_provider", loader=None)
