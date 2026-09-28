@@ -542,9 +542,13 @@ secrets:
     AWS_SECRET_ACCESS_KEY: ""
     
     # --- Optional: Email/SMTP ---
-    SMTP_HOST: ""                # e.g., smtp.gmail.com
+    # SMTP_HOST, SMTP_USER and SMTP_PASSWORD are ALL required together.
+    # If any one is blank, EmailService raises ValueError at construction and
+    # get_email_service() fails outright — every email feature (RCA
+    # notifications, account verification codes) then silently breaks.
+    SMTP_HOST: ""                # e.g., smtp.gmail.com / smtp.sendgrid.net
     SMTP_PORT: "587"
-    SMTP_USER: ""
+    SMTP_USER: ""                # SendGrid uses the literal string "apikey"
     SMTP_PASSWORD: ""
     SMTP_FROM_EMAIL: ""
     SMTP_FROM_NAME: "Aurora"

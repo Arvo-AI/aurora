@@ -25,14 +25,14 @@ from utils.auth.enforcer import (
 )
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.db_utils import connect_to_db_as_user
-from utils.log_sanitizer import sanitize
+from utils.log_sanitizer import mask_email, sanitize
 
 logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[Admin]"
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
-from utils.auth import VALID_ROLES
+from utils.auth import VALID_ROLES, normalize_email
 
 
 @admin_bp.route("/users", methods=["GET"])
@@ -74,7 +74,7 @@ def create_user(user_id):
     their consent).
     """
     data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
+    email = normalize_email(data.get("email"))
     password = data.get("password") or ""
     name = (data.get("name") or "").strip()
     role = (data.get("role") or "viewer").strip().lower()
@@ -92,7 +92,9 @@ def create_user(user_id):
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix=_LOG_PREFIX)
 
-            cur.execute("SELECT id, email, name, org_id FROM users WHERE email = %s", (email,))
+            # Normalized comparison so "add user" finds an existing mixed-case
+            # account instead of inserting a second row for the same person.
+            cur.execute("SELECT id, email, name, org_id FROM users WHERE LOWER(email) = %s", (email,))
             existing = cur.fetchone()
 
             # Step 1: Dry-run check used by the 2-step "Add Member" dialog.
@@ -110,16 +112,19 @@ def create_user(user_id):
                 if target_org_id == org_id:
                     return jsonify({"error": "This user is already a member of your organization"}), 409
 
-                # Expire any stale invitations, then check for an active one
+                # Expire any stale invitations, then check for an active one.
+                # Matched on the normalized email: org_routes stores invitations
+                # lowercased, so comparing a legacy mixed-case users.email here
+                # would miss a pending row and then hit the unique constraint.
                 cur.execute(
                     """UPDATE org_invitations SET status = 'expired'
-                       WHERE org_id = %s AND email = %s AND status = 'pending'
+                       WHERE org_id = %s AND LOWER(email) = %s AND status = 'pending'
                          AND expires_at IS NOT NULL AND expires_at <= NOW()""",
-                    (org_id, target_email),
+                    (org_id, email),
                 )
                 cur.execute(
-                    "SELECT id FROM org_invitations WHERE org_id = %s AND email = %s AND status = 'pending'",
-                    (org_id, target_email),
+                    "SELECT id FROM org_invitations WHERE org_id = %s AND LOWER(email) = %s AND status = 'pending'",
+                    (org_id, email),
                 )
                 if cur.fetchone():
                     return jsonify({"error": "An invitation for this user is already pending"}), 409
@@ -127,8 +132,8 @@ def create_user(user_id):
                 # Clear old cancelled/declined/expired rows to avoid unique constraint
                 cur.execute(
                     """DELETE FROM org_invitations
-                       WHERE org_id = %s AND email = %s AND status IN ('cancelled', 'declined', 'expired')""",
-                    (org_id, target_email),
+                       WHERE org_id = %s AND LOWER(email) = %s AND status IN ('cancelled', 'declined', 'expired')""",
+                    (org_id, email),
                 )
 
                 from utils.hooks import get_hook
@@ -147,13 +152,13 @@ def create_user(user_id):
                     """INSERT INTO org_invitations (id, org_id, email, role, invited_by, status, expires_at)
                        VALUES (%s, %s, %s, %s, %s, 'pending', %s)
                        RETURNING id""",
-                    (invitation_id, org_id, target_email, role, user_id, expires_at),
+                    (invitation_id, org_id, email, role, user_id, expires_at),
                 )
                 conn.commit()
 
                 logger.info("Admin %s created invitation %s for existing user %s (%s) to join org %s",
                             sanitize(user_id), invitation_id, sanitize(target_id),
-                            sanitize(target_email), sanitize(org_id))
+                            mask_email(target_email), sanitize(org_id))
                 record_audit_event(org_id, user_id, "create_invitation", "user", target_id,
                                    {"email": target_email, "role": role, "invitation_id": invitation_id}, request)
                 return jsonify({
@@ -209,7 +214,7 @@ def create_user(user_id):
         except Exception as casbin_err:
             logger.warning("Failed to assign Casbin role for %s: %s", new_user_id, casbin_err)
 
-        logger.info("Admin %s created user %s (%s) with role '%s'", sanitize(user_id), sanitize(new_user_id), sanitize(email), sanitize(role))
+        logger.info("Admin %s created user %s (%s) with role '%s'", sanitize(user_id), sanitize(new_user_id), mask_email(email), sanitize(role))
         record_audit_event(org_id or "", user_id, "create_user", "user", new_user_id,
                            {"email": email, "role": role}, request)
         return jsonify({
@@ -406,6 +411,6 @@ def delete_user(user_id, target_user_id):
         logger.warning("Failed to clean up Casbin policies for deleted user %s: %s",
                         target_user_id, casbin_err)
 
-    logger.info("Admin %s deleted user %s (%s)", sanitize(user_id), sanitize(target_user_id), sanitize(target_email))
+    logger.info("Admin %s deleted user %s (%s)", sanitize(user_id), sanitize(target_user_id), mask_email(target_email))
     record_audit_event(org_id or "", user_id, "delete_user", "user", target_user_id, {"email": target_email}, request)
     return jsonify({"message": "User deleted", "id": target_user_id}), 200

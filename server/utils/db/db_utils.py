@@ -5,6 +5,7 @@ from psycopg2 import DatabaseError
 from dotenv import load_dotenv
 import os
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import mask_email
 
 # Load environment variables
 load_dotenv()
@@ -3209,6 +3210,76 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(f"Error adding users.org_id FK: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_org_fk")
+
+            # Migration: normalize users.email to lowercase and enforce
+            # case-insensitive uniqueness.
+            #
+            # Login looked up `WHERE u.email = %s` (case-sensitive) while admin
+            # creation and invitation matching stored/compared `.strip().lower()`.
+            # A user whose stored email was lowercase but who typed any
+            # capitalization (mobile keyboards autocapitalize the first letter)
+            # failed the exact match and got "Invalid credentials" despite having
+            # a valid account — and the case-sensitive UNIQUE constraint then let
+            # them register a *second* row for the same address. Normalize the
+            # existing rows, then enforce it in the DB so no future code path can
+            # reintroduce the split.
+            try:
+                cursor.execute("SAVEPOINT sp_email_ci")
+
+                # Lowercase only rows that don't collide with an existing
+                # lowercase row. Genuine duplicates are reported below, never
+                # merged — picking a winner would silently discard one real
+                # person's account, org membership and history.
+                cursor.execute("""
+                    UPDATE users u
+                    SET email = LOWER(u.email)
+                    WHERE u.email <> LOWER(u.email)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM users o
+                          WHERE o.id <> u.id AND LOWER(o.email) = LOWER(u.email)
+                      );
+                """)
+                if cursor.rowcount:
+                    logging.info(
+                        "Normalized %d mixed-case user email(s) to lowercase.",
+                        cursor.rowcount,
+                    )
+
+                # Surface any remaining collisions for manual reconciliation.
+                cursor.execute("""
+                    SELECT LOWER(email), COUNT(*) FROM users
+                    GROUP BY LOWER(email) HAVING COUNT(*) > 1;
+                """)
+                dupes = cursor.fetchall()
+                for norm_email, dupe_count in dupes:
+                    logging.error(
+                        "Duplicate accounts share email %s (%d rows). "
+                        "Case-insensitive unique index NOT applied. Reconcile these "
+                        "accounts manually, then restart to enforce uniqueness.",
+                        mask_email(norm_email), dupe_count,
+                    )
+
+                # Only safe to add the unique index once no collisions remain —
+                # creating it with duplicates present would fail the whole
+                # migration and, worse, imply the data is already clean.
+                if not dupes:
+                    cursor.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower "
+                        "ON users (LOWER(email));"
+                    )
+                    logging.info("Enforced case-insensitive uniqueness on users.email.")
+
+                cursor.execute("RELEASE SAVEPOINT sp_email_ci")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error normalizing user emails: {e}")
+                # Defensive: if the transaction is already aborted the rollback
+                # itself raises, which at boot would take the whole server down
+                # over a non-critical migration.
+                try:
+                    cursor.execute("ROLLBACK TO SAVEPOINT sp_email_ci")
+                except Exception:
+                    logging.debug("ROLLBACK TO SAVEPOINT also failed for sp_email_ci")
 
             # Backfill org_id on all data tables — single source of truth
             # in utils/db/org_backfill.py.  Covers user-scoped tables (dynamic

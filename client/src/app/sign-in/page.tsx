@@ -35,6 +35,13 @@ const taglines: Record<AuthMode, { line1: string; line2: string; desc: string }>
   },
 }
 
+// Mobile keyboards autocapitalize the first letter and password managers
+// replay whatever case was first typed. The backend stores and compares a
+// lowercase form, so normalize here too — otherwise "Me@x.com" and "me@x.com"
+// look like two different accounts. Stops the bug at the source rather than
+// relying only on the server-side fallback.
+const normalizeEmail = (value: string) => value.trim().toLowerCase()
+
 function getInitialMode(searchParams: URLSearchParams): AuthMode {
   const mode = searchParams.get("mode")
   if (mode === "signup") return "signup"
@@ -162,7 +169,7 @@ function AuthPage() {
     setError("")
     setIsLoading(true)
     try {
-      const result = await signIn("credentials", { email, password, redirect: false })
+      const result = await signIn("credentials", { email: normalizeEmail(email), password, redirect: false })
       if (result?.error) {
         setError("Invalid email or password")
       } else if (result?.ok) {
@@ -192,14 +199,14 @@ function AuthPage() {
       const response = await fetch('/api/auth/register', {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, name, org_name: orgName.trim() })
+        body: JSON.stringify({ email: normalizeEmail(email), password, name, org_name: orgName.trim() })
       })
       if (!response.ok) {
         const data = await response.json()
         setError(data.error || "Registration failed")
         return
       }
-      const result = await signIn("credentials", { email, password, redirect: false })
+      const result = await signIn("credentials", { email: normalizeEmail(email), password, redirect: false })
       if (result?.ok) {
         sessionStorage.removeItem("aurora_onboarding_state")
         sessionStorage.removeItem("aurora_onboarding_queue")
@@ -275,6 +282,9 @@ function AuthPage() {
       })
       const data = await response.json()
       if (!response.ok) { setError(data.error || "Failed to change password"); return }
+      // Not normalized: this comes from the session (i.e. the canonical stored
+      // row), not from a keyboard, and the exact-case value is the best
+      // candidate-ordering hint if legacy duplicates exist for this address.
       const userEmail = session?.user?.email
       if (!userEmail) { setError("Session expired. Please sign in again."); return }
       const result = await signIn("credentials", { email: userEmail, password: newPassword, redirect: false })
@@ -391,7 +401,7 @@ function AuthPage() {
                   <div className="space-y-3">
                     <div>
                       <label htmlFor="signin-email" className="block text-xs font-medium text-[#888] mb-1.5">Email</label>
-                      <input id="signin-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isLoading} />
+                      <input id="signin-email" type="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isLoading} />
                     </div>
                     <div>
                       <label htmlFor="signin-password" className="block text-xs font-medium text-[#888] mb-1.5">Password</label>
@@ -427,7 +437,7 @@ function AuthPage() {
                   </div>
                   <div>
                     <label htmlFor="signup-email" className="block text-xs font-medium text-[#888] mb-1.5">Work email</label>
-                    <input id="signup-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="jane@acme.com" disabled={isLoading} />
+                    <input id="signup-email" type="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="jane@acme.com" disabled={isLoading} />
                   </div>
                   <div>
                     <label htmlFor="signup-password" className="block text-xs font-medium text-[#888] mb-1.5">Password</label>

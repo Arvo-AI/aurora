@@ -89,8 +89,10 @@ def get_org_google_chat_credentials(sender_email: str) -> Optional[Tuple[str, st
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 # No RLS needed — users not RLS-protected
+                # Google sends whatever case is on the Workspace profile, so
+                # normalize both sides to keep the sender resolvable.
                 cursor.execute(
-                    "SELECT id, org_id FROM users WHERE email = %s",
+                    "SELECT id, org_id FROM users WHERE LOWER(email) = LOWER(%s)",
                     (sender_email,),
                 )
                 user_row = cursor.fetchone()
