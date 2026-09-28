@@ -105,15 +105,21 @@ class DatabaseConnectionPool:
                         raise
         return self._pool
 
-    def _getconn_with_retry(self, pool):
-        """Get a connection, waiting up to _POOL_WAIT_TIMEOUT if exhausted.
+    def _getconn_with_retry(self, pool, wait_timeout: Optional[float] = None):
+        """Get a connection, waiting up to ``wait_timeout`` seconds if exhausted.
 
         psycopg2's ThreadedConnectionPool raises PoolError immediately when
         all connections are checked out. This wrapper retries with backoff so
         that short-lived queries (sub-agents, tool callbacks) don't fail just
         because they collided at the same instant.
+
+        ``wait_timeout`` defaults to ``_POOL_WAIT_TIMEOUT``. Callers that must
+        not block a request thread for long (health probes) pass a small value;
+        ``0`` means "fail immediately if the pool is empty".
         """
-        deadline = time.monotonic() + _POOL_WAIT_TIMEOUT
+        if wait_timeout is None:
+            wait_timeout = _POOL_WAIT_TIMEOUT
+        deadline = time.monotonic() + wait_timeout
         attempt = 0
         while True:
             try:
@@ -138,18 +144,22 @@ class DatabaseConnectionPool:
             self._pool_available.notify()
 
     @contextmanager
-    def get_connection(self):
+    def get_connection(self, wait_timeout: Optional[float] = None):
         """Get a connection from the pool with automatic cleanup.
 
         Automatically sets RLS session variables (myapp.current_user_id,
         myapp.current_org_id) from the Flask request context when available.
         This ensures all queries on RLS-protected tables work correctly
         without callers needing to SET them manually.
+
+        ``wait_timeout`` bounds how long to wait for a free pooled connection
+        (default ``_POOL_WAIT_TIMEOUT``); a ``psycopg2.pool.PoolError`` is
+        raised when it expires.
         """
         pool = self._get_pool()
         connection = None
         try:
-            connection = self._getconn_with_retry(pool)
+            connection = self._getconn_with_retry(pool, wait_timeout)
             if connection:
                 connection.autocommit = False
                 self._set_rls_vars(connection)
@@ -221,6 +231,9 @@ class DatabaseConnectionPool:
             status['pool'] = {
                 'min_connections': self.min_connections,
                 'max_connections': self.max_connections,
+                # psycopg2 keeps checked-out connections in the private ``_used``
+                # dict; exposing its size lets /health report pool pressure.
+                'in_use': len(getattr(self._pool, '_used', {}) or {}),
                 'closed': self._pool.closed
             }
 
