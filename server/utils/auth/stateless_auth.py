@@ -647,7 +647,7 @@ def get_user_display_name(user_id: str) -> Optional[str]:
     """Look up a user's display name (users.name) by user_id.
 
     Used to record the actual person behind a human edit (e.g. "added by
-    Olivier"). Returns None when the user has no name set or lookup fails —
+    Alex"). Returns None when the user has no name set or lookup fails —
     callers should fall back to a generic label. users is not RLS-protected.
     """
     if not user_id:

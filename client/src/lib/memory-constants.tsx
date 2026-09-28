@@ -40,7 +40,7 @@ export interface MemoryEntry {
   category: MemoryCategory;
   description: string | null;
   last_edited_by: string | null;
-  // Actual display name of the person who last edited (e.g. "Olivier").
+  // Actual display name of the person who last edited (e.g. "Alex").
   // Null for agent edits or pre-migration entries — fall back to last_edited_by.
   last_edited_by_name?: string | null;
   updated_at: string | null;
@@ -51,7 +51,7 @@ export interface MemoryEntry {
  * Prefers the real person's name, falling back to the generic "User"/"Agent".
  */
 export function formatEditedBy(entry: Pick<MemoryEntry, "last_edited_by" | "last_edited_by_name">): string | null {
-  // Real person's name recorded — show it (e.g. "Olivier").
+  // Real person's name recorded — show it (e.g. "Alex").
   if (entry.last_edited_by_name && entry.last_edited_by_name.trim()) {
     return entry.last_edited_by_name.trim();
   }

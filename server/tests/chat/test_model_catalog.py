@@ -1,6 +1,6 @@
 """Catalog tables stay consistent with each other and with the frontend picker.
 
-Noah's review on #666 flagged that nothing covered these tables, so a model could be
+Review on #666 flagged that nothing covered these tables, so a model could be
 priced but unselectable (or selectable but unpriced / context-less) without any signal.
 Each test below pins one cross-table invariant rather than asserting specific rates, so
 the suite doesn't need editing every time a published price changes.

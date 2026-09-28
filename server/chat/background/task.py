@@ -653,7 +653,7 @@ def run_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to link session to incident: {e}")
 
-            # FUTURE (root-cause dedup, build-order step 4 — needs Noah's sign-off
+            # FUTURE (root-cause dedup, build-order step 4 — needs maintainer sign-off
             # plus shadow-mode precision data before building): pre-investigation
             # early exit. This is the single choke point covering all RCA
             # producers, so the gate belongs here, before

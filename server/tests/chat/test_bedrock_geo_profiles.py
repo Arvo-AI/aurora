@@ -1,6 +1,6 @@
 """Bedrock inference-profile id derivation (geo prefix + region resolution).
 
-Covers the two gaps Noah flagged on #666:
+Covers the two gaps flagged in review on #666:
  - Fable 5 / 5.1 have no ``eu.`` or ``apac.`` profile, so deriving one 404s.
  - ``BEDROCK_REGION=global`` was special-cased in pricing but unreachable in the
    provider, because ``global`` is not an AWS region boto3 can sign against.
