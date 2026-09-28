@@ -32,6 +32,18 @@ spec:
         - name: postgres
           image: postgres:15-alpine
           imagePullPolicy: IfNotPresent
+          {{- if or .Values.services.postgres.maxConnections .Values.services.postgres.extraArgs }}
+          # Command-line settings override postgresql.conf; the image entrypoint
+          # prepends "postgres" when the first arg starts with "-".
+          args:
+            {{- with .Values.services.postgres.maxConnections }}
+            - "-c"
+            - "max_connections={{ . }}"
+            {{- end }}
+            {{- range .Values.services.postgres.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          {{- end }}
           securityContext:
             {{- include "aurora.containerSecurityContext" (dict "service" "postgres" "global" $ "defaults" (dict)) | nindent 12 }}
           ports:

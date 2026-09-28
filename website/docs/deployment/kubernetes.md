@@ -554,17 +554,47 @@ autoscaling:
 
 When enabled, `replicaCounts.*` values are ignored -- HPA manages replicas.
 
-### Per-pod concurrency
+### Per-pod concurrency and the Postgres connection budget
 
 ```yaml
 config:
-  GUNICORN_WORKERS: "4"    # 1 per vCPU
-  GUNICORN_THREADS: "4"    # threads per worker
-  DB_POOL_MAX: "20"        # connections per worker process
-  CELERY_CONCURRENCY: "4"  # parallel tasks per pod
+  GUNICORN_WORKERS: "2"    # processes per API server pod
+  GUNICORN_THREADS: "16"   # threads per worker; keep <= DB_POOL_MAX
+  DB_POOL_MAX: "16"        # connections per Python process
+  CELERY_CONCURRENCY: "4"  # parallel tasks (processes) per worker pod
+services:
+  postgres:
+    maxConnections: 300    # in-cluster Postgres only; the image default is 100
 ```
 
-Ensure PostgreSQL `max_connections` can handle `pods x DB_POOL_MAX`.
+Keep `GUNICORN_THREADS` at or below `DB_POOL_MAX`. A request thread that waits on
+an empty pool (up to 5s) is a thread that cannot answer the readiness or
+liveness probe, and enough of them get the pod killed.
+
+Every Python process opens its own pool, so Postgres must allow at least:
+
+```
+  server pods   x GUNICORN_WORKERS   x (DB_POOL_MAX + 15)   # +15 for the RBAC engine
++ worker pods   x CELERY_CONCURRENCY x DB_POOL_MAX
++ chatbot pods  x DB_POOL_MAX
++ celery-beat   x DB_POOL_MAX
++ mcp           x 10
+```
+
+With the defaults above, one replica of each service needs about 170
+connections and two server plus two worker replicas need about 300. Raise
+`services.postgres.maxConnections` (or `max_connections` on your managed
+Postgres) before enabling the HPA or adding replicas. Changing the value
+restarts the in-cluster Postgres pod once.
+
+### API server probes
+
+`/health/liveness` is a constant 200 and only fails when the process has no
+free thread for the kubelet's timeout; the defaults give it 120s
+(`server.probes.liveness`: period 20s, timeout 10s, 6 failures) before the pod
+is restarted. `/health/readiness` checks Postgres and Redis with short bounded
+waits and reports a busy connection pool as `degraded` (HTTP 200) rather than
+taking the pod out of the Service.
 
 ## Using Pre-Existing Kubernetes Secrets
 

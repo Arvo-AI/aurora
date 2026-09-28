@@ -22,6 +22,20 @@ fullnameOverride: ""
 services:
   postgres:
     enabled: true    # Set false to use external Postgres (RDS, Cloud SQL, etc.)
+    # max_connections for the in-cluster Postgres (postgres:15-alpine ships 100).
+    # Every Aurora Python process opens its own pool of up to config.DB_POOL_MAX
+    # connections, so the budget is roughly:
+    #   server pods  x GUNICORN_WORKERS   x (DB_POOL_MAX + 15)   # +15 for the RBAC engine
+    # + worker pods  x CELERY_CONCURRENCY x DB_POOL_MAX
+    # + chatbot pods x DB_POOL_MAX + celery-beat x DB_POOL_MAX + mcp x 10
+    # With the config defaults (2 workers, pool 16, concurrency 4) one replica of
+    # each is ~170 and two server + two worker replicas is ~300. Raise this before
+    # enabling autoscaling or adding replicas. Changing it restarts the Postgres
+    # pod once. Ignored when services.postgres.enabled is false: set
+    # max_connections on your managed Postgres instead.
+    maxConnections: 300
+    # Extra "postgres -c key=value" style arguments, e.g. ["-c", "shared_buffers=256MB"]
+    extraArgs: []
   redis:
     enabled: true    # Set false to use external Redis (ElastiCache, Memorystore, etc.)
   vault:
@@ -101,18 +115,53 @@ frontendImage: {}
 # ------------------------------------------------------------------------------
 # Autoscaling (HPA)
 # ------------------------------------------------------------------------------
+# Every extra server or worker replica adds GUNICORN_WORKERS x (DB_POOL_MAX + 15)
+# or CELERY_CONCURRENCY x DB_POOL_MAX Postgres connections. Check the budget in
+# services.postgres.maxConnections before raising maxReplicas: with the config
+# defaults, 3 + 3 replicas already needs ~420 connections.
 autoscaling:
   server:
     enabled: false
     minReplicas: 2
-    maxReplicas: 6
+    maxReplicas: 3
     targetCPU: 70
     targetMemory:         # optional — set to e.g. 80 to also scale on memory
   celeryWorker:
     enabled: false
     minReplicas: 2
-    maxReplicas: 6
+    maxReplicas: 3
     targetCPU: 70
+
+# ------------------------------------------------------------------------------
+# API server probes
+# ------------------------------------------------------------------------------
+# /health/liveness is a constant 200 that needs one free gunicorn thread and
+# nothing else, so it only fails when the process is saturated; 6 x 20s gives it
+# 120s to drain before kubelet restarts the pod (was 3 x 20s = 60s, with a 5s
+# timeout that a busy process missed under a burst of alerts).
+# /health/readiness checks Postgres + Redis with short bounded waits and reports
+# a busy connection pool as degraded (HTTP 200) instead of 503, so load alone
+# never takes the pod out of the Service.
+server:
+  probes:
+    startup:
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 30
+    readiness:
+      periodSeconds: 10
+      timeoutSeconds: 10
+      failureThreshold: 3
+    liveness:
+      # "http" (default) = GET /health/liveness, needs one free gunicorn thread.
+      # "tcp" = only checks that port 5080 accepts connections: never restarts a
+      # saturated-but-listening pod. Use it if a deployment still shows
+      # "failed liveness probe" restarts under alert bursts.
+      type: http
+      periodSeconds: 20
+      timeoutSeconds: 10
+      failureThreshold: 6
 
 # ------------------------------------------------------------------------------
 # Extra environment variables (for marketplace metering, custom integrations, etc.)
@@ -235,11 +284,18 @@ config:
   GUARDRAILS_LLM_MODEL: ""
 
   # --- Concurrency & Pool Sizing ---
+  # Keep GUNICORN_THREADS <= DB_POOL_MAX. Every request thread may need a DB
+  # connection, and a thread that waits on an empty pool (up to 5s) is a thread
+  # that cannot answer the readiness or liveness probe; enough of them and the
+  # pod is killed. Each of GUNICORN_WORKERS and CELERY_CONCURRENCY is a separate
+  # process with its own DB_POOL_MAX-sized pool: size Postgres accordingly
+  # (see services.postgres.maxConnections).
+  # Incident SSE streams are capped at GUNICORN_THREADS / 4 per worker process.
   GUNICORN_WORKERS: "2"
-  GUNICORN_THREADS: "32"
+  GUNICORN_THREADS: "16"
   CELERY_CONCURRENCY: "4"
   DB_POOL_MIN: "2"
-  DB_POOL_MAX: "20"
+  DB_POOL_MAX: "16"
 
   # --- Performance & Caching ---
   AURORA_SETUP_CACHE_ENABLED: "true"
