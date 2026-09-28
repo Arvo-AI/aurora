@@ -5,7 +5,6 @@ priced but unselectable (or selectable but unpriced / context-less) without any 
 Each test below pins one cross-table invariant rather than asserting specific rates, so
 the suite doesn't need editing every time a published price changes.
 """
-import json
 import os
 import re
 
