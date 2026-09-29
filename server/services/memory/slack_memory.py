@@ -7,6 +7,7 @@ import logging
 
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
+from utils.log_sanitizer import sanitize
 from services.artifacts.store import create_version
 from services.memory import SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE
 
@@ -143,7 +144,13 @@ def seed_slack_memory(user_id: str, org_id: str | None = None) -> bool:
                     source="agent",
                 )
                 conn.commit()
-                logger.info("[SlackMemory] Seeded default Slack memory for org %s", org_id)
+                # org_id can arrive from a request header (X-Org-ID), so strip
+                # control chars before logging — a newline would let a caller
+                # forge log lines (S5145).
+                logger.info(
+                    "[SlackMemory] Seeded default Slack memory for org %s",
+                    sanitize(org_id),
+                )
                 return True
     except Exception:
         logger.exception("[SlackMemory] Failed to seed Slack memory")
