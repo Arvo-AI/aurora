@@ -1,15 +1,9 @@
 """Google Chat sender resolution must not guess a tenant.
 
-``get_org_google_chat_credentials`` maps an inbound event's ``user.email`` to an
-Aurora account and organization. The lookup is case-insensitive, because Google
-sends whatever case is on the Workspace profile.
-
-Legacy rows can share a normalized email across two *different* organizations
-(the old ``users.email`` UNIQUE index was case-sensitive). Unlike ``/login``
-there is no password here to prove which account the sender owns — the Google
-OIDC check only authenticates ``chat@system.gserviceaccount.com``, it does not
-bind the event's ``user.email`` to an org. So an ambiguous match must fail
-closed rather than pick a row and run the event in the wrong tenant.
+The sender lookup is case-insensitive since Google sends whatever case is on the
+Workspace profile. But case-variant duplicate rows can span two orgs, and there's
+no password here to prove ownership, so an ambiguous match must fail closed
+rather than run the event in the wrong tenant.
 """
 
 from unittest.mock import MagicMock

@@ -3211,24 +3211,15 @@ def initialize_tables():
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_org_fk")
 
             # Migration: normalize users.email to lowercase and enforce
-            # case-insensitive uniqueness.
-            #
-            # Login looked up `WHERE u.email = %s` (case-sensitive) while admin
-            # creation and invitation matching stored/compared `.strip().lower()`.
-            # A user whose stored email was lowercase but who typed any
-            # capitalization (mobile keyboards autocapitalize the first letter)
-            # failed the exact match and got "Invalid credentials" despite having
-            # a valid account — and the case-sensitive UNIQUE constraint then let
-            # them register a *second* row for the same address. Normalize the
-            # existing rows, then enforce it in the DB so no future code path can
-            # reintroduce the split.
+            # case-insensitive uniqueness. Login matched email case-sensitively
+            # while registration stored a lowercased copy, so a user typing any
+            # capitalization got "Invalid credentials" and could then register a
+            # duplicate row. Enforced in the DB so no code path can reintroduce it.
             try:
                 cursor.execute("SAVEPOINT sp_email_ci")
 
-                # Lowercase only rows that don't collide with an existing
-                # lowercase row. Genuine duplicates are reported below, never
-                # merged — picking a winner would silently discard one real
-                # person's account, org membership and history.
+                # Skip rows that would collide — genuine duplicates are reported
+                # below, never merged, since picking a winner discards an account.
                 cursor.execute("""
                     UPDATE users u
                     SET email = LOWER(u.email)

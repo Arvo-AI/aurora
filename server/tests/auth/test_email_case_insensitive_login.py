@@ -1,17 +1,11 @@
 """Login must resolve an account by normalized email, and by *password*.
 
-Background: ``/api/auth/login`` matched ``WHERE u.email = %s`` (case-sensitive)
-while admin user creation and invitation matching stored/compared
-``.strip().lower()``. An admin-invited user who typed any capitalization got a
-generic "Invalid credentials" despite owning a valid account, and — because the
-``/register`` duplicate check was case-sensitive too — could then register a
-*second* account for the same address.
-
-Duplicate rows therefore exist in production. A case-insensitive lookup that
-returns ``fetchone()`` would be non-deterministic about which row it picks,
-which would take login away from whoever can authenticate right now. These
-tests pin the required behaviour: every candidate is authenticated and the
-password decides which account is returned.
+Login matched email case-sensitively while registration stored a lowercased
+copy, so users who typed any capitalization got "Invalid credentials" and could
+register a duplicate. Those duplicate rows exist in production, so a lookup
+using fetchone() would be non-deterministic about which row it picks and could
+take login away from whoever can authenticate today. These tests pin the
+required behaviour: every candidate is authenticated and the password decides.
 
 Fixtures use fictional ``example.com`` addresses that mirror the *shape* of the
 production duplicates. Never put real user emails, names or org names in tests.

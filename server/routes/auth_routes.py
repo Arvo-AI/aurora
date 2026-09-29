@@ -42,14 +42,10 @@ def _name_to_slug(name: str) -> str:
 def _password_matches(password, password_hash) -> bool:
     """bcrypt comparison that returns False instead of raising.
 
-    A malformed/truncated hash, a NULL/empty hash, a non-string password from a
-    hand-crafted JSON body, or an over-long password all make bcrypt raise.
-    That would surface as a 500 instead of a 401 and — when several legacy rows
-    share a normalized email — could abort the candidate loop before reaching
-    the account that would actually have authenticated.
-
-    ``.encode()`` on a non-string raises AttributeError, which is NOT covered
-    by the (ValueError, TypeError) tuple, hence the explicit isinstance guard.
+    A malformed hash, non-string password, or over-long password all make bcrypt
+    raise, which would 500 instead of 401 and abort the candidate loop early.
+    The isinstance guard is needed because .encode() on a non-string raises
+    AttributeError, which (ValueError, TypeError) below does not catch.
     """
     if not password_hash or not isinstance(password, str) or not isinstance(password_hash, str):
         return False
@@ -486,28 +482,22 @@ def login():
                 candidates = cursor.fetchall()
 
                 # No account for this email — still run one bcrypt check against
-                # the dummy hash so response time doesn't reveal which emails
-                # exist.
+                # the dummy hash so response time doesn't reveal which emails exist.
                 if not candidates:
                     _password_matches(password, _DUMMY_BCRYPT_HASH)
                     user = None
                 else:
-                    # Legacy rows can share a normalized email because the old
-                    # UNIQUE index was case-sensitive. Authenticate against every
-                    # candidate so the password decides which account is
-                    # returned, never row ordering — otherwise a user who can log
-                    # in today could be handed a row whose password they never
-                    # set. Merging or deleting the other row would lock out
-                    # whoever owns it, so nothing is mutated here.
+                    # Legacy case-variant duplicates exist, so let the password
+                    # pick the account rather than row order. Nothing is mutated —
+                    # merging would lock out whoever owns the other row.
                     user = next(
                         (c for c in candidates if _password_matches(password, c[3])),
                         None,
                     )
 
-                # Resolve audit identifiers before branching so the variable
-                # lookups don't create a measurable timing difference. A failed
-                # password is still attributed to the first candidate row, which
-                # is what the previous single-row lookup would have found.
+                # Resolved before branching so variable lookups can't introduce a
+                # timing difference. A failed password is attributed to the first
+                # candidate, matching the old single-row behaviour.
                 _attributed = user or (candidates[0] if candidates else None)
                 _audit_org = (_attributed[5] or "") if _attributed else ""
                 _audit_uid = _attributed[0] if _attributed else ""

@@ -1,16 +1,8 @@
 """Guard the users.email normalization migration.
 
-Two layers:
-
-1. Structural — ``utils/db/db_utils.py`` is imported extremely early at boot
-   (before Flask, and by Celery workers), so pulling ``utils.log_sanitizer``
-   into it must not create an import cycle, and the savepoint block must
-   actually be registered inside ``initialize_tables()``.
-
-2. Behavioural — the migration's SQL is executed against real Postgres rows to
-   prove it lowercases non-colliding emails, refuses the unique index while
-   collisions remain, and never deletes or merges a colliding row. Skips
-   cleanly when Postgres is unreachable.
+Runs the migration's SQL against real Postgres rows to prove it lowercases
+non-colliding emails, refuses the unique index while collisions remain, and
+never deletes or merges a colliding row. Skips when Postgres is unreachable.
 """
 
 import inspect

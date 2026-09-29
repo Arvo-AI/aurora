@@ -8,18 +8,10 @@ VALID_ROLES = frozenset({ROLE_ADMIN, ROLE_EDITOR, ROLE_VIEWER})
 
 
 def normalize_email(email) -> str:
-    """Canonicalize an email for storage and lookup.
+    """Canonical email form for storage and lookup. Non-strings become "".
 
-    Email addresses are effectively case-insensitive in practice, but mobile
-    keyboards autocapitalize the first letter and password managers replay
-    whatever case was first typed. Storing and comparing a single canonical
-    form keeps an account reachable no matter how the user capitalizes it, and
-    stops a capitalized and a lowercase spelling of one address from becoming
-    two separate accounts.
-
-    Lives here rather than in a route module so login, registration, admin
-    user creation and GitHub provisioning can all share it without importing
-    each other.
+    The isinstance guard matters: callers pass data.get("email") straight in,
+    which is None on a missing key and would raise on .strip().
     """
     if not isinstance(email, str):
         return ""

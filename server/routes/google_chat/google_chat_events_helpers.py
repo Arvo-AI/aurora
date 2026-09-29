@@ -89,9 +89,8 @@ def get_org_google_chat_credentials(sender_email: str) -> Optional[Tuple[str, st
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 # No RLS needed — users not RLS-protected
-                # Google sends whatever case is on the Workspace profile, so
-                # normalize both sides to keep the sender resolvable. Fetch 2 so
-                # an ambiguous case-insensitive match can be detected below.
+                # Google sends whatever case is on the Workspace profile. Fetch 2
+                # so an ambiguous case-insensitive match is detectable below.
                 cursor.execute(
                     "SELECT id, org_id, email FROM users WHERE LOWER(email) = LOWER(%s) "
                     "ORDER BY (email = %s) DESC, created_at ASC LIMIT 2",
@@ -102,16 +101,13 @@ def get_org_google_chat_credentials(sender_email: str) -> Optional[Tuple[str, st
                     logger.warning(f"No Aurora user or org found for {_mask_email(sender_email)}")
                     return None
 
-                # An exact-case hit is unambiguous — users.email is UNIQUE, so
-                # at most one row can equal the sender address exactly.
+                # users.email is UNIQUE, so an exact-case hit is unambiguous.
                 exact_match = user_rows[0][2] == sender_email
 
-                # Legacy case-variant rows can span two different orgs. Unlike
-                # /login there is no password here to prove which account the
-                # sender owns — the Google OIDC check only authenticates
-                # chat@system.gserviceaccount.com, it does not bind the event's
-                # user.email to an Aurora org. Picking the oldest row would run
-                # the event in the wrong tenant, so fail closed instead.
+                # Case-variant rows can span two orgs and, unlike /login, there's
+                # no password here to prove ownership — the OIDC check only
+                # authenticates Google's service account, not the sender. Guessing
+                # would run the event in the wrong tenant, so fail closed.
                 if not exact_match and len(user_rows) > 1:
                     logger.warning(
                         "Ambiguous Aurora accounts for Google Chat sender %s; "
