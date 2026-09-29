@@ -66,23 +66,38 @@ different style under "Per-channel notes".
 """
 
 
-def seed_slack_memory(user_id: str) -> bool:
-    """Create the default "Slack" memory for the user's org if absent (idempotent,
-    non-destructive). Returns True if a new entry was created."""
+def seed_slack_memory(user_id: str, org_id: str | None = None) -> bool:
+    """Create the default "Slack" memory for an org if absent (idempotent,
+    non-destructive). Returns True if a new entry was created.
+
+    ``org_id`` should be passed by request handlers, which resolve the caller's
+    ACTIVE org from the request (``get_org_id_from_request``). Omitting it falls
+    back to resolving the user's org from the DB — correct for background/OAuth
+    callers with no request context, but that lookup is TTL-cached and can lag a
+    recent org change, which would seed one org while the caller reads another.
+    """
     if not user_id:
         return False
 
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                org_id = set_rls_context(
+                # Resolve+configure RLS from the user first, then — if the caller
+                # supplied an explicit org — repoint RLS at it. The INSERT below
+                # must run with myapp.current_org_id matching the org_id it writes,
+                # or FORCE ROW LEVEL SECURITY rejects the row.
+                resolved_org_id = set_rls_context(
                     cursor, conn, user_id, log_prefix="[SlackMemory:seed]"
                 )
+                org_id = org_id or resolved_org_id
                 if not org_id:
                     logger.warning(
                         "[SlackMemory] No org for user; cannot seed Slack memory"
                     )
                     return False
+                if org_id != resolved_org_id:
+                    cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+                    conn.commit()
 
                 # Already present — never overwrite user/agent edits on reconnect.
                 cursor.execute(

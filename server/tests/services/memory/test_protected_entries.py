@@ -59,3 +59,21 @@ def test_agent_forces_the_protected_identity():
     forced_key = f"{SLACK_MEMORY_CATEGORY}/{SLACK_MEMORY_TITLE}"
     entry = {"category": SLACK_MEMORY_CATEGORY, "title": SLACK_MEMORY_TITLE}
     assert _entry_key(entry) == forced_key
+
+
+def test_seed_accepts_an_explicit_org_id():
+    """Request handlers must be able to seed the caller's ACTIVE org.
+
+    The route reads with the org from the request but seeding otherwise resolves
+    the org from the user row (TTL-cached), so the two can disagree after an org
+    change — seeding one org while the retry reads another. The explicit
+    parameter is what keeps them aligned.
+    """
+    import inspect
+
+    from services.memory.slack_memory import seed_slack_memory
+
+    params = inspect.signature(seed_slack_memory).parameters
+    assert "org_id" in params
+    # Must stay optional so background/OAuth callers (no request context) still work.
+    assert params["org_id"].default is None

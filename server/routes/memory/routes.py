@@ -422,9 +422,11 @@ def get_slack_memory(user_id):
             )
 
         # Missing — seed the default policy, then read it back on a fresh
-        # connection (seeding commits on its own admin connection).
+        # connection (seeding commits on its own admin connection). Pass the
+        # request's active org so a user who switched orgs seeds the org they're
+        # actually looking at, not whichever one the user row resolves to.
         if entry is None:
-            seed_slack_memory(user_id)
+            seed_slack_memory(user_id, org_id=org_id)
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
                 set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
