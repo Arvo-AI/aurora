@@ -316,15 +316,18 @@ def post_slack_message(
     The one write tool on the Slack surface. Never raises — a failure here must
     not abort the agent loop; it returns a JSON error the agent can react to.
 
-    Server-side routing guard: the destination must be one of the org's ACTIVE
-    channels (a ``slack_channels`` row — i.e. a channel the user activated /
-    Aurora is a member of). The prompt already tells the agent to post only to
-    channels from get_connected_slack_channels, but a stale "service -> #channel"
-    mapping in the Slack memory, or a name resolved via the live
-    list_slack_channels, could otherwise still land a message in a channel the
-    user deactivated. Enforcing it here makes deactivation actually stop posts.
-    Auto-joins the channel once on not_in_channel and retries, mirroring the
-    notification service.
+    Membership guard (``_is_member_channel``): the destination must be a channel
+    Aurora is a member of, i.e. an active channel — deactivating a channel is a
+    real ``conversations.leave``. This is NOT redundant with Slack's own
+    ``not_in_channel`` rejection: this tool used to answer ``not_in_channel`` by
+    calling ``conversations.join`` and retrying, so a post aimed at a
+    deactivated *public* channel (a stale "service -> #channel" mapping in the
+    Slack memory, or a name resolved via the live list_slack_channels) would
+    make Aurora silently rejoin the channel it had just been told to leave, and
+    the post would land. Slack won't stop that for us; the guard does, and the
+    auto-join is gone from the write path (reads still self-join public
+    channels, which is harmless). Joining is an explicit user action
+    (activate / invite), never a side effect of posting.
     """
     if not user_id:
         return json.dumps({"error": _ERR_NO_USER})
@@ -338,14 +341,13 @@ def post_slack_message(
     if len(text) > _MAX_POST_CHARS:
         text = text[: _MAX_POST_CHARS - 3] + "..."
 
-    if not _is_active_channel(user_id, channel_id):
-        logger.info("[SlackTool] Refused post to inactive/unknown channel %s", channel_id)
+    if not _is_member_channel(user_id, channel_id):
+        logger.info("[SlackTool] Refused post to non-member channel %s", channel_id)
         return json.dumps({
             "error": (
-                f"Channel {channel_id} is not an active Aurora channel (deactivated, "
-                "or Aurora is not a member). Only post to channels returned by "
-                "get_connected_slack_channels; if the Slack memory maps a service to "
-                "this channel, that mapping is stale — correct it instead of posting."
+                f"Aurora is not a member of channel {channel_id} (it was deactivated, "
+                "or never activated). Do not post here and do not try to join it. "
+                "Only post to channels returned by get_connected_slack_channels."
             ),
             "code": "channel_not_active",
         })
@@ -360,16 +362,16 @@ def post_slack_message(
     try:
         response = _send()
     except SlackAPIError as e:
-        # not_in_channel → join once and retry, else surface the error.
+        # not_in_channel here means membership changed under us (removed
+        # between the guard and the post). Never join to recover — see the
+        # docstring — just report it.
         if getattr(e, "error", None) == "not_in_channel":
-            try:
-                client.join_channel(channel_id)
-                response = _send()
-            except Exception as retry_err:
-                logger.info("[SlackTool] Post retry after join failed for %s", channel_id)
-                return json.dumps({"error": f"Could not post to channel after join: {retry_err}"})
-        else:
-            return json.dumps({"error": f"Slack API error: {e}"})
+            logger.info("[SlackTool] Post refused, Aurora is not in channel %s", channel_id)
+            return json.dumps({
+                "error": f"Aurora is not a member of channel {channel_id}; message not posted.",
+                "code": "channel_not_active",
+            })
+        return json.dumps({"error": f"Slack API error: {e}"})
     except Exception as e:
         logger.info("[SlackTool] Failed to post message to %s", channel_id)
         return json.dumps({"error": f"Failed to post message: {e}"})
@@ -385,13 +387,16 @@ def post_slack_message(
     })
 
 
-def _is_active_channel(user_id: str, channel_id: str) -> bool:
-    """True if ``channel_id`` is one of the org's active Slack channels.
+def _is_member_channel(user_id: str, channel_id: str) -> bool:
+    """True if Aurora is a member of ``channel_id`` (an org ``slack_channels``
+    row with ``is_member``).
 
-    Same eligibility as get_connected_slack_channels: a ``slack_channels`` row
-    (membership is the source of truth) whose description is ``ready``, so the
-    guard and the list the agent picks from can't disagree. Fails CLOSED on a
-    DB error: dropping one teammate message is better than posting into a
+    Same bar as ``routes.slack.slack_channels._is_active_channel``: membership
+    is the permission to post. The description (``metadata_status``) is only a
+    hint for *choosing* a channel and is deliberately not required here — a
+    member channel whose description hasn't generated yet is still a legitimate
+    destination (e.g. a thread reply, or a routing-map entry). Fails CLOSED on
+    a DB error: dropping one teammate message is better than posting into a
     channel the user asked Aurora to stay out of.
     """
     try:
@@ -407,13 +412,13 @@ def _is_active_channel(user_id: str, channel_id: str) -> bool:
                 cur.execute(
                     f"""SELECT 1 FROM slack_channels
                          WHERE provider = 'slack' AND channel_id = %s AND {predicate}
-                           AND metadata_status = 'ready'
+                           AND is_member
                          LIMIT 1""",
                     (channel_id, *pred_params),
                 )
                 return cur.fetchone() is not None
     except Exception:
-        logger.exception("[SlackTool] Could not verify channel %s is active; refusing post", channel_id)
+        logger.exception("[SlackTool] Could not verify membership of channel %s; refusing post", channel_id)
         return False
 
 

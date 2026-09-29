@@ -15,11 +15,11 @@ import chat.backend.agent.tools.slack_tool as slack_tool
 def _run(client, active=True, **kwargs):
     """Invoke post_slack_message with the Slack client patched to `client`.
 
-    ``active`` stands in for the server-side "is this one of the org's active
-    channels" DB check (default: yes, so the Slack-transport tests stay focused).
+    ``active`` stands in for the server-side "is Aurora a member of this channel"
+    DB check (default: yes, so the Slack-transport tests stay focused).
     """
     with patch.object(slack_tool, "get_slack_client_for_user", return_value=client), \
-            patch.object(slack_tool, "_is_active_channel", return_value=active):
+            patch.object(slack_tool, "_is_member_channel", return_value=active):
         return json.loads(slack_tool.post_slack_message(user_id="u1", **kwargs))
 
 
@@ -40,22 +40,14 @@ def test_threaded_reply_passes_thread_ts():
     assert client.sent[0]["thread_ts"] == "1700000000.000001"
 
 
-def test_not_in_channel_joins_and_retries():
+def test_not_in_channel_never_rejoins():
+    """Membership changed between the guard and the post: report it, do not
+    join. Joining here would undo a deactivate (conversations.leave)."""
     client = FakeSlackClient(not_in_channel_until_joined=True, join_succeeds=True)
     out = _run(client, channel_id=CHAN, text="hi")
-    assert out["status"] == "posted"
-    # Joined once, then the retry landed the message.
-    assert client.joined == [CHAN]
-    assert len(client.sent) == 1
-
-
-def test_not_in_channel_join_fails_returns_error():
-    client = FakeSlackClient(not_in_channel_until_joined=True, join_succeeds=True)
-    # join "succeeds" but membership check in the fake only flips on join_channel;
-    # simulate a persistent not_in_channel by never adding to joined.
-    client.join_channel = lambda channel: None  # join returns None → still not a member
-    out = _run(client, channel_id=CHAN, text="hi")
-    assert "error" in out
+    assert out["code"] == "channel_not_active"
+    assert client.joined == []
+    assert client.sent == []
 
 
 def test_empty_text_rejected():
@@ -91,7 +83,7 @@ def test_long_text_is_trimmed_not_rejected():
     assert len(client.sent[0]["text"]) <= slack_tool._MAX_POST_CHARS
 
 
-def test_inactive_channel_refused_before_any_slack_call():
+def test_non_member_channel_refused_before_any_slack_call():
     """Deactivating a channel must actually stop posts: a stale routing-map
     entry or a name resolved from the live listing can't bypass the guard."""
     client = FakeSlackClient()
@@ -102,7 +94,7 @@ def test_inactive_channel_refused_before_any_slack_call():
     assert client.joined == []
 
 
-def test_active_check_fails_closed_on_db_error():
+def test_membership_check_fails_closed_on_db_error():
     """If the DB lookup blows up we refuse rather than post somewhere unknown."""
     with patch("utils.db.org_scope.resolve_org", side_effect=RuntimeError("db down")):
-        assert slack_tool._is_active_channel("u1", CHAN) is False
+        assert slack_tool._is_member_channel("u1", CHAN) is False
