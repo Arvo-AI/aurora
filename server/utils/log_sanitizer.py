@@ -50,21 +50,6 @@ def sanitize(value: object) -> str:
     return _CONTROL_CHARS.sub("", str(value))
 
 
-def mask_email(value: object) -> str:
-    """Mask an email for logging: 'foo@bar.com' -> 'foo***@***'.
-
-    Emails are PII and must never be logged in full. A short prefix of the
-    local part is enough for an operator to correlate a log line with a known
-    account without the log itself disclosing the address. The prefix is taken
-    from the local part only — slicing the raw string would leak the '@' (and
-    the start of the domain) for very short local parts.
-    """
-    if not isinstance(value, str) or not value:
-        return "***"
-    local = _CONTROL_CHARS.sub("", value).split("@", 1)[0]
-    return f"{local[:3]}***@***"
-
-
 def safe_provider(value: object) -> str:
     """Return an allowlisted provider label safe for logging.
 

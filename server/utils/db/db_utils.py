@@ -5,7 +5,6 @@ from psycopg2 import DatabaseError
 from dotenv import load_dotenv
 import os
 from utils.db.connection_pool import db_pool
-from utils.log_sanitizer import mask_email
 
 # Load environment variables
 load_dotenv()
@@ -3256,7 +3255,7 @@ def initialize_tables():
                         "Duplicate accounts share email %s (%d rows). "
                         "Case-insensitive unique index NOT applied. Reconcile these "
                         "accounts manually, then restart to enforce uniqueness.",
-                        mask_email(norm_email), dupe_count,
+                        norm_email, dupe_count,
                     )
 
                 # Only safe to add the unique index once no collisions remain —

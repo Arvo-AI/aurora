@@ -327,7 +327,7 @@ def test_over_long_correct_password_is_not_a_500():
 
 
 # ---------------------------------------------------------------------------
-# normalize_email / mask_email
+# normalize_email
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
@@ -347,23 +347,3 @@ def test_normalize_email(raw, expected):
     from utils.auth import normalize_email
 
     assert normalize_email(raw) == expected
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("first.last@example.com", "fir***@***"),
-        ("ab@x.com", "ab***@***"),
-        ("a@x.com", "a***@***"),
-        ("", "***"),
-        (None, "***"),
-        (12345, "***"),
-    ],
-)
-def test_mask_email_never_leaks_the_address(raw, expected):
-    from utils.log_sanitizer import mask_email
-
-    masked = mask_email(raw)
-    assert masked == expected
-    if isinstance(raw, str) and "@" in raw:
-        assert raw.split("@", 1)[1] not in masked

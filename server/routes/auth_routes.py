@@ -14,7 +14,7 @@ from utils.db.db_utils import connect_to_db_as_user
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_auth_only
 from utils.auth import normalize_email
-from utils.log_sanitizer import mask_email
+from utils.log_sanitizer import sanitize
 from utils.web.limiter_ext import limiter
 import os
 
@@ -214,7 +214,7 @@ def register():
                 except Exception as casbin_err:
                     logging.warning(f"Failed to assign Casbin role for {user_id}: {casbin_err}")
                 
-                logging.info("New user registered: %s (role=admin, org=%s)", mask_email(email), org_id)
+                logging.info(f"New user registered: {email[:3]}***@*** (role=admin, org={org_id})")
 
                 try:
                     from utils.auth.command_policy import seed_default_command_policy
@@ -541,7 +541,7 @@ def login():
                     logging.warning(
                         "Multiple accounts share the normalized email %s; authenticated user_id=%s. "
                         "These should be reconciled manually.",
-                        mask_email(email), user_id,
+                        sanitize(email), user_id,
                     )
 
                 record_audit_event(_audit_org, _audit_uid, "login", "session", _audit_uid, {"email": email}, request)

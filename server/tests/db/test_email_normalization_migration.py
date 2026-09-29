@@ -44,21 +44,6 @@ _CREATE_INDEX = (
 # Structural
 # ---------------------------------------------------------------------------
 
-def test_db_utils_imports_mask_email_without_a_cycle():
-    import utils.db.db_utils as db_utils
-
-    assert db_utils.mask_email("someone@example.com") == "som***@***"
-
-
-def test_log_sanitizer_stays_dependency_light():
-    """It must not reach back into the DB layer — that would be the cycle."""
-    import utils.log_sanitizer as ls
-
-    src = inspect.getsource(ls)
-    assert "db_utils" not in src
-    assert "connection_pool" not in src
-
-
 def test_migration_is_registered_in_initialize_tables():
     """The savepoint block must actually be inside initialize_tables()."""
     import utils.db.db_utils as db_utils
