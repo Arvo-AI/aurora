@@ -30,27 +30,87 @@ def _model_label(model) -> str:
     )
 
 
+# Opus 5.5 rejects a forced tool_choice, which Trigger RCA and /action pin on their
+# first turn. ForceToolChoice detects that rejection and retries with tool_choice=auto
+# plus an explicit prompt directive, so both flows still reach their tool.
+# Module-level so _resolve_rca_model() can reference it (a class body isn't in scope
+# from a module-level function). ModelConfig re-exports it as _DEFAULT_MODEL.
+DEFAULT_MODEL = "anthropic/claude-opus-5.5"
+
+# Cheap Anthropic model used for high-volume background work when cost optimization is on.
+COST_OPTIMIZED_MODEL = "anthropic/claude-haiku-4.5"
+
+
+def anthropic_default_is_servable() -> bool:
+    """Can this deployment actually create an ``anthropic/*`` model?
+
+    Decides whether the hardcoded Anthropic background defaults are safe to keep.
+    Mirrors the routing in ``providers.get_provider_for_model``.
+    """
+    mode = os.getenv("LLM_PROVIDER_MODE", "direct").lower()
+
+    # OpenRouter proxies every provider, so an Anthropic id always resolves.
+    if mode == "openrouter":
+        return True
+
+    # Bedrock's supports_model() claims the `anthropic/` prefix, so Claude routes there.
+    if mode == "bedrock":
+        return True
+
+    # Direct/auto routing: the Anthropic provider itself needs a key.
+    return bool(os.getenv("ANTHROPIC_API_KEY"))
+
+
+def resolve_background_model(explicit_var: str, anthropic_default: str) -> str:
+    """Shared precedence for Aurora's cheap background models (RCA, suggestion enrichment).
+
+    1. ``explicit_var`` (e.g. ``RCA_MODEL`` / ``ENRICHMENT_MODEL``) — always wins.
+    2. ``MAIN_MODEL`` — only when ``anthropic_default`` isn't servable, so a deployment
+       with no Anthropic path doesn't RuntimeError at ``create_chat_model``.
+    3. ``anthropic_default`` — Anthropic deployments keep the cheap default even when
+       MAIN_MODEL is set, since these are the highest-volume background paths.
+    """
+    explicit = os.getenv(explicit_var)
+    if explicit:
+        return explicit
+
+    # Anthropic is reachable — keep the cheap/default pick regardless of MAIN_MODEL.
+    if anthropic_default_is_servable():
+        return anthropic_default
+
+    # No Anthropic path: reuse whatever provider the deployment actually configured.
+    return os.getenv("MAIN_MODEL") or anthropic_default
+
+
+def _resolve_rca_model() -> str:
+    """Pick the background RCA model. See ModelConfig.RCA_MODEL for precedence."""
+    cost_optimized = os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
+    return resolve_background_model(
+        "RCA_MODEL", COST_OPTIMIZED_MODEL if cost_optimized else DEFAULT_MODEL
+    )
+
+
 class ModelConfig:
     """Centralized model configuration for all Aurora LLM usage.
     
     All model selections are defined here in one place for easy maintenance.
     Change these values to switch providers across the entire application.
     """
-    
-    # Opus 5.5 rejects a forced tool_choice, which Trigger RCA and /action pin on their
-    # first turn. ForceToolChoice detects that rejection and retries with tool_choice=auto
-    # plus an explicit prompt directive, so both flows still reach their tool.
-    _DEFAULT_MODEL = "anthropic/claude-opus-5.5"
+
+    # Kept as a class attribute for backwards compatibility with existing callers/tests.
+    _DEFAULT_MODEL = DEFAULT_MODEL
 
     # Primary models - configurable via env vars
     MAIN_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
     VISION_MODEL = os.getenv("VISION_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
-    # Background RCA model - configurable via RCA_MODEL env var, falls back to cost-based selection
-    RCA_MODEL = os.getenv("RCA_MODEL") or (
-        "anthropic/claude-haiku-4.5" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
-        else _DEFAULT_MODEL
-    )
+    # Background RCA model. Precedence (see resolve_background_model):
+    #   1. Explicit RCA_MODEL env var.
+    #   2. MAIN_MODEL, but only when this deployment has no Anthropic path — otherwise the
+    #      hardcoded Anthropic default RuntimeErrors at create_chat_model.
+    #   3. Cost-based Anthropic default (Haiku when RCA_OPTIMIZE_COSTS, else the default
+    #      model). Anthropic deployments keep cost optimization even with MAIN_MODEL set.
+    RCA_MODEL = _resolve_rca_model()
 
     # Multi-agent RCA orchestrator — required when ORCHESTRATOR_ENABLED=true.
     # No fallback to MAIN_MODEL/RCA_MODEL: must be set explicitly.
