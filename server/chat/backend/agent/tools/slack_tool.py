@@ -341,7 +341,16 @@ def post_slack_message(
     if len(text) > _MAX_POST_CHARS:
         text = text[: _MAX_POST_CHARS - 3] + "..."
 
-    if not _is_member_channel(user_id, channel_id):
+    is_member = _is_member_channel(user_id, channel_id)
+    if is_member is None:
+        # Lookup failed: still refuse (fail closed), but say so — this is not
+        # evidence the channel is inactive, so the agent must not touch mappings.
+        return json.dumps({
+            "error": f"Could not verify Aurora's membership of channel {channel_id}; message not posted. "
+                     "Transient error, do not change any routing mapping because of it.",
+            "code": "membership_check_failed",
+        })
+    if not is_member:
         logger.info("[SlackTool] Refused post to non-member channel %s", channel_id)
         return json.dumps({
             "error": (
@@ -387,17 +396,19 @@ def post_slack_message(
     })
 
 
-def _is_member_channel(user_id: str, channel_id: str) -> bool:
+def _is_member_channel(user_id: str, channel_id: str) -> Optional[bool]:
     """True if Aurora is a member of ``channel_id`` (an org ``slack_channels``
-    row with ``is_member``).
+    row with ``is_member``), False if not, None if the lookup itself failed.
 
     Same bar as ``routes.slack.slack_channels._is_active_channel``: membership
     is the permission to post. The description (``metadata_status``) is only a
     hint for *choosing* a channel and is deliberately not required here — a
     member channel whose description hasn't generated yet is still a legitimate
-    destination (e.g. a thread reply, or a routing-map entry). Fails CLOSED on
-    a DB error: dropping one teammate message is better than posting into a
-    channel the user asked Aurora to stay out of.
+    destination (e.g. a thread reply, or a routing-map entry). On a DB error
+    returns None so the caller can fail closed without claiming the channel is
+    inactive: dropping one teammate message is better than posting into a
+    channel the user asked Aurora to stay out of, and a transient error must not
+    look like a stale mapping.
     """
     try:
         from utils.db.connection_pool import db_pool
@@ -419,7 +430,7 @@ def _is_member_channel(user_id: str, channel_id: str) -> bool:
                 return cur.fetchone() is not None
     except Exception:
         logger.exception("[SlackTool] Could not verify membership of channel %s; refusing post", channel_id)
-        return False
+        return None
 
 
 class GetConnectedSlackChannelsArgs(BaseModel):
@@ -461,6 +472,7 @@ def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
                               detected_platform, metadata_summary, is_member
                          FROM slack_channels
                         WHERE provider = 'slack'
+                          AND is_member
                           AND metadata_status = 'ready'
                           AND {predicate}
                         ORDER BY channel_id, updated_at DESC""",

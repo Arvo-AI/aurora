@@ -95,6 +95,11 @@ def test_non_member_channel_refused_before_any_slack_call():
 
 
 def test_membership_check_fails_closed_on_db_error():
-    """If the DB lookup blows up we refuse rather than post somewhere unknown."""
+    """If the DB lookup blows up we refuse rather than post somewhere unknown,
+    but report it as a check failure, not as a non-member channel."""
     with patch("utils.db.org_scope.resolve_org", side_effect=RuntimeError("db down")):
-        assert slack_tool._is_member_channel("u1", CHAN) is False
+        assert slack_tool._is_member_channel("u1", CHAN) is None
+    client = FakeSlackClient()
+    out = _run(client, active=None, channel_id=CHAN, text="hi")
+    assert out["code"] == "membership_check_failed"
+    assert client.attempts == 0
