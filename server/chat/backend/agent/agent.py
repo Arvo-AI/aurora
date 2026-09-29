@@ -355,16 +355,20 @@ class Agent:
                         _lm = state.messages[-1]
                         _last_msg_content = _lm.content if isinstance(getattr(_lm, 'content', ''), str) else str(getattr(_lm, 'content', ''))
                     if _last_msg_content:
-                        # For Slack-sourced sessions, always inject the "Slack"
-                        # memory (teammate policy) regardless of the selector so
-                        # tone/notification behaviour is consistently applied.
+                        # For sessions that speak in Slack (@mention replies and
+                        # the post-RCA team-routing agent), always inject the
+                        # "Slack" memory (teammate policy) regardless of the
+                        # selector. team_routing has no rca_context, so check
+                        # the raw trigger source too.
                         _force_entries = None
                         _rca_ctx = getattr(state, "rca_context", None) or {}
-                        if str(_rca_ctx.get("source", "")).lower() == "slack":
-                            from services.memory.slack_memory import (
-                                SLACK_MEMORY_CATEGORY,
-                                SLACK_MEMORY_TITLE,
-                            )
+                        _src = str(_rca_ctx.get("source") or getattr(state, "trigger_source", None) or "").lower()
+                        from services.memory.slack_memory import (
+                            SLACK_MEMORY_CATEGORY,
+                            SLACK_MEMORY_TITLE,
+                            SLACK_POLICY_SOURCES,
+                        )
+                        if _src in SLACK_POLICY_SOURCES:
                             _force_entries = [(SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE)]
                         _memory_prefetch = MemoryPrefetch(
                             user_id=state.user_id,

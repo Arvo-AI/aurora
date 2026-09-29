@@ -34,6 +34,11 @@ class State(BaseModel):
     rca_context: Optional[Dict[str, Any]] = (
         None  # RCA-specific context (source, providers) - used by prompt_builder
     )
+    trigger_source: Optional[str] = (
+        None  # Background trigger source (trigger_metadata["source"]), set for
+        # every background session — including non-RCA ones like "team_routing"
+        # that have no rca_context. Used to pick source-specific policy memories.
+    )
     storage_chat_files: Optional[List[Dict[str, Any]]] = (
         None  # Files found in the chat's storage directory
     )

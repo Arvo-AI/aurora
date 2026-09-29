@@ -315,8 +315,19 @@ def post_slack_message(
 
     The one write tool on the Slack surface. Never raises — a failure here must
     not abort the agent loop; it returns a JSON error the agent can react to.
-    Auto-joins the channel once on not_in_channel and retries, mirroring the
-    notification service, so a channel Aurora can see but hasn't joined still works.
+
+    Membership guard (``_is_member_channel``): the destination must be a channel
+    Aurora is a member of, i.e. an active channel — deactivating a channel is a
+    real ``conversations.leave``. This is NOT redundant with Slack's own
+    ``not_in_channel`` rejection: this tool used to answer ``not_in_channel`` by
+    calling ``conversations.join`` and retrying, so a post aimed at a
+    deactivated *public* channel (a stale "service -> #channel" mapping in the
+    Slack memory, or a name resolved via the live list_slack_channels) would
+    make Aurora silently rejoin the channel it had just been told to leave, and
+    the post would land. Slack won't stop that for us; the guard does, and the
+    auto-join is gone from the write path (reads still self-join public
+    channels, which is harmless). Joining is an explicit user action
+    (activate / invite), never a side effect of posting.
     """
     if not user_id:
         return json.dumps({"error": _ERR_NO_USER})
@@ -330,6 +341,26 @@ def post_slack_message(
     if len(text) > _MAX_POST_CHARS:
         text = text[: _MAX_POST_CHARS - 3] + "..."
 
+    is_member = _is_member_channel(user_id, channel_id)
+    if is_member is None:
+        # Lookup failed: still refuse (fail closed), but say so — this is not
+        # evidence the channel is inactive, so the agent must not touch mappings.
+        return json.dumps({
+            "error": f"Could not verify Aurora's membership of channel {channel_id}; message not posted. "
+                     "Transient error, do not change any routing mapping because of it.",
+            "code": "membership_check_failed",
+        })
+    if not is_member:
+        logger.info("[SlackTool] Refused post to non-member channel %s", channel_id)
+        return json.dumps({
+            "error": (
+                f"Aurora is not a member of channel {channel_id} (it was deactivated, "
+                "or never activated). Do not post here and do not try to join it. "
+                "Only post to channels returned by get_connected_slack_channels."
+            ),
+            "code": "channel_not_active",
+        })
+
     client = get_slack_client_for_user(user_id)
     if not client:
         return json.dumps({"error": _ERR_NOT_CONNECTED})
@@ -340,16 +371,16 @@ def post_slack_message(
     try:
         response = _send()
     except SlackAPIError as e:
-        # not_in_channel → join once and retry, else surface the error.
+        # not_in_channel here means membership changed under us (removed
+        # between the guard and the post). Never join to recover — see the
+        # docstring — just report it.
         if getattr(e, "error", None) == "not_in_channel":
-            try:
-                client.join_channel(channel_id)
-                response = _send()
-            except Exception as retry_err:
-                logger.info("[SlackTool] Post retry after join failed for %s", channel_id)
-                return json.dumps({"error": f"Could not post to channel after join: {retry_err}"})
-        else:
-            return json.dumps({"error": f"Slack API error: {e}"})
+            logger.info("[SlackTool] Post refused, Aurora is not in channel %s", channel_id)
+            return json.dumps({
+                "error": f"Aurora is not a member of channel {channel_id}; message not posted.",
+                "code": "channel_not_active",
+            })
+        return json.dumps({"error": f"Slack API error: {e}"})
     except Exception as e:
         logger.info("[SlackTool] Failed to post message to %s", channel_id)
         return json.dumps({"error": f"Failed to post message: {e}"})
@@ -363,6 +394,43 @@ def post_slack_message(
         # not add a new top-level message.
         "threaded": bool(thread_ts),
     })
+
+
+def _is_member_channel(user_id: str, channel_id: str) -> Optional[bool]:
+    """True if Aurora is a member of ``channel_id`` (an org ``slack_channels``
+    row with ``is_member``), False if not, None if the lookup itself failed.
+
+    Same bar as ``routes.slack.slack_channels._is_active_channel``: membership
+    is the permission to post. The description (``metadata_status``) is only a
+    hint for *choosing* a channel and is deliberately not required here — a
+    member channel whose description hasn't generated yet is still a legitimate
+    destination (e.g. a thread reply, or a routing-map entry). On a DB error
+    returns None so the caller can fail closed without claiming the channel is
+    inactive: dropping one teammate message is better than posting into a
+    channel the user asked Aurora to stay out of, and a transient error must not
+    look like a stale mapping.
+    """
+    try:
+        from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
+        from utils.db.org_scope import resolve_org, org_read_predicate
+
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[SlackTool:active]")
+                cur.execute(
+                    f"""SELECT 1 FROM slack_channels
+                         WHERE provider = 'slack' AND channel_id = %s AND {predicate}
+                           AND is_member
+                         LIMIT 1""",
+                    (channel_id, *pred_params),
+                )
+                return cur.fetchone() is not None
+    except Exception:
+        logger.exception("[SlackTool] Could not verify membership of channel %s; refusing post", channel_id)
+        return None
 
 
 class GetConnectedSlackChannelsArgs(BaseModel):
@@ -404,6 +472,7 @@ def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
                               detected_platform, metadata_summary, is_member
                          FROM slack_channels
                         WHERE provider = 'slack'
+                          AND is_member
                           AND metadata_status = 'ready'
                           AND {predicate}
                         ORDER BY channel_id, updated_at DESC""",

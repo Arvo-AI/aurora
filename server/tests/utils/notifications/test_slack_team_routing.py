@@ -126,3 +126,12 @@ def test_rail_text_is_incident_fields_only():
     assert "disk full" in rail
     # None of our instruction scaffolding leaks into the rail text.
     assert "get_connected_slack_channels" not in rail
+
+
+def test_prompt_no_longer_lets_routing_map_skip_rederiving():
+    """A stale 'service -> #channel' mapping must not override a team's
+    'do not post here' note, and the agent may only post to active channels."""
+    _, run_mock = _run(standalone_incident())
+    prompt = run_mock.delay.call_args.kwargs["initial_message"]
+    assert "skip re-deriving" not in prompt
+    assert "ONLY post to channels in that list" in prompt
