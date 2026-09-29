@@ -19,6 +19,16 @@ logger = logging.getLogger(__name__)
 _backend_instance: Optional[SecretsBackend] = None
 _backend_lock = threading.Lock()
 
+# Shown to users in place of a provider-specific credential error when the
+# secrets backend itself is down. Every provider's credentials live behind it, so
+# an outage makes them all fail at once, which otherwise reads as a cloud
+# authentication problem and sends people re-adding connectors that never broke.
+SECRETS_BACKEND_UNAVAILABLE_MESSAGE = (
+    "Secrets backend (Vault) is unavailable, so stored credentials could not be "
+    "read. This is not a problem with your cloud credentials — check VAULT_ADDR, "
+    "VAULT_TOKEN and the Vault seal status."
+)
+
 
 def get_secrets_backend() -> SecretsBackend:
     """Get the configured secrets backend singleton.
@@ -68,8 +78,27 @@ def reset_backend():
     _backend_instance = None
 
 
+def credential_error_message(fallback: str) -> str:
+    """Return the message to show when a credential lookup produced nothing.
+
+    Distinguishes "the secrets backend is down" from "these credentials are
+    wrong/missing". Callers pass their own provider-specific wording as
+    ``fallback``; it is returned unchanged whenever the backend is healthy, so a
+    genuine credential problem still reads as one.
+    """
+    try:
+        if not get_secrets_backend().is_available():
+            return SECRETS_BACKEND_UNAVAILABLE_MESSAGE
+    # The diagnostic must never replace the error it is annotating.
+    except Exception as e:
+        logger.warning("Could not check secrets backend availability: %s", e)
+    return fallback
+
+
 __all__ = [
     "SecretsBackend",
     "get_secrets_backend",
     "reset_backend",
+    "credential_error_message",
+    "SECRETS_BACKEND_UNAVAILABLE_MESSAGE",
 ]

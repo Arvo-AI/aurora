@@ -30,7 +30,9 @@ def run_terraform_command(
     try:
         success, resource_id, isolated_env = setup_terraform_environment_isolated(user_id)
         if not success or isolated_env is None:
-            return {"error": "Failed to setup Terraform environment"}
+            from utils.secrets import credential_error_message
+
+            return {"error": credential_error_message("Failed to setup Terraform environment")}
 
         tf_config = os.environ.get("TF_CLI_CONFIG_FILE")
         if tf_config:

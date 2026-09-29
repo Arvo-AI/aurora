@@ -11,6 +11,7 @@ sending operators after credentials that were never the problem.
 These tests fix the contract: success latches, failure retries.
 """
 
+import json
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -150,32 +151,92 @@ class TestErrorAttribution:
 
     This is what made the original incident hard to diagnose: users saw "Failed to
     authenticate with Azure" while the real cause was an unreachable Vault, so the
-    investigation went looking at Azure service-principal credentials.
+    investigation went looking at Azure service-principal credentials. Every
+    provider reads credentials through the same backend, so the attribution has to
+    hold for all of them, not just the one that happened to be reported.
     """
 
-    def test_names_vault_when_backend_is_down(self):
-        from chat.backend.agent.tools.cloud_exec_tool import _credential_setup_error
-
+    def _backend(self, available: bool):
         backend = MagicMock()
-        backend.is_available.return_value = False
-        with patch("utils.secrets.get_secrets_backend", return_value=backend):
-            msg = _credential_setup_error("Failed to authenticate with Azure")
+        backend.is_available.return_value = available
+        return patch("utils.secrets.get_secrets_backend", return_value=backend)
+
+    def test_names_vault_when_backend_is_down(self):
+        from utils.secrets import credential_error_message
+
+        with self._backend(available=False):
+            msg = credential_error_message("Failed to authenticate with Azure")
 
         assert "Vault" in msg
         assert "not a problem with your cloud credentials" in msg
 
     def test_keeps_provider_message_when_backend_is_healthy(self):
         """A real credential problem must still read as one."""
-        from chat.backend.agent.tools.cloud_exec_tool import _credential_setup_error
+        from utils.secrets import credential_error_message
 
-        backend = MagicMock()
-        backend.is_available.return_value = True
-        with patch("utils.secrets.get_secrets_backend", return_value=backend):
-            assert _credential_setup_error("boom") == "boom"
+        with self._backend(available=True):
+            assert credential_error_message("boom") == "boom"
 
     def test_diagnostic_failure_does_not_mask_the_original_error(self):
         """The availability probe must never replace the error it annotates."""
-        from chat.backend.agent.tools.cloud_exec_tool import _credential_setup_error
+        from utils.secrets import credential_error_message
 
         with patch("utils.secrets.get_secrets_backend", side_effect=RuntimeError("nope")):
-            assert _credential_setup_error("boom") == "boom"
+            assert credential_error_message("boom") == "boom"
+
+    @pytest.mark.parametrize(
+        "fallback",
+        [
+            "Failed to authenticate with Azure",
+            "Failed to setup AWS environment with workspace authentication",
+            "Failed to setup GCP environment with service_account authentication",
+            "Failed to setup OVH environment. Please connect your OVH account first.",
+            "Failed to setup Scaleway environment. Please connect your Scaleway account first.",
+            "Failed to setup Tailscale environment. Please connect your Tailscale account first.",
+            "Failed to setup Fly.io environment. Please connect your Fly.io account first.",
+            "Failed to setup Terraform environment",
+            "Failed to assume role",
+        ],
+    )
+    def test_every_provider_message_is_replaced_when_backend_is_down(self, fallback):
+        """The original fix only covered Azure; the outage hits every provider."""
+        from utils.secrets import (
+            SECRETS_BACKEND_UNAVAILABLE_MESSAGE,
+            credential_error_message,
+        )
+
+        with self._backend(available=False):
+            assert credential_error_message(fallback) == SECRETS_BACKEND_UNAVAILABLE_MESSAGE
+
+
+class TestReconnectPromptSuppression:
+    """During a backend outage the connector is fine, so "reconnect your account"
+    is wrong advice — it sends users to re-add credentials that never broke."""
+
+    def _payload(self, available: bool, requires_connection: bool):
+        from chat.backend.agent.tools.cloud_exec_tool import _credential_setup_failure
+
+        backend = MagicMock()
+        backend.is_available.return_value = available
+        with patch("utils.secrets.get_secrets_backend", return_value=backend):
+            return json.loads(
+                _credential_setup_failure(
+                    "Failed to setup OVH environment. Please connect your OVH account first.",
+                    "server list",
+                    requires_connection=requires_connection,
+                )
+            )
+
+    def test_reconnect_prompt_dropped_when_backend_is_down(self):
+        payload = self._payload(available=False, requires_connection=True)
+        assert "requires_connection" not in payload
+        assert "Vault" in payload["error"]
+
+    def test_reconnect_prompt_kept_when_backend_is_healthy(self):
+        payload = self._payload(available=True, requires_connection=True)
+        assert payload["requires_connection"] is True
+
+    def test_final_command_is_always_reported(self):
+        for available in (True, False):
+            payload = self._payload(available=available, requires_connection=True)
+            assert payload["final_command"] == "server list"

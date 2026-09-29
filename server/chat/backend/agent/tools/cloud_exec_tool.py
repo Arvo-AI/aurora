@@ -126,26 +126,31 @@ def check_cli_availability(cli_tool: str) -> bool:
 
 
 def _credential_setup_error(fallback: str) -> str:
-    """Distinguish "secrets backend is down" from a real credential problem.
+    """Name the secrets backend when it, rather than the provider, is the problem.
 
-    When Vault is unreachable, sealed, or holding an expired token, every
-    credential lookup returns empty and the provider setup fails. Reporting that
-    as an authentication failure sends operators chasing cloud credentials that
-    were never the problem, so name the actual cause when the backend is down.
+    Every provider's credentials are read through the same backend, so an outage
+    there fails them all at once. Thin wrapper kept so the provider setup paths
+    below don't each import from utils.secrets.
     """
-    try:
-        from utils.secrets import get_secrets_backend
+    from utils.secrets import credential_error_message
 
-        if not get_secrets_backend().is_available():
-            return (
-                "Secrets backend (Vault) is unavailable, so stored credentials could "
-                "not be read. This is not a problem with your cloud credentials — "
-                "check VAULT_ADDR, VAULT_TOKEN and the Vault seal status."
-            )
-    # Never let the diagnostic itself replace the error it is annotating.
-    except Exception as e:
-        logger.warning("Could not check secrets backend availability: %s", e)
-    return fallback
+    return credential_error_message(fallback)
+
+
+def _credential_setup_failure(fallback: str, command: str, requires_connection: bool = False) -> str:
+    """Build the JSON error payload for a provider whose credential setup failed.
+
+    `requires_connection` drives a "connect your account" prompt in the UI, which
+    is actively misleading during a secrets-backend outage: the connector is fine
+    and reconnecting cannot help, so the flag is dropped in that case.
+    """
+    message = _credential_setup_error(fallback)
+    payload = {"error": message, "final_command": command}
+    # Message unchanged means the backend is healthy, so this really is a
+    # missing/invalid credential and the reconnect prompt is correct.
+    if requires_connection and message == fallback:
+        payload["requires_connection"] = True
+    return json.dumps(payload)
 
 
 def setup_azure_environment_isolated(user_id: str, subscription_id: str | None = None):
@@ -1312,7 +1317,7 @@ def _cloud_exec_aws_multi_account(
             )
             if not success:
                 return {"account_id": account_id, "region": region, "success": False,
-                        "error": "Failed to assume role"}
+                        "error": _credential_setup_error("Failed to assume role")}
 
             cmd = command.strip()
             if not cmd.startswith("aws"):
@@ -1766,7 +1771,7 @@ Security & Compliance
                     )
             success, subscription_id, auth_method, isolated_env, auth_argv = setup_azure_environment_isolated(user_id, target_subscription)
             if not success:
-                return json.dumps({"error": _credential_setup_error(f"Failed to setup Azure environment with {provider_preference} authentication"), "final_command": command})
+                return _credential_setup_failure(f"Failed to setup Azure environment with {provider_preference} authentication", command)
             resource_id = subscription_id
             # Reuse an existing `az login` for these credentials when one is cached.
             # None means this command keeps its private directory and logs in itself.
@@ -1793,31 +1798,31 @@ Security & Compliance
                 target_account_id=account_id,
             )
             if not success:
-                return json.dumps({"error": f"Failed to setup AWS environment with {provider_preference} authentication", "final_command": command})
+                return _credential_setup_failure(f"Failed to setup AWS environment with {provider_preference} authentication", command)
             resource_id = region
         elif normalized_provider == 'ovh':
             # OVH isolated setup
             success, project_id, auth_method, isolated_env = setup_ovh_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": f"Failed to setup OVH environment with {provider_preference} authentication. Please connect your OVH account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure(f"Failed to setup OVH environment with {provider_preference} authentication. Please connect your OVH account first.", command, requires_connection=True)
             resource_id = project_id
         elif normalized_provider == 'scaleway':
             # Scaleway isolated setup
             success, project_id, auth_method, isolated_env = setup_scaleway_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": f"Failed to setup Scaleway environment with {provider_preference} authentication. Please connect your Scaleway account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure(f"Failed to setup Scaleway environment with {provider_preference} authentication. Please connect your Scaleway account first.", command, requires_connection=True)
             resource_id = project_id
         elif normalized_provider == 'tailscale':
             # Tailscale isolated setup - uses REST API, not CLI
             success, tailnet, auth_method, isolated_env = setup_tailscale_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": f"Failed to setup Tailscale environment. Please connect your Tailscale account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure("Failed to setup Tailscale environment. Please connect your Tailscale account first.", command, requires_connection=True)
             resource_id = tailnet
         elif normalized_provider == 'flyio':
             # Fly.io isolated setup - uses FLY_API_TOKEN env var
             success, org_slug, auth_method, isolated_env = setup_flyio_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": "Failed to setup Fly.io environment. Please connect your Fly.io account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure("Failed to setup Fly.io environment. Please connect your Fly.io account first.", command, requires_connection=True)
             resource_id = org_slug
         elif normalized_provider not in CLOUD_EXEC_PROVIDERS:
             return json.dumps({
@@ -1831,7 +1836,7 @@ Security & Compliance
             # GCP isolated setup (default)
             success, project_id, auth_method, isolated_env = setup_gcp_environment_isolated(user_id, selected_project_id, provider_preference)
             if not success:
-                return json.dumps({"error": f"Failed to setup GCP environment with {provider_preference} authentication", "final_command": command})
+                return _credential_setup_failure(f"Failed to setup GCP environment with {provider_preference} authentication", command)
             resource_id = project_id
 
         logger.info(f"Using {auth_method} authentication for resource {resource_id}")
