@@ -169,6 +169,63 @@ for _ns in _STUBBED_NAMESPACES:
             sys.modules.pop(_wrapper, None)
             sys.modules[_wrapper] = _StubModule(_wrapper)
 
+
+def _install_flask_limiter_stub() -> None:
+    """Stub ``flask_limiter`` with pass-through decorators.
+
+    ``utils.web.limiter_ext`` builds a module-level ``Limiter`` and routes apply
+    it as ``@limiter.limit("...")`` *below* ``@bp.route(...)``. A MagicMock is
+    not usable here: ``limiter.limit(...)`` would return a MagicMock, the
+    decorated view would become a MagicMock, and Flask's ``add_url_rule`` needs
+    ``view_func.__name__`` to derive the endpoint — so blueprint registration
+    would fail with AttributeError. The stub therefore returns the original
+    function untouched, which also means rate limits are simply inert in tests.
+    """
+    if _is_installed("flask_limiter"):
+        return
+
+    def _passthrough_decorator(*_args: Any, **_kwargs: Any):
+        def _decorate(func):
+            return func
+        return _decorate
+
+    class _StubLimiter:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            self.enabled = False
+
+        # @limiter.limit("10 per minute") / @limiter.shared_limit(...)
+        limit = staticmethod(_passthrough_decorator)
+        shared_limit = staticmethod(_passthrough_decorator)
+        exempt = staticmethod(_passthrough_decorator)
+
+        # Bare decorators — applied directly to a function, not called first.
+        @staticmethod
+        def request_filter(func):
+            return func
+
+        def init_app(self, _app: Any) -> None:
+            return None
+
+    module = _StubModule("flask_limiter")
+    module.Limiter = _StubLimiter  # type: ignore[attr-defined]
+
+    util = _StubModule("flask_limiter.util")
+    util.get_remote_address = lambda: "127.0.0.1"  # type: ignore[attr-defined]
+
+    errors = _StubModule("flask_limiter.errors")
+
+    class _RateLimitExceeded(Exception):
+        retry_after = None
+
+    errors.RateLimitExceeded = _RateLimitExceeded  # type: ignore[attr-defined]
+
+    sys.modules.setdefault("flask_limiter", module)
+    sys.modules.setdefault("flask_limiter.util", util)
+    sys.modules.setdefault("flask_limiter.errors", errors)
+
+
+_install_flask_limiter_stub()
+
 try:
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa

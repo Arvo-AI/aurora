@@ -90,20 +90,40 @@ def get_org_google_chat_credentials(sender_email: str) -> Optional[Tuple[str, st
             with conn.cursor() as cursor:
                 # No RLS needed — users not RLS-protected
                 # Google sends whatever case is on the Workspace profile, so
-                # normalize both sides to keep the sender resolvable. Ordered
-                # so a legacy duplicate pair resolves predictably (exact case
-                # first, then oldest) rather than by arbitrary row order.
+                # normalize both sides to keep the sender resolvable. Fetch 2 so
+                # an ambiguous case-insensitive match can be detected below.
                 cursor.execute(
-                    "SELECT id, org_id FROM users WHERE LOWER(email) = LOWER(%s) "
-                    "ORDER BY (email = %s) DESC, created_at ASC LIMIT 1",
+                    "SELECT id, org_id, email FROM users WHERE LOWER(email) = LOWER(%s) "
+                    "ORDER BY (email = %s) DESC, created_at ASC LIMIT 2",
                     (sender_email, sender_email),
                 )
-                user_row = cursor.fetchone()
-                if not user_row or not user_row[1]:
+                user_rows = cursor.fetchall()
+                if not user_rows:
                     logger.warning(f"No Aurora user or org found for {_mask_email(sender_email)}")
                     return None
 
-                sender_user_id, org_id = user_row
+                # An exact-case hit is unambiguous — users.email is UNIQUE, so
+                # at most one row can equal the sender address exactly.
+                exact_match = user_rows[0][2] == sender_email
+
+                # Legacy case-variant rows can span two different orgs. Unlike
+                # /login there is no password here to prove which account the
+                # sender owns — the Google OIDC check only authenticates
+                # chat@system.gserviceaccount.com, it does not bind the event's
+                # user.email to an Aurora org. Picking the oldest row would run
+                # the event in the wrong tenant, so fail closed instead.
+                if not exact_match and len(user_rows) > 1:
+                    logger.warning(
+                        "Ambiguous Aurora accounts for Google Chat sender %s; "
+                        "refusing to guess an organization. Reconcile the duplicate users.",
+                        _mask_email(sender_email),
+                    )
+                    return None
+
+                sender_user_id, org_id = user_rows[0][0], user_rows[0][1]
+                if not org_id:
+                    logger.warning(f"No Aurora org found for {_mask_email(sender_email)}")
+                    return None
 
                 from utils.auth.stateless_auth import set_rls_context
                 set_rls_context(cursor, conn, sender_user_id, log_prefix="[GChatHelpers:get_org_creds]")
