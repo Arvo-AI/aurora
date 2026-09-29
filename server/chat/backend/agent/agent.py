@@ -361,7 +361,7 @@ class Agent:
                         _force_entries = None
                         _rca_ctx = getattr(state, "rca_context", None) or {}
                         if str(_rca_ctx.get("source", "")).lower() == "slack":
-                            from services.memory.slack_memory import (
+                            from services.memory import (
                                 SLACK_MEMORY_CATEGORY,
                                 SLACK_MEMORY_TITLE,
                             )

@@ -16,7 +16,16 @@ from pypdf import PdfReader
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context, get_user_display_name
-from services.memory import MEMORY_CATEGORIES, USER_WRITABLE_CATEGORIES, SYSTEM_CATEGORY
+from services.memory import (
+    MEMORY_CATEGORIES,
+    USER_WRITABLE_CATEGORIES,
+    SYSTEM_CATEGORY,
+    PROTECTED_ENTRIES,
+    SLACK_MEMORY_CATEGORY,
+    SLACK_MEMORY_TITLE,
+)
+from services.memory.queries import fetch_entry_by_id, fetch_entry_by_title
+from services.memory.slack_memory import seed_slack_memory
 from services.artifacts.store import create_version
 from utils.validation import strip_nul
 
@@ -185,27 +194,12 @@ def get_entry(user_id, entry_id):
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
 
-            cursor.execute(
-                """SELECT id, title, category, description, content,
-                          last_edited_by, last_edited_by_name, updated_at
-                   FROM artifacts WHERE id = %s AND org_id = %s AND category = ANY(%s)""",
-                (entry_id, org_id, list(MEMORY_CATEGORIES)),
-            )
-            row = cursor.fetchone()
+            entry = fetch_entry_by_id(cursor, org_id, entry_id)
 
-        if not row:
+        if not entry:
             return jsonify({"error": "Memory entry not found"}), 404
 
-        return jsonify({
-            "id": str(row[0]),
-            "title": row[1],
-            "category": row[2],
-            "description": row[3],
-            "content": row[4],
-            "last_edited_by": row[5],
-            "last_edited_by_name": row[6],
-            "updated_at": row[7].isoformat() if row[7] else None,
-        }), 200
+        return jsonify(entry), 200
 
     except Exception as e:
         logger.exception(f"[Memory] Error getting entry: {e}")
@@ -223,10 +217,10 @@ def delete_entry(user_id, entry_id):
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
 
-            # Look up the category first so we can distinguish "not found" from
-            # "reserved system entry" and return an accurate status/message.
+            # Look up the category + title first so we can distinguish "not found"
+            # from a reserved/protected entry and return an accurate status/message.
             cursor.execute(
-                "SELECT category FROM artifacts WHERE id = %s AND org_id = %s AND category = ANY(%s)",
+                "SELECT category, title FROM artifacts WHERE id = %s AND org_id = %s AND category = ANY(%s)",
                 (entry_id, org_id, list(MEMORY_CATEGORIES)),
             )
             row = cursor.fetchone()
@@ -236,6 +230,18 @@ def delete_entry(user_id, entry_id):
             # System-maintained entries (e.g. the Incident Index) are read-only.
             if row[0] == SYSTEM_CATEGORY:
                 return jsonify({"error": "This entry is system-managed and cannot be deleted."}), 403
+
+            # Protected well-known entries can't be deleted — the feature that owns
+            # them (e.g. Slack) would silently lose its policy. Clearing the content
+            # is the supported way to neutralize one.
+            if (row[0], row[1]) in PROTECTED_ENTRIES:
+                return jsonify({
+                    "error": (
+                        f'"{row[1]}" is a built-in memory entry and can\'t be deleted. '
+                        "Edit its content instead."
+                    ),
+                    "code": "protected_entry",
+                }), 403
 
             cursor.execute(
                 "DELETE FROM artifacts WHERE id = %s AND org_id = %s AND category = ANY(%s)",
@@ -299,11 +305,11 @@ def update_entry(user_id, entry_id):
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
 
-            # Look up the current category first so we can block editing a
+            # Look up the current category + title first so we can block editing a
             # system-managed entry (e.g. the Incident Index), which is read-only
             # for users and whose id-keyed lookups in services/memory must stay intact.
             cursor.execute(
-                "SELECT category FROM artifacts WHERE id = %s AND org_id = %s AND category = ANY(%s)",
+                "SELECT category, title FROM artifacts WHERE id = %s AND org_id = %s AND category = ANY(%s)",
                 (entry_id, org_id, list(MEMORY_CATEGORIES)),
             )
             existing = cursor.fetchone()
@@ -313,6 +319,22 @@ def update_entry(user_id, entry_id):
             # System-maintained entries are read-only for users.
             if existing[0] == SYSTEM_CATEGORY:
                 return jsonify({"error": "This entry is system-managed and cannot be modified."}), 403
+
+            # Protected well-known entries (e.g. the Slack policy): content and
+            # description stay freely editable, but renaming/recategorizing would
+            # detach the entry from the (category, title) lookups that seeders and
+            # the prompt injector pin to — silently disabling it.
+            if (existing[0], existing[1]) in PROTECTED_ENTRIES:
+                renaming = has_title and title != existing[1]
+                recategorizing = has_category and category != existing[0]
+                if renaming or recategorizing:
+                    return jsonify({
+                        "error": (
+                            f'"{existing[1]}" is a built-in memory entry. You can edit its '
+                            "content, but its title and category can't be changed."
+                        ),
+                        "code": "protected_entry",
+                    }), 403
 
             # Stamp the actual editor's name (None → generic label in the UI).
             editor_name = get_user_display_name(user_id)
@@ -373,6 +395,55 @@ def update_entry(user_id, entry_id):
     except Exception as e:
         logger.exception(f"[Memory] Error updating entry: {e}")
         return jsonify({"error": "Failed to update memory entry"}), 500
+
+
+@memory_bp.route("/slack", methods=["GET"])
+@require_permission("memory", "read")
+def get_slack_memory(user_id):
+    """Fetch the well-known "Slack" memory entry, seeding it if absent.
+
+    Surfaced so the Slack connector page can show/edit Slack behaviour in place,
+    instead of making people hunt for the entry in the full memory list. Edits go
+    through the normal ``PUT /entries/<id>`` so versioning stays identical.
+
+    Normally the entry already exists — ``seed_slack_memory`` runs on Slack
+    connect. The seed-on-read below covers orgs that connected before seeding
+    shipped, or whose connect-time seed failed (it's best-effort there), so the
+    card never has to render an "it's missing" state.
+    """
+    org_id = get_org_id_from_request()
+
+    try:
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
+            entry = fetch_entry_by_title(
+                cursor, org_id, SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE
+            )
+
+        # Missing — seed the default policy, then read it back on a fresh
+        # connection (seeding commits on its own admin connection).
+        if entry is None:
+            seed_slack_memory(user_id)
+            with db_pool.get_user_connection() as conn:
+                cursor = conn.cursor()
+                set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
+                entry = fetch_entry_by_title(
+                    cursor, org_id, SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE
+                )
+
+        # Still missing means seeding failed (it logs its own reason) — report it
+        # rather than handing the UI a null entry it can no longer act on.
+        if entry is None:
+            return jsonify({"error": "Failed to load the Slack memory entry"}), 500
+
+        return jsonify({"entry": entry}), 200
+
+    except Exception:
+        # Lazy/no interpolation: logger.exception already records the traceback,
+        # and the message must not embed request-derived values.
+        logger.exception("[Memory] Error getting Slack memory")
+        return jsonify({"error": "Failed to get the Slack memory entry"}), 500
 
 
 @memory_bp.route("/upload", methods=["POST"])

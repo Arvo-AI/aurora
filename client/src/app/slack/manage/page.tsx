@@ -12,6 +12,7 @@ import { slackService, type SlackStatus, type SlackConnectedChannel } from "@/li
 import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite as checkCanWrite } from "@/lib/roles";
 import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
+import { SlackMemoryCard } from "@/components/SlackMemoryCard";
 import { queryClient, jsonFetcher } from "@/lib/query";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -605,8 +606,8 @@ export default function SlackManagePage() {
               cause, links. It goes to <span className="font-medium">one</span>{" "}
               channel. This does not affect Aurora replying when @mentioned, or
               posting an investigation&apos;s conclusion to relevant team
-              channels — that routing is always on and tuned in Aurora&apos;s
-              Slack memory.
+              channels — that routing is always on and tuned in the Slack memory
+              below.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -979,6 +980,10 @@ export default function SlackManagePage() {
             )}
           </CardContent>
         </Card>
+
+        {/* Slack Memory — the teammate policy that governs tone/routing, mirrored
+            from the shared memory system so it's editable in context here. */}
+        <SlackMemoryCard canWrite={canWrite} />
 
         {/* Danger Zone */}
         <Card className="border-destructive/50">

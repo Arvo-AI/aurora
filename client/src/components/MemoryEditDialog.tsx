@@ -26,6 +26,7 @@ import {
   type MemoryEntry,
   CATEGORY_META,
   USER_WRITABLE_CATEGORIES,
+  isProtectedEntry,
 } from "@/lib/memory-constants";
 
 interface MemoryEditDialogProps {
@@ -48,6 +49,10 @@ export function MemoryEditDialog({ entry, onOpenChange, onSaved, readOnly = fals
   const [content, setContent] = useState("");
   const [isLoadingContent, setIsLoadingContent] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Built-in entries (e.g. the Slack policy) are pinned by (category, title), so
+  // those two fields are locked here — content and description stay editable.
+  const identityLocked = !!entry && isProtectedEntry(entry);
 
   // When a new entry is opened, seed the form from the list row, then fetch
   // the full content (the list endpoint omits content).
@@ -159,12 +164,12 @@ export function MemoryEditDialog({ entry, onOpenChange, onSaved, readOnly = fals
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="Title"
-                  disabled={readOnly}
+                  disabled={readOnly || identityLocked}
                 />
               </div>
               <div className="space-y-1">
                 <label htmlFor="edit-memory-category" className="text-sm font-medium">Category</label>
-                {readOnly ? (
+                {readOnly || identityLocked ? (
                   // System entries use the 'artifact' category, which isn't in the
                   // writable list — render a static label instead of an empty Select.
                   <Input

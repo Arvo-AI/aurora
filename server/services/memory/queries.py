@@ -2,7 +2,18 @@
 Memory data-access helpers.
 
 Shared DB queries for fetching memory entries (artifacts table).
-Used by both the index builder and the injector.
+Used by the index builder, the injector, and the memory API routes.
+
+Two flavours live here, and the difference matters:
+
+* ``get_*`` / ``fetch_memory_*`` take a ``user_id`` and open their own admin
+  connection, resolving the org via ``set_rls_context``. That resolution reads the
+  user's org from the DB (TTL-cached), so it's for background/agent callers that
+  have no Flask request context.
+* ``fetch_entry_by_*`` take an already-open ``cursor`` plus an explicit
+  ``org_id``. Request handlers must use these and pass the org from
+  ``get_org_id_from_request()``, otherwise a multi-org user who switched orgs
+  would read their default org's entries instead of their active org's.
 """
 
 import logging
@@ -14,6 +25,56 @@ from utils.auth.stateless_auth import set_rls_context
 from services.memory import MEMORY_CATEGORIES
 
 logger = logging.getLogger(__name__)
+
+# Column list + row shape shared by every single-entry read, so the lookups below
+# can differ only in their WHERE clause instead of restating all eight fields.
+ENTRY_COLUMNS = """id, title, category, description, content,
+                   last_edited_by, last_edited_by_name, updated_at"""
+
+
+def serialize_entry(row) -> Dict:
+    """Map an ENTRY_COLUMNS row to the single-entry API response shape."""
+    return {
+        "id": str(row[0]),
+        "title": row[1],
+        "category": row[2],
+        "description": row[3],
+        "content": row[4],
+        "last_edited_by": row[5],
+        "last_edited_by_name": row[6],
+        "updated_at": row[7].isoformat() if row[7] else None,
+    }
+
+
+def fetch_entry_by_id(cursor, org_id: str, entry_id: str) -> Optional[Dict]:
+    """Read a single memory entry by id, or None if absent.
+
+    Restricted to MEMORY_CATEGORIES so non-memory artifacts are never exposed
+    through the memory API.
+    """
+    cursor.execute(
+        f"""SELECT {ENTRY_COLUMNS} FROM artifacts
+            WHERE id = %s AND org_id = %s AND category = ANY(%s)""",
+        (entry_id, org_id, list(MEMORY_CATEGORIES)),
+    )
+    row = cursor.fetchone()
+    return serialize_entry(row) if row else None
+
+
+def fetch_entry_by_title(cursor, org_id: str, category: str, title: str) -> Optional[Dict]:
+    """Read a single memory entry by (category, title), or None if absent.
+
+    The by-title counterpart to ``fetch_entry_by_id``, for the well-known entries
+    whose (category, title) pair is the stable identity that seeders and the
+    agent's prompt injector pin to.
+    """
+    cursor.execute(
+        f"""SELECT {ENTRY_COLUMNS} FROM artifacts
+            WHERE org_id = %s AND category = %s AND title = %s""",
+        (org_id, category, title),
+    )
+    row = cursor.fetchone()
+    return serialize_entry(row) if row else None
 
 
 def get_memory_content(user_id: str, category: str, title: str) -> Optional[str]:

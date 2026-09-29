@@ -8,13 +8,10 @@ import logging
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 from services.artifacts.store import create_version
-from services.memory.queries import get_memory_content
+from services.memory import SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE
 
 logger = logging.getLogger(__name__)
 
-# Well-known identity of the Slack memory entry — referenced by seeding + injector.
-SLACK_MEMORY_CATEGORY = "context"
-SLACK_MEMORY_TITLE = "Slack"
 SLACK_MEMORY_DESCRIPTION = (
     "Slack behaviour: tone, when Aurora speaks, and which teams/channels to "
     "notify. Aurora reads and updates this whenever Slack is involved."
@@ -67,18 +64,6 @@ different style under "Per-channel notes".
 ## Per-channel notes
 (none yet — Aurora and the team add channel-specific preferences here over time)
 """
-
-
-def read_slack_memory(user_id: str) -> str:
-    """Return the org's current "Slack" memory content, or "" if none/error.
-
-    Thin wrapper over the shared ``get_memory_content`` helper, pinned to the
-    Slack entry's (category, title) and normalising its ``None`` to "" for the
-    routing / non-agent callers that expect a string.
-    """
-    if not user_id:
-        return ""
-    return get_memory_content(user_id, SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE) or ""
 
 
 def seed_slack_memory(user_id: str) -> bool:
