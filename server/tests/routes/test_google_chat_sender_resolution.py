@@ -21,7 +21,7 @@ _TOKEN_SQL_MARKER = "user_tokens"
 
 
 class _FakeCursor:
-    """Implements just enough of the two queries the helper issues."""
+    """Implements just enough of the queries the helper issues."""
 
     def __init__(self, user_rows, token_user_id="owner-uid"):
         self._user_rows = user_rows
@@ -37,6 +37,16 @@ class _FakeCursor:
         # RLS context statement — no result set.
         if "set_config" in query or "SET " in query.upper():
             self._result = []
+            return
+
+        # org_id lookup by user id (set_rls_context -> get_org_id_for_user).
+        # Handled explicitly so a real, unpatched RLS helper surfaces loudly
+        # instead of tripping the sender-lookup assertion below and having the
+        # AssertionError swallowed upstream.
+        if "org_id" in query and "WHERE id = %s" in query:
+            uid = params[0]
+            match = next((r for r in self._user_rows if r[0] == uid), None)
+            self._result = [(match[1],)] if match else []
             return
 
         # First query: the sender lookup under test.
@@ -64,9 +74,13 @@ def resolve(monkeypatch):
     """Return a callable invoking the helper against fabricated user rows."""
     from routes.google_chat import google_chat_events_helpers as helpers
 
-    monkeypatch.setattr(
-        helpers, "set_rls_context", MagicMock(return_value="org"), raising=False
-    )
+    # The helper imports set_rls_context *inside* the function, so the patch has
+    # to land on the defining module — patching the helper module would be a
+    # no-op and let the real RLS lookup run against the fake cursor.
+    import utils.auth.stateless_auth as stateless_auth
+
+    rls = MagicMock(return_value="org")
+    monkeypatch.setattr(stateless_auth, "set_rls_context", rls)
 
     def _run(user_rows, sender_email, token_user_id="owner-uid"):
         cursor = _FakeCursor(user_rows, token_user_id)
@@ -76,11 +90,9 @@ def resolve(monkeypatch):
         conn.__exit__ = lambda *_a: False
         monkeypatch.setattr(helpers.db_pool, "get_admin_connection", lambda: conn)
 
-        import sys
-
-        sys.modules.setdefault("utils.auth.stateless_auth", MagicMock())
         return helpers.get_org_google_chat_credentials(sender_email)
 
+    _run.rls = rls
     return _run
 
 
@@ -95,6 +107,13 @@ def test_exact_case_match_resolves(resolve):
     assert result is not None
     assert result[1] == "org-a"
     assert result[2] == "uid-a"
+
+
+def test_rls_context_is_set_for_the_resolved_sender(resolve):
+    """Guards the mock: proves the patched RLS helper is the one being called."""
+    assert resolve([_EXACT], "sender@example.com") is not None
+    resolve.rls.assert_called_once()
+    assert resolve.rls.call_args.args[2] == "uid-a"
 
 
 def test_single_case_variant_row_still_resolves(resolve):
