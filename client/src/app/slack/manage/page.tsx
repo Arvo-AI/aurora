@@ -322,7 +322,8 @@ export default function SlackManagePage() {
   // LLM generation as the regenerate action (result lands on next load).
   const handleGenerateFromEditor = (channelId: string) => {
     setEditingChannelId(null);
-    handleRegenerateDescription(channelId);
+    // Fire-and-forget: it handles its own errors and the result lands via polling.
+    void handleRegenerateDescription(channelId);
   };
 
   const handleRegenerateDescription = async (channelId: string) => {
@@ -460,7 +461,8 @@ export default function SlackManagePage() {
         localStorage.removeItem("isSlackConnected");
         globalThis.window.dispatchEvent(new CustomEvent("providerStateChanged"));
       }
-      queryClient.invalidate("/api/connectors/status", jsonFetcher);
+      // Fire-and-forget revalidation — we navigate away regardless.
+      void queryClient.invalidate("/api/connectors/status", jsonFetcher);
       toast({ title: "Success", description: "Slack disconnected successfully" });
       router.push("/connectors");
     } catch (error: any) {

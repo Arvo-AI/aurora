@@ -67,7 +67,8 @@ export function MemoryEditDialog({ entry, onOpenChange, onSaved, readOnly = fals
     setContent("");
     setIsLoadingContent(true);
 
-    (async () => {
+    // Fire-and-forget: errors are surfaced via toast inside the IIFE.
+    void (async () => {
       try {
         const res = await fetch(`/api/proxy/memory/entries/${entry.id}`);
         if (!res.ok) {

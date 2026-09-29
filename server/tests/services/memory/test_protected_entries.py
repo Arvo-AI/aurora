@@ -29,12 +29,15 @@ def test_slack_memory_stays_user_writable():
 
 def test_protected_entries_are_category_title_pairs():
     # The route guards do `(category, title) in PROTECTED_ENTRIES`, so every member
-    # must be a 2-tuple or those checks silently never match.
+    # must be a 2-tuple of non-empty strings or those checks silently never match.
     for item in PROTECTED_ENTRIES:
-        assert isinstance(item, tuple) and len(item) == 2, item
+        assert isinstance(item, tuple), item
+        assert len(item) == 2, item
         category, title = item
-        assert isinstance(category, str) and category
-        assert isinstance(title, str) and title
+        assert isinstance(category, str)
+        assert category
+        assert isinstance(title, str)
+        assert title
 
 
 def test_seeder_uses_the_protected_identity():

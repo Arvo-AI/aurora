@@ -18,7 +18,7 @@ interface SlackMemory extends MemoryEntry {
 
 interface SlackMemoryCardProps {
   // Editing is gated on the same role check the rest of the manage page uses.
-  canWrite: boolean;
+  readonly canWrite: boolean;
 }
 
 export function SlackMemoryCard({ canWrite }: SlackMemoryCardProps) {
@@ -107,6 +107,90 @@ export function SlackMemoryCard({ canWrite }: SlackMemoryCardProps) {
 
   const editedBy = memory ? formatEditedBy(memory) : null;
 
+  // Split the four view states into named renderers rather than one nested
+  // ternary chain — keeps each branch readable and the component simple.
+  const renderLoading = () => (
+    <div className="flex items-center justify-center py-6">
+      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+    </div>
+  );
+
+  // GET seeds on demand, so a null entry means the load or the seed failed.
+  const renderLoadError = () => (
+    <div className="flex items-center justify-between gap-3">
+      <p className="text-xs text-muted-foreground">Couldn&apos;t load the Slack memory.</p>
+      <Button variant="outline" size="sm" className="h-7" onClick={loadMemory}>
+        <RotateCw className="h-3.5 w-3.5 mr-1.5" />
+        Retry
+      </Button>
+    </div>
+  );
+
+  const renderEditor = () => (
+    <div className="space-y-2">
+      <Textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        className="min-h-[320px] font-mono text-xs"
+        placeholder="Describe how Aurora should behave in Slack (markdown)."
+      />
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          Markdown. Aurora also edits this itself as it learns — your changes are versioned.
+        </p>
+        <div className="flex gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            onClick={() => setIsEditing(false)}
+            disabled={isSaving}
+          >
+            Cancel
+          </Button>
+          <Button size="sm" className="h-7 px-2 text-xs" onClick={handleSave} disabled={isSaving}>
+            {isSaving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : null}
+            Save
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderPolicy = (entry: SlackMemory) => (
+    <div className="space-y-2">
+      {/* Scrollable so a long, well-tuned policy doesn't stretch the page. */}
+      <div className="max-h-96 overflow-y-auto rounded-lg border p-4">
+        {entry.content?.trim() ? (
+          <MarkdownRenderer content={entry.content} />
+        ) : (
+          <p className="text-xs text-muted-foreground/70 italic">
+            This memory is empty — Aurora has no Slack-specific guidance yet.
+          </p>
+        )}
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          {entry.updated_at ? `Last updated ${formatDate(entry.updated_at)}` : ""}
+          {editedBy ? ` by ${editedBy}` : ""}
+        </p>
+        {canWrite && (
+          <Button variant="outline" size="sm" className="h-7" onClick={startEditing}>
+            <Pencil className="h-3.5 w-3.5 mr-1.5" />
+            Edit
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderContent = () => {
+    if (isLoading) return renderLoading();
+    if (loadFailed || !memory) return renderLoadError();
+    if (isEditing) return renderEditor();
+    return renderPolicy(memory);
+  };
+
   return (
     <Card className="mb-6">
       <CardHeader>
@@ -124,78 +208,7 @@ export function SlackMemoryCard({ canWrite }: SlackMemoryCardProps) {
           to go looking for it.
         </CardDescription>
       </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <div className="flex items-center justify-center py-6">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : loadFailed || !memory ? (
-          /* GET seeds on demand, so a null entry means the load or seed failed. */
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs text-muted-foreground">
-              Couldn&apos;t load the Slack memory.
-            </p>
-            <Button variant="outline" size="sm" className="h-7" onClick={loadMemory}>
-              <RotateCw className="h-3.5 w-3.5 mr-1.5" />
-              Retry
-            </Button>
-          </div>
-        ) : isEditing ? (
-          <div className="space-y-2">
-            <Textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              className="min-h-[320px] font-mono text-xs"
-              placeholder="Describe how Aurora should behave in Slack (markdown)."
-            />
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs text-muted-foreground">
-                Markdown. Aurora also edits this itself as it learns — your changes are versioned.
-              </p>
-              <div className="flex gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => setIsEditing(false)}
-                  disabled={isSaving}
-                >
-                  Cancel
-                </Button>
-                <Button size="sm" className="h-7 px-2 text-xs" onClick={handleSave} disabled={isSaving}>
-                  {isSaving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : null}
-                  Save
-                </Button>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {/* Scrollable so a long, well-tuned policy doesn't stretch the page. */}
-            <div className="max-h-96 overflow-y-auto rounded-lg border p-4">
-              {memory.content?.trim() ? (
-                <MarkdownRenderer content={memory.content} />
-              ) : (
-                <p className="text-xs text-muted-foreground/70 italic">
-                  This memory is empty — Aurora has no Slack-specific guidance yet.
-                </p>
-              )}
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs text-muted-foreground">
-                {memory.updated_at ? `Last updated ${formatDate(memory.updated_at)}` : ""}
-                {editedBy ? ` by ${editedBy}` : ""}
-              </p>
-              {canWrite && (
-                <Button variant="outline" size="sm" className="h-7" onClick={startEditing}>
-                  <Pencil className="h-3.5 w-3.5 mr-1.5" />
-                  Edit
-                </Button>
-              )}
-            </div>
-          </div>
-        )}
-      </CardContent>
+      <CardContent>{renderContent()}</CardContent>
     </Card>
   );
 }
