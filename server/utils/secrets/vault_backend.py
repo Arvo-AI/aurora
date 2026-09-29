@@ -7,6 +7,7 @@ This is the OSS-first default for Aurora deployments.
 
 import os
 import logging
+import threading
 import time
 from typing import Optional
 
@@ -31,33 +32,72 @@ class VaultSecretsBackend(SecretsBackend):
         vault:kv/data/{mount}/{base_path}/{secret_name}
     """
 
+    # Minimum gap between initialization attempts once one has failed.
+    RETRY_INTERVAL_SECONDS = 30
+    # Cap on the auth probe, which runs while _init_lock is held.
+    CONNECT_TIMEOUT_SECONDS = 10
+
     def __init__(self):
         self._client = None
         self._initialized = False
         self._available = False
+        # Monotonic timestamp of the last failed init, so a transient failure is
+        # retried instead of disabling Vault for the life of the process.
+        self._last_failure_at = None
+        self._init_lock = threading.Lock()
         self.mount_point = os.getenv("VAULT_KV_MOUNT", "aurora")
         self.vault_addr = os.getenv("VAULT_ADDR", "http://vault:8200")
         self.base_path = os.getenv("VAULT_KV_BASE_PATH", "users")
 
     def _initialize_client(self):
-        """Lazily initialize the Vault client.
+        """Lazily initialize the Vault client, retrying after a failure.
 
-        Only attempts initialization once to avoid repeated failures
-        on startup when Vault may not be needed.
+        Success latches: the client is reused for the rest of the process. Failure
+        does NOT latch. Vault can be unreachable, sealed, or holding an expired
+        token when a pod first touches it, and latching `_available = False` there
+        left every secret lookup failing until the pod was restarted — long after
+        Vault itself had recovered. Failures are retried, at most once per
+        RETRY_INTERVAL_SECONDS so a genuine outage doesn't turn every lookup into a
+        blocking connection attempt.
         """
         if self._initialized:
             return
 
-        self._initialized = True
+        # Checked before taking the lock: the lock is held across a network call,
+        # so during an outage this keeps callers from queueing behind it instead of
+        # failing fast on the backoff they are already inside.
+        if self._in_retry_backoff():
+            return
 
+        with self._init_lock:
+            # Another thread initialized or failed while this one waited.
+            if self._initialized or self._in_retry_backoff():
+                return
+
+            if self._try_initialize():
+                self._initialized = True
+                self._available = True
+                self._last_failure_at = None
+            else:
+                self._available = False
+                self._last_failure_at = time.monotonic()
+
+    def _in_retry_backoff(self) -> bool:
+        """True while a recent failed attempt should suppress another one."""
+        last_failure = self._last_failure_at
+        if last_failure is None:
+            return False
+        return (time.monotonic() - last_failure) < self.RETRY_INTERVAL_SECONDS
+
+    def _try_initialize(self) -> bool:
+        """One initialization attempt. True on success; never raises."""
         try:
             import hvac
         except ImportError:
             logger.warning(
                 "hvac package not installed. Install with: pip install hvac"
             )
-            self._available = False
-            return
+            return False
 
         vault_token = os.getenv("VAULT_TOKEN")
 
@@ -65,32 +105,46 @@ class VaultSecretsBackend(SecretsBackend):
             logger.warning(
                 "VAULT_TOKEN not set. Vault secrets backend will not be available."
             )
-            self._available = False
-            return
+            return False
 
         try:
-            self._client = hvac.Client(url=self.vault_addr, token=vault_token)
+            # Bounded: this call runs under _init_lock, so an unbounded wait on an
+            # unreachable Vault would stall every other caller behind it.
+            client = hvac.Client(
+                url=self.vault_addr,
+                token=vault_token,
+                timeout=self.CONNECT_TIMEOUT_SECONDS,
+            )
 
             # Verify connection and authentication
-            if not self._client.is_authenticated():
-                logger.error("Vault authentication failed. Check VAULT_TOKEN.")
-                self._available = False
-                return
+            if not client.is_authenticated():
+                logger.error(
+                    "Vault authentication failed (unreachable, sealed, or expired "
+                    "VAULT_TOKEN). Will retry in %ss.",
+                    self.RETRY_INTERVAL_SECONDS,
+                )
+                return False
+
+            self._client = client
 
             # Auto-enable KV v2 engine if not already enabled
             self._ensure_kv_engine()
 
-            self._available = True
             logger.info(
                 "VaultSecretsBackend initialized (addr: %s, mount: %s, base_path: %s)",
                 self.vault_addr,
                 self.mount_point,
                 self.base_path,
             )
+            return True
 
         except Exception as e:
-            logger.error("Failed to initialize Vault client: %s", e)
-            self._available = False
+            logger.error(
+                "Failed to initialize Vault client: %s. Will retry in %ss.",
+                e,
+                self.RETRY_INTERVAL_SECONDS,
+            )
+            return False
 
     def _ensure_kv_engine(self):
         """Enable KV v2 secrets engine if not already enabled."""

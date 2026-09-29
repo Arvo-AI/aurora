@@ -125,6 +125,29 @@ def check_cli_availability(cli_tool: str) -> bool:
 # OLD GLOBAL AZURE FUNCTION REMOVED - Use setup_azure_environment_isolated() instead
 
 
+def _credential_setup_error(fallback: str) -> str:
+    """Distinguish "secrets backend is down" from a real credential problem.
+
+    When Vault is unreachable, sealed, or holding an expired token, every
+    credential lookup returns empty and the provider setup fails. Reporting that
+    as an authentication failure sends operators chasing cloud credentials that
+    were never the problem, so name the actual cause when the backend is down.
+    """
+    try:
+        from utils.secrets import get_secrets_backend
+
+        if not get_secrets_backend().is_available():
+            return (
+                "Secrets backend (Vault) is unavailable, so stored credentials could "
+                "not be read. This is not a problem with your cloud credentials — "
+                "check VAULT_ADDR, VAULT_TOKEN and the Vault seal status."
+            )
+    # Never let the diagnostic itself replace the error it is annotating.
+    except Exception as e:
+        logger.warning("Could not check secrets backend availability: %s", e)
+    return fallback
+
+
 def setup_azure_environment_isolated(user_id: str, subscription_id: str | None = None):
     """Set up Azure environment with isolated credentials - NO global state modification."""
     try:
@@ -1530,7 +1553,7 @@ def _cloud_exec_azure_multi_subscription(
     if not setup_ok:
         return json.dumps({
             "success": False,
-            "error": "Failed to authenticate with Azure",
+            "error": _credential_setup_error("Failed to authenticate with Azure"),
             "multi_subscription": True,
             "command": command,
             "provider": "azure",
@@ -1743,7 +1766,7 @@ Security & Compliance
                     )
             success, subscription_id, auth_method, isolated_env, auth_argv = setup_azure_environment_isolated(user_id, target_subscription)
             if not success:
-                return json.dumps({"error": f"Failed to setup Azure environment with {provider_preference} authentication", "final_command": command})
+                return json.dumps({"error": _credential_setup_error(f"Failed to setup Azure environment with {provider_preference} authentication"), "final_command": command})
             resource_id = subscription_id
             # Reuse an existing `az login` for these credentials when one is cached.
             # None means this command keeps its private directory and logs in itself.
