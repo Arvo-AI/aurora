@@ -402,7 +402,7 @@ def test_unparseable_command_is_not_read_only(is_read_only):
     ("gcloud config set account x", "'set' is a write operation"),
     ("kubectl get pods && kubectl delete pod x", "'delete' is a write operation"),
     ("aws ssm get-parameter --name /db/p --with-decryption",
-     "'--with-decryption' returns a decrypted secret, which Ask mode never allows"),
+     'it passes an option that returns decrypted secrets'),
     ("sudo aws ec2 describe-instances",
      "'sudo' runs another command, so what would actually execute cannot be checked"),
     ("kubectl get pods | bash",
@@ -417,9 +417,12 @@ def test_rejection_reason_names_the_cause(command, expected):
     assert describe_rejection(command) == expected, command
 
 
-def test_credential_reason_names_the_credential_word():
-    assert "'token'" in describe_rejection("aws sts get-session-token")
-    assert "'secrets'" in describe_rejection("kubectl get secrets -n ns")
+def test_credential_reason_does_not_echo_the_credential_vocabulary():
+    # This reason reaches a log line, so it stays static: interpolating the
+    # matched credential word trips CodeQL's clear-text-logging rule for no gain.
+    for command in ("aws sts get-session-token", "kubectl get secrets -n ns"):
+        reason = describe_rejection(command)
+        assert reason == 'it returns a credential, key, secret or token', command
 
 
 def test_false_positive_reason_shows_the_misparse():

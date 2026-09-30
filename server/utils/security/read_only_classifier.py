@@ -400,6 +400,56 @@ def _is_real_dry_run(segments: list) -> bool:
     return found
 
 
+def _credential_rejection(facts: list, flag_names: set) -> str:
+    """Why the command hands back credentials, or '' when it does not.
+
+    Deliberately interpolates nothing: this reason reaches a log line, and
+    feeding the credential vocabulary into one trips CodeQL's clear-text-logging
+    rule for no gain, since the agent can already see its own command.
+    """
+    if flag_names & CREDENTIAL_FLAGS:
+        return 'it passes an option that returns decrypted secrets'
+
+    for f in facts:
+        if f.credential_words & CREDENTIAL_WORDS and not _is_kubeconfig_fetch(f.operation):
+            return 'it returns a credential, key, secret or token'
+
+    if _is_credential_read(facts, flag_names):
+        return 'it returns usable credentials'
+    return ''
+
+
+def _write_rejection(facts: list) -> str:
+    """Why a write verb blocks the command, or '' when none is present."""
+    for f in facts:
+        if not f.write_verb:
+            continue
+        # Name the leading word too. Shape cannot tell a real `delete-log-group`
+        # from a resource named `delete-me-vm`, so this is what makes a misparse
+        # self-evident instead of looking like a genuine delete.
+        verb = _verb_of(f.write_verb)
+        if verb == f.write_verb:
+            return "'%s' is a write operation" % f.write_verb
+        return ("'%s' is a write operation (it leads with '%s')"
+                % (f.write_verb, verb))
+    return ''
+
+
+def _pipeline_rejection(facts: list) -> str:
+    """Why the command's shape blocks it: a wrapper, or a non-filter downstream."""
+    # A wrapper's argument is the command that really runs, so what was
+    # classified above is not what executes.
+    if facts[0].executable in COMMAND_WRAPPERS:
+        return ("'%s' runs another command, so what would actually execute "
+                "cannot be checked" % facts[0].executable)
+
+    for f in facts[1:]:
+        if f.executable not in DOWNSTREAM_FILTERS:
+            return ("its output is piped into '%s', which is not a text filter"
+                    % (f.executable or '?'))
+    return ''
+
+
 def describe_rejection(command: str) -> str:
     """Why *command* is not read-only, as a clause, or '' when it is read-only.
 
@@ -420,39 +470,11 @@ def describe_rejection(command: str) -> str:
         if t.startswith('-') and t != '--'
     }
 
-    secret_flags = flag_names & CREDENTIAL_FLAGS
-    if secret_flags:
-        return ("'%s' returns a decrypted secret, which Ask mode never allows"
-                % sorted(secret_flags)[0])
-
-    for f in facts:
-        creds = f.credential_words & CREDENTIAL_WORDS
-        if creds and not _is_kubeconfig_fetch(f.operation):
-            return ("it returns a credential ('%s'), which Ask mode never allows"
-                    % sorted(creds)[0])
-
-    if _is_credential_read(facts, flag_names):
-        return 'it returns usable credentials, which Ask mode never allows'
-
-    # The offending token *and* the leading word it matched. Shape cannot tell a
-    # real `delete-log-group` from a resource named `delete-me-vm`, so one wording
-    # covers both: naming the leading word makes a misparse self-evident.
-    for f in facts:
-        if f.write_verb:
-            verb = _verb_of(f.write_verb)
-            if verb == f.write_verb:
-                return "'%s' is a write operation" % f.write_verb
-            return ("'%s' is a write operation (it leads with '%s')"
-                    % (f.write_verb, verb))
-
-    if facts[0].executable in COMMAND_WRAPPERS:
-        return ("'%s' runs another command, so what would actually execute "
-                "cannot be checked" % facts[0].executable)
-
-    for f in facts[1:]:
-        if f.executable not in DOWNSTREAM_FILTERS:
-            return ("its output is piped into '%s', which is not a text filter"
-                    % (f.executable or '?'))
+    for reason in (_credential_rejection(facts, flag_names),
+                   _write_rejection(facts),
+                   _pipeline_rejection(facts)):
+        if reason:
+            return reason
 
     if facts[0].verb in READ_ONLY_VERBS or _is_real_dry_run(segments):
         return ''
