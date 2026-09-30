@@ -100,6 +100,7 @@ Six rules keep the gate fail-closed:
 6. **Boolean switches don't swallow the verb** — `kubectl
    --insecure-skip-tls-verify get pods` stays read-only.
 
+Implementation: `server/utils/security/read_only_classifier.py`.
 Tests: `server/tests/security/test_read_only_classifier.py`.
 
 ### Relationship to the Security settings guardrails
