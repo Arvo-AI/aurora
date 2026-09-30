@@ -66,10 +66,9 @@ def duplicate_pair():
 class _FakeCursor:
     """Stands in for a psycopg2 cursor, implementing just the login SELECT.
 
-    Rows are listed oldest-first, standing in for ``created_at``. The ordering
-    is read off the query text rather than hardcoded, so dropping the
-    exact-case term from the route's ORDER BY fails these tests instead of
-    silently passing.
+    Rows are listed oldest-first, standing in for ``created_at``. The direction
+    is read off the query text rather than hardcoded, so flipping the route's
+    ORDER BY fails these tests instead of silently passing.
     """
 
     def __init__(self, rows):
@@ -79,17 +78,11 @@ class _FakeCursor:
     def execute(self, query, params=None):
         assert "LOWER(u.email) = %s" in query, "login must match on normalized email"
         assert query.count("%s") == len(params), "placeholders must match params"
+        assert "u.created_at" in query, "candidate order must be explicit"
 
-        exact_case_first = "(u.email = %s) DESC" in query
-        normalized = params[0]
-        raw = params[1] if exact_case_first else None
-
-        # enumerate() index is the created_at proxy: lower means older.
-        matches = [
-            (age, r) for age, r in enumerate(self._rows) if r[1].lower() == normalized
-        ]
-        matches.sort(key=lambda p: (exact_case_first and p[1][1] != raw, p[0]))
-        self._result = [r for _age, r in matches]
+        matches = [r for r in self._rows if r[1].lower() == params[0]]
+        # Newest-first is the account a locked-out user self-registered.
+        self._result = matches[::-1] if "u.created_at DESC" in query else matches
 
     def fetchall(self):
         return self._result
@@ -167,12 +160,13 @@ def test_surrounding_whitespace_is_stripped(login_client):
     assert _login(login_client, f"  {_EMAIL_MIXED} ", _SELF_PW) == (200, "uid-self")
 
 
-def test_shared_password_resolves_to_the_case_the_user_typed(monkeypatch):
-    """Both duplicates share a password, so only the typed case can break the tie.
+def test_shared_password_resolves_to_the_newest_account(monkeypatch):
+    """Both duplicates share a password, so candidate order alone decides.
 
-    The password loop can't choose here — it matches both rows. Without the
-    exact-case term in the ORDER BY, the caller silently lands on the older
-    (admin-created) row instead of the account they actually use.
+    A pair is an admin-created row (older, must_change_password) plus the row
+    the user self-registered once the case bug locked them out — so the newer
+    one is the account they actually use. Unlike the typed capitalization, that
+    answer holds however they spell the address.
     """
     for heavy in ("celery_config", "celery", "routes.audit_routes"):
         if heavy not in sys.modules:
@@ -197,11 +191,8 @@ def test_shared_password_resolves_to_the_case_the_user_typed(monkeypatch):
     application.register_blueprint(auth_routes.auth_bp)
     client = application.test_client()
 
-    # Typed exactly as each row is stored — each reaches its own account.
-    assert _login(client, _EMAIL_MIXED, shared_pw) == (200, "uid-self")
-    assert _login(client, _EMAIL_LOWER, shared_pw) == (200, "uid-admin")
-    # No exact-case match, so the oldest row is the documented fallback.
-    assert _login(client, _EMAIL_MIXED.upper(), shared_pw) == (200, "uid-admin")
+    for typed in (_EMAIL_MIXED, _EMAIL_LOWER, _EMAIL_MIXED.upper()):
+        assert _login(client, typed, shared_pw) == (200, "uid-self"), typed
 
 
 def test_lowercase_only_account_is_reachable_when_typed_capitalized(monkeypatch):
@@ -305,10 +296,10 @@ def test_corrupt_hash_on_first_candidate_does_not_block_the_second(monkeypatch):
 
     from routes import auth_routes
 
-    # Exact-case row is ordered first but carries a truncated hash.
+    # The newest row is tried first but carries a truncated hash.
     corrupt = list(_row("uid-corrupt", _EMAIL_MIXED, _ADMIN_PW, "orgA"))
     corrupt[_COLS.index("password_hash")] = corrupt[_COLS.index("password_hash")][:20]
-    rows = [tuple(corrupt), _row("uid-good", _EMAIL_LOWER, _SELF_PW, "orgB")]
+    rows = [_row("uid-good", _EMAIL_LOWER, _SELF_PW, "orgB"), tuple(corrupt)]
 
     fake_conn = MagicMock()
     fake_conn.cursor.return_value = _FakeCursor(rows)

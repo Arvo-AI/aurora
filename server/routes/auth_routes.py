@@ -454,9 +454,7 @@ def login():
         if not isinstance(data, dict):
             return jsonify({"error": "Invalid request body"}), 400
 
-        _raw = data.get('email')
-        raw_email = _raw.strip() if isinstance(_raw, str) else ''
-        email = normalize_email(raw_email)
+        email = normalize_email(data.get('email'))
         password = data.get('password')
         
         if not email or not password:
@@ -468,16 +466,17 @@ def login():
             with conn.cursor() as cursor:
                 # No RLS needed — users not RLS-protected
                 # Match on the normalized email so an account stays reachable
-                # however the user capitalizes it. Ordered deterministically so
-                # the exact-case row is tried first, then the oldest account.
+                # however the user capitalizes it. Newest first: a duplicate pair
+                # is an admin-created row the case bug locked the user out of,
+                # plus the row they then self-registered and actually use.
                 cursor.execute(
                     "SELECT u.id, u.email, u.name, u.password_hash, u.role, u.org_id, o.name, "
                     "COALESCE(u.must_change_password, FALSE), COALESCE(u.email_verified, FALSE), "
                     "(u.github_user_id IS NOT NULL) "
                     "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
                     "WHERE LOWER(u.email) = %s "
-                    "ORDER BY (u.email = %s) DESC, u.created_at ASC",
-                    (email, raw_email)
+                    "ORDER BY u.created_at DESC",
+                    (email,)
                 )
                 candidates = cursor.fetchall()
 
