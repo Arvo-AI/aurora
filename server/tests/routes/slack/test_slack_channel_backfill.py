@@ -56,7 +56,7 @@ def _run(users_by_org, rows_per_org, connected_users=None, rls_ok=True,
         return [c for c in cids if claimed is None or c in claimed]
 
     dbcm, _conn, _cur = _db()
-    with patch.object(mod, "_users_by_org", return_value=users_by_org), \
+    with patch("utils.auth.stateless_auth.users_by_org", return_value=users_by_org), \
          patch.object(mod, "_rotate_orgs", side_effect=lambda ids, now=None: list(ids)), \
          patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
          patch("utils.auth.stateless_auth.set_rls_context",
@@ -175,7 +175,7 @@ def test_backfill_one_failing_org_does_not_stop_the_sweep():
 
     dbcm, _conn, _cur = _db()
     # now=0 pins the rotation so the failing org is the one visited first.
-    with patch.object(mod, "_users_by_org", return_value={ORG_A: [USER_A], ORG_B: [USER_B]}), \
+    with patch("utils.auth.stateless_auth.users_by_org", return_value={ORG_A: [USER_A], ORG_B: [USER_B]}), \
          patch.object(mod, "_rotate_orgs", return_value=[ORG_A, ORG_B]), \
          patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
          patch("utils.auth.stateless_auth.set_rls_context", return_value=ORG_A), \
@@ -193,7 +193,7 @@ def test_backfill_one_failing_org_does_not_stop_the_sweep():
 
 
 def test_backfill_returns_empty_when_org_enumeration_fails():
-    with patch.object(mod, "_users_by_org", side_effect=RuntimeError("db down")):
+    with patch("utils.auth.stateless_auth.users_by_org", side_effect=RuntimeError("db down")):
         assert mod._backfill_channel_descriptions() == {"orgs": 0, "enqueued": 0}
 
 
@@ -232,7 +232,7 @@ def test_backfill_claim_reasserts_the_staleness_window():
         return list(cids)
 
     dbcm, _conn, _cur = _db()
-    with patch.object(mod, "_users_by_org", return_value={ORG_A: [USER_A]}), \
+    with patch("utils.auth.stateless_auth.users_by_org", return_value={ORG_A: [USER_A]}), \
          patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
          patch("utils.auth.stateless_auth.set_rls_context", return_value=ORG_A), \
          patch("connectors.slack_connector.client.get_slack_client_for_user",

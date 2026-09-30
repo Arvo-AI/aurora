@@ -255,21 +255,6 @@ def generate_channel_metadata(self, user_id: str, channel_id: str):
 _BACKFILL_LOG = "[SlackDescBackfill]"
 
 
-def _users_by_org() -> dict[str, list[str]]:
-    """Map org_id -> [user_id, ...]. ``users`` is NOT RLS-protected, so reading it
-    before any org context is set is how a cross-org task finds its orgs."""
-    from utils.db.connection_pool import db_pool
-
-    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT org_id, id FROM users WHERE org_id IS NOT NULL ORDER BY org_id, id"
-        )
-        by_org: dict[str, list[str]] = {}
-        for org_id, user_id in cur.fetchall():
-            by_org.setdefault(org_id, []).append(user_id)
-        return by_org
-
-
 def _rotate_orgs(org_ids: list[str], now: float | None = None) -> list[str]:
     """Rotate the org list so a different org leads each run.
 
@@ -414,9 +399,10 @@ def _backfill_channel_descriptions():
     tail stayed 'pending' forever. DB-only, so a timer can't hit Slack's limits.
     """
     from routes.slack.slack_channels import _enqueue_metadata
+    from utils.auth.stateless_auth import users_by_org
 
     try:
-        users_by_org = _users_by_org()
+        org_users_map = users_by_org()
     except Exception:
         logger.warning("%s could not enumerate orgs", _BACKFILL_LOG, exc_info=True)
         return {"orgs": 0, "enqueued": 0}
@@ -427,8 +413,8 @@ def _backfill_channel_descriptions():
 
     # Rotate the starting org so the global cap can't permanently starve the orgs
     # that happen to sort last.
-    for org_id in _rotate_orgs(list(users_by_org)):
-        org_users = users_by_org[org_id]
+    for org_id in _rotate_orgs(list(org_users_map)):
+        org_users = org_users_map[org_id]
         # Global cap reached — remaining orgs get their turn next run (the
         # rotation above is what makes that fair across orgs; the
         # longest-waiting-first ordering in the query is fair within one).
