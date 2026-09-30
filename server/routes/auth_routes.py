@@ -732,6 +732,22 @@ def _dispatch_reset_code(email: str) -> None:
         logging.exception("Error dispatching password reset code")
 
 
+@auth_bp.route('/password-reset-available', methods=['GET'])
+@limiter.limit("30 per minute")
+def password_reset_available():
+    """Report whether this deployment can send password reset emails at all.
+
+    Unauthenticated, and safe to be: the answer describes our SMTP config, not
+    any account, so unlike a per-email answer it reveals nothing to enumerate.
+    Without it the UI has no way to know a reset is impossible — /forgot-password
+    deliberately answers 200 either way — so it would promise a code that never
+    arrives.
+    """
+    from utils.notifications.email_service import is_email_configured
+
+    return jsonify({"available": is_email_configured()}), 200
+
+
 @auth_bp.route('/forgot-password', methods=['POST'])
 # Keyed on the submitted email: these requests arrive via the frontend proxy, so
 # the default IP key would be one shared bucket for every user.

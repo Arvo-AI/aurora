@@ -754,3 +754,101 @@ class TestPublicAuthRateLimitKey:
         assert status == 200
         email_svc.send_password_reset_email.assert_called_once()
         assert email_svc.send_password_reset_email.call_args.args[0] == _EMAIL
+
+
+# ---------------------------------------------------------------------------
+# SMTP availability: /forgot-password answers 200 even when it can't send, so
+# the UI needs a separate way to know a reset is impossible.
+# ---------------------------------------------------------------------------
+
+_SMTP_ENV = ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD")
+
+
+class TestIsEmailConfigured:
+    def test_true_when_all_required_vars_are_set(self, monkeypatch):
+        for var in _SMTP_ENV:
+            monkeypatch.setenv(var, "set")
+
+        from utils.notifications.email_service import is_email_configured
+
+        assert is_email_configured() is True
+
+    @pytest.mark.parametrize("missing", _SMTP_ENV)
+    def test_false_when_any_required_var_is_missing(self, monkeypatch, missing):
+        for var in _SMTP_ENV:
+            monkeypatch.setenv(var, "set")
+        monkeypatch.delenv(missing)
+
+        from utils.notifications.email_service import is_email_configured
+
+        assert is_email_configured() is False
+
+    @pytest.mark.parametrize("missing", _SMTP_ENV)
+    def test_false_when_a_required_var_is_empty(self, monkeypatch, missing):
+        # .env.example ships these as empty strings, which is the common case.
+        for var in _SMTP_ENV:
+            monkeypatch.setenv(var, "set")
+        monkeypatch.setenv(missing, "")
+
+        from utils.notifications.email_service import is_email_configured
+
+        assert is_email_configured() is False
+
+    @pytest.mark.parametrize("missing", _SMTP_ENV)
+    def test_agrees_with_whether_the_service_constructs(self, monkeypatch, missing):
+        # The whole point is to predict get_email_service() without calling it,
+        # so the two must not drift apart.
+        for var in _SMTP_ENV:
+            monkeypatch.setenv(var, "set")
+        monkeypatch.delenv(missing)
+
+        from utils.notifications.email_service import (
+            EmailService,
+            is_email_configured,
+        )
+
+        assert is_email_configured() is False
+        with pytest.raises(ValueError):
+            EmailService()
+
+
+class TestPasswordResetAvailableEndpoint:
+    def test_reports_true_when_smtp_is_configured(self, monkeypatch, reset_env):
+        client, _cursor, _svc = reset_env
+        monkeypatch.setattr(
+            "utils.notifications.email_service.is_email_configured", lambda: True
+        )
+        resp = client.get("/api/auth/password-reset-available")
+        assert resp.status_code == 200
+        assert resp.get_json() == {"available": True}
+
+    def test_reports_false_when_smtp_is_unconfigured(self, monkeypatch, reset_env):
+        # Without this the sign-in page promises a code that can never arrive.
+        client, _cursor, _svc = reset_env
+        monkeypatch.setattr(
+            "utils.notifications.email_service.is_email_configured", lambda: False
+        )
+        resp = client.get("/api/auth/password-reset-available")
+        assert resp.status_code == 200
+        assert resp.get_json() == {"available": False}
+
+    def test_needs_no_authentication(self, monkeypatch, reset_env):
+        # The caller is locked out by definition, so there's no session to send.
+        client, _cursor, _svc = reset_env
+        monkeypatch.setattr(
+            "utils.notifications.email_service.is_email_configured", lambda: True
+        )
+        resp = client.get("/api/auth/password-reset-available")
+        assert resp.status_code == 200
+
+    def test_says_nothing_about_any_account(self, monkeypatch, reset_env):
+        # Deployment-level fact only: it must stay independent of the users table,
+        # or it becomes the enumeration oracle the POST route avoids being.
+        client, cursor, _svc = reset_env
+        monkeypatch.setattr(
+            "utils.notifications.email_service.is_email_configured", lambda: False
+        )
+        before = len(cursor.executed)
+        body = client.get("/api/auth/password-reset-available").get_json()
+        assert set(body) == {"available"}
+        assert len(cursor.executed) == before

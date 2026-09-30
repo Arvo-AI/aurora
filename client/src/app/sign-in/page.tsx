@@ -7,7 +7,7 @@ import Link from "next/link"
 import Image from "next/image"
 import dynamic from "next/dynamic"
 import { useDarkPageBackground } from "@/hooks/useDarkPageBackground"
-import { usePasswordReset } from "@/hooks/usePasswordReset"
+import { usePasswordReset, usePasswordResetAvailable } from "@/hooks/usePasswordReset"
 import { ForgotPasswordPanel, ResetPasswordPanel } from "./PasswordResetPanels"
 
 const AuroraShader = dynamic(() => import('@/app/components/AuroraShader'), { ssr: false })
@@ -97,6 +97,11 @@ function AuthPage() {
   // this component stays a set of panels; email + password fields stay here
   // because sign-in and change-password share them.
   const [notice, setNotice] = useState("")
+  // Probed only once the user is actually in the flow, so a plain sign-in visit
+  // doesn't pay for the request.
+  const resetAvailable = usePasswordResetAvailable(
+    mode === "forgot-password" || mode === "reset-password"
+  )
   const {
     resetCode, setResetCode, resetSent, resetComplete,
     isSubmitting: isResetSubmitting, isResending: isResendingReset,
@@ -584,6 +589,7 @@ function AuthPage() {
                 error={error}
                 isSubmitting={isResetSubmitting}
                 spamHint={SPAM_FOLDER_HINT}
+                resetAvailable={resetAvailable}
                 onSubmit={handleForgotPassword}
                 onBack={() => switchMode('signin')}
               />
@@ -607,6 +613,7 @@ function AuthPage() {
                 error={error}
                 notice={notice}
                 spamHint={SPAM_FOLDER_HINT}
+                resetAvailable={resetAvailable}
                 onSubmit={handleResetPassword}
                 onResend={handleResendReset}
                 onBack={() => switchMode('signin')}

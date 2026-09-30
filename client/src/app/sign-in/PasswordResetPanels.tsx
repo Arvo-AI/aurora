@@ -49,19 +49,50 @@ function BackToSignIn({ onBack }: Readonly<{ onBack: () => void }>) {
   )
 }
 
+// Shown in place of the form when the deployment has no SMTP configured. The
+// backend can't mail a code, and /forgot-password answers 200 regardless, so
+// without this the user waits on an email that is never coming.
+function EmailNotConfigured({ onBack }: Readonly<{ onBack: () => void }>) {
+  return (
+    <div className="space-y-8">
+      <div>
+        <h2 className="text-2xl font-semibold text-white">Password reset unavailable</h2>
+        <p className="mt-2 text-[#888] text-sm">
+          This Aurora instance has no email server (SMTP) configured, so we can&apos;t send you a reset code.
+        </p>
+      </div>
+      <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-4 py-3" aria-live="polite">
+        <p className="text-sm text-amber-300/90">
+          Ask an administrator to reset your password for you, or to configure SMTP to enable self-service resets.
+        </p>
+      </div>
+      <BackToSignIn onBack={onBack} />
+    </div>
+  )
+}
+
 type ForgotPasswordPanelProps = {
   email: string
   setEmail: (v: string) => void
   error: string
   isSubmitting: boolean
   spamHint: string
+  /** null while the SMTP probe is in flight; false swaps in the unavailable notice. */
+  resetAvailable: boolean | null
   onSubmit: (e: React.FormEvent) => void
   onBack: () => void
 }
 
 export function ForgotPasswordPanel({
-  email, setEmail, error, isSubmitting, spamHint, onSubmit, onBack,
+  email, setEmail, error, isSubmitting, spamHint, resetAvailable, onSubmit, onBack,
 }: Readonly<ForgotPasswordPanelProps>) {
+  // No mail server — don't show a form that can only dead-end.
+  if (resetAvailable === false) return <EmailNotConfigured onBack={onBack} />
+
+  // Probe still running: hold the submit rather than flashing a form we may
+  // be about to replace.
+  const pending = isSubmitting || resetAvailable === null
+
   return (
     <div className="space-y-8">
       <div>
@@ -72,10 +103,10 @@ export function ForgotPasswordPanel({
       <form className="space-y-4" onSubmit={onSubmit}>
         <div>
           <label htmlFor="forgot-email" className={LABEL_CLASS}>Email</label>
-          <input id="forgot-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className={INPUT_CLASS} placeholder="you@company.com" disabled={isSubmitting} />
+          <input id="forgot-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className={INPUT_CLASS} placeholder="you@company.com" disabled={pending} />
         </div>
         {error && <ErrorBox message={error} />}
-        <button type="submit" disabled={isSubmitting} className={SUBMIT_CLASS}>
+        <button type="submit" disabled={pending} className={SUBMIT_CLASS}>
           {isSubmitting ? <span className="flex items-center justify-center gap-2">{SPINNER}Sending code...</span> : "Send reset code"}
         </button>
       </form>
@@ -104,6 +135,8 @@ type ResetPasswordPanelProps = {
   error: string
   notice: string
   spamHint: string
+  /** null while the SMTP probe is in flight; false swaps in the unavailable notice. */
+  resetAvailable: boolean | null
   onSubmit: (e: React.FormEvent) => void
   onResend: () => void
   onBack: () => void
@@ -113,8 +146,12 @@ export function ResetPasswordPanel({
   email, setEmail, resetCode, setResetCode, newPassword, setNewPassword,
   confirmNewPassword, setConfirmNewPassword, resetSent, resetComplete,
   isSubmitting, resendDisabled, resendLabel, error, notice, spamHint,
-  onSubmit, onResend, onBack,
+  resetAvailable, onSubmit, onResend, onBack,
 }: Readonly<ResetPasswordPanelProps>) {
+  // Reachable directly via ?mode=reset-password, so it needs the same guard as
+  // the panel before it — no mail server means no code could have been sent.
+  if (resetAvailable === false) return <EmailNotConfigured onBack={onBack} />
+
   const frozen = isSubmitting || resetComplete
   const codeClass = resetComplete
     ? "border-green-500/40 bg-green-500/10 text-green-400 focus:ring-green-500/20"

@@ -19,6 +19,7 @@ const publicRoutes = [
   "/api/auth/resend-verification", // Resend verification code
   "/api/auth/forgot-password", // Reset-code request (caller is locked out)
   "/api/auth/reset-password", // Reset completion (emailed code is the proof)
+  "/api/auth/password-reset-available", // Whether SMTP is configured (no account data)
   "/google-chat/events",  // Google Chat event POSTs (rewritten to backend)
   "/api/ping",            // Connection health check
 ]

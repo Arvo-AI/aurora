@@ -11,6 +11,24 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# Env var -> attribute for the settings without which no send can work. Module
+# level so is_email_configured() can answer from the same source of truth that
+# EmailService.__init__ validates against.
+_REQUIRED_SMTP_VARS = {
+    "SMTP_HOST": "smtp_host",
+    "SMTP_USER": "smtp_user",
+    "SMTP_PASSWORD": "smtp_password",
+}
+
+
+def is_email_configured() -> bool:
+    """True when get_email_service() would succeed rather than raise ValueError.
+
+    Lets callers gate an email-dependent feature without constructing the
+    service just to catch the failure.
+    """
+    return all(os.getenv(var) for var in _REQUIRED_SMTP_VARS)
+
 
 class EmailService:
     """SMTP-based email service for Aurora notifications."""
@@ -37,7 +55,7 @@ class EmailService:
         self.frontend_url = os.getenv("FRONTEND_URL")
         
         # Validate required configuration at initialization
-        for env_var, attr in [("SMTP_HOST", "smtp_host"), ("SMTP_USER", "smtp_user"), ("SMTP_PASSWORD", "smtp_password")]:
+        for env_var, attr in _REQUIRED_SMTP_VARS.items():
             if not getattr(self, attr):
                 raise ValueError(f"EmailService configuration incomplete. Missing required environment variable: {env_var}")
     

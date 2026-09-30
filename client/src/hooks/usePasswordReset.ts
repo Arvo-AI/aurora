@@ -1,5 +1,37 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { signIn } from "next-auth/react"
+
+/**
+ * Whether this deployment can send reset emails at all.
+ *
+ * `null` while unknown. Fetched only when `enabled`, so the sign-in page pays
+ * for it when someone opens the flow rather than on every visit.
+ */
+export function usePasswordResetAvailable(enabled: boolean): boolean | null {
+  const [available, setAvailable] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    if (!enabled || available !== null) return
+    let cancelled = false
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/auth/password-reset-available")
+        if (!response.ok) throw new Error(String(response.status))
+        const data = await response.json()
+        if (!cancelled) setAvailable(data.available !== false)
+      } catch {
+        // Assume available on a failed probe: wrongly blocking the form for a
+        // working deployment is worse than the existing dead-end we're fixing.
+        if (!cancelled) setAvailable(true)
+      }
+    })()
+
+    return () => { cancelled = true }
+  }, [enabled, available])
+
+  return available
+}
 
 // Both reset endpoints are POST-JSON-and-read-a-message. Extracted so callers
 // hold the state transitions rather than the plumbing, and so the error
