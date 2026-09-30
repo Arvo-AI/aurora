@@ -237,7 +237,11 @@ def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent", login
           "contextvars": __import__("contextvars"),
           "Optional": typing.Optional, "logger": __import__("logging").getLogger("test")}
 
-    for fn in ["is_read_only_command", "_apply_azure_subscription",
+    # The fan-out calls the Ask-mode gate, which now lives in its own module.
+    from utils.security.read_only_classifier import is_read_only_command
+    ns["is_read_only_command"] = is_read_only_command
+
+    for fn in ["_apply_azure_subscription",
                "_run_azure_on_subscription", "_fan_out_azure",
                "_subscriptions_needing_relogin", "_azure_login_ok",
                "_retry_stale_subscriptions", "_cloud_exec_azure_multi_subscription"]:

@@ -7,32 +7,14 @@ to decide what may run in Ask mode, so every behaviour below is load-bearing:
 * Mutations, credential/token minting and decrypted secret reads must stay denied.
 * Unknown or unparseable operations must fail closed.
 """
-import re
-import shlex
-
 import pytest
 
-CLOUD_EXEC = "chat/backend/agent/tools/cloud_exec_tool.py"
-
-
-def _load_is_read_only_command():
-    """Exec the classifier out of cloud_exec_tool without importing the module.
-
-    cloud_exec_tool pulls in the whole agent/DB stack at import time, which is
-    not available in unit tests.
-    """
-    with open(CLOUD_EXEC, encoding="utf-8") as fh:
-        src = fh.read()
-    match = re.search(r"^def is_read_only_command\(.*?(?=^def )", src, re.S | re.M)
-    assert match, f"is_read_only_command not found in {CLOUD_EXEC}"
-    ns = {"shlex": shlex, "re": re}
-    exec(match.group(0), ns)
-    return ns["is_read_only_command"]
+from utils.security.read_only_classifier import is_read_only_command
 
 
 @pytest.fixture(scope="module")
 def is_read_only():
-    return _load_is_read_only_command()
+    return is_read_only_command
 
 
 # ---------------------------------------------------------------------------
