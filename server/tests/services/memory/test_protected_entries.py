@@ -35,8 +35,12 @@ ENTRY_ID = "11111111-1111-1111-1111-111111111111"
 # ---------------------------------------------------------------------------
 
 def test_slack_memory_stays_user_writable():
-    # Protection must NOT be implemented by moving it into the system category —
-    # users are meant to edit the policy's content freely.
+    """Protection must be an identity lock, not a read-only flag.
+
+    Implementing it by moving the entry into SYSTEM_CATEGORY would make the
+    content read-only, which is the opposite of what's wanted: users and the
+    agent are both meant to edit the policy freely.
+    """
     assert (SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE) in PROTECTED_ENTRIES
     assert SLACK_MEMORY_CATEGORY in USER_WRITABLE_CATEGORIES
     assert SLACK_MEMORY_CATEGORY != SYSTEM_CATEGORY
@@ -109,6 +113,7 @@ def memory_client(monkeypatch):
 
 
 def _put(client, body):
+    """PUT the protected entry with an authenticated identity."""
     return client.put(
         f"/entries/{ENTRY_ID}",
         json=body,
@@ -117,18 +122,21 @@ def _put(client, body):
 
 
 def test_route_rename_of_protected_entry_is_rejected(memory_client):
+    """A new title would detach the entry from the injector's (category, title) key."""
     resp = _put(memory_client, {"title": "Slack Policy"})
     assert resp.status_code == 403
     assert resp.get_json()["code"] == "protected_entry"
 
 
 def test_route_recategorize_of_protected_entry_is_rejected(memory_client):
+    """Moving categories breaks the same lookup as a rename."""
     resp = _put(memory_client, {"category": "runbook"})
     assert resp.status_code == 403
     assert resp.get_json()["code"] == "protected_entry"
 
 
 def test_route_delete_of_protected_entry_is_rejected(memory_client):
+    """Deleting it would leave Slack with no policy at all."""
     resp = memory_client.delete(
         f"/entries/{ENTRY_ID}",
         headers={"X-User-ID": USER_ID, "X-Org-ID": ORG_ID},
@@ -181,6 +189,8 @@ def memory_tool(monkeypatch):
     conn = MagicMock()
 
     class _Conn:
+        """Stands in for _memory_connection's (cursor, conn, org_id) contract."""
+
         def __enter__(self):
             return cursor, conn, ORG_ID
 
@@ -193,6 +203,7 @@ def memory_tool(monkeypatch):
 
 
 def test_agent_cannot_rename_protected_entry(memory_tool):
+    """The agent is the other writer, so it needs the same lock as the routes."""
     result = json.loads(memory_tool.rename_memory(
         category=SLACK_MEMORY_CATEGORY,
         title=SLACK_MEMORY_TITLE,
@@ -204,6 +215,7 @@ def test_agent_cannot_rename_protected_entry(memory_tool):
 
 
 def test_agent_cannot_delete_protected_entry(memory_tool):
+    """Blocked before the connection opens, so nothing reaches the DB."""
     result = json.loads(memory_tool.delete_memory(
         category=SLACK_MEMORY_CATEGORY,
         title=SLACK_MEMORY_TITLE,
@@ -225,6 +237,7 @@ def test_agent_can_update_protected_entry_description(memory_tool):
 
 
 def test_agent_can_rename_unprotected_entry(memory_tool):
+    """Ordinary memory entries stay fully renameable by the agent."""
     result = json.loads(memory_tool.rename_memory(
         category="runbook",
         title="Deploy Steps",
