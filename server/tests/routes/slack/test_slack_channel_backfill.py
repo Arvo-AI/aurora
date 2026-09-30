@@ -203,8 +203,10 @@ def test_select_only_targets_member_channels_awaiting_description():
 
     sql, params = cur.execute.call_args.args
     assert "is_member" in sql
-    assert "'skipped'" in sql and "'pending'" in sql
-    assert "error" not in sql and "limit_reached" not in sql
+    assert "'skipped'" in sql
+    assert "'pending'" in sql
+    assert "error" not in sql
+    assert "limit_reached" not in sql
     # Longest-waiting first so repeated bounded runs drain the backlog fairly.
     assert "ORDER BY d.updated_at ASC" in sql
     # One LLM call per channel even when several org members each hold a row.
@@ -219,7 +221,8 @@ def test_select_excludes_freshly_queued_pending_rows():
     cur.fetchall.return_value = []
     mod._select_undescribed_channels(cur, 10)
     sql = cur.execute.call_args.args[0]
-    assert "updated_at <" in sql and "make_interval" in sql
+    assert "updated_at <" in sql
+    assert "make_interval" in sql
 
 
 # --- beat registration ------------------------------------------------------
@@ -247,3 +250,20 @@ def test_backfill_is_registered_on_the_beat_schedule():
     source = (Path(__file__).resolve().parents[3] / "celery_config.py").read_text()
     assert "backfill-slack-channel-descriptions" in source
     assert "routes.slack.slack_channel_metadata.backfill_channel_descriptions" in source
+
+
+# --- _assign_actors (credential selection in isolation) ---------------------
+
+def test_assign_actors_prefers_the_row_owner():
+    """No extra credential lookup when the owner is still connected."""
+    assigned = _assign_actors_with([("C1", USER_A)], [USER_A, USER_A2], {USER_A, USER_A2})
+    assert assigned == [(USER_A, "C1")]
+
+
+def test_assign_actors_drops_channels_nobody_can_reach():
+    assigned = _assign_actors_with([("C1", USER_A)], [USER_A], set())
+    assert assigned == []
+
+
+def _assign_actors_with(rows, org_users, connected):
+    return mod._assign_actors(rows, org_users, lambda uid: uid in connected)

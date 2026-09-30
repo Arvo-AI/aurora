@@ -249,21 +249,23 @@ def generate_channel_metadata(self, user_id: str, channel_id: str):
             _update_metadata(user_id, channel_id, None, "error")
 
 
+_BACKFILL_LOG = "[SlackDescBackfill]"
+
+
 def _users_by_org() -> dict[str, list[str]]:
     """Map org_id -> [user_id, ...]. ``users`` is NOT RLS-protected, so it can be
     read before any org context is set — which is how a cross-org task discovers
     the orgs it has to iterate (see the RLS notes in AGENTS.md)."""
     from utils.db.connection_pool import db_pool
 
-    with db_pool.get_admin_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT org_id, id FROM users WHERE org_id IS NOT NULL ORDER BY org_id, id"
-            )
-            by_org: dict[str, list[str]] = {}
-            for org_id, user_id in cur.fetchall():
-                by_org.setdefault(org_id, []).append(user_id)
-            return by_org
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT org_id, id FROM users WHERE org_id IS NOT NULL ORDER BY org_id, id"
+        )
+        by_org: dict[str, list[str]] = {}
+        for org_id, user_id in cur.fetchall():
+            by_org.setdefault(org_id, []).append(user_id)
+        return by_org
 
 
 def _select_undescribed_channels(cur, limit: int) -> list[tuple[str, str]]:
@@ -303,6 +305,90 @@ def _select_undescribed_channels(cur, limit: int) -> list[tuple[str, str]]:
     return [(row[0], row[1]) for row in cur.fetchall()]
 
 
+class _SlackCredProbe:
+    """Memoized "can this user reach Slack?" check.
+
+    Each probe is a DB + Vault round trip, and a sweep asks about the same users
+    repeatedly, so answers are cached for the lifetime of one run.
+    """
+
+    def __init__(self):
+        self._cache: dict[str, bool] = {}
+
+    def __call__(self, user_id: str) -> bool:
+        if user_id not in self._cache:
+            from connectors.slack_connector.client import get_slack_client_for_user
+            try:
+                self._cache[user_id] = get_slack_client_for_user(user_id) is not None
+            except Exception:
+                self._cache[user_id] = False
+        return self._cache[user_id]
+
+
+def _assign_actors(rows: list[tuple[str, str]], org_users: list[str],
+                   has_slack) -> list[tuple[str, str]]:
+    """Pair each channel with the user_id whose credentials should describe it.
+
+    Returns [(actor_user_id, channel_id)], skipping channels nobody can reach.
+    """
+    # Prefer the row's owner — the identity whose token registered the channel.
+    # Only when an owner has since disconnected Slack do we need a stand-in, so
+    # the (DB + Vault) lookup for one is done lazily.
+    fallback = None
+    if any(not has_slack(owner_id) for _cid, owner_id in rows):
+        fallback = next((uid for uid in org_users if has_slack(uid)), None)
+
+    assigned = []
+    for channel_id, owner_id in rows:
+        actor = owner_id if has_slack(owner_id) else fallback
+        # Nobody in the org can reach Slack any more — leave the row pending
+        # rather than queueing a task that would only mark it 'error' (which is
+        # never auto-retried).
+        if actor:
+            assigned.append((actor, channel_id))
+    return assigned
+
+
+def _claim_org_channels(org_users: list[str], limit: int,
+                        has_slack) -> list[tuple[str, str]]:
+    """Claim up to ``limit`` of one org's undescribed channels for description.
+
+    "Claim" = select them, then mark them 'pending' with a fresh ``updated_at``
+    and COMMIT, so the rows no longer look unqueued to a concurrent sweep. The
+    caller enqueues the returned work afterwards.
+
+    Returns [(actor_user_id, channel_id)] — empty when there's nothing to do.
+    """
+    from utils.db.connection_pool import db_pool
+    from utils.auth.stateless_auth import set_rls_context
+    from routes.slack.slack_channels import _mark_pending
+
+    # Read pass, in its own short-lived block so the pooled connection isn't held
+    # across the Vault round trips the credential probe below makes.
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        # No org context resolvable (e.g. org deleted mid-sweep) — don't query
+        # with the wrong context.
+        if not set_rls_context(cur, conn, org_users[0], log_prefix=_BACKFILL_LOG):
+            return []
+        rows = _select_undescribed_channels(cur, limit)
+    if not rows:
+        return []
+
+    to_enqueue = _assign_actors(rows, org_users, has_slack)
+    if not to_enqueue:
+        return []
+
+    # Write pass, committed BEFORE the caller enqueues, so a worker can never pick
+    # a task up against a row that still looks unqueued (or, for a 'skipped' row,
+    # one whose status would make the description write a no-op).
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        if not set_rls_context(cur, conn, org_users[0], log_prefix=_BACKFILL_LOG):
+            return []
+        _mark_pending(cur, [cid for _actor, cid in to_enqueue])
+        conn.commit()
+    return to_enqueue
+
+
 @celery_app.task(name="routes.slack.slack_channel_metadata.backfill_channel_descriptions")
 def backfill_channel_descriptions():
     """Beat entry point — thin wrapper so the logic stays directly callable.
@@ -334,85 +420,34 @@ def _backfill_channel_descriptions():
     timer can't trip Slack's rate limits; membership reconciliation stays with
     :func:`~routes.slack.slack_channels.auto_register_channels`.
     """
-    from utils.db.connection_pool import db_pool
-    from utils.auth.stateless_auth import set_rls_context
-    from connectors.slack_connector.client import get_slack_client_for_user
-    from routes.slack.slack_channels import _enqueue_metadata, _mark_pending
-
-    log_prefix = "[SlackDescBackfill]"
-
-    # Per-run memo: probe each user's Slack credentials at most once (each probe
-    # is a DB + Vault round trip).
-    connected: dict[str, bool] = {}
-
-    def _has_slack(uid: str) -> bool:
-        if uid not in connected:
-            try:
-                connected[uid] = get_slack_client_for_user(uid) is not None
-            except Exception:
-                connected[uid] = False
-        return connected[uid]
+    from routes.slack.slack_channels import _enqueue_metadata
 
     try:
         users_by_org = _users_by_org()
     except Exception:
-        logger.warning("%s could not enumerate orgs", log_prefix, exc_info=True)
+        logger.warning("%s could not enumerate orgs", _BACKFILL_LOG, exc_info=True)
         return {"orgs": 0, "enqueued": 0}
 
+    has_slack = _SlackCredProbe()
     total = 0
     orgs_touched = 0
-    for _org_id, org_users in users_by_org.items():
-        # Global cap reached — the remaining orgs get their turn next run (the
-        # ORDER BY updated_at in the query above keeps that fair).
+
+    for org_users in users_by_org.values():
+        # Global cap reached — remaining orgs get their turn next run (the
+        # longest-waiting-first ordering in the query keeps that fair).
         if total >= BACKFILL_MAX_TOTAL:
             break
         try:
-            # Read pass. Kept in its own short-lived block so the pooled
-            # connection isn't held across the Vault round trips the credential
-            # probe below makes.
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cur:
-                    # No org context resolvable for this user (e.g. org deleted
-                    # mid-sweep) — skip rather than query with the wrong context.
-                    if not set_rls_context(cur, conn, org_users[0], log_prefix=log_prefix):
-                        continue
-                    rows = _select_undescribed_channels(
-                        cur, min(BACKFILL_MAX_PER_ORG, BACKFILL_MAX_TOTAL - total)
-                    )
-            if not rows:
-                continue
-
-            # Enqueue under the row's owner — the identity whose token registered
-            # the channel. Only if they've since disconnected Slack do we look for
-            # another connected org member (credentials are org-shared), so a
-            # channel isn't stranded by one person leaving.
-            owners = {owner_id for _cid, owner_id in rows}
-            fallback = None
-            if any(not _has_slack(owner_id) for owner_id in owners):
-                fallback = next((uid for uid in org_users if _has_slack(uid)), None)
-
-            to_enqueue = []
-            for channel_id, owner_id in rows:
-                actor = owner_id if _has_slack(owner_id) else fallback
-                # Nobody in the org can reach Slack any more — leave the rows
-                # pending rather than queueing a task that would only mark them
-                # 'error' (which is never auto-retried).
-                if actor:
-                    to_enqueue.append((actor, channel_id))
-            if not to_enqueue:
-                continue
-
-            # Write pass. Committed BEFORE enqueueing so the worker can never pick
-            # a task up against a row that still looks unqueued (or, for a
-            # 'skipped' row, one whose status would reject the description write).
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cur:
-                    if not set_rls_context(cur, conn, org_users[0], log_prefix=log_prefix):
-                        continue
-                    _mark_pending(cur, [cid for _actor, cid in to_enqueue])
-                    conn.commit()
+            to_enqueue = _claim_org_channels(
+                org_users,
+                min(BACKFILL_MAX_PER_ORG, BACKFILL_MAX_TOTAL - total),
+                has_slack,
+            )
         except Exception:
-            logger.warning("%s sweep failed for one org", log_prefix, exc_info=True)
+            # One org's failure must not starve the rest of the sweep.
+            logger.warning("%s sweep failed for one org", _BACKFILL_LOG, exc_info=True)
+            continue
+        if not to_enqueue:
             continue
 
         for actor, channel_id in to_enqueue:
@@ -422,5 +457,5 @@ def _backfill_channel_descriptions():
 
     if total:
         logger.info("%s enqueued %d description(s) across %d org(s)",
-                    log_prefix, total, orgs_touched)
+                    _BACKFILL_LOG, total, orgs_touched)
     return {"orgs": orgs_touched, "enqueued": total}
