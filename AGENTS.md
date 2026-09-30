@@ -52,25 +52,39 @@ RCA (Root Cause Analysis) investigations are **explicitly read-only** per AGENTS
 
 `is_read_only_command()` classifies the command's **operation** (its positional
 arguments) and ignores option names and option values, then matches the leading
-word of a hyphenated operation against the verb sets:
+word of the **first** verb-looking positional against the verb sets:
 - `describe-health-check` → leading word `describe` → read-only ✅
 - `get-metric-statistics` → leading word `get` → read-only ✅
 - `list-nodegroups` → leading word `list` → read-only ✅
 - `terminate-instances --query Reservations` → leading word `terminate` → blocked ✅
   (the `--query` option can never supply the verb)
+- `kubectl logs update-cache-cronjob-x` → verb is `logs`; the resource name that
+  follows it is not scanned, so `update` doesn't flip the result ✅
 
 This general approach works for **any** hyphenated diagnostic verb, not just hardcoded ones.
 
-Three rules keep the gate fail-closed:
-1. **Credential/token reads are denied** even though they mutate nothing —
-   `sts get-session-token`, `sts assume-role`, `eks get-token`,
-   `ecr get-login-password`, `secretsmanager get-secret-value`,
-   `gcloud auth print-access-token`, `az account get-access-token`,
-   `az storage account keys list`, and any `--with-decryption` SSM read.
-2. **Any write verb in the operation blocks the command**, including
-   hyphenated mutations (`modify-*`, `terminate-*`, `reboot-*`, `delete-*`).
-3. **Unknown operations default to blocked**, and an unparseable command
+Five rules keep the gate fail-closed:
+1. **Credential/token reads are denied** even though they mutate nothing. Rather
+   than an ever-incomplete per-service list, any credential word (`key`, `keys`,
+   `secret`, `credential`, `password`, `token`, `sas`, …) in the operation path
+   blocks the command — this covers `sts get-session-token`, `eks get-token`,
+   `ecr get-login-password`, `secretsmanager get-secret-value`, `kubectl get
+   secrets`, `az storage account keys list`, `az signalr key list`, and the long
+   tail of `<service> keys list` commands alike. Options that dump secrets
+   (`--with-decryption`, `--expand-keys`) are blocked too. `aks get-credentials`
+   and `container clusters get-credentials` are exempt: they only write a local
+   kubeconfig and start every managed-Kubernetes investigation.
+2. **Any write verb blocks the command**, including hyphenated mutations
+   (`modify-*`, `terminate-*`, `reboot-*`, `delete-*`).
+3. **Each shell segment is classified separately.** A write behind `&&`, `;`, a
+   pipe, a newline, or a `$(...)`/backtick substitution blocks the whole command,
+   so `kubectl get pods && kubectl delete pod x` is not read-only.
+4. **Unknown operations default to blocked**, and an unparseable command
    (unbalanced quotes) is blocked rather than guessed at.
+5. **Boolean switches don't swallow the verb** — `kubectl
+   --insecure-skip-tls-verify get pods` stays read-only.
+
+Tests: `server/tests/security/test_read_only_classifier.py`.
 
 ### Allowed RCA Diagnostic Commands (Ask Mode)
 

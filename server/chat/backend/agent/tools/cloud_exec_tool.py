@@ -1165,14 +1165,16 @@ def is_read_only_command(command: str) -> bool:
 
     Classification only looks at the *operation* — the positional arguments —
     so neither an option name nor an option value can supply the verb
-    (`aws ec2 terminate-instances --query Reservations` stays blocked). A
-    hyphenated operation matches on its leading word, so hyphenated diagnostic
-    verbs work: `describe-health-check` → 'describe' → read-only.
+    (`aws ec2 terminate-instances --query Reservations` stays blocked). Only the
+    *first* positional that looks like a verb decides the outcome, so a resource
+    name further right can't flip it (`kubectl logs update-cache-cronjob-xxx`
+    stays read-only). A hyphenated operation matches on its leading word, so
+    hyphenated diagnostic verbs work: `describe-health-check` → 'describe'.
     """
     READ_ONLY_VERBS = frozenset({
-        'list', 'describe', 'get', 'show', 'config', 'version', 'info', 'status',
-        'read', 'view', 'help', 'logs', 'log', 'top', 'explain', 'diff', 'search',
-        'query', 'export', 'devices', 'keys', 'routes', 'settings', 'check',
+        'list', 'ls', 'describe', 'get', 'show', 'config', 'version', 'info',
+        'status', 'read', 'view', 'help', 'logs', 'log', 'top', 'explain', 'diff',
+        'search', 'query', 'export', 'devices', 'routes', 'settings', 'check',
     })
     WRITE_VERBS = frozenset({
         'delete', 'destroy', 'remove', 'rm', 'create', 'apply', 'update', 'set',
@@ -1188,10 +1190,51 @@ def is_read_only_command(command: str) -> bool:
         'suspend', 'migrate', 'move', 'rename', 'reimage', 'redeploy', 'reinstall',
     })
 
+    # Boolean switches take no value, so the token after them is still part of
+    # the operation (`kubectl --insecure-skip-tls-verify get pods`). Every other
+    # option is assumed to consume its value, which keeps an option value from
+    # being mistaken for the verb. Ambiguous single-letter aliases are left out
+    # on purpose — `-w` is `--watch` in kubectl but `--workspace` in az.
+    VALUELESS_FLAGS = frozenset({
+        # kubectl
+        '--all-namespaces', '--all', '--insecure-skip-tls-verify', '--no-headers',
+        '--show-labels', '--show-kind', '--ignore-not-found', '--recursive',
+        '--follow', '--previous', '--timestamps', '--watch', '--watch-only',
+        '--prefix', '--force', '--now', '--wait', '--no-wait',
+        # aws
+        '--no-cli-pager', '--no-paginate', '--no-verify-ssl', '--no-sign-request',
+        '--with-decryption', '--no-cli-auto-prompt', '--cli-auto-prompt',
+        # az / gcloud
+        '--only-show-errors', '--include-preview', '--show-details', '--yes',
+        '--quiet', '--verbose', '--debug', '--help', '--version',
+    })
+
+    # Newlines separate commands but shlex treats them as plain whitespace, so
+    # they are turned into an explicit separator first.
+    normalized = command.replace('\r', '\n').replace('\n', ' ; ')
+
     try:
-        raw_tokens = shlex.split(command)
+        # punctuation_chars keeps `&&`, `||`, `|`, `;`, `(` and backticks as their
+        # own tokens while leaving quoted operators (a KQL query's pipes) inside
+        # the string they belong to.
+        lexer = shlex.shlex(normalized, posix=True, punctuation_chars='();<>|&`')
+        lexer.whitespace_split = True
+        raw_tokens = list(lexer)
     except ValueError:
         # Unbalanced quotes: the command cannot be parsed, so fail closed.
+        return False
+
+    # Each shell segment is a command of its own: a write hidden behind `&&`,
+    # `| xargs`, a newline or a `$(...)`/backtick substitution must not ride in
+    # on a read-only first segment.
+    segments: list[list[str]] = [[]]
+    for token in raw_tokens:
+        if token and all(c in '();<>|&`' for c in token):
+            segments.append([])
+            continue
+        segments[-1].append(token)
+    segments = [seg for seg in segments if seg]
+    if not segments:
         return False
 
     # Flag names are kept separately from the operation: they gate the command
@@ -1201,77 +1244,126 @@ def is_read_only_command(command: str) -> bool:
         if t.startswith('-') and t != '--'
     }
 
-    operation: list[str] = []
-    skip_next = False
-    for token in raw_tokens:
-        # Everything after `--` is passed to the target process, not the CLI.
-        if token == '--':
-            break
-        # Previous token was `--flag`, so this is its value, not an operation word.
-        if skip_next:
-            skip_next = False
-            continue
-        # An option: `--flag value` consumes the next token, `--flag=value` does not.
-        if token.startswith('-'):
-            skip_next = '=' not in token
-            continue
-        operation.append(token.lower())
-
-    # Component words let hyphenated operations match the credential deny list.
-    words = [w for token in operation for w in token.split('-') if w]
-    # Verb matching uses only each token's leading word, since cloud CLIs put the
-    # verb first (`terminate-instances`, `describe-health-check`). A resource name
-    # that happens to contain a verb (`pod-restart-test`) therefore can't flip the
-    # classification in either direction.
-    verb_words = {t for t in operation} | {t.split('-', 1)[0] for t in operation}
-
     # Some reads mutate nothing but hand back usable credentials, keys, secrets,
     # connection strings or bearer tokens. Ask mode must refuse them outright,
     # including hyphenated forms whose leading word ('get') looks read-only.
+    # One credential word in the operation is enough: every provider spells these
+    # the same way (`az signalr key list`, `az functionapp keys list`, `aws sts
+    # get-session-token`), so this covers the long tail of services an explicit
+    # per-service deny list keeps missing.
+    CREDENTIAL_WORDS = frozenset({
+        'key', 'keys', 'credential', 'credentials', 'secret', 'secrets',
+        'password', 'passwords', 'token', 'tokens', 'sas', 'kerberos',
+    })
+
+    # Per segment: the operation (positional args), the first verb, and the words
+    # that the credential rules are matched against.
+    verbs: list[str | None] = []
+    words: set[str] = set()
+    cred_scope: set[str] = set()
+    for seg_tokens in segments:
+        operation: list[str] = []
+        skip_next = False
+        for token in seg_tokens:
+            # Everything after `--` is passed to the target process, not the CLI.
+            if token == '--':
+                break
+            # Previous token was a value-taking flag, so this is its value.
+            if skip_next:
+                skip_next = False
+                continue
+            # An option: `--flag value` consumes the next token; `--flag=value`
+            # and known boolean switches do not.
+            if token.startswith('-'):
+                skip_next = '=' not in token and token.lower() not in VALUELESS_FLAGS
+                continue
+            operation.append(token.lower())
+
+        # The verb is the *first* positional whose whole token or leading word is
+        # a known verb — cloud CLIs put the verb before its operands, so anything
+        # to its right is a resource name and must not change the classification
+        # (`kubectl logs update-cache-cronjob-xxx` is a read, not an 'update').
+        verb: str | None = None
+        verb_index = len(operation)
+        for i, token in enumerate(operation):
+            for candidate in (token, token.split('-', 1)[0]):
+                if candidate in WRITE_VERBS or candidate in READ_ONLY_VERBS:
+                    verb, verb_index = candidate, i
+                    break
+            if verb is not None:
+                break
+        verbs.append(verb)
+
+        # Component words let hyphenated operations match the credential combos.
+        words |= {w for token in operation for w in token.split('-') if w}
+
+        # Credential words are matched two ways so that `az storage account keys
+        # list` and `aws sts get-session-token` are caught while a pod named
+        # `api-key-service` is not:
+        #   - any *whole* positional that is itself a credential word ('secrets')
+        cred_scope |= {t for t in operation if t in CREDENTIAL_WORDS}
+        #   - components of hyphenated tokens inside the operation path. That path
+        #     ends at the last positional that is *exactly* a verb, since a
+        #     service can precede the operation (`az search admin-key show`);
+        #     trailing resource names sit past it and are left out.
+        exact_verbs = [
+            i for i, t in enumerate(operation)
+            if t in WRITE_VERBS or t in READ_ONLY_VERBS
+        ]
+        cred_end = max([verb_index] + exact_verbs)
+        cred_scope |= {
+            w for token in operation[:cred_end + 1] for w in token.split('-') if w
+        }
+
+    # Fetching a kubeconfig only writes a local file and is the required first
+    # step of every managed-Kubernetes investigation, so it stays allowed.
+    CREDENTIAL_WORD_EXEMPT = (
+        ('aks', 'get', 'credentials'),       # az aks get-credentials
+        ('clusters', 'get', 'credentials'),  # gcloud container clusters get-credentials
+    )
+    if cred_scope & CREDENTIAL_WORDS and not any(
+        all(part in cred_scope for part in combo) for combo in CREDENTIAL_WORD_EXEMPT
+    ):
+        return False
+
+    # Options that turn an ordinary read into a secret dump.
+    CREDENTIAL_FLAGS = frozenset({
+        '--with-decryption',   # aws ssm get-parameter
+        '--expand-keys',       # az iot hub policy show
+        '--include-keys', '--show-keys', '--show-secrets', '--reveal',
+    })
+    if flag_names & CREDENTIAL_FLAGS:
+        return False
+
+    # Credential reads that contain none of the words above.
     CREDENTIAL_READS = (
-        # azure
-        ('storage', 'account', 'keys'), ('storage', 'account', 'show', 'connection', 'string'),
-        ('keyvault', 'secret'), ('keyvault', 'key'), ('keyvault', 'certificate'),
-        ('ad', 'sp', 'credential'), ('ad', 'app', 'credential'),
-        ('redis', 'list', 'keys'), ('cosmosdb', 'keys'),
-        ('servicebus', 'namespace', 'authorization', 'rule', 'keys'),
-        ('eventhubs', 'namespace', 'authorization', 'rule', 'keys'),
-        ('acr', 'credential'), ('batch', 'account', 'keys'),
-        ('account', 'get', 'access', 'token'),
+        # any provider: `show-connection-string` embeds the account key
+        ('connection', 'string'),
         # gcloud
-        ('secrets', 'get'), ('secrets', 'versions'),
-        ('auth', 'print', 'access', 'token'), ('auth', 'print', 'identity', 'token'),
+        ('iam', 'service', 'accounts', 'sign', 'jwt'),
+        ('iam', 'service', 'accounts', 'sign', 'blob'),
         # aws
-        ('secretsmanager', 'get', 'secret', 'value'), ('iam', 'create', 'access', 'key'),
-        ('sts', 'get', 'session', 'token'), ('sts', 'get', 'federation', 'token'),
-        ('sts', 'assume', 'role'), ('eks', 'get', 'token'),
-        ('ecr', 'get', 'login', 'password'), ('ecr', 'get', 'authorization', 'token'),
-        ('ecr', 'public', 'get', 'login', 'password'),
-        ('rds', 'generate', 'db', 'auth', 'token'),
+        ('sts', 'assume', 'role'),
         ('lightsail', 'get', 'instance', 'access', 'details'),
         ('cognito', 'idp', 'initiate', 'auth'),
     )
     if any(all(part in words for part in combo) for combo in CREDENTIAL_READS):
         return False
 
-    # `aws ssm get-parameter --with-decryption` returns plaintext secrets even
-    # though the operation itself is a read.
-    if '--with-decryption' in flag_names:
+    # A write verb in any segment disqualifies the whole command.
+    if any(v in WRITE_VERBS for v in verbs):
         return False
 
-    # Any write verb in the operation disqualifies the command outright.
-    if any(w in WRITE_VERBS for w in verb_words):
-        return False
-
-    # A read-only verb in the operation (base verb or the leading word of a
-    # hyphenated one, e.g. 'describe-health-check' → 'describe') clears it.
-    if any(w in READ_ONLY_VERBS for w in verb_words):
+    # The leading command decides: a read-only verb (base verb or the leading
+    # word of a hyphenated one, `describe-health-check` → 'describe') clears it.
+    # Downstream filters in a pipe (grep, jq, head) carry no verb and are fine.
+    if verbs[0] in READ_ONLY_VERBS:
         return True
 
     if '--dry-run' in flag_names:
         return True
 
-    # Default to **not** read-only to err on the side of caution.
+    # Unknown or absent operation: default to **not** read-only.
     return False
 
 

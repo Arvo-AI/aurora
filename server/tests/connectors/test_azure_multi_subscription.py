@@ -1,7 +1,8 @@
-"""Azure multi-subscription support (DEV-1499) and read-only fail-closed behaviour.
+"""Azure multi-subscription support (DEV-1499).
 
-Covers the logic that silently breaks without a test: the read-only command
-classifier, per-subscription command pinning, and Resource Graph paging.
+Covers the logic that silently breaks without a test: per-subscription command
+pinning, login/relogin handling, and Resource Graph paging. The read-only command
+classifier lives in `tests/security/test_read_only_classifier.py`.
 """
 import json
 import logging
@@ -49,97 +50,11 @@ SUBSCRIPTIONS_MOD = "connectors/azure_connector/subscriptions.py"
 def helpers():
     from utils.cloud import azure_login_cache
     ns = _load(
-        ["is_read_only_command", "_apply_azure_subscription", "_is_azure_cli_command",
-         "_azure_can_fan_out"],
+        ["_apply_azure_subscription", "_is_azure_cli_command", "_azure_can_fan_out"],
         CLOUD_EXEC,
     )
     ns["azure_login_cache"] = azure_login_cache
     return ns
-
-
-@pytest.mark.parametrize("command,read_only", [
-    # The bug this replaced: substring matching saw "logs" in the resource name.
-    ("az group delete --name my-logs-rg", False),
-    ("az vm list", True),
-    ("kubectl logs pod-a", True),
-    ("kubectl delete pod x", False),
-    ("az group create --name foo", False),
-    ("az aks show --name c --resource-group r", True),
-    ("az monitor log-analytics query -w W --analytics-query Q", True),
-    ("az role assignment create --assignee x --role Owner", False),
-    ("kubectl exec -it pod -- sh", False),
-    ("", False),
-])
-def test_read_only_classifier(helpers, command, read_only):
-    assert helpers["is_read_only_command"](command) is read_only
-
-
-@pytest.mark.parametrize("command", [
-    # Hyphenated diagnostic verbs: RCA in Ask mode needs these.
-    "aws route53 describe-health-check --health-check-id abc",
-    "aws route53 get-health-check-status --health-check-id abc",
-    "aws cloudwatch get-metric-statistics --namespace AWS/Route53",
-    "aws cloudwatch describe-alarms --alarm-names foo",
-    "aws eks describe-cluster --name c --region us-east-1",
-    "aws eks list-nodegroups --cluster-name c",
-    "kubectl get statefulsets -n ns",
-    "kubectl top nodes",
-    # `aks get-credentials` only writes a local kubeconfig and starts every
-    # AKS investigation, so it has to stay allowed.
-    "az aks get-credentials --name c --resource-group r",
-    "az appservice plan check-name --name foo",
-    # An un-decrypted SSM parameter read is an ordinary read.
-    "aws ssm get-parameter --name /app/feature-flag",
-])
-def test_hyphenated_diagnostic_verbs_are_read_only(helpers, command):
-    assert helpers["is_read_only_command"](command) is True, command
-
-
-@pytest.mark.parametrize("command", [
-    # Credential/token minting: mutates nothing but hands back usable creds, so
-    # the 'get' in `get-session-token` must not clear it.
-    "aws sts get-session-token",
-    "aws sts get-federation-token --name bob",
-    "aws sts assume-role --role-arn arn --role-session-name s",
-    "aws eks get-token --cluster-name c",
-    "aws ecr get-login-password --region us-east-1",
-    "aws ecr get-authorization-token",
-    "aws secretsmanager get-secret-value --secret-id s",
-    "aws rds generate-db-auth-token --hostname h --port 5432 --username u",
-    "gcloud auth print-access-token",
-    "gcloud secrets versions access latest --secret=s",
-    "az account get-access-token",
-    "az storage account keys list -n acct",
-    "az storage account show-connection-string -n acct",
-    "az redis list-keys --name r --resource-group g",
-    "az acr credential show -n reg",
-    # --with-decryption returns the plaintext secret, not just the parameter.
-    "aws ssm get-parameter --name /db/password --with-decryption",
-])
-def test_credential_reads_are_not_read_only(helpers, command):
-    assert helpers["is_read_only_command"](command) is False, command
-
-
-@pytest.mark.parametrize("command", [
-    # Option names and values must never supply the verb: 'query' and 'check'
-    # are read-only verbs, but the operation is a mutation.
-    "aws ec2 terminate-instances --instance-ids i-1 --query Reservations",
-    "aws ec2 modify-instance-attribute --instance-id i-1 --no-source-dest-check",
-    "aws ec2 reboot-instances --instance-ids i-1",
-    "kubectl delete pod x --output json",
-    "helm upgrade rel chart",
-    "terraform apply -auto-approve",
-    # Unknown operations fail closed rather than being assumed harmless.
-    "aws ec2 frobnicate-instances",
-    # --dry-run doesn't rescue a write verb.
-    "kubectl apply -f x.yaml --dry-run=client",
-])
-def test_mutating_operations_are_not_read_only(helpers, command):
-    assert helpers["is_read_only_command"](command) is False, command
-
-
-def test_unparseable_command_is_not_read_only(helpers):
-    assert helpers["is_read_only_command"]('az vm list --name "unclosed') is False
 
 
 @pytest.mark.parametrize("command,expected", [
@@ -821,38 +736,6 @@ def test_mg_walker_handles_empty_and_malformed():
 # secrets or connection strings, so allowing them would let Ask mode exfiltrate
 # standing credentials. There is no second allowlist gate behind this function.
 # ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("command", [
-    "az storage account keys list --account-name x",
-    "az storage account show-connection-string --name x",
-    "az keyvault secret show --name s --vault-name v",
-    "az keyvault secret list --vault-name v",
-    "az keyvault key list --vault-name v",
-    "az ad sp credential list --id x",
-    "az redis list-keys --name r",
-    "az cosmosdb keys list --name c --resource-group g",
-    "az acr credential show --name r",
-    "aws secretsmanager get-secret-value --secret-id s",
-    "gcloud secrets versions access latest --secret=s",
-])
-def test_credential_reads_are_not_read_only(helpers, command):
-    assert helpers["is_read_only_command"](command) is False, command
-
-
-@pytest.mark.parametrize("command", [
-    # Hyphenated subcommands are single tokens and match no bare verb, so they
-    # fell through to the default deny. `aks get-credentials` only writes a local
-    # kubeconfig and is the required first step of AKS investigation.
-    "az aks get-credentials --name c --resource-group r",
-    "az aks list",
-    "az storage account list",
-    "az keyvault list",
-    "az monitor metrics list --resource x",
-    "kubectl logs pod-x --tail=100",
-])
-def test_investigation_reads_stay_allowed(helpers, command):
-    assert helpers["is_read_only_command"](command) is True, command
-
 
 # ---------------------------------------------------------------------------
 # Disconnect must mark connections inactive even without a secret_ref column.
