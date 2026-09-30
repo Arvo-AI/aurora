@@ -1209,6 +1209,29 @@ def is_read_only_command(command: str) -> bool:
         '--quiet', '--verbose', '--debug', '--help', '--version',
     })
 
+    # A read-only command may pipe into a text filter, and nothing else. Anything
+    # unrecognised downstream is refused rather than guessed at, which is what
+    # stops a legitimate read from being used as a payload source:
+    # `kubectl get cm evil -o jsonpath='{.data.sh}' | bash` has a perfectly
+    # read-only first segment but executes whatever the ConfigMap holds.
+    DOWNSTREAM_FILTERS = frozenset({
+        'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'jq', 'yq', 'head', 'tail',
+        'sort', 'uniq', 'wc', 'cut', 'tr', 'awk', 'gawk', 'sed', 'tac',
+        'column', 'nl', 'rev', 'paste', 'fold', 'expand',
+        'echo', 'printf', 'strings', 'od', 'hexdump', 'less', 'more', 'seq',
+    })
+    # Interpreters and exec wrappers are never part of a read: they run whatever
+    # they're handed, so the verb of the wrapped command is invisible here.
+    EXEC_WRAPPERS = frozenset({
+        'bash', 'sh', 'dash', 'ash', 'zsh', 'ksh', 'csh', 'tcsh', 'fish', 'busybox',
+        'eval', 'exec', 'source', '.', 'command', 'builtin',
+        'python', 'python2', 'python3', 'perl', 'ruby', 'node', 'nodejs', 'php',
+        'lua', 'rscript', 'osascript', 'deno', 'bun',
+        'xargs', 'env', 'sudo', 'doas', 'su', 'nohup', 'setsid', 'timeout', 'watch',
+        'ssh', 'scp', 'sftp', 'nc', 'ncat', 'netcat', 'socat', 'telnet',
+        'curl', 'wget', 'tee', 'dd', 'find', 'make', 'git',
+    })
+
     # Newlines separate commands but shlex treats them as plain whitespace, so
     # they are turned into an explicit separator first.
     normalized = command.replace('\r', '\n').replace('\n', ' ; ')
@@ -1230,6 +1253,11 @@ def is_read_only_command(command: str) -> bool:
     segments: list[list[str]] = [[]]
     for token in raw_tokens:
         if token and all(c in '();<>|&`' for c in token):
+            # A redirection writes a file or an fd, which is a mutation no matter
+            # how read-only the command producing the bytes is
+            # (`kubectl get pods > /etc/cron.d/pwn`).
+            if '>' in token or '<' in token:
+                return False
             segments.append([])
             continue
         segments[-1].append(token)
@@ -1256,9 +1284,10 @@ def is_read_only_command(command: str) -> bool:
         'password', 'passwords', 'token', 'tokens', 'sas', 'kerberos',
     })
 
-    # Per segment: the operation (positional args), the first verb, and the words
-    # that the credential rules are matched against.
+    # Per segment: the operation (positional args), the first verb, the executable
+    # that runs it, and the words the credential rules are matched against.
     verbs: list[str | None] = []
+    executables: list[str | None] = []
     words: set[str] = set()
     cred_scope: set[str] = set()
     for seg_tokens in segments:
@@ -1278,6 +1307,16 @@ def is_read_only_command(command: str) -> bool:
                 skip_next = '=' not in token and token.lower() not in VALUELESS_FLAGS
                 continue
             operation.append(token.lower())
+
+        # The segment's executable, with any path and env-var prefix stripped, so
+        # `/bin/bash` and `FOO=1 bash` are both recognised as `bash`.
+        executable = None
+        for token in operation:
+            if '=' in token and not token.startswith('/'):
+                continue  # leading `VAR=value` assignment, not the command
+            executable = token.rsplit('/', 1)[-1]
+            break
+        executables.append(executable)
 
         # The verb is the *first* positional whose whole token or leading word is
         # a known verb — cloud CLIs put the verb before its operands, so anything
@@ -1354,9 +1393,19 @@ def is_read_only_command(command: str) -> bool:
     if any(v in WRITE_VERBS for v in verbs):
         return False
 
+    # An interpreter or exec wrapper anywhere means the real operation is hidden
+    # inside a string this classifier can't see, so refuse the whole command.
+    if any(exe in EXEC_WRAPPERS for exe in executables):
+        return False
+
+    # Every segment after the first must be a recognised read-only text filter.
+    # Anything else — an unknown binary, a second cloud call — fails closed.
+    for exe in executables[1:]:
+        if exe not in DOWNSTREAM_FILTERS:
+            return False
+
     # The leading command decides: a read-only verb (base verb or the leading
     # word of a hyphenated one, `describe-health-check` → 'describe') clears it.
-    # Downstream filters in a pipe (grep, jq, head) carry no verb and are fine.
     if verbs[0] in READ_ONLY_VERBS:
         return True
 

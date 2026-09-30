@@ -63,7 +63,7 @@ word of the **first** verb-looking positional against the verb sets:
 
 This general approach works for **any** hyphenated diagnostic verb, not just hardcoded ones.
 
-Five rules keep the gate fail-closed:
+Six rules keep the gate fail-closed:
 1. **Credential/token reads are denied** even though they mutate nothing. Rather
    than an ever-incomplete per-service list, any credential word (`key`, `keys`,
    `secret`, `credential`, `password`, `token`, `sas`, …) in the operation path
@@ -79,9 +79,19 @@ Five rules keep the gate fail-closed:
 3. **Each shell segment is classified separately.** A write behind `&&`, `;`, a
    pipe, a newline, or a `$(...)`/backtick substitution blocks the whole command,
    so `kubectl get pods && kubectl delete pod x` is not read-only.
-4. **Unknown operations default to blocked**, and an unparseable command
+4. **A read cannot be used as a payload source.** The verb of a command handed to
+   an interpreter is invisible to the classifier, so any interpreter or exec
+   wrapper (`bash`, `sh`, `python`, `xargs`, `sudo`, `env`, `ssh`, `curl`, `tee`,
+   `timeout`, …) anywhere in the pipeline blocks the command — otherwise
+   `kubectl get cm evil -o jsonpath='{.data.sh}' | bash` would pass on a
+   perfectly read-only first segment. Path and env-var prefixes don't help
+   (`/bin/bash`, `FOO=1 bash`). Downstream segments must be recognised text
+   filters (`grep`, `jq`, `sort`, `head`, `awk`, `wc`, …); an unknown binary
+   fails closed. Redirections (`>`, `>>`, `<`) are blocked outright since they
+   write a file regardless of what produced the bytes.
+5. **Unknown operations default to blocked**, and an unparseable command
    (unbalanced quotes) is blocked rather than guessed at.
-5. **Boolean switches don't swallow the verb** — `kubectl
+6. **Boolean switches don't swallow the verb** — `kubectl
    --insecure-skip-tls-verify get pods` stays read-only.
 
 Tests: `server/tests/security/test_read_only_classifier.py`.
