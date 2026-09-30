@@ -846,6 +846,7 @@ PROVIDER_CHECKERS = {
     "spinnaker": _check_spinnaker,
     "pagerduty": _check_pagerduty,
     "opsgenie":      _check_opsgenie,
+    "splunk_on_call": _check_credentials_only,
     "dynatrace": _check_dynatrace,
     "bigpanda": _check_bigpanda,
     "tailscale": _check_tailscale,

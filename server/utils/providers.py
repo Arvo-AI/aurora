@@ -46,6 +46,7 @@ CONNECTOR_DIRS: frozenset = frozenset({
     "tailscale",
     "terraform",
     "thousandeyes",
+    "splunk_on_call",
 })
 
 # Auxiliary provider keys not backed by a routes/ directory but that do appear

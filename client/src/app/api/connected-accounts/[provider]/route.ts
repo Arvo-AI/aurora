@@ -25,7 +25,7 @@ export async function DELETE(
     const { provider } = await context.params
 
     // Validate provider
-    if (!['gcp', 'azure', 'aws', 'github', 'gitlab', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'google_chat', 'splunk', 'dynatrace', 'confluence', 'jira', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker', 'newrelic', 'opsgenie', 'incidentio', 'sentry', 'elastic'].includes(provider)) {
+    if (!['gcp', 'azure', 'aws', 'github', 'gitlab', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'google_chat', 'splunk', 'dynatrace', 'confluence', 'jira', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker', 'newrelic', 'opsgenie', 'splunk_on_call', 'incidentio', 'sentry', 'elastic'].includes(provider)) {
       return NextResponse.json(
         { error: 'Invalid provider' },
         { status: 400 }
@@ -446,6 +446,10 @@ export async function DELETE(
       }
 
       return NextResponse.json({ success: true })
+    }
+
+    if (provider === 'splunk_on_call') {
+      return forwardRequest(request, 'DELETE', '/splunk-on-call/disconnect', 'splunk-on-call-disconnect')
     }
 
     // Special handling for incident.io

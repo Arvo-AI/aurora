@@ -21,6 +21,7 @@ _SOURCE_TABLE_MAP = {
     "newrelic": "newrelic_events",
     "pagerduty": "pagerduty_events",
     "opsgenie": "opsgenie_events",
+    "splunk_on_call": "splunk_on_call_events",
     "sentry": "sentry_events",
     "splunk": "splunk_alerts",
     "elastic": "elastic_alerts",
