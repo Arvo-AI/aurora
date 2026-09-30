@@ -338,6 +338,19 @@ def test_backfill_is_registered_on_the_beat_schedule():
     assert "routes.slack.slack_channel_metadata.backfill_channel_descriptions" in source
 
 
+def test_stale_window_covers_at_least_one_sweep():
+    """The claim restamps ``updated_at``, so a row claimed by one sweep must not
+    look stale to the next — otherwise a task still sitting in the queue gets
+    enqueued twice. The two constants are independent (one is cadence, one is
+    "presumed lost"), but the stale window must stay >= one interval.
+    """
+    assert mod.BACKFILL_STALE_MINUTES * 60 >= mod.BACKFILL_INTERVAL_SECONDS, (
+        f"stale window {mod.BACKFILL_STALE_MINUTES}min is shorter than the "
+        f"{mod.BACKFILL_INTERVAL_SECONDS}s sweep interval — rows claimed by one "
+        f"sweep would be re-enqueued by the next"
+    )
+
+
 def test_beat_schedule_uses_the_shared_interval_constant():
     """A literal here would drift from _rotate_orgs' interval and skip orgs."""
     source = (Path(__file__).resolve().parents[3] / "celery_config.py").read_text()

@@ -34,7 +34,10 @@ BACKFILL_MAX_PER_ORG = 25
 BACKFILL_MAX_TOTAL = 200
 
 # How long a 'pending' row must sit before the sweep treats it as stuck rather
-# than still in flight (re-enqueueing early just duplicates the LLM call).
+# than still in flight. NOT the same knob as BACKFILL_INTERVAL_SECONDS: a started
+# task is 'generating', so a still-'pending' row is one waiting in the broker
+# queue, and this measures worst-case queue wait, not sweep cadence. Must stay
+# >= one interval though, or a claimed row looks stale again next sweep (tested).
 BACKFILL_STALE_MINUTES = 15
 
 
