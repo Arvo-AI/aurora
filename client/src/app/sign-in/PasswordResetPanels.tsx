@@ -22,7 +22,7 @@ const LABEL_CLASS = "block text-xs font-medium text-[#888] mb-1.5"
 const SUBMIT_CLASS =
   "w-full py-2.5 px-4 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#0a0a0a] disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
 
-function ErrorBox({ message }: { message: string }) {
+function ErrorBox({ message }: Readonly<{ message: string }>) {
   return (
     <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3">
       <p className="text-sm text-red-400">{message}</p>
@@ -30,7 +30,7 @@ function ErrorBox({ message }: { message: string }) {
   )
 }
 
-function NoticeBox({ message }: { message: string }) {
+function NoticeBox({ message }: Readonly<{ message: string }>) {
   return (
     <div className="rounded-lg bg-white/[0.04] border border-white/[0.12] px-4 py-3" aria-live="polite">
       <p className="text-sm text-[#bbb]">{message}</p>
@@ -38,7 +38,7 @@ function NoticeBox({ message }: { message: string }) {
   )
 }
 
-function BackToSignIn({ onBack }: { onBack: () => void }) {
+function BackToSignIn({ onBack }: Readonly<{ onBack: () => void }>) {
   return (
     <p className="text-center text-sm text-[#555]">
       <button onClick={onBack} className="text-white/80 hover:text-white transition-colors inline-flex items-center gap-1.5">
@@ -61,7 +61,7 @@ type ForgotPasswordPanelProps = {
 
 export function ForgotPasswordPanel({
   email, setEmail, error, isSubmitting, spamHint, onSubmit, onBack,
-}: ForgotPasswordPanelProps) {
+}: Readonly<ForgotPasswordPanelProps>) {
   return (
     <div className="space-y-8">
       <div>
@@ -114,7 +114,7 @@ export function ResetPasswordPanel({
   confirmNewPassword, setConfirmNewPassword, resetSent, resetComplete,
   isSubmitting, resendDisabled, resendLabel, error, notice, spamHint,
   onSubmit, onResend, onBack,
-}: ResetPasswordPanelProps) {
+}: Readonly<ResetPasswordPanelProps>) {
   const frozen = isSubmitting || resetComplete
   const codeClass = resetComplete
     ? "border-green-500/40 bg-green-500/10 text-green-400 focus:ring-green-500/20"
