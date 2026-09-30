@@ -7,6 +7,7 @@ import Link from "next/link"
 import Image from "next/image"
 import dynamic from "next/dynamic"
 import { useDarkPageBackground } from "@/hooks/useDarkPageBackground"
+import { usePasswordReset } from "@/hooks/usePasswordReset"
 
 const AuroraShader = dynamic(() => import('@/app/components/AuroraShader'), { ssr: false })
 
@@ -50,38 +51,7 @@ const taglines: Record<AuthMode, { line1: string; line2: string; desc: string }>
 // it as a broken product rather than a misplaced email.
 const SPAM_FOLDER_HINT = "Don't see it? Check your spam or junk folder."
 
-// Kept out of the component: pure, easy to read as a list of rules, and keeps
-// the already-large AuthPage from growing more branches.
-function validateResetForm(code: string, password: string, confirmation: string): string | null {
-  if (code.length !== 6) return "Please enter the 6-digit code"
-  if (password.length < 8) return "New password must be at least 8 characters"
-  if (password !== confirmation) return "Passwords do not match"
-  return null
-}
-
 const AUTH_MODES = ["signup", "verify-email", "change-password", "forgot-password", "reset-password"] as const
-
-// Both reset endpoints are POST-JSON-and-read-a-message. Extracted so the
-// component holds the state transitions rather than the plumbing, and so the
-// error precedence (HTTP error > body error > fallback) is defined in one place.
-async function postResetRequest(
-  path: string,
-  body: Record<string, string>,
-  fallbackError: string,
-): Promise<{ message?: string; error?: string }> {
-  try {
-    const response = await fetch(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    })
-    const data = await response.json()
-    if (!response.ok) return { error: data.error || fallbackError }
-    return { message: data.message }
-  } catch {
-    return { error: "An error occurred. Please try again." }
-  }
-}
 
 function getInitialMode(searchParams: URLSearchParams): AuthMode {
   const mode = searchParams.get("mode")
@@ -122,11 +92,35 @@ function AuthPage() {
   const [newPassword, setNewPassword] = useState("")
   const [confirmNewPassword, setConfirmNewPassword] = useState("")
 
-  // Forgot/reset-password state
-  const [resetCode, setResetCode] = useState("")
-  const [resetSent, setResetSent] = useState(false)
-  const [resetComplete, setResetComplete] = useState(false)
+  // Forgot/reset-password state. The flow itself lives in usePasswordReset so
+  // this component stays a set of panels; email + password fields stay here
+  // because sign-in and change-password share them.
   const [notice, setNotice] = useState("")
+  const {
+    resetCode, setResetCode, resetSent, resetComplete,
+    isSubmitting: isResetSubmitting, isResending: isResendingReset,
+    requestCode, submitReset, resendCode: handleResendReset,
+  } = usePasswordReset({
+    email,
+    newPassword,
+    confirmNewPassword,
+    setError,
+    setNotice,
+    startCooldown: () => setResendCooldown(60),
+    // Wrapped in an arrow so switchMode is looked up when the callback fires,
+    // not at hook-call time — it is declared below this point.
+    onCodeSent: () => switchMode("reset-password", true),
+    onResetComplete: (signedIn) => {
+      // Signed in with the new password — go where they were headed.
+      if (signedIn) {
+        setTimeout(() => { router.push(callbackUrl); router.refresh() }, 800)
+        return
+      }
+      // Password did change; only the follow-up sign-in failed.
+      setNotice("Password reset. Please sign in with your new password.")
+      setTimeout(() => switchMode("signin", true), 1200)
+    },
+  })
 
   useDarkPageBackground()
 
@@ -353,67 +347,18 @@ function AuthPage() {
 
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError("")
-    setNotice("")
-    if (!email.trim()) { setError("Please enter your email"); return }
-    setIsLoading(true)
-    const { message, error: requestError } = await postResetRequest(
-      "/api/auth/forgot-password",
-      { email: email.trim() },
-      "Failed to send reset code",
-    )
-    setIsLoading(false)
-    if (requestError) { setError(requestError); return }
-    // The backend answers 200 with the same message whether or not the account
-    // exists, so there is nothing to branch on here.
-    setResetSent(true)
-    setNotice(message || "If an account exists for that email, we've sent a reset code.")
-    setResendCooldown(60)
-    switchMode("reset-password", true)
+    await requestCode()
   }
 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError("")
-    const validationError = validateResetForm(resetCode, newPassword, confirmNewPassword)
-    if (validationError) { setError(validationError); return }
-    setIsLoading(true)
-    const { error: requestError } = await postResetRequest(
-      "/api/auth/reset-password",
-      { email: email.trim(), code: resetCode, newPassword },
-      "Failed to reset password",
-    )
-    if (requestError) { setIsLoading(false); setError(requestError); return }
-    setResetComplete(true)
-    // Sign in with the password they just set rather than sending them back to a
-    // form to retype it.
-    const result = await signIn("credentials", { email: email.trim(), password: newPassword, redirect: false })
-    setIsLoading(false)
-    if (result?.ok) {
-      setTimeout(() => { router.push(callbackUrl); router.refresh() }, 800)
-    } else {
-      setNotice("Password reset. Please sign in with your new password.")
-      setTimeout(() => switchMode("signin", true), 1200)
-    }
-  }
-
-  const handleResendReset = async () => {
-    setIsResending(true)
-    setError("")
-    const { message, error: requestError } = await postResetRequest(
-      "/api/auth/forgot-password",
-      { email: email.trim() },
-      "Failed to resend code",
-    )
-    setIsResending(false)
-    if (requestError) { setError(requestError); return }
-    setNotice(message || "A new code is on its way.")
-    setResendCooldown(60)
+    await submitReset()
   }
 
   const tagline = taglines[mode]
   let resendLabel = "Resend code"
-  if (isResending) resendLabel = "Resending..."
+  // Shared by the verify-email and reset panels; either one can be in flight.
+  if (isResending || isResendingReset) resendLabel = "Resending..."
   else if (resendCooldown > 0) resendLabel = `Resend in ${resendCooldown}s`
 
   return (
@@ -641,11 +586,11 @@ function AuthPage() {
                 <form className="space-y-4" onSubmit={handleForgotPassword}>
                   <div>
                     <label htmlFor="forgot-email" className="block text-xs font-medium text-[#888] mb-1.5">Email</label>
-                    <input id="forgot-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isLoading} />
+                    <input id="forgot-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isResetSubmitting} />
                   </div>
                   {error && <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3"><p className="text-sm text-red-400">{error}</p></div>}
-                  <button type="submit" disabled={isLoading} className="w-full py-2.5 px-4 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#0a0a0a] disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
-                    {isLoading ? <span className="flex items-center justify-center gap-2"><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>Sending code...</span> : "Send reset code"}
+                  <button type="submit" disabled={isResetSubmitting} className="w-full py-2.5 px-4 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#0a0a0a] disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
+                    {isResetSubmitting ? <span className="flex items-center justify-center gap-2"><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>Sending code...</span> : "Send reset code"}
                   </button>
                 </form>
                 <p className="text-center text-sm text-[#555]">
@@ -674,31 +619,31 @@ function AuthPage() {
                         was collected on the previous step — so keep it editable. */}
                     <div>
                       <label htmlFor="reset-email" className="block text-xs font-medium text-[#888] mb-1.5">Email</label>
-                      <input id="reset-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isLoading || resetComplete} />
+                      <input id="reset-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isResetSubmitting || resetComplete} />
                     </div>
                     <div>
                       <label htmlFor="reset-code" className="block text-xs font-medium text-[#888] mb-1.5">Reset code</label>
-                      <input id="reset-code" type="text" inputMode="numeric" maxLength={6} required value={resetCode} onChange={(e) => setResetCode(e.target.value.replace(/\D/g, ""))} className={`w-full px-3.5 py-2.5 rounded-lg border text-center text-2xl font-mono tracking-widest placeholder:text-[#555] focus:outline-none focus:ring-2 transition-colors duration-300 ${resetComplete ? 'border-green-500/40 bg-green-500/10 text-green-400 focus:ring-green-500/20' : 'border-white/[0.12] bg-white/[0.03] text-white focus:ring-white/10 focus:border-white/20'}`} placeholder="000000" disabled={isLoading || resetComplete} />
+                      <input id="reset-code" type="text" inputMode="numeric" maxLength={6} required value={resetCode} onChange={(e) => setResetCode(e.target.value.replace(/\D/g, ""))} className={`w-full px-3.5 py-2.5 rounded-lg border text-center text-2xl font-mono tracking-widest placeholder:text-[#555] focus:outline-none focus:ring-2 transition-colors duration-300 ${resetComplete ? 'border-green-500/40 bg-green-500/10 text-green-400 focus:ring-green-500/20' : 'border-white/[0.12] bg-white/[0.03] text-white focus:ring-white/10 focus:border-white/20'}`} placeholder="000000" disabled={isResetSubmitting || resetComplete} />
                     </div>
                     <div>
                       <label htmlFor="reset-new-password" className="block text-xs font-medium text-[#888] mb-1.5">New password</label>
-                      <input id="reset-new-password" type="password" autoComplete="new-password" required value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="Min. 8 characters" disabled={isLoading || resetComplete} />
+                      <input id="reset-new-password" type="password" autoComplete="new-password" required value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="Min. 8 characters" disabled={isResetSubmitting || resetComplete} />
                     </div>
                     <div>
                       <label htmlFor="reset-confirm-password" className="block text-xs font-medium text-[#888] mb-1.5">Confirm new password</label>
-                      <input id="reset-confirm-password" type="password" autoComplete="new-password" required value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="Confirm your new password" disabled={isLoading || resetComplete} />
+                      <input id="reset-confirm-password" type="password" autoComplete="new-password" required value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="Confirm your new password" disabled={isResetSubmitting || resetComplete} />
                     </div>
                   </div>
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-[#555]">Code expires in 15 minutes</span>
-                    <button type="button" onClick={handleResendReset} disabled={isResending || resendCooldown > 0 || resetComplete} className="text-white/60 hover:text-white disabled:text-[#555] disabled:cursor-not-allowed transition-colors">
+                    <button type="button" onClick={handleResendReset} disabled={isResendingReset || resendCooldown > 0 || resetComplete} className="text-white/60 hover:text-white disabled:text-[#555] disabled:cursor-not-allowed transition-colors">
                       {resendLabel}
                     </button>
                   </div>
                   {error && <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3"><p className="text-sm text-red-400">{error}</p></div>}
                   {notice && !error && <div className="rounded-lg bg-white/[0.04] border border-white/[0.12] px-4 py-3" aria-live="polite"><p className="text-sm text-[#bbb]">{notice}</p></div>}
-                  <button type="submit" disabled={isLoading || resetComplete} className="w-full py-2.5 px-4 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#0a0a0a] disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
-                    {isLoading ? <span className="flex items-center justify-center gap-2"><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>Resetting...</span> : "Reset password"}
+                  <button type="submit" disabled={isResetSubmitting || resetComplete} className="w-full py-2.5 px-4 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#0a0a0a] disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
+                    {isResetSubmitting ? <span className="flex items-center justify-center gap-2"><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>Resetting...</span> : "Reset password"}
                   </button>
                 </form>
                 <p className="text-center text-sm text-[#555]">
