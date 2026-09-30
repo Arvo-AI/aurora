@@ -188,6 +188,14 @@ celery_app.conf.update(
             'task': 'services.actions.scheduler.run_scheduled_actions',
             'schedule': 60.0,  # Check every minute
         },
+        # Safety net so every Slack channel Aurora is a member of eventually gets
+        # an LLM description (agent routing only offers described channels).
+        # Reconcile passes are user-triggered and capped per pass, so without this
+        # the tail of a large membership stays invisible to routing.
+        'backfill-slack-channel-descriptions': {
+            'task': 'routes.slack.slack_channel_metadata.backfill_channel_descriptions',
+            'schedule': 900.0,  # Every 15 minutes
+        },
     },
     beat_schedule_filename='celerybeat-schedule',
     worker_hijack_root_logger=False

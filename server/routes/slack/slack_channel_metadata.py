@@ -24,6 +24,19 @@ METADATA_PROMPT = (
     "{context}"
 )
 
+# --- Periodic backfill bounds ----------------------------------------------
+# Descriptions are normally enqueued by a reconcile pass (Slack connect, a manage
+# page load, an explicit refresh), which is bounded to MAX_AUTO_CHANNELS per
+# pass. The beat task below is the safety net that finishes the tail; these caps
+# bound its LLM spend and queue depth per run.
+BACKFILL_MAX_PER_ORG = 25
+BACKFILL_MAX_TOTAL = 200
+
+# A 'pending' row younger than this probably has a description task still in
+# flight, so re-enqueueing it would only duplicate the LLM call. Matches the
+# staleness window the reconcile pass uses.
+BACKFILL_STALE_MINUTES = 15
+
 
 def _update_metadata(user_id: str, channel_id: str, summary, status: str,
                      channel_type: str | None = None, platform: str | None = None):
@@ -234,3 +247,169 @@ def generate_channel_metadata(self, user_id: str, channel_id: str):
             self.retry(countdown=30)
         except self.MaxRetriesExceededError:
             _update_metadata(user_id, channel_id, None, "error")
+
+
+def _users_by_org() -> dict[str, list[str]]:
+    """Map org_id -> [user_id, ...]. ``users`` is NOT RLS-protected, so it can be
+    read before any org context is set — which is how a cross-org task discovers
+    the orgs it has to iterate (see the RLS notes in AGENTS.md)."""
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT org_id, id FROM users WHERE org_id IS NOT NULL ORDER BY org_id, id"
+            )
+            by_org: dict[str, list[str]] = {}
+            for org_id, user_id in cur.fetchall():
+                by_org.setdefault(org_id, []).append(user_id)
+            return by_org
+
+
+def _select_undescribed_channels(cur, limit: int) -> list[tuple[str, str]]:
+    """Return [(channel_id, owner_user_id)] for member channels still awaiting a
+    description. Expects the caller to have set the org's RLS context already.
+
+    Longest-waiting first, so repeated bounded runs drain the backlog fairly
+    instead of re-picking the same head of the list.
+
+    ``DISTINCT ON (channel_id)`` because the table is unique per
+    ``(user_id, provider, channel_id)``: when two org members each connected
+    Slack, the same channel has a row per member. Both rows describe one Slack
+    channel and the metadata write covers them all (it's keyed on channel_id), so
+    without the de-dupe we'd pay for the same LLM call twice.
+
+    'error'/'limit_reached' rows are deliberately excluded: the metadata task's
+    own retries already bound transient failures, and auto-retrying a hard
+    failure or a cost-capped org on a timer would just burn quota in a loop.
+    Those need an explicit regenerate.
+    """
+    cur.execute(
+        """SELECT channel_id, user_id FROM (
+               SELECT DISTINCT ON (channel_id) channel_id, user_id, updated_at
+                 FROM slack_channels
+                WHERE provider = 'slack' AND is_member
+                  AND (
+                        metadata_status = 'skipped'
+                     OR (metadata_status = 'pending'
+                         AND updated_at < NOW() - make_interval(mins => %s))
+                  )
+                ORDER BY channel_id, updated_at ASC
+           ) AS d
+           ORDER BY d.updated_at ASC
+           LIMIT %s""",
+        (BACKFILL_STALE_MINUTES, limit),
+    )
+    return [(row[0], row[1]) for row in cur.fetchall()]
+
+
+@celery_app.task(name="routes.slack.slack_channel_metadata.backfill_channel_descriptions")
+def backfill_channel_descriptions():
+    """Beat task: make sure EVERY member channel eventually gets described.
+
+    Agent routing (``get_connected_slack_channels``) only offers channels whose
+    ``metadata_status`` is 'ready'. Descriptions are otherwise only enqueued by a
+    reconcile pass — Slack connect, a manage-page load, or an explicit refresh —
+    and each pass enqueues at most ``MAX_AUTO_CHANNELS``. In a workspace where
+    Aurora is a member of hundreds of channels, the tail past that cap only got
+    picked up if a human kept reloading the manage page, so those channels stayed
+    'pending' forever: active in Slack, but invisible to routing.
+
+    This closes that gap. Each run sweeps every org for the longest-waiting
+    member channels still 'pending'/'skipped' and enqueues a bounded batch, so
+    coverage converges on its own with no user action.
+
+    Deliberately DB-only (no Slack API calls), so running it across all orgs on a
+    timer can't trip Slack's rate limits; membership reconciliation stays with
+    :func:`~routes.slack.slack_channels.auto_register_channels`.
+    """
+    from utils.db.connection_pool import db_pool
+    from utils.auth.stateless_auth import set_rls_context
+    from connectors.slack_connector.client import get_slack_client_for_user
+    from routes.slack.slack_channels import _enqueue_metadata, _mark_pending
+
+    log_prefix = "[SlackDescBackfill]"
+
+    # Per-run memo: probe each user's Slack credentials at most once (each probe
+    # is a DB + Vault round trip).
+    connected: dict[str, bool] = {}
+
+    def _has_slack(uid: str) -> bool:
+        if uid not in connected:
+            try:
+                connected[uid] = get_slack_client_for_user(uid) is not None
+            except Exception:
+                connected[uid] = False
+        return connected[uid]
+
+    try:
+        users_by_org = _users_by_org()
+    except Exception:
+        logger.warning("%s could not enumerate orgs", log_prefix, exc_info=True)
+        return {"orgs": 0, "enqueued": 0}
+
+    total = 0
+    orgs_touched = 0
+    for _org_id, org_users in users_by_org.items():
+        # Global cap reached — the remaining orgs get their turn next run (the
+        # ORDER BY updated_at in the query above keeps that fair).
+        if total >= BACKFILL_MAX_TOTAL:
+            break
+        try:
+            # Read pass. Kept in its own short-lived block so the pooled
+            # connection isn't held across the Vault round trips the credential
+            # probe below makes.
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    # No org context resolvable for this user (e.g. org deleted
+                    # mid-sweep) — skip rather than query with the wrong context.
+                    if not set_rls_context(cur, conn, org_users[0], log_prefix=log_prefix):
+                        continue
+                    rows = _select_undescribed_channels(
+                        cur, min(BACKFILL_MAX_PER_ORG, BACKFILL_MAX_TOTAL - total)
+                    )
+            if not rows:
+                continue
+
+            # Enqueue under the row's owner — the identity whose token registered
+            # the channel. Only if they've since disconnected Slack do we look for
+            # another connected org member (credentials are org-shared), so a
+            # channel isn't stranded by one person leaving.
+            owners = {owner_id for _cid, owner_id in rows}
+            fallback = None
+            if any(not _has_slack(owner_id) for owner_id in owners):
+                fallback = next((uid for uid in org_users if _has_slack(uid)), None)
+
+            to_enqueue = []
+            for channel_id, owner_id in rows:
+                actor = owner_id if _has_slack(owner_id) else fallback
+                # Nobody in the org can reach Slack any more — leave the rows
+                # pending rather than queueing a task that would only mark them
+                # 'error' (which is never auto-retried).
+                if actor:
+                    to_enqueue.append((actor, channel_id))
+            if not to_enqueue:
+                continue
+
+            # Write pass. Committed BEFORE enqueueing so the worker can never pick
+            # a task up against a row that still looks unqueued (or, for a
+            # 'skipped' row, one whose status would reject the description write).
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    if not set_rls_context(cur, conn, org_users[0], log_prefix=log_prefix):
+                        continue
+                    _mark_pending(cur, [cid for _actor, cid in to_enqueue])
+                    conn.commit()
+        except Exception:
+            logger.warning("%s sweep failed for one org", log_prefix, exc_info=True)
+            continue
+
+        for actor, channel_id in to_enqueue:
+            _enqueue_metadata(actor, channel_id)
+        total += len(to_enqueue)
+        orgs_touched += 1
+
+    if total:
+        logger.info("%s enqueued %d description(s) across %d org(s)",
+                    log_prefix, total, orgs_touched)
+    return {"orgs": orgs_touched, "enqueued": total}

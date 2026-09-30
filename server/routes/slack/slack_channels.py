@@ -68,8 +68,10 @@ slack_channels_bp = Blueprint("slack_channels", __name__)
 logger = logging.getLogger(__name__)
 
 # Cap on how many channels get an auto-generated description on connect, to
-# bound LLM cost/volume in large workspaces. ALL channels are still registered
-# (so Aurora is aware of them); only the most recent this-many are described.
+# bound LLM cost/volume in large workspaces. This caps the number of
+# descriptions ENQUEUED PER PASS, not the total a workspace may ever have:
+# member channels past the cap stay 'pending' and are picked up by a later pass
+# or by the ``backfill_channel_descriptions`` beat task.
 MAX_AUTO_CHANNELS = 50
 
 # Hard cap on how many channels we enumerate from Slack in one pass. Seeing fewer
@@ -276,8 +278,10 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
     # membership-as-truth every member channel is active and routable. Channels
     # past the cap this pass stay 'pending' (never 'skipped'); because a 'pending'
     # row's updated_at is NOT bumped on reconcile (see _upsert_channel), it goes
-    # stale after ~10 min and a later pass enqueues it — so no member channel is
-    # ever permanently stuck invisible to the agent (which routes to 'ready' only).
+    # stale after ~10 min and gets enqueued by a later pass — or, since reconcile
+    # passes are user-triggered and may never happen again, by the
+    # backfill_channel_descriptions beat task. Either way no member channel is
+    # permanently stuck invisible to the agent (which routes to 'ready' only).
     ranked_members = _rank_channels(member_channels)
 
     org_id = resolve_org(user_id)
@@ -327,6 +331,11 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
                     if (_cid and (is_new or needs_describe)
                             and len(newly_added_to_describe) < describe_limit):
                         newly_added_to_describe.append(_cid)
+
+                # Flip the chosen rows to 'pending' and restamp updated_at so the
+                # metadata task's write isn't rejected (a 'skipped' row would be)
+                # and so this pass's queue isn't re-queued by the next one.
+                _mark_pending(cur, newly_added_to_describe)
 
                 # Reconcile membership: any stored row that is NOT in the current
                 # member set means Aurora left / was removed from that channel, so
@@ -929,6 +938,33 @@ def _activate_channels(user_id: str, channel_ids: list[str]) -> int:
         register_single_channel(user_id, channel_id)
 
     return len(joined)
+
+
+def _mark_pending(cur, channel_ids: list[str]) -> None:
+    """Reset rows to 'pending' and restamp ``updated_at`` just before enqueueing.
+
+    Two things depend on this happening at enqueue time:
+
+    * ``_update_metadata`` (the writer in the metadata task) only advances rows
+      whose status is 'pending'/'generating'. A legacy 'skipped' row would
+      therefore have its freshly generated description silently dropped, so it
+      must be flipped back to 'pending' before the task runs.
+    * ``updated_at`` is our "time since the description was queued" signal for
+      the staleness check. Restamping it here means a row we *just* queued isn't
+      immediately seen as stale and queued again by the next reconcile or
+      backfill pass (which would be a duplicate LLM call).
+
+    Runs on the caller's cursor/transaction; the caller commits.
+    """
+    if not channel_ids:
+        return
+    cur.execute(
+        """UPDATE slack_channels
+              SET metadata_status = 'pending', updated_at = NOW()
+            WHERE provider = 'slack' AND channel_id = ANY(%s)
+              AND metadata_status IN ('pending', 'skipped')""",
+        (channel_ids,),
+    )
 
 
 def _enqueue_metadata(user_id: str, channel_id: str):
