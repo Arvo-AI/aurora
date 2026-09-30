@@ -8,6 +8,7 @@ import Image from "next/image"
 import dynamic from "next/dynamic"
 import { useDarkPageBackground } from "@/hooks/useDarkPageBackground"
 import { usePasswordReset } from "@/hooks/usePasswordReset"
+import { ForgotPasswordPanel, ResetPasswordPanel } from "./PasswordResetPanels"
 
 const AuroraShader = dynamic(() => import('@/app/components/AuroraShader'), { ssr: false })
 
@@ -577,82 +578,39 @@ function AuthPage() {
             )}
 
             {mode === 'forgot-password' && (
-              <div className="space-y-8">
-                <div>
-                  <h2 className="text-2xl font-semibold text-white">Forgot your password?</h2>
-                  <p className="mt-2 text-[#888] text-sm">Enter the email you signed up with and we&apos;ll send you a 6-digit reset code.</p>
-                  <p className="mt-2 text-[#666] text-xs">{SPAM_FOLDER_HINT}</p>
-                </div>
-                <form className="space-y-4" onSubmit={handleForgotPassword}>
-                  <div>
-                    <label htmlFor="forgot-email" className="block text-xs font-medium text-[#888] mb-1.5">Email</label>
-                    <input id="forgot-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isResetSubmitting} />
-                  </div>
-                  {error && <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3"><p className="text-sm text-red-400">{error}</p></div>}
-                  <button type="submit" disabled={isResetSubmitting} className="w-full py-2.5 px-4 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#0a0a0a] disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
-                    {isResetSubmitting ? <span className="flex items-center justify-center gap-2"><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>Sending code...</span> : "Send reset code"}
-                  </button>
-                </form>
-                <p className="text-center text-sm text-[#555]">
-                  <button onClick={() => switchMode('signin')} className="text-white/80 hover:text-white transition-colors inline-flex items-center gap-1.5">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-                    Back to sign in
-                  </button>
-                </p>
-              </div>
+              <ForgotPasswordPanel
+                email={email}
+                setEmail={setEmail}
+                error={error}
+                isSubmitting={isResetSubmitting}
+                spamHint={SPAM_FOLDER_HINT}
+                onSubmit={handleForgotPassword}
+                onBack={() => switchMode('signin')}
+              />
             )}
 
             {mode === 'reset-password' && (
-              <div className="space-y-8">
-                <div>
-                  <h2 className="text-2xl font-semibold text-white">Choose a new password</h2>
-                  <p className="mt-2 text-[#888] text-sm">
-                    {resetSent
-                      ? `Enter the 6-digit code we sent to ${email || "your email"} and your new password.`
-                      : "Enter the 6-digit code from your email and your new password."}
-                  </p>
-                  <p className="mt-2 text-[#666] text-xs">{SPAM_FOLDER_HINT}</p>
-                </div>
-                <form className="space-y-4" onSubmit={handleResetPassword}>
-                  <div className="space-y-3">
-                    {/* Reachable directly via ?mode=reset-password, where no email
-                        was collected on the previous step — so keep it editable. */}
-                    <div>
-                      <label htmlFor="reset-email" className="block text-xs font-medium text-[#888] mb-1.5">Email</label>
-                      <input id="reset-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isResetSubmitting || resetComplete} />
-                    </div>
-                    <div>
-                      <label htmlFor="reset-code" className="block text-xs font-medium text-[#888] mb-1.5">Reset code</label>
-                      <input id="reset-code" type="text" inputMode="numeric" maxLength={6} required value={resetCode} onChange={(e) => setResetCode(e.target.value.replace(/\D/g, ""))} className={`w-full px-3.5 py-2.5 rounded-lg border text-center text-2xl font-mono tracking-widest placeholder:text-[#555] focus:outline-none focus:ring-2 transition-colors duration-300 ${resetComplete ? 'border-green-500/40 bg-green-500/10 text-green-400 focus:ring-green-500/20' : 'border-white/[0.12] bg-white/[0.03] text-white focus:ring-white/10 focus:border-white/20'}`} placeholder="000000" disabled={isResetSubmitting || resetComplete} />
-                    </div>
-                    <div>
-                      <label htmlFor="reset-new-password" className="block text-xs font-medium text-[#888] mb-1.5">New password</label>
-                      <input id="reset-new-password" type="password" autoComplete="new-password" required value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="Min. 8 characters" disabled={isResetSubmitting || resetComplete} />
-                    </div>
-                    <div>
-                      <label htmlFor="reset-confirm-password" className="block text-xs font-medium text-[#888] mb-1.5">Confirm new password</label>
-                      <input id="reset-confirm-password" type="password" autoComplete="new-password" required value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="Confirm your new password" disabled={isResetSubmitting || resetComplete} />
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-[#555]">Code expires in 15 minutes</span>
-                    <button type="button" onClick={handleResendReset} disabled={isResendingReset || resendCooldown > 0 || resetComplete} className="text-white/60 hover:text-white disabled:text-[#555] disabled:cursor-not-allowed transition-colors">
-                      {resendLabel}
-                    </button>
-                  </div>
-                  {error && <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3"><p className="text-sm text-red-400">{error}</p></div>}
-                  {notice && !error && <div className="rounded-lg bg-white/[0.04] border border-white/[0.12] px-4 py-3" aria-live="polite"><p className="text-sm text-[#bbb]">{notice}</p></div>}
-                  <button type="submit" disabled={isResetSubmitting || resetComplete} className="w-full py-2.5 px-4 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#0a0a0a] disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
-                    {isResetSubmitting ? <span className="flex items-center justify-center gap-2"><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>Resetting...</span> : "Reset password"}
-                  </button>
-                </form>
-                <p className="text-center text-sm text-[#555]">
-                  <button onClick={() => switchMode('signin')} className="text-white/80 hover:text-white transition-colors inline-flex items-center gap-1.5">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-                    Back to sign in
-                  </button>
-                </p>
-              </div>
+              <ResetPasswordPanel
+                email={email}
+                setEmail={setEmail}
+                resetCode={resetCode}
+                setResetCode={setResetCode}
+                newPassword={newPassword}
+                setNewPassword={setNewPassword}
+                confirmNewPassword={confirmNewPassword}
+                setConfirmNewPassword={setConfirmNewPassword}
+                resetSent={resetSent}
+                resetComplete={resetComplete}
+                isSubmitting={isResetSubmitting}
+                resendDisabled={isResendingReset || resendCooldown > 0 || resetComplete}
+                resendLabel={resendLabel}
+                error={error}
+                notice={notice}
+                spamHint={SPAM_FOLDER_HINT}
+                onSubmit={handleResetPassword}
+                onResend={handleResendReset}
+                onBack={() => switchMode('signin')}
+              />
             )}
           </div>
         </div>
