@@ -79,22 +79,46 @@ Six rules keep the gate fail-closed:
 3. **Each shell segment is classified separately.** A write behind `&&`, `;`, a
    pipe, a newline, or a `$(...)`/backtick substitution blocks the whole command,
    so `kubectl get pods && kubectl delete pod x` is not read-only.
-4. **A read cannot be used as a payload source.** The verb of a command handed to
-   an interpreter is invisible to the classifier, so any interpreter or exec
-   wrapper (`bash`, `sh`, `python`, `xargs`, `sudo`, `env`, `ssh`, `curl`, `tee`,
-   `timeout`, …) anywhere in the pipeline blocks the command — otherwise
-   `kubectl get cm evil -o jsonpath='{.data.sh}' | bash` would pass on a
-   perfectly read-only first segment. Path and env-var prefixes don't help
-   (`/bin/bash`, `FOO=1 bash`). Downstream segments must be recognised text
-   filters (`grep`, `jq`, `sort`, `head`, `awk`, `wc`, …); an unknown binary
-   fails closed. Redirections (`>`, `>>`, `<`) are blocked outright since they
-   write a file regardless of what produced the bytes.
+4. **A read cannot be used as a payload source.** The leading program must be a
+   known cloud/k8s CLI (`aws`, `az`, `gcloud`, `kubectl`, `helm`, …) and every
+   downstream segment must be a recognised text filter (`grep`, `jq`, `sort`,
+   `head`, `awk`, `wc`, …). Both are allowlists, so an interpreter or exfil tool
+   needs no enumeration — it simply isn't on either list. That blocks
+   `kubectl get cm evil -o jsonpath='{.data.sh}' | bash` (read-only first
+   segment, but the ConfigMap supplies the script) and `bash -c "aws ..."` /
+   `sudo aws ...`, where the operation this function classifies isn't the one
+   that runs. Redirections (`>`, `>>`, `<`) are blocked since they write a file
+   regardless of what produced the bytes.
 5. **Unknown operations default to blocked**, and an unparseable command
    (unbalanced quotes) is blocked rather than guessed at.
 6. **Boolean switches don't swallow the verb** — `kubectl
    --insecure-skip-tls-verify get pods` stays read-only.
 
 Tests: `server/tests/security/test_read_only_classifier.py`.
+
+### Relationship to the Security settings guardrails
+
+These are different questions and both are needed:
+
+| | `is_read_only_command()` | Security tab (`org_command_policies`) |
+|---|---|---|
+| Asks | "is this a **write**?" | "is this **dangerous**?" |
+| Scope | Ask mode only | every mode |
+| On block | hard fail, "switch to Agent mode" | HITL prompt (Yes / No / Yes-Always) |
+| Configurable | no | yes, per org, and can be disabled |
+
+`kubectl delete pod x` is a routine operation no guardrail should block, but it
+must fail in Ask mode. Conversely `rm -rf /` is caught by the denylist in *any*
+mode. Ask mode can't delegate to the guardrails: they're HITL (there's no user to
+prompt during a background RCA), org-configurable, and switchable off via
+`GUARDRAILS_ENABLED=false` — Ask mode still has to hold when they're all off.
+
+So keep this classifier narrow. It answers read-vs-write and defers everything
+about *danger* to the shared layers (`signature_match.py`,
+`_UNIVERSAL_DENY_RULES`, the LLM judge) via `gate_command()`. The one overlap is
+deliberate: piping a read into an interpreter has to be refused here because the
+wrapped command's verb is invisible to a read-vs-write check, and the shared
+denylist only covers the `base64|sh` / `curl|sh` / `bash -c` spellings.
 
 ### Allowed RCA Diagnostic Commands (Ask Mode)
 

@@ -1209,27 +1209,19 @@ def is_read_only_command(command: str) -> bool:
         '--quiet', '--verbose', '--debug', '--help', '--version',
     })
 
-    # A read-only command may pipe into a text filter, and nothing else. Anything
-    # unrecognised downstream is refused rather than guessed at, which is what
-    # stops a legitimate read from being used as a payload source:
-    # `kubectl get cm evil -o jsonpath='{.data.sh}' | bash` has a perfectly
-    # read-only first segment but executes whatever the ConfigMap holds.
+    # A read-only command may pipe into a text filter, and nothing else. This is
+    # an allowlist on purpose: an unrecognised downstream program is refused
+    # rather than guessed at, which is what stops a legitimate read from being
+    # used as a payload source. `kubectl get cm evil -o jsonpath='{.data.sh}' |
+    # bash` has a perfectly read-only first segment but executes whatever the
+    # ConfigMap holds, and `bash` is not a write verb. Keeping this fail-closed
+    # means interpreters, exec wrappers and exfil tools (sh, python, xargs, ssh,
+    # nc, tee, …) need no enumeration — they simply aren't filters.
     DOWNSTREAM_FILTERS = frozenset({
         'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'jq', 'yq', 'head', 'tail',
         'sort', 'uniq', 'wc', 'cut', 'tr', 'awk', 'gawk', 'sed', 'tac',
         'column', 'nl', 'rev', 'paste', 'fold', 'expand',
         'echo', 'printf', 'strings', 'od', 'hexdump', 'less', 'more', 'seq',
-    })
-    # Interpreters and exec wrappers are never part of a read: they run whatever
-    # they're handed, so the verb of the wrapped command is invisible here.
-    EXEC_WRAPPERS = frozenset({
-        'bash', 'sh', 'dash', 'ash', 'zsh', 'ksh', 'csh', 'tcsh', 'fish', 'busybox',
-        'eval', 'exec', 'source', '.', 'command', 'builtin',
-        'python', 'python2', 'python3', 'perl', 'ruby', 'node', 'nodejs', 'php',
-        'lua', 'rscript', 'osascript', 'deno', 'bun',
-        'xargs', 'env', 'sudo', 'doas', 'su', 'nohup', 'setsid', 'timeout', 'watch',
-        'ssh', 'scp', 'sftp', 'nc', 'ncat', 'netcat', 'socat', 'telnet',
-        'curl', 'wget', 'tee', 'dd', 'find', 'make', 'git',
     })
 
     # Newlines separate commands but shlex treats them as plain whitespace, so
@@ -1393,13 +1385,24 @@ def is_read_only_command(command: str) -> bool:
     if any(v in WRITE_VERBS for v in verbs):
         return False
 
-    # An interpreter or exec wrapper anywhere means the real operation is hidden
-    # inside a string this classifier can't see, so refuse the whole command.
-    if any(exe in EXEC_WRAPPERS for exe in executables):
+    # The first segment must be a cloud/k8s CLI invoking a read. A wrapper here
+    # (`bash -c "aws ..."`, `sudo aws ...`) means the operation this function
+    # would classify isn't the one that runs, so require the leading executable
+    # to be a known CLI rather than trying to enumerate every wrapper.
+    CLI_NAMES = frozenset({
+        'aws', 'az', 'gcloud', 'gsutil', 'bq', 'kubectl', 'oc', 'helm', 'kubectx',
+        'kubens', 'k9s', 'eksctl', 'doctl', 'flyctl', 'fly', 'heroku', 'vercel',
+        'wrangler', 'railway', 'render', 'terraform', 'tofu', 'pulumi', 'docker',
+        'ibmcloud', 'oci', 'linode-cli', 'scw', 'hcloud', 'kubeadm', 'istioctl',
+        'argocd', 'flux', 'velero', 'stern', 'kustomize', 'crictl', 'nomad',
+        'consul', 'vault', 'gh', 'glab',
+    })
+    if executables[0] not in CLI_NAMES:
         return False
 
     # Every segment after the first must be a recognised read-only text filter.
-    # Anything else — an unknown binary, a second cloud call — fails closed.
+    # Anything else — an interpreter, an exfil tool, a second cloud call — fails
+    # closed, since the verb of a command handed to a wrapper is invisible here.
     for exe in executables[1:]:
         if exe not in DOWNSTREAM_FILTERS:
             return False

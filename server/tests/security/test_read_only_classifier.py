@@ -287,6 +287,37 @@ def test_unparseable_command_is_not_read_only(is_read_only):
 
 
 # ---------------------------------------------------------------------------
+# The leading executable must be a known CLI, so a wrapper can't stand in for it
+# and present an operation other than the one that actually runs.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("command", [
+    'bash -c "aws ec2 describe-instances"',
+    "sudo aws ec2 describe-instances",
+    "env LD_PRELOAD=/tmp/x.so aws ec2 describe-instances",
+    "xargs kubectl get pods",
+    "./mytool get pods",
+    "/usr/local/bin/evil get pods",
+])
+def test_wrapped_or_unknown_executable_is_not_read_only(is_read_only, command):
+    assert is_read_only(command) is False, command
+
+
+@pytest.mark.parametrize("command", [
+    "kubectl get pods",
+    "/usr/local/bin/kubectl get pods",
+    "gcloud compute instances list",
+    "gsutil ls gs://bucket",
+    "bq ls",
+    "helm list",
+    "oc get pods",
+    "argocd app list",
+    "flux get sources git",
+])
+def test_known_clis_are_recognised(is_read_only, command):
+    assert is_read_only(command) is True, command
+
+
+# ---------------------------------------------------------------------------
 # Investigation reads that the classifier previously rejected.
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("command", [
