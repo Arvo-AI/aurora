@@ -209,6 +209,202 @@ class TestErrorAttribution:
             assert credential_error_message(fallback) == SECRETS_BACKEND_UNAVAILABLE_MESSAGE
 
 
+class TestAvailabilityIsRevalidatedAfterOperations:
+    """Init-time success must not be mistaken for *current* health.
+
+    Vault can seal, or VAULT_TOKEN can expire, after a successful init. The
+    availability latch is the input to the outage-vs-credentials attribution, so a
+    stale ``True`` puts us straight back to blaming the provider.
+    """
+
+    _REF = "vault:kv/data/aurora/users/x"
+
+    def _connected(self, backend, client):
+        with patch("hvac.Client", return_value=client):
+            assert backend.is_available() is True
+
+    def test_read_failure_re_probes_and_reports_the_outage(self, vault_env):
+        backend = VaultSecretsBackend()
+        client = _client(True)
+        self._connected(backend, client)
+
+        # Vault seals after init: the read fails while the latch still says available.
+        client.secrets.kv.v2.read_secret_version.side_effect = RuntimeError("Vault is sealed")
+        with pytest.raises(RuntimeError, match="sealed"):
+            backend.get_secret(self._REF)
+
+        with patch("hvac.Client", return_value=_client(False)) as ctor:
+            assert backend.is_available() is False
+            assert ctor.call_count == 1, "availability was never re-probed"
+
+    def test_expired_token_after_init_is_attributed_to_the_backend(self, vault_env):
+        """End-to-end: the cached latch used to report an outage as a provider
+        credential error, which is the whole misdiagnosis this PR exists to fix."""
+        from utils.secrets import (
+            SECRETS_BACKEND_UNAVAILABLE_MESSAGE,
+            credential_error_message,
+        )
+
+        backend = VaultSecretsBackend()
+        client = _client(True)
+        self._connected(backend, client)
+
+        client.secrets.kv.v2.read_secret_version.side_effect = RuntimeError("permission denied")
+        with pytest.raises(RuntimeError):
+            backend.get_secret(self._REF)
+
+        with patch("hvac.Client", return_value=_client(False)), patch(
+            "utils.secrets.get_secrets_backend", return_value=backend
+        ):
+            assert (
+                credential_error_message("Failed to authenticate with Azure")
+                == SECRETS_BACKEND_UNAVAILABLE_MESSAGE
+            )
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            type("InvalidPath", (Exception,), {})("nope"),
+            Exception("secret not found at that path"),
+            Exception("no versions of this secret exist"),
+        ],
+        ids=["InvalidPath", "not-found", "no-versions"],
+    )
+    def test_missing_secret_leaves_the_latch_intact(self, vault_env, exc):
+        """A 404 is about one secret, so re-probing on it would be pure overhead."""
+        backend = VaultSecretsBackend()
+        client = _client(True)
+
+        with patch("hvac.Client", return_value=client) as ctor:
+            assert backend.is_available() is True
+            client.secrets.kv.v2.read_secret_version.side_effect = exc
+
+            with pytest.raises(Exception):
+                backend.get_secret(self._REF)
+
+            assert backend.is_available() is True
+            assert ctor.call_count == 1, "a missing secret must not trigger a re-probe"
+
+    def test_malformed_reference_leaves_the_latch_intact(self, vault_env):
+        """A bad ref is a caller bug, so it must not cost a re-probe either."""
+        backend = VaultSecretsBackend()
+
+        with patch("hvac.Client", return_value=_client(True)) as ctor:
+            assert backend.is_available() is True
+            with pytest.raises(ValueError, match="Invalid Vault secret reference"):
+                backend.get_secret("not-a-vault-ref")
+
+            assert backend.is_available() is True
+            assert ctor.call_count == 1
+
+    def test_healthy_vault_relatches_so_no_outage_is_invented(self, vault_env):
+        """A per-path ACL denial on a reachable Vault must still read as a
+        credential problem: the re-probe succeeds and the provider message survives."""
+        from utils.secrets import credential_error_message
+
+        backend = VaultSecretsBackend()
+        client = _client(True)
+
+        with patch("hvac.Client", return_value=client):
+            assert backend.is_available() is True
+            client.secrets.kv.v2.read_secret_version.side_effect = Exception("permission denied")
+            with pytest.raises(Exception, match="permission denied"):
+                backend.get_secret(self._REF)
+
+            with patch("utils.secrets.get_secrets_backend", return_value=backend):
+                assert credential_error_message("boom") == "boom"
+            assert backend.is_available() is True
+
+    @pytest.mark.parametrize("operation", ["store", "delete"])
+    def test_write_failures_also_re_open_the_availability_check(self, vault_env, operation):
+        backend = VaultSecretsBackend()
+        client = _client(True)
+        self._connected(backend, client)
+
+        if operation == "store":
+            client.secrets.kv.v2.create_or_update_secret.side_effect = RuntimeError("sealed")
+            with pytest.raises(RuntimeError):
+                backend.store_secret("x", "y")
+        else:
+            client.secrets.kv.v2.delete_metadata_and_all_versions.side_effect = RuntimeError("sealed")
+            with pytest.raises(RuntimeError):
+                backend.delete_secret(self._REF)
+
+        assert backend._initialized is False, (
+            f"{operation} failure did not re-open the availability check"
+        )
+
+    def test_a_single_failure_does_not_reconnect_on_every_later_read(self, vault_env):
+        """Re-validating must not undo the thundering-herd guard: the failed re-probe
+        starts a backoff window and later reads fail fast on the guard."""
+        backend = VaultSecretsBackend()
+        backend.RETRY_INTERVAL_SECONDS = 300
+        client = _client(True)
+        self._connected(backend, client)
+
+        client.secrets.kv.v2.read_secret_version.side_effect = RuntimeError("sealed")
+        with pytest.raises(RuntimeError):
+            backend.get_secret(self._REF)
+
+        with patch("hvac.Client", return_value=_client(False)) as ctor:
+            for _ in range(10):
+                with pytest.raises(RuntimeError, match="not available"):
+                    backend.get_secret(self._REF)
+            assert ctor.call_count == 1, (
+                f"expected 1 re-probe inside the backoff window, got {ctor.call_count}"
+            )
+
+
+class TestBackendIsNamedInTheDiagnostic:
+    """Vault is the default, not the only backend. Telling an AWS Secrets Manager
+    operator to check VAULT_ADDR sends them to a service they aren't running."""
+
+    def _message(self, monkeypatch, **env) -> str:
+        from utils.secrets import credential_error_message, reset_backend
+
+        for key, value in env.items():
+            if value is None:
+                monkeypatch.delenv(key, raising=False)
+            else:
+                monkeypatch.setenv(key, value)
+
+        reset_backend()
+        try:
+            return credential_error_message("Failed to authenticate with Azure")
+        finally:
+            reset_backend()
+
+    def test_aws_secrets_manager_gets_aws_guidance(self, monkeypatch):
+        from utils.secrets import AWS_SM_UNAVAILABLE_MESSAGE
+
+        msg = self._message(
+            monkeypatch, SECRETS_BACKEND="aws_secrets_manager", AWS_SM_REGION=None
+        )
+
+        assert msg == AWS_SM_UNAVAILABLE_MESSAGE
+        assert "AWS Secrets Manager" in msg
+        assert "VAULT_ADDR" not in msg
+
+    def test_vault_still_gets_vault_guidance(self, monkeypatch):
+        from utils.secrets import SECRETS_BACKEND_UNAVAILABLE_MESSAGE
+
+        msg = self._message(monkeypatch, SECRETS_BACKEND="vault", VAULT_TOKEN=None)
+
+        assert msg == SECRETS_BACKEND_UNAVAILABLE_MESSAGE
+        assert "Vault" in msg
+        assert "AWS_SM_REGION" not in msg
+
+    def test_both_messages_disclaim_the_provider_credentials(self):
+        """Whichever backend is down, the point is that the connector is not at fault."""
+        from utils.secrets import (
+            AWS_SM_UNAVAILABLE_MESSAGE,
+            SECRETS_BACKEND_UNAVAILABLE_MESSAGE,
+        )
+
+        for msg in (SECRETS_BACKEND_UNAVAILABLE_MESSAGE, AWS_SM_UNAVAILABLE_MESSAGE):
+            assert "not a problem with your cloud credentials" in msg
+
+
 class TestReconnectPromptSuppression:
     """During a backend outage the connector is fine, so "reconnect your account"
     is wrong advice — it sends users to re-add credentials that never broke."""

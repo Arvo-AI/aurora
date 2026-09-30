@@ -52,13 +52,10 @@ class VaultSecretsBackend(SecretsBackend):
     def _initialize_client(self):
         """Lazily initialize the Vault client, retrying after a failure.
 
-        Success latches: the client is reused for the rest of the process. Failure
-        does NOT latch. Vault can be unreachable, sealed, or holding an expired
-        token when a pod first touches it, and latching `_available = False` there
-        left every secret lookup failing until the pod was restarted — long after
-        Vault itself had recovered. Failures are retried, at most once per
-        RETRY_INTERVAL_SECONDS so a genuine outage doesn't turn every lookup into a
-        blocking connection attempt.
+        Failure must not latch: a pod that first touched Vault while it was
+        unreachable, sealed, or holding an expired token kept failing every lookup
+        until restarted, long after Vault recovered. Retried at most once per
+        RETRY_INTERVAL_SECONDS so an outage doesn't reconnect on every lookup.
         """
         if self._initialized:
             return
@@ -88,6 +85,39 @@ class VaultSecretsBackend(SecretsBackend):
         if last_failure is None:
             return False
         return (time.monotonic() - last_failure) < self.RETRY_INTERVAL_SECONDS
+
+    @staticmethod
+    def _is_missing_secret(exc: Exception) -> bool:
+        """True when the failure is about one absent secret, not Vault's health.
+
+        Mirrors the classification in ``secret_ref_utils._clear_secret_ref`` so the
+        two agree on what "not found" means.
+        """
+        if type(exc).__name__ == "InvalidPath":
+            return True
+        text = str(exc).lower()
+        return "not found" in text or "no versions" in text or "invalidpath" in text
+
+    def _invalidate_after_operation_failure(self, exc: Exception) -> None:
+        """Drop the cached availability latch when an operation suggests an outage.
+
+        Availability is otherwise only probed at init, so a Vault that seals *after*
+        that keeps reporting available and the outage gets blamed on the provider's
+        credentials. A healthy Vault re-latches on the next probe, so this cannot
+        invent an outage.
+        """
+        # A malformed reference is a caller bug and a missing secret is a per-secret
+        # condition; neither says anything about Vault's health.
+        if not self._initialized or isinstance(exc, ValueError) or self._is_missing_secret(exc):
+            return
+
+        logger.warning(
+            "Vault operation failed (%s); re-checking availability on next use.",
+            type(exc).__name__,
+        )
+        with self._init_lock:
+            self._initialized = False
+            self._available = False
 
     def _try_initialize(self) -> bool:
         """One initialization attempt. True on success; never raises."""
@@ -227,6 +257,7 @@ class VaultSecretsBackend(SecretsBackend):
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             logger.error("Failed to store secret '%s' (%.1fms): %s", secret_name, elapsed_ms, e)
+            self._invalidate_after_operation_failure(e)
             raise
 
     def get_secret(self, secret_ref: str) -> str:
@@ -291,6 +322,7 @@ class VaultSecretsBackend(SecretsBackend):
                 error_type,
                 path if 'path' in locals() else secret_ref,
             )
+            self._invalidate_after_operation_failure(e)
             raise
 
     def delete_secret(self, secret_ref: str) -> None:
@@ -340,4 +372,5 @@ class VaultSecretsBackend(SecretsBackend):
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             logger.error("Failed to delete secret (%.1fms): %s", elapsed_ms, e)
+            self._invalidate_after_operation_failure(e)
             raise
