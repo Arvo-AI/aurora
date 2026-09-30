@@ -5,6 +5,7 @@ from psycopg2 import DatabaseError
 from dotenv import load_dotenv
 import os
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 
 # Load environment variables
 load_dotenv()
@@ -3246,7 +3247,9 @@ def initialize_tables():
                         "Duplicate accounts share email %s (%d rows). "
                         "Case-insensitive unique index NOT applied. Reconcile these "
                         "accounts manually, then restart to enforce uniqueness.",
-                        norm_email, dupe_count,
+                        # /register does not validate email format, so a stored
+                        # address can carry newlines and forge log lines here.
+                        sanitize(norm_email), dupe_count,
                     )
 
                 # Only safe to add the unique index once no collisions remain —

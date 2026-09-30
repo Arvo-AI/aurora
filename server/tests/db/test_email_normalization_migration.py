@@ -47,6 +47,9 @@ def test_migration_is_registered_in_initialize_tables():
     assert "HAVING COUNT(*) > 1" in src
     # Duplicates are reported, never merged or deleted.
     assert "DELETE FROM users" not in src
+    # The reported email reaches a log statement, and /register does not validate
+    # email format, so it must be sanitized against log injection.
+    assert "sanitize(norm_email)" in src
 
 
 def test_migration_sql_constants_match_the_implementation():
@@ -212,6 +215,21 @@ def test_index_applies_after_collisions_are_reconciled(users_table):
         cur.execute(_CREATE_INDEX)
 
     assert _index_exists(users_table)
+
+
+def test_collision_report_sanitizes_the_email(users_table):
+    """/register does not validate email format, so a stored address can carry a
+    newline and forge a log line in the collision report."""
+    import utils.db.db_utils as db_utils
+
+    forged = "victim@example.com\nERROR - forged log line"
+    _seed(users_table, [("a1", forged), ("a2", forged.upper())])
+
+    reported = _collisions(users_table)
+    assert reported, "the forged pair should collide"
+    for norm_email, _count in reported:
+        assert "\n" in norm_email, "precondition: the raw value carries a newline"
+        assert "\n" not in db_utils.sanitize(norm_email)
 
 
 def test_migration_is_idempotent(users_table):
