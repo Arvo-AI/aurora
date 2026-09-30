@@ -110,6 +110,13 @@ COMMAND_WRAPPERS = frozenset({
 # over-blocks rather than under-blocks -- the safe direction for this gate.
 OPERAND_POSITIONAL_CLIS = frozenset({'kubectl'})
 
+# Subcommand groups of the CLIs above whose operation continues one token
+# further, so the relaxed scan must not stop at the group name. `kubectl config`
+# reads, but `config set-context` / `delete-context` / `unset` rewrite the
+# kubeconfig, and stopping at 'config' let every one of them through. The token
+# after such a group is a real operation, never an operand name.
+SUBCOMMAND_GROUPS = frozenset({'config'})
+
 # Some reads mutate nothing but hand back usable credentials, keys, secrets,
 # connection strings or bearer tokens. Ask mode must refuse them outright,
 # including hyphenated forms whose leading word ('get') looks read-only. One
@@ -296,8 +303,16 @@ def _find_write_verb(operation: list[str], executable: Optional[str],
     positional names (`kubectl logs update-cache-xxx`); an absent CLI gets the
     full scan and over-blocks, which is the safe direction.
     """
-    scanned = (operation[:verb_index + 1]
-               if executable in OPERAND_POSITIONAL_CLIS else operation)
+    if executable in OPERAND_POSITIONAL_CLIS:
+        # A subcommand group's operation runs one token longer, so the relaxed
+        # scan has to reach it (`kubectl config` vs `config delete-context`).
+        end = verb_index + 1
+        if verb_index < len(operation) and operation[verb_index] in SUBCOMMAND_GROUPS:
+            end += 1
+        scanned = operation[:end]
+    # Unknown CLI: scan everything, which over-blocks rather than under-blocks.
+    else:
+        scanned = operation
     for token in scanned:
         if _verb_of(token) in WRITE_VERBS:
             return token

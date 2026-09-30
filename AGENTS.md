@@ -79,15 +79,28 @@ is that a non-kubectl read whose *positional resource name* starts with a write
 verb is refused (`gcloud compute instances describe delete-me-vm`); that fails
 closed, and Agent mode covers it.
 
+The relaxed scan stops at the verb, which was one token too early for kubectl's
+one subcommand group spelled like a read verb: `kubectl config set-context`,
+`delete-context`, `use-context` and `unset` all sat past `config` and classified
+as reads. They only rewrite the local kubeconfig, but that repoints the cluster
+and namespace every later read resolves against, so they are writes. `config` is
+in `SUBCOMMAND_GROUPS`, which carries the scan one positional further —
+`config view` / `get-contexts` / `current-context` stay read-only.
+
 `describe_rejection()` returns why a command was refused, and
 `ensure_cloud_command_allowed()` puts it in the error the agent sees — naming the
 offending token is what lets the agent repair a command instead of retrying it:
 
 ```
 aws logs delete-log-group    → 'delete-log-group' is a write operation (it leads with 'delete')
-aws sts get-session-token    → it returns a credential ('token')
+aws sts get-session-token    → it returns a credential, key, secret or token
 kubectl get pods | bash      → its output is piped into 'bash', which is not a text filter
 ```
+
+The credential reason is a fixed string that names no token on purpose: the
+reason reaches a log line, and interpolating the matched credential word there
+trips CodeQL's clear-text-logging rule for no gain, since the agent can already
+see the command it sent.
 
 Six rules keep the gate fail-closed:
 1. **Credential/token reads are denied** even though they mutate nothing. Rather

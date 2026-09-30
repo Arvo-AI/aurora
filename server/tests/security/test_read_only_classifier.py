@@ -7,9 +7,18 @@ to decide what may run in Ask mode, so every behaviour below is load-bearing:
 * Mutations, credential/token minting and decrypted secret reads must stay denied.
 * Unknown or unparseable operations must fail closed.
 """
+import pathlib
+import re
+
 import pytest
 
 from utils.security.read_only_classifier import describe_rejection, is_read_only_command
+
+# The `Ask Mode Read-Only Enforcement` section of AGENTS.md quotes real
+# `describe_rejection()` output; `test_documented_rejection_examples_are_real`
+# keeps the two from drifting apart.
+_AGENTS_MD = pathlib.Path(__file__).resolve().parents[3] / 'AGENTS.md'
+_DOC_EXAMPLE = re.compile(r'^(\S[^\u2192]*?)\s+\u2192 ((?:it|\').*\S)$')
 
 
 @pytest.fixture(scope="module")
@@ -259,6 +268,36 @@ def test_reads_in_verb_named_groups_stay_allowed(is_read_only, command):
 
 
 # ---------------------------------------------------------------------------
+# kubectl's relaxed scan stops at the verb, which was one token short for
+# `config`: these only rewrite the local kubeconfig, but that repoints the
+# cluster/namespace every later read resolves against.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("command", [
+    "kubectl config set-context foo --namespace prod",
+    "kubectl config delete-context foo",
+    "kubectl config use-context foo",
+    "kubectl config rename-context a b",
+    "kubectl config unset current-context",
+    "kubectl config set-cluster c --server https://x",
+    "kubectl config set-credentials u --token=x",
+    "kubectl config set clusters.c.server https://x",
+])
+def test_kubeconfig_writes_are_not_read_only(is_read_only, command):
+    assert is_read_only(command) is False, command
+
+
+@pytest.mark.parametrize("command", [
+    "kubectl config view",
+    "kubectl config view --minify -o json",
+    "kubectl config get-contexts",
+    "kubectl config get-clusters",
+    "kubectl config current-context",
+])
+def test_kubeconfig_reads_stay_allowed(is_read_only, command):
+    assert is_read_only(command) is True, command
+
+
+# ---------------------------------------------------------------------------
 # State toggles and un-prefixed mutations: these read like reads but write.
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("command", [
@@ -423,6 +462,19 @@ def test_credential_reason_does_not_echo_the_credential_vocabulary():
     for command in ("aws sts get-session-token", "kubectl get secrets -n ns"):
         reason = describe_rejection(command)
         assert reason == 'it returns a credential, key, secret or token', command
+
+
+@pytest.mark.skipif(not _AGENTS_MD.is_file(), reason="AGENTS.md not checked out")
+def test_documented_rejection_examples_are_real():
+    # AGENTS.md documented a reason the code never produces, so the examples are
+    # now asserted against actual output rather than trusted.
+    examples = [
+        m.groups() for line in _AGENTS_MD.read_text().splitlines()
+        if (m := _DOC_EXAMPLE.match(line.strip()))
+    ]
+    assert examples, "no documented rejection examples found in AGENTS.md"
+    for command, documented in examples:
+        assert describe_rejection(command) == documented, command
 
 
 def test_false_positive_reason_shows_the_misparse():
