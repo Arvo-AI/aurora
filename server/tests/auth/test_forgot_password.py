@@ -647,12 +647,14 @@ class TestResetCodeRowLock:
         client, cursor, _svc = reset_env
         code = _issue_code(cursor)
         _reset(client, _EMAIL, code)
-        order = [
-            i for i, (q, _p) in enumerate(cursor.executed)
-            if "FOR UPDATE" in " ".join(q.split())
-            or "SET password_hash = %s" in " ".join(q.split())
+        statements = [" ".join(q.split()) for q, _p in cursor.executed]
+        locked = [i for i, q in enumerate(statements) if "FOR UPDATE" in q]
+        wrote = [
+            i for i, q in enumerate(statements) if "SET password_hash = %s" in q
         ]
-        assert len(order) == 2 and order[0] < order[1]
+        assert len(locked) == 1
+        assert len(wrote) == 1
+        assert locked[0] < wrote[0]
 
 
 class TestPublicAuthRateLimitKey:
@@ -678,9 +680,10 @@ class TestPublicAuthRateLimitKey:
         )
 
     def test_same_email_is_stable_across_requests(self, app):
-        assert self._key(app, {"email": "a@example.com"}) == self._key(
-            app, {"email": "a@example.com"}
-        )
+        # Compared against an independently computed digest rather than a second
+        # call, so this asserts the actual key format, not just self-consistency.
+        expected = hashlib.sha256(b"a@example.com").hexdigest()
+        assert self._key(app, {"email": "a@example.com"}) == f"email:{expected}"
 
     def test_case_and_whitespace_share_one_bucket(self, app):
         # Otherwise re-casing the address resets the allowance.
