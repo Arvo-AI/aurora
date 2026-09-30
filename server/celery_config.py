@@ -5,8 +5,6 @@ import sys
 import logging
 from dotenv import load_dotenv
 
-# Dependency-free leaf module, safe to import here: it defines the backfill
-# interval once so the beat schedule below and the task's org rotation agree.
 from routes.slack.slack_backfill_config import BACKFILL_INTERVAL_SECONDS
 
 # ------------------------------------------------------------
@@ -196,8 +194,6 @@ celery_app.conf.update(
         # an LLM description (agent routing only offers described channels).
         # Reconcile passes are user-triggered and capped per pass, so without this
         # the tail of a large membership stays invisible to routing.
-        # Shared constant, not a literal: the task derives its org rotation from
-        # the same value, and a drift between the two can starve orgs.
         'backfill-slack-channel-descriptions': {
             'task': 'routes.slack.slack_channel_metadata.backfill_channel_descriptions',
             'schedule': BACKFILL_INTERVAL_SECONDS,  # Every 15 minutes

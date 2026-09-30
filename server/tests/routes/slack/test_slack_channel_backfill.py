@@ -350,14 +350,7 @@ def test_backfill_is_registered_on_the_beat_schedule():
 
 
 def test_beat_schedule_uses_the_shared_interval_constant():
-    """The beat interval and the rotation in ``_rotate_orgs`` must not drift.
-
-    ``_rotate_orgs`` offsets by ``now // BACKFILL_INTERVAL_SECONDS``, so if the
-    schedule were re-hardcoded to a multiple of it the offset would step by more
-    than one per run and could permanently skip orgs (step 2 over an even org
-    count visits only half) — the starvation the rotation exists to prevent.
-    This fails if anyone replaces the shared constant with a literal.
-    """
+    """A literal here would drift from _rotate_orgs' interval and skip orgs."""
     source = (Path(__file__).resolve().parents[3] / "celery_config.py").read_text()
     entry = source.split("'backfill-slack-channel-descriptions'", 1)[1].split("},", 1)[0]
     assert "'schedule': BACKFILL_INTERVAL_SECONDS" in entry, (
