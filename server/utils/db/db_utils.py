@@ -5,6 +5,7 @@ from psycopg2 import DatabaseError
 from dotenv import load_dotenv
 import os
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 
 # Load environment variables
 load_dotenv()
@@ -3209,6 +3210,69 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(f"Error adding users.org_id FK: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_org_fk")
+
+            # Migration: normalize users.email to lowercase and enforce
+            # case-insensitive uniqueness. Login matched email case-sensitively
+            # while registration stored a lowercased copy, so a user typing any
+            # capitalization got "Invalid credentials" and could then register a
+            # duplicate row. Enforced in the DB so no code path can reintroduce it.
+            try:
+                cursor.execute("SAVEPOINT sp_email_ci")
+
+                # Skip rows that would collide — genuine duplicates are reported
+                # below, never merged, since picking a winner discards an account.
+                cursor.execute("""
+                    UPDATE users u
+                    SET email = LOWER(u.email)
+                    WHERE u.email <> LOWER(u.email)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM users o
+                          WHERE o.id <> u.id AND LOWER(o.email) = LOWER(u.email)
+                      );
+                """)
+                if cursor.rowcount:
+                    logging.info(
+                        "Normalized %d mixed-case user email(s) to lowercase.",
+                        cursor.rowcount,
+                    )
+
+                # Surface any remaining collisions for manual reconciliation.
+                cursor.execute("""
+                    SELECT LOWER(email), COUNT(*) FROM users
+                    GROUP BY LOWER(email) HAVING COUNT(*) > 1;
+                """)
+                dupes = cursor.fetchall()
+                for norm_email, dupe_count in dupes:
+                    logging.error(
+                        "Duplicate accounts share email %s (%d rows). "
+                        "Case-insensitive unique index NOT applied. Reconcile these "
+                        "accounts manually, then restart to enforce uniqueness.",
+                        # /register does not validate email format, so a stored
+                        # address can carry newlines and forge log lines here.
+                        sanitize(norm_email), dupe_count,
+                    )
+
+                # Only safe to add the unique index once no collisions remain —
+                # creating it with duplicates present would fail the whole
+                # migration and, worse, imply the data is already clean.
+                if not dupes:
+                    cursor.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower "
+                        "ON users (LOWER(email));"
+                    )
+                    logging.info("Enforced case-insensitive uniqueness on users.email.")
+
+                cursor.execute("RELEASE SAVEPOINT sp_email_ci")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error normalizing user emails: {e}")
+                # Defensive: if the transaction is already aborted the rollback
+                # itself raises, which at boot would take the whole server down
+                # over a non-critical migration.
+                try:
+                    cursor.execute("ROLLBACK TO SAVEPOINT sp_email_ci")
+                except Exception:
+                    logging.debug("ROLLBACK TO SAVEPOINT also failed for sp_email_ci")
 
             # Backfill org_id on all data tables — single source of truth
             # in utils/db/org_backfill.py.  Covers user-scoped tables (dynamic

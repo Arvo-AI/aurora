@@ -162,6 +162,9 @@ function AuthPage() {
     setError("")
     setIsLoading(true)
     try {
+      // Sent as typed: the backend lowercases for the lookup, and its
+      // exact-case tie-break can only order legacy duplicates correctly if the
+      // original capitalization survives the round trip.
       const result = await signIn("credentials", { email, password, redirect: false })
       if (result?.error) {
         setError("Invalid email or password")
@@ -391,7 +394,7 @@ function AuthPage() {
                   <div className="space-y-3">
                     <div>
                       <label htmlFor="signin-email" className="block text-xs font-medium text-[#888] mb-1.5">Email</label>
-                      <input id="signin-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isLoading} />
+                      <input id="signin-email" type="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isLoading} />
                     </div>
                     <div>
                       <label htmlFor="signin-password" className="block text-xs font-medium text-[#888] mb-1.5">Password</label>
@@ -427,7 +430,7 @@ function AuthPage() {
                   </div>
                   <div>
                     <label htmlFor="signup-email" className="block text-xs font-medium text-[#888] mb-1.5">Work email</label>
-                    <input id="signup-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="jane@acme.com" disabled={isLoading} />
+                    <input id="signup-email" type="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="jane@acme.com" disabled={isLoading} />
                   </div>
                   <div>
                     <label htmlFor="signup-password" className="block text-xs font-medium text-[#888] mb-1.5">Password</label>
