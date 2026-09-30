@@ -582,7 +582,6 @@ class TestPerAccountCooldown:
     def test_freshness_lookup_failure_fails_open(self, monkeypatch, reset_env):
         # A read error must not lock a user out of resetting their password, so
         # the helper reports "not fresh" rather than propagating.
-        _client, _cursor, _svc = reset_env
         from routes import auth_routes
 
         broken_pool = MagicMock()

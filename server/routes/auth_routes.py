@@ -703,13 +703,10 @@ def forgot_password():
         if not email or len(email) > 254:
             return generic
 
-        conn = connect_to_db_as_user()
-        try:
+        with connect_to_db_as_user() as conn:
             with conn.cursor() as cursor:
                 # No RLS needed — users not RLS-protected
                 row = _find_user_for_email(cursor, email)
-        finally:
-            conn.close()
 
         # No account (or an ambiguous case-variant match) — say nothing.
         if not row:
