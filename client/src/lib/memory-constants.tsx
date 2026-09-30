@@ -46,6 +46,17 @@ export interface MemoryEntry {
   updated_at: string | null;
 }
 
+// Mirrors PROTECTED_ENTRIES in server/services/memory/__init__.py. These entries
+// live in user-writable categories and their content is freely editable, but a
+// feature pins to their (category, title) pair — so renaming, recategorizing, or
+// deleting one would silently detach it. The backend rejects those with 403; the
+// UI hides the affordances so it never comes up.
+const PROTECTED_ENTRIES: ReadonlySet<string> = new Set(["context/Slack"]);
+
+export function isProtectedEntry(entry: Pick<MemoryEntry, "category" | "title">): boolean {
+  return PROTECTED_ENTRIES.has(`${entry.category}/${entry.title}`);
+}
+
 /**
  * Human-readable "by <who>" label for a memory entry's last editor.
  * Prefers the real person's name, falling back to the generic "User"/"Agent".

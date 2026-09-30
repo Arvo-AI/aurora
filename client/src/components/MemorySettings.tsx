@@ -50,6 +50,7 @@ import {
   SYSTEM_CATEGORY,
   CATEGORY_META,
   formatEditedBy,
+  isProtectedEntry,
 } from "@/lib/memory-constants";
 
 export function MemorySettings() {
@@ -567,6 +568,10 @@ export function MemorySettings() {
                 // System-maintained entries (e.g. the Incident Index) are read-only:
                 // users can view them but can't recategorize or delete them.
                 const isSystem = entry.category === SYSTEM_CATEGORY;
+                // Built-in entries (e.g. the Slack policy): content is editable,
+                // but the title/category are its identity and deleting it would
+                // silently disable the feature that pins to it.
+                const isProtected = isProtectedEntry(entry);
                 return (
                   <div
                     key={entry.id}
@@ -579,7 +584,7 @@ export function MemorySettings() {
                       <div className="min-w-0">
                         <p className="font-medium truncate">{entry.title}</p>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          {canWrite && !isSystem ? (
+                          {canWrite && !isSystem && !isProtected ? (
                             <Select
                               value={entry.category}
                               onValueChange={(v) => handleCategoryChange(entry.id, v as MemoryCategory)}
@@ -599,6 +604,7 @@ export function MemorySettings() {
                             <Badge variant="secondary" className={`text-xs px-1.5 py-0 ${meta.color}`}>
                               {meta.label}
                               {isSystem && " · System"}
+                              {isProtected && " · Built-in"}
                             </Badge>
                           )}
                           {entry.description && (
@@ -624,19 +630,23 @@ export function MemorySettings() {
                           >
                             <Pencil className="h-4 w-4 text-muted-foreground hover:text-primary" />
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleDelete(entry.id, entry.title)}
-                            disabled={deletingId === entry.id}
-                            title="Delete memory entry"
-                          >
-                            {deletingId === entry.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
-                            )}
-                          </Button>
+                          {/* Built-in entries stay editable but can't be deleted —
+                              the feature that pins to them would lose its policy. */}
+                          {!isProtected && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDelete(entry.id, entry.title)}
+                              disabled={deletingId === entry.id}
+                              title="Delete memory entry"
+                            >
+                              {deletingId === entry.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                              )}
+                            </Button>
+                          )}
                         </>
                       ) : (
                         // System-managed (or read-only for viewers): can't edit, but

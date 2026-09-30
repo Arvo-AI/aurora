@@ -665,13 +665,25 @@ def get_user_display_name(user_id: str) -> Optional[str]:
         return None
 
 
-def set_rls_context(cursor, conn, user_id: str, *, log_prefix: str = "") -> Optional[str]:
+def set_rls_context(
+    cursor, conn, user_id: str, *, org_id: Optional[str] = None, log_prefix: str = ""
+) -> Optional[str]:
     """Resolve org_id and configure RLS session variables on a DB connection.
 
     Returns the org_id on success, or None (and logs an error) when the org
     cannot be resolved — callers should abort persistence in that case.
+
+    Pass ``org_id`` from a request handler that already resolved it via
+    ``get_org_id_from_request()`` (the X-Org-ID header, from the Auth.js session).
+    Without it the org comes from ``users.org_id``, and the two can disagree while
+    a reassignment propagates — a stale JWT still carrying the old org, or this
+    function's own 5-minute cache lagging a new one. RLS then filters a different
+    org than the handler's WHERE clause, so queries silently match zero rows.
+    Handlers should pin both to the org RBAC authorized. Omit it in Celery /
+    background callers, which have no request to read the header from.
     """
-    org_id = get_org_id_for_user(user_id)
+    if org_id is None:
+        org_id = get_org_id_for_user(user_id)
     if not org_id:
         logger.error("%s Missing org_id for user %s; cannot set RLS context", log_prefix, sanitize(user_id))
         return None

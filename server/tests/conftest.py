@@ -50,6 +50,10 @@ _OPTIONAL_PACKAGES = (
     "hvac", "redis", "celery", "flask_socketio",
     "flask_cors", "langchain", "langgraph", "requests", "tiktoken",
     "dotenv", "flask",
+    # routes/memory/routes.py imports PdfReader at module scope for upload
+    # text-extraction, so the blueprint is unimportable without it — even for
+    # tests that never touch the upload route.
+    "pypdf",
     "langchain_core", "langchain_core.tools", "langchain_core.language_models",
     "langchain_core.language_models.chat_models",
     "langchain_anthropic", "langchain_openai", "langchain_google_genai",
