@@ -27,6 +27,7 @@ VERIFICATION_CODE_EXPIRY_MINUTES = 15
 RESEND_COOLDOWN_MINUTES = 1
 PASSWORD_RESET_CODE_EXPIRY_MINUTES = 15
 PASSWORD_RESET_MAX_ATTEMPTS = 5
+PASSWORD_RESET_RESEND_COOLDOWN_MINUTES = 1
 _SERVER_ERROR = "Server error"
 
 # Returned for every /forgot-password outcome — found, not found, or send
@@ -114,6 +115,36 @@ def send_verification_email(user_id: str, email: str) -> bool:
             c.commit()
 
     return email_svc.send_account_verification_email(email, code)
+
+
+def _reset_code_is_fresh(user_id: str) -> bool:
+    """True when this account was mailed a reset code within the cooldown.
+
+    Rate limiting alone can't protect an individual mailbox: every request
+    arrives from the frontend proxy's IP, so all users share one bucket.
+    Fails open — a lookup error should not block a legitimate reset.
+    """
+    try:
+        with db_pool.get_admin_connection() as c:
+            with c.cursor() as cur:
+                cur.execute(
+                    "SELECT password_reset_code_expires_at FROM users WHERE id = %s",
+                    (user_id,),
+                )
+                row = cur.fetchone()
+    except Exception:
+        logging.exception("Could not read reset-code freshness for %s", user_id)
+        return False
+
+    if not row or not row[0]:
+        return False
+
+    # Derive when the code was issued from its expiry; a code younger than the
+    # cooldown means we already mailed one moments ago.
+    issued_at = row[0] - timedelta(minutes=PASSWORD_RESET_CODE_EXPIRY_MINUTES)
+    return datetime.now() < issued_at + timedelta(
+        minutes=PASSWORD_RESET_RESEND_COOLDOWN_MINUTES
+    )
 
 
 def send_password_reset_email(user_id: str, email: str) -> bool:
@@ -688,6 +719,14 @@ def forgot_password():
             return generic
 
         user_id, user_email = row[0], row[1]
+
+        # Per-account cooldown. The Flask-Limiter bucket above keys on the
+        # caller IP, which is the frontend proxy for every user, so it can't stop
+        # one address being mail-bombed. Silently skip rather than 429 — a
+        # different status here would be the oracle the constant body avoids.
+        if _reset_code_is_fresh(user_id):
+            logging.info("Suppressed duplicate password reset request for %s", user_id)
+            return generic
 
         if not send_password_reset_email(user_id, user_email):
             logging.warning("Failed to send password reset email for user %s", user_id)

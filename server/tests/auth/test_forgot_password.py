@@ -59,6 +59,10 @@ class _FakeCursor:
         # Case-insensitive fallback, only used when the exact match missed.
         elif "LOWER(email) = LOWER(%s)" in normalized:
             self._result = [u for u in self.users if u[1].lower() == params[0].lower()]
+        # Reset-code freshness probe (per-account cooldown).
+        elif "SELECT password_reset_code_expires_at" in normalized:
+            state = self.reset_state.get(params[-1])
+            self._result = [(state[1],)] if state else []
         # Reset-code state for a resolved user id.
         elif "SELECT password_reset_code" in normalized:
             self._result = [self.reset_state.get(params[-1])]
@@ -539,3 +543,60 @@ class TestCodeEmails:
         reset, verify = sent
         assert reset["subject"] != verify["subject"]
         assert "Reset Your Password" in reset["subject"]
+
+
+class TestPerAccountCooldown:
+    """The IP-keyed rate limiter sees the frontend proxy for every user, so all
+    users share one bucket. A per-account cooldown is what actually stops a
+    single mailbox being flooded."""
+
+    def test_second_request_within_cooldown_sends_nothing(self, reset_env):
+        client, cursor, email_svc = reset_env
+        # A code was mailed seconds ago (full 15 min still to run).
+        _issue_code(cursor, expires_in_min=15)
+        _forgot(client, _EMAIL)
+        email_svc.send_password_reset_email.assert_not_called()
+
+    def test_suppressed_request_still_returns_the_same_body(self, reset_env):
+        # Suppression must not be observable — a 429 here would be the oracle
+        # the constant body exists to avoid.
+        client, cursor, _svc = reset_env
+        _status, fresh_body = _forgot(client, _EMAIL)
+        _issue_code(cursor, expires_in_min=15)
+        status, body = _forgot(client, _EMAIL)
+        assert (status, body) == (200, fresh_body)
+
+    def test_request_after_cooldown_sends_again(self, reset_env):
+        client, cursor, email_svc = reset_env
+        # Issued ~2 min ago: 13 min of a 15 min lifetime left.
+        _issue_code(cursor, expires_in_min=13)
+        _forgot(client, _EMAIL)
+        email_svc.send_password_reset_email.assert_called_once()
+
+    def test_expired_code_does_not_block_a_new_request(self, reset_env):
+        client, cursor, email_svc = reset_env
+        _issue_code(cursor, expires_in_min=-5)
+        _forgot(client, _EMAIL)
+        email_svc.send_password_reset_email.assert_called_once()
+
+    def test_freshness_lookup_failure_fails_open(self, monkeypatch, reset_env):
+        # A read error must not lock a user out of resetting their password, so
+        # the helper reports "not fresh" rather than propagating.
+        _client, _cursor, _svc = reset_env
+        from routes import auth_routes
+
+        broken_pool = MagicMock()
+        broken_pool.get_admin_connection = MagicMock(
+            side_effect=RuntimeError("db blip")
+        )
+        monkeypatch.setattr(auth_routes, "db_pool", broken_pool)
+        assert auth_routes._reset_code_is_fresh(_UID) is False
+
+    def test_freshness_failure_still_sends_the_code(self, monkeypatch, reset_env):
+        client, cursor, email_svc = reset_env
+        _issue_code(cursor, expires_in_min=15)
+        monkeypatch.setattr(
+            "routes.auth_routes._reset_code_is_fresh", lambda _uid: False
+        )
+        _forgot(client, _EMAIL)
+        email_svc.send_password_reset_email.assert_called_once()

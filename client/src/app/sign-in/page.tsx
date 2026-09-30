@@ -160,11 +160,14 @@ function AuthPage() {
     return () => clearTimeout(t)
   }, [resendCooldown])
 
-  const switchMode = (newMode: AuthMode) => {
+  // keepNotice: the forgot/reset steps set a confirmation message *and* move to
+  // the next panel, and that message is the only feedback the user gets — the
+  // default clear would wipe it in the same render.
+  const switchMode = (newMode: AuthMode, keepNotice = false) => {
     if (switching.current) return
     switching.current = true
     setError("")
-    setNotice("")
+    if (!keepNotice) setNotice("")
     setFormVisible(false)
     setTaglineVisible(false)
     const url = new URL(globalThis.location.href)
@@ -338,7 +341,7 @@ function AuthPage() {
       setResetSent(true)
       setNotice(data.message || "If an account exists for that email, we've sent a reset code.")
       setResendCooldown(60)
-      switchMode("reset-password")
+      switchMode("reset-password", true)
     } catch {
       setError("An error occurred. Please try again.")
     } finally {
@@ -369,7 +372,7 @@ function AuthPage() {
         setTimeout(() => { router.push(callbackUrl); router.refresh() }, 800)
       } else {
         setNotice("Password reset. Please sign in with your new password.")
-        setTimeout(() => switchMode("signin"), 1200)
+        setTimeout(() => switchMode("signin", true), 1200)
       }
     } catch {
       setError("An error occurred. Please try again.")
