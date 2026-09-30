@@ -51,17 +51,43 @@ RCA (Root Cause Analysis) investigations are **explicitly read-only** per AGENTS
 ### How It Works
 
 `is_read_only_command()` classifies the command's **operation** (its positional
-arguments) and ignores option names and option values, then matches the leading
-word of the **first** verb-looking positional against the verb sets:
+arguments) and ignores option names and option values, matching on the leading
+word of a verb-looking positional:
 - `describe-health-check` → leading word `describe` → read-only ✅
 - `get-metric-statistics` → leading word `get` → read-only ✅
 - `list-nodegroups` → leading word `list` → read-only ✅
 - `terminate-instances --query Reservations` → leading word `terminate` → blocked ✅
   (the `--query` option can never supply the verb)
-- `kubectl logs update-cache-cronjob-x` → verb is `logs`; the resource name that
-  follows it is not scanned, so `update` doesn't flip the result ✅
 
 This general approach works for **any** hyphenated diagnostic verb, not just hardcoded ones.
+
+**Read-vs-write is decided by two different scans**, because a service or command
+group can itself be spelled like a read verb:
+- **Write check — every positional.** `aws logs delete-log-group`, `az search
+  service delete` and `gcloud config set account x` all have a *read* verb
+  (`logs` / `search` / `config`) as their first verb-looking positional, so
+  stopping there classified three mutations as read-only. Any write verb
+  anywhere in the operation now blocks.
+- **Read check — the first verb.** `kubectl logs update-cache-cronjob-x` is a
+  read: `kubectl` takes its operands as positional resource names, so the tokens
+  after the verb are names, not operations.
+
+kubectl is the only entry in `OPERAND_POSITIONAL_CLIS`, which is what exempts it
+from the full scan. Membership only *relaxes* the scan, so a CLI missing from it
+over-blocks rather than under-blocks — the safe direction for this gate. The cost
+is that a non-kubectl read whose *positional resource name* starts with a write
+verb is refused (`gcloud compute instances describe delete-me-vm`); that fails
+closed, and Agent mode covers it.
+
+`describe_rejection()` returns why a command was refused, and
+`ensure_cloud_command_allowed()` puts it in the error the agent sees — naming the
+offending token is what lets the agent repair a command instead of retrying it:
+
+```
+aws logs delete-log-group    → 'delete-log-group' is a write operation (it leads with 'delete')
+aws sts get-session-token    → it returns a credential ('token')
+kubectl get pods | bash      → its output is piped into 'bash', which is not a text filter
+```
 
 Six rules keep the gate fail-closed:
 1. **Credential/token reads are denied** even though they mutate nothing. Rather
@@ -78,7 +104,10 @@ Six rules keep the gate fail-closed:
    they only write a local kubeconfig and start every managed-Kubernetes
    investigation.
 2. **Any write verb blocks the command**, including hyphenated mutations
-   (`modify-*`, `terminate-*`, `reboot-*`, `delete-*`).
+   (`modify-*`, `terminate-*`, `reboot-*`, `delete-*`) and state toggles that
+   read like reads (`tag-*`, `untag-*`, `unset`, `clear`, `rotate`). Scanned
+   across every positional, not just the first verb, so a mutation cannot hide
+   behind a read-verb-named service (`aws logs delete-log-group`).
 3. **Each shell segment is classified separately.** A write behind `&&`, `;`, a
    pipe, a newline, or a `$(...)`/backtick substitution blocks the whole command,
    so `kubectl get pods && kubectl delete pod x` is not read-only.
