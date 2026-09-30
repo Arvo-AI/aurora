@@ -14,7 +14,7 @@ from flask import Blueprint, request, jsonify
 from utils.db.db_utils import connect_to_db_as_user
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_auth_only
-from utils.web.limiter_ext import limiter
+from utils.web.limiter_ext import get_public_auth_rate_limit_key, limiter
 import os
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
@@ -733,7 +733,9 @@ def _dispatch_reset_code(email: str) -> None:
 
 
 @auth_bp.route('/forgot-password', methods=['POST'])
-@limiter.limit("5 per minute;20 per hour")
+# Keyed on the submitted email: these requests arrive via the frontend proxy, so
+# the default IP key would be one shared bucket for every user.
+@limiter.limit("5 per minute;20 per hour", key_func=get_public_auth_rate_limit_key)
 def forgot_password():
     """Email a one-time reset code to the address in the body.
 
@@ -793,7 +795,11 @@ def _verify_reset_code(conn, cursor, user_id: str, code: str):
     """
     cursor.execute(
         "SELECT password_reset_code, password_reset_code_expires_at, "
-        "COALESCE(password_reset_attempts, 0) FROM users WHERE id = %s",
+        "COALESCE(password_reset_attempts, 0) FROM users WHERE id = %s "
+        # FOR UPDATE: without the row lock two concurrent requests can both read
+        # the same attempt count, so the 6th guess slips past the cap and a single
+        # valid code can be redeemed twice.
+        "FOR UPDATE",
         (user_id,),
     )
     reset_row = cursor.fetchone()
@@ -829,7 +835,9 @@ def _verify_reset_code(conn, cursor, user_id: str, code: str):
 
 
 @auth_bp.route('/reset-password', methods=['POST'])
-@limiter.limit("10 per minute;30 per hour")
+# Per-email, as with /forgot-password. The hard guessing limit is the DB attempt
+# counter in _verify_reset_code(); this only blunts the request rate.
+@limiter.limit("10 per minute;30 per hour", key_func=get_public_auth_rate_limit_key)
 def reset_password():
     """Set a new password using the code from /forgot-password.
 

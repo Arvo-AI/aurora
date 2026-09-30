@@ -476,7 +476,7 @@ View full report: {incident_url}{self._text_footer()}"""
 
 {intro}
 
-Your verification code is: {code}
+{code_label} {code}
 
 This code will expire in 15 minutes.
 

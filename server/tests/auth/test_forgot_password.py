@@ -545,11 +545,40 @@ class TestCodeEmails:
         assert reset["subject"] != verify["subject"]
         assert "Reset Your Password" in reset["subject"]
 
+    def test_reset_text_part_does_not_call_the_code_a_verification_code(
+        self, email_service
+    ):
+        # The shared builder used to hardcode "Your verification code is:" in the
+        # text part, so the reset email contradicted its own HTML.
+        svc, sent = email_service
+        svc.send_password_reset_email("user@example.com", "123456")
+        assert "verification code" not in sent[0]["text"].lower()
+
+    @pytest.mark.parametrize(
+        "method",
+        [
+            "send_account_verification_email",
+            "send_password_reset_email",
+            "send_verification_code_email",
+        ],
+    )
+    def test_both_mime_parts_use_the_same_code_label(self, email_service, method):
+        svc, sent = email_service
+        getattr(svc, method)("user@example.com", "123456")
+        body = sent[0]
+        # The label sits directly above the code box in the HTML; the text part
+        # must introduce the code the same way.
+        label = "Enter this code in Aurora to choose a new password:"
+        if method != "send_password_reset_email":
+            label = "Enter this verification code in Aurora:"
+        assert label in body["text"]
+        assert label in body["html"]
+
 
 class TestPerAccountCooldown:
-    """The IP-keyed rate limiter sees the frontend proxy for every user, so all
-    users share one bucket. A per-account cooldown is what actually stops a
-    single mailbox being flooded."""
+    """Rate limiting bounds the request rate; this cooldown bounds the mail. Even
+    with a per-email limiter key, 5 requests/min would still mean 5 emails/min to
+    one mailbox, so the cooldown is what actually stops a flood."""
 
     def test_second_request_within_cooldown_sends_nothing(self, reset_env):
         client, cursor, email_svc = reset_env
@@ -599,4 +628,111 @@ class TestPerAccountCooldown:
             "routes.auth_routes._reset_code_is_fresh", lambda _uid: False
         )
         _forgot(client, _EMAIL)
+        email_svc.send_password_reset_email.assert_called_once()
+
+
+class TestResetCodeRowLock:
+    """The verify → increment → write sequence must serialize, or two concurrent
+    requests can both read the same attempt count and slip past the cap."""
+
+    def test_code_lookup_locks_the_row(self, reset_env):
+        client, cursor, _svc = reset_env
+        code = _issue_code(cursor)
+        _reset(client, _EMAIL, code)
+        query, _params = cursor.sql_for("SELECT password_reset_code,")
+        assert "FOR UPDATE" in " ".join(query.split())
+
+    def test_lock_is_taken_before_the_password_write(self, reset_env):
+        # Both statements must land inside one transaction, the SELECT first.
+        client, cursor, _svc = reset_env
+        code = _issue_code(cursor)
+        _reset(client, _EMAIL, code)
+        order = [
+            i for i, (q, _p) in enumerate(cursor.executed)
+            if "FOR UPDATE" in " ".join(q.split())
+            or "SET password_hash = %s" in " ".join(q.split())
+        ]
+        assert len(order) == 2 and order[0] < order[1]
+
+
+class TestPublicAuthRateLimitKey:
+    """These routes carry no X-User-ID, so the default key would bucket every
+    caller under the frontend proxy's address — one global allowance."""
+
+    @staticmethod
+    def _key(app, body):
+        from utils.web.limiter_ext import get_public_auth_rate_limit_key
+
+        with app.test_request_context("/api/auth/forgot-password", json=body):
+            return get_public_auth_rate_limit_key()
+
+    @pytest.fixture
+    def app(self):
+        from flask import Flask
+
+        return Flask(__name__)  # NOSONAR — test-local app
+
+    def test_distinct_emails_get_distinct_buckets(self, app):
+        assert self._key(app, {"email": "a@example.com"}) != self._key(
+            app, {"email": "b@example.com"}
+        )
+
+    def test_same_email_is_stable_across_requests(self, app):
+        assert self._key(app, {"email": "a@example.com"}) == self._key(
+            app, {"email": "a@example.com"}
+        )
+
+    def test_case_and_whitespace_share_one_bucket(self, app):
+        # Otherwise re-casing the address resets the allowance.
+        assert self._key(app, {"email": "  User@Example.com "}) == self._key(
+            app, {"email": "user@example.com"}
+        )
+
+    def test_key_does_not_contain_the_raw_email(self, app):
+        # The key becomes a Redis key; addresses shouldn't be written into it.
+        key = self._key(app, {"email": "user@example.com"})
+        assert "user@example.com" not in key
+        assert key.startswith("email:")
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {},
+            {"email": ""},
+            {"email": "   "},
+            {"email": None},
+            {"email": 12345},
+            {"email": "a" * 250 + "@example.com"},
+        ],
+        ids=["missing", "empty", "blank", "null", "non-string", "too-long"],
+    )
+    def test_unusable_email_falls_back_to_the_ip_bucket(self, app, body):
+        # Must not mint an unlimited per-request key for junk input.
+        assert self._key(app, body).startswith("ip:")
+
+    def test_non_dict_body_falls_back_to_the_ip_bucket(self, app):
+        from utils.web.limiter_ext import get_public_auth_rate_limit_key
+
+        with app.test_request_context(
+            "/api/auth/forgot-password", json=["not", "a", "dict"]
+        ):
+            assert get_public_auth_rate_limit_key().startswith("ip:")
+
+    def test_malformed_json_does_not_raise(self, app):
+        from utils.web.limiter_ext import get_public_auth_rate_limit_key
+
+        with app.test_request_context(
+            "/api/auth/forgot-password",
+            data="{not json",
+            content_type="application/json",
+        ):
+            assert get_public_auth_rate_limit_key().startswith("ip:")
+
+    def test_reading_the_body_leaves_it_available_to_the_route(self, reset_env):
+        # The limiter key reads request JSON before the view does; Flask caches
+        # it, but if that ever stopped holding the route would see an empty body.
+        client, cursor, email_svc = reset_env
+        _issue_code(cursor, expires_in_min=-5)
+        status, _body = _forgot(client, _EMAIL)
+        assert status == 200
         email_svc.send_password_reset_email.assert_called_once()

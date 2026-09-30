@@ -91,6 +91,9 @@ export function usePasswordReset({
       setError(error)
       return
     }
+    // Re-entering the flow after a failed post-reset sign-in: the hook stays
+    // mounted, so a stale resetComplete would leave the next form frozen.
+    setResetComplete(false)
     // The backend answers 200 with the same message whether or not the account
     // exists, so there is nothing to branch on here.
     setResetSent(true)
@@ -120,13 +123,23 @@ export function usePasswordReset({
     setResetComplete(true)
     // Sign in with the password they just set rather than sending them back to a
     // form to retype it.
-    const result = await signIn("credentials", {
-      email: email.trim(),
-      password: newPassword,
-      redirect: false,
-    })
-    setIsSubmitting(false)
-    onResetComplete(Boolean(result?.ok))
+    let signedIn = false
+    try {
+      const result = await signIn("credentials", {
+        email: email.trim(),
+        password: newPassword,
+        redirect: false,
+      })
+      signedIn = Boolean(result?.ok)
+    } catch {
+      // The password was already changed, so a throw here (network drop, etc.)
+      // is only a failed convenience sign-in — fall through and let the caller
+      // send them to the sign-in form instead of freezing on a spinner.
+      signedIn = false
+    } finally {
+      setIsSubmitting(false)
+    }
+    onResetComplete(signedIn)
   }
 
   const resendCode = async () => {
