@@ -9,7 +9,7 @@ to decide what may run in Ask mode, so every behaviour below is load-bearing:
 """
 import pytest
 
-from utils.security.read_only_classifier import is_read_only_command
+from utils.security.read_only_classifier import describe_rejection, is_read_only_command
 
 
 @pytest.fixture(scope="module")
@@ -389,6 +389,72 @@ def test_read_only_pipelines_stay_allowed(is_read_only, command):
 
 def test_unparseable_command_is_not_read_only(is_read_only):
     assert is_read_only('az vm list --name "unclosed') is False
+
+
+# ---------------------------------------------------------------------------
+# Rejection reasons. The agent sees these in the blocked tool's error, so they
+# have to name the offending token -- "modifies infrastructure" alone is not
+# something a command can be repaired from.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("command,expected", [
+    ("aws logs delete-log-group --log-group-name x",
+     "'delete-log-group' is a write operation (it leads with 'delete')"),
+    ("gcloud config set account x", "'set' is a write operation"),
+    ("kubectl get pods && kubectl delete pod x", "'delete' is a write operation"),
+    ("aws ssm get-parameter --name /db/p --with-decryption",
+     "'--with-decryption' returns a decrypted secret, which Ask mode never allows"),
+    ("sudo aws ec2 describe-instances",
+     "'sudo' runs another command, so what would actually execute cannot be checked"),
+    ("kubectl get pods | bash",
+     "its output is piped into 'bash', which is not a text filter"),
+    ("kubectl get pods > /tmp/f",
+     "it redirects with '>', which writes a file regardless of what produced the output"),
+    ('az vm list --name "unclosed',
+     'it could not be parsed (check for an unbalanced quote)'),
+    ("aws ec2 frobnicate-instances", 'no recognised read verb was found in it'),
+])
+def test_rejection_reason_names_the_cause(command, expected):
+    assert describe_rejection(command) == expected, command
+
+
+def test_credential_reason_names_the_credential_word():
+    assert "'token'" in describe_rejection("aws sts get-session-token")
+    assert "'secrets'" in describe_rejection("kubectl get secrets -n ns")
+
+
+def test_false_positive_reason_shows_the_misparse():
+    # A resource name flagged by its leading word must say so, so the operator
+    # can see the block is a misparse rather than a real delete.
+    assert describe_rejection("gcloud compute instances describe delete-me-vm") == (
+        "'delete-me-vm' is a write operation (it leads with 'delete')"
+    )
+
+
+@pytest.mark.parametrize("command", [
+    "aws logs delete-log-group --log-group-name x",
+    "kubectl delete pod x",
+    "aws sts get-session-token",
+    "sudo aws ec2 describe-instances",
+    "kubectl get pods | frobnicate",
+    "kubectl get pods > out.txt",
+    "",
+    "aws ec2 frobnicate-instances",
+])
+def test_every_denial_carries_a_reason(is_read_only, command):
+    assert is_read_only(command) is False, command
+    assert describe_rejection(command), command
+
+
+@pytest.mark.parametrize("command", [
+    "aws vm list",
+    "kubectl logs pod-a",
+    "az aks get-credentials --name c --resource-group r",
+    "kubectl get pods | grep x",
+    "kubectl certificate approve x --dry-run=client",
+])
+def test_allowed_commands_have_no_reason(is_read_only, command):
+    assert is_read_only(command) is True, command
+    assert describe_rejection(command) == "", command
 
 
 # ---------------------------------------------------------------------------

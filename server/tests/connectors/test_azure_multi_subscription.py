@@ -238,8 +238,9 @@ def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent", login
           "Optional": typing.Optional, "logger": __import__("logging").getLogger("test")}
 
     # The fan-out calls the Ask-mode gate, which now lives in its own module.
-    from utils.security.read_only_classifier import is_read_only_command
+    from utils.security.read_only_classifier import describe_rejection, is_read_only_command
     ns["is_read_only_command"] = is_read_only_command
+    ns["describe_rejection"] = describe_rejection
 
     for fn in ["_apply_azure_subscription",
                "_run_azure_on_subscription", "_fan_out_azure",
@@ -275,8 +276,11 @@ def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent", login
         "get_command_timeout": lambda c, t: t or 60,
         "get_mode_from_context": lambda: mode,
         "ModeAccessController": type("M", (), {
+            # Mirrors the real signature, including the rejection reason the gate
+            # now interpolates into its message.
             "ensure_cloud_command_allowed": staticmethod(
-                lambda m, ro, c: (True, "") if m == "agent" or ro else (False, "blocked"))
+                lambda m, ro, c, reason="": (True, "") if m == "agent" or ro
+                else (False, "blocked because %s" % (reason or "it modifies infrastructure")))
         }),
         "_Result": Result,
     })

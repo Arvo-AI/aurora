@@ -34,7 +34,10 @@ from chat.backend.agent.access import ModeAccessController
 from utils.cloud.cloud_utils import get_mode_from_context
 # Ask-mode read-only gate. Re-exported here because callers (and tests) have
 # always imported it from this module.
-from utils.security.read_only_classifier import is_read_only_command  # noqa: F401
+from utils.security.read_only_classifier import (  # noqa: F401
+    describe_rejection,
+    is_read_only_command,
+)
 from utils.log_sanitizer import hash_for_log
 
 
@@ -1213,6 +1216,7 @@ def _cloud_exec_aws_multi_account(
         current_mode,
         is_read_only_command(command),
         command,
+        describe_rejection(command),
     )
     if not allowed:
         logger.warning(read_only_message)
@@ -1458,7 +1462,7 @@ def _cloud_exec_azure_multi_subscription(
 
     current_mode = get_mode_from_context()
     allowed, read_only_message = ModeAccessController.ensure_cloud_command_allowed(
-        current_mode, is_read_only_command(command), command,
+        current_mode, is_read_only_command(command), command, describe_rejection(command),
     )
     if not allowed:
         return json.dumps({
@@ -1894,6 +1898,7 @@ Security & Compliance
                     current_mode,
                     is_read_only_command(command),
                     command,
+                    describe_rejection(command),
                 )
                 if not allowed:
                     logger.warning(read_only_message)
@@ -2086,6 +2091,7 @@ Security & Compliance
             current_mode,
             is_read_only_command(command),
             command,
+            describe_rejection(command),
         )
         if not allowed:
             logger.warning(read_only_message)

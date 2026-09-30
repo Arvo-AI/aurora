@@ -189,6 +189,14 @@ def split_segments(command: str) -> Optional[list[list[str]]]:
     quotes, or a redirection (which writes a file or an fd no matter how
     read-only the command producing the bytes is).
     """
+    segments, _reason = _split_segments_or_reason(command)
+    return segments
+
+
+def _split_segments_or_reason(
+    command: str,
+) -> tuple[Optional[list[list[str]]], str]:
+    """`split_segments`, plus why it refused, for the Ask-mode error message."""
     # Newlines separate commands but shlex treats them as plain whitespace, so
     # they are turned into an explicit separator first.
     normalized = command.replace('\r', '\n').replace('\n', ' ; ')
@@ -201,18 +209,25 @@ def split_segments(command: str) -> Optional[list[list[str]]]:
         lexer.whitespace_split = True
         raw_tokens = list(lexer)
     except ValueError:
-        return None
+        return None, 'it could not be parsed (check for an unbalanced quote)'
 
     segments: list[list[str]] = [[]]
     for token in raw_tokens:
         if token and all(c in _CONTROL_CHARS for c in token):
             # A redirection writes a file or an fd, which is a mutation.
             if '>' in token or '<' in token:
-                return None
+                return None, (
+                    "it redirects with '%s', which writes a file regardless of "
+                    'what produced the output' % token
+                )
             segments.append([])
             continue
         segments[-1].append(token)
-    return [seg for seg in segments if seg]
+
+    trimmed = [seg for seg in segments if seg]
+    if not trimmed:
+        return None, 'it is empty'
+    return trimmed, ''
 
 
 def _operation_of(tokens: list[str]) -> list[str]:
@@ -385,6 +400,69 @@ def _is_real_dry_run(segments: list) -> bool:
     return found
 
 
+def describe_rejection(command: str) -> str:
+    """Why *command* is not read-only, as a clause, or '' when it is read-only.
+
+    The agent sees this in the blocked tool's error, so it says which token
+    caused the refusal: 'modifies infrastructure' alone is not enough to repair
+    a command with.
+    """
+    segments, parse_reason = _split_segments_or_reason(command)
+    if not segments:
+        return parse_reason
+
+    facts = [analyze_segment(seg) for seg in segments]
+
+    # Flag names gate the command (`--with-decryption`, `--dry-run`) but must
+    # never provide a read-only verb, so they are collected separately.
+    flag_names = {
+        t.split('=', 1)[0].lower() for seg in segments for t in seg
+        if t.startswith('-') and t != '--'
+    }
+
+    secret_flags = flag_names & CREDENTIAL_FLAGS
+    if secret_flags:
+        return ("'%s' returns a decrypted secret, which Ask mode never allows"
+                % sorted(secret_flags)[0])
+
+    for f in facts:
+        creds = f.credential_words & CREDENTIAL_WORDS
+        if creds and not _is_kubeconfig_fetch(f.operation):
+            return ("it returns a credential ('%s'), which Ask mode never allows"
+                    % sorted(creds)[0])
+
+    if _is_credential_read(facts, flag_names):
+        return 'it returns usable credentials, which Ask mode never allows'
+
+    # The offending token *and* the leading word it matched. Shape cannot tell a
+    # real `delete-log-group` from a resource named `delete-me-vm`, so one wording
+    # covers both: naming the leading word makes a misparse self-evident.
+    for f in facts:
+        if f.write_verb:
+            verb = _verb_of(f.write_verb)
+            if verb == f.write_verb:
+                return "'%s' is a write operation" % f.write_verb
+            return ("'%s' is a write operation (it leads with '%s')"
+                    % (f.write_verb, verb))
+
+    if facts[0].executable in COMMAND_WRAPPERS:
+        return ("'%s' runs another command, so what would actually execute "
+                "cannot be checked" % facts[0].executable)
+
+    for f in facts[1:]:
+        if f.executable not in DOWNSTREAM_FILTERS:
+            return ("its output is piped into '%s', which is not a text filter"
+                    % (f.executable or '?'))
+
+    if facts[0].verb in READ_ONLY_VERBS or _is_real_dry_run(segments):
+        return ''
+
+    # Unknown or absent operation.
+    if facts[0].verb is None:
+        return 'no recognised read verb was found in it'
+    return "'%s' is not a recognised read-only operation" % facts[0].verb
+
+
 def is_read_only_command(command: str) -> bool:
     """Whether *command* only reads, and is therefore allowed in Ask mode.
 
@@ -402,43 +480,4 @@ def is_read_only_command(command: str) -> bool:
 
     Defaults to False: anything unrecognised is not read-only.
     """
-    segments = split_segments(command)
-    if not segments:
-        # Unparseable, empty, or a redirection -- fail closed.
-        return False
-
-    facts = [analyze_segment(seg) for seg in segments]
-
-    # Flag names gate the command (`--with-decryption`, `--dry-run`) but must
-    # never provide a read-only verb, so they are collected separately.
-    flag_names = {
-        t.split('=', 1)[0].lower() for seg in segments for t in seg
-        if t.startswith('-') and t != '--'
-    }
-
-    if _is_credential_read(facts, flag_names):
-        return False
-
-    # A write verb anywhere in any segment's operation disqualifies the whole
-    # command, not just the first verb: a service name can be spelled like a read
-    # verb (`aws logs delete-log-group`) and hide the mutation behind it.
-    if any(f.write_verb for f in facts):
-        return False
-
-    # A wrapper as the leading program means the operation classified above is
-    # not the one that runs.
-    if facts[0].executable in COMMAND_WRAPPERS:
-        return False
-
-    # Every segment after the first must be a recognised read-only text filter.
-    if any(f.executable not in DOWNSTREAM_FILTERS for f in facts[1:]):
-        return False
-
-    # The leading command decides.
-    if facts[0].verb in READ_ONLY_VERBS:
-        return True
-    if _is_real_dry_run(segments):
-        return True
-
-    # Unknown or absent operation.
-    return False
+    return not describe_rejection(command)
