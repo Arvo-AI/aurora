@@ -426,8 +426,8 @@ def test_register_single_channel_resolves_the_workspace_when_not_given():
 
 
 def test_register_single_channel_prefers_the_callers_workspace():
-    """The member_joined_channel event carries the authoritative team_id — use it
-    rather than spending a DB + Vault round trip to re-derive it."""
+    """The member_joined_channel event carries the authoritative team_id — the row
+    must be tagged with that, not with a re-derived value."""
     client = MagicMock()
     client.get_channel_info.return_value = {"id": "C1", "name": "inc-payments"}
     dbcm, _cur = _db(fetchone_row=None)
@@ -438,7 +438,7 @@ def test_register_single_channel_prefers_the_callers_workspace():
         return "C1", True
 
     with patch.object(mod, "get_slack_client_for_user", return_value=client), \
-         patch.object(mod, "_team_id_for_user") as probe, \
+         patch.object(mod, "_team_id_for_user", return_value="T_DERIVED"), \
          patch.object(mod, "resolve_org", return_value="org"), \
          patch.object(mod, "set_rls_context", return_value="org"), \
          patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
@@ -447,7 +447,6 @@ def test_register_single_channel_prefers_the_callers_workspace():
         mod.register_single_channel("u1", "C1", team_id="T_FROM_EVENT")
 
     assert captured["team_id"] == "T_FROM_EVENT"
-    probe.assert_not_called()
 
 
 # --- _activate_channels (join-based) ----------------------------------------
@@ -484,6 +483,28 @@ def test_activate_channels_tags_rows_with_the_workspace():
 
     assert teams == ["T1", "T1", "T1"]
     assert probe.call_count == 1
+
+
+def test_register_single_channel_reuses_the_workspace_for_invalidation():
+    """Cache invalidation must not re-resolve the workspace: a bulk activate calls
+    register_single_channel per channel, so a lookup here is a DB + Vault round
+    trip per channel across a batch that can exceed a thousand."""
+    client = MagicMock()
+    client.get_channel_info.return_value = {"id": "C1", "name": "one"}
+    dbcm, _cur = _db(fetchone_row=None)
+    with patch.object(mod, "get_slack_client_for_user", return_value=client), \
+         patch.object(mod, "_team_id_for_user") as probe, \
+         patch.object(mod, "resolve_org", return_value="org"), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_upsert_channel", return_value=("C1", True)), \
+         patch.object(mod, "get_redis_client", return_value=MagicMock()) as redis_get, \
+         patch.object(mod, "_enqueue_metadata"):
+        mod.register_single_channel("u1", "C1", team_id="T1")
+
+    probe.assert_not_called()
+    # Still invalidated, under the caller's workspace.
+    redis_get.return_value.delete.assert_called_once_with("slack:available_channels:org:T1")
 
 
 def test_activate_channels_skips_unjoinable():
@@ -602,6 +623,7 @@ def test_workspace_channels_cache_hit_skips_slack():
     redis_client = MagicMock()
     redis_client.get.return_value = json.dumps([{"id": "C9", "name": "cached"}])
     with patch.object(mod, "resolve_org", return_value="org1"), \
+         patch.object(mod, "_team_id_for_user", return_value="T1"), \
          patch.object(mod, "get_redis_client", return_value=redis_client), \
          patch.object(mod, "get_slack_client_for_user", return_value=client):
         result = mod._fetch_workspace_channels("u1")
@@ -616,17 +638,67 @@ def test_workspace_channels_cache_miss_fetches_and_stores():
     redis_client = MagicMock()
     redis_client.get.return_value = None  # cold cache
     with patch.object(mod, "resolve_org", return_value="org1"), \
+         patch.object(mod, "_team_id_for_user", return_value="T1"), \
          patch.object(mod, "get_redis_client", return_value=redis_client), \
          patch.object(mod, "get_slack_client_for_user", return_value=client):
         result = mod._fetch_workspace_channels("u1")
 
     assert result == [{"id": "C1", "name": "one", "is_private": False}]
     client.list_all_channels.assert_called_once()
-    # Stored under an org-scoped key with a TTL (creds resolve org-wide, and a
-    # stale entry must expire rather than pin the picker forever).
+    # TTL so a stale entry expires rather than pinning the picker forever.
     key, ttl, _payload = redis_client.setex.call_args.args
-    assert key == "slack:available_channels:org1"
+    assert key == "slack:available_channels:org1:T1"
     assert ttl == mod.AVAILABLE_CHANNELS_CACHE_TTL
+
+
+def test_workspace_channels_cache_is_scoped_per_workspace():
+    """The listing is whatever the caller's token can see, and one org can connect
+    several Slack workspaces — an org-only key would serve workspace A's channels
+    to a user on workspace B."""
+    keys = []
+    redis_client = MagicMock()
+    redis_client.get.return_value = None
+    client = MagicMock()
+    client.list_all_channels.return_value = [{"id": "C1", "name": "one"}]
+
+    for team in ("T_ALPHA", "T_BETA"):
+        with patch.object(mod, "resolve_org", return_value="org1"), \
+             patch.object(mod, "_team_id_for_user", return_value=team), \
+             patch.object(mod, "get_redis_client", return_value=redis_client), \
+             patch.object(mod, "get_slack_client_for_user", return_value=client):
+            mod._fetch_workspace_channels("u1")
+        keys.append(redis_client.setex.call_args.args[0])
+
+    assert keys == ["slack:available_channels:org1:T_ALPHA",
+                    "slack:available_channels:org1:T_BETA"]
+
+
+def test_workspace_channels_does_not_cache_without_a_known_workspace():
+    """No workspace ID = no key that's provably safe to share, so go live to Slack
+    rather than risk reading or writing another workspace's listing."""
+    redis_client = MagicMock()
+    client = MagicMock()
+    client.list_all_channels.return_value = [{"id": "C1", "name": "one"}]
+    with patch.object(mod, "resolve_org", return_value="org1"), \
+         patch.object(mod, "_team_id_for_user", return_value=None), \
+         patch.object(mod, "get_redis_client", return_value=redis_client), \
+         patch.object(mod, "get_slack_client_for_user", return_value=client):
+        assert mod._fetch_workspace_channels("u1") == [{"id": "C1", "name": "one"}]
+
+    redis_client.get.assert_not_called()
+    redis_client.setex.assert_not_called()
+
+
+def test_invalidate_available_channels_cache_targets_the_workspace_key():
+    """Invalidation must clear the same key the read path uses, or a join/leave
+    stays invisible until the TTL expires."""
+    redis_client = MagicMock()
+    with patch.object(mod, "resolve_org", return_value="org1"), \
+         patch.object(mod, "_team_id_for_user", return_value="T1"), \
+         patch.object(mod, "get_redis_client", return_value=redis_client):
+        mod._invalidate_available_channels_cache("u1")
+
+    redis_client.delete.assert_called_once_with("slack:available_channels:org1:T1")
 
 
 def test_workspace_channels_survives_broken_redis():
@@ -634,6 +706,7 @@ def test_workspace_channels_survives_broken_redis():
     client = MagicMock()
     client.list_all_channels.return_value = [{"id": "C1", "name": "one"}]
     with patch.object(mod, "resolve_org", return_value="org1"), \
+         patch.object(mod, "_team_id_for_user", return_value="T1"), \
          patch.object(mod, "get_redis_client", side_effect=RuntimeError("redis down")), \
          patch.object(mod, "get_slack_client_for_user", return_value=client):
         assert mod._fetch_workspace_channels("u1") == [{"id": "C1", "name": "one"}]
@@ -648,6 +721,7 @@ def test_available_channels_filters_against_live_membership_on_cache_hit():
         {"id": "C2", "name": "two"},
     ])
     with patch.object(mod, "resolve_org", return_value="org1"), \
+         patch.object(mod, "_team_id_for_user", return_value="T1"), \
          patch.object(mod, "get_redis_client", return_value=redis_client), \
          patch.object(mod, "get_slack_client_for_user", return_value=MagicMock()):
         available = mod._list_available_channels("u1", {"C1"})
@@ -660,6 +734,7 @@ def test_workspace_channels_returns_none_when_slack_unreachable():
     client = MagicMock()
     client.list_all_channels.side_effect = RuntimeError("slack down")
     with patch.object(mod, "resolve_org", return_value="org1"), \
+         patch.object(mod, "_team_id_for_user", return_value="T1"), \
          patch.object(mod, "get_redis_client", return_value=None), \
          patch.object(mod, "get_slack_client_for_user", return_value=client):
         assert mod._fetch_workspace_channels("u1") is None

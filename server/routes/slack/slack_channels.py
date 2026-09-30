@@ -85,7 +85,8 @@ LIST_CHANNELS_CAP = 2000
 # and because Slack throttles per token, one person refreshing this page degrades
 # Slack for everyone in that org, incident notifications included. The set barely
 # changes minute to minute, so a short TTL removes the stampede without making
-# the picker meaningfully stale. Cache is keyed per org (creds resolve org-wide).
+# the picker meaningfully stale. Keyed per org AND workspace: the listing is what
+# the caller's token can see, and one org may connect several workspaces.
 AVAILABLE_CHANNELS_CACHE_TTL = 300
 
 
@@ -427,8 +428,9 @@ def register_single_channel(user_id: str, channel_id: str,
     # Tag the workspace even when the caller didn't pass one (the activate/restore
     # routes don't), so the description backfill can later tell which org member's
     # token is able to read this channel.
+    team_id = team_id or _team_id_for_user(user_id)
     ch = {**info, "channel_id": channel_id, "channel_name": info.get("name"),
-          "team_id": team_id or _team_id_for_user(user_id), "is_member": True}
+          "team_id": team_id, "is_member": True}
 
     org_id = resolve_org(user_id)
     try:
@@ -455,7 +457,8 @@ def register_single_channel(user_id: str, channel_id: str,
     if is_new and _cid:
         # Aurora is now a member, so the cached workspace listing is stale — this
         # channel must move out of the Inactive picker without waiting for the TTL.
-        _invalidate_available_channels_cache(user_id)
+        # Workspace passed through: the activate loop calls this per channel.
+        _invalidate_available_channels_cache(user_id, team_id)
         _enqueue_metadata(user_id, channel_id)
         logger.info("[slack_channels] registered joined channel %s", sanitize(channel_id))
     return bool(is_new)
@@ -557,16 +560,33 @@ def get_slack_channels(user_id):
         return jsonify({"error": "Failed to get Slack channels"}), 500
 
 
+def _available_channels_cache_key(user_id: str, team_id: str | None = None) -> str | None:
+    """Redis key for the cached workspace listing, or None if it can't be cached.
+
+    Scoped by org *and* workspace: the listing is whatever the caller's token can
+    see, and one org can connect several Slack workspaces — an org-only key would
+    serve workspace A's channels to a user on workspace B. Without a known
+    workspace there is no safe key, so the caller must go live to Slack.
+
+    ``team_id`` lets a caller that already resolved it skip the lookup (it's a DB
+    + Vault round trip, and the activate loop runs per channel).
+    """
+    org_id = resolve_org(user_id)
+    team_id = team_id or _team_id_for_user(user_id)
+    if not org_id or not team_id:
+        return None
+    return f"slack:available_channels:{org_id}:{team_id}"
+
+
 def _fetch_workspace_channels(user_id: str) -> list[dict] | None:
-    """Return the raw ``conversations.list`` result for the org, Redis-cached.
+    """Return the raw ``conversations.list`` result for the workspace, Redis-cached.
 
     Caches the *unfiltered* listing rather than the computed Inactive set: the
     member set changes as Aurora joins channels, so filtering after the cache
     read keeps the result correct even on a cache hit. Returns None if Slack
     couldn't be reached (callers must distinguish that from "no channels").
     """
-    org_id = resolve_org(user_id)
-    cache_key = f"slack:available_channels:{org_id}" if org_id else None
+    cache_key = _available_channels_cache_key(user_id)
 
     # Cache hit — skip Slack entirely.
     if cache_key:
@@ -607,19 +627,19 @@ def _fetch_workspace_channels(user_id: str) -> list[dict] | None:
     return all_channels
 
 
-def _invalidate_available_channels_cache(user_id: str) -> None:
-    """Drop the cached workspace listing for the user's org.
+def _invalidate_available_channels_cache(user_id: str, team_id: str | None = None) -> None:
+    """Drop the cached listing for the user's org + workspace.
 
     Called after Aurora joins/leaves channels so the Inactive picker reflects the
     change immediately instead of after the TTL.
     """
     try:
-        org_id = resolve_org(user_id)
-        if not org_id:
+        cache_key = _available_channels_cache_key(user_id, team_id)
+        if not cache_key:
             return
         client_redis = get_redis_client()
         if client_redis:
-            client_redis.delete(f"slack:available_channels:{org_id}")
+            client_redis.delete(cache_key)
     except Exception:
         logger.debug("[slack_channels] available-channels cache invalidation failed", exc_info=True)
 
