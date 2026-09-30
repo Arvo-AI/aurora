@@ -14,6 +14,11 @@ Two flavours live here, and the difference matters:
   ``org_id``. Request handlers must use these and pass the org from
   ``get_org_id_from_request()``, otherwise a multi-org user who switched orgs
   would read their default org's entries instead of their active org's.
+
+  The handler must also pin RLS to that *same* org
+  (``set_rls_context(..., org_id=org_id)``). These queries filter on ``org_id``
+  in SQL, but RLS filters independently on ``myapp.current_org_id`` — if the two
+  disagree the row is hidden and the query returns nothing, with no error.
 """
 
 import logging
