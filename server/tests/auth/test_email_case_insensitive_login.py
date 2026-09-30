@@ -35,8 +35,11 @@ _EMAIL_LOWER = "first.last@example.com"
 _EMAIL_MIXED = "First.Last@example.com"
 
 
-def _row(user_id, email, password, created_at, org_id):
-    """Build one users-table row in the shape login() unpacks."""
+def _row(user_id, email, password, org_id):
+    """Build one users-table row in the shape login() unpacks.
+
+    Age isn't a column here — `_FakeCursor` treats list order as created_at.
+    """
     return (
         user_id,
         email,
@@ -55,18 +58,18 @@ def _row(user_id, email, password, created_at, org_id):
 def duplicate_pair():
     """The admin-created row (older) and the self-registered row (newer)."""
     return [
-        _row("uid-admin", _EMAIL_LOWER, _ADMIN_PW, 1, "acme"),
-        _row("uid-self", _EMAIL_MIXED, _SELF_PW, 2, "acme-test"),
+        _row("uid-admin", _EMAIL_LOWER, _ADMIN_PW, "acme"),
+        _row("uid-self", _EMAIL_MIXED, _SELF_PW, "acme-test"),
     ]
 
 
 class _FakeCursor:
     """Stands in for a psycopg2 cursor, implementing just the login SELECT.
 
-    Replicates the server-side semantics the route depends on:
-    ``WHERE LOWER(u.email) = %s ORDER BY (u.email = %s) DESC, u.created_at ASC``
-    so the test exercises the real candidate ordering rather than a hardcoded
-    list.
+    Rows are listed oldest-first, standing in for ``created_at``. The ordering
+    is read off the query text rather than hardcoded, so dropping the
+    exact-case term from the route's ORDER BY fails these tests instead of
+    silently passing.
     """
 
     def __init__(self, rows):
@@ -75,10 +78,18 @@ class _FakeCursor:
 
     def execute(self, query, params=None):
         assert "LOWER(u.email) = %s" in query, "login must match on normalized email"
-        normalized, raw = params
-        matches = [r for r in self._rows if r[1].lower() == normalized]
-        # Exact-case row first, then oldest — mirrors the ORDER BY clause.
-        self._result = sorted(matches, key=lambda r: (r[1] != raw, r[_COLS.index("id")]))
+        assert query.count("%s") == len(params), "placeholders must match params"
+
+        exact_case_first = "(u.email = %s) DESC" in query
+        normalized = params[0]
+        raw = params[1] if exact_case_first else None
+
+        # enumerate() index is the created_at proxy: lower means older.
+        matches = [
+            (age, r) for age, r in enumerate(self._rows) if r[1].lower() == normalized
+        ]
+        matches.sort(key=lambda p: (exact_case_first and p[1][1] != raw, p[0]))
+        self._result = [r for _age, r in matches]
 
     def fetchall(self):
         return self._result
@@ -156,6 +167,43 @@ def test_surrounding_whitespace_is_stripped(login_client):
     assert _login(login_client, f"  {_EMAIL_MIXED} ", _SELF_PW) == (200, "uid-self")
 
 
+def test_shared_password_resolves_to_the_case_the_user_typed(monkeypatch):
+    """Both duplicates share a password, so only the typed case can break the tie.
+
+    The password loop can't choose here — it matches both rows. Without the
+    exact-case term in the ORDER BY, the caller silently lands on the older
+    (admin-created) row instead of the account they actually use.
+    """
+    for heavy in ("celery_config", "celery", "routes.audit_routes"):
+        if heavy not in sys.modules:
+            sys.modules[heavy] = MagicMock()
+    sys.modules["routes.audit_routes"].record_audit_event = MagicMock()
+
+    from flask import Flask
+
+    from routes import auth_routes
+
+    shared_pw = "SharedChosenPw3"
+    rows = [
+        _row("uid-admin", _EMAIL_LOWER, shared_pw, "acme"),
+        _row("uid-self", _EMAIL_MIXED, shared_pw, "acme-test"),
+    ]
+    fake_conn = MagicMock()
+    fake_conn.cursor.return_value = _FakeCursor(rows)
+    monkeypatch.setattr(auth_routes, "connect_to_db_as_user", lambda: fake_conn)
+    monkeypatch.setattr(auth_routes, "record_audit_event", MagicMock())
+
+    application = Flask(__name__)  # NOSONAR — test-local app
+    application.register_blueprint(auth_routes.auth_bp)
+    client = application.test_client()
+
+    # Typed exactly as each row is stored — each reaches its own account.
+    assert _login(client, _EMAIL_MIXED, shared_pw) == (200, "uid-self")
+    assert _login(client, _EMAIL_LOWER, shared_pw) == (200, "uid-admin")
+    # No exact-case match, so the oldest row is the documented fallback.
+    assert _login(client, _EMAIL_MIXED.upper(), shared_pw) == (200, "uid-admin")
+
+
 def test_lowercase_only_account_is_reachable_when_typed_capitalized(monkeypatch):
     """The original lockout: one lowercase row, user types it capitalized."""
     for heavy in ("celery_config", "celery", "routes.audit_routes"):
@@ -167,7 +215,7 @@ def test_lowercase_only_account_is_reachable_when_typed_capitalized(monkeypatch)
 
     from routes import auth_routes
 
-    only_row = [_row("uid-admin", _EMAIL_LOWER, _ADMIN_PW, 1, "acme")]
+    only_row = [_row("uid-admin", _EMAIL_LOWER, _ADMIN_PW, "acme")]
     fake_conn = MagicMock()
     fake_conn.cursor.return_value = _FakeCursor(only_row)
     monkeypatch.setattr(auth_routes, "connect_to_db_as_user", lambda: fake_conn)
@@ -258,9 +306,9 @@ def test_corrupt_hash_on_first_candidate_does_not_block_the_second(monkeypatch):
     from routes import auth_routes
 
     # Exact-case row is ordered first but carries a truncated hash.
-    corrupt = list(_row("uid-corrupt", _EMAIL_MIXED, _ADMIN_PW, 1, "orgA"))
-    corrupt[3] = corrupt[3][:20]
-    rows = [tuple(corrupt), _row("uid-good", _EMAIL_LOWER, _SELF_PW, 2, "orgB")]
+    corrupt = list(_row("uid-corrupt", _EMAIL_MIXED, _ADMIN_PW, "orgA"))
+    corrupt[_COLS.index("password_hash")] = corrupt[_COLS.index("password_hash")][:20]
+    rows = [tuple(corrupt), _row("uid-good", _EMAIL_LOWER, _SELF_PW, "orgB")]
 
     fake_conn = MagicMock()
     fake_conn.cursor.return_value = _FakeCursor(rows)

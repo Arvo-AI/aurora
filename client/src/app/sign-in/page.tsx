@@ -35,13 +35,6 @@ const taglines: Record<AuthMode, { line1: string; line2: string; desc: string }>
   },
 }
 
-// Mobile keyboards autocapitalize the first letter and password managers
-// replay whatever case was first typed. The backend stores and compares a
-// lowercase form, so normalize here too — otherwise "Me@x.com" and "me@x.com"
-// look like two different accounts. Stops the bug at the source rather than
-// relying only on the server-side fallback.
-const normalizeEmail = (value: string) => value.trim().toLowerCase()
-
 function getInitialMode(searchParams: URLSearchParams): AuthMode {
   const mode = searchParams.get("mode")
   if (mode === "signup") return "signup"
@@ -169,7 +162,10 @@ function AuthPage() {
     setError("")
     setIsLoading(true)
     try {
-      const result = await signIn("credentials", { email: normalizeEmail(email), password, redirect: false })
+      // Sent as typed: the backend lowercases for the lookup, and its
+      // exact-case tie-break can only order legacy duplicates correctly if the
+      // original capitalization survives the round trip.
+      const result = await signIn("credentials", { email, password, redirect: false })
       if (result?.error) {
         setError("Invalid email or password")
       } else if (result?.ok) {
@@ -199,14 +195,14 @@ function AuthPage() {
       const response = await fetch('/api/auth/register', {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: normalizeEmail(email), password, name, org_name: orgName.trim() })
+        body: JSON.stringify({ email, password, name, org_name: orgName.trim() })
       })
       if (!response.ok) {
         const data = await response.json()
         setError(data.error || "Registration failed")
         return
       }
-      const result = await signIn("credentials", { email: normalizeEmail(email), password, redirect: false })
+      const result = await signIn("credentials", { email, password, redirect: false })
       if (result?.ok) {
         sessionStorage.removeItem("aurora_onboarding_state")
         sessionStorage.removeItem("aurora_onboarding_queue")
@@ -282,9 +278,6 @@ function AuthPage() {
       })
       const data = await response.json()
       if (!response.ok) { setError(data.error || "Failed to change password"); return }
-      // Not normalized: this comes from the session (i.e. the canonical stored
-      // row), not from a keyboard, and the exact-case value is the best
-      // candidate-ordering hint if legacy duplicates exist for this address.
       const userEmail = session?.user?.email
       if (!userEmail) { setError("Session expired. Please sign in again."); return }
       const result = await signIn("credentials", { email: userEmail, password: newPassword, redirect: false })
