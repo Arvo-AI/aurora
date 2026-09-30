@@ -1489,6 +1489,7 @@ async def _execute_background_chat(
             is_hpa_vpa_action=_is_hpa_vpa_action,
             is_pr_review=_is_pr_review,
             rca_context=rca_context,
+            trigger_source=_tm_source or None,
             permitted_tools=_resolve_permitted_tools(user_id),
         )
         logger.info(

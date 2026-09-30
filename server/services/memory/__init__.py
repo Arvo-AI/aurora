@@ -21,6 +21,11 @@ INCIDENT_INDEX_TITLE = "Incident Index"
 SLACK_MEMORY_CATEGORY = "context"
 SLACK_MEMORY_TITLE = "Slack"
 
+# Background-session sources that speak in Slack and must always have this
+# memory injected (not left to the LLM memory selector): @mention replies and
+# the post-RCA team-routing agent that picks which team channels to post to.
+SLACK_POLICY_SOURCES = frozenset({"slack", "team_routing"})
+
 # Well-known entries whose (category, title) pair IS their stable identity —
 # seeders, the agent's prompt injector, and route lookups all pin to it rather
 # than to an id. Users may freely edit their content and description, but renaming,
