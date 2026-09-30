@@ -12,8 +12,9 @@ Two flavours live here, and the difference matters:
   have no Flask request context.
 * ``fetch_entry_by_*`` take an already-open ``cursor`` plus an explicit
   ``org_id``. Request handlers must use these and pass the org from
-  ``get_org_id_from_request()``, otherwise a multi-org user who switched orgs
-  would read their default org's entries instead of their active org's.
+  ``get_org_id_from_request()`` — the org RBAC authorized — rather than letting
+  it be re-resolved from ``users.org_id``, which can lag behind while an org
+  reassignment propagates.
 
   The handler must also pin RLS to that *same* org
   (``set_rls_context(..., org_id=org_id)``). These queries filter on ``org_id``

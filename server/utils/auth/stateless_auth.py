@@ -673,12 +673,14 @@ def set_rls_context(
     Returns the org_id on success, or None (and logs an error) when the org
     cannot be resolved — callers should abort persistence in that case.
 
-    Pass ``org_id`` from a request handler that already resolved the caller's
-    ACTIVE org via ``get_org_id_from_request()`` (the X-Org-ID header). Without it
-    the org comes from the user row, which is the user's *default* org — for a
-    user who switched orgs that pins RLS to a different org than the handler
-    filters on, so every query silently matches zero rows. Omit it in Celery /
-    background callers, which have no request to resolve an active org from.
+    Pass ``org_id`` from a request handler that already resolved it via
+    ``get_org_id_from_request()`` (the X-Org-ID header, from the Auth.js session).
+    Without it the org comes from ``users.org_id``, and the two can disagree while
+    a reassignment propagates — a stale JWT still carrying the old org, or this
+    function's own 5-minute cache lagging a new one. RLS then filters a different
+    org than the handler's WHERE clause, so queries silently match zero rows.
+    Handlers should pin both to the org RBAC authorized. Omit it in Celery /
+    background callers, which have no request to read the header from.
     """
     if org_id is None:
         org_id = get_org_id_for_user(user_id)

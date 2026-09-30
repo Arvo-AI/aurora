@@ -71,11 +71,12 @@ def seed_slack_memory(user_id: str, org_id: str | None = None) -> bool:
     """Create the default "Slack" memory for an org if absent (idempotent,
     non-destructive). Returns True if a new entry was created.
 
-    ``org_id`` should be passed by request handlers, which resolve the caller's
-    ACTIVE org from the request (``get_org_id_from_request``). Omitting it falls
-    back to resolving the user's org from the DB — correct for background/OAuth
-    callers with no request context, but that lookup is TTL-cached and can lag a
-    recent org change, which would seed one org while the caller reads another.
+    ``org_id`` should be passed by request handlers, which resolve it from the
+    request (``get_org_id_from_request``) so the seed lands in the same org the
+    caller reads back. Omitting it falls back to ``users.org_id`` — correct for
+    background/OAuth callers with no request context, but that lookup is
+    TTL-cached and can lag an org reassignment, seeding one org while the caller
+    reads another.
     """
     if not user_id:
         return False

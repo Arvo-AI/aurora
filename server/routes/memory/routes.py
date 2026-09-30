@@ -416,17 +416,16 @@ def get_slack_memory(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            # Pin RLS to the org from the request, not the user's default org —
-            # otherwise an org-switched caller reads a different org than it filters on.
+            # Pin RLS to the same org the WHERE clause filters on (and that RBAC
+            # authorized) — if they disagree, RLS hides the row and this 500s.
             set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
             entry = fetch_entry_by_title(
                 cursor, org_id, SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE
             )
 
         # Missing — seed the default policy, then read it back on a fresh
-        # connection (seeding commits on its own admin connection). Pass the
-        # request's active org so a user who switched orgs seeds the org they're
-        # actually looking at, not whichever one the user row resolves to.
+        # connection (seeding commits on its own admin connection). Seed into the
+        # same org this read filtered on, so the re-read below can actually see it.
         if entry is None:
             seed_slack_memory(user_id, org_id=org_id)
             with db_pool.get_user_connection() as conn:
