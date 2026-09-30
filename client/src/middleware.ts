@@ -17,6 +17,8 @@ const publicRoutes = [
   "/api/auth/register",   // Public registration endpoint
   "/api/auth/verify-email", // Email verification
   "/api/auth/resend-verification", // Resend verification code
+  "/api/auth/forgot-password", // Reset-code request (caller is locked out)
+  "/api/auth/reset-password", // Reset completion (emailed code is the proof)
   "/google-chat/events",  // Google Chat event POSTs (rewritten to backend)
   "/api/ping",            // Connection health check
 ]

@@ -5,6 +5,7 @@ Replaces the previous authentication system.
 import logging
 from routes.audit_routes import record_audit_event
 import hashlib
+import hmac
 import re
 import secrets
 from datetime import datetime, timedelta
@@ -24,7 +25,17 @@ FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 VERIFICATION_CODE_EXPIRY_MINUTES = 15
 RESEND_COOLDOWN_MINUTES = 1
+PASSWORD_RESET_CODE_EXPIRY_MINUTES = 15
+PASSWORD_RESET_MAX_ATTEMPTS = 5
 _SERVER_ERROR = "Server error"
+
+# Returned for every /forgot-password outcome — found, not found, or send
+# failure — so the endpoint can't be used to enumerate which emails have
+# accounts.
+_RESET_REQUESTED_MESSAGE = (
+    "If an account exists for that email, we've sent a reset code. "
+    "Check your spam folder if you don't see it."
+)
 
 SLUG_REGEX = re.compile(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$')
 ORG_NAME_REGEX = re.compile(r"^[\w\s\-\.,'&()]+$", re.UNICODE)
@@ -35,6 +46,39 @@ def _name_to_slug(name: str) -> str:
     if len(slug) < 2:
         slug = slug + '-org'
     return slug
+
+
+def _generate_code() -> tuple[str, str]:
+    """Return a fresh 6-digit code and its SHA-256 hex digest.
+
+    Only the digest is persisted, so a database read can't be replayed as a
+    valid code.
+    """
+    code = f"{secrets.randbelow(1000000):06d}"
+    return code, hashlib.sha256(code.encode()).hexdigest()
+
+
+def _find_user_for_email(cursor, email: str):
+    """Resolve an email to ``(user_id, email)``, or None when ambiguous/absent.
+
+    Exact match wins. Only if nothing matches exactly do we retry
+    case-insensitively, and then only when exactly one row matches: legacy
+    mixed-case duplicates exist, and mailing a reset code for a row the sender
+    didn't mean is worse than asking them to use the exact address they signed
+    up with.
+    """
+    cursor.execute("SELECT id, email FROM users WHERE email = %s", (email,))
+    row = cursor.fetchone()
+    if row:
+        return row
+
+    # No exact row — fall back to a case-insensitive match.
+    cursor.execute(
+        "SELECT id, email FROM users WHERE LOWER(email) = LOWER(%s) LIMIT 2",
+        (email,),
+    )
+    rows = cursor.fetchall()
+    return rows[0] if len(rows) == 1 else None
 
 
 def send_verification_email(user_id: str, email: str) -> bool:
@@ -56,8 +100,7 @@ def send_verification_email(user_id: str, email: str) -> bool:
                 c.commit()
         return True
 
-    code = f"{secrets.randbelow(1000000):06d}"
-    code_hash = hashlib.sha256(code.encode()).hexdigest()
+    code, code_hash = _generate_code()
     expires = datetime.now() + timedelta(minutes=VERIFICATION_CODE_EXPIRY_MINUTES)
 
     with db_pool.get_admin_connection() as c:
@@ -71,6 +114,39 @@ def send_verification_email(user_id: str, email: str) -> bool:
             c.commit()
 
     return email_svc.send_account_verification_email(email, code)
+
+
+def send_password_reset_email(user_id: str, email: str) -> bool:
+    """Generate a password reset code, store its hash, and email it.
+
+    Unlike verification there is no auto-approve fallback when SMTP is
+    unconfigured: a reset with no email to prove inbox ownership would let
+    anyone take over any account. Callers get False and must surface an error.
+
+    Returns True if the email was sent, False otherwise.
+    """
+    from utils.notifications.email_service import get_email_service
+
+    try:
+        email_svc = get_email_service()
+    except ValueError:
+        logging.warning("Password reset requested but SMTP is not configured")
+        return False
+
+    code, code_hash = _generate_code()
+    expires = datetime.now() + timedelta(minutes=PASSWORD_RESET_CODE_EXPIRY_MINUTES)
+
+    with db_pool.get_admin_connection() as c:
+        with c.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET password_reset_code = %s, "
+                "password_reset_code_expires_at = %s, password_reset_attempts = 0 "
+                "WHERE id = %s",
+                (code_hash, expires, user_id),
+            )
+            c.commit()
+
+    return email_svc.send_password_reset_email(email, code)
 
 
 @auth_bp.after_request
@@ -575,6 +651,160 @@ def change_password(user_id):
     except Exception as e:
         logging.error(f"Error changing password: {e}")
         return jsonify({"error": "Password change failed"}), 500
+
+
+@auth_bp.route('/forgot-password', methods=['POST'])
+@limiter.limit("5 per minute;20 per hour")
+def forgot_password():
+    """Email a one-time reset code to the address in the body.
+
+    Body: { email }. Unauthenticated by design — the code mailed to the
+    address is the proof of ownership. Always returns the same 200 message so
+    the endpoint can't be used to discover which emails have accounts; the real
+    outcome is only visible in the audit log and server logs.
+    """
+    generic = jsonify({"message": _RESET_REQUESTED_MESSAGE}), 200
+    try:
+        data = request.get_json(silent=True) or {}
+        raw_email = data.get('email')
+        email = raw_email.strip() if isinstance(raw_email, str) else ''
+
+        if not email or len(email) > 254:
+            return generic
+
+        conn = connect_to_db_as_user()
+        try:
+            with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
+                row = _find_user_for_email(cursor, email)
+        finally:
+            conn.close()
+
+        # No account (or an ambiguous case-variant match) — say nothing.
+        if not row:
+            logging.info(
+                "Password reset requested for an address with no unique account"
+            )
+            return generic
+
+        user_id, user_email = row[0], row[1]
+
+        if not send_password_reset_email(user_id, user_email):
+            logging.warning("Failed to send password reset email for user %s", user_id)
+            return generic
+
+        from utils.auth.stateless_auth import resolve_org_id
+        record_audit_event(
+            resolve_org_id(user_id) or "", user_id,
+            "password_reset_requested", "user", user_id, {}, request,
+        )
+        return generic
+    except Exception:
+        logging.exception("Error in /forgot-password")
+        # Still generic: an internal failure must not become a signal that
+        # distinguishes existing accounts from missing ones.
+        return generic
+
+
+@auth_bp.route('/reset-password', methods=['POST'])
+@limiter.limit("10 per minute;30 per hour")
+def reset_password():
+    """Set a new password using the code from /forgot-password.
+
+    Body: { email, code, newPassword }. Unauthenticated — possession of the
+    code proves inbox ownership. A correct code also marks the email verified,
+    since delivery just demonstrated the address works.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        raw_email = data.get('email')
+        email = raw_email.strip() if isinstance(raw_email, str) else ''
+        code = data.get('code')
+        code = code.strip() if isinstance(code, str) else ''
+        new_password = data.get('newPassword')
+
+        if not email or not code:
+            return jsonify({"error": "Email and code are required"}), 400
+
+        if len(code) != 6 or not code.isdigit():
+            return jsonify({"error": "Invalid or expired reset code"}), 400
+
+        # A non-string password would raise on len()/.encode(), turning a bad
+        # request into a 500.
+        if not isinstance(new_password, str):
+            return jsonify({"error": "New password is required"}), 400
+
+        if len(new_password) < 8:
+            return jsonify({"error": "New password must be at least 8 characters"}), 400
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                row = _find_user_for_email(cursor, email)
+                if not row:
+                    return jsonify({"error": "Invalid or expired reset code"}), 400
+
+                user_id = row[0]
+                cursor.execute(
+                    "SELECT password_reset_code, password_reset_code_expires_at, "
+                    "COALESCE(password_reset_attempts, 0) FROM users WHERE id = %s",
+                    (user_id,),
+                )
+                reset_row = cursor.fetchone()
+                if not reset_row:
+                    return jsonify({"error": "Invalid or expired reset code"}), 400
+
+                stored_hash, expires_at, attempts = reset_row
+
+                # No code was ever issued for this account.
+                if not stored_hash:
+                    return jsonify({"error": "Invalid or expired reset code"}), 400
+
+                if attempts >= PASSWORD_RESET_MAX_ATTEMPTS:
+                    return jsonify({
+                        "error": "Too many attempts. Please request a new code."
+                    }), 429
+
+                if expires_at and datetime.now() > expires_at:
+                    return jsonify({"error": "Invalid or expired reset code"}), 400
+
+                code_hash = hashlib.sha256(code.encode()).hexdigest()
+                # compare_digest, not ==, so a wrong code can't be narrowed down
+                # byte-by-byte from response timing.
+                if not hmac.compare_digest(stored_hash, code_hash):
+                    cursor.execute(
+                        "UPDATE users SET password_reset_attempts = "
+                        "COALESCE(password_reset_attempts, 0) + 1 WHERE id = %s",
+                        (user_id,),
+                    )
+                    conn.commit()
+                    return jsonify({"error": "Invalid or expired reset code"}), 400
+
+                # Code verified. Clear it in the same statement that sets the
+                # password so it can't be replayed, and drop
+                # must_change_password — the user just chose this password.
+                new_hash = bcrypt.hashpw(
+                    new_password.encode('utf-8'), bcrypt.gensalt()
+                ).decode('utf-8')
+                cursor.execute(
+                    "UPDATE users SET password_hash = %s, must_change_password = FALSE, "
+                    "email_verified = TRUE, password_reset_code = NULL, "
+                    "password_reset_code_expires_at = NULL, password_reset_attempts = 0 "
+                    "WHERE id = %s",
+                    (new_hash, user_id),
+                )
+                conn.commit()
+
+        logging.info("Password reset completed for user %s", user_id)
+
+        from utils.auth.stateless_auth import resolve_org_id
+        record_audit_event(
+            resolve_org_id(user_id) or "", user_id,
+            "password_reset", "user", user_id, {}, request,
+        )
+        return jsonify({"message": "Password reset successfully"}), 200
+    except Exception:
+        logging.exception("Error in /reset-password")
+        return jsonify({"error": "Password reset failed"}), 500
 
 
 @auth_bp.route('/me', methods=['GET'])

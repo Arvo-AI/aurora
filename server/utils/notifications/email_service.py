@@ -423,35 +423,67 @@ View full report: {incident_url}{self._text_footer()}"""
         
         return self._send_email(to_email, subject, html_body, text_body)
     
-    def send_verification_code_email(
+    # Shown on every code email. Transactional 6-digit codes are the most
+    # frequently spam-filtered mail we send, and a user who never finds the
+    # code is indistinguishable (to them) from a broken signup.
+    SPAM_FOLDER_NOTICE = (
+        "Don't see the email? Check your spam or junk folder — "
+        "it can take a minute to arrive."
+    )
+
+    def _code_email(
         self,
         to_email: str,
-        verification_code: str
+        subject: str,
+        heading: str,
+        intro: str,
+        code: str,
+        closing: str,
+        footer_tagline: str,
+        code_label: str = "Enter this verification code in Aurora:",
     ) -> bool:
-        """
-        Send email verification code for RCA notification recipients.
-        
+        """Render and send a one-time-code email (verification, reset, …).
+
+        All code emails share the same layout, so only the copy differs. Kept as
+        one builder so a fix to the markup (or the spam-folder notice) applies
+        to every code email instead of one copy of three.
+
         Args:
-            to_email: Email address to verify
-            verification_code: 6-digit verification code
-            
+            to_email: Recipient address
+            subject: Email subject line
+            heading: Header banner text
+            intro: Lead paragraph explaining why the code was sent
+            code: The 6-digit code itself
+            closing: Final paragraph, typically "if you didn't request this…"
+            footer_tagline: Product tagline rendered in the footer
+            code_label: Sentence directly above the code box
+
         Returns:
-            True if email sent successfully, False otherwise
+            True if the email was sent successfully, False otherwise
         """
-        subject = "[Aurora] Verify Your Email for RCA Notifications"
-        
-        # Plain text version
-        text_body = f"""VERIFY YOUR EMAIL
+        # Everything interpolated below is either a literal from the caller or
+        # a generated numeric code, but escape anyway so a future caller that
+        # threads user input through can't inject markup.
+        heading_html = html.escape(heading)
+        intro_html = html.escape(intro)
+        code_label_html = html.escape(code_label)
+        code_html = html.escape(code)
+        closing_html = html.escape(closing)
+        footer_tagline_html = html.escape(footer_tagline)
+        spam_notice_html = html.escape(self.SPAM_FOLDER_NOTICE)
 
-You've requested to receive Aurora RCA investigation notifications at this email address.
+        text_body = f"""{heading.upper()}
 
-Your verification code is: {verification_code}
+{intro}
+
+Your verification code is: {code}
 
 This code will expire in 15 minutes.
 
-If you didn't request this, you can safely ignore this email.{self._text_footer()}"""
-        
-        # HTML version with professional styling
+{self.SPAM_FOLDER_NOTICE}
+
+{closing}{self._text_footer()}"""
+
         html_body = f"""
 <!DOCTYPE html>
 <html>
@@ -467,43 +499,47 @@ If you didn't request this, you can safely ignore this email.{self._text_footer(
                     <!-- Header -->
                     <tr>
                         <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
-                            <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 600;">Verify Your Email</h1>
+                            <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 600;">{heading_html}</h1>
                         </td>
                     </tr>
-                    
+
                     <!-- Content -->
                     <tr>
                         <td style="padding: 40px 30px;">
                             <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-                                You've requested to receive Aurora RCA investigation notifications at this email address.
+                                {intro_html}
                             </p>
-                            
+
                             <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-                                Enter this verification code in Aurora:
+                                {code_label_html}
                             </p>
-                            
+
                             <!-- Verification Code Box -->
                             <div style="background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%); border-radius: 8px; padding: 30px; text-align: center; margin: 0 0 30px 0;">
                                 <div style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #1f2937; font-family: 'Courier New', monospace;">
-                                    {verification_code}
+                                    {code_html}
                                 </div>
                             </div>
-                            
+
                             <p style="margin: 0 0 20px 0; color: #6b7280; font-size: 14px; line-height: 1.6;">
-                                ⏱️ This code will expire in <strong>15 minutes</strong>.
+                                This code will expire in <strong>15 minutes</strong>.
                             </p>
-                            
+
+                            <p style="margin: 0 0 20px 0; color: #6b7280; font-size: 14px; line-height: 1.6;">
+                                {spam_notice_html}
+                            </p>
+
                             <p style="margin: 0; color: #6b7280; font-size: 14px; line-height: 1.6;">
-                                If you didn't request this, you can safely ignore this email.
+                                {closing_html}
                             </p>
                         </td>
                     </tr>
-                    
+
                     <!-- Footer -->
                     <tr>
                         <td style="background-color: #f9fafb; padding: 30px; text-align: center; border-top: 1px solid #e5e7eb;">
                             <p style="margin: 0; color: #9ca3af; font-size: 12px;">
-                                Aurora AI - Root Cause Analysis Platform
+                                {footer_tagline_html}
                             </p>
                         </td>
                     </tr>
@@ -514,8 +550,36 @@ If you didn't request this, you can safely ignore this email.{self._text_footer(
 </body>
 </html>
 """
-        
+
         return self._send_email(to_email, subject, html_body, text_body)
+
+    def send_verification_code_email(
+        self,
+        to_email: str,
+        verification_code: str
+    ) -> bool:
+        """
+        Send email verification code for RCA notification recipients.
+
+        Args:
+            to_email: Email address to verify
+            verification_code: 6-digit verification code
+
+        Returns:
+            True if email sent successfully, False otherwise
+        """
+        return self._code_email(
+            to_email=to_email,
+            subject="[Aurora] Verify Your Email for RCA Notifications",
+            heading="Verify Your Email",
+            intro=(
+                "You've requested to receive Aurora RCA investigation "
+                "notifications at this email address."
+            ),
+            code=verification_code,
+            closing="If you didn't request this, you can safely ignore this email.",
+            footer_tagline="Aurora AI - Root Cause Analysis Platform",
+        )
 
     def send_account_verification_email(
         self,
@@ -531,82 +595,52 @@ If you didn't request this, you can safely ignore this email.{self._text_footer(
         Returns:
             True if email sent successfully, False otherwise
         """
-        subject = "[Aurora] Verify Your Account"
+        return self._code_email(
+            to_email=to_email,
+            subject="[Aurora] Verify Your Account",
+            heading="Verify Your Account",
+            intro=(
+                "Welcome to Aurora! Please verify your email address to "
+                "complete your account setup."
+            ),
+            code=verification_code,
+            closing=(
+                "If you didn't create an Aurora account, you can safely "
+                "ignore this email."
+            ),
+            footer_tagline="Aurora AI - Intelligent Cloud Operations",
+        )
 
-        text_body = f"""VERIFY YOUR ACCOUNT
+    def send_password_reset_email(
+        self,
+        to_email: str,
+        reset_code: str
+    ) -> bool:
+        """Send a password reset code to a user who used "Forgot password".
 
-Welcome to Aurora! Please verify your email address to complete your account setup.
+        Args:
+            to_email: Address that requested the reset
+            reset_code: 6-digit reset code
 
-Your verification code is: {verification_code}
-
-This code will expire in 15 minutes.
-
-If you didn't create an Aurora account, you can safely ignore this email.{self._text_footer()}"""
-
-        html_body = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f5f5f5;">
-    <table role="presentation" style="width: 100%; border-collapse: collapse;">
-        <tr>
-            <td style="padding: 40px 20px;">
-                <table role="presentation" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-                    <!-- Header -->
-                    <tr>
-                        <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
-                            <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 600;">Verify Your Account</h1>
-                        </td>
-                    </tr>
-
-                    <!-- Content -->
-                    <tr>
-                        <td style="padding: 40px 30px;">
-                            <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-                                Welcome to Aurora! Please verify your email address to complete your account setup.
-                            </p>
-
-                            <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-                                Enter this verification code in Aurora:
-                            </p>
-
-                            <!-- Verification Code Box -->
-                            <div style="background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%); border-radius: 8px; padding: 30px; text-align: center; margin: 0 0 30px 0;">
-                                <div style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #1f2937; font-family: 'Courier New', monospace;">
-                                    {verification_code}
-                                </div>
-                            </div>
-
-                            <p style="margin: 0 0 20px 0; color: #6b7280; font-size: 14px; line-height: 1.6;">
-                                This code will expire in <strong>15 minutes</strong>.
-                            </p>
-
-                            <p style="margin: 0; color: #6b7280; font-size: 14px; line-height: 1.6;">
-                                If you didn't create an Aurora account, you can safely ignore this email.
-                            </p>
-                        </td>
-                    </tr>
-
-                    <!-- Footer -->
-                    <tr>
-                        <td style="background-color: #f9fafb; padding: 30px; text-align: center; border-top: 1px solid #e5e7eb;">
-                            <p style="margin: 0; color: #9ca3af; font-size: 12px;">
-                                Aurora AI - Intelligent Cloud Operations
-                            </p>
-                        </td>
-                    </tr>
-                </table>
-            </td>
-        </tr>
-    </table>
-</body>
-</html>
-"""
-
-        return self._send_email(to_email, subject, html_body, text_body)
+        Returns:
+            True if email sent successfully, False otherwise
+        """
+        return self._code_email(
+            to_email=to_email,
+            subject="[Aurora] Reset Your Password",
+            heading="Reset Your Password",
+            intro=(
+                "We received a request to reset the password for your Aurora "
+                "account."
+            ),
+            code=reset_code,
+            code_label="Enter this code in Aurora to choose a new password:",
+            closing=(
+                "If you didn't request a password reset, you can safely ignore "
+                "this email — your password has not been changed."
+            ),
+            footer_tagline="Aurora AI - Intelligent Cloud Operations",
+        )
 
     def send_action_started_email(
         self,
