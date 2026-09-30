@@ -1166,10 +1166,15 @@ def is_read_only_command(command: str) -> bool:
     Classification only looks at the *operation* — the positional arguments —
     so neither an option name nor an option value can supply the verb
     (`aws ec2 terminate-instances --query Reservations` stays blocked). Only the
-    *first* positional that looks like a verb decides the outcome, so a resource
+    *first* positional that looks like a verb decides a segment, so a resource
     name further right can't flip it (`kubectl logs update-cache-cronjob-xxx`
     stays read-only). A hyphenated operation matches on its leading word, so
     hyphenated diagnostic verbs work: `describe-health-check` → 'describe'.
+
+    The command is split into shell segments and every deny rule applies across
+    all of them, so a write behind `&&`, a pipe, a newline or a `$(...)` can't
+    ride in on a read-only first segment. Only the leading segment may carry the
+    read verb; the rest must be text filters. Anything unrecognised is refused.
     """
     READ_ONLY_VERBS = frozenset({
         'list', 'ls', 'describe', 'get', 'show', 'config', 'version', 'info',
