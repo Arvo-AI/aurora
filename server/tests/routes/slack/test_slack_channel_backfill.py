@@ -1,14 +1,8 @@
-"""Tests for the periodic Slack channel-description backfill.
+"""Tests for the periodic Slack channel-description backfill (issue #673).
 
-Agent routing only offers channels with ``metadata_status = 'ready'``, and
-descriptions were previously only enqueued by a user-triggered reconcile pass
-that is capped per pass — so in a large workspace the tail of Aurora's
-memberships never got described. These tests cover the beat task that closes
-that gap (see issue #673).
-
-These exercise ``_backfill_channel_descriptions`` (the implementation) rather
-than the ``@celery_app.task``-decorated wrapper: conftest stubs ``celery``, so
-the decorator yields a MagicMock and the real logic would never run.
+Routing only offers 'ready' channels, and descriptions were previously only
+enqueued by capped, user-triggered reconcile passes. These target
+``_backfill_channel_descriptions``, not the wrapper: conftest stubs ``celery``.
 """
 
 from pathlib import Path
@@ -40,12 +34,9 @@ def _run(users_by_org, rows_per_org, connected_users=None, rls_ok=True,
          claimed=None):
     """Run the backfill, returning (result, enqueued, mark_pending_calls).
 
-    ``rows_per_org`` is a list of row batches, consumed in org iteration order.
-    ``claimed`` optionally restricts which channel_ids the claiming UPDATE
-    reports as won (default: all of them).
-
-    The org rotation is pinned to dict order here so batches line up predictably;
-    the rotation itself is covered by its own tests below.
+    ``rows_per_org`` is consumed in org iteration order; ``claimed`` restricts
+    which channel_ids the UPDATE reports as won (default: all). Rotation is
+    pinned to dict order here and covered by its own tests below.
     """
     enqueued = []
     marked = []
@@ -327,10 +318,8 @@ def test_select_excludes_freshly_queued_pending_rows():
 def test_implementation_is_a_plain_function():
     """Regression guard for the tests above.
 
-    conftest stubs ``celery``, so ``@celery_app.task`` yields a MagicMock. If
-    these tests targeted the decorated wrapper they would exercise a mock and
-    pass while asserting nothing — which is exactly what happened before the
-    implementation was split out.
+    conftest stubs ``celery``, so ``@celery_app.task`` yields a MagicMock —
+    tests aimed at the wrapper would exercise a mock and pass vacuously.
     """
     import types
 

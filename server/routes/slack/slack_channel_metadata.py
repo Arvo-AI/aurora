@@ -271,9 +271,8 @@ def _rotate_orgs(org_ids: list[str], now: float | None = None) -> list[str]:
     """Rotate the org list so a different org leads each run.
 
     The sweep stops at a global cap, so a fixed order would let a few
-    large-backlog orgs consume it every run and starve the rest. The offset comes
-    from the clock rather than stored state, so it needs no cursor to migrate and
-    concurrent beat workers agree on the order.
+    large-backlog orgs consume it every run and starve the rest. Clock-derived so
+    there's no cursor to migrate and concurrent workers agree on the order.
     """
     if not org_ids:
         return []
@@ -287,10 +286,8 @@ def _select_undescribed_channels(cur, limit: int) -> list[tuple[str, str]]:
     """Return [(channel_id, owner_user_id)] for member channels still awaiting a
     description. Caller must have set the org's RLS context.
 
-    Longest-waiting first so repeated bounded runs drain the backlog. DISTINCT ON
-    de-dupes the row-per-member the table keeps for each channel. 'error' and
-    'limit_reached' are excluded on purpose — retrying a hard failure or a
-    cost-capped org on a timer just burns quota; those need an explicit regenerate.
+    Longest-waiting first so bounded runs drain the backlog; DISTINCT ON de-dupes
+    the row-per-member. 'error'/'limit_reached' excluded — retrying burns quota.
     """
     cur.execute(
         """SELECT channel_id, user_id FROM (
@@ -410,14 +407,8 @@ def _backfill_channel_descriptions():
     """Make sure EVERY member channel eventually gets described.
 
     Routing only offers 'ready' channels, but descriptions were otherwise only
-    enqueued by user-triggered reconcile passes that cap each pass — so in a large
-    workspace the tail past that cap stayed 'pending' forever unless a human kept
-    reloading the manage page. Each run here sweeps every org for the
-    longest-waiting channels and enqueues a bounded batch, so coverage converges
-    on its own.
-
-    DB-only by design (no Slack API calls), so running across all orgs on a timer
-    can't trip Slack's rate limits.
+    enqueued by capped, user-triggered reconcile passes, so a large workspace's
+    tail stayed 'pending' forever. DB-only, so a timer can't hit Slack's limits.
     """
     from routes.slack.slack_channels import _enqueue_metadata
 
