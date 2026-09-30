@@ -11,6 +11,7 @@ import time
 
 from celery_config import celery_app
 from chat.backend.agent.utils.message_content import extract_text_from_content
+from routes.slack.slack_backfill_config import BACKFILL_INTERVAL_SECONDS
 from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
@@ -40,11 +41,6 @@ BACKFILL_MAX_TOTAL = 200
 # whereas this runs unattended across every org, so it waits longer to be sure a
 # row is genuinely stuck rather than merely slow.
 BACKFILL_STALE_MINUTES = 15
-
-# Must match the beat interval in celery_config.py. Used only to rotate which org
-# leads each sweep (see _rotate_orgs); a drift between the two just makes the
-# rotation step unevenly, it cannot skip an org or double-enqueue.
-_BACKFILL_INTERVAL_SECONDS = 900
 
 
 def _update_metadata(user_id: str, channel_id: str, summary, status: str,
@@ -295,7 +291,7 @@ def _rotate_orgs(org_ids: list[str], now: float | None = None) -> list[str]:
         return []
     if now is None:
         now = time.time()
-    offset = int(now // _BACKFILL_INTERVAL_SECONDS) % len(org_ids)
+    offset = int(now // BACKFILL_INTERVAL_SECONDS) % len(org_ids)
     return org_ids[offset:] + org_ids[:offset]
 
 

@@ -261,7 +261,7 @@ def test_rotate_orgs_advances_with_the_beat_interval():
     """A fixed order would let the same few orgs consume the global cap every run
     and starve the rest, so the leading org rotates each interval."""
     orgs = ["a", "b", "c"]
-    interval = mod._BACKFILL_INTERVAL_SECONDS
+    interval = mod.BACKFILL_INTERVAL_SECONDS
     assert mod._rotate_orgs(orgs, now=0) == ["a", "b", "c"]
     assert mod._rotate_orgs(orgs, now=interval) == ["b", "c", "a"]
     assert mod._rotate_orgs(orgs, now=2 * interval) == ["c", "a", "b"]
@@ -272,7 +272,7 @@ def test_rotate_orgs_advances_with_the_beat_interval():
 def test_rotate_orgs_is_stable_within_one_interval():
     """Concurrent beat workers in the same window must agree on the order."""
     orgs = ["a", "b", "c"]
-    base = 10 * mod._BACKFILL_INTERVAL_SECONDS
+    base = 10 * mod.BACKFILL_INTERVAL_SECONDS
     assert mod._rotate_orgs(orgs, now=base) == mod._rotate_orgs(orgs, now=base + 1)
 
 
@@ -285,7 +285,7 @@ def test_rotate_orgs_preserves_every_org():
     """A rotation must never drop or duplicate an org."""
     orgs = [f"org{i}" for i in range(7)]
     for step in range(10):
-        rotated = mod._rotate_orgs(orgs, now=step * mod._BACKFILL_INTERVAL_SECONDS)
+        rotated = mod._rotate_orgs(orgs, now=step * mod.BACKFILL_INTERVAL_SECONDS)
         assert sorted(rotated) == sorted(orgs)
 
 
@@ -347,6 +347,22 @@ def test_backfill_is_registered_on_the_beat_schedule():
     source = (Path(__file__).resolve().parents[3] / "celery_config.py").read_text()
     assert "backfill-slack-channel-descriptions" in source
     assert "routes.slack.slack_channel_metadata.backfill_channel_descriptions" in source
+
+
+def test_beat_schedule_uses_the_shared_interval_constant():
+    """The beat interval and the rotation in ``_rotate_orgs`` must not drift.
+
+    ``_rotate_orgs`` offsets by ``now // BACKFILL_INTERVAL_SECONDS``, so if the
+    schedule were re-hardcoded to a multiple of it the offset would step by more
+    than one per run and could permanently skip orgs (step 2 over an even org
+    count visits only half) — the starvation the rotation exists to prevent.
+    This fails if anyone replaces the shared constant with a literal.
+    """
+    source = (Path(__file__).resolve().parents[3] / "celery_config.py").read_text()
+    entry = source.split("'backfill-slack-channel-descriptions'", 1)[1].split("},", 1)[0]
+    assert "'schedule': BACKFILL_INTERVAL_SECONDS" in entry, (
+        f"beat schedule must reference the shared constant, got: {entry!r}"
+    )
 
 
 # --- _assign_actors (credential selection in isolation) ---------------------
