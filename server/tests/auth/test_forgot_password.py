@@ -191,7 +191,8 @@ class TestForgotPasswordIsNotAnOracle:
         email_svc.send_password_reset_email.assert_called_once()
         sent_to, sent_code = email_svc.send_password_reset_email.call_args.args
         assert sent_to == _EMAIL
-        assert len(sent_code) == 6 and sent_code.isdigit()
+        assert len(sent_code) == 6
+        assert sent_code.isdigit()
 
     def test_only_the_hash_is_stored(self, reset_env):
         # A DB read must not yield a usable code.

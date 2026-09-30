@@ -50,14 +50,21 @@ const taglines: Record<AuthMode, { line1: string; line2: string; desc: string }>
 // it as a broken product rather than a misplaced email.
 const SPAM_FOLDER_HINT = "Don't see it? Check your spam or junk folder."
 
+// Kept out of the component: pure, easy to read as a list of rules, and keeps
+// the already-large AuthPage from growing more branches.
+function validateResetForm(code: string, password: string, confirmation: string): string | null {
+  if (code.length !== 6) return "Please enter the 6-digit code"
+  if (password.length < 8) return "New password must be at least 8 characters"
+  if (password !== confirmation) return "Passwords do not match"
+  return null
+}
+
+const AUTH_MODES = ["signup", "verify-email", "change-password", "forgot-password", "reset-password"] as const
+
 function getInitialMode(searchParams: URLSearchParams): AuthMode {
   const mode = searchParams.get("mode")
-  if (mode === "signup") return "signup"
-  if (mode === "verify-email") return "verify-email"
-  if (mode === "change-password") return "change-password"
-  if (mode === "forgot-password") return "forgot-password"
-  if (mode === "reset-password") return "reset-password"
-  return "signin"
+  // Anything unrecognized (or absent) lands on sign-in rather than a blank panel.
+  return AUTH_MODES.find((m) => m === mode) ?? "signin"
 }
 
 function AuthPage() {
@@ -352,9 +359,8 @@ function AuthPage() {
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
-    if (resetCode.length !== 6) { setError("Please enter the 6-digit code"); return }
-    if (newPassword.length < 8) { setError("New password must be at least 8 characters"); return }
-    if (newPassword !== confirmNewPassword) { setError("Passwords do not match"); return }
+    const validationError = validateResetForm(resetCode, newPassword, confirmNewPassword)
+    if (validationError) { setError(validationError); return }
     setIsLoading(true)
     try {
       const response = await fetch("/api/auth/reset-password", {
@@ -631,7 +637,7 @@ function AuthPage() {
                 <form className="space-y-4" onSubmit={handleForgotPassword}>
                   <div>
                     <label htmlFor="forgot-email" className="block text-xs font-medium text-[#888] mb-1.5">Email</label>
-                    <input id="forgot-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isLoading} autoFocus />
+                    <input id="forgot-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isLoading} />
                   </div>
                   {error && <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3"><p className="text-sm text-red-400">{error}</p></div>}
                   <button type="submit" disabled={isLoading} className="w-full py-2.5 px-4 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#0a0a0a] disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
