@@ -220,6 +220,71 @@ def test_real_dry_run_is_read_only(is_read_only, command):
 
 
 # ---------------------------------------------------------------------------
+# A service or command group can be spelled like a read verb (`aws logs`,
+# `az search`, `gcloud config`). Classifying on the *first* verb stopped there
+# and never reached the real operation, so these mutations read as read-only.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("command", [
+    "aws logs delete-log-group --log-group-name x",
+    "aws logs delete-log-stream --log-group-name g --log-stream-name s",
+    "aws logs create-log-group --log-group-name x",
+    "aws logs put-retention-policy --log-group-name x --retention-in-days 1",
+    "az search service delete --name s --resource-group g",
+    "az search service create --name s --resource-group g",
+    "az search service update --name s --resource-group g",
+    "gcloud config set account x",
+    "az config set core.output=json",
+    "aws logs put-subscription-filter --log-group-name g --filter-name f",
+])
+def test_write_behind_a_read_verb_service_name_is_blocked(is_read_only, command):
+    assert is_read_only(command) is False, command
+
+
+# ---------------------------------------------------------------------------
+# Scanning every positional must not break the reads that share those groups.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("command", [
+    "aws logs describe-log-groups",
+    "aws logs describe-log-streams --log-group-name g",
+    "aws logs filter-log-events --log-group-name /aws/lambda/x",
+    "aws logs tail /aws/lambda/x",
+    "az search service show --name s --resource-group g",
+    "gcloud config list",
+    "az config get core.output",
+    "kubectl config get-contexts",
+    "kubectl config view",
+])
+def test_reads_in_verb_named_groups_stay_allowed(is_read_only, command):
+    assert is_read_only(command) is True, command
+
+
+# ---------------------------------------------------------------------------
+# State toggles and un-prefixed mutations: these read like reads but write.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("command", [
+    "aws logs tag-log-group --log-group-name x --tags k=v",
+    "aws logs untag-log-group --log-group-name g --tags k",
+    "gcloud config unset account",
+    "az account clear",
+    "gcloud auth revoke",
+    "az keyvault key rotate --name k --vault-name v",
+])
+def test_state_toggle_verbs_are_not_read_only(is_read_only, command):
+    assert is_read_only(command) is False, command
+
+
+def test_toggle_verbs_in_resource_names_stay_read_only(is_read_only):
+    # kubectl operands are positional names, so a pod called `sync-worker` is a
+    # read -- the toggle verbs must not leak into the resource-name position.
+    assert is_read_only("kubectl logs sync-worker-1") is True
+    assert is_read_only("kubectl describe pod push-notifier-x") is True
+    assert is_read_only("kubectl get pod rotate-certs-job") is True
+    # `--tag` / `describe-tags` are an option and a read, not the `tag` verb.
+    assert is_read_only("az resource list --tag env=prod") is True
+    assert is_read_only("aws ec2 describe-tags") is True
+
+
+# ---------------------------------------------------------------------------
 # Mutations, including ones whose option names look read-only.
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("command", [

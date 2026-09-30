@@ -50,6 +50,12 @@ WRITE_VERBS = frozenset({
     'reset', 'restore', 'purge', 'promote', 'publish', 'cancel', 'deploy',
     'install', 'uninstall', 'upgrade', 'rollback', 'grant', 'resize', 'resume',
     'suspend', 'migrate', 'move', 'rename', 'reimage', 'redeploy', 'reinstall',
+    # State toggles and un-prefixed mutations. `logs tag-log-group` and
+    # `config unset` read like reads but write.
+    'tag', 'untag', 'unset', 'clear', 'logout', 'activate', 'deactivate',
+    'abort', 'flush', 'prune', 'truncate', 'drop', 'sync', 'push', 'upload',
+    'send', 'trigger', 'bind', 'unbind', 'mount', 'unmount', 'use', 'switch',
+    'swap', 'rotate', 'renew', 'force',
 })
 
 # Boolean switches take no value, so the token after them is still part of the
@@ -95,6 +101,14 @@ COMMAND_WRAPPERS = frozenset({
     'sudo', 'doas', 'su', 'env', 'xargs', 'nohup', 'setsid', 'timeout',
     'watch', 'time', 'nice', 'ionice', 'stdbuf', 'script',
 })
+
+# CLIs that take their operands as positional arguments after the verb, so the
+# tokens to the right of the verb are resource names rather than operations
+# (`kubectl logs update-cache-cronjob-xxx`). Everything else is assumed to spell
+# its operation as the last positional, and gets every positional scanned for
+# write verbs. Membership here only *relaxes* the scan, so an absent CLI
+# over-blocks rather than under-blocks -- the safe direction for this gate.
+OPERAND_POSITIONAL_CLIS = frozenset({'kubectl'})
 
 # Some reads mutate nothing but hand back usable credentials, keys, secrets,
 # connection strings or bearer tokens. Ask mode must refuse them outright,
@@ -162,6 +176,7 @@ class SegmentFacts(NamedTuple):
 
     executable: Optional[str]
     verb: Optional[str]
+    write_verb: Optional[str]  # any write verb in the operation, not just the first
     operation: tuple  # positional args in order, for prefix-anchored matching
     words: frozenset  # every operation word, for the CREDENTIAL_READS combos
     credential_words: frozenset  # words the credential rules are matched against
@@ -234,18 +249,44 @@ def _executable_of(operation: list[str]) -> Optional[str]:
     return None
 
 
+def _verb_of(token: str) -> Optional[str]:
+    """The verb *token* denotes, matching on its leading word for hyphenated ops."""
+    for candidate in (token, token.split('-', 1)[0]):
+        if candidate in WRITE_VERBS or candidate in READ_ONLY_VERBS:
+            return candidate
+    return None
+
+
 def _find_verb(operation: list[str]) -> tuple[Optional[str], int]:
     """The first positional that is a known verb, plus its index.
 
-    Cloud CLIs put the verb before its operands, so anything to its right is a
-    resource name and must not change the classification
-    (`kubectl logs update-cache-cronjob-xxx` is a read, not an 'update').
+    A service or group name can itself be a read verb (`aws logs`, `az search`),
+    so this verb says what the command *looks* like but cannot clear it of being
+    a write -- that is `_find_write_verb`'s job.
     """
     for i, token in enumerate(operation):
-        for candidate in (token, token.split('-', 1)[0]):
-            if candidate in WRITE_VERBS or candidate in READ_ONLY_VERBS:
-                return candidate, i
+        verb = _verb_of(token)
+        if verb:
+            return verb, i
     return None, len(operation)
+
+
+def _find_write_verb(operation: list[str], executable: Optional[str],
+                     verb_index: int) -> Optional[str]:
+    """The first write verb anywhere in the operation, or None.
+
+    Stopping at the first verb missed every mutation whose *service* is spelled
+    like a read verb (`aws logs delete-log-group`, `gcloud config set`), so all
+    positionals are scanned. kubectl is exempt because its operands are
+    positional names (`kubectl logs update-cache-xxx`); an absent CLI gets the
+    full scan and over-blocks, which is the safe direction.
+    """
+    scanned = (operation[:verb_index + 1]
+               if executable in OPERAND_POSITIONAL_CLIS else operation)
+    for token in scanned:
+        if _verb_of(token) in WRITE_VERBS:
+            return token
+    return None
 
 
 def _credential_words_of(operation: list[str], verb_index: int) -> set[str]:
@@ -282,9 +323,11 @@ def analyze_segment(tokens: list[str]) -> SegmentFacts:
     """Reduce one shell segment to the facts the deny rules need."""
     operation = _operation_of(tokens)
     verb, verb_index = _find_verb(operation)
+    executable = _executable_of(operation)
     return SegmentFacts(
-        executable=_executable_of(operation),
+        executable=executable,
         verb=verb,
+        write_verb=_find_write_verb(operation, executable, verb_index),
         operation=tuple(operation),
         words=frozenset(w for token in operation for w in _split_words(token)),
         credential_words=frozenset(_credential_words_of(operation, verb_index)),
@@ -376,8 +419,10 @@ def is_read_only_command(command: str) -> bool:
     if _is_credential_read(facts, flag_names):
         return False
 
-    # A write verb in any segment disqualifies the whole command.
-    if any(f.verb in WRITE_VERBS for f in facts):
+    # A write verb anywhere in any segment's operation disqualifies the whole
+    # command, not just the first verb: a service name can be spelled like a read
+    # verb (`aws logs delete-log-group`) and hide the mutation behind it.
+    if any(f.write_verb for f in facts):
         return False
 
     # A wrapper as the leading program means the operation classified above is
