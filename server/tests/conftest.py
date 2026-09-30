@@ -146,6 +146,45 @@ for _pkg in _OPTIONAL_PACKAGES:
     if not _is_installed(_pkg):
         _stub(_pkg)
 
+
+# flask_limiter needs a hand-written stub, not a _StubModule: route modules apply
+# `@limiter.limit(...)` at import time, and a MagicMock would *replace* the view
+# function with a mock, so the route would never run. The stub keeps the
+# decorators as identity functions, which is what tests want anyway — rate
+# limiting is enforced by Flask-Limiter itself, not by the routes under test.
+if not _is_installed("flask_limiter"):
+    def _identity_decorator(*_args: Any, **_kwargs: Any):
+        def _wrap(func):
+            return func
+        return _wrap
+
+    class _StubLimiter:
+        """Minimal stand-in for flask_limiter.Limiter."""
+
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            self.enabled = False
+
+        # `@limiter.limit("5 per minute")` — returns a decorator.
+        limit = staticmethod(_identity_decorator)
+        shared_limit = staticmethod(_identity_decorator)
+
+        # `@limiter.request_filter` / `@limiter.exempt` — used bare, so the
+        # function itself is the single argument.
+        @staticmethod
+        def request_filter(func):
+            return func
+
+        @staticmethod
+        def exempt(func):
+            return func
+
+        def init_app(self, _app: Any) -> None:
+            return None
+
+    _flask_limiter_stub = _StubModule("flask_limiter")
+    _flask_limiter_stub.Limiter = _StubLimiter  # type: ignore[attr-defined]
+    sys.modules["flask_limiter"] = _flask_limiter_stub
+
 # Whether the real google.oauth2 is importable must be sampled BEFORE any
 # stubbing runs. Once `google.oauth2` is placed in sys.modules, find_spec()
 # returns that stub's own ModuleSpec, so _is_installed() answers True and the
