@@ -70,25 +70,31 @@ Six rules keep the gate fail-closed:
    blocks the command — this covers `sts get-session-token`, `eks get-token`,
    `ecr get-login-password`, `secretsmanager get-secret-value`, `kubectl get
    secrets`, `az storage account keys list`, `az signalr key list`, and the long
-   tail of `<service> keys list` commands alike. Options that dump secrets
-   (`--with-decryption`, `--expand-keys`) are blocked too. `aks get-credentials`
-   and `container clusters get-credentials` are exempt: they only write a local
-   kubeconfig and start every managed-Kubernetes investigation.
+   tail of `<service> keys list` commands alike. Matching peels off kubectl's
+   resource syntax (`secret,pods`, `secret/my-tls`, `secrets.v1`) but *not*
+   hyphens, so a pod named `api-key-service` is not mistaken for a key fetch.
+   Options that dump secrets (`--with-decryption`, `--expand-keys`) are blocked
+   too. `aks get-credentials` and `container clusters get-credentials` are exempt:
+   they only write a local kubeconfig and start every managed-Kubernetes
+   investigation.
 2. **Any write verb blocks the command**, including hyphenated mutations
    (`modify-*`, `terminate-*`, `reboot-*`, `delete-*`).
 3. **Each shell segment is classified separately.** A write behind `&&`, `;`, a
    pipe, a newline, or a `$(...)`/backtick substitution blocks the whole command,
    so `kubectl get pods && kubectl delete pod x` is not read-only.
-4. **A read cannot be used as a payload source.** The leading program must be a
-   known cloud/k8s CLI (`aws`, `az`, `gcloud`, `kubectl`, `helm`, …) and every
-   downstream segment must be a recognised text filter (`grep`, `jq`, `sort`,
-   `head`, `awk`, `wc`, …). Both are allowlists, so an interpreter or exfil tool
-   needs no enumeration — it simply isn't on either list. That blocks
-   `kubectl get cm evil -o jsonpath='{.data.sh}' | bash` (read-only first
-   segment, but the ConfigMap supplies the script) and `bash -c "aws ..."` /
-   `sudo aws ...`, where the operation this function classifies isn't the one
-   that runs. Redirections (`>`, `>>`, `<`) are blocked since they write a file
-   regardless of what produced the bytes.
+4. **A read cannot be used as a payload source.** Every segment downstream of the
+   first must be a recognised text filter (`grep`, `jq`, `sort`, `head`, `awk`,
+   `wc`, …). That's an allowlist, so an interpreter or exfil tool needs no
+   enumeration — it simply isn't a filter. It blocks
+   `kubectl get cm evil -o jsonpath='{.data.sh}' | bash`, whose first segment is
+   genuinely read-only but whose ConfigMap supplies the script. Commands that
+   take another command as an argument (`sudo`, `env`, `xargs`, `timeout`,
+   `watch`, …) are refused as the leading program, since the operation this
+   function classifies wouldn't be the one that runs. Redirections (`>`, `>>`,
+   `<`) are blocked because they write a file regardless of what produced the
+   bytes. Note this gates on *shape*, never on a list of CLI names — OVH's RCA
+   skill emits a bare `cloud project list`, so an allowlist of known CLIs breaks
+   real providers.
 5. **Unknown operations default to blocked**, and an unparseable command
    (unbalanced quotes) is blocked rather than guessed at.
 6. **Boolean switches don't swallow the verb** — `kubectl

@@ -25,7 +25,7 @@ def _load_is_read_only_command():
         src = fh.read()
     match = re.search(r"^def is_read_only_command\(.*?(?=^def )", src, re.S | re.M)
     assert match, f"is_read_only_command not found in {CLOUD_EXEC}"
-    ns = {"shlex": shlex}
+    ns = {"shlex": shlex, "re": re}
     exec(match.group(0), ns)
     return ns["is_read_only_command"]
 
@@ -145,6 +145,12 @@ def test_value_taking_flag_still_consumes_its_value(is_read_only):
     "az cosmosdb keys list --name c --resource-group g",
     "kubectl get secrets -n ns",
     "kubectl get secret my-tls -o yaml",
+    # kubectl resource syntax glues the type to other text, so splitting on '-'
+    # alone let the credential word hide inside a compound token.
+    "kubectl get secret,pods -o yaml",
+    "kubectl get secret/my-tls -o yaml",
+    "kubectl get secrets.v1 -o yaml",
+    "kubectl get secrets.v1.core/my-tls",
     # --with-decryption returns the plaintext secret, not just the parameter.
     "aws ssm get-parameter --name /db/password --with-decryption",
 ])
@@ -174,9 +180,12 @@ def test_generic_credential_words_cover_unlisted_services(is_read_only, command)
 
 def test_credential_word_in_a_resource_name_is_not_a_credential_read(is_read_only):
     # `api-key-service` is a pod name, not a key fetch: the credential scan stops
-    # at the verb so resource names can't trigger a false block.
+    # at the verb so resource names can't trigger a false block. Hyphens are also
+    # not treated as resource-syntax separators, so `*-key-*` names stay clean.
     assert is_read_only("kubectl logs api-key-service-abc123") is True
     assert is_read_only("kubectl logs token-refresher-7f9") is True
+    assert is_read_only("kubectl describe pod secret-scanner-x") is True
+    assert is_read_only("kubectl logs password-reset-worker-1") is True
 
 
 # ---------------------------------------------------------------------------
@@ -295,25 +304,31 @@ def test_unparseable_command_is_not_read_only(is_read_only):
     "sudo aws ec2 describe-instances",
     "env LD_PRELOAD=/tmp/x.so aws ec2 describe-instances",
     "xargs kubectl get pods",
-    "./mytool get pods",
-    "/usr/local/bin/evil get pods",
+    "timeout 5 aws ec2 describe-instances",
+    "nohup kubectl get pods",
+    "watch kubectl get pods",
 ])
-def test_wrapped_or_unknown_executable_is_not_read_only(is_read_only, command):
+def test_wrapped_command_is_not_read_only(is_read_only, command):
     assert is_read_only(command) is False, command
 
 
+# ---------------------------------------------------------------------------
+# Non-enumerated CLIs must keep working: OVH's RCA skill emits `cloud project
+# list`, and gating on an allowlist of CLI names silently broke it.
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize("command", [
+    "cloud project list --json",
+    "ovhcloud cloud project list",
+    "tailscale status",
+    "doctl compute droplet list",
     "kubectl get pods",
     "/usr/local/bin/kubectl get pods",
     "gcloud compute instances list",
     "gsutil ls gs://bucket",
-    "bq ls",
     "helm list",
-    "oc get pods",
     "argocd app list",
-    "flux get sources git",
 ])
-def test_known_clis_are_recognised(is_read_only, command):
+def test_reads_from_any_cli_stay_allowed(is_read_only, command):
     assert is_read_only(command) is True, command
 
 

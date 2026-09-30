@@ -1224,6 +1224,18 @@ def is_read_only_command(command: str) -> bool:
         'echo', 'printf', 'strings', 'od', 'hexdump', 'less', 'more', 'seq',
     })
 
+    # Operation words are split on every separator a CLI uses to glue a resource
+    # type to something else, not just '-'. kubectl accepts `secret,pods`,
+    # `secret/my-tls` and `secrets.v1`, so splitting on '-' alone let a credential
+    # word hide inside a compound token.
+    WORD_SEP = re.compile(r'[-.,/:=@]+')
+    # The same separators minus '-', for matching a token that *is* a credential
+    # word: hyphens are part of ordinary resource names (`api-key-service`).
+    RESOURCE_SEP = re.compile(r'[.,/:=@]+')
+
+    def split_words(token: str) -> list[str]:
+        return [w for w in WORD_SEP.split(token) if w]
+
     # Newlines separate commands but shlex treats them as plain whitespace, so
     # they are turned into an explicit separator first.
     normalized = command.replace('\r', '\n').replace('\n', ' ; ')
@@ -1326,13 +1338,19 @@ def is_read_only_command(command: str) -> bool:
         verbs.append(verb)
 
         # Component words let hyphenated operations match the credential combos.
-        words |= {w for token in operation for w in token.split('-') if w}
+        words |= {w for token in operation for w in split_words(token)}
 
         # Credential words are matched two ways so that `az storage account keys
         # list` and `aws sts get-session-token` are caught while a pod named
         # `api-key-service` is not:
-        #   - any *whole* positional that is itself a credential word ('secrets')
-        cred_scope |= {t for t in operation if t in CREDENTIAL_WORDS}
+        #   - any positional that *is* a credential word once kubectl's resource
+        #     syntax is peeled off, so `secret,pods` / `secret/my-tls` /
+        #     `secrets.v1` all match. Hyphens are deliberately not split here:
+        #     that would make every `*-key-*` resource name a credential read.
+        cred_scope |= {
+            w for t in operation for w in RESOURCE_SEP.split(t)
+            if w in CREDENTIAL_WORDS
+        }
         #   - components of hyphenated tokens inside the operation path. That path
         #     ends at the last positional that is *exactly* a verb, since a
         #     service can precede the operation (`az search admin-key show`);
@@ -1341,9 +1359,9 @@ def is_read_only_command(command: str) -> bool:
             i for i, t in enumerate(operation)
             if t in WRITE_VERBS or t in READ_ONLY_VERBS
         ]
-        cred_end = max([verb_index] + exact_verbs)
+        cred_end = max([verb_index, *exact_verbs])
         cred_scope |= {
-            w for token in operation[:cred_end + 1] for w in token.split('-') if w
+            w for token in operation[:cred_end + 1] for w in split_words(token)
         }
 
     # Fetching a kubeconfig only writes a local file and is the required first
@@ -1385,19 +1403,16 @@ def is_read_only_command(command: str) -> bool:
     if any(v in WRITE_VERBS for v in verbs):
         return False
 
-    # The first segment must be a cloud/k8s CLI invoking a read. A wrapper here
-    # (`bash -c "aws ..."`, `sudo aws ...`) means the operation this function
-    # would classify isn't the one that runs, so require the leading executable
-    # to be a known CLI rather than trying to enumerate every wrapper.
-    CLI_NAMES = frozenset({
-        'aws', 'az', 'gcloud', 'gsutil', 'bq', 'kubectl', 'oc', 'helm', 'kubectx',
-        'kubens', 'k9s', 'eksctl', 'doctl', 'flyctl', 'fly', 'heroku', 'vercel',
-        'wrangler', 'railway', 'render', 'terraform', 'tofu', 'pulumi', 'docker',
-        'ibmcloud', 'oci', 'linode-cli', 'scw', 'hcloud', 'kubeadm', 'istioctl',
-        'argocd', 'flux', 'velero', 'stern', 'kustomize', 'crictl', 'nomad',
-        'consul', 'vault', 'gh', 'glab',
+    # Commands whose arguments are themselves a command: the verb this function
+    # would classify belongs to a nested invocation, or runs under different
+    # privileges, so the classification wouldn't describe what actually executes.
+    # `bash -c "..."` needs no entry — its payload is an option value, which is
+    # already excluded from the operation, leaving no verb at all.
+    COMMAND_WRAPPERS = frozenset({
+        'sudo', 'doas', 'su', 'env', 'xargs', 'nohup', 'setsid', 'timeout',
+        'watch', 'time', 'nice', 'ionice', 'stdbuf', 'script',
     })
-    if executables[0] not in CLI_NAMES:
+    if executables[0] in COMMAND_WRAPPERS:
         return False
 
     # Every segment after the first must be a recognised read-only text filter.

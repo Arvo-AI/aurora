@@ -233,7 +233,7 @@ class _NoLoginCache:
 def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent", login_cache=_NoLoginCache):
     """Exec the real fan-out function with faked module-level dependencies."""
     src = _read(CLOUD_EXEC)
-    ns = {"shlex": shlex, "json": __import__("json"), "time": __import__("time"),
+    ns = {"shlex": shlex, "re": re, "json": __import__("json"), "time": __import__("time"),
           "contextvars": __import__("contextvars"),
           "Optional": typing.Optional, "logger": __import__("logging").getLogger("test")}
 
