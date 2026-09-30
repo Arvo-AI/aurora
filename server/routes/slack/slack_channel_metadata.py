@@ -7,6 +7,7 @@ topic/purpose + a small sample of recent messages, then asks an LLM for a
 serves. The result feeds the agent's channel-routing decisions.
 """
 import logging
+import time
 
 from celery_config import celery_app
 from chat.backend.agent.utils.message_content import extract_text_from_content
@@ -33,9 +34,17 @@ BACKFILL_MAX_PER_ORG = 25
 BACKFILL_MAX_TOTAL = 200
 
 # A 'pending' row younger than this probably has a description task still in
-# flight, so re-enqueueing it would only duplicate the LLM call. Matches the
-# staleness window the reconcile pass uses.
+# flight, so re-enqueueing it would only duplicate the LLM call. Intentionally
+# NOT the same as the reconcile pass's 10-minute window: reconcile runs only when
+# a user is looking at the page (so a slightly eager retry is cheap and visible),
+# whereas this runs unattended across every org, so it waits longer to be sure a
+# row is genuinely stuck rather than merely slow.
 BACKFILL_STALE_MINUTES = 15
+
+# Must match the beat interval in celery_config.py. Used only to rotate which org
+# leads each sweep (see _rotate_orgs); a drift between the two just makes the
+# rotation step unevenly, it cannot skip an org or double-enqueue.
+_BACKFILL_INTERVAL_SECONDS = 900
 
 
 def _update_metadata(user_id: str, channel_id: str, summary, status: str,
@@ -268,6 +277,28 @@ def _users_by_org() -> dict[str, list[str]]:
         return by_org
 
 
+def _rotate_orgs(org_ids: list[str], now: float | None = None) -> list[str]:
+    """Rotate the org list so a different org leads each run.
+
+    The sweep stops at a global cap, so a fixed iteration order would let a few
+    large-backlog orgs consume the whole cap every run and starve the rest
+    indefinitely (the longest-waiting-first ordering in the query is only fair
+    *within* one org).
+
+    The offset is derived from wall-clock time rather than stored state: the beat
+    interval advances it by one each run, so every org takes a turn at the front
+    without needing a cursor in Redis or the DB (which would be one more thing to
+    migrate, and would reset anyway). Being a pure function of the clock also
+    means concurrent beat workers agree on the order.
+    """
+    if not org_ids:
+        return []
+    if now is None:
+        now = time.time()
+    offset = int(now // _BACKFILL_INTERVAL_SECONDS) % len(org_ids)
+    return org_ids[offset:] + org_ids[:offset]
+
+
 def _select_undescribed_channels(cur, limit: int) -> list[tuple[str, str]]:
     """Return [(channel_id, owner_user_id)] for member channels still awaiting a
     description. Expects the caller to have set the org's RLS context already.
@@ -380,13 +411,19 @@ def _claim_org_channels(org_users: list[str], limit: int,
 
     # Write pass, committed BEFORE the caller enqueues, so a worker can never pick
     # a task up against a row that still looks unqueued (or, for a 'skipped' row,
-    # one whose status would make the description write a no-op).
+    # one whose status would make the description write a no-op). Passing the
+    # staleness window makes select-then-claim atomic: only rows the UPDATE
+    # actually claimed are returned, so two overlapping sweeps racing on the same
+    # row can't both enqueue it.
     with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
         if not set_rls_context(cur, conn, org_users[0], log_prefix=_BACKFILL_LOG):
             return []
-        _mark_pending(cur, [cid for _actor, cid in to_enqueue])
+        claimed = set(_mark_pending(
+            cur, [cid for _actor, cid in to_enqueue],
+            stale_minutes=BACKFILL_STALE_MINUTES,
+        ))
         conn.commit()
-    return to_enqueue
+    return [(actor, cid) for actor, cid in to_enqueue if cid in claimed]
 
 
 @celery_app.task(name="routes.slack.slack_channel_metadata.backfill_channel_descriptions")
@@ -432,9 +469,13 @@ def _backfill_channel_descriptions():
     total = 0
     orgs_touched = 0
 
-    for org_users in users_by_org.values():
+    # Rotate the starting org so the global cap can't permanently starve the orgs
+    # that happen to sort last.
+    for org_id in _rotate_orgs(list(users_by_org)):
+        org_users = users_by_org[org_id]
         # Global cap reached — remaining orgs get their turn next run (the
-        # longest-waiting-first ordering in the query keeps that fair).
+        # rotation above is what makes that fair across orgs; the
+        # longest-waiting-first ordering in the query is fair within one).
         if total >= BACKFILL_MAX_TOTAL:
             break
         try:

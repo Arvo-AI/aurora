@@ -121,6 +121,7 @@ def test_auto_register_persists_only_members():
          patch.object(mod, "set_rls_context", return_value="org"), \
          patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
          patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
+         patch.object(mod, "_mark_pending", side_effect=lambda cur, cids: list(cids)), \
          patch.object(mod, "_enqueue_metadata", side_effect=lambda uid, cid: enqueued.append(cid)):
         described = mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=50)
 
@@ -157,6 +158,7 @@ def test_auto_register_describe_limit_caps_members():
          patch.object(mod, "set_rls_context", return_value="org"), \
          patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
          patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
+         patch.object(mod, "_mark_pending", side_effect=lambda cur, cids: list(cids)), \
          patch.object(mod, "_enqueue_metadata", side_effect=lambda uid, cid: enqueued.append(cid)):
         described = mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=2)
 
@@ -166,6 +168,75 @@ def test_auto_register_describe_limit_caps_members():
     # ...but the oldest member is still persisted 'pending' (not 'skipped'), so a
     # subsequent reconcile can describe it — it's never permanently invisible.
     assert dict(upserts)["C3"] == "pending"
+
+
+# --- _mark_pending (claiming rows for description) --------------------------
+
+def test_mark_pending_returns_only_claimed_ids():
+    """Callers enqueue what the UPDATE actually claimed, so a row someone else
+    already took doesn't get a duplicate (wasted) LLM call."""
+    cur = MagicMock()
+    cur.fetchall.return_value = [("C1",)]
+    assert mod._mark_pending(cur, ["C1", "C2"]) == ["C1"]
+
+
+def test_mark_pending_noops_on_empty_list():
+    cur = MagicMock()
+    assert mod._mark_pending(cur, []) == []
+    cur.execute.assert_not_called()
+
+
+def test_mark_pending_without_staleness_claims_fresh_rows():
+    """The reconcile pass also enqueues rows it just inserted, so it must not be
+    gated on a staleness window."""
+    cur = MagicMock()
+    cur.fetchall.return_value = [("C1",)]
+    mod._mark_pending(cur, ["C1"])
+    sql = cur.execute.call_args.args[0]
+    assert "make_interval" not in sql
+    assert "metadata_status IN ('pending', 'skipped')" in sql
+
+
+def test_mark_pending_with_staleness_reasserts_the_window():
+    """The backfill re-checks the predicate its SELECT observed, making
+    select-then-claim atomic against a racing sweep."""
+    cur = MagicMock()
+    cur.fetchall.return_value = [("C1",)]
+    mod._mark_pending(cur, ["C1"], stale_minutes=15)
+    sql, params = cur.execute.call_args.args
+    assert "make_interval" in sql
+    assert params == (["C1"], 15)
+
+
+def test_mark_pending_always_restamps_updated_at():
+    """updated_at is the 'time since queued' signal; without restamping, a
+    just-queued row looks stale and gets enqueued again."""
+    cur = MagicMock()
+    cur.fetchall.return_value = []
+    mod._mark_pending(cur, ["C1"])
+    assert "updated_at = NOW()" in cur.execute.call_args.args[0]
+
+
+def test_reconcile_enqueues_only_claimed_rows():
+    """auto_register_channels must honor the claim result too."""
+    members = [{"id": "C1", "name": "one", "is_member": True, "created": 300}]
+    fake_client = MagicMock()
+    fake_client.list_bot_channels.return_value = members
+    enqueued = []
+
+    dbcm, _cur = _db(fetchall_rows=[])
+    with patch.object(mod, "get_slack_client_for_user", return_value=fake_client), \
+         patch.object(mod, "resolve_org", return_value="00000000-0000-0000-0000-000000000000"), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_upsert_channel", return_value=("C1", True)), \
+         patch.object(mod, "_mark_pending", return_value=[]), \
+         patch.object(mod, "_enqueue_metadata", side_effect=lambda u, c: enqueued.append(c)):
+        described = mod.auto_register_channels("11111111-1111-1111-1111-111111111111")
+
+    # The claim came back empty (another pass won it), so nothing is enqueued.
+    assert enqueued == []
+    assert described == 0
 
 
 def _run_reconcile_with_existing(rows):
@@ -188,6 +259,7 @@ def _run_reconcile_with_existing(rows):
          patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
          patch.object(mod, "_get_card_channel_id", return_value=None), \
          patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
+         patch.object(mod, "_mark_pending", side_effect=lambda cur, cids: list(cids)), \
          patch.object(mod, "_enqueue_metadata", side_effect=lambda uid, cid: enqueued.append(cid)):
         mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=50)
     return enqueued
@@ -239,6 +311,7 @@ def test_over_cap_member_is_picked_up_on_a_later_pass():
              patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
              patch.object(mod, "_get_card_channel_id", return_value=None), \
              patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
+             patch.object(mod, "_mark_pending", side_effect=lambda cur, cids: list(cids)), \
              patch.object(mod, "_enqueue_metadata", side_effect=lambda uid, cid: enqueued.append(cid)):
             mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=2)
         return enqueued
@@ -276,6 +349,7 @@ def test_auto_register_prunes_non_member_channels():
          patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
          patch.object(mod, "_get_card_channel_id", return_value=None), \
          patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
+         patch.object(mod, "_mark_pending", side_effect=lambda cur, cids: list(cids)), \
          patch.object(mod, "_enqueue_metadata", side_effect=lambda uid, cid: None):
         mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=50)
 
@@ -318,6 +392,7 @@ def test_register_single_channel_marks_member_true():
          patch.object(mod, "set_rls_context", return_value="org"), \
          patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
          patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
+         patch.object(mod, "_mark_pending", side_effect=lambda cur, cids: list(cids)), \
          patch.object(mod, "_enqueue_metadata"):
         mod.register_single_channel("u1", "C1", team_id="T1")
 
@@ -540,6 +615,7 @@ def test_auto_register_clears_card_channel_when_pruned():
          patch.object(mod, "_get_card_channel_id", return_value="C_CARD"), \
          patch.object(mod, "_clear_card_channel") as clear, \
          patch.object(mod, "_upsert_channel", side_effect=fake_upsert), \
+         patch.object(mod, "_mark_pending", side_effect=lambda cur, cids: list(cids)), \
          patch.object(mod, "_enqueue_metadata", side_effect=lambda uid, cid: None):
         mod.auto_register_channels("11111111-1111-1111-1111-111111111111", describe_limit=50)
 

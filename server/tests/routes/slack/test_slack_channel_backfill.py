@@ -36,10 +36,16 @@ def _db(fetchall_rows=None):
     return dbcm, conn, cur
 
 
-def _run(users_by_org, rows_per_org, connected_users=None, rls_ok=True):
-    """Run the backfill task, returning (result, enqueued, mark_pending_calls).
+def _run(users_by_org, rows_per_org, connected_users=None, rls_ok=True,
+         claimed=None):
+    """Run the backfill, returning (result, enqueued, mark_pending_calls).
 
     ``rows_per_org`` is a list of row batches, consumed in org iteration order.
+    ``claimed`` optionally restricts which channel_ids the claiming UPDATE
+    reports as won (default: all of them).
+
+    The org rotation is pinned to dict order here so batches line up predictably;
+    the rotation itself is covered by its own tests below.
     """
     enqueued = []
     marked = []
@@ -54,8 +60,13 @@ def _run(users_by_org, rows_per_org, connected_users=None, rls_ok=True):
             return MagicMock()
         return MagicMock() if uid in connected_users else None
 
+    def fake_mark_pending(cur, cids, stale_minutes=None):
+        marked.append(list(cids))
+        return [c for c in cids if claimed is None or c in claimed]
+
     dbcm, _conn, _cur = _db()
     with patch.object(mod, "_users_by_org", return_value=users_by_org), \
+         patch.object(mod, "_rotate_orgs", side_effect=lambda ids, now=None: list(ids)), \
          patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
          patch("utils.auth.stateless_auth.set_rls_context",
                return_value=(ORG_A if rls_ok else None)), \
@@ -63,7 +74,7 @@ def _run(users_by_org, rows_per_org, connected_users=None, rls_ok=True):
                side_effect=fake_client), \
          patch.object(mod, "_select_undescribed_channels", side_effect=fake_select), \
          patch("routes.slack.slack_channels._mark_pending",
-               side_effect=lambda cur, cids: marked.append(list(cids))), \
+               side_effect=fake_mark_pending), \
          patch("routes.slack.slack_channels._enqueue_metadata",
                side_effect=lambda uid, cid: enqueued.append((uid, cid))):
         result = mod._backfill_channel_descriptions()
@@ -172,13 +183,16 @@ def test_backfill_one_failing_org_does_not_stop_the_sweep():
         return [("C2", USER_B)]
 
     dbcm, _conn, _cur = _db()
+    # now=0 pins the rotation so the failing org is the one visited first.
     with patch.object(mod, "_users_by_org", return_value={ORG_A: [USER_A], ORG_B: [USER_B]}), \
+         patch.object(mod, "_rotate_orgs", return_value=[ORG_A, ORG_B]), \
          patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
          patch("utils.auth.stateless_auth.set_rls_context", return_value=ORG_A), \
          patch("connectors.slack_connector.client.get_slack_client_for_user",
                return_value=MagicMock()), \
          patch.object(mod, "_select_undescribed_channels", side_effect=flaky_select), \
-         patch("routes.slack.slack_channels._mark_pending"), \
+         patch("routes.slack.slack_channels._mark_pending",
+               side_effect=lambda cur, cids, stale_minutes=None: list(cids)), \
          patch("routes.slack.slack_channels._enqueue_metadata",
                side_effect=lambda uid, cid: enqueued.append((uid, cid))):
         result = mod._backfill_channel_descriptions()
@@ -190,6 +204,89 @@ def test_backfill_one_failing_org_does_not_stop_the_sweep():
 def test_backfill_returns_empty_when_org_enumeration_fails():
     with patch.object(mod, "_users_by_org", side_effect=RuntimeError("db down")):
         assert mod._backfill_channel_descriptions() == {"orgs": 0, "enqueued": 0}
+
+
+# --- concurrency: the claim decides what gets enqueued ----------------------
+
+def test_backfill_enqueues_only_the_rows_it_actually_claimed():
+    """A row whose status moved on between SELECT and the claiming UPDATE (a
+    racing sweep, or a worker that started describing it) must NOT be enqueued —
+    otherwise we pay for an LLM call whose result _update_metadata discards."""
+    result, enqueued, _marked = _run(
+        {ORG_A: [USER_A]},
+        [[("C1", USER_A), ("C2", USER_A)]],
+        claimed={"C1"},  # C2 was won by someone else
+    )
+    assert enqueued == [(USER_A, "C1")]
+    assert result == {"orgs": 1, "enqueued": 1}
+
+
+def test_backfill_skips_org_when_it_claims_nothing():
+    """Lost every row to a concurrent sweep — nothing to enqueue, and the org
+    shouldn't be counted as touched."""
+    result, enqueued, _marked = _run(
+        {ORG_A: [USER_A]}, [[("C1", USER_A)]], claimed=set(),
+    )
+    assert enqueued == []
+    assert result == {"orgs": 0, "enqueued": 0}
+
+
+def test_backfill_claim_reasserts_the_staleness_window():
+    """The UPDATE must re-check the predicate the SELECT observed, so a racing
+    sweep's restamp locks this one out instead of both enqueueing."""
+    seen = {}
+
+    def capture(cur, cids, stale_minutes=None):
+        seen["stale_minutes"] = stale_minutes
+        return list(cids)
+
+    dbcm, _conn, _cur = _db()
+    with patch.object(mod, "_users_by_org", return_value={ORG_A: [USER_A]}), \
+         patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
+         patch("utils.auth.stateless_auth.set_rls_context", return_value=ORG_A), \
+         patch("connectors.slack_connector.client.get_slack_client_for_user",
+               return_value=MagicMock()), \
+         patch.object(mod, "_select_undescribed_channels",
+                      return_value=[("C1", USER_A)]), \
+         patch("routes.slack.slack_channels._mark_pending", side_effect=capture), \
+         patch("routes.slack.slack_channels._enqueue_metadata"):
+        mod._backfill_channel_descriptions()
+
+    assert seen["stale_minutes"] == mod.BACKFILL_STALE_MINUTES
+
+
+# --- cross-org fairness -----------------------------------------------------
+
+def test_rotate_orgs_advances_with_the_beat_interval():
+    """A fixed order would let the same few orgs consume the global cap every run
+    and starve the rest, so the leading org rotates each interval."""
+    orgs = ["a", "b", "c"]
+    interval = mod._BACKFILL_INTERVAL_SECONDS
+    assert mod._rotate_orgs(orgs, now=0) == ["a", "b", "c"]
+    assert mod._rotate_orgs(orgs, now=interval) == ["b", "c", "a"]
+    assert mod._rotate_orgs(orgs, now=2 * interval) == ["c", "a", "b"]
+    # Wraps cleanly back to the start.
+    assert mod._rotate_orgs(orgs, now=3 * interval) == ["a", "b", "c"]
+
+
+def test_rotate_orgs_is_stable_within_one_interval():
+    """Concurrent beat workers in the same window must agree on the order."""
+    orgs = ["a", "b", "c"]
+    base = 10 * mod._BACKFILL_INTERVAL_SECONDS
+    assert mod._rotate_orgs(orgs, now=base) == mod._rotate_orgs(orgs, now=base + 1)
+
+
+def test_rotate_orgs_handles_empty_and_single():
+    assert mod._rotate_orgs([]) == []
+    assert mod._rotate_orgs(["only"], now=12345) == ["only"]
+
+
+def test_rotate_orgs_preserves_every_org():
+    """A rotation must never drop or duplicate an org."""
+    orgs = [f"org{i}" for i in range(7)]
+    for step in range(10):
+        rotated = mod._rotate_orgs(orgs, now=step * mod._BACKFILL_INTERVAL_SECONDS)
+        assert sorted(rotated) == sorted(orgs)
 
 
 # --- the selection query itself ---------------------------------------------

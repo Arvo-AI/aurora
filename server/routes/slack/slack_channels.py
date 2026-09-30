@@ -280,8 +280,9 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
     # row's updated_at is NOT bumped on reconcile (see _upsert_channel), it goes
     # stale after ~10 min and gets enqueued by a later pass — or, since reconcile
     # passes are user-triggered and may never happen again, by the
-    # backfill_channel_descriptions beat task. Either way no member channel is
-    # permanently stuck invisible to the agent (which routes to 'ready' only).
+    # backfill_channel_descriptions beat task (which uses its own, longer window).
+    # Either way no member channel is permanently stuck invisible to the agent
+    # (which routes to 'ready' only).
     ranked_members = _rank_channels(member_channels)
 
     org_id = resolve_org(user_id)
@@ -332,10 +333,12 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
                             and len(newly_added_to_describe) < describe_limit):
                         newly_added_to_describe.append(_cid)
 
-                # Flip the chosen rows to 'pending' and restamp updated_at so the
-                # metadata task's write isn't rejected (a 'skipped' row would be)
-                # and so this pass's queue isn't re-queued by the next one.
-                _mark_pending(cur, newly_added_to_describe)
+                # Claim the chosen rows: flip to 'pending' and restamp updated_at
+                # so the metadata task's write isn't rejected (a 'skipped' row
+                # would be) and this pass's queue isn't re-queued by the next one.
+                # Only rows the UPDATE actually claimed get enqueued — one whose
+                # status moved on concurrently is someone else's to describe.
+                newly_added_to_describe = _mark_pending(cur, newly_added_to_describe)
 
                 # Reconcile membership: any stored row that is NOT in the current
                 # member set means Aurora left / was removed from that channel, so
@@ -940,8 +943,14 @@ def _activate_channels(user_id: str, channel_ids: list[str]) -> int:
     return len(joined)
 
 
-def _mark_pending(cur, channel_ids: list[str]) -> None:
-    """Reset rows to 'pending' and restamp ``updated_at`` just before enqueueing.
+def _mark_pending(cur, channel_ids: list[str],
+                  stale_minutes: int | None = None) -> list[str]:
+    """Claim rows for description: set 'pending' + restamp ``updated_at``.
+
+    Returns the channel_ids actually updated, which is what the caller must
+    enqueue — a row whose status moved on concurrently (to 'generating'/'ready')
+    is not returned, so we never pay for an LLM call whose result
+    ``_update_metadata`` would just discard.
 
     Two things depend on this happening at enqueue time:
 
@@ -950,21 +959,46 @@ def _mark_pending(cur, channel_ids: list[str]) -> None:
       therefore have its freshly generated description silently dropped, so it
       must be flipped back to 'pending' before the task runs.
     * ``updated_at`` is our "time since the description was queued" signal for
-      the staleness check. Restamping it here means a row we *just* queued isn't
+      the staleness check. Restamping it means a row we *just* queued isn't
       immediately seen as stale and queued again by the next reconcile or
       backfill pass (which would be a duplicate LLM call).
+
+    ``stale_minutes`` re-asserts the caller's staleness predicate inside the
+    UPDATE, making select-then-claim atomic: when two sweeps race on the same
+    stale row, the first to commit restamps ``updated_at``, so the second no
+    longer matches and gets back an empty list instead of double-enqueueing.
+    Callers that legitimately claim *fresh* rows (the reconcile pass, which also
+    enqueues rows it just inserted) leave it None.
 
     Runs on the caller's cursor/transaction; the caller commits.
     """
     if not channel_ids:
-        return
-    cur.execute(
-        """UPDATE slack_channels
-              SET metadata_status = 'pending', updated_at = NOW()
-            WHERE provider = 'slack' AND channel_id = ANY(%s)
-              AND metadata_status IN ('pending', 'skipped')""",
-        (channel_ids,),
-    )
+        return []
+    # Re-assert staleness (backfill): only claim rows still as stale as when we
+    # selected them, so a racing sweep's restamp locks us out.
+    if stale_minutes is not None:
+        cur.execute(
+            """UPDATE slack_channels
+                  SET metadata_status = 'pending', updated_at = NOW()
+                WHERE provider = 'slack' AND channel_id = ANY(%s)
+                  AND (metadata_status = 'skipped'
+                       OR (metadata_status = 'pending'
+                           AND updated_at < NOW() - make_interval(mins => %s)))
+             RETURNING channel_id""",
+            (channel_ids, stale_minutes),
+        )
+    # No staleness bar (reconcile): claim any row still awaiting a description,
+    # including the freshly-inserted ones this pass just created.
+    else:
+        cur.execute(
+            """UPDATE slack_channels
+                  SET metadata_status = 'pending', updated_at = NOW()
+                WHERE provider = 'slack' AND channel_id = ANY(%s)
+                  AND metadata_status IN ('pending', 'skipped')
+             RETURNING channel_id""",
+            (channel_ids,),
+        )
+    return [row[0] for row in cur.fetchall()]
 
 
 def _enqueue_metadata(user_id: str, channel_id: str):
