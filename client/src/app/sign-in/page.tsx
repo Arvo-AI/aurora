@@ -61,6 +61,28 @@ function validateResetForm(code: string, password: string, confirmation: string)
 
 const AUTH_MODES = ["signup", "verify-email", "change-password", "forgot-password", "reset-password"] as const
 
+// Both reset endpoints are POST-JSON-and-read-a-message. Extracted so the
+// component holds the state transitions rather than the plumbing, and so the
+// error precedence (HTTP error > body error > fallback) is defined in one place.
+async function postResetRequest(
+  path: string,
+  body: Record<string, string>,
+  fallbackError: string,
+): Promise<{ message?: string; error?: string }> {
+  try {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+    const data = await response.json()
+    if (!response.ok) return { error: data.error || fallbackError }
+    return { message: data.message }
+  } catch {
+    return { error: "An error occurred. Please try again." }
+  }
+}
+
 function getInitialMode(searchParams: URLSearchParams): AuthMode {
   const mode = searchParams.get("mode")
   // Anything unrecognized (or absent) lands on sign-in rather than a blank panel.
@@ -335,25 +357,19 @@ function AuthPage() {
     setNotice("")
     if (!email.trim()) { setError("Please enter your email"); return }
     setIsLoading(true)
-    try {
-      const response = await fetch("/api/auth/forgot-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim() }),
-      })
-      const data = await response.json()
-      // The backend intentionally answers 200 with the same message whether or
-      // not the account exists, so there is nothing to branch on here.
-      if (!response.ok) { setError(data.error || "Failed to send reset code"); return }
-      setResetSent(true)
-      setNotice(data.message || "If an account exists for that email, we've sent a reset code.")
-      setResendCooldown(60)
-      switchMode("reset-password", true)
-    } catch {
-      setError("An error occurred. Please try again.")
-    } finally {
-      setIsLoading(false)
-    }
+    const { message, error: requestError } = await postResetRequest(
+      "/api/auth/forgot-password",
+      { email: email.trim() },
+      "Failed to send reset code",
+    )
+    setIsLoading(false)
+    if (requestError) { setError(requestError); return }
+    // The backend answers 200 with the same message whether or not the account
+    // exists, so there is nothing to branch on here.
+    setResetSent(true)
+    setNotice(message || "If an account exists for that email, we've sent a reset code.")
+    setResendCooldown(60)
+    switchMode("reset-password", true)
   }
 
   const handleResetPassword = async (e: React.FormEvent) => {
@@ -362,49 +378,37 @@ function AuthPage() {
     const validationError = validateResetForm(resetCode, newPassword, confirmNewPassword)
     if (validationError) { setError(validationError); return }
     setIsLoading(true)
-    try {
-      const response = await fetch("/api/auth/reset-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), code: resetCode, newPassword }),
-      })
-      const data = await response.json()
-      if (!response.ok) { setError(data.error || "Failed to reset password"); return }
-      setResetComplete(true)
-      // Sign in with the password they just set rather than sending them back
-      // to a form to retype it.
-      const result = await signIn("credentials", { email: email.trim(), password: newPassword, redirect: false })
-      if (result?.ok) {
-        setTimeout(() => { router.push(callbackUrl); router.refresh() }, 800)
-      } else {
-        setNotice("Password reset. Please sign in with your new password.")
-        setTimeout(() => switchMode("signin", true), 1200)
-      }
-    } catch {
-      setError("An error occurred. Please try again.")
-    } finally {
-      setIsLoading(false)
+    const { error: requestError } = await postResetRequest(
+      "/api/auth/reset-password",
+      { email: email.trim(), code: resetCode, newPassword },
+      "Failed to reset password",
+    )
+    if (requestError) { setIsLoading(false); setError(requestError); return }
+    setResetComplete(true)
+    // Sign in with the password they just set rather than sending them back to a
+    // form to retype it.
+    const result = await signIn("credentials", { email: email.trim(), password: newPassword, redirect: false })
+    setIsLoading(false)
+    if (result?.ok) {
+      setTimeout(() => { router.push(callbackUrl); router.refresh() }, 800)
+    } else {
+      setNotice("Password reset. Please sign in with your new password.")
+      setTimeout(() => switchMode("signin", true), 1200)
     }
   }
 
   const handleResendReset = async () => {
     setIsResending(true)
     setError("")
-    try {
-      const response = await fetch("/api/auth/forgot-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim() }),
-      })
-      const data = await response.json()
-      if (!response.ok) { setError(data.error || "Failed to resend code"); return }
-      setNotice(data.message || "A new code is on its way.")
-      setResendCooldown(60)
-    } catch {
-      setError("Failed to resend code")
-    } finally {
-      setIsResending(false)
-    }
+    const { message, error: requestError } = await postResetRequest(
+      "/api/auth/forgot-password",
+      { email: email.trim() },
+      "Failed to resend code",
+    )
+    setIsResending(false)
+    if (requestError) { setError(requestError); return }
+    setNotice(message || "A new code is on its way.")
+    setResendCooldown(60)
   }
 
   const tagline = taglines[mode]
