@@ -305,7 +305,18 @@ def _select_undescribed_channels(cur, limit: int) -> list[tuple[str, str]]:
 
 @celery_app.task(name="routes.slack.slack_channel_metadata.backfill_channel_descriptions")
 def backfill_channel_descriptions():
-    """Beat task: make sure EVERY member channel eventually gets described.
+    """Beat entry point — thin wrapper so the logic stays directly callable.
+
+    The decorated object is the Celery task, not the function, so keeping the
+    body in :func:`_backfill_channel_descriptions` is what lets tests (and any
+    other caller) invoke it without a broker. Mirrors
+    :func:`auto_register_channels_task` wrapping ``auto_register_channels``.
+    """
+    return _backfill_channel_descriptions()
+
+
+def _backfill_channel_descriptions():
+    """Make sure EVERY member channel eventually gets described.
 
     Agent routing (``get_connected_slack_channels``) only offers channels whose
     ``metadata_status`` is 'ready'. Descriptions are otherwise only enqueued by a

@@ -5,40 +5,16 @@ descriptions were previously only enqueued by a user-triggered reconcile pass
 that is capped per pass — so in a large workspace the tail of Aurora's
 memberships never got described. These tests cover the beat task that closes
 that gap (see issue #673).
+
+These exercise ``_backfill_channel_descriptions`` (the implementation) rather
+than the ``@celery_app.task``-decorated wrapper: conftest stubs ``celery``, so
+the decorator yields a MagicMock and the real logic would never run.
 """
 
-import sys
 from pathlib import Path
-from types import ModuleType
 from unittest.mock import MagicMock, patch
 
-
-def _install_import_stubs() -> None:
-    """Stub ``celery_config`` before importing the task module.
-
-    Importing the real one pulls in the LangGraph-backed background-chat stack
-    and requires a live Redis, which a hermetic unit test must not need. The
-    stub only has to provide a ``.task`` decorator that returns the function
-    unchanged (mirrors tests/routes/incidentio/test_alert_rca.py).
-    """
-    celery_cfg = ModuleType("celery_config")
-
-    class _App:
-        def task(self, *dargs, **dkwargs):
-            def _decorator(fn):
-                return fn
-            # Support both @task and @task(...) usage.
-            if dargs and callable(dargs[0]) and not dkwargs:
-                return dargs[0]
-            return _decorator
-
-    celery_cfg.celery_app = _App()  # type: ignore[attr-defined]
-    sys.modules.setdefault("celery_config", celery_cfg)
-
-
-_install_import_stubs()
-
-from routes.slack import slack_channel_metadata as mod  # noqa: E402
+from routes.slack import slack_channel_metadata as mod
 
 ORG_A = "00000000-0000-0000-0000-00000000000a"
 ORG_B = "00000000-0000-0000-0000-00000000000b"
@@ -90,7 +66,7 @@ def _run(users_by_org, rows_per_org, connected_users=None, rls_ok=True):
                side_effect=lambda cur, cids: marked.append(list(cids))), \
          patch("routes.slack.slack_channels._enqueue_metadata",
                side_effect=lambda uid, cid: enqueued.append((uid, cid))):
-        result = mod.backfill_channel_descriptions()
+        result = mod._backfill_channel_descriptions()
     return result, enqueued, marked
 
 
@@ -205,7 +181,7 @@ def test_backfill_one_failing_org_does_not_stop_the_sweep():
          patch("routes.slack.slack_channels._mark_pending"), \
          patch("routes.slack.slack_channels._enqueue_metadata",
                side_effect=lambda uid, cid: enqueued.append((uid, cid))):
-        result = mod.backfill_channel_descriptions()
+        result = mod._backfill_channel_descriptions()
 
     assert enqueued == [(USER_B, "C2")]
     assert result == {"orgs": 1, "enqueued": 1}
@@ -213,7 +189,7 @@ def test_backfill_one_failing_org_does_not_stop_the_sweep():
 
 def test_backfill_returns_empty_when_org_enumeration_fails():
     with patch.object(mod, "_users_by_org", side_effect=RuntimeError("db down")):
-        assert mod.backfill_channel_descriptions() == {"orgs": 0, "enqueued": 0}
+        assert mod._backfill_channel_descriptions() == {"orgs": 0, "enqueued": 0}
 
 
 # --- the selection query itself ---------------------------------------------
@@ -247,6 +223,19 @@ def test_select_excludes_freshly_queued_pending_rows():
 
 
 # --- beat registration ------------------------------------------------------
+
+def test_implementation_is_a_plain_function():
+    """Regression guard for the tests above.
+
+    conftest stubs ``celery``, so ``@celery_app.task`` yields a MagicMock. If
+    these tests targeted the decorated wrapper they would exercise a mock and
+    pass while asserting nothing — which is exactly what happened before the
+    implementation was split out.
+    """
+    import types
+
+    assert isinstance(mod._backfill_channel_descriptions, types.FunctionType)
+
 
 def test_backfill_is_registered_on_the_beat_schedule():
     """Without a beat entry the tail never converges — that IS the bug.
