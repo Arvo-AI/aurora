@@ -27,19 +27,14 @@ METADATA_PROMPT = (
 )
 
 # --- Periodic backfill bounds ----------------------------------------------
-# Descriptions are normally enqueued by a reconcile pass (Slack connect, a manage
-# page load, an explicit refresh), which is bounded to MAX_AUTO_CHANNELS per
-# pass. The beat task below is the safety net that finishes the tail; these caps
-# bound its LLM spend and queue depth per run.
+# Descriptions are normally enqueued by a user-triggered reconcile pass, which is
+# capped per pass. This beat task is the safety net for the tail; these caps bound
+# its LLM spend and queue depth per run.
 BACKFILL_MAX_PER_ORG = 25
 BACKFILL_MAX_TOTAL = 200
 
-# A 'pending' row younger than this probably has a description task still in
-# flight, so re-enqueueing it would only duplicate the LLM call. Intentionally
-# NOT the same as the reconcile pass's 10-minute window: reconcile runs only when
-# a user is looking at the page (so a slightly eager retry is cheap and visible),
-# whereas this runs unattended across every org, so it waits longer to be sure a
-# row is genuinely stuck rather than merely slow.
+# How long a 'pending' row must sit before the sweep treats it as stuck rather
+# than still in flight (re-enqueueing early just duplicates the LLM call).
 BACKFILL_STALE_MINUTES = 15
 
 
@@ -258,9 +253,8 @@ _BACKFILL_LOG = "[SlackDescBackfill]"
 
 
 def _users_by_org() -> dict[str, list[str]]:
-    """Map org_id -> [user_id, ...]. ``users`` is NOT RLS-protected, so it can be
-    read before any org context is set — which is how a cross-org task discovers
-    the orgs it has to iterate (see the RLS notes in AGENTS.md)."""
+    """Map org_id -> [user_id, ...]. ``users`` is NOT RLS-protected, so reading it
+    before any org context is set is how a cross-org task finds its orgs."""
     from utils.db.connection_pool import db_pool
 
     with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
@@ -276,16 +270,10 @@ def _users_by_org() -> dict[str, list[str]]:
 def _rotate_orgs(org_ids: list[str], now: float | None = None) -> list[str]:
     """Rotate the org list so a different org leads each run.
 
-    The sweep stops at a global cap, so a fixed iteration order would let a few
-    large-backlog orgs consume the whole cap every run and starve the rest
-    indefinitely (the longest-waiting-first ordering in the query is only fair
-    *within* one org).
-
-    The offset is derived from wall-clock time rather than stored state: the beat
-    interval advances it by one each run, so every org takes a turn at the front
-    without needing a cursor in Redis or the DB (which would be one more thing to
-    migrate, and would reset anyway). Being a pure function of the clock also
-    means concurrent beat workers agree on the order.
+    The sweep stops at a global cap, so a fixed order would let a few
+    large-backlog orgs consume it every run and starve the rest. The offset comes
+    from the clock rather than stored state, so it needs no cursor to migrate and
+    concurrent beat workers agree on the order.
     """
     if not org_ids:
         return []
@@ -297,21 +285,12 @@ def _rotate_orgs(org_ids: list[str], now: float | None = None) -> list[str]:
 
 def _select_undescribed_channels(cur, limit: int) -> list[tuple[str, str]]:
     """Return [(channel_id, owner_user_id)] for member channels still awaiting a
-    description. Expects the caller to have set the org's RLS context already.
+    description. Caller must have set the org's RLS context.
 
-    Longest-waiting first, so repeated bounded runs drain the backlog fairly
-    instead of re-picking the same head of the list.
-
-    ``DISTINCT ON (channel_id)`` because the table is unique per
-    ``(user_id, provider, channel_id)``: when two org members each connected
-    Slack, the same channel has a row per member. Both rows describe one Slack
-    channel and the metadata write covers them all (it's keyed on channel_id), so
-    without the de-dupe we'd pay for the same LLM call twice.
-
-    'error'/'limit_reached' rows are deliberately excluded: the metadata task's
-    own retries already bound transient failures, and auto-retrying a hard
-    failure or a cost-capped org on a timer would just burn quota in a loop.
-    Those need an explicit regenerate.
+    Longest-waiting first so repeated bounded runs drain the backlog. DISTINCT ON
+    de-dupes the row-per-member the table keeps for each channel. 'error' and
+    'limit_reached' are excluded on purpose — retrying a hard failure or a
+    cost-capped org on a timer just burns quota; those need an explicit regenerate.
     """
     cur.execute(
         """SELECT channel_id, user_id FROM (
@@ -380,11 +359,9 @@ def _claim_org_channels(org_users: list[str], limit: int,
                         has_slack) -> list[tuple[str, str]]:
     """Claim up to ``limit`` of one org's undescribed channels for description.
 
-    "Claim" = select them, then mark them 'pending' with a fresh ``updated_at``
-    and COMMIT, so the rows no longer look unqueued to a concurrent sweep. The
-    caller enqueues the returned work afterwards.
-
-    Returns [(actor_user_id, channel_id)] — empty when there's nothing to do.
+    "Claim" = mark them 'pending' with a fresh ``updated_at`` and COMMIT, so a
+    concurrent sweep won't pick them up again. Returns [(actor_user_id,
+    channel_id)] for the caller to enqueue.
     """
     from utils.db.connection_pool import db_pool
     from utils.auth.stateless_auth import set_rls_context
@@ -424,34 +401,23 @@ def _claim_org_channels(org_users: list[str], limit: int,
 
 @celery_app.task(name="routes.slack.slack_channel_metadata.backfill_channel_descriptions")
 def backfill_channel_descriptions():
-    """Beat entry point — thin wrapper so the logic stays directly callable.
-
-    The decorated object is the Celery task, not the function, so keeping the
-    body in :func:`_backfill_channel_descriptions` is what lets tests (and any
-    other caller) invoke it without a broker. Mirrors
-    :func:`auto_register_channels_task` wrapping ``auto_register_channels``.
-    """
+    """Beat entry point. The body lives in the undecorated function below so tests
+    and other callers can invoke it without a broker."""
     return _backfill_channel_descriptions()
 
 
 def _backfill_channel_descriptions():
     """Make sure EVERY member channel eventually gets described.
 
-    Agent routing (``get_connected_slack_channels``) only offers channels whose
-    ``metadata_status`` is 'ready'. Descriptions are otherwise only enqueued by a
-    reconcile pass — Slack connect, a manage-page load, or an explicit refresh —
-    and each pass enqueues at most ``MAX_AUTO_CHANNELS``. In a workspace where
-    Aurora is a member of hundreds of channels, the tail past that cap only got
-    picked up if a human kept reloading the manage page, so those channels stayed
-    'pending' forever: active in Slack, but invisible to routing.
+    Routing only offers 'ready' channels, but descriptions were otherwise only
+    enqueued by user-triggered reconcile passes that cap each pass — so in a large
+    workspace the tail past that cap stayed 'pending' forever unless a human kept
+    reloading the manage page. Each run here sweeps every org for the
+    longest-waiting channels and enqueues a bounded batch, so coverage converges
+    on its own.
 
-    This closes that gap. Each run sweeps every org for the longest-waiting
-    member channels still 'pending'/'skipped' and enqueues a bounded batch, so
-    coverage converges on its own with no user action.
-
-    Deliberately DB-only (no Slack API calls), so running it across all orgs on a
-    timer can't trip Slack's rate limits; membership reconciliation stays with
-    :func:`~routes.slack.slack_channels.auto_register_channels`.
+    DB-only by design (no Slack API calls), so running across all orgs on a timer
+    can't trip Slack's rate limits.
     """
     from routes.slack.slack_channels import _enqueue_metadata
 
