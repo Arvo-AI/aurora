@@ -83,22 +83,17 @@ def seed_slack_memory(user_id: str, org_id: str | None = None) -> bool:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Resolve+configure RLS from the user first, then — if the caller
-                # supplied an explicit org — repoint RLS at it. The INSERT below
-                # must run with myapp.current_org_id matching the org_id it writes,
-                # or FORCE ROW LEVEL SECURITY rejects the row.
-                resolved_org_id = set_rls_context(
-                    cursor, conn, user_id, log_prefix="[SlackMemory:seed]"
+                # One SET, from the org we're about to write. The INSERT must run
+                # with myapp.current_org_id matching its org_id or FORCE ROW LEVEL
+                # SECURITY rejects the row.
+                org_id = set_rls_context(
+                    cursor, conn, user_id, org_id=org_id, log_prefix="[SlackMemory:seed]"
                 )
-                org_id = org_id or resolved_org_id
                 if not org_id:
                     logger.warning(
                         "[SlackMemory] No org for user; cannot seed Slack memory"
                     )
                     return False
-                if org_id != resolved_org_id:
-                    cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-                    conn.commit()
 
                 # Already present — never overwrite user/agent edits on reconnect.
                 cursor.execute(

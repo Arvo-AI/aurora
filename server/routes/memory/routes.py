@@ -63,7 +63,7 @@ def list_entries(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
 
             if category:
                 cursor.execute(
@@ -134,7 +134,7 @@ def create_entry(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
 
             # Detect an existing entry with the same (category, title). Without an
             # explicit overwrite, surface a 409 so the UI can ask the user whether
@@ -192,7 +192,7 @@ def get_entry(user_id, entry_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
 
             entry = fetch_entry_by_id(cursor, org_id, entry_id)
 
@@ -215,7 +215,7 @@ def delete_entry(user_id, entry_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
 
             # Look up the category + title first so we can distinguish "not found"
             # from a reserved/protected entry and return an accurate status/message.
@@ -303,7 +303,7 @@ def update_entry(user_id, entry_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
 
             # Look up the current category + title first so we can block editing a
             # system-managed entry (e.g. the Incident Index), which is read-only
@@ -416,7 +416,9 @@ def get_slack_memory(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
+            # Pin RLS to the org from the request, not the user's default org —
+            # otherwise an org-switched caller reads a different org than it filters on.
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
             entry = fetch_entry_by_title(
                 cursor, org_id, SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE
             )
@@ -429,7 +431,7 @@ def get_slack_memory(user_id):
             seed_slack_memory(user_id, org_id=org_id)
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
-                set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
+                set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
                 entry = fetch_entry_by_title(
                     cursor, org_id, SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE
                 )
@@ -505,7 +507,7 @@ def upload_file(user_id):
 
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
 
             cursor.execute(
                 """INSERT INTO artifacts
