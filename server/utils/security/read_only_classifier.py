@@ -109,10 +109,15 @@ CREDENTIAL_WORDS = frozenset({
 })
 
 # Fetching a kubeconfig only writes a local file and is the required first step
-# of every managed-Kubernetes investigation, so it stays allowed.
+# of every managed-Kubernetes investigation, so it stays allowed. Matched against
+# the leading positionals in order, never an unordered word set: otherwise
+# `kubectl get secret x aks get credentials` would smuggle the exemption's words
+# into scope and unlock a real secret read.
 CREDENTIAL_WORD_EXEMPT = (
-    ('aks', 'get', 'credentials'),       # az aks get-credentials
-    ('clusters', 'get', 'credentials'),  # gcloud container clusters get-credentials
+    ('az', 'aks', 'get-credentials'),
+    ('aks', 'get-credentials'),  # provider prefix already stripped by the caller
+    ('gcloud', 'container', 'clusters', 'get-credentials'),
+    ('container', 'clusters', 'get-credentials'),
 )
 
 # Options that turn an ordinary read into a secret dump.
@@ -157,6 +162,7 @@ class SegmentFacts(NamedTuple):
 
     executable: Optional[str]
     verb: Optional[str]
+    operation: tuple  # positional args in order, for prefix-anchored matching
     words: frozenset  # every operation word, for the CREDENTIAL_READS combos
     credential_words: frozenset  # words the credential rules are matched against
 
@@ -279,24 +285,61 @@ def analyze_segment(tokens: list[str]) -> SegmentFacts:
     return SegmentFacts(
         executable=_executable_of(operation),
         verb=verb,
+        operation=tuple(operation),
         words=frozenset(w for token in operation for w in _split_words(token)),
         credential_words=frozenset(_credential_words_of(operation, verb_index)),
     )
 
 
-def _is_credential_read(credential_words: set[str], all_words: set[str],
-                        flag_names: set[str]) -> bool:
+def _is_kubeconfig_fetch(operation: tuple) -> bool:
+    """Whether the operation is exactly a managed-Kubernetes kubeconfig fetch.
+
+    Anchored to the leading positionals in order, so credential words elsewhere
+    in the command cannot unlock the exemption.
+    """
+    return any(
+        operation[:len(combo)] == combo for combo in CREDENTIAL_WORD_EXEMPT
+    )
+
+
+def _is_credential_read(facts: list, flag_names: set) -> bool:
     """Whether the command hands back credentials, keys, secrets or tokens."""
-    if credential_words & CREDENTIAL_WORDS and not any(
-        all(part in credential_words for part in combo)
-        for combo in CREDENTIAL_WORD_EXEMPT
-    ):
-        return True
+    # Options that dump secrets gate the whole command.
     if flag_names & CREDENTIAL_FLAGS:
         return True
+
+    # A credential word in any segment blocks, unless *that* segment is exactly a
+    # kubeconfig fetch. Checked per segment so one exempt segment can't clear a
+    # credential read sitting in another.
+    for f in facts:
+        if f.credential_words & CREDENTIAL_WORDS and not _is_kubeconfig_fetch(f.operation):
+            return True
+
+    all_words = set().union(*(f.words for f in facts))
     return any(
         all(part in all_words for part in combo) for combo in CREDENTIAL_READS
     )
+
+
+# `--dry-run` only makes an unknown operation safe when it actually skips
+# execution. kubectl's `--dry-run=none` performs the real mutation, and
+# `=false` is the same trap, so the value is checked rather than dropped.
+_DRY_RUN_SKIPS_EXECUTION = frozenset({'client', 'server', 'true'})
+
+
+def _is_real_dry_run(segments: list) -> bool:
+    """Whether every segment carries a `--dry-run` that genuinely skips writes."""
+    found = False
+    for tokens in segments:
+        for token in tokens:
+            name, _, value = token.partition('=')
+            if name.lower() != '--dry-run':
+                continue
+            # `--dry-run=none` / `=false` execute for real.
+            if value and value.lower() not in _DRY_RUN_SKIPS_EXECUTION:
+                return False
+            found = True
+    return found
 
 
 def is_read_only_command(command: str) -> bool:
@@ -330,11 +373,7 @@ def is_read_only_command(command: str) -> bool:
         if t.startswith('-') and t != '--'
     }
 
-    if _is_credential_read(
-        set().union(*(f.credential_words for f in facts)),
-        set().union(*(f.words for f in facts)),
-        flag_names,
-    ):
+    if _is_credential_read(facts, flag_names):
         return False
 
     # A write verb in any segment disqualifies the whole command.
@@ -353,7 +392,7 @@ def is_read_only_command(command: str) -> bool:
     # The leading command decides.
     if facts[0].verb in READ_ONLY_VERBS:
         return True
-    if '--dry-run' in flag_names:
+    if _is_real_dry_run(segments):
         return True
 
     # Unknown or absent operation.

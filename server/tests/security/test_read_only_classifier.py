@@ -171,6 +171,55 @@ def test_credential_word_in_a_resource_name_is_not_a_credential_read(is_read_onl
 
 
 # ---------------------------------------------------------------------------
+# The kubeconfig exemption is anchored to the operation prefix. Matching it
+# against an unordered word set let a real secret read borrow the exemption's
+# words: `kubectl get secret x aks get credentials` put 'aks'/'credentials' in
+# scope and cleared the 'secret'.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("command", [
+    "kubectl get secret x aks get credentials -o yaml",
+    "kubectl get secrets aks get credentials",
+    "kubectl get secret/my-tls clusters get credentials",
+    "kubectl get secret x container clusters get-credentials",
+])
+def test_exemption_words_cannot_unlock_a_credential_read(is_read_only, command):
+    assert is_read_only(command) is False, command
+
+
+@pytest.mark.parametrize("command", [
+    "az aks get-credentials --name c --resource-group r",
+    "aks get-credentials --name c --resource-group r",
+    "gcloud container clusters get-credentials c --zone z",
+    "container clusters get-credentials c",
+])
+def test_kubeconfig_fetch_stays_allowed(is_read_only, command):
+    assert is_read_only(command) is True, command
+
+
+# ---------------------------------------------------------------------------
+# `--dry-run` only rescues an unknown operation when it really skips execution.
+# kubectl's `--dry-run=none` performs the mutation for real.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("command", [
+    "kubectl certificate approve x --dry-run=none",
+    "kubectl certificate approve x --dry-run=false",
+    "kubectl certificate approve x --dry-run=NONE",
+])
+def test_non_skipping_dry_run_values_are_not_read_only(is_read_only, command):
+    assert is_read_only(command) is False, command
+
+
+@pytest.mark.parametrize("command", [
+    "kubectl certificate approve x --dry-run",
+    "kubectl certificate approve x --dry-run=client",
+    "kubectl certificate approve x --dry-run=server",
+    "kubectl certificate approve x --dry-run=true",
+])
+def test_real_dry_run_is_read_only(is_read_only, command):
+    assert is_read_only(command) is True, command
+
+
+# ---------------------------------------------------------------------------
 # Mutations, including ones whose option names look read-only.
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("command", [
