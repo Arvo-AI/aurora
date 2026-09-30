@@ -15,6 +15,8 @@ ORG_B = "00000000-0000-0000-0000-00000000000b"
 USER_A = "11111111-1111-1111-1111-11111111111a"
 USER_A2 = "11111111-1111-1111-1111-11111111112a"
 USER_B = "11111111-1111-1111-1111-11111111111b"
+TEAM_1 = "T1000000"
+TEAM_2 = "T2000000"
 
 
 def _db(fetchall_rows=None):
@@ -31,25 +33,29 @@ def _db(fetchall_rows=None):
 
 
 def _run(users_by_org, rows_per_org, connected_users=None, rls_ok=True,
-         claimed=None):
+         claimed=None, teams=None):
     """Run the backfill, returning (result, enqueued, mark_pending_calls).
 
-    ``rows_per_org`` is consumed in org iteration order; ``claimed`` restricts
+    ``rows_per_org`` is consumed in org iteration order; rows are
+    (channel_id, owner_user_id[, team_id]) — team_id defaults to TEAM_1 so the
+    common case stays terse. ``teams`` maps user_id -> the workspace their Slack
+    connection belongs to (default: everyone on TEAM_1). ``claimed`` restricts
     which channel_ids the UPDATE reports as won (default: all). Rotation is
     pinned to dict order here and covered by its own tests below.
     """
     enqueued = []
     marked = []
-    batches = list(rows_per_org)
+    batches = [[_row(r) for r in batch] for batch in rows_per_org]
 
     def fake_select(cur, limit):
         batch = batches.pop(0) if batches else []
         return batch[:limit]
 
-    def fake_client(uid):
-        if connected_users is None:
-            return MagicMock()
-        return MagicMock() if uid in connected_users else None
+    def fake_creds(uid, provider):
+        if connected_users is not None and uid not in connected_users:
+            return None
+        return {"access_token": "xoxb-test",
+                "team_id": (teams or {}).get(uid, TEAM_1)}
 
     def fake_mark_pending(cur, cids, stale_minutes=None):
         marked.append(list(cids))
@@ -61,8 +67,8 @@ def _run(users_by_org, rows_per_org, connected_users=None, rls_ok=True,
          patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
          patch("utils.auth.stateless_auth.set_rls_context",
                return_value=(ORG_A if rls_ok else None)), \
-         patch("connectors.slack_connector.client.get_slack_client_for_user",
-               side_effect=fake_client), \
+         patch("utils.auth.stateless_auth.get_credentials_from_db",
+               side_effect=fake_creds), \
          patch.object(mod, "_select_undescribed_channels", side_effect=fake_select), \
          patch("routes.slack.slack_channels._mark_pending",
                side_effect=fake_mark_pending), \
@@ -70,6 +76,11 @@ def _run(users_by_org, rows_per_org, connected_users=None, rls_ok=True,
                side_effect=lambda uid, cid: enqueued.append((uid, cid))):
         result = mod._backfill_channel_descriptions()
     return result, enqueued, marked
+
+
+def _row(row):
+    """Pad a (channel_id, owner) test row out to the query's 3-tuple shape."""
+    return row if len(row) == 3 else (row[0], row[1], TEAM_1)
 
 
 # --- happy path -------------------------------------------------------------
@@ -132,10 +143,10 @@ def test_backfill_caps_total_across_orgs():
 
 def test_backfill_falls_back_to_another_connected_org_member():
     """The row owner disconnected Slack, but creds are org-shared — use another
-    connected member so the channel isn't stranded."""
+    member connected to the SAME workspace so the channel isn't stranded."""
     _result, enqueued, _marked = _run(
         {ORG_A: [USER_A, USER_A2]},
-        [[("C1", USER_A)]],
+        [[("C1", USER_A, TEAM_1)]],
         connected_users={USER_A2},  # owner USER_A has no Slack creds
     )
     assert enqueued == [(USER_A2, "C1")]
@@ -148,6 +159,21 @@ def test_backfill_skips_org_with_no_slack_connection():
         {ORG_A: [USER_A]},
         [[("C1", USER_A)]],
         connected_users=set(),
+    )
+    assert enqueued == []
+    assert marked == []
+
+
+def test_backfill_skips_a_channel_whose_only_standin_is_another_workspace():
+    """Slack creds are org-shared, but an org can connect several workspaces. A
+    token for the wrong workspace can't read the channel: conversations.info
+    returns nothing and the task would persist an invented description as
+    'ready'. Leave the row pending instead."""
+    _result, enqueued, marked = _run(
+        {ORG_A: [USER_A, USER_A2]},
+        [[("C1", USER_A, TEAM_1)]],
+        connected_users={USER_A2},          # owner disconnected
+        teams={USER_A2: TEAM_2},            # ...and the stand-in is on another team
     )
     assert enqueued == []
     assert marked == []
@@ -171,7 +197,7 @@ def test_backfill_one_failing_org_does_not_stop_the_sweep():
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("transient DB error")
-        return [("C2", USER_B)]
+        return [("C2", USER_B, TEAM_1)]
 
     dbcm, _conn, _cur = _db()
     # now=0 pins the rotation so the failing org is the one visited first.
@@ -179,8 +205,8 @@ def test_backfill_one_failing_org_does_not_stop_the_sweep():
          patch.object(mod, "_rotate_orgs", return_value=[ORG_A, ORG_B]), \
          patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
          patch("utils.auth.stateless_auth.set_rls_context", return_value=ORG_A), \
-         patch("connectors.slack_connector.client.get_slack_client_for_user",
-               return_value=MagicMock()), \
+         patch("utils.auth.stateless_auth.get_credentials_from_db",
+               return_value={"access_token": "xoxb-test", "team_id": TEAM_1}), \
          patch.object(mod, "_select_undescribed_channels", side_effect=flaky_select), \
          patch("routes.slack.slack_channels._mark_pending",
                side_effect=lambda cur, cids, stale_minutes=None: list(cids)), \
@@ -235,10 +261,10 @@ def test_backfill_claim_reasserts_the_staleness_window():
     with patch("utils.auth.stateless_auth.users_by_org", return_value={ORG_A: [USER_A]}), \
          patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
          patch("utils.auth.stateless_auth.set_rls_context", return_value=ORG_A), \
-         patch("connectors.slack_connector.client.get_slack_client_for_user",
-               return_value=MagicMock()), \
+         patch("utils.auth.stateless_auth.get_credentials_from_db",
+               return_value={"access_token": "xoxb-test", "team_id": TEAM_1}), \
          patch.object(mod, "_select_undescribed_channels",
-                      return_value=[("C1", USER_A)]), \
+                      return_value=[("C1", USER_A, TEAM_1)]), \
          patch("routes.slack.slack_channels._mark_pending", side_effect=capture), \
          patch("routes.slack.slack_channels._enqueue_metadata"):
         mod._backfill_channel_descriptions()
@@ -286,8 +312,8 @@ def test_select_only_targets_member_channels_awaiting_description():
     """'error'/'limit_reached' must NOT be swept: retrying a hard failure or a
     cost-capped org on a timer would burn quota in a loop."""
     cur = MagicMock()
-    cur.fetchall.return_value = [("C1", USER_A)]
-    assert mod._select_undescribed_channels(cur, 25) == [("C1", USER_A)]
+    cur.fetchall.return_value = [("C1", USER_A, TEAM_1)]
+    assert mod._select_undescribed_channels(cur, 25) == [("C1", USER_A, TEAM_1)]
 
     sql, params = cur.execute.call_args.args
     assert "is_member" in sql
@@ -299,6 +325,9 @@ def test_select_only_targets_member_channels_awaiting_description():
     assert "ORDER BY d.updated_at ASC" in sql
     # One LLM call per channel even when several org members each hold a row.
     assert "DISTINCT ON (channel_id)" in sql
+    # The workspace comes back with the row: the actor picker needs it to reject a
+    # stand-in whose token belongs to a different Slack workspace.
+    assert "team_id" in sql
     assert params == (mod.BACKFILL_STALE_MINUTES, 25)
 
 
@@ -362,16 +391,97 @@ def test_beat_schedule_uses_the_shared_interval_constant():
 
 # --- _assign_actors (credential selection in isolation) ---------------------
 
+class _CountingProbe(mod._SlackCredProbe):
+    """_SlackCredProbe with the credential fetch stubbed, counting round trips.
+
+    ``teams`` maps connected user_id -> the workspace their Slack token belongs
+    to; a user absent from it has no usable credentials.
+    """
+
+    def __init__(self, teams: dict):
+        super().__init__()
+        self._teams = teams
+        self.lookups = 0
+
+    def _creds(self, user_id: str):
+        if user_id not in self._cache:
+            self.lookups += 1
+            self._cache[user_id] = (
+                {"access_token": "xoxb-test", "team_id": self._teams[user_id]}
+                if user_id in self._teams else None
+            )
+        return self._cache[user_id]
+
+
+def _assign_actors_with(rows, org_users, teams: dict):
+    return mod._assign_actors(rows, org_users, _CountingProbe(teams))
+
+
 def test_assign_actors_prefers_the_row_owner():
     """No extra credential lookup when the owner is still connected."""
-    assigned = _assign_actors_with([("C1", USER_A)], [USER_A, USER_A2], {USER_A, USER_A2})
+    assigned = _assign_actors_with([("C1", USER_A, TEAM_1)], [USER_A, USER_A2],
+                                   {USER_A: TEAM_1, USER_A2: TEAM_1})
     assert assigned == [(USER_A, "C1")]
 
 
 def test_assign_actors_drops_channels_nobody_can_reach():
-    assigned = _assign_actors_with([("C1", USER_A)], [USER_A], set())
+    assigned = _assign_actors_with([("C1", USER_A, TEAM_1)], [USER_A], {})
     assert assigned == []
 
 
-def _assign_actors_with(rows, org_users, connected):
-    return mod._assign_actors(rows, org_users, lambda uid: uid in connected)
+def test_assign_actors_rejects_an_owner_who_moved_workspace():
+    """The owner registered the row, but a disconnect/reconnect can point their
+    token at a different workspace — where this channel doesn't exist."""
+    assigned = _assign_actors_with([("C1", USER_A, TEAM_1)], [USER_A],
+                                   {USER_A: TEAM_2})
+    assert assigned == []
+
+
+def test_assign_actors_requires_the_fallback_to_match_the_workspace():
+    """An org can connect several Slack workspaces. A token from the wrong one
+    can't read the channel: conversations.info comes back empty and we'd save an
+    invented description as 'ready'. Leave the row pending instead."""
+    assigned = _assign_actors_with(
+        [("C1", USER_A, TEAM_1)], [USER_A, USER_A2],
+        {USER_A2: TEAM_2},  # owner disconnected; only stand-in is on another team
+    )
+    assert assigned == []
+
+
+def test_assign_actors_picks_the_fallback_on_the_channels_workspace():
+    """With both workspaces connected, the stand-in must be the one whose token
+    belongs to the channel's workspace — not merely the first connected member."""
+    assigned = _assign_actors_with(
+        [("C1", USER_A, TEAM_2)], [USER_A, USER_A2, USER_B],
+        {USER_A2: TEAM_1, USER_B: TEAM_2},
+    )
+    assert assigned == [(USER_B, "C1")]
+
+
+def test_assign_actors_allows_an_untagged_row_when_the_org_has_one_workspace():
+    """Rows registered before workspace tagging have team_id NULL. A single
+    connected workspace makes the stand-in unambiguous, so don't strand them."""
+    assigned = _assign_actors_with(
+        [("C1", USER_A, None)], [USER_A, USER_A2], {USER_A2: TEAM_1},
+    )
+    assert assigned == [(USER_A2, "C1")]
+
+
+def test_assign_actors_skips_an_untagged_row_in_a_multi_workspace_org():
+    """Untagged row + more than one connected workspace = a guess. Don't take it."""
+    assigned = _assign_actors_with(
+        [("C1", USER_A, None)], [USER_A, USER_A2, USER_B],
+        {USER_A2: TEAM_1, USER_B: TEAM_2},
+    )
+    assert assigned == []
+
+
+def test_assign_actors_resolves_each_workspace_fallback_once():
+    """Probing a stand-in is a DB + Vault round trip, so the per-workspace answer
+    must be memoized across the batch."""
+    probe = _CountingProbe({USER_A2: TEAM_1})
+    rows = [(f"C{i}", USER_A, TEAM_1) for i in range(20)]
+    assigned = mod._assign_actors(rows, [USER_A, USER_A2], probe)
+    assert len(assigned) == 20
+    # One miss for the owner + one hit for the stand-in, not one pair per row.
+    assert probe.lookups == 2

@@ -270,16 +270,19 @@ def _rotate_orgs(org_ids: list[str], now: float | None = None) -> list[str]:
     return org_ids[offset:] + org_ids[:offset]
 
 
-def _select_undescribed_channels(cur, limit: int) -> list[tuple[str, str]]:
-    """Return [(channel_id, owner_user_id)] for member channels still awaiting a
-    description. Caller must have set the org's RLS context.
+def _select_undescribed_channels(cur, limit: int) -> list[tuple[str, str, str | None]]:
+    """Return [(channel_id, owner_user_id, team_id)] for member channels still
+    awaiting a description. Caller must have set the org's RLS context.
+
+    ``team_id`` is the Slack workspace the row was registered against; the actor
+    picker needs it because an org can connect more than one workspace.
 
     Longest-waiting first so bounded runs drain the backlog; DISTINCT ON de-dupes
     the row-per-member. 'error'/'limit_reached' excluded — retrying burns quota.
     """
     cur.execute(
-        """SELECT channel_id, user_id FROM (
-               SELECT DISTINCT ON (channel_id) channel_id, user_id, updated_at
+        """SELECT channel_id, user_id, team_id FROM (
+               SELECT DISTINCT ON (channel_id) channel_id, user_id, team_id, updated_at
                  FROM slack_channels
                 WHERE provider = 'slack' AND is_member
                   AND (
@@ -293,55 +296,110 @@ def _select_undescribed_channels(cur, limit: int) -> list[tuple[str, str]]:
            LIMIT %s""",
         (BACKFILL_STALE_MINUTES, limit),
     )
-    return [(row[0], row[1]) for row in cur.fetchall()]
+    return [(row[0], row[1], row[2]) for row in cur.fetchall()]
 
 
 class _SlackCredProbe:
-    """Memoized "can this user reach Slack?" check.
+    """Memoized "can this user reach Slack, and which workspace?" lookup.
 
     Each probe is a DB + Vault round trip, and a sweep asks about the same users
-    repeatedly, so answers are cached for the lifetime of one run.
+    repeatedly, so answers are cached for the lifetime of one run. The workspace
+    matters as much as the yes/no: an org can hold Slack connections for several
+    workspaces, and a token from the wrong one can't read the channel.
     """
 
     def __init__(self):
-        self._cache: dict[str, bool] = {}
+        self._cache: dict[str, dict | None] = {}
 
-    def __call__(self, user_id: str) -> bool:
+    def _creds(self, user_id: str) -> dict | None:
         if user_id not in self._cache:
-            from connectors.slack_connector.client import get_slack_client_for_user
+            from utils.auth.stateless_auth import get_credentials_from_db
             try:
-                self._cache[user_id] = get_slack_client_for_user(user_id) is not None
+                creds = get_credentials_from_db(user_id, "slack") or {}
             except Exception:
-                self._cache[user_id] = False
+                creds = {}
+            self._cache[user_id] = creds if creds.get("access_token") else None
         return self._cache[user_id]
 
+    def __call__(self, user_id: str) -> bool:
+        """True when the user still has usable Slack credentials."""
+        return self._creds(user_id) is not None
 
-def _assign_actors(rows: list[tuple[str, str]], org_users: list[str],
-                   has_slack) -> list[tuple[str, str]]:
+    def team(self, user_id: str) -> str | None:
+        """The Slack workspace the user's connection belongs to, if recorded."""
+        return (self._creds(user_id) or {}).get("team_id")
+
+
+def _can_reach(probe: "_SlackCredProbe", user_id: str, team_id: str | None) -> bool:
+    """True when the user's Slack token belongs to the channel's workspace.
+
+    An untagged row (registered before workspace tagging, or Slack never returned
+    a team) can't be checked, so any usable connection counts — the caller
+    disambiguates those separately.
+    """
+    if not probe(user_id):
+        return False
+    return team_id is None or probe.team(user_id) == team_id
+
+
+def _fallback_actor(org_users: list[str], team_id: str | None,
+                    probe: "_SlackCredProbe") -> str | None:
+    """Pick an org member whose Slack token can actually read ``team_id``.
+
+    Credentials are org-shared, but an org can connect several workspaces, so a
+    stand-in for a disconnected owner is only safe if its token belongs to the
+    channel's workspace. A foreign token makes conversations.info return nothing
+    and we'd persist an invented description as 'ready'.
+    """
+    connected = [uid for uid in org_users if probe(uid)]
+
+    # Workspace is recorded on the row — demand an exact match.
+    if team_id:
+        return next((uid for uid in connected if probe.team(uid) == team_id), None)
+
+    # Row predates workspace tagging (or Slack never returned one). Any connected
+    # member is provably right only if the org has a single workspace; otherwise
+    # we'd be guessing, so leave the row pending.
+    teams = {probe.team(uid) for uid in connected}
+    return connected[0] if len(teams) == 1 else None
+
+
+def _assign_actors(rows: list[tuple[str, str, str | None]], org_users: list[str],
+                   probe: "_SlackCredProbe") -> list[tuple[str, str]]:
     """Pair each channel with the user_id whose credentials should describe it.
 
-    Returns [(actor_user_id, channel_id)], skipping channels nobody can reach.
+    ``rows`` is [(channel_id, owner_user_id, team_id)] as returned by
+    :func:`_select_undescribed_channels`. Returns [(actor_user_id, channel_id)],
+    skipping channels nobody can reach.
     """
-    # Prefer the row's owner — the identity whose token registered the channel.
-    # Only when an owner has since disconnected Slack do we need a stand-in, so
-    # the (DB + Vault) lookup for one is done lazily.
-    fallback = None
-    if any(not has_slack(owner_id) for _cid, owner_id in rows):
-        fallback = next((uid for uid in org_users if has_slack(uid)), None)
+    # Memoized per workspace: resolving a stand-in walks the org's members and
+    # each probe is a DB + Vault round trip.
+    fallbacks: dict[str | None, str | None] = {}
 
     assigned = []
-    for channel_id, owner_id in rows:
-        actor = owner_id if has_slack(owner_id) else fallback
-        # Nobody in the org can reach Slack any more — leave the row pending
-        # rather than queueing a task that would only mark it 'error' (which is
-        # never auto-retried).
+    for channel_id, owner_id, team_id in rows:
+        # Prefer the row's owner — the identity whose token registered it. Still
+        # workspace-checked: an owner who disconnected and reconnected to a
+        # different workspace can no longer read this channel.
+        if _can_reach(probe, owner_id, team_id):
+            assigned.append((owner_id, channel_id))
+            continue
+
+        # Owner is gone (or moved workspace), so look for a stand-in.
+        if team_id not in fallbacks:
+            fallbacks[team_id] = _fallback_actor(org_users, team_id, probe)
+        actor = fallbacks[team_id]
+
+        # No compatible connection left in the org — leave the row pending rather
+        # than queueing a task that would only mark it 'error' (which is never
+        # auto-retried) or describe it from an empty, wrong-workspace context.
         if actor:
             assigned.append((actor, channel_id))
     return assigned
 
 
 def _claim_org_channels(org_users: list[str], limit: int,
-                        has_slack) -> list[tuple[str, str]]:
+                        probe: "_SlackCredProbe") -> list[tuple[str, str]]:
     """Claim up to ``limit`` of one org's undescribed channels for description.
 
     "Claim" = mark them 'pending' with a fresh ``updated_at`` and COMMIT, so a
@@ -363,7 +421,7 @@ def _claim_org_channels(org_users: list[str], limit: int,
     if not rows:
         return []
 
-    to_enqueue = _assign_actors(rows, org_users, has_slack)
+    to_enqueue = _assign_actors(rows, org_users, probe)
     if not to_enqueue:
         return []
 
@@ -407,7 +465,7 @@ def _backfill_channel_descriptions():
         logger.warning("%s could not enumerate orgs", _BACKFILL_LOG, exc_info=True)
         return {"orgs": 0, "enqueued": 0}
 
-    has_slack = _SlackCredProbe()
+    probe = _SlackCredProbe()
     total = 0
     orgs_touched = 0
 
@@ -424,7 +482,7 @@ def _backfill_channel_descriptions():
             to_enqueue = _claim_org_channels(
                 org_users,
                 min(BACKFILL_MAX_PER_ORG, BACKFILL_MAX_TOTAL - total),
-                has_slack,
+                probe,
             )
         except Exception:
             # One org's failure must not starve the rest of the sweep.

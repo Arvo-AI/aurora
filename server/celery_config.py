@@ -121,6 +121,11 @@ celery_app.conf.update(
     # Bitbucket Incident Prevention must not sit behind a Save of N metadata jobs.
     task_routes={
         "bitbucket.enable_change_gating_bulk": {"queue": "high"},
+        # Same reason: a user clicking "Activate" on the Slack manage page must not
+        # queue behind the description backfill, which can hold hundreds of
+        # generate_channel_metadata jobs in the default queue (observed: an
+        # activation sat at position 289/453, ~85 min behind).
+        "routes.slack.slack_channel_metadata.bulk_activate_channels_task": {"queue": "high"},
     },
     # Explicitly include task modules from their new locations
     include=[
