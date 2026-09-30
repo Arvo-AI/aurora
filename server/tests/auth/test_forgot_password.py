@@ -732,10 +732,25 @@ class TestPublicAuthRateLimitKey:
             assert get_public_auth_rate_limit_key().startswith("ip:")
 
     def test_reading_the_body_leaves_it_available_to_the_route(self, reset_env):
-        # The limiter key reads request JSON before the view does; Flask caches
-        # it, but if that ever stopped holding the route would see an empty body.
+        # The limiter calls the key function before the view runs, so the body is
+        # read twice per request. Flask caches the parsed JSON, but the limiter is
+        # not initialized on this test app, so the first read has to be staged
+        # explicitly — otherwise this passes without the double read ever happening.
+        from utils.web.limiter_ext import get_public_auth_rate_limit_key
+
         client, cursor, email_svc = reset_env
+        keys: list[str] = []
+
+        @client.application.before_request
+        def _read_key() -> None:
+            keys.append(get_public_auth_rate_limit_key())
+
         _issue_code(cursor, expires_in_min=-5)
         status, _body = _forgot(client, _EMAIL)
+
+        # The key really was derived from the body, ahead of the view.
+        assert keys == [f"email:{hashlib.sha256(_EMAIL.encode()).hexdigest()}"]
+        # And the view still read the same body rather than an empty one.
         assert status == 200
         email_svc.send_password_reset_email.assert_called_once()
+        assert email_svc.send_password_reset_email.call_args.args[0] == _EMAIL
