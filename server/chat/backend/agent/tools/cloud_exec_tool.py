@@ -32,6 +32,12 @@ from .cloud_provider_utils import determine_target_provider_from_context
 from chat.backend.agent.prompt.prompt_builder import CLOUD_EXEC_PROVIDERS
 from chat.backend.agent.access import ModeAccessController
 from utils.cloud.cloud_utils import get_mode_from_context
+# Ask-mode read-only gate. Re-exported here because callers (and tests) have
+# always imported it from this module.
+from utils.security.read_only_classifier import (  # noqa: F401
+    describe_rejection,
+    is_read_only_command,
+)
 from utils.log_sanitizer import hash_for_log
 
 
@@ -1156,64 +1162,6 @@ def setup_flyio_environment_isolated(user_id: str, selected_org: str | None = No
         return False, None, None, None
 
 
-def is_read_only_command(command: str) -> bool:
-    """Check if a cloud command is read-only (list, describe, get, etc.).
-
-    Matches on the command's verb tokens, not a substring scan: a bare
-    `verb in command` test classifies `az group delete --name my-logs-rg` as
-    read-only because "logs" appears in the resource name. Defaults to False.
-    """
-    READ_ONLY_VERBS = frozenset({
-        'list', 'describe', 'get', 'show', 'config', 'version', 'info', 'status',
-        'read', 'view', 'help', 'logs', 'log', 'top', 'explain', 'diff', 'search',
-        'query', 'export', 'devices', 'keys', 'routes', 'settings',
-        # Hyphenated subcommands are single tokens, so they need listing outright.
-        # `aks get-credentials` only writes a local kubeconfig and is the required
-        # first step of AKS investigation, so Ask mode must allow it.
-        'get-credentials', 'list-keys', 'show-connection-string', 'get-versions',
-        'list-deleted', 'check-name', 'show-usage',
-    })
-    WRITE_VERBS = frozenset({
-        'delete', 'destroy', 'remove', 'rm', 'create', 'apply', 'update', 'set',
-        'patch', 'replace', 'edit', 'scale', 'drain', 'cordon', 'uncordon', 'exec',
-        'attach', 'port-forward', 'cp', 'run', 'restart', 'start', 'stop', 'add',
-        'put', 'write', 'invoke', 'rollout', 'taint', 'label', 'annotate', 'login',
-    })
-
-    try:
-        tokens = [t.lower() for t in shlex.split(command) if not t.startswith('-')]
-    except ValueError:
-        return False
-
-    # Some reads return credentials. They pass a verb check ("list", "show") but
-    # hand back keys, secrets or connection strings, so Ask mode must refuse them
-    # even though they mutate nothing.
-    CREDENTIAL_READS = (
-        ('storage', 'account', 'keys'), ('storage', 'account', 'show-connection-string'),
-        ('keyvault', 'secret'), ('keyvault', 'key'), ('keyvault', 'certificate'),
-        ('ad', 'sp', 'credential'), ('ad', 'app', 'credential'),
-        ('redis', 'list-keys'), ('cosmosdb', 'keys'),
-        ('servicebus', 'namespace', 'authorization-rule', 'keys'),
-        ('eventhubs', 'namespace', 'authorization-rule', 'keys'),
-        ('acr', 'credential'), ('batch', 'account', 'keys'),
-        ('secrets', 'get'), ('secrets', 'versions'),   # gcloud
-        ('secretsmanager', 'get-secret-value'), ('iam', 'create-access-key'),  # aws
-    )
-    if any(all(part in tokens for part in combo) for combo in CREDENTIAL_READS):
-        return False
-
-    # Any write verb anywhere disqualifies the command outright.
-    if any(t in WRITE_VERBS for t in tokens):
-        return False
-    if any(t in READ_ONLY_VERBS for t in tokens):
-        return True
-    if '--dry-run' in command.lower():
-        return True
-
-    # Default to **not** read-only to err on the side of caution.
-    return False
-
-
 def get_command_timeout(command: str, user_timeout: int = None) -> int:
     """Determine timeout for a command. Use user_timeout if provided, else adapt based on command type."""
     if user_timeout is not None:
@@ -1268,6 +1216,7 @@ def _cloud_exec_aws_multi_account(
         current_mode,
         is_read_only_command(command),
         command,
+        describe_rejection(command),
     )
     if not allowed:
         logger.warning(read_only_message)
@@ -1513,7 +1462,7 @@ def _cloud_exec_azure_multi_subscription(
 
     current_mode = get_mode_from_context()
     allowed, read_only_message = ModeAccessController.ensure_cloud_command_allowed(
-        current_mode, is_read_only_command(command), command,
+        current_mode, is_read_only_command(command), command, describe_rejection(command),
     )
     if not allowed:
         return json.dumps({
@@ -1949,6 +1898,7 @@ Security & Compliance
                     current_mode,
                     is_read_only_command(command),
                     command,
+                    describe_rejection(command),
                 )
                 if not allowed:
                     logger.warning(read_only_message)
@@ -2141,6 +2091,7 @@ Security & Compliance
             current_mode,
             is_read_only_command(command),
             command,
+            describe_rejection(command),
         )
         if not allowed:
             logger.warning(read_only_message)
