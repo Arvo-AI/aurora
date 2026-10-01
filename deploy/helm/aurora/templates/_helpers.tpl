@@ -51,6 +51,28 @@ Usage: image: {{ include "aurora.image" (dict "image" "server" "global" $) | quo
 {{- end -}}
 
 {{/*
+Resolve the MinIO image reference.
+
+Upstream deleted minio/minio from Docker Hub in Sept 2026, so we publish a
+rebuild from their GitHub release binary. Defaults to ghcr.io/arvo-ai rather
+than image.registry, since that is Aurora's own registry and users who point
+image.registry at a private mirror have not necessarily mirrored this one.
+
+The inline defaults are load-bearing: `helm upgrade --reuse-values` does not
+merge new chart defaults, so upgrades from <=1.5.1 reach here with
+services.minio.image unset. Digest wins over tag when set.
+*/}}
+{{- define "aurora.minioImage" -}}
+{{- $img := .Values.services.minio.image | default dict -}}
+{{- $repo := $img.repository | default "ghcr.io/arvo-ai/aurora-minio" -}}
+{{- if $img.digest -}}
+{{- printf "%s@%s" $repo $img.digest -}}
+{{- else -}}
+{{- printf "%s:%s" $repo ($img.tag | default "RELEASE.2025-04-22T22-12-26Z") -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Pod scheduling block (tolerations, nodeSelector, affinity).
 Pass a dict with "service" (key into .Values.scheduling) and "global" (top-level context).
 When scheduling.<service> is set, it fully replaces the global defaults for that service.

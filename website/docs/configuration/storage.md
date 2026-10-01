@@ -87,6 +87,17 @@ STORAGE_SECRET_KEY=...
 
 ### MinIO
 
+:::warning MinIO images were removed from public registries
+In September 2026 MinIO deleted `minio/minio` and `minio/mc` from Docker Hub, closed
+anonymous pulls on `quay.io`, and `dl.min.io` now returns `410 Gone`. The community
+edition is [source-only and no longer maintained](https://github.com/minio/minio).
+
+Aurora's Helm chart (`services.minio.enabled: true`) pulls a rebuild of the last AGPL
+release from `ghcr.io/arvo-ai/aurora-minio`. That image is **frozen and receives no
+security patches** — use it for local dev only. For anything else, pick one of the
+managed options above.
+:::
+
 ```bash
 STORAGE_TYPE=minio
 STORAGE_BUCKET=aurora

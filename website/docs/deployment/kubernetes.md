@@ -20,7 +20,7 @@ Deploy Aurora on any Kubernetes cluster using Helm.
 - **GCP GKE / Azure AKS:** Create a cluster with default settings
 
 :::note Third-party images
-Aurora deploys several third-party images from public registries. Your nodes must be able to pull: `postgres:15-alpine`, `redis:7-alpine`, `hashicorp/vault:1.15`, `searxng/searxng:*`, `memgraph/memgraph-mage:3.8.1`. Optional components (e.g. `services.minio.enabled: true`) may pull additional images. For air-gapped clusters, mirror these to a private registry and review enabled services in your `values.yaml`.
+Aurora deploys several third-party images from public registries. Your nodes must be able to pull: `postgres:15-alpine`, `redis:7-alpine`, `hashicorp/vault:1.15`, `searxng/searxng:*`, `memgraph/memgraph-mage:3.8.1`. With `services.minio.enabled: true` you also need `ghcr.io/arvo-ai/aurora-minio` and `amazon/aws-cli` (bucket-creation hook). For air-gapped clusters, mirror these to a private registry and review enabled services in your `values.yaml`.
 :::
 
 ### Required tools
@@ -41,7 +41,7 @@ Aurora stores files in S3-compatible object storage. Have your bucket details re
 | AWS S3 | `https://s3.amazonaws.com` | [EKS guide](./eks-setup) covers bucket creation |
 | GCS (S3 interop) | `https://storage.googleapis.com` | [Create HMAC keys](https://cloud.google.com/storage/docs/authentication/hmackeys) |
 | Cloudflare R2 | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` | Region: `auto` |
-| MinIO | `http://minio:9000` | Self-hosted |
+| MinIO | `http://minio:9000` | Self-hosted; see the [storage guide](../configuration/storage#minio) — upstream images were pulled from public registries in Sept 2026 |
 
 ### LLM provider
 
@@ -452,7 +452,7 @@ For local dev on OrbStack, Docker Desktop, or Rancher Desktop:
 ./deploy/k8s-deploy.sh --local
 ```
 
-This builds images locally (no push), enables built-in MinIO for S3 storage, and uses nip.io URLs.
+This builds images locally (no push), enables built-in MinIO for S3 storage, and uses nip.io URLs. The MinIO image comes from `ghcr.io/arvo-ai/aurora-minio` and is frozen at the last AGPL release — intended for local dev only, not production.
 
 ## Upgrading
 

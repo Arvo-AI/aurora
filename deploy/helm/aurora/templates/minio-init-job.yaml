@@ -6,33 +6,65 @@ metadata:
   labels:
     {{- include "aurora.labels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": post-install
+    # post-upgrade too: the original install's hook could have failed (e.g. its
+    # image was unpullable), and an install-only hook would never retry, leaving
+    # the backend dead on "bucket does not exist". The script is idempotent.
+    "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "0"
     "helm.sh/hook-delete-policy": hook-succeeded
 spec:
   template:
     spec:
       restartPolicy: OnFailure
+      automountServiceAccountToken: false
       containers:
+        # Was minio/mc, which upstream deleted from Docker Hub alongside the
+        # server image. aws-cli speaks the same S3 API and is what the
+        # docker-compose stack already uses for this step.
         - name: minio-init
-          image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+          image: {{ .Values.services.minio.initImage | default "amazon/aws-cli:2.34.6" | quote }}
+          imagePullPolicy: IfNotPresent
+          # `command` overrides the aws-cli image's ENTRYPOINT (`aws`) so we can
+          # run a shell script instead of a single CLI invocation.
           command:
             - /bin/sh
             - -c
             - |
-              until mc alias set aurora http://{{ include "aurora.fullname" . }}-minio:9000 "$ACCESS_KEY" "$SECRET_KEY" 2>/dev/null; do
+              set -eu
+              ENDPOINT="http://{{ include "aurora.fullname" . }}-minio:9000"
+
+              # MinIO has no startup ordering guarantee relative to this hook, so
+              # poll the S3 API until it answers before trying to create anything.
+              i=0
+              until aws --endpoint-url "$ENDPOINT" s3api list-buckets >/dev/null 2>&1; do
+                i=$((i + 1))
+                if [ "$i" -ge 60 ]; then
+                  echo "MinIO did not become ready in time" >&2
+                  exit 1
+                fi
                 echo "Waiting for MinIO..."
                 sleep 2
               done
-              mc mb --ignore-existing aurora/{{ .Values.config.STORAGE_BUCKET }}
+
+              # Creating an existing bucket is an error, so only create if absent.
+              if aws --endpoint-url "$ENDPOINT" s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
+                echo "Bucket already exists"
+              else
+                aws --endpoint-url "$ENDPOINT" s3api create-bucket --bucket "$BUCKET"
+                echo "Bucket created"
+              fi
               echo "Bucket ready"
           env:
-            - name: ACCESS_KEY
+            - name: BUCKET
+              value: {{ .Values.config.STORAGE_BUCKET | quote }}
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.config.STORAGE_REGION | default "us-east-1" | quote }}
+            - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
                   name: {{ include "aurora.secretName.backend" . }}
                   key: STORAGE_ACCESS_KEY
-            - name: SECRET_KEY
+            - name: AWS_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "aurora.secretName.backend" . }}

@@ -5,6 +5,17 @@ All notable changes to Aurora will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Helm chart: in-cluster MinIO no longer fails with `ImagePullBackOff`. Upstream deleted
+  `minio/minio` and `minio/mc` from Docker Hub in September 2026 and closed anonymous
+  pulls on quay.io, so the chart now uses `ghcr.io/arvo-ai/aurora-minio` — a rebuild of
+  the same AGPL release from upstream's GitHub release binary, so existing `minio-data`
+  volumes stay readable with no migration. The bucket-creation hook moved from the
+  equally-removed `minio/mc` to `amazon/aws-cli`, and now also runs on `post-upgrade`
+  so a failed install-time hook can recover.
+
 ## [1.1.1] - 2026-03-06
 
 ### Fixed

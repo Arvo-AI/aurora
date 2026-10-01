@@ -47,6 +47,18 @@ services:
     enabled: true    # Set false if graph features are not needed
   minio:
     enabled: false   # Set true for local dev (provides S3-compatible storage in-cluster)
+    # Upstream deleted minio/minio from Docker Hub in Sept 2026 and closed
+    # anonymous pulls on quay.io, so Aurora publishes a rebuild of the last
+    # AGPL release (unmodified upstream binary) to its own registry.
+    # This release is frozen and will never receive security patches —
+    # prefer an external S3 bucket for anything beyond local dev.
+    image:
+      repository: ghcr.io/arvo-ai/aurora-minio
+      # Keep in sync with MINIO_RELEASE in .github/workflows/publish-minio-image.yml
+      tag: "RELEASE.2025-04-22T22-12-26Z"
+      digest: ""     # e.g. "sha256:..." — takes precedence over tag
+    # Image for the bucket-creation hook (was minio/mc, deleted upstream too).
+    initImage: "amazon/aws-cli:2.34.6"
 
 # ------------------------------------------------------------------------------
 # Slack Socket Mode (optional)

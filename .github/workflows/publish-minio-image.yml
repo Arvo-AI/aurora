@@ -1,0 +1,123 @@
+name: Publish MinIO Image
+
+# Rebuilds upstream MinIO from its GitHub release binary and publishes it to
+# GHCR. MinIO deleted minio/minio from Docker Hub in Sept 2026, so chart
+# installs with services.minio.enabled had no pullable image.
+#
+# Content is immutable (one pinned upstream release), so this does not need to
+# run on every push — only when the Dockerfile changes, or on demand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/images/minio/Dockerfile'
+      - '.github/workflows/publish-minio-image.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-minio-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/arvo-ai/aurora-minio
+  # Keep in sync with ARG MINIO_RELEASE in deploy/images/minio/Dockerfile and
+  # with services.minio.image.tag in the Helm chart values.
+  MINIO_RELEASE: RELEASE.2025-04-22T22-12-26Z
+
+jobs:
+  publish:
+    name: Build and publish aurora-minio
+    if: github.repository == 'Arvo-AI/aurora'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No QEMU setup: the Dockerfile's fetch stage pins --platform=$BUILDPLATFORM
+      # and only downloads, so arm64 needs no emulation.
+      - name: Build and push multi-arch image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./deploy/images/minio
+          file: ./deploy/images/minio/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # Provenance attestations add unknown/unknown entries to the manifest
+          # list, which would break the arch verification below.
+          provenance: false
+          build-args: |
+            MINIO_RELEASE=${{ env.MINIO_RELEASE }}
+          tags: ${{ env.IMAGE_NAME }}:${{ env.MINIO_RELEASE }}
+          cache-from: type=gha,scope=minio
+          cache-to: type=gha,mode=max,scope=minio
+
+      - name: Verify manifest covers both architectures
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF="${IMAGE_NAME}:${MINIO_RELEASE}"
+          docker buildx imagetools inspect "$REF"
+          PLATFORMS=$(docker buildx imagetools inspect "$REF" \
+            --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}')
+          echo "Platforms: $PLATFORMS"
+          for want in linux/amd64 linux/arm64; do
+            echo "$PLATFORMS" | grep -q "$want" || { echo "Missing $want in manifest list" >&2; exit 1; }
+          done
+
+      # GHCR packages are private on first publish, so warn loudly rather than
+      # letting clients discover it as another ImagePullBackOff.
+      - name: Check the package is anonymously pullable
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -sf "https://ghcr.io/token?service=ghcr.io&scope=repository:arvo-ai/aurora-minio:pull" | jq -r '.token // empty')
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://ghcr.io/v2/arvo-ai/aurora-minio/manifests/${MINIO_RELEASE}")
+          if [ "$CODE" = "200" ]; then
+            echo "Package is public — clients can pull anonymously."
+          else
+            echo "::warning::aurora-minio is NOT anonymously pullable (HTTP ${CODE}). Set the GHCR package visibility to Public, or every OSS install will fail with ImagePullBackOff."
+          fi
+
+      - name: Report digest to pin in values.yaml
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DIGEST:-}" ]; then
+            echo "No digest produced by build step" >&2
+            exit 1
+          fi
+          {
+            echo "### aurora-minio published"
+            echo ""
+            echo "Release: \`${MINIO_RELEASE}\`"
+            echo ""
+            echo "Pin it in the chart with:"
+            echo ""
+            echo '```yaml'
+            echo "services:"
+            echo "  minio:"
+            echo "    image:"
+            echo "      digest: \"${DIGEST}\""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
