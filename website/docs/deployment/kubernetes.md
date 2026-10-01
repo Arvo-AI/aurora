@@ -20,7 +20,7 @@ Deploy Aurora on any Kubernetes cluster using Helm.
 - **GCP GKE / Azure AKS:** Create a cluster with default settings
 
 :::note Third-party images
-Aurora deploys several third-party images from public registries. Your nodes must be able to pull: `postgres:15-alpine`, `redis:7-alpine`, `hashicorp/vault:1.15`, `searxng/searxng:*`, `memgraph/memgraph-mage:3.8.1`. With `services.minio.enabled: true` you also need `ghcr.io/arvo-ai/aurora-minio` and `amazon/aws-cli` (bucket-creation hook). For air-gapped clusters, mirror these to a private registry and review enabled services in your `values.yaml`.
+Aurora deploys several third-party images from public registries. Your nodes must be able to pull: `postgres:15-alpine`, `redis:7-alpine`, `hashicorp/vault:1.15`, `searxng/searxng:*`, `memgraph/memgraph-mage:3.8.1`. With `services.minio.enabled: true` you also need `pgsty/silo` and `amazon/aws-cli` (bucket-creation hook). For air-gapped clusters, mirror these to a private registry and review enabled services in your `values.yaml`.
 :::
 
 ### Required tools
@@ -452,7 +452,7 @@ For local dev on OrbStack, Docker Desktop, or Rancher Desktop:
 ./deploy/k8s-deploy.sh --local
 ```
 
-This builds images locally (no push), enables built-in MinIO for S3 storage, and uses nip.io URLs. The MinIO image comes from `ghcr.io/arvo-ai/aurora-minio` and is frozen at the last AGPL release — intended for local dev only, not production.
+This builds images locally (no push), enables built-in S3-compatible storage for local dev, and uses nip.io URLs. The storage image is `pgsty/silo`, a maintained MinIO fork — see the [storage guide](../configuration/storage#minio) for why.
 
 ## Upgrading
 

@@ -10,11 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Helm chart: in-cluster MinIO no longer fails with `ImagePullBackOff`. Upstream deleted
   `minio/minio` and `minio/mc` from Docker Hub in September 2026 and closed anonymous
-  pulls on quay.io, so the chart now uses `ghcr.io/arvo-ai/aurora-minio` — a rebuild of
-  the same AGPL release from upstream's GitHub release binary, so existing `minio-data`
-  volumes stay readable with no migration. The bucket-creation hook moved from the
-  equally-removed `minio/mc` to `amazon/aws-cli`, and now also runs on `post-upgrade`
-  so a failed install-time hook can recover.
+  pulls on quay.io, so the chart now uses [`pgsty/silo`](https://github.com/pgsty/silo),
+  a maintained AGPL fork that preserves the S3 API, `MINIO_*` variables, health routes,
+  and the `.minio.sys` on-disk format — existing `minio-data` volumes are readable by
+  either server, so rollback works. Pinned by digest. The bucket-creation hook moved
+  from the equally-removed `minio/mc` to `amazon/aws-cli`, and now also runs on
+  `post-upgrade` so a failed install-time hook can recover.
 
 ## [1.1.1] - 2026-03-06
 

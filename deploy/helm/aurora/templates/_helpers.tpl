@@ -51,12 +51,12 @@ Usage: image: {{ include "aurora.image" (dict "image" "server" "global" $) | quo
 {{- end -}}
 
 {{/*
-Resolve the MinIO image reference.
+Resolve the MinIO-compatible object storage image.
 
-Upstream deleted minio/minio from Docker Hub in Sept 2026, so we publish a
-rebuild from their GitHub release binary. Defaults to ghcr.io/arvo-ai rather
-than image.registry, since that is Aurora's own registry and users who point
-image.registry at a private mirror have not necessarily mirrored this one.
+Upstream MinIO deleted minio/minio from Docker Hub in Sept 2026 and closed
+anonymous pulls on quay.io, so the chart uses pgsty/silo — a maintained AGPL
+fork that keeps the S3 API, MINIO_* env vars, health routes, and .minio.sys
+on-disk format, so existing volumes are readable in both directions.
 
 The inline defaults are load-bearing: `helm upgrade --reuse-values` does not
 merge new chart defaults, so upgrades from <=1.5.1 reach here with
@@ -64,11 +64,11 @@ services.minio.image unset. Digest wins over tag when set.
 */}}
 {{- define "aurora.minioImage" -}}
 {{- $img := .Values.services.minio.image | default dict -}}
-{{- $repo := $img.repository | default "ghcr.io/arvo-ai/aurora-minio" -}}
+{{- $repo := $img.repository | default "docker.io/pgsty/silo" -}}
 {{- if $img.digest -}}
 {{- printf "%s@%s" $repo $img.digest -}}
 {{- else -}}
-{{- printf "%s:%s" $repo ($img.tag | default "RELEASE.2025-04-22T22-12-26Z") -}}
+{{- printf "%s:%s" $repo ($img.tag | default "RELEASE.2026-09-16T00-00-00Z") -}}
 {{- end -}}
 {{- end -}}
 

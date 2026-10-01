@@ -19,8 +19,9 @@ spec:
       automountServiceAccountToken: false
       containers:
         # Was minio/mc, which upstream deleted from Docker Hub alongside the
-        # server image. aws-cli speaks the same S3 API and is what the
-        # docker-compose stack already uses for this step.
+        # server image. aws-cli speaks the same S3 API, is what the
+        # docker-compose stack already uses, and avoids depending on the
+        # upstream that disappeared.
         - name: minio-init
           image: {{ .Values.services.minio.initImage | default "amazon/aws-cli:2.34.6" | quote }}
           imagePullPolicy: IfNotPresent
