@@ -328,11 +328,6 @@ def _severity_passes_filter(
     return True
 
 
-def _should_postback(user_id: str) -> bool:
-    from utils.auth.stateless_auth import get_user_preference
-    return get_user_preference(user_id, "incidentio_postback_enabled", default=False)
-
-
 def _resolve_incident_object(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Find the incident dict inside an incident.io webhook payload.
 
@@ -1021,64 +1016,5 @@ def _trigger_rca_pipeline(
 
         logger.info("[INCIDENTIO] Triggered RCA for incident %s (task=%s)", incident_id, task.id)
 
-        # Post-back RCA summary if enabled. Only incident events have an
-        # incident.io timeline to post to — alert events (public_alert.*) have
-        # no /incident_updates endpoint, so skip postback for them.
-        if _should_postback(user_id) and fields.get("incident_id") and not fields.get("is_alert"):
-            postback_rca_to_incidentio.delay(user_id, str(incident_id), fields["incident_id"])
-
     except Exception as exc:
         logger.exception("[INCIDENTIO] Failed to trigger RCA: %s", exc)
-
-
-@celery_app.task(
-    bind=True, max_retries=2, default_retry_delay=120, name="incidentio.postback_rca"
-)
-def postback_rca_to_incidentio(
-    self,
-    user_id: str,
-    aurora_incident_id: str,
-    incidentio_incident_id: str,
-) -> None:
-    """Post RCA results back to incident.io timeline once analysis completes."""
-    try:
-        from utils.db.connection_pool import db_pool
-        from utils.auth.token_management import get_token_data
-        from routes.incidentio.incidentio_routes import IncidentioClient
-
-        # Wait for RCA to complete — check for summary in incidents table
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT aurora_summary, aurora_status FROM incidents WHERE id = %s",
-                    (aurora_incident_id,),
-                )
-                row = cursor.fetchone()
-
-        if not row or not row[0]:
-            if self.request.retries < self.max_retries:
-                raise self.retry(countdown=120)
-            logger.info("[INCIDENTIO] No RCA summary after retries, skipping postback")
-            return
-
-        summary, aurora_status = row
-        if aurora_status not in ("analyzed", "completed"):
-            if self.request.retries < self.max_retries:
-                raise self.retry(countdown=120)
-            return
-
-        creds = get_token_data(user_id, "incidentio")
-        if not creds or not creds.get("api_key"):
-            logger.warning("[INCIDENTIO] No credentials for postback")
-            return
-
-        client = IncidentioClient(creds["api_key"])
-        message = f"🔍 **Aurora RCA Summary**\n\n{summary}"
-        client.post_incident_update(incidentio_incident_id, message)
-        logger.info("[INCIDENTIO] Posted RCA back to incident %s", incidentio_incident_id)
-
-    except Exception as exc:
-        if "retry" not in str(type(exc).__name__).lower():
-            logger.exception("[INCIDENTIO] Postback failed: %s", exc)
-            raise self.retry(exc=exc)
-        raise

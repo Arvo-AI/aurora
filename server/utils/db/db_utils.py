@@ -785,6 +785,7 @@ def initialize_tables():
                          slack_message_ts VARCHAR(50),
                          google_chat_message_name VARCHAR(255),
                          pagerduty_note_id VARCHAR(64),
+                         incidentio_update_id VARCHAR(64),
                          active_tab VARCHAR(10) DEFAULT 'thoughts',
                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -2461,6 +2462,20 @@ def initialize_tables():
                 conn.commit()
             except Exception:
                 logging.exception("Failed to add pagerduty_note_id column to incidents")
+                conn.rollback()
+
+            # Add incidentio_update_id column to incidents: id of the RCA update posted
+            # back to the incident.io incident ('pending' while a post is in flight)
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS incidentio_update_id VARCHAR(64);
+                    """
+                )
+                conn.commit()
+            except Exception:
+                logging.exception("Failed to add incidentio_update_id column to incidents")
                 conn.rollback()
 
             # Migration: Add active_tab column to incidents for UI state persistence
