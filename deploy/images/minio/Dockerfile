@@ -36,6 +36,12 @@ RUN set -eux; \
     echo "${expected}  /tmp/minio" | sha256sum -c -; \
     chmod 0755 /tmp/minio
 
+# distroless has no shell, so the data dir has to be staged here and copied in.
+# Without it MinIO dies with "Unable to initialize backend: file access denied",
+# because uid 1000 cannot create /data at the filesystem root. The old
+# minio/minio image shipped /data as a declared VOLUME.
+RUN mkdir -p /staging/data
+
 # The release binary is a static ELF (ET_EXEC, no dynamic interpreter), so it
 # needs no libc — distroless/static keeps the attack surface near zero.
 # Pinned by digest because `latest` is mutable; resolved from tag `latest`.
@@ -50,8 +56,15 @@ LABEL org.opencontainers.image.title="aurora-minio" \
 
 COPY --from=fetch /tmp/minio /usr/bin/minio
 
+# Owned by uid 1000 so the default entrypoint works bare (`docker run ... server
+# /data`). Under Kubernetes the chart mounts a PVC over this path and fsGroup
+# 1000 governs permissions, so this only matters outside the chart.
+COPY --from=fetch --chown=1000:1000 /staging/data /data
+
 # Matches the chart's podSecurityContext (runAsUser/fsGroup 1000) so the
 # mounted PVC is writable; Kubernetes overrides this anyway.
 USER 1000:1000
+
+VOLUME ["/data"]
 
 ENTRYPOINT ["/usr/bin/minio"]
