@@ -279,8 +279,9 @@ class TestAvailabilityIsRevalidatedAfterOperations:
             assert backend.is_available() is True
             client.secrets.kv.v2.read_secret_version.side_effect = exc
 
-            with pytest.raises(Exception):
+            with pytest.raises(type(exc)) as raised:
                 backend.get_secret(self._REF)
+            assert raised.value is exc
 
             assert backend.is_available() is True
             assert ctor.call_count == 1, "a missing secret must not trigger a re-probe"
@@ -413,7 +414,8 @@ class TestAvailabilityIsRevalidatedAfterOperations:
         released.set()
         reader.join(2)
 
-        assert errors and "sealed" in str(errors[0])
+        assert errors, "the in-flight read did not fail"
+        assert "sealed" in str(errors[0])
         assert backend._initialized is True, "stale failure unlatched the new client"
         assert backend._available is True
         new_client.secrets.kv.v2.read_secret_version.assert_not_called()

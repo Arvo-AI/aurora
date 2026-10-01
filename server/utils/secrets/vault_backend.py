@@ -173,10 +173,11 @@ class VaultSecretsBackend(SecretsBackend):
             )
             return True
 
-        except Exception as e:
-            logger.error(
-                "Failed to initialize Vault client: %s. Will retry in %ss.",
-                e,
+        except Exception:
+            # Traceback matters here: the cause (DNS, TLS, refused, sealed) decides
+            # whether an operator looks at Vault or at the network.
+            logger.exception(
+                "Failed to initialize Vault client. Will retry in %ss.",
                 self.RETRY_INTERVAL_SECONDS,
             )
             return False
