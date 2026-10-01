@@ -44,12 +44,19 @@ spec:
                 sleep 2
               done
 
-              # Creating an existing bucket is an error, so only create if absent.
+              # head-bucket also fails on 403, so a denied check must not turn
+              # into a failed create and block the whole upgrade.
               if aws --endpoint-url "$ENDPOINT" s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
                 echo "Bucket already exists"
-              else
-                aws --endpoint-url "$ENDPOINT" s3api create-bucket --bucket "$BUCKET"
+              elif out=$(aws --endpoint-url "$ENDPOINT" s3api create-bucket --bucket "$BUCKET" 2>&1); then
                 echo "Bucket created"
+              else
+                case "$out" in
+                  *BucketAlreadyOwnedByYou*|*BucketAlreadyExists*)
+                    echo "Bucket already exists" ;;
+                  *)
+                    echo "$out" >&2; exit 1 ;;
+                esac
               fi
               echo "Bucket ready"
           env:
