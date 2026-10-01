@@ -98,7 +98,7 @@ class VaultSecretsBackend(SecretsBackend):
         text = str(exc).lower()
         return "not found" in text or "no versions" in text or "invalidpath" in text
 
-    def _invalidate_after_operation_failure(self, exc: Exception) -> None:
+    def _invalidate_after_operation_failure(self, exc: Exception, client=None) -> None:
         """Drop the cached availability latch when an operation suggests an outage.
 
         Availability is otherwise only probed at init, so a Vault that seals *after*
@@ -111,11 +111,16 @@ class VaultSecretsBackend(SecretsBackend):
         if not self._initialized or isinstance(exc, ValueError) or self._is_missing_secret(exc):
             return
 
-        logger.warning(
-            "Vault operation failed (%s); re-checking availability on next use.",
-            type(exc).__name__,
-        )
         with self._init_lock:
+            # A slow failure can land after another thread already re-probed and
+            # published a healthy client; only the client that failed may clear it.
+            if client is not None and self._client is not client:
+                return
+
+            logger.warning(
+                "Vault operation failed (%s); re-checking availability on next use.",
+                type(exc).__name__,
+            )
             self._initialized = False
             self._available = False
 
@@ -237,11 +242,15 @@ class VaultSecretsBackend(SecretsBackend):
                 "Check VAULT_ADDR and VAULT_TOKEN configuration."
             )
 
+        # Pinned for the whole operation so a concurrent re-probe can't swap the
+        # client mid-call, and so the failure handler knows which one failed.
+        client = self._client
+
         try:
             path = f"{self.base_path}/{secret_name}"
 
             # Store the secret in KV v2
-            self._client.secrets.kv.v2.create_or_update_secret(
+            client.secrets.kv.v2.create_or_update_secret(
                 mount_point=self.mount_point,
                 path=path,
                 secret={"value": secret_value},
@@ -257,7 +266,7 @@ class VaultSecretsBackend(SecretsBackend):
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             logger.error("Failed to store secret '%s' (%.1fms): %s", secret_name, elapsed_ms, e)
-            self._invalidate_after_operation_failure(e)
+            self._invalidate_after_operation_failure(e, client)
             raise
 
     def get_secret(self, secret_ref: str) -> str:
@@ -280,6 +289,8 @@ class VaultSecretsBackend(SecretsBackend):
                 "Check VAULT_ADDR and VAULT_TOKEN configuration."
             )
 
+        client = self._client
+
         try:
             # Parse the secret reference to extract the path
             # Format: vault:kv/data/{mount}/{path}
@@ -296,7 +307,7 @@ class VaultSecretsBackend(SecretsBackend):
             else:
                 path = path_with_mount
 
-            response = self._client.secrets.kv.v2.read_secret_version(
+            response = client.secrets.kv.v2.read_secret_version(
                 mount_point=self.mount_point,
                 path=path,
                 raise_on_deleted_version=True,
@@ -322,7 +333,7 @@ class VaultSecretsBackend(SecretsBackend):
                 error_type,
                 path if 'path' in locals() else secret_ref,
             )
-            self._invalidate_after_operation_failure(e)
+            self._invalidate_after_operation_failure(e, client)
             raise
 
     def delete_secret(self, secret_ref: str) -> None:
@@ -348,6 +359,8 @@ class VaultSecretsBackend(SecretsBackend):
                 "Check VAULT_ADDR and VAULT_TOKEN configuration."
             )
 
+        client = self._client
+
         try:
             # Parse the secret reference
             if not secret_ref.startswith(VAULT_REF_PREFIX):
@@ -361,7 +374,7 @@ class VaultSecretsBackend(SecretsBackend):
                 path = path_with_mount
 
             # Delete all versions and metadata
-            self._client.secrets.kv.v2.delete_metadata_and_all_versions(
+            client.secrets.kv.v2.delete_metadata_and_all_versions(
                 mount_point=self.mount_point,
                 path=path,
             )
@@ -372,5 +385,5 @@ class VaultSecretsBackend(SecretsBackend):
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             logger.error("Failed to delete secret (%.1fms): %s", elapsed_ms, e)
-            self._invalidate_after_operation_failure(e)
+            self._invalidate_after_operation_failure(e, client)
             raise

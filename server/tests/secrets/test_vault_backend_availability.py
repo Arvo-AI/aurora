@@ -354,6 +354,70 @@ class TestAvailabilityIsRevalidatedAfterOperations:
                 f"expected 1 re-probe inside the backoff window, got {ctor.call_count}"
             )
 
+    def test_stale_failure_cannot_unlatch_a_reconnected_client(self, vault_env):
+        """A read that started before the outage can land after recovery. Clearing
+        the latch then would cost the fresh client a pointless re-probe, so the
+        invalidation only applies to the client that actually failed."""
+        backend = VaultSecretsBackend()
+        old_client = _client(True)
+        self._connected(backend, old_client)
+
+        # Vault recovers and another caller publishes a replacement client.
+        new_client = _client(True)
+        backend._client = new_client
+
+        backend._invalidate_after_operation_failure(RuntimeError("sealed"), old_client)
+
+        assert backend._initialized is True, "the replacement client was unlatched"
+        assert backend._available is True
+
+    def test_current_client_failure_still_unlatches(self, vault_env):
+        """The guard must not swallow the case it exists to allow."""
+        backend = VaultSecretsBackend()
+        client = _client(True)
+        self._connected(backend, client)
+
+        backend._invalidate_after_operation_failure(RuntimeError("sealed"), client)
+
+        assert backend._initialized is False
+        assert backend._available is False
+
+    def test_in_flight_read_on_a_replaced_client_leaves_the_latch_alone(self, vault_env):
+        """End-to-end form of the race: the failing read is issued against the
+        client it captured, and its failure doesn't disturb the new one."""
+        backend = VaultSecretsBackend()
+        old_client = _client(True)
+        self._connected(backend, old_client)
+
+        new_client = _client(True)
+        released = threading.Event()
+
+        def slow_failing_read(*a, **kw):
+            released.wait(1)
+            raise RuntimeError("Vault is sealed")
+
+        old_client.secrets.kv.v2.read_secret_version.side_effect = slow_failing_read
+
+        errors = []
+
+        def read():
+            try:
+                backend.get_secret(self._REF)
+            except Exception as exc:  # noqa: BLE001 - asserted on below
+                errors.append(exc)
+
+        reader = threading.Thread(target=read)
+        reader.start()
+        # Swap in the recovered client while the read is still in flight.
+        backend._client = new_client
+        released.set()
+        reader.join(2)
+
+        assert errors and "sealed" in str(errors[0])
+        assert backend._initialized is True, "stale failure unlatched the new client"
+        assert backend._available is True
+        new_client.secrets.kv.v2.read_secret_version.assert_not_called()
+
 
 class TestBackendIsNamedInTheDiagnostic:
     """Vault is the default, not the only backend. Telling an AWS Secrets Manager
