@@ -11,7 +11,10 @@ metadata:
     # the backend dead on "bucket does not exist". The script is idempotent.
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "0"
-    "helm.sh/hook-delete-policy": hook-succeeded
+    # before-hook-creation is required, not cosmetic: a failed install hook
+    # leaves the Job behind (hook-succeeded only deletes on success), so the
+    # post-upgrade hook would hit AlreadyExists and never run the fix.
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   template:
     spec:
