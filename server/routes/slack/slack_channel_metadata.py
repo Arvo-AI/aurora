@@ -33,12 +33,21 @@ METADATA_PROMPT = (
 BACKFILL_MAX_PER_ORG = 25
 BACKFILL_MAX_TOTAL = 200
 
+# How many rows one org's read pass may scan before giving up for this run. The
+# pass re-reads past workspaces nobody can describe (see _claim_org_channels), so
+# without a ceiling an org whose backlog is mostly unreachable would page through
+# all of it every 15 minutes.
+BACKFILL_MAX_SCAN_PER_ORG = 500
+
 # How long a 'pending' row must sit before the sweep treats it as stuck rather
 # than still in flight. NOT the same knob as BACKFILL_INTERVAL_SECONDS: a started
 # task is 'generating', so a still-'pending' row is one waiting in the broker
-# queue, and this measures worst-case queue wait, not sweep cadence. Must stay
-# >= one interval though, or a claimed row looks stale again next sweep (tested).
-BACKFILL_STALE_MINUTES = 15
+# queue, and this measures worst-case queue wait, not sweep cadence. Hours, not
+# minutes: a backlog of description jobs on the default queue has been observed
+# ~85 min deep, and anything shorter re-claims rows that are merely queued.
+# (generate_channel_metadata also claims the row, so a duplicate costs no LLM
+# call — this window only decides how fast a genuinely lost task is retried.)
+BACKFILL_STALE_MINUTES = 180
 
 
 def _update_metadata(user_id: str, channel_id: str, summary, status: str,
@@ -77,9 +86,51 @@ def _update_metadata(user_id: str, channel_id: str, summary, status: str,
             conn.commit()
 
 
+def _claim_for_generation(user_id: str, channel_id: str,
+                          allow_generating: bool = False) -> bool:
+    """Flip pending -> generating, returning False if someone else got there first.
+
+    The sweep re-enqueues rows that look stuck, so the same channel can be queued
+    twice; without this the second task would pay for a full LLM call whose write
+    ``_update_metadata`` then discards. ``allow_generating`` is for our own retry,
+    which re-enters with the row already flipped by its first attempt.
+    """
+    from utils.db.connection_pool import db_pool
+    from utils.auth.stateless_auth import set_rls_context
+
+    statuses = ['pending', 'skipped'] + (['generating'] if allow_generating else [])
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            if not set_rls_context(cur, conn, user_id, log_prefix="[SlackChannelMeta]"):
+                return False
+            cur.execute(
+                """UPDATE slack_channels
+                   SET metadata_status = 'generating', updated_at = NOW()
+                   WHERE provider = 'slack' AND channel_id = %s
+                     AND metadata_status = ANY(%s)""",
+                (channel_id, statuses),
+            )
+            claimed = cur.rowcount > 0
+            conn.commit()
+    return claimed
+
+
+class ChannelUnreadable(RuntimeError):
+    """conversations.info returned nothing for the channel.
+
+    Means the token can't see it (wrong workspace, archived, revoked scope) or
+    Slack failed. Either way there's nothing to describe, and an empty context
+    would just make the LLM invent a summary — so this fails into the retry path.
+    """
+
+
 def _build_context(client, channel_id: str) -> tuple[str, str, dict]:
     """Return (context_text, channel_name, raw_info) for the LLM prompt."""
     info = client.get_channel_info(channel_id) or {}
+    # Nothing came back, so we never actually read the channel. Describing it
+    # anyway would persist a fabricated summary as 'ready'.
+    if not info:
+        raise ChannelUnreadable("conversations.info returned no channel")
     name = info.get("name", "")
     topic = (info.get("topic") or {}).get("value", "")
     purpose = (info.get("purpose") or {}).get("value", "")
@@ -201,9 +252,16 @@ def generate_channel_metadata(self, user_id: str, channel_id: str):
         return
 
     try:
-        # Inside the try so a DB/connection failure on this initial status write
-        # is retried (not left silently stuck as 'pending').
-        _update_metadata(user_id, channel_id, None, "generating")
+        # Claim the row before spending anything. The sweep re-enqueues rows that
+        # look stuck, so the same channel can be queued twice; losing the claim
+        # means another task owns it and this one would only pay for an LLM call
+        # whose write _update_metadata discards. Inside the try so a DB failure
+        # here is retried rather than leaving the row silently 'pending'.
+        if not _claim_for_generation(user_id, channel_id,
+                                     allow_generating=bool(self.request.retries)):
+            logger.info("[SlackChannelMeta] %s already claimed elsewhere — skipping",
+                        sanitize(channel_id))
+            return
 
         from connectors.slack_connector.client import get_slack_client_for_user
         client = get_slack_client_for_user(user_id)
@@ -270,12 +328,18 @@ def _rotate_orgs(org_ids: list[str], now: float | None = None) -> list[str]:
     return org_ids[offset:] + org_ids[:offset]
 
 
-def _select_undescribed_channels(cur, limit: int) -> list[tuple[str, str, str | None]]:
+def _select_undescribed_channels(cur, limit: int,
+                                 exclude_teams: list[str] | None = None,
+                                 exclude_untagged: bool = False,
+                                 ) -> list[tuple[str, str, str | None]]:
     """Return [(channel_id, owner_user_id, team_id)] for member channels still
     awaiting a description. Caller must have set the org's RLS context.
 
     ``team_id`` is the Slack workspace the row was registered against; the actor
     picker needs it because an org can connect more than one workspace.
+    ``exclude_teams`` / ``exclude_untagged`` drop workspaces the caller has
+    already proven unreachable, so the oldest undescribable rows can't wedge the
+    window and hide the rest of the backlog.
 
     Longest-waiting first so bounded runs drain the backlog; DISTINCT ON de-dupes
     the row-per-member. 'error'/'limit_reached' excluded — retrying burns quota.
@@ -290,11 +354,16 @@ def _select_undescribed_channels(cur, limit: int) -> list[tuple[str, str, str | 
                      OR (metadata_status = 'pending'
                          AND updated_at < NOW() - make_interval(mins => %s))
                   )
+                  -- Workspaces already proven unreachable this run. Guarded on
+                  -- NULL because `NULL = ANY(...)` is unknown, not false, and
+                  -- would silently drop every untagged row.
+                  AND (team_id IS NULL OR team_id <> ALL(%s::text[]))
+                  AND (team_id IS NOT NULL OR NOT %s)
                 ORDER BY channel_id, updated_at ASC
            ) AS d
            ORDER BY d.updated_at ASC
            LIMIT %s""",
-        (BACKFILL_STALE_MINUTES, limit),
+        (BACKFILL_STALE_MINUTES, exclude_teams or [], exclude_untagged, limit),
     )
     return [(row[0], row[1], row[2]) for row in cur.fetchall()]
 
@@ -333,50 +402,60 @@ class _SlackCredProbe:
 def _can_reach(probe: "_SlackCredProbe", user_id: str, team_id: str | None) -> bool:
     """True when the user's Slack token belongs to the channel's workspace.
 
-    An untagged row (registered before workspace tagging, or Slack never returned
-    a team) can't be checked, so any usable connection counts — the caller
-    disambiguates those separately.
+    ``team_id`` must be the row's recorded workspace: an untagged row has nothing
+    to compare against, so it is never resolved through here (see
+    :func:`_untagged_actor`).
     """
-    if not probe(user_id):
+    if not probe(user_id) or team_id is None:
         return False
-    return team_id is None or probe.team(user_id) == team_id
+    return probe.team(user_id) == team_id
 
 
-def _fallback_actor(org_users: list[str], team_id: str | None,
+def _fallback_actor(org_users: list[str], team_id: str,
                     probe: "_SlackCredProbe") -> str | None:
-    """Pick an org member whose Slack token can actually read ``team_id``.
+    """Pick an org member whose Slack token belongs to ``team_id``.
 
     Credentials are org-shared, but an org can connect several workspaces, so a
     stand-in for a disconnected owner is only safe if its token belongs to the
     channel's workspace. A foreign token makes conversations.info return nothing
     and we'd persist an invented description as 'ready'.
     """
+    return next((uid for uid in org_users
+                 if probe(uid) and probe.team(uid) == team_id), None)
+
+
+def _untagged_actor(org_users: list[str], owner_id: str,
+                    probe: "_SlackCredProbe") -> str | None:
+    """Pick an actor for a row with no recorded workspace.
+
+    Rows registered before workspace tagging (or where Slack never returned a
+    team) can't be matched against a token, and the owner's current token may
+    well point at a different workspace now. Only safe when the org has exactly
+    one connected workspace; otherwise it's a guess, so leave the row pending.
+    """
     connected = [uid for uid in org_users if probe(uid)]
-
-    # Workspace is recorded on the row — demand an exact match.
-    if team_id:
-        return next((uid for uid in connected if probe.team(uid) == team_id), None)
-
-    # Row predates workspace tagging (or Slack never returned one). Any connected
-    # member is provably right only if the org has a single workspace; otherwise
-    # we'd be guessing, so leave the row pending.
-    teams = {probe.team(uid) for uid in connected}
-    return connected[0] if len(teams) == 1 else None
+    if len({probe.team(uid) for uid in connected}) != 1:
+        return None
+    # Single workspace: every connected member's token reads the same one, so
+    # prefer the owner to keep the actor stable across runs.
+    return owner_id if owner_id in connected else connected[0]
 
 
 def _assign_actors(rows: list[tuple[str, str, str | None]], org_users: list[str],
-                   probe: "_SlackCredProbe") -> list[tuple[str, str]]:
+                   probe: "_SlackCredProbe") -> tuple[list[tuple[str, str]], set[str | None]]:
     """Pair each channel with the user_id whose credentials should describe it.
 
     ``rows`` is [(channel_id, owner_user_id, team_id)] as returned by
-    :func:`_select_undescribed_channels`. Returns [(actor_user_id, channel_id)],
-    skipping channels nobody can reach.
+    :func:`_select_undescribed_channels`. Returns
+    ``([(actor_user_id, channel_id)], unreachable_team_ids)`` — the second element
+    lets the caller skip those workspaces and keep scanning the backlog.
     """
     # Memoized per workspace: resolving a stand-in walks the org's members and
     # each probe is a DB + Vault round trip.
-    fallbacks: dict[str | None, str | None] = {}
+    actors: dict[str | None, str | None] = {}
 
-    assigned = []
+    assigned: list[tuple[str, str]] = []
+    unreachable: set[str | None] = set()
     for channel_id, owner_id, team_id in rows:
         # Prefer the row's owner — the identity whose token registered it. Still
         # workspace-checked: an owner who disconnected and reconnected to a
@@ -385,17 +464,25 @@ def _assign_actors(rows: list[tuple[str, str, str | None]], org_users: list[str]
             assigned.append((owner_id, channel_id))
             continue
 
-        # Owner is gone (or moved workspace), so look for a stand-in.
-        if team_id not in fallbacks:
-            fallbacks[team_id] = _fallback_actor(org_users, team_id, probe)
-        actor = fallbacks[team_id]
+        # Owner is gone (or moved workspace), so look for a stand-in. Untagged
+        # rows have no workspace to match on and are resolved separately.
+        if team_id is None:
+            actor = _untagged_actor(org_users, owner_id, probe)
+        else:
+            if team_id not in actors:
+                actors[team_id] = _fallback_actor(org_users, team_id, probe)
+            actor = actors[team_id]
 
         # No compatible connection left in the org — leave the row pending rather
         # than queueing a task that would only mark it 'error' (which is never
         # auto-retried) or describe it from an empty, wrong-workspace context.
         if actor:
             assigned.append((actor, channel_id))
-    return assigned
+        else:
+            # Nothing in the org can read this workspace, so every other row on it
+            # is unreachable too — report it so the caller stops re-reading them.
+            unreachable.add(team_id)
+    return assigned, unreachable
 
 
 def _claim_org_channels(org_users: list[str], limit: int,
@@ -410,18 +497,44 @@ def _claim_org_channels(org_users: list[str], limit: int,
     from utils.auth.stateless_auth import set_rls_context
     from routes.slack.slack_channels import _mark_pending
 
-    # Read pass, in its own short-lived block so the pooled connection isn't held
-    # across the Vault round trips the credential probe below makes.
-    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
-        # No org context resolvable (e.g. org deleted mid-sweep) — don't query
-        # with the wrong context.
-        if not set_rls_context(cur, conn, org_users[0], log_prefix=_BACKFILL_LOG):
-            return []
-        rows = _select_undescribed_channels(cur, limit)
-    if not rows:
-        return []
+    # Reads happen in short-lived blocks so the pooled connection isn't held
+    # across the Vault round trips the credential probe makes.
+    def read(exclude_teams, exclude_untagged):
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            # No org context resolvable (e.g. org deleted mid-sweep) — don't query
+            # with the wrong context.
+            if not set_rls_context(cur, conn, org_users[0], log_prefix=_BACKFILL_LOG):
+                return None
+            return _select_undescribed_channels(
+                cur, limit, exclude_teams=exclude_teams,
+                exclude_untagged=exclude_untagged,
+            )
 
-    to_enqueue = _assign_actors(rows, org_users, probe)
+    to_enqueue: list[tuple[str, str]] = []
+    dead_teams: set[str] = set()
+    skip_untagged = False
+    scanned = 0
+    # The oldest rows may belong to a workspace nobody is connected to; those never
+    # become describable, so a single page would hand back the same dead rows every
+    # sweep and the channels behind them would never be reached. Re-read past each
+    # workspace we've just proven unreachable.
+    while True:
+        rows = read(sorted(dead_teams), skip_untagged)
+        if not rows:
+            return []
+        scanned += len(rows)
+        # Each page is the same oldest-first prefix minus the excluded workspaces,
+        # so a later page re-assigns everything an earlier one did — replace rather
+        # than accumulate.
+        to_enqueue, unreachable = _assign_actors(rows, org_users, probe)
+        new_dead = unreachable - dead_teams - ({None} if skip_untagged else set())
+        # Budget filled, nothing new to skip past, or we've scanned far enough for
+        # one run — any of those means the next page adds nothing.
+        if (len(to_enqueue) >= limit or not new_dead
+                or scanned >= BACKFILL_MAX_SCAN_PER_ORG):
+            break
+        dead_teams |= {t for t in new_dead if t is not None}
+        skip_untagged = skip_untagged or None in new_dead
     if not to_enqueue:
         return []
 

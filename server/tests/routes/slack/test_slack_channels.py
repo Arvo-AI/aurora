@@ -187,6 +187,16 @@ def test_mark_pending_noops_on_empty_list():
     cur.execute.assert_not_called()
 
 
+def test_mark_pending_dedupes_the_returned_ids():
+    """The table holds one row per member for the same channel, so RETURNING
+    repeats a channel_id once per member row. The reconcile caller enqueues the
+    list as-is, so without dedupe a channel with 3 member rows gets 3 identical
+    LLM jobs."""
+    cur = MagicMock()
+    cur.fetchall.return_value = [("C1",), ("C1",), ("C2",), ("C1",)]
+    assert mod._mark_pending(cur, ["C1", "C2"]) == ["C1", "C2"]
+
+
 def test_mark_pending_without_staleness_claims_fresh_rows():
     """The reconcile pass also enqueues rows it just inserted, so it must not be
     gated on a staleness window."""
@@ -459,7 +469,7 @@ def test_activate_channels_joins_and_registers():
     with patch.object(mod, "get_slack_client_for_user", return_value=client), \
          patch.object(mod, "_team_id_for_user", return_value="T1"), \
          patch.object(mod, "register_single_channel",
-                      side_effect=lambda u, c, team_id=None: registered.append(c)):
+                      side_effect=lambda u, c, team_id=None, describe=True: registered.append(c)):
         activated = mod._activate_channels("u1", ["C1", "C2"])
 
     assert activated == 2
@@ -478,7 +488,7 @@ def test_activate_channels_tags_rows_with_the_workspace():
     with patch.object(mod, "get_slack_client_for_user", return_value=client), \
          patch.object(mod, "_team_id_for_user", return_value="T1") as probe, \
          patch.object(mod, "register_single_channel",
-                      side_effect=lambda u, c, team_id=None: teams.append(team_id)):
+                      side_effect=lambda u, c, team_id=None, describe=True: teams.append(team_id)):
         mod._activate_channels("u1", ["C1", "C2", "C3"])
 
     assert teams == ["T1", "T1", "T1"]
@@ -515,7 +525,7 @@ def test_activate_channels_skips_unjoinable():
     with patch.object(mod, "get_slack_client_for_user", return_value=client), \
          patch.object(mod, "_team_id_for_user", return_value="T1"), \
          patch.object(mod, "register_single_channel",
-                      side_effect=lambda u, c, team_id=None: registered.append(c)):
+                      side_effect=lambda u, c, team_id=None, describe=True: registered.append(c)):
         activated = mod._activate_channels("u1", ["C1", "C2_private"])
 
     assert activated == 1
@@ -534,7 +544,7 @@ def test_activate_channels_registers_as_it_joins():
     with patch.object(mod, "get_slack_client_for_user", return_value=client), \
          patch.object(mod, "_team_id_for_user", return_value="T1"), \
          patch.object(mod, "register_single_channel",
-                      side_effect=lambda u, c, team_id=None: calls.append(("register", c))):
+                      side_effect=lambda u, c, team_id=None, describe=True: calls.append(("register", c))):
         client.join_channel.side_effect = lambda cid: calls.append(("join", cid)) or {"id": cid}
         activated = mod._activate_channels("u1", ["C1", "C2", "C3"])
 
@@ -549,6 +559,62 @@ def test_activate_channels_registers_as_it_joins():
 def test_activate_channels_no_client_returns_zero():
     with patch.object(mod, "get_slack_client_for_user", return_value=None):
         assert mod._activate_channels("u1", ["C1"]) == 0
+
+
+def test_activate_channels_caps_description_enqueues():
+    """Joins pace themselves against Slack's rate limits, but descriptions don't:
+    each is an LLM job queued immediately, so an uncapped batch (activating a
+    1500-channel workspace is one click) floods the queue. Over-cap channels are
+    registered without a description and drained by the backfill."""
+    client = MagicMock()
+    client.join_channel.return_value = {"id": "ok"}
+    described = []
+    with patch.object(mod, "get_slack_client_for_user", return_value=client), \
+         patch.object(mod, "_team_id_for_user", return_value="T1"), \
+         patch.object(mod, "MAX_ACTIVATE_DESCRIBE", 2), \
+         patch.object(mod, "register_single_channel",
+                      side_effect=lambda u, c, team_id=None, describe=True:
+                          described.append((c, describe))):
+        activated = mod._activate_channels("u1", ["C1", "C2", "C3", "C4"])
+
+    # Every channel is still joined + registered — only the LLM work is rationed.
+    assert activated == 4
+    assert described == [("C1", True), ("C2", True), ("C3", False), ("C4", False)]
+
+
+def test_activate_channels_cap_is_not_spent_on_unjoinable_channels():
+    """A private channel is skipped before registration, so it must not consume a
+    slot of the description budget."""
+    client = MagicMock()
+    client.join_channel.side_effect = lambda cid: None if cid == "C1_private" else {"id": cid}
+    described = []
+    with patch.object(mod, "get_slack_client_for_user", return_value=client), \
+         patch.object(mod, "_team_id_for_user", return_value="T1"), \
+         patch.object(mod, "MAX_ACTIVATE_DESCRIBE", 1), \
+         patch.object(mod, "register_single_channel",
+                      side_effect=lambda u, c, team_id=None, describe=True:
+                          described.append((c, describe))):
+        mod._activate_channels("u1", ["C1_private", "C2"])
+
+    assert described == [("C2", True)]
+
+
+def test_register_single_channel_can_skip_the_description():
+    """describe=False leaves the row 'pending' for the backfill: it's how bulk
+    activate bounds LLM enqueues without losing the channel."""
+    client = MagicMock()
+    client.get_channel_info.return_value = {"id": "C1", "name": "one"}
+    dbcm, _cur = _db(fetchone_row=None)
+    with patch.object(mod, "get_slack_client_for_user", return_value=client), \
+         patch.object(mod, "resolve_org", return_value="org"), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_upsert_channel", return_value=("C1", True)), \
+         patch.object(mod, "get_redis_client", return_value=MagicMock()), \
+         patch.object(mod, "_enqueue_metadata") as enqueue:
+        assert mod.register_single_channel("u1", "C1", team_id="T1", describe=False) is True
+
+    enqueue.assert_not_called()
 
 
 # --- list_all_channels pagination ------------------------------------------

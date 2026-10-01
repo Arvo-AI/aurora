@@ -74,6 +74,13 @@ logger = logging.getLogger(__name__)
 # for a later pass or the backfill_channel_descriptions beat task.
 MAX_AUTO_CHANNELS = 50
 
+# Cap on how many descriptions ONE bulk-activate batch enqueues. The joins pace
+# themselves against Slack's rate limits, but the description tasks don't —
+# activating a 1500-channel workspace would put 1500 LLM jobs on the queue at
+# once and starve everything behind them. Over-cap channels are registered
+# 'pending' and drained by the backfill sweep at its own bounded rate.
+MAX_ACTIVATE_DESCRIBE = 50
+
 # Hard cap on how many channels we enumerate from Slack in one pass. Seeing fewer
 # than this means we paged through the whole workspace, so a stored channel that's
 # absent can be safely pruned; hitting it means the list is partial (don't prune).
@@ -296,9 +303,10 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
     # membership-as-truth every member channel is active and routable. Channels
     # past the cap this pass stay 'pending' (never 'skipped'); because a 'pending'
     # row's updated_at is NOT bumped on reconcile (see _upsert_channel), it goes
-    # stale after ~10 min and gets enqueued by a later pass — or, since reconcile
-    # passes are user-triggered and may never happen again, by the
-    # backfill_channel_descriptions beat task (longer window).
+    # stale after this pass's own 10-minute window and gets enqueued by a later
+    # reconcile — or, since reconcile passes are user-triggered and may never
+    # happen again, by the backfill_channel_descriptions beat task (which uses its
+    # own, much longer window sized for worst-case queue wait).
     ranked_members = _rank_channels(member_channels)
 
     org_id = resolve_org(user_id)
@@ -400,7 +408,8 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
 
 def register_single_channel(user_id: str, channel_id: str,
                             team_id: str | None = None,
-                            allow_restore: bool = True) -> bool:
+                            allow_restore: bool = True,
+                            describe: bool = True) -> bool:
     """Register (and describe) one channel Aurora was just added to.
 
     Lightweight counterpart to auto_register_channels for the
@@ -408,6 +417,9 @@ def register_single_channel(user_id: str, channel_id: str,
     channel) and the activate/restore routes. Fetches just that channel's info,
     upserts it as an active member channel, and enqueues a description.
     Idempotent. Returns True if a new row was created.
+
+    ``describe=False`` registers the row but leaves it 'pending' for the backfill
+    sweep — the bulk-activate path uses it to bound LLM enqueues per batch.
 
     ``allow_restore`` is accepted for backwards-compatibility with callers but is
     now a no-op: membership is the source of truth, so there is no separate
@@ -459,7 +471,10 @@ def register_single_channel(user_id: str, channel_id: str,
         # channel must move out of the Inactive picker without waiting for the TTL.
         # Workspace passed through: the activate loop calls this per channel.
         _invalidate_available_channels_cache(user_id, team_id)
-        _enqueue_metadata(user_id, channel_id)
+        # Caller is rationing LLM enqueues (bulk activate): the row stays 'pending'
+        # and the backfill sweep picks it up.
+        if describe:
+            _enqueue_metadata(user_id, channel_id)
         logger.info("[slack_channels] registered joined channel %s", sanitize(channel_id))
     return bool(is_new)
 
@@ -980,8 +995,10 @@ def trigger_channel_metadata(user_id):
     channel_id = (request.get_json(silent=True) or {}).get("channel_id")
     if not channel_id:
         return jsonify({"error": "channel_id is required"}), 400
-    # Flip to 'generating' first so the UI shows a spinner; 404 if unknown.
-    err = _update_one_channel(user_id, channel_id, "metadata_status = 'generating'", ())
+    # 'pending', not 'generating': the task claims the row by flipping
+    # pending -> generating, which is what stops a duplicate enqueue from paying
+    # for a second LLM call. The UI renders both as a spinner. 404 if unknown.
+    err = _update_one_channel(user_id, channel_id, "metadata_status = 'pending'", ())
     if err:
         return err
     _enqueue_metadata(user_id, channel_id)
@@ -1016,9 +1033,10 @@ def activate_slack_channels(user_id):
     # rate-limit/timeout the request. Enqueue and return immediately; the manage
     # page polls the channel list as rows/descriptions land.
     #
-    # Deliberately uncapped: the batch goes to one task that works through it
-    # sequentially, so even selecting every channel in a 1500-channel workspace
-    # paces itself against Slack's limits rather than flooding the queue.
+    # The batch itself is uncapped — one task works through it sequentially, so
+    # even selecting every channel in a 1500-channel workspace paces itself
+    # against Slack's limits. The DESCRIPTIONS are capped (MAX_ACTIVATE_DESCRIBE),
+    # since those are LLM jobs that would otherwise all land on the queue at once.
     try:
         from routes.slack.slack_channel_metadata import bulk_activate_channels_task
         bulk_activate_channels_task.delay(user_id, channel_ids)
@@ -1054,13 +1072,27 @@ def _activate_channels(user_id: str, channel_ids: list[str]) -> int:
     team_id = _team_id_for_user(user_id)
 
     joined = 0
+    described = 0
     for channel_id in channel_ids:
         # join_channel swallows its own errors and returns None on failure
         # (e.g. private channel), so a skip here is expected and non-fatal.
-        if client.join_channel(channel_id):
-            register_single_channel(user_id, channel_id, team_id=team_id)
-            joined += 1
+        if not client.join_channel(channel_id):
+            continue
+        # The joins pace themselves against Slack, but the descriptions don't:
+        # each one is an LLM job queued immediately, so an uncapped batch (a
+        # 1500-channel workspace is one click) floods the queue and delays
+        # everything behind it. Over-cap channels are left 'pending' for the
+        # backfill sweep to drain at its own bounded rate.
+        describe = described < MAX_ACTIVATE_DESCRIBE
+        register_single_channel(user_id, channel_id, team_id=team_id,
+                                describe=describe)
+        if describe:
+            described += 1
+        joined += 1
 
+    if joined > described:
+        logger.info("[slack_channels] activated %d channel(s), described %d now — "
+                    "%d left for the backfill", joined, described, joined - described)
     return joined
 
 
@@ -1098,7 +1130,9 @@ def _mark_pending(cur, channel_ids: list[str],
              RETURNING channel_id""",
             (channel_ids,),
         )
-    return [row[0] for row in cur.fetchall()]
+    # One row per member for the same channel, so RETURNING repeats a channel_id
+    # once per member row — dedupe or the caller enqueues N identical LLM jobs.
+    return list(dict.fromkeys(row[0] for row in cur.fetchall()))
 
 
 def _enqueue_metadata(user_id: str, channel_id: str):

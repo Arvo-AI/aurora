@@ -42,14 +42,26 @@ def _run(users_by_org, rows_per_org, connected_users=None, rls_ok=True,
     connection belongs to (default: everyone on TEAM_1). ``claimed`` restricts
     which channel_ids the UPDATE reports as won (default: all). Rotation is
     pinned to dict order here and covered by its own tests below.
+
+    The read pass can re-query to page past unreachable workspaces, so the stub
+    applies the exclusion filters itself and only advances to the next org's batch
+    once a batch is exhausted.
     """
     enqueued = []
     marked = []
     batches = [[_row(r) for r in batch] for batch in rows_per_org]
+    current = {"rows": None}
 
-    def fake_select(cur, limit):
-        batch = batches.pop(0) if batches else []
-        return batch[:limit]
+    def fake_select(cur, limit, exclude_teams=None, exclude_untagged=False):
+        # A fresh org always reads with no exclusions; a re-read always carries at
+        # least one (it only happens after a workspace is proven unreachable), so
+        # the exclusion state is what distinguishes "next org" from "next page".
+        if not exclude_teams and not exclude_untagged:
+            current["rows"] = batches.pop(0) if batches else []
+        excluded = set(exclude_teams or [])
+        rows = [r for r in current["rows"] or []
+                if r[2] not in excluded and not (exclude_untagged and r[2] is None)]
+        return rows[:limit]
 
     def fake_creds(uid, provider):
         if connected_users is not None and uid not in connected_users:
@@ -193,7 +205,7 @@ def test_backfill_one_failing_org_does_not_stop_the_sweep():
     enqueued = []
     calls = {"n": 0}
 
-    def flaky_select(cur, limit):
+    def flaky_select(cur, limit, exclude_teams=None, exclude_untagged=False):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("transient DB error")
@@ -272,6 +284,74 @@ def test_backfill_claim_reasserts_the_staleness_window():
     assert seen["stale_minutes"] == mod.BACKFILL_STALE_MINUTES
 
 
+# --- generate_channel_metadata: claim before spending -----------------------
+
+def _claim_db(rowcount=1):
+    conn = MagicMock()
+    cur = MagicMock()
+    cur.rowcount = rowcount
+    conn.cursor.return_value.__enter__ = lambda s: cur
+    conn.cursor.return_value.__exit__ = lambda s, *a: False
+    dbcm = MagicMock()
+    dbcm.__enter__ = lambda s: conn
+    dbcm.__exit__ = lambda s, *a: False
+    return dbcm, cur
+
+
+def test_claim_for_generation_flips_pending_to_generating():
+    dbcm, cur = _claim_db(rowcount=1)
+    with patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
+         patch("utils.auth.stateless_auth.set_rls_context", return_value=ORG_A):
+        assert mod._claim_for_generation(USER_A, "C1") is True
+
+    sql, params = cur.execute.call_args.args
+    assert "metadata_status = 'generating'" in sql
+    # Only an unclaimed row may be taken; a row already 'generating' belongs to
+    # another task, so its status is what makes the claim exclusive.
+    assert params == ("C1", ["pending", "skipped"])
+
+
+def test_claim_for_generation_loses_to_a_concurrent_task():
+    """No rows matched — someone else already flipped the row, so this task must
+    bail out instead of paying for an LLM call _update_metadata would discard."""
+    dbcm, _cur = _claim_db(rowcount=0)
+    with patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
+         patch("utils.auth.stateless_auth.set_rls_context", return_value=ORG_A):
+        assert mod._claim_for_generation(USER_A, "C1") is False
+
+
+def test_claim_for_generation_accepts_generating_on_a_retry():
+    """The task's own retry re-enters with the row already flipped by attempt 1 —
+    it must not lock itself out."""
+    dbcm, cur = _claim_db(rowcount=1)
+    with patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
+         patch("utils.auth.stateless_auth.set_rls_context", return_value=ORG_A):
+        mod._claim_for_generation(USER_A, "C1", allow_generating=True)
+    assert cur.execute.call_args.args[1][1] == ["pending", "skipped", "generating"]
+
+
+def test_claim_for_generation_without_an_org_context_claims_nothing():
+    """slack_channels is RLS-protected, so an unset org context makes the UPDATE
+    match zero rows — treat it as a lost claim, not a win."""
+    dbcm, cur = _claim_db(rowcount=1)
+    with patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
+         patch("utils.auth.stateless_auth.set_rls_context", return_value=None):
+        assert mod._claim_for_generation(USER_A, "C1") is False
+    cur.execute.assert_not_called()
+
+
+def test_build_context_refuses_a_channel_it_could_not_read():
+    """conversations.info returning nothing means the token can't see the channel
+    (wrong workspace, archived, scope revoked). Describing it from an empty
+    context would persist a fabricated summary as 'ready'."""
+    import pytest
+
+    client = MagicMock()
+    client.get_channel_info.return_value = None
+    with pytest.raises(mod.ChannelUnreadable):
+        mod._build_context(client, "C1")
+
+
 # --- cross-org fairness -----------------------------------------------------
 
 def test_rotate_orgs_advances_with_the_beat_interval():
@@ -328,7 +408,21 @@ def test_select_only_targets_member_channels_awaiting_description():
     # The workspace comes back with the row: the actor picker needs it to reject a
     # stand-in whose token belongs to a different Slack workspace.
     assert "team_id" in sql
-    assert params == (mod.BACKFILL_STALE_MINUTES, 25)
+    assert params == (mod.BACKFILL_STALE_MINUTES, [], False, 25)
+
+
+def test_select_can_exclude_unreachable_workspaces():
+    """The caller pages past workspaces nobody can describe, so the query must be
+    able to skip them — otherwise the same dead rows fill the window every run."""
+    cur = MagicMock()
+    cur.fetchall.return_value = []
+    mod._select_undescribed_channels(cur, 25, exclude_teams=[TEAM_2],
+                                     exclude_untagged=True)
+    sql, params = cur.execute.call_args.args
+    # NULL-guarded: `NULL = ANY(...)` is unknown, not false, so an unguarded
+    # exclusion would silently drop every untagged row the moment one team is dead.
+    assert "team_id IS NULL OR team_id <> ALL" in sql
+    assert params == (mod.BACKFILL_STALE_MINUTES, [TEAM_2], True, 25)
 
 
 def test_select_excludes_freshly_queued_pending_rows():
@@ -367,17 +461,17 @@ def test_backfill_is_registered_on_the_beat_schedule():
     assert "routes.slack.slack_channel_metadata.backfill_channel_descriptions" in source
 
 
-def test_stale_window_covers_at_least_one_sweep():
-    """The claim restamps ``updated_at``, so a row claimed by one sweep must not
-    look stale to the next — otherwise a task still sitting in the queue gets
-    enqueued twice. The two constants are independent (one is cadence, one is
-    "presumed lost"), but the stale window must stay >= one interval.
+def test_stale_window_covers_the_observed_queue_wait():
+    """The claim restamps ``updated_at``, so the window decides when a queued row
+    is presumed lost. Descriptions sit in the default queue (observed ~85 min
+    deep), so a short window re-claims rows that are merely waiting. The task's
+    own claim makes a duplicate free, but churning statuses isn't.
     """
-    assert mod.BACKFILL_STALE_MINUTES * 60 >= mod.BACKFILL_INTERVAL_SECONDS, (
-        f"stale window {mod.BACKFILL_STALE_MINUTES}min is shorter than the "
-        f"{mod.BACKFILL_INTERVAL_SECONDS}s sweep interval — rows claimed by one "
-        f"sweep would be re-enqueued by the next"
+    assert mod.BACKFILL_STALE_MINUTES >= 120, (
+        f"stale window {mod.BACKFILL_STALE_MINUTES}min is inside the observed "
+        f"queue wait — rows still queued would be re-claimed every sweep"
     )
+    assert mod.BACKFILL_STALE_MINUTES * 60 >= mod.BACKFILL_INTERVAL_SECONDS
 
 
 def test_beat_schedule_uses_the_shared_interval_constant():
@@ -414,7 +508,9 @@ class _CountingProbe(mod._SlackCredProbe):
 
 
 def _assign_actors_with(rows, org_users, teams: dict):
-    return mod._assign_actors(rows, org_users, _CountingProbe(teams))
+    """Return just the assignments; the unreachable-workspace set has its own tests."""
+    assigned, _unreachable = mod._assign_actors(rows, org_users, _CountingProbe(teams))
+    return assigned
 
 
 def test_assign_actors_prefers_the_row_owner():
@@ -427,6 +523,17 @@ def test_assign_actors_prefers_the_row_owner():
 def test_assign_actors_drops_channels_nobody_can_reach():
     assigned = _assign_actors_with([("C1", USER_A, TEAM_1)], [USER_A], {})
     assert assigned == []
+
+
+def test_assign_actors_reports_the_workspaces_nobody_can_reach():
+    """The caller needs this to page past dead rows: without it the oldest 25
+    channels of a disconnected workspace fill the window every single sweep and
+    the describable ones behind them are never reached."""
+    _assigned, unreachable = mod._assign_actors(
+        [("C1", USER_A, TEAM_1), ("C2", USER_B, TEAM_2)],
+        [USER_A, USER_B], _CountingProbe({USER_B: TEAM_2}),
+    )
+    assert unreachable == {TEAM_1}
 
 
 def test_assign_actors_rejects_an_owner_who_moved_workspace():
@@ -467,6 +574,28 @@ def test_assign_actors_allows_an_untagged_row_when_the_org_has_one_workspace():
     assert assigned == [(USER_A2, "C1")]
 
 
+def test_assign_actors_verifies_the_owner_of_an_untagged_row_too():
+    """An untagged row can't be matched against a token, so the owner being
+    connected proves nothing about which workspace they're on now. With two
+    workspaces connected, assigning them would be a guess — and a wrong guess
+    saves an invented description as 'ready'."""
+    assigned = _assign_actors_with(
+        [("C1", USER_A, None)], [USER_A, USER_B],
+        {USER_A: TEAM_1, USER_B: TEAM_2},
+    )
+    assert assigned == []
+
+
+def test_assign_actors_keeps_the_owner_on_an_untagged_single_workspace_row():
+    """One connected workspace makes the owner's token provably the right one, so
+    prefer them — the actor stays stable across runs."""
+    assigned = _assign_actors_with(
+        [("C1", USER_A, None)], [USER_A2, USER_A],
+        {USER_A: TEAM_1, USER_A2: TEAM_1},
+    )
+    assert assigned == [(USER_A, "C1")]
+
+
 def test_assign_actors_skips_an_untagged_row_in_a_multi_workspace_org():
     """Untagged row + more than one connected workspace = a guess. Don't take it."""
     assigned = _assign_actors_with(
@@ -481,7 +610,77 @@ def test_assign_actors_resolves_each_workspace_fallback_once():
     must be memoized across the batch."""
     probe = _CountingProbe({USER_A2: TEAM_1})
     rows = [(f"C{i}", USER_A, TEAM_1) for i in range(20)]
-    assigned = mod._assign_actors(rows, [USER_A, USER_A2], probe)
+    assigned, _unreachable = mod._assign_actors(rows, [USER_A, USER_A2], probe)
     assert len(assigned) == 20
     # One miss for the owner + one hit for the stand-in, not one pair per row.
     assert probe.lookups == 2
+
+
+# --- paging past unreachable workspaces -------------------------------------
+
+def test_backfill_looks_past_a_workspace_nobody_can_describe():
+    """The regression: the oldest rows belong to a disconnected workspace, so a
+    single capped read hands back only dead rows and the describable channels
+    behind them are never reached — every sweep, forever."""
+    rows = ([("DEAD1", USER_B, TEAM_2), ("DEAD2", USER_B, TEAM_2)]
+            + [("C1", USER_A, TEAM_1)])
+    with patch.object(mod, "BACKFILL_MAX_PER_ORG", 2):
+        _result, enqueued, _marked = _run(
+            {ORG_A: [USER_A, USER_B]}, [rows],
+            connected_users={USER_A},   # nobody is connected to TEAM_2
+        )
+    assert enqueued == [(USER_A, "C1")]
+
+
+def test_backfill_paging_stops_once_the_budget_is_full():
+    """A full page of describable rows must not trigger another read."""
+    reads = {"n": 0}
+    real_select = mod._select_undescribed_channels
+
+    def counting(cur, limit, exclude_teams=None, exclude_untagged=False):
+        reads["n"] += 1
+        return real_select(cur, limit, exclude_teams, exclude_untagged)
+
+    dbcm, _conn, _cur = _db(fetchall_rows=[("C1", USER_A, TEAM_1)])
+    with patch("utils.auth.stateless_auth.users_by_org", return_value={ORG_A: [USER_A]}), \
+         patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
+         patch("utils.auth.stateless_auth.set_rls_context", return_value=ORG_A), \
+         patch("utils.auth.stateless_auth.get_credentials_from_db",
+               return_value={"access_token": "xoxb-test", "team_id": TEAM_1}), \
+         patch.object(mod, "_select_undescribed_channels", side_effect=counting), \
+         patch.object(mod, "BACKFILL_MAX_PER_ORG", 1), \
+         patch("routes.slack.slack_channels._mark_pending",
+               side_effect=lambda cur, cids, stale_minutes=None: list(cids)), \
+         patch("routes.slack.slack_channels._enqueue_metadata"):
+        mod._backfill_channel_descriptions()
+    assert reads["n"] == 1
+
+
+def test_backfill_paging_is_bounded_per_org():
+    """Re-reading past dead workspaces must not page through an unbounded backlog
+    every 15 minutes."""
+    dead_teams = [f"TDEAD{i}" for i in range(50)]
+    rows = [(f"D{i}", USER_B, t) for i, t in enumerate(dead_teams)]
+    reads = {"n": 0}
+
+    def counting(cur, limit, exclude_teams=None, exclude_untagged=False):
+        reads["n"] += 1
+        excluded = set(exclude_teams or [])
+        return [r for r in rows if r[2] not in excluded][:limit]
+
+    dbcm, _conn, _cur = _db()
+    with patch("utils.auth.stateless_auth.users_by_org", return_value={ORG_A: [USER_A]}), \
+         patch("utils.db.connection_pool.db_pool.get_admin_connection", return_value=dbcm), \
+         patch("utils.auth.stateless_auth.set_rls_context", return_value=ORG_A), \
+         patch("utils.auth.stateless_auth.get_credentials_from_db",
+               return_value={"access_token": "xoxb-test", "team_id": TEAM_1}), \
+         patch.object(mod, "_select_undescribed_channels", side_effect=counting), \
+         patch.object(mod, "BACKFILL_MAX_SCAN_PER_ORG", 5), \
+         patch.object(mod, "BACKFILL_MAX_PER_ORG", 1), \
+         patch("routes.slack.slack_channels._mark_pending",
+               side_effect=lambda cur, cids, stale_minutes=None: list(cids)), \
+         patch("routes.slack.slack_channels._enqueue_metadata"):
+        mod._backfill_channel_descriptions()
+
+    # 1 row scanned per read, so the scan ceiling caps the reads.
+    assert reads["n"] == 5
