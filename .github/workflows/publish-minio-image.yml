@@ -80,23 +80,6 @@ jobs:
             echo "$PLATFORMS" | grep -q "$want" || { echo "Missing $want in manifest list" >&2; exit 1; }
           done
 
-      # GHCR packages are private on first publish, so warn loudly rather than
-      # letting clients discover it as another ImagePullBackOff.
-      - name: Check the package is anonymously pullable
-        shell: bash
-        run: |
-          set -euo pipefail
-          TOKEN=$(curl -sf --proto '=https' --tlsv1.2 "https://ghcr.io/token?service=ghcr.io&scope=repository:arvo-ai/aurora-minio:pull" | jq -r '.token // empty')
-          CODE=$(curl -s --proto '=https' --tlsv1.2 -o /dev/null -w '%{http_code}' \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
-            "https://ghcr.io/v2/arvo-ai/aurora-minio/manifests/${MINIO_RELEASE}")
-          if [ "$CODE" = "200" ]; then
-            echo "Package is public — clients can pull anonymously."
-          else
-            echo "::warning::aurora-minio is NOT anonymously pullable (HTTP ${CODE}). Set the GHCR package visibility to Public, or every OSS install will fail with ImagePullBackOff."
-          fi
-
       - name: Report digest to pin in values.yaml
         shell: bash
         env:
@@ -121,3 +104,33 @@ jobs:
             echo "      digest: \"${DIGEST}\""
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # GHCR packages are private on first publish, and a private aurora-minio
+      # reproduces the exact ImagePullBackOff this change fixes. Fail loudly:
+      # the image is already pushed, so a maintainer flips visibility and re-runs.
+      # Kept last so the digest above is recorded even when this gate fails.
+      - name: Require the package to be anonymously pullable
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -sf --proto '=https' --tlsv1.2 "https://ghcr.io/token?service=ghcr.io&scope=repository:arvo-ai/aurora-minio:pull" | jq -r '.token // empty')
+          CODE=$(curl -s --proto '=https' --tlsv1.2 -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://ghcr.io/v2/arvo-ai/aurora-minio/manifests/${MINIO_RELEASE}")
+          if [ "$CODE" = "200" ]; then
+            echo "Package is public — clients can pull anonymously."
+            exit 0
+          fi
+          echo "::error::aurora-minio is published but NOT anonymously pullable (HTTP ${CODE})."
+          {
+            echo ""
+            echo "### Action required: make the package public"
+            echo ""
+            echo "The image pushed successfully, but \`aurora-minio\` is private, so"
+            echo "\`services.minio.enabled: true\` installs will fail with ImagePullBackOff."
+            echo ""
+            echo "Fix: **Packages → aurora-minio → Package settings → Change visibility → Public**,"
+            echo "then re-run this workflow to confirm."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
