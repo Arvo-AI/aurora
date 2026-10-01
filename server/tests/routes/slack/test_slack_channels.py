@@ -611,10 +611,100 @@ def test_register_single_channel_can_skip_the_description():
          patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
          patch.object(mod, "_upsert_channel", return_value=("C1", True)), \
          patch.object(mod, "get_redis_client", return_value=MagicMock()), \
+         patch.object(mod, "_backdate_for_backfill") as backdate, \
          patch.object(mod, "_enqueue_metadata") as enqueue:
         assert mod.register_single_channel("u1", "C1", team_id="T1", describe=False) is True
 
     enqueue.assert_not_called()
+    # No task was sent, so the row must not look freshly queued or it waits out
+    # the sweep's lost-task window for an enqueue that never happened.
+    backdate.assert_called_once()
+    assert backdate.call_args[0][1] == "C1"
+
+
+def test_register_single_channel_does_not_backdate_a_described_row():
+    """A described row HAS a task in flight, so the stale window is doing its real
+    job — backdating it would invite the sweep to re-claim a queued row."""
+    client = MagicMock()
+    client.get_channel_info.return_value = {"id": "C1", "name": "one"}
+    dbcm, _cur = _db(fetchone_row=None)
+    with patch.object(mod, "get_slack_client_for_user", return_value=client), \
+         patch.object(mod, "resolve_org", return_value="org"), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_upsert_channel", return_value=("C1", True)), \
+         patch.object(mod, "get_redis_client", return_value=MagicMock()), \
+         patch.object(mod, "_backdate_for_backfill") as backdate, \
+         patch.object(mod, "_enqueue_metadata") as enqueue:
+        mod.register_single_channel("u1", "C1", team_id="T1", describe=True)
+
+    enqueue.assert_called_once()
+    backdate.assert_not_called()
+
+
+def test_register_single_channel_does_not_backdate_an_existing_row():
+    """An idempotent re-register must not touch updated_at: the existing row may
+    hold a 'ready' description or a task genuinely in flight."""
+    client = MagicMock()
+    client.get_channel_info.return_value = {"id": "C1", "name": "one"}
+    dbcm, _cur = _db(fetchone_row=("u_owner",))
+    with patch.object(mod, "get_slack_client_for_user", return_value=client), \
+         patch.object(mod, "resolve_org", return_value="org"), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_upsert_channel", return_value=("C1", False)), \
+         patch.object(mod, "get_redis_client", return_value=MagicMock()), \
+         patch.object(mod, "_backdate_for_backfill") as backdate, \
+         patch.object(mod, "_enqueue_metadata") as enqueue:
+        assert mod.register_single_channel("u1", "C1", team_id="T1", describe=False) is False
+
+    enqueue.assert_not_called()
+    backdate.assert_not_called()
+
+
+def test_backdate_ages_the_row_past_the_sweep_window():
+    """The backdate must clear BACKFILL_STALE_MINUTES, not merely approach it, or
+    the row is still invisible to the next sweep."""
+    _dbcm, cur = _db()
+    mod._backdate_for_backfill(cur, "C1")
+
+    sql, params = cur.execute.call_args[0]
+    assert params[0] > mod.BACKFILL_STALE_MINUTES, (
+        "backdate must land strictly outside the stale window"
+    )
+    assert params[1] == "C1"
+    # Only a 'pending' row may be aged: a 'ready'/'generating' row has nothing
+    # waiting for the sweep, and moving its timestamp would misreport progress.
+    assert "metadata_status = 'pending'" in sql
+
+
+def test_over_cap_activation_is_visible_to_the_very_next_sweep():
+    """Regression: the 50-description cap and the 180-minute stale window are
+    independently sound but used to combine into a 3h dead zone — over-cap rows
+    landed 'pending' with a fresh updated_at, so the sweep ignored them until the
+    lost-task window elapsed even though no task was ever sent."""
+    client = MagicMock()
+    client.join_channel.return_value = {"id": "ok"}
+    client.get_channel_info.return_value = {"id": "C", "name": "c"}
+    backdated = []
+    dbcm, _cur = _db(fetchone_row=None)
+    with patch.object(mod, "get_slack_client_for_user", return_value=client), \
+         patch.object(mod, "_team_id_for_user", return_value="T1"), \
+         patch.object(mod, "MAX_ACTIVATE_DESCRIBE", 1), \
+         patch.object(mod, "resolve_org", return_value="org"), \
+         patch.object(mod, "set_rls_context", return_value="org"), \
+         patch.object(mod.db_pool, "get_admin_connection", return_value=dbcm), \
+         patch.object(mod, "_upsert_channel",
+                      side_effect=lambda cur, u, o, ch, ex, **kw: (ch["channel_id"], True)), \
+         patch.object(mod, "get_redis_client", return_value=MagicMock()), \
+         patch.object(mod, "_backdate_for_backfill",
+                      side_effect=lambda cur, cid: backdated.append(cid)), \
+         patch.object(mod, "_enqueue_metadata") as enqueue:
+        mod._activate_channels("u1", ["C1", "C2", "C3"])
+
+    # One described now; the rest handed to the backfill already stale.
+    assert [c.args[1] for c in enqueue.call_args_list] == ["C1"]
+    assert backdated == ["C2", "C3"]
 
 
 # --- list_all_channels pagination ------------------------------------------

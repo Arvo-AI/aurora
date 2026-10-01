@@ -11,7 +11,10 @@ import time
 
 from celery_config import celery_app
 from chat.backend.agent.utils.message_content import extract_text_from_content
-from routes.slack.slack_backfill_config import BACKFILL_INTERVAL_SECONDS
+from routes.slack.slack_backfill_config import (
+    BACKFILL_INTERVAL_SECONDS,
+    BACKFILL_STALE_MINUTES,
+)
 from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
@@ -39,15 +42,9 @@ BACKFILL_MAX_TOTAL = 200
 # all of it every 15 minutes.
 BACKFILL_MAX_SCAN_PER_ORG = 500
 
-# How long a 'pending' row must sit before the sweep treats it as stuck rather
-# than still in flight. NOT the same knob as BACKFILL_INTERVAL_SECONDS: a started
-# task is 'generating', so a still-'pending' row is one waiting in the broker
-# queue, and this measures worst-case queue wait, not sweep cadence. Hours, not
-# minutes: a backlog of description jobs on the default queue has been observed
-# ~85 min deep, and anything shorter re-claims rows that are merely queued.
-# (generate_channel_metadata also claims the row, so a duplicate costs no LLM
-# call — this window only decides how fast a genuinely lost task is retried.)
-BACKFILL_STALE_MINUTES = 180
+# BACKFILL_STALE_MINUTES lives in slack_backfill_config: slack_channels backdates
+# the rows it registers without describing against the same window read here, and
+# a drift strands those rows for the difference.
 
 
 def _update_metadata(user_id: str, channel_id: str, summary, status: str,

@@ -58,6 +58,7 @@ import re
 from flask import Blueprint, jsonify, request
 
 from connectors.slack_connector.client import get_slack_client_for_user
+from routes.slack.slack_backfill_config import BACKFILL_STALE_MINUTES
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
 from utils.cache.redis_client import get_redis_client
@@ -78,7 +79,8 @@ MAX_AUTO_CHANNELS = 50
 # themselves against Slack's rate limits, but the description tasks don't —
 # activating a 1500-channel workspace would put 1500 LLM jobs on the queue at
 # once and starve everything behind them. Over-cap channels are registered
-# 'pending' and drained by the backfill sweep at its own bounded rate.
+# 'pending' and backdated past the sweep's stale window, so the next sweep starts
+# draining them at its own bounded rate (see _backdate_for_backfill).
 MAX_ACTIVATE_DESCRIBE = 50
 
 # Hard cap on how many channels we enumerate from Slack in one pass. Seeing fewer
@@ -418,7 +420,8 @@ def register_single_channel(user_id: str, channel_id: str,
     Idempotent. Returns True if a new row was created.
 
     ``describe=False`` registers the row but leaves it 'pending' for the backfill
-    sweep — the bulk-activate path uses it to bound LLM enqueues per batch.
+    sweep — the bulk-activate path uses it to bound LLM enqueues per batch. The
+    row is backdated so the very next sweep is eligible to claim it.
     """
     if not channel_id:
         return False
@@ -453,6 +456,11 @@ def register_single_channel(user_id: str, channel_id: str,
                 existing = {channel_id: row[0]} if row else {}
                 _cid, is_new = _upsert_channel(cur, user_id, org_id, ch, existing,
                                                initial_status="pending")
+                # Nothing will enqueue this row, so don't let it look freshly
+                # queued — age it so the next sweep claims it instead of waiting
+                # out a lost-task window for a task that was never sent.
+                if is_new and _cid and not describe:
+                    _backdate_for_backfill(cur, _cid)
                 conn.commit()
     except Exception:
         logger.warning("[slack_channels] single-register: DB upsert failed", exc_info=True)
@@ -1076,8 +1084,9 @@ def _activate_channels(user_id: str, channel_ids: list[str]) -> int:
         # The joins pace themselves against Slack, but the descriptions don't:
         # each one is an LLM job queued immediately, so an uncapped batch (a
         # 1500-channel workspace is one click) floods the queue and delays
-        # everything behind it. Over-cap channels are left 'pending' for the
-        # backfill sweep to drain at its own bounded rate.
+        # everything behind it. Over-cap channels are left 'pending' and
+        # backdated, so the next sweep (<=15 min out) starts draining them at its
+        # own bounded rate rather than after the lost-task window.
         describe = described < MAX_ACTIVATE_DESCRIBE
         register_single_channel(user_id, channel_id, team_id=team_id,
                                 describe=describe)
@@ -1128,6 +1137,22 @@ def _mark_pending(cur, channel_ids: list[str],
     # One row per member for the same channel, so RETURNING repeats a channel_id
     # once per member row — dedupe or the caller enqueues N identical LLM jobs.
     return list(dict.fromkeys(row[0] for row in cur.fetchall()))
+
+
+def _backdate_for_backfill(cur, channel_id: str):
+    """Age a 'pending' row past the sweep's stale window so it's eligible at once.
+
+    The window is a lost-task timer, but a row registered with ``describe=False``
+    has no task behind it — left fresh it would wait out the full window for an
+    enqueue that never happened. One extra minute clears the boundary.
+    """
+    cur.execute(
+        """UPDATE slack_channels
+              SET updated_at = NOW() - make_interval(mins => %s)
+            WHERE provider = 'slack' AND channel_id = %s
+              AND metadata_status = 'pending'""",
+        (BACKFILL_STALE_MINUTES + 1, channel_id),
+    )
 
 
 def _enqueue_metadata(user_id: str, channel_id: str):

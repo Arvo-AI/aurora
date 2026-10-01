@@ -483,6 +483,15 @@ def test_beat_schedule_uses_the_shared_interval_constant():
     )
 
 
+def test_stale_window_is_shared_with_the_registration_path():
+    """slack_channels backdates un-described rows past this window. If the two
+    modules held separate copies, a change here would strand those rows for the
+    difference — the dead zone this constant's sharing exists to prevent."""
+    from routes.slack import slack_channels
+
+    assert slack_channels.BACKFILL_STALE_MINUTES is mod.BACKFILL_STALE_MINUTES
+
+
 # --- _assign_actors (credential selection in isolation) ---------------------
 
 class _CountingProbe(mod._SlackCredProbe):
