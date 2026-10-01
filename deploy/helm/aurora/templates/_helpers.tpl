@@ -51,16 +51,9 @@ Usage: image: {{ include "aurora.image" (dict "image" "server" "global" $) | quo
 {{- end -}}
 
 {{/*
-Resolve the MinIO-compatible object storage image.
-
-Upstream MinIO deleted minio/minio from Docker Hub in Sept 2026 and closed
-anonymous pulls on quay.io, so the chart uses pgsty/silo — a maintained AGPL
-fork that keeps the S3 API, MINIO_* env vars, health routes, and .minio.sys
-on-disk format, so existing volumes are readable in both directions.
-
-The inline defaults are load-bearing: `helm upgrade --reuse-values` does not
-merge new chart defaults, so upgrades from <=1.5.1 reach here with
-services.minio.image unset. Digest wins over tag when set.
+MinIO-compatible object storage image; digest wins over tag.
+Inline defaults are load-bearing: `helm upgrade --reuse-values` skips new chart
+defaults, so upgrades from <=1.5.1 arrive with services.minio.image unset.
 */}}
 {{- define "aurora.minioImage" -}}
 {{- $img := .Values.services.minio.image | default dict -}}
