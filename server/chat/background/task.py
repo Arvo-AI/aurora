@@ -2164,8 +2164,19 @@ def _send_response_to_slack(
         
         # Slack messages have a ~3000 char limit for update_message
         SLACK_MSG_LIMIT = 2900
-        if len(formatted_message) > SLACK_MSG_LIMIT:
-            formatted_message = formatted_message[:SLACK_MSG_LIMIT] + "\n\n_...truncated. See full results in Aurora._"
+        # Always point back at the session: the Slack reply is a clipped view, and
+        # this link is the only way to find the run again in the console.
+        frontend_url = os.getenv("FRONTEND_URL", "").rstrip("/")
+        session_link = (
+            f"\n\n<{frontend_url}/chat?sessionId={session_id}|Open the full response in Aurora>"
+            if frontend_url else ""
+        )
+        if len(formatted_message) + len(session_link) > SLACK_MSG_LIMIT:
+            # The link itself says where to go, so the note just marks the cut
+            note = "\n\n_...truncated._" if session_link else "\n\n_...truncated. See full results in Aurora._"
+            budget = max(SLACK_MSG_LIMIT - len(session_link) - len(note), 0)
+            formatted_message = formatted_message[:budget] + note
+        formatted_message += session_link
 
         # Update the "Thinking..." message if we have the timestamp, otherwise send a new message
         if thinking_message_ts:
