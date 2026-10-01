@@ -30,7 +30,8 @@ RUN set -eux; \
       arm64) expected="$SHA256_ARM64" ;; \
       *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL --retry 3 --retry-delay 2 -o /tmp/minio \
+    curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
+      --retry 3 --retry-delay 2 -o /tmp/minio \
       "https://github.com/minio/minio/releases/download/${MINIO_RELEASE}/minio.linux-${TARGETARCH}.${MINIO_RELEASE}"; \
     echo "${expected}  /tmp/minio" | sha256sum -c -; \
     chmod 0755 /tmp/minio

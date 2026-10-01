@@ -86,8 +86,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TOKEN=$(curl -sf "https://ghcr.io/token?service=ghcr.io&scope=repository:arvo-ai/aurora-minio:pull" | jq -r '.token // empty')
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+          TOKEN=$(curl -sf --proto '=https' --tlsv1.2 "https://ghcr.io/token?service=ghcr.io&scope=repository:arvo-ai/aurora-minio:pull" | jq -r '.token // empty')
+          CODE=$(curl -s --proto '=https' --tlsv1.2 -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer ${TOKEN}" \
             -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
             "https://ghcr.io/v2/arvo-ai/aurora-minio/manifests/${MINIO_RELEASE}")
