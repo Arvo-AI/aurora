@@ -23,11 +23,13 @@ from utils.secrets.vault_backend import VaultSecretsBackend
 
 @pytest.fixture
 def vault_env(monkeypatch):
+    """Minimum env for the backend to attempt a connection at all."""
     monkeypatch.setenv("VAULT_TOKEN", "test-token")
     monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
 
 
 def _client(authenticated: bool) -> MagicMock:
+    """A stand-in hvac client whose auth probe returns ``authenticated``."""
     client = MagicMock()
     client.is_authenticated.return_value = authenticated
     client.sys.list_mounted_secrets_engines.return_value = {"aurora/": {}}
@@ -87,6 +89,7 @@ class TestAvailabilityIsRetried:
             )
 
     def test_backoff_window_expiry_allows_another_attempt(self, vault_env):
+        """Backoff suppresses retries, it does not end them."""
         backend = VaultSecretsBackend()
         backend.RETRY_INTERVAL_SECONDS = 300
 
@@ -107,6 +110,7 @@ class TestAvailabilityIsRetried:
         results = []
 
         def slow_client(*a, **kw):
+            """Slow enough that the other threads pile up on the init lock."""
             time.sleep(0.02)
             return _client(False)
 
@@ -157,11 +161,13 @@ class TestErrorAttribution:
     """
 
     def _backend(self, available: bool):
+        """Patch in a backend reporting the given availability."""
         backend = MagicMock()
         backend.is_available.return_value = available
         return patch("utils.secrets.get_secrets_backend", return_value=backend)
 
     def test_names_vault_when_backend_is_down(self):
+        """The whole point: the message must point at Vault, not the provider."""
         from utils.secrets import credential_error_message
 
         with self._backend(available=False):
@@ -220,10 +226,12 @@ class TestAvailabilityIsRevalidatedAfterOperations:
     _REF = "vault:kv/data/aurora/users/x"
 
     def _connected(self, backend, client):
+        """Drive the backend to a latched-available state on ``client``."""
         with patch("hvac.Client", return_value=client):
             assert backend.is_available() is True
 
     def test_read_failure_re_probes_and_reports_the_outage(self, vault_env):
+        """A read that fails on a sealed Vault must re-open the availability check."""
         backend = VaultSecretsBackend()
         client = _client(True)
         self._connected(backend, client)
@@ -318,6 +326,7 @@ class TestAvailabilityIsRevalidatedAfterOperations:
 
     @pytest.mark.parametrize("operation", ["store", "delete"])
     def test_write_failures_also_re_open_the_availability_check(self, vault_env, operation):
+        """Reads are not the only signal — a failed write says as much about health."""
         backend = VaultSecretsBackend()
         client = _client(True)
         self._connected(backend, client)
@@ -394,6 +403,7 @@ class TestAvailabilityIsRevalidatedAfterOperations:
         released = threading.Event()
 
         def slow_failing_read(*a, **kw):
+            """Blocks until the test has swapped the client, then fails."""
             released.wait(1)
             raise RuntimeError("Vault is sealed")
 
@@ -402,6 +412,7 @@ class TestAvailabilityIsRevalidatedAfterOperations:
         errors = []
 
         def read():
+            """Runs the doomed read off-thread so the swap can race it."""
             try:
                 backend.get_secret(self._REF)
             except Exception as exc:  # noqa: BLE001 - asserted on below
@@ -426,6 +437,7 @@ class TestBackendIsNamedInTheDiagnostic:
     operator to check VAULT_ADDR sends them to a service they aren't running."""
 
     def _message(self, monkeypatch, **env) -> str:
+        """Build a fresh backend from ``env`` and return the message it produces."""
         from utils.secrets import credential_error_message, reset_backend
 
         for key, value in env.items():
@@ -441,6 +453,7 @@ class TestBackendIsNamedInTheDiagnostic:
             reset_backend()
 
     def test_aws_secrets_manager_gets_aws_guidance(self, monkeypatch):
+        """An operator not running Vault must not be sent to check VAULT_ADDR."""
         from utils.secrets import AWS_SM_UNAVAILABLE_MESSAGE
 
         msg = self._message(
@@ -452,6 +465,7 @@ class TestBackendIsNamedInTheDiagnostic:
         assert "VAULT_ADDR" not in msg
 
     def test_vault_still_gets_vault_guidance(self, monkeypatch):
+        """Selecting on backend type must not regress the default case."""
         from utils.secrets import SECRETS_BACKEND_UNAVAILABLE_MESSAGE
 
         msg = self._message(monkeypatch, SECRETS_BACKEND="vault", VAULT_TOKEN=None)
@@ -476,6 +490,7 @@ class TestReconnectPromptSuppression:
     is wrong advice — it sends users to re-add credentials that never broke."""
 
     def _payload(self, available: bool, requires_connection: bool):
+        """The failure payload cloud_exec would return under the given conditions."""
         from chat.backend.agent.tools.cloud_exec_tool import _credential_setup_failure
 
         backend = MagicMock()
@@ -490,15 +505,18 @@ class TestReconnectPromptSuppression:
             )
 
     def test_reconnect_prompt_dropped_when_backend_is_down(self):
+        """No reconnect flow during an outage — the connector never broke."""
         payload = self._payload(available=False, requires_connection=True)
         assert "requires_connection" not in payload
         assert "Vault" in payload["error"]
 
     def test_reconnect_prompt_kept_when_backend_is_healthy(self):
+        """A genuinely disconnected account must still be prompted to reconnect."""
         payload = self._payload(available=True, requires_connection=True)
         assert payload["requires_connection"] is True
 
     def test_final_command_is_always_reported(self):
+        """Suppressing the prompt must not drop the rest of the payload."""
         for available in (True, False):
             payload = self._payload(available=available, requires_connection=True)
             assert payload["final_command"] == "server list"

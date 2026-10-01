@@ -38,6 +38,7 @@ class VaultSecretsBackend(SecretsBackend):
     CONNECT_TIMEOUT_SECONDS = 10
 
     def __init__(self):
+        """Nothing connects here — the client is built lazily on first lookup."""
         self._client = None
         self._initialized = False
         self._available = False

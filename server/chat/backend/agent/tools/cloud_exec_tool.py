@@ -1309,6 +1309,7 @@ def _cloud_exec_aws_multi_account(
         })
 
     def _run_on_account(conn: dict) -> dict:
+        """Run the command against one account with its own isolated credential env."""
         account_id = conn.get("account_id", "unknown")
         region = conn.get("region") or "us-east-1"
         try:
