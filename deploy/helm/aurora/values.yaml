@@ -49,9 +49,13 @@ services:
     enabled: false   # Set true for local dev (provides S3-compatible storage in-cluster)
     # Upstream MinIO deleted minio/minio from Docker Hub in Sept 2026 and closed
     # anonymous pulls on quay.io, leaving no public image. pgsty/silo is a
-    # maintained AGPL fork that preserves the S3 API, MINIO_* env vars, health
-    # routes, and the .minio.sys on-disk format (readable by either server, so
-    # rollback works). Unlike upstream it still ships CVE fixes.
+    # maintained AGPL fork of upstream's final release (2025-10-15) that still
+    # ships CVE fixes.
+    #
+    # Safe over existing minio-data volumes: xl.meta and format.json version
+    # constants are byte-identical to upstream, so no migration runs on first
+    # boot and data stays readable by either server. Every Silo release shares
+    # that same upstream base, so pinning an older tag reduces nothing.
     #
     # Pinned by digest because Docker Hub tags are mutable — and a deleted
     # upstream repo is exactly how this broke in the first place.

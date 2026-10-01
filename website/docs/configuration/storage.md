@@ -93,10 +93,14 @@ anonymous pulls on `quay.io`, and `dl.min.io` now returns `410 Gone`. The commun
 edition is [source-only and no longer maintained](https://github.com/minio/minio).
 
 Aurora's Helm chart (`services.minio.enabled: true`) therefore uses
-[`pgsty/silo`](https://github.com/pgsty/silo), a maintained AGPL fork that keeps the
-S3 API, `MINIO_*` variables, health routes, and the `.minio.sys` on-disk format — so
-existing MinIO volumes are readable by either server. Unlike upstream, it still ships
-CVE fixes.
+[`pgsty/silo`](https://github.com/pgsty/silo), a maintained AGPL fork of upstream's
+final community release that keeps the S3 API, `MINIO_*` variables, health routes,
+and the `.minio.sys` on-disk format. Unlike upstream, it still ships CVE fixes.
+
+**Upgrading an existing `minio-data` volume is safe.** The `xl.meta` and
+`format.json` version constants are unchanged from MinIO, so no migration runs on
+first boot and data remains readable by either server. Take a `VolumeSnapshot`
+first anyway if your storage class supports it.
 
 In-cluster storage is still intended for local dev. For production, use one of the
 managed options above.
