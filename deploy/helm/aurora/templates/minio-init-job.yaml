@@ -31,12 +31,15 @@ spec:
             - |
               set -eu
               ENDPOINT="http://{{ include "aurora.fullname" . }}-minio:9000"
+              # --cli-connect-timeout: the default is 60s, so without it one
+              # unreachable-endpoint attempt outlasts the whole wait budget.
+              AWS="aws --endpoint-url $ENDPOINT --cli-connect-timeout 5 --cli-read-timeout 10"
 
               # No startup ordering vs. the StatefulSet — wait for the S3 API.
-              i=0
-              until aws --endpoint-url "$ENDPOINT" s3api list-buckets >/dev/null 2>&1; do
-                i=$((i + 1))
-                if [ "$i" -ge 60 ]; then
+              # Deadline, not an attempt count: attempts have no fixed duration.
+              DEADLINE=$(( $(date +%s) + 180 ))
+              until $AWS s3api list-buckets >/dev/null 2>&1; do
+                if [ "$(date +%s)" -ge "$DEADLINE" ]; then
                   echo "MinIO did not become ready in time" >&2
                   exit 1
                 fi
@@ -46,9 +49,9 @@ spec:
 
               # head-bucket also fails on 403, so a denied check must not turn
               # into a failed create and block the whole upgrade.
-              if aws --endpoint-url "$ENDPOINT" s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
+              if $AWS s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
                 echo "Bucket already exists"
-              elif out=$(aws --endpoint-url "$ENDPOINT" s3api create-bucket --bucket "$BUCKET" 2>&1); then
+              elif out=$($AWS s3api create-bucket --bucket "$BUCKET" 2>&1); then
                 echo "Bucket created"
               else
                 case "$out" in
@@ -62,6 +65,9 @@ spec:
           env:
             - name: BUCKET
               value: {{ .Values.config.STORAGE_BUCKET | quote }}
+            # Retries would multiply each attempt's timeout by 3.
+            - name: AWS_MAX_ATTEMPTS
+              value: "1"
             - name: AWS_DEFAULT_REGION
               value: {{ .Values.config.STORAGE_REGION | default "us-east-1" | quote }}
             - name: AWS_ACCESS_KEY_ID

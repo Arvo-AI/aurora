@@ -53,6 +53,7 @@ services:
     # Digest-pinned because Docker Hub tags are mutable.
     image:
       repository: docker.io/pgsty/silo
+      # digest wins: to move to another tag, set it AND clear digest to "".
       tag: "RELEASE.2026-09-16T00-00-00Z"
       # Multi-arch index (linux/amd64 + linux/arm64) for the tag above.
       digest: "sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46"
