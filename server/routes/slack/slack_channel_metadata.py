@@ -99,19 +99,18 @@ def _claim_for_generation(user_id: str, channel_id: str,
     from utils.auth.stateless_auth import set_rls_context
 
     statuses = ['pending', 'skipped'] + (['generating'] if allow_generating else [])
-    with db_pool.get_admin_connection() as conn:
-        with conn.cursor() as cur:
-            if not set_rls_context(cur, conn, user_id, log_prefix="[SlackChannelMeta]"):
-                return False
-            cur.execute(
-                """UPDATE slack_channels
-                   SET metadata_status = 'generating', updated_at = NOW()
-                   WHERE provider = 'slack' AND channel_id = %s
-                     AND metadata_status = ANY(%s)""",
-                (channel_id, statuses),
-            )
-            claimed = cur.rowcount > 0
-            conn.commit()
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        if not set_rls_context(cur, conn, user_id, log_prefix="[SlackChannelMeta]"):
+            return False
+        cur.execute(
+            """UPDATE slack_channels
+               SET metadata_status = 'generating', updated_at = NOW()
+               WHERE provider = 'slack' AND channel_id = %s
+                 AND metadata_status = ANY(%s)""",
+            (channel_id, statuses),
+        )
+        claimed = cur.rowcount > 0
+        conn.commit()
     return claimed
 
 

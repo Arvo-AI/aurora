@@ -408,7 +408,6 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
 
 def register_single_channel(user_id: str, channel_id: str,
                             team_id: str | None = None,
-                            allow_restore: bool = True,
                             describe: bool = True) -> bool:
     """Register (and describe) one channel Aurora was just added to.
 
@@ -420,10 +419,6 @@ def register_single_channel(user_id: str, channel_id: str,
 
     ``describe=False`` registers the row but leaves it 'pending' for the backfill
     sweep — the bulk-activate path uses it to bound LLM enqueues per batch.
-
-    ``allow_restore`` is accepted for backwards-compatibility with callers but is
-    now a no-op: membership is the source of truth, so there is no separate
-    "dismissed" state to restore — a channel is active iff Aurora is a member.
     """
     if not channel_id:
         return False
