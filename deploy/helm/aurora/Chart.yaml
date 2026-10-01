@@ -3,8 +3,6 @@ name: aurora-oss
 description: Aurora – AI-powered cloud operations platform (on-prem deployment)
 type: application
 version: 1.5.3
-# Keep in lockstep with version: image.tag defaults to appVersion, so a stale
-# value here silently runs older application images. CI enforces equality.
 appVersion: "1.5.3"
 home: https://github.com/Arvo-AI/aurora
 sources:
