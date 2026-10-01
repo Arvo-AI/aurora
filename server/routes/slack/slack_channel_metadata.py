@@ -339,6 +339,7 @@ def _select_undescribed_channels(cur, limit: int,
 
     Longest-waiting first so bounded runs drain the backlog; DISTINCT ON de-dupes
     the row-per-member. 'error'/'limit_reached' excluded — retrying burns quota.
+    A stale 'generating' row is included: it's crash recovery, not a retry.
     """
     cur.execute(
         """SELECT channel_id, user_id, team_id FROM (
@@ -347,7 +348,13 @@ def _select_undescribed_channels(cur, limit: int,
                 WHERE provider = 'slack' AND is_member
                   AND (
                         metadata_status = 'skipped'
-                     OR (metadata_status = 'pending'
+                     -- 'generating' is set by the task itself, so a stale one
+                     -- means the worker died mid-flight (eviction/OOM) and no
+                     -- retry will fire. Without this the row is stranded for
+                     -- good: a spinner in the UI, and invisible to the agent,
+                     -- which only lists 'ready'. Generation takes seconds, so
+                     -- anything this old is not still running.
+                     OR (metadata_status IN ('pending', 'generating')
                          AND updated_at < NOW() - make_interval(mins => %s))
                   )
                   -- Workspaces already proven unreachable this run. Guarded on

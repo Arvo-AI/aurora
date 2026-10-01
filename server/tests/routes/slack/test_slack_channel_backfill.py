@@ -436,6 +436,25 @@ def test_select_excludes_freshly_queued_pending_rows():
     assert "make_interval" in sql
 
 
+def test_select_recovers_a_generating_row_abandoned_by_a_dead_worker():
+    """'generating' is set by the task itself, so no retry fires if the worker is
+    killed (eviction/OOM) — nothing else resets it. Without this the row is
+    stranded for good: a spinner in the UI, and invisible to the agent, which
+    lists only 'ready'."""
+    cur = MagicMock()
+    cur.fetchall.return_value = []
+    mod._select_undescribed_channels(cur, 10)
+    sql = cur.execute.call_args.args[0]
+    assert "metadata_status IN ('pending', 'generating')" in sql
+    # Only a STALE one: a 'generating' row inside the window is a live task, and
+    # re-enqueueing it would duplicate the LLM call the claim exists to prevent.
+    # Normalised so the assertion survives reformatting of the SQL literal.
+    flat = " ".join(sql.split())
+    assert "metadata_status IN ('pending', 'generating') AND updated_at <" in flat, (
+        "a 'generating' row must be gated on the staleness window, not reclaimed outright"
+    )
+
+
 # --- beat registration ------------------------------------------------------
 
 def test_implementation_is_a_plain_function():

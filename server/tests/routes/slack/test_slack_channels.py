@@ -219,6 +219,27 @@ def test_mark_pending_with_staleness_reasserts_the_window():
     assert params == (["C1"], 15)
 
 
+def test_mark_pending_can_reclaim_a_stale_generating_row():
+    """The claim must accept the same statuses the sweep's SELECT does, or the
+    sweep hands back a crashed 'generating' row the UPDATE then refuses, and it
+    stays stranded while silently consuming a slot of the per-org budget."""
+    cur = MagicMock()
+    cur.fetchall.return_value = [("C1",)]
+    mod._mark_pending(cur, ["C1"], stale_minutes=180)
+    sql = cur.execute.call_args.args[0]
+    assert "metadata_status IN ('pending', 'generating')" in sql
+
+
+def test_mark_pending_without_staleness_will_not_touch_generating():
+    """Reconcile has no staleness bar, so admitting 'generating' there would let a
+    page load reset a row whose task is legitimately mid-flight."""
+    cur = MagicMock()
+    cur.fetchall.return_value = [("C1",)]
+    mod._mark_pending(cur, ["C1"])
+    sql = cur.execute.call_args.args[0]
+    assert "generating" not in sql
+
+
 def test_mark_pending_always_restamps_updated_at():
     """updated_at is the 'time since queued' signal; without restamping, a
     just-queued row looks stale and gets enqueued again."""

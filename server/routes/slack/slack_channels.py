@@ -1111,14 +1111,16 @@ def _mark_pending(cur, channel_ids: list[str],
     if not channel_ids:
         return []
     # Re-assert staleness (backfill): only claim rows still as stale as when we
-    # selected them, so a racing sweep's restamp locks us out.
+    # selected them, so a racing sweep's restamp locks us out. 'generating' is
+    # included for the same reason the sweep's SELECT includes it — a worker
+    # killed mid-flight leaves it set with nothing coming to clear it.
     if stale_minutes is not None:
         cur.execute(
             """UPDATE slack_channels
                   SET metadata_status = 'pending', updated_at = NOW()
                 WHERE provider = 'slack' AND channel_id = ANY(%s)
                   AND (metadata_status = 'skipped'
-                       OR (metadata_status = 'pending'
+                       OR (metadata_status IN ('pending', 'generating')
                            AND updated_at < NOW() - make_interval(mins => %s)))
              RETURNING channel_id""",
             (channel_ids, stale_minutes),
