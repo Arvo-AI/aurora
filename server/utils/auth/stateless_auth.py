@@ -176,7 +176,7 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
         if provider == 'aws':
             try:
                 from utils.aws.aws_auth import assume_role_and_get_creds
-                from utils.workspace.workspace_utils import get_or_create_workspace
+                from utils.workspace.workspace_utils import resolve_connection_external_id
 
                 conn = connect_to_db_as_user()
                 cur = conn.cursor()
@@ -184,7 +184,7 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
 
                 cur.execute(
                     """
-                    SELECT role_arn, account_id FROM user_connections
+                    SELECT role_arn, account_id, workspace_id FROM user_connections
                     WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
                     ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END,
                              last_verified_at DESC NULLS LAST
@@ -203,18 +203,22 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
                 logger.warning(f"No active AWS connection found for user {user_id}")
                 return None
 
-            role_arn, account_id = row
+            role_arn, account_id, workspace_id = row
             # Try cache
             cached = _get_cached_aws_creds(user_id, account_id)
             if cached:
                 logger.debug("Returned cached AWS credentials for %s/%s", user_id, account_id)
                 return cached
 
-            # Get external_id from workspace (required for role assumption)
-            workspace = get_or_create_workspace(user_id, "default")
-            external_id = workspace.get('aws_external_id')
+            # ExternalId belongs to the workspace that registered this connection,
+            # not the caller's -- connectors are org-shared.
+            external_id = resolve_connection_external_id(
+                {"workspace_id": str(workspace_id) if workspace_id else None,
+                 "account_id": account_id},
+                user_id,
+            )
             if not external_id:
-                logger.error(f"Workspace for user {user_id} missing aws_external_id - cannot assume role")
+                logger.error("Could not resolve aws_external_id for user %s - cannot assume role", sanitize(user_id))
                 return None
 
             try:

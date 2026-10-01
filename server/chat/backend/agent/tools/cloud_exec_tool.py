@@ -218,7 +218,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
         try:
             # Single source of truth: read from user_connections
             from utils.db.connection_utils import get_user_aws_connection
-            from utils.workspace.workspace_utils import get_or_create_workspace
+            from utils.workspace.workspace_utils import resolve_connection_external_id
             from utils.aws.aws_sts_client import assume_workspace_role
             from utils.aws.aws_session_policies import get_read_only_session_policy
 
@@ -242,12 +242,17 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
             if conn_region and not selected_region:
                 selected_region = conn_region
 
-            # Get external_id from workspace (needed for STS AssumeRole)
-            ws = get_or_create_workspace(user_id, "default")
-            external_id = ws.get("aws_external_id")
+            # ExternalId must come from the workspace that owns this connection,
+            # not the caller's -- org-shared connectors make those differ.
+            external_id = resolve_connection_external_id(aws_conn, user_id)
             if not external_id:
-                logger.error("Workspace %s for user %s missing aws_external_id", hash_for_log(str(ws["id"])), hash_for_log(user_id))
+                logger.error(
+                    "Could not resolve AWS ExternalId for account %s (user %s)",
+                    hash_for_log(str(aws_conn.get("account_id"))), hash_for_log(user_id),
+                )
                 return False, None, None, None
+
+            workspace_id = aws_conn["workspace_id"]
 
             current_mode = get_mode_from_context()
             role_arn = aws_conn.get("role_arn")
@@ -277,7 +282,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
             sts_creds = assume_workspace_role(
                 role_arn=role_arn,
                 external_id=external_id,
-                workspace_id=ws["id"],
+                workspace_id=workspace_id,
                 region=selected_region or "us-east-1",
                 session_policy=session_policy,
                 user_id=user_id,
@@ -293,7 +298,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
 
             logger.info(
                 "Assumed workspace role for %s in region %s",
-                hash_for_log(str(ws["id"])),
+                hash_for_log(str(workspace_id)),
                 selected_region or "us-east-1",
             )
 
@@ -413,15 +418,9 @@ def setup_aws_environments_all_accounts(user_id: str):
     accounts that were successfully assumed.
     """
     from utils.db.connection_utils import get_all_user_aws_connections
-    from utils.workspace.workspace_utils import get_or_create_workspace
+    from utils.workspace.workspace_utils import resolve_connection_external_id
     from utils.aws.aws_sts_client import assume_workspace_role
     from utils.aws.aws_session_policies import get_read_only_session_policy
-
-    ws = get_or_create_workspace(user_id, "default")
-    external_id = ws.get("aws_external_id")
-    if not external_id:
-        logger.error("Workspace %s for user %s missing aws_external_id", hash_for_log(str(ws["id"])), hash_for_log(user_id))
-        return []
 
     connections = get_all_user_aws_connections(user_id)
     if not connections:
@@ -444,6 +443,12 @@ def setup_aws_environments_all_accounts(user_id: str):
             logger.warning("Skipping account %s – no role_arn", account_id)
             continue
 
+        # Each account's ExternalId belongs to the workspace that registered it
+        external_id = resolve_connection_external_id(conn, user_id)
+        if not external_id:
+            logger.warning("Skipping account %s – could not resolve ExternalId", account_id)
+            continue
+
         if ModeAccessController.is_read_only_mode(current_mode):
             ro_arn = conn.get("read_only_role_arn")
             if ro_arn:
@@ -454,7 +459,7 @@ def setup_aws_environments_all_accounts(user_id: str):
             creds = assume_workspace_role(
                 role_arn=role_arn,
                 external_id=external_id,
-                workspace_id=ws["id"],
+                workspace_id=conn["workspace_id"],
                 region=region,
                 session_policy=session_policy,
                 user_id=user_id,
@@ -1238,7 +1243,9 @@ def _cloud_exec_aws_multi_account(
             )
             if not success:
                 return {"account_id": account_id, "region": region, "success": False,
-                        "error": "Failed to assume role"}
+                        "error": "Failed to assume role — check the server log for the "
+                                 "underlying STS error (ExternalId mismatch and a missing "
+                                 "trust-policy principal both surface as AccessDenied)"}
 
             cmd = command.strip()
             if not cmd.startswith("aws"):
