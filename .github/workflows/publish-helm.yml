@@ -33,10 +33,18 @@ jobs:
         run: |
           TAG_VERSION="${GITHUB_REF#refs/tags/v}"
           CHART_VERSION=$(grep '^version:' ${{ env.CHART_DIR }}/aurora/Chart.yaml | awk '{print $2}')
-          echo "Git tag version:   $TAG_VERSION"
+          APP_VERSION=$(grep '^appVersion:' ${{ env.CHART_DIR }}/aurora/Chart.yaml | awk '{print $2}' | tr -d '"')
+          echo "Git tag version:    $TAG_VERSION"
           echo "Chart.yaml version: $CHART_VERSION"
+          echo "Chart.yaml appVersion: $APP_VERSION"
           if [ "$TAG_VERSION" != "$CHART_VERSION" ]; then
             echo "::error::Tag v$TAG_VERSION does not match Chart.yaml version $CHART_VERSION"
+            exit 1
+          fi
+          # image.tag defaults to appVersion, so a stale appVersion silently ships
+          # older application images (shipped broken in chart 1.5.2).
+          if [ "$APP_VERSION" != "$CHART_VERSION" ]; then
+            echo "::error::Chart.yaml appVersion $APP_VERSION does not match version $CHART_VERSION. image.tag defaults to appVersion, so the chart would deploy $APP_VERSION application images."
             exit 1
           fi
           echo "Versions match."
