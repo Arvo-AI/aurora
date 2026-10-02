@@ -3476,6 +3476,24 @@ def initialize_tables():
                 conn.rollback()
                 raise RuntimeError("Required email verification migration failed") from e
 
+            # Migration: Add password reset columns to users table.
+            # Mirrors the email_verification_* columns — a hashed one-time code,
+            # its expiry, and an attempt counter so a stolen code can't be
+            # brute-forced. Non-fatal: a deployment missing these columns should
+            # lose "forgot password", not fail to boot.
+            try:
+                cursor.execute("""
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_code VARCHAR(64);
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_code_expires_at TIMESTAMP;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_attempts INTEGER DEFAULT 0;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_attempts_at TIMESTAMP;
+                """)
+                conn.commit()
+                logging.info("Ensured password reset columns exist on users table.")
+            except Exception as e:
+                logging.warning("Error adding password reset columns to users: %s", e)
+                conn.rollback()
+
             # Create k8s_clusters view (after org_id migration so the column exists)
             # DROP first because CREATE OR REPLACE VIEW cannot remove columns from an existing view
             try:
