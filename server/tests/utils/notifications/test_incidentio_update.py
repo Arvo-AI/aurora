@@ -1,4 +1,4 @@
-"""incidentio_notification_service: post the RCA back as an incident.io incident update (no DB, no network)."""
+"""incidentio_notification_service: post the RCA back as an incident.io incident update or alert note (no DB, no network)."""
 
 import json
 from types import SimpleNamespace
@@ -31,6 +31,7 @@ ALERT_EVENT = {
 CLAIM = ("UPDATE incidents SET incidentio_update_id = %s WHERE id = %s AND incidentio_update_id IS NULL", ("pending", "i1"))
 RELEASE = ("UPDATE incidents SET incidentio_update_id = NULL WHERE id = %s AND incidentio_update_id = %s", ("i1", "pending"))
 RECORD = ("UPDATE incidents SET incidentio_update_id = %s WHERE id = %s", ("upd_1", "i1"))
+RECORD_NOTE = ("UPDATE incidents SET incidentio_update_id = %s WHERE id = %s", ("note_1", "i1"))
 
 
 def _anchor(**over):
@@ -50,6 +51,7 @@ def _attached(*incidents):
 def wired(monkeypatch, patched_db):
     client = MagicMock(name="client")
     client.post_incident_update.return_value = {"incident_update": {"id": "upd_1"}}
+    client.post_alert_note.return_value = {"alert_note": {"id": "note_1"}}
     client.list_incident_alerts.return_value = _attached()
     built = []
 
@@ -80,6 +82,49 @@ def test_post_incident_update_sends_idempotency_key(monkeypatch):
     monkeypatch.setattr(client, "_request", fake_request)
     assert client.post_incident_update("inc_1", "hello", idempotency_key="aurora-rca-i1") == {"incident_update": {"id": "upd_1"}}
     assert calls == [("POST", "/incident_updates", {"json": {"incident_id": "inc_1", "message": "hello", "idempotency_key": "aurora-rca-i1"}})]
+
+
+def test_post_alert_note_targets_the_v1_service(monkeypatch):
+    client = IncidentioClient("k")
+    calls = []
+
+    def fake_request(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        response = MagicMock()
+        response.json.return_value = {"alert_note": {"id": "note_1"}}
+        return response
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    assert client.post_alert_note("alert_1", "hello") == {"alert_note": {"id": "note_1"}}
+    # alert notes are v1; no idempotency_key exists on this endpoint
+    assert calls == [("POST", "/alert_notes", {"api_version": "v1", "json": {"alert_id": "alert_1", "content": "hello"}})]
+
+
+def _captured_urls(monkeypatch):
+    """Record the absolute URL every _request builds."""
+    urls = []
+
+    def fake_request(method, url, **kwargs):
+        urls.append(url)
+        response = MagicMock(status_code=200)
+        response.json.return_value = {}
+        return response
+
+    monkeypatch.setattr("routes.incidentio.incidentio_client.requests.request", fake_request)
+    return urls
+
+
+def test_alert_notes_use_v1_while_every_other_call_stays_on_v2(monkeypatch):
+    urls = _captured_urls(monkeypatch)
+    client = IncidentioClient("k")
+    client.get_incident("inc_1")
+    client.post_incident_update("inc_1", "hello")
+    client.post_alert_note("alert_1", "hello")
+    assert urls == [
+        "https://api.incident.io/v2/incidents/inc_1",
+        "https://api.incident.io/v2/incident_updates",
+        "https://api.incident.io/v1/alert_notes",
+    ]
 
 
 def _page(links, after=None):
@@ -230,6 +275,7 @@ def test_incident_event_posts_to_that_incident(wired):
     assert svc.send_incidentio_incident_update("u1", _anchor()) is True
     assert wired.pool.updates == [CLAIM, RECORD]
     wired.client.list_incident_alerts.assert_not_called()
+    wired.client.post_alert_note.assert_not_called()
     wired.client.post_incident_update.assert_called_once()
     args, kwargs = wired.client.post_incident_update.call_args
     assert args[0] == "inc_1"
@@ -269,6 +315,8 @@ def test_alert_event_posts_to_the_incident_it_is_attached_to(wired):
     assert svc.send_incidentio_incident_update("u1", _anchor()) is True
     wired.client.list_incident_alerts.assert_called_once_with("alert_1")
     assert wired.client.post_incident_update.call_args.args[0] == "inc_9"
+    # an attached alert has an incident timeline: no alert-note fallback
+    wired.client.post_alert_note.assert_not_called()
     assert wired.pool.updates == [CLAIM, RECORD]
 
 
@@ -314,6 +362,8 @@ def test_alert_recurrence_skips_when_anchor_alert_is_on_the_same_incident(wired)
     assert svc.send_incidentio_incident_update("u1", _anchor(recurrence_of="root-1")) is False
     wired.client.list_incident_alerts.assert_any_call(incident_id="inc_9")
     wired.client.post_incident_update.assert_not_called()
+    # folded onto the anchor's incident: it must not fall through to an alert note either
+    wired.client.post_alert_note.assert_not_called()
     assert wired.pool.updates == []
 
 
@@ -335,11 +385,103 @@ def test_alert_recurrence_posts_when_anchor_never_posted(wired):
     assert all(c.kwargs.get("incident_id") is None for c in wired.client.list_incident_alerts.call_args_list)
 
 
-def test_alert_without_an_incident_posts_nothing_and_claims_nothing(wired):
+def test_alert_without_an_incident_posts_a_note_on_the_alert(wired):
     wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT, None, None)
+    assert svc.send_incidentio_incident_update("u1", _anchor()) is True
+    wired.client.post_incident_update.assert_not_called()
+    wired.client.post_alert_note.assert_called_once()
+    alert_id, content = wired.client.post_alert_note.call_args.args
+    assert alert_id == "alert_1"
+    assert content.startswith("**Aurora RCA**\n\n**Root cause**\n\n" + ROOT_CAUSE_BODY + "\n\n")
+    assert "- [Open the full investigation](http://localhost:3000/incidents/i1)" in content
+    # the note id is recorded in the same claim column as an incident update
+    assert wired.pool.updates == [CLAIM, RECORD_NOTE]
+
+
+def test_alert_note_without_a_returned_id_still_resolves_the_claim(wired):
+    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT, None, None)
+    wired.client.post_alert_note.return_value = {}
+    assert svc.send_incidentio_incident_update("u1", _anchor()) is True
+    assert wired.pool.updates == [CLAIM, ("UPDATE incidents SET incidentio_update_id = %s WHERE id = %s", ("posted", "i1"))]
+
+
+def test_alert_note_is_claimed_before_the_post(wired):
+    # /v1/alert_notes has no idempotency key, so the claim is the only duplicate guard
+    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT, None, None)
+    order = []
+
+    def record_claim(sql, params=None):
+        if "incidentio_update_id IS NULL" in sql:
+            order.append("claim")
+
+    def record_post(alert_id, content):
+        order.append("post")
+        return {"alert_note": {"id": "note_1"}}
+
+    wired.pool.cursor.execute.side_effect = record_claim
+    wired.client.post_alert_note.side_effect = record_post
+    assert svc.send_incidentio_incident_update("u1", _anchor()) is True
+    assert order == ["claim", "post"]
+
+
+def test_lost_claim_posts_no_alert_note(wired):
+    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT, None, None)
+    wired.pool.cursor.rowcount = 0
+    assert svc.send_incidentio_incident_update("u1", _anchor()) is False
+    assert wired.pool.updates == [CLAIM]
+    wired.client.post_alert_note.assert_not_called()
+
+
+def test_incident_sourced_rca_with_no_incident_id_still_posts_nothing(wired):
+    # an incident event whose payload carries no incident id has nowhere to post:
+    # there is no alert to fall back onto
+    wired.pool.cursor.fetchone.return_value = (None, {"event_type": "public_incident.incident_created_v2", "event": {}}, None, None)
     assert svc.send_incidentio_incident_update("u1", _anchor()) is False
     assert wired.pool.updates == []
     wired.client.post_incident_update.assert_not_called()
+    wired.client.post_alert_note.assert_not_called()
+
+
+def test_missing_alerts_edit_scope_releases_the_claim_and_does_not_raise(wired):
+    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT, None, None)
+    wired.client.post_alert_note.side_effect = IncidentioAPIError(IncidentioAPIError.FORBIDDEN, 403)
+    assert svc.send_incidentio_incident_update("u1", _anchor()) is False
+    assert wired.pool.updates == [CLAIM, RELEASE]
+
+
+@pytest.mark.parametrize("code, status", [
+    (IncidentioAPIError.INVALID_KEY, 401),
+    (IncidentioAPIError.API_ERROR, 422),
+])
+def test_rejected_alert_note_releases_the_claim(wired, code, status):
+    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT, None, None)
+    wired.client.post_alert_note.side_effect = IncidentioAPIError(code, status)
+    assert svc.send_incidentio_incident_update("u1", _anchor()) is False
+    assert wired.pool.updates == [CLAIM, RELEASE]
+
+
+@pytest.mark.parametrize("code, status", [
+    (IncidentioAPIError.TIMEOUT, None),
+    (IncidentioAPIError.UNREACHABLE, None),
+    (IncidentioAPIError.API_ERROR, 500),
+    (IncidentioAPIError.API_ERROR, 502),
+    (IncidentioAPIError.API_ERROR, 504),
+])
+def test_unknown_alert_note_outcome_keeps_the_claim(wired, code, status):
+    # with no idempotency key on /v1/alert_notes, a retry would duplicate the note
+    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT, None, None)
+    wired.client.post_alert_note.side_effect = IncidentioAPIError(code, status)
+    assert svc.send_incidentio_incident_update("u1", _anchor()) is False
+    assert wired.pool.updates == [CLAIM]
+
+
+def test_alert_note_recurrence_posts_its_own_note(wired):
+    # each alert of a recurrence group is its own Aurora incident with its own claim and
+    # its own alert timeline, so an escalation-only recurrence is not folded away
+    wired.pool.cursor.fetchone.return_value = ("alert_2", ALERT_EVENT, "alert_1", "note_0")
+    assert svc.send_incidentio_incident_update("u1", _anchor(recurrence_of="root-1")) is True
+    assert wired.client.post_alert_note.call_args.args[0] == "alert_2"
+    assert wired.pool.updates == [CLAIM, RECORD_NOTE]
 
 
 def test_alert_lookup_failure_posts_nothing_and_claims_nothing(wired):
@@ -348,6 +490,7 @@ def test_alert_lookup_failure_posts_nothing_and_claims_nothing(wired):
     assert svc.send_incidentio_incident_update("u1", _anchor()) is False
     assert wired.pool.updates == []
     wired.client.post_incident_update.assert_not_called()
+    wired.client.post_alert_note.assert_not_called()
 
 
 def test_missing_source_row_posts_nothing(wired):

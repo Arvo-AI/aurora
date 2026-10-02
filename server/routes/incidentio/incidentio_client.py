@@ -6,7 +6,10 @@ from typing import Any, Dict, Optional
 
 import requests
 
-INCIDENTIO_API_BASE = "https://api.incident.io/v2"
+INCIDENTIO_API_HOST = "https://api.incident.io"
+# incident.io versions per service, not per API: most of what we call is v2, but
+# alert notes only exist on v1, so the version is part of the request not the base.
+INCIDENTIO_DEFAULT_API_VERSION = "v2"
 INCIDENTIO_TIMEOUT = 15
 # incident_alerts paging: 50 is the API maximum; 20 pages = 1000 links per lookup
 _PAGE_SIZE = 50
@@ -57,9 +60,11 @@ class IncidentioClient:
             "Accept": "application/json",
         }
 
-    def _request(self, method: str, path: str, **kwargs) -> requests.Response:
+    def _request(
+        self, method: str, path: str, *, api_version: str = INCIDENTIO_DEFAULT_API_VERSION, **kwargs
+    ) -> requests.Response:
         """One API call; network and HTTP failures surface as IncidentioAPIError."""
-        url = f"{INCIDENTIO_API_BASE}{path}"
+        url = f"{INCIDENTIO_API_HOST}/{api_version}{path}"
         try:
             response = requests.request(
                 method, url, headers=self.headers, timeout=INCIDENTIO_TIMEOUT, **kwargs
@@ -72,7 +77,7 @@ class IncidentioClient:
             raise IncidentioAPIError(IncidentioAPIError.UNREACHABLE)
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else None
-            logger.warning("[INCIDENTIO] HTTP %s from %s", status, path)
+            logger.warning("[INCIDENTIO] HTTP %s from /%s%s", status, api_version, path)
             if status == 401:
                 raise IncidentioAPIError(IncidentioAPIError.INVALID_KEY, status)
             if status == 403:
@@ -101,6 +106,18 @@ class IncidentioClient:
         if idempotency_key:
             body["idempotency_key"] = idempotency_key
         return self._request("POST", "/incident_updates", json=body).json()
+
+    def post_alert_note(self, alert_id: str, content: str) -> Dict[str, Any]:
+        """Add a markdown note to an alert's timeline (and its Slack pulse thread).
+
+        Alert notes are a v1 service; everything else here is v2. Requires the
+        `alerts.edit` scope, and has no idempotency key, so the caller must not
+        retry blindly.
+        """
+        return self._request(
+            "POST", "/alert_notes", api_version="v1",
+            json={"alert_id": alert_id, "content": content},
+        ).json()
 
     def list_incident_alerts(
         self, alert_id: Optional[str] = None, *, incident_id: Optional[str] = None
