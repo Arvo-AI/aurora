@@ -58,8 +58,10 @@ import re
 from flask import Blueprint, jsonify, request
 
 from connectors.slack_connector.client import get_slack_client_for_user
+from routes.slack.slack_backfill_config import BACKFILL_STALE_MINUTES
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
+from utils.cache.redis_client import get_redis_client
 from utils.db.connection_pool import db_pool
 from utils.db.org_scope import resolve_org, org_read_predicate
 from utils.log_sanitizer import sanitize
@@ -68,18 +70,33 @@ slack_channels_bp = Blueprint("slack_channels", __name__)
 logger = logging.getLogger(__name__)
 
 # Cap on how many channels get an auto-generated description on connect, to
-# bound LLM cost/volume in large workspaces. ALL channels are still registered
-# (so Aurora is aware of them); only the most recent this-many are described.
+# bound LLM cost/volume in large workspaces. Caps descriptions ENQUEUED PER PASS,
+# not the total a workspace may have: member channels past the cap stay 'pending'
+# for a later pass or the backfill_channel_descriptions beat task.
 MAX_AUTO_CHANNELS = 50
+
+# Cap on how many descriptions ONE bulk-activate batch enqueues. The joins pace
+# themselves against Slack's rate limits, but the description tasks don't —
+# activating a 1500-channel workspace would put 1500 LLM jobs on the queue at
+# once and starve everything behind them. Over-cap channels are registered
+# 'pending' and backdated past the sweep's stale window, so the next sweep starts
+# draining them at its own bounded rate (see _backdate_for_backfill).
+MAX_ACTIVATE_DESCRIBE = 50
 
 # Hard cap on how many channels we enumerate from Slack in one pass. Seeing fewer
 # than this means we paged through the whole workspace, so a stored channel that's
 # absent can be safely pruned; hitting it means the list is partial (don't prune).
 LIST_CHANNELS_CAP = 2000
 
-# Cap on channels a single bulk-activate request may queue, so a runaway request
-# can't flood the metadata task queue.
-MAX_BULK_ACTIVATE = 200
+# How long the live workspace listing (the "Inactive" picker) is cached per org.
+# `conversations.list` is Tier 2 and pages ~8 requests for a 1500-channel
+# workspace, so re-listing on every page load rate-limits the org's bot token —
+# and because Slack throttles per token, one person refreshing this page degrades
+# Slack for everyone in that org, incident notifications included. The set barely
+# changes minute to minute, so a short TTL removes the stampede without making
+# the picker meaningfully stale. Keyed per org AND workspace: the listing is what
+# the caller's token can see, and one org may connect several workspaces.
+AVAILABLE_CHANNELS_CACHE_TTL = 300
 
 
 # Word-boundary patterns for incident-platform detection. Using anchored regex
@@ -163,14 +180,15 @@ def _upsert_channel(cur, user_id: str, org_id: str | None, ch: dict,
                channel_type = EXCLUDED.channel_type,
                detected_platform = EXCLUDED.detected_platform,
                channel_data = EXCLUDED.channel_data,
-               -- Don't bump updated_at for rows still 'pending': auto_register
-               -- upserts every member on each reconcile, and we use updated_at
-               -- as "time since the description was queued" to detect a lost
-               -- task (see the staleness check). Bumping it here would keep a
-               -- stuck 'pending' row looking fresh forever, so it'd never be
-               -- re-enqueued. Every other status advances the timestamp normally.
+               -- Don't bump updated_at for a row awaiting a description:
+               -- auto_register upserts every member on each reconcile, and
+               -- updated_at is "time since the description was queued", which the
+               -- staleness checks use to spot a lost task. Bumping it would keep a
+               -- stuck row looking fresh forever. 'generating' counts too: the
+               -- sweep recovers one abandoned by a killed worker on the same
+               -- window, and a page load must not reset its age.
                updated_at = CASE
-                   WHEN slack_channels.metadata_status = 'pending'
+                   WHEN slack_channels.metadata_status IN ('pending', 'generating')
                    THEN slack_channels.updated_at
                    ELSE NOW()
                END""",
@@ -227,6 +245,23 @@ def _update_one_channel(user_id: str, channel_id: str, set_clause: str, params: 
         return jsonify({"error": "Failed to update channel"}), 500
 
 
+def _team_id_for_user(user_id: str) -> str | None:
+    """The Slack workspace the user's stored connection belongs to.
+
+    Rows carry team_id so the description backfill can tell which member's token
+    is able to read a channel: an org may connect more than one workspace, and a
+    token from the wrong one reads nothing. Best-effort — a NULL is handled by
+    the callers, an exception here must not block registration.
+    """
+    try:
+        from utils.auth.stateless_auth import get_credentials_from_db
+        return (get_credentials_from_db(user_id, "slack") or {}).get("team_id")
+    except Exception:
+        logger.warning("[slack_channels] could not resolve team_id for user %s",
+                       sanitize(user_id))
+        return None
+
+
 def auto_register_channels(user_id: str, team_id: str | None = None,
                            describe_limit: int = MAX_AUTO_CHANNELS) -> int:
     """Reconcile Aurora's stored channels against real Slack membership.
@@ -263,12 +298,7 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
     # Derive team_id from stored creds when the caller didn't supply it (e.g. the
     # manual "refresh" path), so rows are tagged consistently with the OAuth path.
     if not team_id:
-        try:
-            from utils.auth.stateless_auth import get_credentials_from_db
-            creds = get_credentials_from_db(user_id, "slack") or {}
-            team_id = creds.get("team_id")
-        except Exception:
-            team_id = None
+        team_id = _team_id_for_user(user_id)
 
     # Describe member channels, recency-first. describe_limit bounds how many
     # descriptions we ENQUEUE per pass (an LLM-cost safety valve for unusually
@@ -276,8 +306,10 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
     # membership-as-truth every member channel is active and routable. Channels
     # past the cap this pass stay 'pending' (never 'skipped'); because a 'pending'
     # row's updated_at is NOT bumped on reconcile (see _upsert_channel), it goes
-    # stale after ~10 min and a later pass enqueues it — so no member channel is
-    # ever permanently stuck invisible to the agent (which routes to 'ready' only).
+    # stale after this pass's own 10-minute window and gets enqueued by a later
+    # reconcile — or, since reconcile passes are user-triggered and may never
+    # happen again, by the backfill_channel_descriptions beat task (which uses its
+    # own, much longer window sized for worst-case queue wait).
     ranked_members = _rank_channels(member_channels)
 
     org_id = resolve_org(user_id)
@@ -311,8 +343,9 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
                     #   * 'pending'      — only if STALE; a fresh pending row is a
                     #     task still in flight (re-queuing = duplicate LLM call).
                     #   * 'error'/'generating'/'ready' — never auto-retry here
-                    #     ('error' is left for an explicit regenerate; the task's
-                    #     own max_retries already bounds transient failures).
+                    #     ('error' now means a failure that may have spent LLM
+                    #     quota, so it's left for an explicit regenerate; pre-LLM
+                    #     failures land back on 'pending' for the sweep instead).
                     needs_describe = (
                         status in (None, "skipped")
                         or (status == "pending" and is_stale_by_id.get(cid, False))
@@ -327,6 +360,11 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
                     if (_cid and (is_new or needs_describe)
                             and len(newly_added_to_describe) < describe_limit):
                         newly_added_to_describe.append(_cid)
+
+                # Claim the chosen rows: flip to 'pending' and restamp so the
+                # metadata task's write isn't rejected and the next pass doesn't
+                # re-queue them. Only rows actually claimed get enqueued.
+                newly_added_to_describe = _mark_pending(cur, newly_added_to_describe)
 
                 # Reconcile membership: any stored row that is NOT in the current
                 # member set means Aurora left / was removed from that channel, so
@@ -374,7 +412,7 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
 
 def register_single_channel(user_id: str, channel_id: str,
                             team_id: str | None = None,
-                            allow_restore: bool = True) -> bool:
+                            describe: bool = True) -> bool:
     """Register (and describe) one channel Aurora was just added to.
 
     Lightweight counterpart to auto_register_channels for the
@@ -383,9 +421,9 @@ def register_single_channel(user_id: str, channel_id: str,
     upserts it as an active member channel, and enqueues a description.
     Idempotent. Returns True if a new row was created.
 
-    ``allow_restore`` is accepted for backwards-compatibility with callers but is
-    now a no-op: membership is the source of truth, so there is no separate
-    "dismissed" state to restore — a channel is active iff Aurora is a member.
+    ``describe=False`` registers the row but leaves it 'pending' for the backfill
+    sweep — the bulk-activate path uses it to bound LLM enqueues per batch. The
+    row is backdated so the very next sweep is eligible to claim it.
     """
     if not channel_id:
         return False
@@ -399,6 +437,10 @@ def register_single_channel(user_id: str, channel_id: str,
         return False
 
     # Aurora is a member (it was just added / just joined), so mark it as such.
+    # Tag the workspace even when the caller didn't pass one (the activate/restore
+    # routes don't), so the description backfill can later tell which org member's
+    # token is able to read this channel.
+    team_id = team_id or _team_id_for_user(user_id)
     ch = {**info, "channel_id": channel_id, "channel_name": info.get("name"),
           "team_id": team_id, "is_member": True}
 
@@ -416,6 +458,11 @@ def register_single_channel(user_id: str, channel_id: str,
                 existing = {channel_id: row[0]} if row else {}
                 _cid, is_new = _upsert_channel(cur, user_id, org_id, ch, existing,
                                                initial_status="pending")
+                # Nothing will enqueue this row, so don't let it look freshly
+                # queued — age it so the next sweep claims it instead of waiting
+                # out a lost-task window for a task that was never sent.
+                if is_new and _cid and not describe:
+                    _backdate_for_backfill(cur, _cid)
                 conn.commit()
     except Exception:
         logger.warning("[slack_channels] single-register: DB upsert failed", exc_info=True)
@@ -425,7 +472,14 @@ def register_single_channel(user_id: str, channel_id: str,
     # (or just joined) is relevant by definition, so it's worth the cheap LLM
     # call. Idempotent re-registers of an existing member channel skip this.
     if is_new and _cid:
-        _enqueue_metadata(user_id, channel_id)
+        # Aurora is now a member, so the cached workspace listing is stale — this
+        # channel must move out of the Inactive picker without waiting for the TTL.
+        # Workspace passed through: the activate loop calls this per channel.
+        _invalidate_available_channels_cache(user_id, team_id)
+        # Caller is rationing LLM enqueues (bulk activate): the row stays 'pending'
+        # and the backfill sweep picks it up.
+        if describe:
+            _enqueue_metadata(user_id, channel_id)
         logger.info("[slack_channels] registered joined channel %s", sanitize(channel_id))
     return bool(is_new)
 
@@ -526,20 +580,100 @@ def get_slack_channels(user_id):
         return jsonify({"error": "Failed to get Slack channels"}), 500
 
 
-def _list_available_channels(user_id: str, member_ids: set[str]) -> list[dict]:
-    """Live-list workspace channels Aurora is NOT a member of (the Inactive set).
+def _available_channels_cache_key(user_id: str, team_id: str | None = None) -> str | None:
+    """Redis key for the cached workspace listing, or None if it can't be cached.
 
-    Not persisted: this is computed on every read so the "activate" picker always
-    reflects the real workspace. Returns entries shaped like the stored rows (with
-    is_dismissed=True) so the frontend can render them in the same list.
+    Scoped by org *and* workspace: the listing is whatever the caller's token can
+    see, and one org can connect several Slack workspaces — an org-only key would
+    serve workspace A's channels to a user on workspace B. Without a known
+    workspace there is no safe key, so the caller must go live to Slack.
+
+    ``team_id`` lets a caller that already resolved it skip the lookup (it's a DB
+    + Vault round trip, and the activate loop runs per channel).
     """
+    org_id = resolve_org(user_id)
+    team_id = team_id or _team_id_for_user(user_id)
+    if not org_id or not team_id:
+        return None
+    return f"slack:available_channels:{org_id}:{team_id}"
+
+
+def _fetch_workspace_channels(user_id: str) -> list[dict] | None:
+    """Return the raw ``conversations.list`` result for the workspace, Redis-cached.
+
+    Caches the *unfiltered* listing rather than the computed Inactive set: the
+    member set changes as Aurora joins channels, so filtering after the cache
+    read keeps the result correct even on a cache hit. Returns None if Slack
+    couldn't be reached (callers must distinguish that from "no channels").
+    """
+    cache_key = _available_channels_cache_key(user_id)
+
+    # Cache hit — skip Slack entirely.
+    if cache_key:
+        try:
+            client_redis = get_redis_client()
+            if client_redis:
+                cached = client_redis.get(cache_key)
+                if cached:
+                    return json.loads(cached)
+        except Exception:
+            # A broken cache must never break the page; fall through to Slack.
+            logger.debug("[slack_channels] available-channels cache read failed", exc_info=True)
+
     try:
         client = get_slack_client_for_user(user_id)
         if not client:
-            return []
+            return None
         all_channels = client.list_all_channels(max_channels=LIST_CHANNELS_CAP)
     except Exception:
         logger.warning("[slack_channels] could not list available channels", exc_info=True)
+        return None
+
+    if cache_key:
+        try:
+            client_redis = get_redis_client()
+            if client_redis:
+                # Store only the fields the Inactive list needs, so a big workspace
+                # doesn't put megabytes of unused Slack payload in Redis.
+                slim = [
+                    {k: ch.get(k) for k in ("id", "name", "is_private", "is_archived",
+                                            "topic", "purpose")}
+                    for ch in all_channels
+                ]
+                client_redis.setex(cache_key, AVAILABLE_CHANNELS_CACHE_TTL, json.dumps(slim))
+        except Exception:
+            logger.debug("[slack_channels] available-channels cache write failed", exc_info=True)
+
+    return all_channels
+
+
+def _invalidate_available_channels_cache(user_id: str, team_id: str | None = None) -> None:
+    """Drop the cached listing for the user's org + workspace.
+
+    Called after Aurora joins/leaves channels so the Inactive picker reflects the
+    change immediately instead of after the TTL.
+    """
+    try:
+        cache_key = _available_channels_cache_key(user_id, team_id)
+        if not cache_key:
+            return
+        client_redis = get_redis_client()
+        if client_redis:
+            client_redis.delete(cache_key)
+    except Exception:
+        logger.debug("[slack_channels] available-channels cache invalidation failed", exc_info=True)
+
+
+def _list_available_channels(user_id: str, member_ids: set[str]) -> list[dict]:
+    """Live-list workspace channels Aurora is NOT a member of (the Inactive set).
+
+    Not persisted: computed on every read (from a short-lived cache of the Slack
+    listing) so the "activate" picker reflects the real workspace. Returns entries
+    shaped like the stored rows (with is_dismissed=True) so the frontend can
+    render them in the same list.
+    """
+    all_channels = _fetch_workspace_channels(user_id)
+    if not all_channels:
         return []
 
     available = []
@@ -629,6 +763,10 @@ def dismiss_slack_channel(user_id, channel_id):
         logger.exception("Error deactivating Slack channel %s", sanitize(channel_id))
         return jsonify({"error": "Failed to deactivate channel"}), 500
 
+    # Aurora just left, so the cached listing no longer reflects membership — drop
+    # it so the channel reappears in the Inactive picker right away.
+    _invalidate_available_channels_cache(user_id)
+
     return jsonify({"channel_id": channel_id, "is_dismissed": True})
 
 
@@ -677,6 +815,9 @@ def refresh_slack_channels(user_id):
     never modified.
     """
     try:
+        # Explicit force-rescan: drop the cached workspace listing first so this
+        # endpoint always reflects Slack right now, cache TTL notwithstanding.
+        _invalidate_available_channels_cache(user_id)
         described = auto_register_channels(user_id)
         return jsonify({"message": "Channels refreshed", "described": described})
     except Exception:
@@ -859,8 +1000,10 @@ def trigger_channel_metadata(user_id):
     channel_id = (request.get_json(silent=True) or {}).get("channel_id")
     if not channel_id:
         return jsonify({"error": "channel_id is required"}), 400
-    # Flip to 'generating' first so the UI shows a spinner; 404 if unknown.
-    err = _update_one_channel(user_id, channel_id, "metadata_status = 'generating'", ())
+    # 'pending', not 'generating': the task claims the row by flipping
+    # pending -> generating, which is what stops a duplicate enqueue from paying
+    # for a second LLM call. The UI renders both as a spinner. 404 if unknown.
+    err = _update_one_channel(user_id, channel_id, "metadata_status = 'pending'", ())
     if err:
         return err
     _enqueue_metadata(user_id, channel_id)
@@ -886,14 +1029,19 @@ def activate_slack_channels(user_id):
     # ANY(%s) can fail at execute() and surface as a 500 instead of a 400.
     if not all(isinstance(cid, str) and cid.strip() for cid in channel_ids):
         return jsonify({"error": "channel_ids must all be non-empty strings"}), 400
-    # Guard against an unbounded request flooding the metadata queue.
-    if len(channel_ids) > MAX_BULK_ACTIVATE:
-        return jsonify({"error": f"Too many channels; activate at most {MAX_BULK_ACTIVATE} at once"}), 400
+
+    # Dedupe while preserving order so a repeated id isn't joined/described twice.
+    channel_ids = list(dict.fromkeys(cid.strip() for cid in channel_ids))
 
     # Join + describe runs on the worker: each join is a rate-limited Slack call,
     # so a large batch done inline would serialize against Slack and could
     # rate-limit/timeout the request. Enqueue and return immediately; the manage
     # page polls the channel list as rows/descriptions land.
+    #
+    # The batch itself is uncapped — one task works through it sequentially, so
+    # even selecting every channel in a 1500-channel workspace paces itself
+    # against Slack's limits. The DESCRIPTIONS are capped (MAX_ACTIVATE_DESCRIBE),
+    # since those are LLM jobs that would otherwise all land on the queue at once.
     try:
         from routes.slack.slack_channel_metadata import bulk_activate_channels_task
         bulk_activate_channels_task.delay(user_id, channel_ids)
@@ -911,24 +1059,104 @@ def _activate_channels(user_id: str, channel_ids: list[str]) -> int:
     the (public) channel via ``conversations.join`` and then registers +
     describes it. Private channels can't be self-joined and are skipped silently
     (they need a human invite). Returns how many were actually joined.
+
+    Join and register are interleaved per channel rather than run as two passes.
+    A large batch is paced by Slack's rate limits and can take many minutes, and
+    the manage page can only display channels that have a row — batching the
+    registrations until the end leaves the UI empty for the whole run. Doing both
+    per channel also makes the job resumable: if it's cancelled or the worker
+    dies midway, every channel joined so far is already registered.
     """
     client = get_slack_client_for_user(user_id)
     if not client:
         logger.warning("[slack_channels] cannot activate channels: no Slack client for user")
         return 0
 
-    joined: list[str] = []
+    # Resolved once for the whole batch: it's a DB + Vault round trip, and a batch
+    # can be well over a thousand channels.
+    team_id = _team_id_for_user(user_id)
+
+    joined = 0
+    described = 0
     for channel_id in channel_ids:
         # join_channel swallows its own errors and returns None on failure
         # (e.g. private channel), so a skip here is expected and non-fatal.
-        if client.join_channel(channel_id):
-            joined.append(channel_id)
+        if not client.join_channel(channel_id):
+            continue
+        # The joins pace themselves against Slack, but the descriptions don't:
+        # each one is an LLM job queued immediately, so an uncapped batch (a
+        # 1500-channel workspace is one click) floods the queue and delays
+        # everything behind it. Over-cap channels are left 'pending' and
+        # backdated, so the next sweep (<=15 min out) starts draining them at its
+        # own bounded rate rather than after the lost-task window.
+        describe = described < MAX_ACTIVATE_DESCRIBE
+        register_single_channel(user_id, channel_id, team_id=team_id,
+                                describe=describe)
+        if describe:
+            described += 1
+        joined += 1
 
-    # Register + describe each joined channel as an active member channel.
-    for channel_id in joined:
-        register_single_channel(user_id, channel_id)
+    if joined > described:
+        logger.info("[slack_channels] activated %d channel(s), described %d now — "
+                    "%d left for the backfill", joined, described, joined - described)
+    return joined
 
-    return len(joined)
+
+def _mark_pending(cur, channel_ids: list[str],
+                  stale_minutes: int | None = None) -> list[str]:
+    """Claim rows for description: set 'pending' + restamp ``updated_at``.
+
+    Returns only the rows actually claimed — what the caller should enqueue.
+    'skipped' must flip to 'pending' or ``_update_metadata`` drops the write.
+    ``stale_minutes`` re-asserts staleness in the UPDATE so the claim is atomic.
+    """
+    if not channel_ids:
+        return []
+    # Re-assert staleness (backfill): only claim rows still as stale as when we
+    # selected them, so a racing sweep's restamp locks us out. 'generating' is
+    # included for the same reason the sweep's SELECT includes it — a worker
+    # killed mid-flight leaves it set with nothing coming to clear it.
+    if stale_minutes is not None:
+        cur.execute(
+            """UPDATE slack_channels
+                  SET metadata_status = 'pending', updated_at = NOW()
+                WHERE provider = 'slack' AND channel_id = ANY(%s)
+                  AND (metadata_status = 'skipped'
+                       OR (metadata_status IN ('pending', 'generating')
+                           AND updated_at < NOW() - make_interval(mins => %s)))
+             RETURNING channel_id""",
+            (channel_ids, stale_minutes),
+        )
+    # No staleness bar (reconcile): claim any row still awaiting a description,
+    # including the freshly-inserted ones this pass just created.
+    else:
+        cur.execute(
+            """UPDATE slack_channels
+                  SET metadata_status = 'pending', updated_at = NOW()
+                WHERE provider = 'slack' AND channel_id = ANY(%s)
+                  AND metadata_status IN ('pending', 'skipped')
+             RETURNING channel_id""",
+            (channel_ids,),
+        )
+    # One row per member for the same channel, so RETURNING repeats a channel_id
+    # once per member row — dedupe or the caller enqueues N identical LLM jobs.
+    return list(dict.fromkeys(row[0] for row in cur.fetchall()))
+
+
+def _backdate_for_backfill(cur, channel_id: str):
+    """Age a 'pending' row past the sweep's stale window so it's eligible at once.
+
+    The window is a lost-task timer, but a row registered with ``describe=False``
+    has no task behind it — left fresh it would wait out the full window for an
+    enqueue that never happened. One extra minute clears the boundary.
+    """
+    cur.execute(
+        """UPDATE slack_channels
+              SET updated_at = NOW() - make_interval(mins => %s)
+            WHERE provider = 'slack' AND channel_id = %s
+              AND metadata_status = 'pending'""",
+        (BACKFILL_STALE_MINUTES + 1, channel_id),
+    )
 
 
 def _enqueue_metadata(user_id: str, channel_id: str):

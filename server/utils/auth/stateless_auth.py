@@ -669,6 +669,25 @@ def get_user_display_name(user_id: str) -> Optional[str]:
         return None
 
 
+def users_by_org() -> Dict[str, List[str]]:
+    """Map org_id -> [user_id, ...] for every org that has users.
+
+    Entry point for cross-org background tasks: ``users`` is NOT RLS-protected, so
+    it can be read before any org context exists. Pair with :func:`set_rls_context`
+    per org before touching RLS-protected tables.
+    """
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT org_id, id FROM users WHERE org_id IS NOT NULL ORDER BY org_id, id"
+        )
+        by_org: Dict[str, List[str]] = {}
+        for org_id, user_id in cur.fetchall():
+            by_org.setdefault(org_id, []).append(user_id)
+        return by_org
+
+
 def set_rls_context(
     cursor, conn, user_id: str, *, org_id: Optional[str] = None, log_prefix: str = ""
 ) -> Optional[str]:
