@@ -694,9 +694,25 @@ def test_backdate_ages_the_row_past_the_sweep_window():
         "backdate must land strictly outside the stale window"
     )
     assert params[1] == "C1"
-    # Only a 'pending' row may be aged: a 'ready'/'generating' row has nothing
-    # waiting for the sweep, and moving its timestamp would misreport progress.
+    # Only a 'pending' row may be aged. A 'ready' row is done, and a 'generating'
+    # row is either live or already recoverable on its own age — backdating it
+    # would fake a crash the sweep would then "recover" mid-flight.
     assert "metadata_status = 'pending'" in sql
+
+
+def test_upsert_preserves_the_age_of_a_row_awaiting_a_description():
+    """auto_register upserts every member on each live page load, and updated_at is
+    the "time since queued" signal both staleness checks read. Bumping it would
+    keep a stuck row looking fresh forever. 'generating' is included because the
+    sweep recovers a worker-abandoned row on that same age — without it, repeated
+    page loads reset the clock and the row never becomes recoverable."""
+    cur = MagicMock()
+    mod._upsert_channel(cur, "u1", "org", {"channel_id": "C1", "channel_name": "c"}, {})
+    sql = cur.execute.call_args.args[0]
+    flat = " ".join(sql.split())
+    assert "WHEN slack_channels.metadata_status IN ('pending', 'generating') THEN slack_channels.updated_at" in flat
+    # Everything else must still advance, or a 'ready' row's age freezes.
+    assert "ELSE NOW()" in flat
 
 
 def test_over_cap_activation_is_visible_to_the_very_next_sweep():

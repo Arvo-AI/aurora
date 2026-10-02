@@ -180,14 +180,15 @@ def _upsert_channel(cur, user_id: str, org_id: str | None, ch: dict,
                channel_type = EXCLUDED.channel_type,
                detected_platform = EXCLUDED.detected_platform,
                channel_data = EXCLUDED.channel_data,
-               -- Don't bump updated_at for rows still 'pending': auto_register
-               -- upserts every member on each reconcile, and we use updated_at
-               -- as "time since the description was queued" to detect a lost
-               -- task (see the staleness check). Bumping it here would keep a
-               -- stuck 'pending' row looking fresh forever, so it'd never be
-               -- re-enqueued. Every other status advances the timestamp normally.
+               -- Don't bump updated_at for a row awaiting a description:
+               -- auto_register upserts every member on each reconcile, and
+               -- updated_at is "time since the description was queued", which the
+               -- staleness checks use to spot a lost task. Bumping it would keep a
+               -- stuck row looking fresh forever. 'generating' counts too: the
+               -- sweep recovers one abandoned by a killed worker on the same
+               -- window, and a page load must not reset its age.
                updated_at = CASE
-                   WHEN slack_channels.metadata_status = 'pending'
+                   WHEN slack_channels.metadata_status IN ('pending', 'generating')
                    THEN slack_channels.updated_at
                    ELSE NOW()
                END""",
