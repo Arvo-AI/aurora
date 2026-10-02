@@ -64,3 +64,12 @@ def test_truncated_reply_keeps_the_link_and_still_fits_slack(send):
     assert text.endswith(EXPECTED_LINK)
     assert "truncated" in text
     assert len(text) < SLACK_HARD_LIMIT
+
+
+def test_cut_inside_a_code_block_still_renders_the_link(send):
+    # An unclosed fence makes Slack render the rest of the message as code,
+    # so the link would arrive as plain text instead of something clickable.
+    text = send("Here are the logs:\n```\n" + "connection reset\n" * 1_000)
+    assert text.count("```") % 2 == 0
+    assert text.endswith(EXPECTED_LINK)
+    assert len(text) < SLACK_HARD_LIMIT
