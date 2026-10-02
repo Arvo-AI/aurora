@@ -66,6 +66,7 @@ from flask import Blueprint, request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from utils.auth.github_app_jwt import GitHubAppJWTError, mint_app_jwt
+from utils.auth import normalize_email
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -319,7 +320,15 @@ def _exchange_code_for_identity(code: str) -> tuple[dict, str] | None:
         email = f"{gh_id}+{login}@users.noreply.github.com"
 
     name = user.get("name") if isinstance(user.get("name"), str) else None
-    identity = {"id": gh_id, "login": login, "name": name or login, "email": email}
+    # Normalize before it reaches the collision check and the INSERT: GitHub
+    # returns whatever case is on the profile, and a mixed-case spelling must
+    # not be able to provision a second row for an existing Aurora account.
+    identity = {
+        "id": gh_id,
+        "login": login,
+        "name": name or login,
+        "email": normalize_email(email),
+    }
     return identity, access_token
 
 
@@ -500,8 +509,10 @@ def _provision_and_handoff(identity: dict, install_data: dict):
                     org_row = cur.fetchone()
                     org_id = org_row[0] if org_row else None
                 else:
+                    # Normalized comparison so an existing mixed-case account
+                    # is still detected as a collision rather than duplicated.
                     cur.execute(
-                        "SELECT 1 FROM users WHERE email = %s", (identity["email"],)
+                        "SELECT 1 FROM users WHERE LOWER(email) = %s", (identity["email"],)
                     )
                     if cur.fetchone():
                         # Email belongs to an Aurora account never linked to

@@ -13,7 +13,8 @@ import pytest
 
 from utils.notifications import (
     dispatcher,
-    pagerduty_notification_service,
+    incidentio_notification_service,
+    postback_claim,
     slack_notification_service,
     slack_threading,
 )
@@ -44,7 +45,8 @@ def fake_pool():
 @pytest.fixture
 def patched_db(fake_pool, monkeypatch):
     """Route every incidents write in the notification modules to fake_pool."""
-    for module in (slack_notification_service, slack_threading, dispatcher, pagerduty_notification_service):
+    for module in (slack_notification_service, slack_threading, dispatcher, postback_claim,
+                   incidentio_notification_service):
         monkeypatch.setattr(module, "db_pool", fake_pool.pool)
         monkeypatch.setattr(module, "set_rls_context", lambda *a, **k: "org-1")
     return fake_pool

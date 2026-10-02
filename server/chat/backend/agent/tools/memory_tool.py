@@ -15,7 +15,7 @@ from contextlib import contextmanager
 
 from pydantic import BaseModel, Field
 
-from services.memory import MEMORY_CATEGORIES, ALL_CATEGORIES
+from services.memory import MEMORY_CATEGORIES, ALL_CATEGORIES, PROTECTED_ENTRIES
 from services.artifacts.store import create_version
 from utils.validation import strip_nul
 from utils.db.connection_pool import db_pool
@@ -80,6 +80,26 @@ def _error_response(e: ValueError) -> str:
     if str(e) == "no_user":
         return _NO_USER_CTX
     return _NO_ORG_CTX
+
+
+def _validate_not_protected(category: str, title: str, operation: str) -> str | None:
+    """Block renaming/deleting a protected entry, return error JSON if blocked.
+
+    Mirrors the memory routes' guard. Protected entries (e.g. the Slack policy)
+    are found by their (category, title) pair, so the agent renaming or deleting
+    one would silently detach it from the injector and the seeder — Aurora would
+    just stop applying the policy, with no error anywhere. Content and
+    description stay freely editable, which is how the agent is meant to learn.
+    """
+    if (category, title.strip()) not in PROTECTED_ENTRIES:
+        return None
+    return json.dumps({
+        "error": (
+            f"'{category}/{title.strip()}' is a built-in memory entry and cannot be "
+            f"{operation}. Edit its content or description instead."
+        ),
+        "code": "protected_entry",
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -677,6 +697,10 @@ def rename_memory(
         return err
     if not new_title and not new_description:
         return json.dumps({"error": "Provide at least one of new_title or new_description."})
+    # A description-only edit leaves the identity intact, so only a real rename is blocked.
+    if new_title and new_title.strip() != title.strip():
+        if err := _validate_not_protected(category, title, "renamed"):
+            return err
 
     try:
         with _memory_connection(user_id, "rename") as (cursor, conn, org_id):
@@ -739,6 +763,8 @@ def delete_memory(
     if err := _validate_category(category):
         return err
     if err := _validate_title(title):
+        return err
+    if err := _validate_not_protected(category, title, "deleted"):
         return err
 
     try:

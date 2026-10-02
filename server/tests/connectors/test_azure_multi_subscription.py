@@ -1,7 +1,8 @@
-"""Azure multi-subscription support (DEV-1499) and read-only fail-closed behaviour.
+"""Azure multi-subscription support (DEV-1499).
 
-Covers the logic that silently breaks without a test: the read-only command
-classifier, per-subscription command pinning, and Resource Graph paging.
+Covers the logic that silently breaks without a test: per-subscription command
+pinning, login/relogin handling, and Resource Graph paging. The read-only command
+classifier lives in `tests/security/test_read_only_classifier.py`.
 """
 import json
 import logging
@@ -49,33 +50,11 @@ SUBSCRIPTIONS_MOD = "connectors/azure_connector/subscriptions.py"
 def helpers():
     from utils.cloud import azure_login_cache
     ns = _load(
-        ["is_read_only_command", "_apply_azure_subscription", "_is_azure_cli_command",
-         "_azure_can_fan_out"],
+        ["_apply_azure_subscription", "_is_azure_cli_command", "_azure_can_fan_out"],
         CLOUD_EXEC,
     )
     ns["azure_login_cache"] = azure_login_cache
     return ns
-
-
-@pytest.mark.parametrize("command,read_only", [
-    # The bug this replaced: substring matching saw "logs" in the resource name.
-    ("az group delete --name my-logs-rg", False),
-    ("az vm list", True),
-    ("kubectl logs pod-a", True),
-    ("kubectl delete pod x", False),
-    ("az group create --name foo", False),
-    ("az aks show --name c --resource-group r", True),
-    ("az monitor log-analytics query -w W --analytics-query Q", True),
-    ("az role assignment create --assignee x --role Owner", False),
-    ("kubectl exec -it pod -- sh", False),
-    ("", False),
-])
-def test_read_only_classifier(helpers, command, read_only):
-    assert helpers["is_read_only_command"](command) is read_only
-
-
-def test_unparseable_command_is_not_read_only(helpers):
-    assert helpers["is_read_only_command"]('az vm list --name "unclosed') is False
 
 
 @pytest.mark.parametrize("command,expected", [
@@ -254,11 +233,16 @@ class _NoLoginCache:
 def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent", login_cache=_NoLoginCache):
     """Exec the real fan-out function with faked module-level dependencies."""
     src = _read(CLOUD_EXEC)
-    ns = {"shlex": shlex, "json": __import__("json"), "time": __import__("time"),
+    ns = {"shlex": shlex, "re": re, "json": __import__("json"), "time": __import__("time"),
           "contextvars": __import__("contextvars"),
           "Optional": typing.Optional, "logger": __import__("logging").getLogger("test")}
 
-    for fn in ["is_read_only_command", "_apply_azure_subscription",
+    # The fan-out calls the Ask-mode gate, which now lives in its own module.
+    from utils.security.read_only_classifier import describe_rejection, is_read_only_command
+    ns["is_read_only_command"] = is_read_only_command
+    ns["describe_rejection"] = describe_rejection
+
+    for fn in ["_apply_azure_subscription",
                "_run_azure_on_subscription", "_fan_out_azure",
                "_subscriptions_needing_relogin", "_azure_login_ok",
                "_retry_stale_subscriptions", "_cloud_exec_azure_multi_subscription"]:
@@ -292,8 +276,11 @@ def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent", login
         "get_command_timeout": lambda c, t: t or 60,
         "get_mode_from_context": lambda: mode,
         "ModeAccessController": type("M", (), {
+            # Mirrors the real signature, including the rejection reason the gate
+            # now interpolates into its message.
             "ensure_cloud_command_allowed": staticmethod(
-                lambda m, ro, c: (True, "") if m == "agent" or ro else (False, "blocked"))
+                lambda m, ro, c, reason="": (True, "") if m == "agent" or ro
+                else (False, "blocked because %s" % (reason or "it modifies infrastructure")))
         }),
         "_Result": Result,
     })
@@ -757,38 +744,6 @@ def test_mg_walker_handles_empty_and_malformed():
 # secrets or connection strings, so allowing them would let Ask mode exfiltrate
 # standing credentials. There is no second allowlist gate behind this function.
 # ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("command", [
-    "az storage account keys list --account-name x",
-    "az storage account show-connection-string --name x",
-    "az keyvault secret show --name s --vault-name v",
-    "az keyvault secret list --vault-name v",
-    "az keyvault key list --vault-name v",
-    "az ad sp credential list --id x",
-    "az redis list-keys --name r",
-    "az cosmosdb keys list --name c --resource-group g",
-    "az acr credential show --name r",
-    "aws secretsmanager get-secret-value --secret-id s",
-    "gcloud secrets versions access latest --secret=s",
-])
-def test_credential_reads_are_not_read_only(helpers, command):
-    assert helpers["is_read_only_command"](command) is False, command
-
-
-@pytest.mark.parametrize("command", [
-    # Hyphenated subcommands are single tokens and match no bare verb, so they
-    # fell through to the default deny. `aks get-credentials` only writes a local
-    # kubeconfig and is the required first step of AKS investigation.
-    "az aks get-credentials --name c --resource-group r",
-    "az aks list",
-    "az storage account list",
-    "az keyvault list",
-    "az monitor metrics list --resource x",
-    "kubectl logs pod-x --tail=100",
-])
-def test_investigation_reads_stay_allowed(helpers, command):
-    assert helpers["is_read_only_command"](command) is True, command
-
 
 # ---------------------------------------------------------------------------
 # Disconnect must mark connections inactive even without a secret_ref column.

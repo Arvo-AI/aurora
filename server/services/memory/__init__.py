@@ -15,5 +15,26 @@ AGENT_CATEGORIES = ()
 INCIDENT_INDEX_CATEGORY = SYSTEM_CATEGORY
 INCIDENT_INDEX_TITLE = "Incident Index"
 
+# The Slack teammate-policy entry (one per org), seeded on Slack connect. Unlike
+# the Incident Index this lives in a user-writable category on purpose — both the
+# user and the agent edit its content — but its identity is protected below.
+SLACK_MEMORY_CATEGORY = "context"
+SLACK_MEMORY_TITLE = "Slack"
+
+# Background-session sources that speak in Slack and must always have this
+# memory injected (not left to the LLM memory selector): @mention replies and
+# the post-RCA team-routing agent that picks which team channels to post to.
+SLACK_POLICY_SOURCES = frozenset({"slack", "team_routing"})
+
+# Well-known entries whose (category, title) pair IS their stable identity —
+# seeders, the agent's prompt injector, and route lookups all pin to it rather
+# than to an id. Users may freely edit their content and description, but renaming,
+# recategorizing, or deleting one would silently detach it from those lookups
+# (e.g. the Slack policy would stop being injected, with no error), so the
+# memory routes reject those operations.
+PROTECTED_ENTRIES = frozenset({
+    (SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE),
+})
+
 # All valid categories (used by memory_tool for validation)
 ALL_CATEGORIES = MEMORY_CATEGORIES + AGENT_CATEGORIES

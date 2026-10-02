@@ -51,6 +51,44 @@ Usage: image: {{ include "aurora.image" (dict "image" "server" "global" $) | quo
 {{- end -}}
 
 {{/*
+MinIO-compatible object storage image; digest wins over tag.
+Inline defaults are load-bearing: `helm upgrade --reuse-values` skips new chart
+defaults, so upgrades from <=1.5.1 arrive with services.minio.image unset — the
+default digest has to live here too, or those upgrades silently lose the pin.
+*/}}
+{{- define "aurora.minioImage" -}}
+{{- $defaultRepo := "docker.io/pgsty/silo" -}}
+{{- $defaultTag := "RELEASE.2026-09-16T00-00-00Z" -}}
+{{- $defaultDigest := "sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46" -}}
+{{- $img := .Values.services.minio.image | default dict -}}
+{{- $repo := $img.repository | default $defaultRepo -}}
+{{- $digest := $img.digest | default "" -}}
+{{- $tag := $img.tag | default "" -}}
+{{/* Nothing pinned at all: fall back to the verified digest, never a bare tag.
+     Guarded on the repo — silo's digest is meaningless against a custom one. */}}
+{{- if and (not $digest) (not $tag) (eq $repo $defaultRepo) -}}
+{{- $digest = $defaultDigest -}}
+{{- end -}}
+{{- if $digest -}}
+{{- printf "%s@%s" $repo $digest -}}
+{{- else -}}
+{{- printf "%s:%s" $repo ($tag | default $defaultTag) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+max_connections for the in-cluster Postgres; see services.postgres.maxConnections.
+Inline default is load-bearing: `helm upgrade --reuse-values` skips new chart
+defaults, so upgrades from <=1.5.1 arrive with the key unset. Without it here
+the connection-budget guard below compares against postgres:15-alpine's stock
+100 and hard-fails a stock single-replica install.
+*/}}
+{{- define "aurora.postgresMaxConnections" -}}
+{{- /* Parenthesized so it is nil-safe when services.postgres is absent entirely. */ -}}
+{{- (.Values.services.postgres).maxConnections | default 300 -}}
+{{- end -}}
+
+{{/*
 Pod scheduling block (tolerations, nodeSelector, affinity).
 Pass a dict with "service" (key into .Values.scheduling) and "global" (top-level context).
 When scheduling.<service> is set, it fully replaces the global defaults for that service.

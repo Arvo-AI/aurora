@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify
 from utils.db.connection_pool import db_pool
 from utils.db.org_backfill import migrate_user_to_org, _USER_SCOPED_TABLES_SQL, _INCIDENT_CHILD_TABLES_SQL
-from utils.auth import VALID_ROLES
+from utils.auth import VALID_ROLES, normalize_email
 from utils.auth.rbac_decorators import require_permission, require_auth_only
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.auth.enforcer import assign_role_to_user, remove_role_from_user, get_user_roles_in_org
@@ -691,7 +691,7 @@ def _list_invitations(org_id: str):
 def _create_invitation(org_id: str, user_id: str):
     """Create a new invitation."""
     data = request.get_json() or {}
-    email = (data.get("email") or "").strip().lower()
+    email = normalize_email(data.get("email"))
     role = data.get("role", "viewer")
 
     if not email or not EMAIL_REGEX.match(email):
@@ -716,14 +716,16 @@ def _create_invitation(org_id: str, user_id: str):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 # No RLS needed — org_invitations not RLS-protected
+                # LOWER() on the column too: legacy rows written before emails
+                # were normalized may still carry mixed case.
                 cursor.execute(
                     """UPDATE org_invitations SET status = 'expired'
-                       WHERE org_id = %s AND email = %s AND status = 'pending'
+                       WHERE org_id = %s AND LOWER(email) = %s AND status = 'pending'
                          AND expires_at IS NOT NULL AND expires_at <= NOW()""",
                     (org_id, email),
                 )
                 cursor.execute(
-                    "SELECT id FROM org_invitations WHERE org_id = %s AND email = %s AND status = 'pending'",
+                    "SELECT id FROM org_invitations WHERE org_id = %s AND LOWER(email) = %s AND status = 'pending'",
                     (org_id, email),
                 )
                 if cursor.fetchone():
@@ -731,7 +733,7 @@ def _create_invitation(org_id: str, user_id: str):
 
                 cursor.execute(
                     """DELETE FROM org_invitations
-                       WHERE org_id = %s AND email = %s AND status IN ('cancelled', 'declined', 'expired')""",
+                       WHERE org_id = %s AND LOWER(email) = %s AND status IN ('cancelled', 'declined', 'expired')""",
                     (org_id, email),
                 )
 

@@ -103,7 +103,7 @@ export function ForgotPasswordPanel({
       <form className="space-y-4" onSubmit={onSubmit}>
         <div>
           <label htmlFor="forgot-email" className={LABEL_CLASS}>Email</label>
-          <input id="forgot-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className={INPUT_CLASS} placeholder="you@company.com" disabled={pending} />
+          <input id="forgot-email" type="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} required value={email} onChange={(e) => setEmail(e.target.value)} className={INPUT_CLASS} placeholder="you@company.com" disabled={pending} />
         </div>
         {error && <ErrorBox message={error} />}
         <button type="submit" disabled={pending} className={SUBMIT_CLASS}>
@@ -174,7 +174,7 @@ export function ResetPasswordPanel({
               collected on the previous step — so keep it editable. */}
           <div>
             <label htmlFor="reset-email" className={LABEL_CLASS}>Email</label>
-            <input id="reset-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className={INPUT_CLASS} placeholder="you@company.com" disabled={frozen} />
+            <input id="reset-email" type="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} required value={email} onChange={(e) => setEmail(e.target.value)} className={INPUT_CLASS} placeholder="you@company.com" disabled={frozen} />
           </div>
           <div>
             <label htmlFor="reset-code" className={LABEL_CLASS}>Reset code</label>

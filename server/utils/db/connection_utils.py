@@ -227,7 +227,7 @@ def get_user_aws_connection(user_id: str) -> Optional[Dict]:
     org_id = _resolve_org_id(user_id)
     if org_id:
         sql = """
-            SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
+            SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at, workspace_id
             FROM user_connections
             WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
             ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
@@ -236,7 +236,7 @@ def get_user_aws_connection(user_id: str) -> Optional[Dict]:
         params = (user_id, org_id, user_id)
     else:
         sql = """
-            SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
+            SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at, workspace_id
             FROM user_connections
             WHERE user_id = %s AND provider = 'aws' AND status = 'active'
             LIMIT 1;
@@ -249,7 +249,7 @@ def get_user_aws_connection(user_id: str) -> Optional[Dict]:
             set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:awsConn]")
             cur.execute(sql, params)
             row = cur.fetchone()
-            
+
             if row:
                 return {
                     "account_id": row[0],
@@ -258,6 +258,10 @@ def get_user_aws_connection(user_id: str) -> Optional[Dict]:
                     "connection_method": row[3],
                     "region": row[4],
                     "last_verified_at": row[5].isoformat() if row[5] else None,
+                    # The ExternalId lives on THIS workspace, not the caller's --
+                    # connectors are org-shared, so the two differ for any member
+                    # who didn't run onboarding.
+                    "workspace_id": str(row[6]) if row[6] else None,
                 }
             return None
     except Exception as e:
@@ -286,7 +290,7 @@ def get_all_user_connections(
     org_id = _resolve_org_id(user_id)
     if org_id:
         sql = """
-            SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
+            SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at, workspace_id
             FROM user_connections
             WHERE (user_id = %s OR org_id = %s) AND provider = %s AND status = 'active'
             ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END, account_id;
@@ -294,7 +298,7 @@ def get_all_user_connections(
         params = (user_id, org_id, provider, user_id)
     else:
         sql = """
-            SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
+            SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at, workspace_id
             FROM user_connections
             WHERE user_id = %s AND provider = %s AND status = 'active'
             ORDER BY account_id;
@@ -317,6 +321,9 @@ def get_all_user_connections(
                 "connection_method": row[3],
                 "region": row[4],
                 "last_verified_at": row[5].isoformat() if row[5] else None,
+                # Needed to resolve the ExternalId the trust policy expects;
+                # see get_user_aws_connection.
+                "workspace_id": str(row[6]) if row[6] else None,
             }
             for row in rows
         ]

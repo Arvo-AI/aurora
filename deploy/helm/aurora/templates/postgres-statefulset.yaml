@@ -15,9 +15,8 @@ Mirrors the budget documented at services.postgres.maxConnections in values.yaml
 {{- $beatPods := .Values.replicaCounts.celeryBeat | int }}
 {{- $mcpPods := .Values.replicaCounts.mcp | int }}
 {{- $budget := add (mul $serverPods $workers (add $pool 15)) (mul $workerPods $concurrency $pool) (mul $chatbotPods $pool) (mul $beatPods $pool) (mul $mcpPods 10) }}
-{{- $limit := 100 }}
+{{- $limit := include "aurora.postgresMaxConnections" . | int }}
 {{- $managedElsewhere := false }}
-{{- with .Values.services.postgres.maxConnections }}{{ $limit = int . }}{{ end }}
 {{- range .Values.services.postgres.extraArgs }}{{ if contains "max_connections=" (toString .) }}{{ $managedElsewhere = true }}{{ end }}{{ end }}
 {{- if and (not $managedElsewhere) (gt $budget $limit) }}
 {{- fail (printf "Postgres connection budget: the configured pods can open up to %d connections (server %d x GUNICORN_WORKERS %d x (DB_POOL_MAX %d + 15) + celery-worker %d x CELERY_CONCURRENCY %d x %d + chatbot %d x %d + celery-beat %d x %d + mcp %d x 10) but the in-cluster Postgres allows %d. Raise services.postgres.maxConnections (and resources.postgres.limits.memory, about 10Mi per connection) or lower the replica counts, autoscaling maxReplicas or config.DB_POOL_MAX." $budget $serverPods $workers $pool $workerPods $concurrency $pool $chatbotPods $pool $beatPods $pool $mcpPods $limit) }}
@@ -55,18 +54,18 @@ spec:
         - name: postgres
           image: postgres:15-alpine
           imagePullPolicy: IfNotPresent
-          {{- if or .Values.services.postgres.maxConnections .Values.services.postgres.extraArgs }}
-          # Command-line settings override postgresql.conf; the image entrypoint
-          # prepends "postgres" when the first arg starts with "-".
+          {{- /* Command-line settings override postgresql.conf; the image entrypoint
+                 prepends "postgres" when the first arg starts with "-". */}}
           args:
-            {{- with .Values.services.postgres.maxConnections }}
+            {{- /* extraArgs already pins max_connections: emitting ours too would
+                   duplicate the -c flag, so defer to the operator's value. */}}
+            {{- if not $managedElsewhere }}
             - "-c"
-            - "max_connections={{ . }}"
+            - "max_connections={{ $limit }}"
             {{- end }}
             {{- range .Values.services.postgres.extraArgs }}
             - {{ . | quote }}
             {{- end }}
-          {{- end }}
           securityContext:
             {{- include "aurora.containerSecurityContext" (dict "service" "postgres" "global" $ "defaults" (dict)) | nindent 12 }}
           ports:

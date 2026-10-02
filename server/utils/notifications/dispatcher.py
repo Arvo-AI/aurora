@@ -22,6 +22,7 @@ from utils.auth.stateless_auth import (
     get_credentials_from_db,
     get_org_id_for_user,
     get_org_preference,
+    get_user_preference,
     set_rls_context,
 )
 from utils.db.connection_pool import db_pool
@@ -110,7 +111,8 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                            i.analyzed_at, i.created_at, i.slack_message_ts, i.google_chat_message_name,
                            i.recurrence_of_incident_id, anchor.slack_message_ts, anchor.alert_title,
                            grp.occurrence_number, grp.group_size, grp.last_fired_at,
-                           i.alert_metadata, i.pagerduty_note_id
+                           i.alert_metadata, i.pagerduty_note_id,
+                           i.incidentio_update_id, i.source_alert_id
                     FROM incidents i
                     LEFT JOIN incidents anchor ON anchor.id = i.recurrence_of_incident_id
                     JOIN grp ON grp.id = i.id
@@ -149,6 +151,8 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                         'group_last_fired_at': result[19],
                         'alert_metadata': alert_metadata,
                         'pagerduty_note_id': result[21],
+                        'incidentio_update_id': result[22],
+                        'source_alert_id': result[23],
                     }
         return None
     except Exception:
@@ -487,6 +491,18 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
                 send_pagerduty_incident_note(user_id, incident_data)
             except Exception:
                 logger.exception("[Dispatcher] PagerDuty note failed")
+
+        # --- incident.io update --- (completion only, once per incident; recurrences
+        # post too since each is a distinct incident.io incident. The post-back
+        # toggle is the one on the incident.io connector page, stored org-wide
+        # with the other incident.io RCA settings)
+        if (not refresh_only and incident_data.get('source_type') == 'incidentio'
+                and bool(get_user_preference(user_id, 'incidentio_postback_enabled', default=False))):
+            try:
+                from utils.notifications.incidentio_notification_service import send_incidentio_incident_update
+                send_incidentio_incident_update(user_id, incident_data)
+            except Exception:
+                logger.exception("[Dispatcher] incident.io update failed")
 
     except Exception:
         logger.exception("[Dispatcher] Error in notify_investigation_completed")

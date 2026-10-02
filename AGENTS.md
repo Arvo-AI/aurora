@@ -44,6 +44,167 @@ Aurora uses S3-compatible object storage via `server/utils/storage/storage.py`. 
 - **S3 API**: http://localhost:8333 (credentials: admin/admin)
 - **Supports**: AWS S3, Cloudflare R2, Backblaze B2, GCS (via S3 interop), MinIO, any S3-compatible service
 
+## RCA Mode & Ask Mode
+
+RCA (Root Cause Analysis) investigations are **explicitly read-only** per AGENTS.md guidelines. The agent can execute diagnostic queries in Ask mode during RCA without requiring Agent mode.
+
+### How It Works
+
+`is_read_only_command()` classifies the command's **operation** (its positional
+arguments) and ignores option names and option values, matching on the leading
+word of a verb-looking positional:
+- `describe-health-check` → leading word `describe` → read-only ✅
+- `get-metric-statistics` → leading word `get` → read-only ✅
+- `list-nodegroups` → leading word `list` → read-only ✅
+- `terminate-instances --query Reservations` → leading word `terminate` → blocked ✅
+  (the `--query` option can never supply the verb)
+
+This general approach works for **any** hyphenated diagnostic verb, not just hardcoded ones.
+
+**Read-vs-write is decided by two different scans**, because a service or command
+group can itself be spelled like a read verb:
+- **Write check — every positional.** `aws logs delete-log-group`, `az search
+  service delete` and `gcloud config set account x` all have a *read* verb
+  (`logs` / `search` / `config`) as their first verb-looking positional, so
+  stopping there classified three mutations as read-only. Any write verb
+  anywhere in the operation now blocks.
+- **Read check — the first verb.** `kubectl logs update-cache-cronjob-x` is a
+  read: `kubectl` takes its operands as positional resource names, so the tokens
+  after the verb are names, not operations.
+
+kubectl is the only entry in `OPERAND_POSITIONAL_CLIS`, which is what exempts it
+from the full scan. Membership only *relaxes* the scan, so a CLI missing from it
+over-blocks rather than under-blocks — the safe direction for this gate. The cost
+is that a non-kubectl read whose *positional resource name* starts with a write
+verb is refused (`gcloud compute instances describe delete-me-vm`); that fails
+closed, and Agent mode covers it.
+
+The relaxed scan stops at the verb, which was one token too early for kubectl's
+one subcommand group spelled like a read verb: `kubectl config set-context`,
+`delete-context`, `use-context` and `unset` all sat past `config` and classified
+as reads. They only rewrite the local kubeconfig, but that repoints the cluster
+and namespace every later read resolves against, so they are writes. `config` is
+in `SUBCOMMAND_GROUPS`, which carries the scan one positional further —
+`config view` / `get-contexts` / `current-context` stay read-only.
+
+`describe_rejection()` returns why a command was refused, and
+`ensure_cloud_command_allowed()` puts it in the error the agent sees — naming the
+offending token is what lets the agent repair a command instead of retrying it:
+
+```
+aws logs delete-log-group    → 'delete-log-group' is a write operation (it leads with 'delete')
+aws sts get-session-token    → it returns a credential, key, secret or token
+kubectl get pods | bash      → its output is piped into 'bash', which is not a text filter
+```
+
+The credential reason is a fixed string that names no token on purpose: the
+reason reaches a log line, and interpolating the matched credential word there
+trips CodeQL's clear-text-logging rule for no gain, since the agent can already
+see the command it sent.
+
+Six rules keep the gate fail-closed:
+1. **Credential/token reads are denied** even though they mutate nothing. Rather
+   than an ever-incomplete per-service list, any credential word (`key`, `keys`,
+   `secret`, `credential`, `password`, `token`, `sas`, …) in the operation path
+   blocks the command — this covers `sts get-session-token`, `eks get-token`,
+   `ecr get-login-password`, `secretsmanager get-secret-value`, `kubectl get
+   secrets`, `az storage account keys list`, `az signalr key list`, and the long
+   tail of `<service> keys list` commands alike. Matching peels off kubectl's
+   resource syntax (`secret,pods`, `secret/my-tls`, `secrets.v1`) but *not*
+   hyphens, so a pod named `api-key-service` is not mistaken for a key fetch.
+   Options that dump secrets (`--with-decryption`, `--expand-keys`) are blocked
+   too. `aks get-credentials` and `container clusters get-credentials` are exempt:
+   they only write a local kubeconfig and start every managed-Kubernetes
+   investigation.
+2. **Any write verb blocks the command**, including hyphenated mutations
+   (`modify-*`, `terminate-*`, `reboot-*`, `delete-*`) and state toggles that
+   read like reads (`tag-*`, `untag-*`, `unset`, `clear`, `rotate`). Scanned
+   across every positional, not just the first verb, so a mutation cannot hide
+   behind a read-verb-named service (`aws logs delete-log-group`).
+3. **Each shell segment is classified separately.** A write behind `&&`, `;`, a
+   pipe, a newline, or a `$(...)`/backtick substitution blocks the whole command,
+   so `kubectl get pods && kubectl delete pod x` is not read-only.
+4. **A read cannot be used as a payload source.** Every segment downstream of the
+   first must be a recognised text filter (`grep`, `jq`, `sort`, `head`, `awk`,
+   `wc`, …). That's an allowlist, so an interpreter or exfil tool needs no
+   enumeration — it simply isn't a filter. It blocks
+   `kubectl get cm evil -o jsonpath='{.data.sh}' | bash`, whose first segment is
+   genuinely read-only but whose ConfigMap supplies the script. Commands that
+   take another command as an argument (`sudo`, `env`, `xargs`, `timeout`,
+   `watch`, …) are refused as the leading program, since the operation this
+   function classifies wouldn't be the one that runs. Redirections (`>`, `>>`,
+   `<`) are blocked because they write a file regardless of what produced the
+   bytes. Note this gates on *shape*, never on a list of CLI names — OVH's RCA
+   skill emits a bare `cloud project list`, so an allowlist of known CLIs breaks
+   real providers.
+5. **Unknown operations default to blocked**, and an unparseable command
+   (unbalanced quotes) is blocked rather than guessed at.
+6. **Boolean switches don't swallow the verb** — `kubectl
+   --insecure-skip-tls-verify get pods` stays read-only.
+
+Implementation: `server/utils/security/read_only_classifier.py`.
+Tests: `server/tests/security/test_read_only_classifier.py`.
+
+### Relationship to the Security settings guardrails
+
+These are different questions and both are needed:
+
+| | `is_read_only_command()` | Security tab (`org_command_policies`) |
+|---|---|---|
+| Asks | "is this a **write**?" | "is this **dangerous**?" |
+| Scope | Ask mode only | every mode |
+| On block | hard fail, "switch to Agent mode" | HITL prompt (Yes / No / Yes-Always) |
+| Configurable | no | yes, per org, and can be disabled |
+
+`kubectl delete pod x` is a routine operation no guardrail should block, but it
+must fail in Ask mode. Conversely `rm -rf /` is caught by the denylist in *any*
+mode. Ask mode can't delegate to the guardrails: they're HITL (there's no user to
+prompt during a background RCA), org-configurable, and switchable off via
+`GUARDRAILS_ENABLED=false` — Ask mode still has to hold when they're all off.
+
+So keep this classifier narrow. It answers read-vs-write and defers everything
+about *danger* to the shared layers (`signature_match.py`,
+`_UNIVERSAL_DENY_RULES`, the LLM judge) via `gate_command()`. The one overlap is
+deliberate: piping a read into an interpreter has to be refused here because the
+wrapped command's verb is invisible to a read-vs-write check, and the shared
+denylist only covers the `base64|sh` / `curl|sh` / `bash -c` spellings.
+
+### Allowed RCA Diagnostic Commands (Ask Mode)
+
+The following diagnostic queries are **always allowed** in Ask mode during RCA investigations:
+
+**AWS Route 53 Health Checks:**
+```bash
+aws route53 describe-health-check --health-check-id <id>
+aws route53 get-health-check-status --health-check-id <id>
+```
+
+**AWS CloudWatch Metrics:**
+```bash
+aws cloudwatch get-metric-statistics --namespace AWS/Route53 --metric-name HealthCheckStatus ...
+aws cloudwatch describe-alarms --alarm-names <name>
+aws cloudwatch list-metrics --namespace AWS/Route53
+```
+
+**AWS EKS Cluster Info:**
+```bash
+aws eks describe-cluster --name <cluster-name> --region <region>
+aws eks describe-nodegroup --cluster-name <cluster> --nodegroup-name <nodegroup>
+aws eks list-nodegroups --cluster-name <cluster>
+```
+
+**Kubernetes Diagnostics:**
+```bash
+kubectl get statefulsets -n <namespace>
+kubectl describe pod <pod-name> -n <namespace>
+kubectl logs <pod-name> -n <namespace>
+kubectl top nodes
+```
+
+**Blocked in Ask mode (use Agent mode):** any mutation, and any credential- or
+token-returning read such as `aws sts get-session-token`, `aws eks get-token`,
+`aws ecr get-login-password`, or `aws ssm get-parameter --with-decryption`.
+
 ## New Connector Checklist
 
 Every new connector (or connector route file) **must** satisfy all of the following before merge. CI enforces RBAC via `server/tests/architectural/test_connector_rbac.py`.

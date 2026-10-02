@@ -117,13 +117,18 @@ class ModeAccessController:
         return False, message
 
     @classmethod
-    def ensure_cloud_command_allowed(cls, mode: Optional[str], is_read_only_command: bool, command: str) -> Tuple[bool, str]:
+    def ensure_cloud_command_allowed(cls, mode: Optional[str], is_read_only_command: bool,
+                                     command: str, reason: str = "") -> Tuple[bool, str]:
         if not cls.is_read_only_mode(mode) or is_read_only_command:
             return True, ""
 
+        # *reason* names the offending token so the agent can repair the command
+        # rather than retry it verbatim. Falls back to the generic wording when a
+        # caller has not classified the command.
+        cause = reason or "it modifies infrastructure"
         message = (
-            "Command '%s' modifies infrastructure and is blocked in Ask mode. "
-            "Send the request in Agent mode to proceed." % command
+            "Command '%s' is blocked in Ask mode because %s. "
+            "Send the request in Agent mode to proceed." % (command, cause)
         )
         return False, message
 

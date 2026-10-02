@@ -50,6 +50,10 @@ _OPTIONAL_PACKAGES = (
     "hvac", "redis", "celery", "flask_socketio",
     "flask_cors", "langchain", "langgraph", "requests", "tiktoken",
     "dotenv", "flask",
+    # routes/memory/routes.py imports PdfReader at module scope for upload
+    # text-extraction, so the blueprint is unimportable without it — even for
+    # tests that never touch the upload route.
+    "pypdf",
     "langchain_core", "langchain_core.tools", "langchain_core.language_models",
     "langchain_core.language_models.chat_models",
     "langchain_anthropic", "langchain_openai", "langchain_google_genai",
@@ -147,44 +151,6 @@ for _pkg in _OPTIONAL_PACKAGES:
         _stub(_pkg)
 
 
-# flask_limiter needs a hand-written stub, not a _StubModule: route modules apply
-# `@limiter.limit(...)` at import time, and a MagicMock would *replace* the view
-# function with a mock, so the route would never run. The stub keeps the
-# decorators as identity functions, which is what tests want anyway — rate
-# limiting is enforced by Flask-Limiter itself, not by the routes under test.
-if not _is_installed("flask_limiter"):
-    def _identity_decorator(*_args: Any, **_kwargs: Any):
-        def _wrap(func):
-            return func
-        return _wrap
-
-    class _StubLimiter:
-        """Minimal stand-in for flask_limiter.Limiter."""
-
-        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
-            self.enabled = False
-
-        # `@limiter.limit("5 per minute")` — returns a decorator.
-        limit = staticmethod(_identity_decorator)
-        shared_limit = staticmethod(_identity_decorator)
-
-        # `@limiter.request_filter` / `@limiter.exempt` — used bare, so the
-        # function itself is the single argument.
-        @staticmethod
-        def request_filter(func):
-            return func
-
-        @staticmethod
-        def exempt(func):
-            return func
-
-        def init_app(self, _app: Any) -> None:
-            return None
-
-    _flask_limiter_stub = _StubModule("flask_limiter")
-    _flask_limiter_stub.Limiter = _StubLimiter  # type: ignore[attr-defined]
-    sys.modules["flask_limiter"] = _flask_limiter_stub
-
 # Whether the real google.oauth2 is importable must be sampled BEFORE any
 # stubbing runs. Once `google.oauth2` is placed in sys.modules, find_spec()
 # returns that stub's own ModuleSpec, so _is_installed() answers True and the
@@ -207,6 +173,70 @@ for _ns in _STUBBED_NAMESPACES:
         for _wrapper in _STUB_WHEN_GOOGLE_ABSENT:
             sys.modules.pop(_wrapper, None)
             sys.modules[_wrapper] = _StubModule(_wrapper)
+
+
+def _install_flask_limiter_stub() -> None:
+    """Stub ``flask_limiter`` with pass-through decorators.
+
+    ``utils.web.limiter_ext`` builds a module-level ``Limiter`` and routes apply
+    it as ``@limiter.limit("...")`` *below* ``@bp.route(...)``. A MagicMock is
+    not usable here: ``limiter.limit(...)`` would return a MagicMock, the
+    decorated view would become a MagicMock, and Flask's ``add_url_rule`` needs
+    ``view_func.__name__`` to derive the endpoint — so blueprint registration
+    would fail with AttributeError. The stub therefore returns the original
+    function untouched, which also means rate limits are simply inert in tests.
+    """
+    if _is_installed("flask_limiter"):
+        return
+
+    def _passthrough_decorator(*_args: Any, **_kwargs: Any):
+        def _decorate(func):
+            return func
+        return _decorate
+
+    class _StubLimiter:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            self.enabled = False
+
+        # @limiter.limit("10 per minute") / @limiter.shared_limit(...)
+        limit = staticmethod(_passthrough_decorator)
+        shared_limit = staticmethod(_passthrough_decorator)
+
+        # Bare decorators — applied directly to a function, not called first.
+        # `exempt` belongs here, not with `limit` above: chat_routes.py applies
+        # it as a plain `@limiter.exempt`, so a decorator-factory would hand
+        # Flask the factory's inner function and every route would register
+        # under the same `__name__`.
+        @staticmethod
+        def request_filter(func):
+            return func
+
+        @staticmethod
+        def exempt(func):
+            return func
+
+        def init_app(self, _app: Any) -> None:
+            return None
+
+    module = _StubModule("flask_limiter")
+    module.Limiter = _StubLimiter  # type: ignore[attr-defined]
+
+    util = _StubModule("flask_limiter.util")
+    util.get_remote_address = lambda: "127.0.0.1"  # type: ignore[attr-defined]
+
+    errors = _StubModule("flask_limiter.errors")
+
+    class _RateLimitExceeded(Exception):
+        retry_after = None
+
+    errors.RateLimitExceeded = _RateLimitExceeded  # type: ignore[attr-defined]
+
+    sys.modules.setdefault("flask_limiter", module)
+    sys.modules.setdefault("flask_limiter.util", util)
+    sys.modules.setdefault("flask_limiter.errors", errors)
+
+
+_install_flask_limiter_stub()
 
 try:
     from cryptography.hazmat.primitives import serialization
