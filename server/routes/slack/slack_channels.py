@@ -342,8 +342,9 @@ def auto_register_channels(user_id: str, team_id: str | None = None,
                     #   * 'pending'      — only if STALE; a fresh pending row is a
                     #     task still in flight (re-queuing = duplicate LLM call).
                     #   * 'error'/'generating'/'ready' — never auto-retry here
-                    #     ('error' is left for an explicit regenerate; the task's
-                    #     own max_retries already bounds transient failures).
+                    #     ('error' now means a failure that may have spent LLM
+                    #     quota, so it's left for an explicit regenerate; pre-LLM
+                    #     failures land back on 'pending' for the sweep instead).
                     needs_describe = (
                         status in (None, "skipped")
                         or (status == "pending" and is_stale_by_id.get(cid, False))

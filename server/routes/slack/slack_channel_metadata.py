@@ -116,8 +116,25 @@ class ChannelUnreadable(RuntimeError):
 
     Means the token can't see it (wrong workspace, archived, revoked scope) or
     Slack failed. Either way there's nothing to describe, and an empty context
-    would just make the LLM invent a summary — so this fails into the retry path.
+    would just make the LLM invent a summary — so this fails into the retry path,
+    and on exhaustion back to 'pending' rather than 'error' (see
+    :func:`_record_exhausted_retry`).
     """
+
+
+def _record_exhausted_retry(user_id: str, channel_id: str, exc: BaseException) -> str:
+    """Land a task that ran out of retries on a status, returning which one.
+
+    'error' is terminal — neither the sweep nor reconcile ever retries it, only an
+    explicit regenerate. That's right once LLM quota is spent, but ChannelUnreadable
+    fires before the LLM call, and get_channel_info swallows timeouts and 429s into
+    None, so marking 'error' lets a Slack blip outlasting two 30s retries strand
+    every channel being described at that moment. Those go back to 'pending'.
+    """
+    # Nothing was spent, so the sweep can afford to try again in a few hours.
+    status = "pending" if isinstance(exc, ChannelUnreadable) else "error"
+    _update_metadata(user_id, channel_id, None, status)
+    return status
 
 
 def _build_context(client, channel_id: str) -> tuple[str, str, dict]:
@@ -261,8 +278,12 @@ def generate_channel_metadata(self, user_id: str, channel_id: str):
 
         from connectors.slack_connector.client import get_slack_client_for_user
         client = get_slack_client_for_user(user_id)
+        # Creds vanished between the sweep picking this actor and now (disconnect,
+        # or a transient Vault read). Also pre-LLM, so leave it to the sweep — and
+        # if nobody in the org can reach Slack, _assign_actors won't re-enqueue it
+        # at all, so 'pending' costs nothing while 'error' would be permanent.
         if not client:
-            _update_metadata(user_id, channel_id, None, "error")
+            _update_metadata(user_id, channel_id, None, "pending")
             return
 
         context_text, channel_name, info = _build_context(client, channel_id)
@@ -303,7 +324,7 @@ def generate_channel_metadata(self, user_id: str, channel_id: str):
         try:
             self.retry(countdown=30)
         except self.MaxRetriesExceededError:
-            _update_metadata(user_id, channel_id, None, "error")
+            _record_exhausted_retry(user_id, channel_id, e)
 
 
 _BACKFILL_LOG = "[SlackDescBackfill]"

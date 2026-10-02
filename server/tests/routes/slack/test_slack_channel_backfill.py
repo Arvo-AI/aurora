@@ -352,6 +352,69 @@ def test_build_context_refuses_a_channel_it_could_not_read():
         mod._build_context(client, "C1")
 
 
+# --- exhausted retries: recoverable vs terminal -----------------------------
+
+def _task_source() -> str:
+    """generate_channel_metadata is wrapped by @celery_app.task, which conftest
+    stubs to a MagicMock, so its body can't be invoked. Read it instead (same
+    approach as test_beat_schedule_uses_the_shared_interval_constant)."""
+    from pathlib import Path
+
+    return Path(mod.__file__).read_text().split("def generate_channel_metadata", 1)[1]
+
+
+def test_unreadable_channel_lands_back_on_pending_not_error():
+    """A Slack blip outlasting the two 30s retries must not be terminal.
+    get_channel_info swallows timeouts and 429s into None, so ChannelUnreadable
+    can't distinguish 'invisible channel' from 'Slack was briefly down'. 'error'
+    is swept by nothing, so marking it there would strand every channel being
+    described during the blip, invisible to routing until someone re-describes it
+    by hand."""
+    with patch.object(mod, "_update_metadata") as upd:
+        assert mod._record_exhausted_retry(USER_A, "C1", mod.ChannelUnreadable()) == "pending"
+    assert upd.call_args.args == (USER_A, "C1", None, "pending")
+
+
+def test_a_failure_that_may_have_spent_quota_stays_terminal():
+    """The flip side: a post-LLM failure must stay 'error'. Retrying it on a
+    180-minute timer would re-bill the LLM call indefinitely, which is exactly
+    why the sweep excludes 'error' in the first place."""
+    with patch.object(mod, "_update_metadata") as upd:
+        assert mod._record_exhausted_retry(USER_A, "C1", RuntimeError("llm exploded")) == "error"
+    assert upd.call_args.args == (USER_A, "C1", None, "error")
+
+
+def test_pending_handoff_restamps_so_the_retry_is_not_immediate():
+    """The row must go back with a fresh updated_at: the sweep gates 'pending' on
+    the stale window, so restamping is what spaces retries to one per window
+    rather than one every sweep."""
+    import inspect
+
+    source = inspect.getsource(mod._update_metadata)
+    status_only = source.split("if summary is None:", 1)[1].split("else:", 1)[0]
+    assert "updated_at = NOW()" in status_only
+    assert "metadata_status IN ('pending', 'generating')" in status_only
+
+
+def test_the_task_routes_exhausted_retries_through_the_classifier():
+    """Guard against someone reinstating the bare _update_metadata(..., 'error')
+    call this replaced — the whole fix lives in that one dispatch."""
+    source = _task_source()
+    assert "_record_exhausted_retry" in source
+    assert '_update_metadata(user_id, channel_id, None, "error")' not in source
+
+
+def test_a_lost_client_is_recoverable_too():
+    """Same class as ChannelUnreadable: the sweep picked this actor because the
+    probe saw credentials, so a None client means they vanished in between. Also
+    pre-LLM, and _assign_actors won't re-enqueue while the org has no Slack
+    connection, so 'pending' costs nothing and 'error' would be forever."""
+    lost_client = _task_source().split("if not client:", 1)[1].split("return", 1)[0]
+    assert '"pending"' in lost_client, (
+        "a vanished Slack client must not be recorded as terminal 'error'"
+    )
+
+
 # --- cross-org fairness -----------------------------------------------------
 
 def test_rotate_orgs_advances_with_the_beat_interval():
