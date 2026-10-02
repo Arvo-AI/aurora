@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-10-02
+
+### Added
+- incident.io: completed RCAs are now posted back onto the incident itself as an
+  incident update, so the summary rides incident.io's own notification flow
+  (incident channel, followers, app notifications) instead of a separate Aurora
+  ping. Alert-triggered RCAs resolve to the incident the alert is attached to;
+  declined/merged/cancelled incidents are skipped, and several alerts of one
+  group on one incident post only once. Gated by the existing org-wide post-back
+  toggle. Replaces the previous polling task, which missed any RCA longer than
+  ~6 minutes and skipped alert-triggered incidents entirely.
+
+### Fixed
+- AWS: `AssumeRole` no longer fails with `AccessDenied` for org members who
+  hadn't run onboarding. AWS connectors are org-shared but ExternalIds are
+  per-workspace, and every AssumeRole path read the ExternalId from the
+  *caller's* workspace — minting a fresh random one as a side effect on a read
+  path, so there was no missing-workspace error, just a secret no trust policy
+  had ever seen. The ExternalId is now resolved read-only from the connection's
+  own `workspace_id` and fails closed. Fixed in all three AssumeRole paths
+  (single-account, multi-account fan-out, and `get_credentials_from_db`), and
+  the `AccessDenied` message now names both possible causes.
+
 ## [1.5.3] - 2026-10-01
 
 ### Fixed
