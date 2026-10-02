@@ -1,13 +1,14 @@
 """
-incident.io incident update: post Aurora's root cause back onto the
-incident.io incident that triggered the RCA, once, when the investigation
-completes.
+incident.io RCA post-back: post Aurora's root cause back onto the incident.io
+object that triggered the RCA, once, when the investigation completes.
 
-The update goes through incident.io's own notification flow (incident channel,
-followers, app notifications), so responders see the cause where they were
-already paged instead of in a separate Aurora ping. Alert-triggered RCAs are
-posted to the incident the alert is attached to; an alert that only escalated
-has no incident timeline and is skipped.
+An incident-attached RCA posts an *incident update*, which goes through
+incident.io's own notification flow (incident channel, followers, app
+notifications). An alert that only escalated has no incident timeline, so the
+root cause goes on the alert itself as an *alert note*, which incident.io shows
+in the alert timeline and in the alert's Slack pulse thread. Either way
+responders see the cause where they were already paged. An incident-triggered
+RCA with no incident id has nowhere to post and is skipped.
 
 Recurrences post too, unlike PagerDuty notes: an incident.io object always maps
 onto the same Aurora incident (the ingest upserts on it), so a folded
@@ -17,8 +18,9 @@ recurrence group are attached to the same incident.io incident, only the
 first RCA is posted there.
 
 Posting is guarded by a claim on incidents.incidentio_update_id (see
-postback_claim) and the POST carries an idempotency key, so a repeat that
-does reach incident.io is a no-op there as well.
+postback_claim). Incident updates also carry an idempotency key, so a repeat
+that does reach incident.io is a no-op there as well; /v1/alert_notes has no
+such key, which leaves the claim as the only guard for notes.
 """
 
 import json
@@ -65,6 +67,12 @@ class _Source(NamedTuple):
     is_alert: bool
     anchor_alert_id: Optional[str]    # the anchor's incident.io object id, when this is a recurrence
     anchor_update_id: Optional[str]   # the anchor's claim: set once it posted or is posting
+
+
+class _Target(NamedTuple):
+    """Where the root cause goes: an incident.io incident timeline, or an alert's own notes."""
+    object_id: str
+    is_alert_note: bool
 
 
 def _read_source(incident_data: Dict[str, Any], user_id: str) -> Optional[_Source]:
@@ -117,19 +125,17 @@ def _target_rank(incident: Dict[str, Any]) -> Tuple[int, int, str]:
     return rank, (int(external_id) if isinstance(external_id, int) else 1 << 62), str(incident.get("id"))
 
 
-def _target_incident(client: IncidentioClient, source: _Source) -> Tuple[Optional[str], str]:
-    """(incident.io incident id to post to, reason-when-none)."""
-    if not source.is_alert:
-        return source.object_id, ""
-    links = (client.list_incident_alerts(source.object_id) or {}).get("incident_alerts") or []
+def _attached_incident(client: IncidentioClient, alert_id: str) -> Optional[str]:
+    """The open incident.io incident this alert is attached to, or None when it only escalated."""
+    links = (client.list_incident_alerts(alert_id) or {}).get("incident_alerts") or []
     candidates = [
         link["incident"] for link in links
         if (link.get("incident") or {}).get("id")
         and link["incident"].get("status_category") not in _CLOSED_CATEGORIES
     ]
     if not candidates:
-        return None, "alert is not attached to an open incident (escalation only)"
-    return str(min(candidates, key=_target_rank)["id"]), ""
+        return None
+    return str(min(candidates, key=_target_rank)["id"])
 
 
 def _anchor_covers_target(client: IncidentioClient, source: _Source, target: str) -> bool:
@@ -141,11 +147,11 @@ def _anchor_covers_target(client: IncidentioClient, source: _Source, target: str
     return any(str((link.get("alert") or {}).get("id")) == source.anchor_alert_id for link in links)
 
 
-def _handle_post_error(e: IncidentioAPIError, incident_id: str, user_id: str) -> None:
+def _handle_post_error(e: IncidentioAPIError, incident_id: str, user_id: str, *, is_alert_note: bool) -> None:
     """Release the claim only when incident.io definitively rejected the POST (4xx)."""
     if e.status_code is None or e.status_code >= 500:
         # No response, or a 5xx a gateway may have returned after incident.io
-        # stored the update: the outcome is unknown. Keep the claim.
+        # stored the post-back: the outcome is unknown. Keep the claim.
         logger.warning(
             "%s No definitive answer from incident.io for incident %s; claim kept to avoid a duplicate: %s",
             _LOG, incident_id, e.code,
@@ -153,33 +159,49 @@ def _handle_post_error(e: IncidentioAPIError, incident_id: str, user_id: str) ->
         return
     _claims.release(incident_id, user_id)
     if e.status_code in (401, 403):
+        # Name the permission the key is missing so the fix is obvious from the log alone.
+        needed = (
+            "the 'alerts.edit' scope to post alert notes (optional: incident updates still post without it)"
+            if is_alert_note
+            else "the 'Create incident updates' permission for RCA post-back"
+        )
         logger.warning(
-            "%s incident.io refused the update for incident %s (%s): the API key needs the "
-            "'Create incident updates' permission for RCA post-back",
-            _LOG, incident_id, e.code,
+            "%s incident.io refused the post-back for incident %s (%s): the API key needs %s",
+            _LOG, incident_id, e.code, needed,
         )
     else:
-        logger.warning("%s incident.io rejected the update for incident %s: HTTP %s", _LOG, incident_id, e.status_code)
+        logger.warning(
+            "%s incident.io rejected the post-back for incident %s: HTTP %s", _LOG, incident_id, e.status_code
+        )
 
 
-def _resolve_target(client: IncidentioClient, incident_data: Dict[str, Any], user_id: str) -> Tuple[Optional[str], str]:
-    """(incident.io incident id to post to, reason-when-none) for this Aurora incident."""
+def _resolve_target(client: IncidentioClient, incident_data: Dict[str, Any], user_id: str) -> Tuple[Optional[_Target], str]:
+    """(where to post this Aurora incident's root cause, reason-when-nowhere)."""
     source = _read_source(incident_data, user_id)
     if not source or not source.object_id:
         return None, "source event has no incident.io id"
+    # An incident event already names its incident: post the update straight to it.
+    if not source.is_alert:
+        return _Target(source.object_id, is_alert_note=False), ""
     try:
-        target, reason = _target_incident(client, source)
-        if target and source.is_alert and _anchor_covers_target(client, source, target):
+        attached = _attached_incident(client, source.object_id)
+        # An alert storm folded onto one incident.io incident: the anchor's update covers it.
+        if attached and _anchor_covers_target(client, source, attached):
             return None, "an earlier alert of this recurrence group already posted to that incident"
-        return target, reason
+        if attached:
+            return _Target(attached, is_alert_note=False), ""
+        # Escalation-only alert: no incident timeline, so the note goes on the alert itself.
+        # No recurrence folding needed — the ingest upserts one Aurora incident per alert, so
+        # the per-incident claim is already 1:1 with the alert whose timeline the note lands on.
+        return _Target(source.object_id, is_alert_note=True), ""
     except IncidentioAPIError as e:
         return None, f"could not resolve the incident for alert {source.object_id}: {e.code}"
 
 
 def send_incidentio_incident_update(user_id: str, incident_data: Dict[str, Any]) -> bool:
-    """Post the RCA root cause as an update on the originating incident.io incident.
+    """Post the RCA root cause onto the originating incident.io incident or alert.
 
-    Returns True only when an update was posted. Never raises.
+    Returns True only when something was posted. Never raises.
     """
     incident_id = incident_data.get("incident_id")
     try:
@@ -201,22 +223,32 @@ def send_incidentio_incident_update(user_id: str, incident_data: Dict[str, Any])
 
         content = compose_note_markdown(root_cause, incident_id, impact, FRONTEND_URL)
 
+        # Claimed before the POST: /v1/alert_notes has no idempotency key, so for notes
+        # this claim is the only thing standing between a retry and a duplicate.
         if not _claims.claim(incident_id, user_id):
-            logger.info("%s Incident %s already has an update posted or in flight", _LOG, incident_id)
+            logger.info("%s Incident %s already has a post-back posted or in flight", _LOG, incident_id)
             return False
 
         try:
-            response = client.post_incident_update(
-                target, content, idempotency_key=f"aurora-rca-{incident_id}"
-            )
+            if target.is_alert_note:
+                response = client.post_alert_note(target.object_id, content)
+                posted_id = ((response or {}).get("alert_note") or {}).get("id") or "posted"
+            else:
+                response = client.post_incident_update(
+                    target.object_id, content, idempotency_key=f"aurora-rca-{incident_id}"
+                )
+                posted_id = ((response or {}).get("incident_update") or {}).get("id") or "posted"
         except IncidentioAPIError as e:
-            _handle_post_error(e, incident_id, user_id)
+            _handle_post_error(e, incident_id, user_id, is_alert_note=target.is_alert_note)
             return False
 
-        update_id = ((response or {}).get("incident_update") or {}).get("id") or "posted"
-        _claims.record(incident_id, user_id, update_id)
-        logger.info("%s Posted update %s on incident.io incident %s for %s", _LOG, update_id, target, incident_id)
+        _claims.record(incident_id, user_id, posted_id)
+        kind, where = ("note", "alert") if target.is_alert_note else ("update", "incident")
+        logger.info(
+            "%s Posted %s %s on incident.io %s %s for %s",
+            _LOG, kind, posted_id, where, target.object_id, incident_id,
+        )
         return True
     except Exception:
-        logger.exception("%s Failed to post update for incident %s", _LOG, incident_id)
+        logger.exception("%s Failed to post the RCA for incident %s", _LOG, incident_id)
         return False
