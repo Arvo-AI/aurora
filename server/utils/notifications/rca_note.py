@@ -29,7 +29,8 @@ _LIST_ITEM_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s")
 # root cause, impact & timeline) followed by "## Ruled Out" / "## Not Checked";
 # models render the paragraph labels as "## X", "**X**" or bare "X" lines, or not at all.
 _MD_HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.*)$")  # trailing " #" trimmed in code: keeps the match linear
-_BOLD_LINE_RE = re.compile(r"^(?:\*\*|__)([^*_.|]{1,80}?)(?:\*\*|__):?$")
+# Greedy on purpose: the class excludes * and _, so it cannot run into the closing delimiter (linear)
+_BOLD_LINE_RE = re.compile(r"^(?:\*\*|__)([^*_.|]{1,80})(?:\*\*|__):?$")
 _KNOWN_TITLE_RE = re.compile(
     r"^(?:summary|what happened|root cause|impact|timeline|incident report|ruled out|not checked|"
     r"suggested next steps|next steps|recommendations|action items|proposed actions|remediation steps)\b",
