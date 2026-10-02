@@ -63,6 +63,7 @@ def _model(class_name: str, module: str, **attrs):
     ("provider", "expected"),
     [
         ("openrouter", {"type": "function", "function": {"name": "trigger_rca"}}),
+        ("requesty", {"type": "function", "function": {"name": "trigger_rca"}}),
         ("openai", {"type": "function", "function": {"name": "trigger_rca"}}),
         ("anthropic", {"type": "tool", "name": "trigger_rca"}),
         ("google", "trigger_rca"),
