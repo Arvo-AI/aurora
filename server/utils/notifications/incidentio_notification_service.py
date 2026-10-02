@@ -24,7 +24,7 @@ does reach incident.io is a no-op there as well.
 import json
 import logging
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, NamedTuple, Optional, Tuple
 
 from routes.incidentio.incidentio_client import IncidentioAPIError, IncidentioClient
 from utils.auth.stateless_auth import set_rls_context
@@ -37,8 +37,10 @@ logger = logging.getLogger(__name__)
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 _LOG = "[IncidentioUpdate]"
-# An alert can stay attached to an incident nobody will read any more
+# incident.io status categories. An alert can stay attached to an incident nobody
+# will read any more; among the rest, prefer the one still being worked on.
 _CLOSED_CATEGORIES = frozenset(("declined", "merged", "canceled"))
+_OPEN_CATEGORY_ORDER = {"live": 0, "triage": 1, "paused": 2, "learning": 3, "closed": 4}
 
 _claims = PostbackClaim("incidentio_update_id", _LOG)
 
@@ -57,26 +59,38 @@ def _eligibility(incident_data: Dict[str, Any]) -> Tuple[bool, str, str, str]:
     return True, "", root_cause, impact
 
 
-def _source_event(source_alert_id: Any, user_id: str) -> Tuple[Optional[str], bool]:
-    """(incident.io object id, is_alert) from the webhook event that created the incident.
+class _Source(NamedTuple):
+    """What the DB knows about the Aurora incident's origin and its recurrence anchor."""
+    object_id: Optional[str]          # incident.io incident id (incident events) or alert id (alert events)
+    is_alert: bool
+    anchor_alert_id: Optional[str]    # the anchor's incident.io object id, when this is a recurrence
+    anchor_update_id: Optional[str]   # the anchor's claim: set once it posted or is posting
 
-    The stored id is the incident.io incident id for incident events and the
-    alert id for alert events; the event family is read off the stored payload
-    with the same parser the webhook uses.
+
+def _read_source(incident_data: Dict[str, Any], user_id: str) -> Optional[_Source]:
+    """One query: the webhook event this incident was created from, plus the anchor's
+    event and claim when the incident is a folded recurrence.
+
+    The stored id is the incident.io incident id for incident events and the alert
+    id for alert events; the event family is read off the stored payload with the
+    same parser the webhook uses.
     """
     from routes.incidentio.tasks import _extract_incident_fields
 
-    with db_pool.get_admin_connection() as conn:
-        with conn.cursor() as cursor:
-            if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG):
-                raise RuntimeError(f"cannot resolve org for user {user_id}")
-            cursor.execute(
-                "SELECT incident_id, payload FROM incidentio_alerts WHERE id = %s",
-                (source_alert_id,),
-            )
-            row = cursor.fetchone()
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+        if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG):
+            raise RuntimeError(f"cannot resolve org for user {user_id}")
+        cursor.execute(
+            "SELECT a.incident_id, a.payload, anc_a.incident_id, anc.incidentio_update_id "
+            "FROM incidentio_alerts a "
+            "LEFT JOIN incidents anc ON anc.id = %s "
+            "LEFT JOIN incidentio_alerts anc_a ON anc_a.id = anc.source_alert_id "
+            "WHERE a.id = %s",
+            (incident_data.get("recurrence_of"), incident_data["source_alert_id"]),
+        )
+        row = cursor.fetchone()
     if not row:
-        return None, False
+        return None
     payload = row[1]
     if isinstance(payload, str):
         try:
@@ -85,44 +99,46 @@ def _source_event(source_alert_id: Any, user_id: str) -> Tuple[Optional[str], bo
             payload = {}
     fields = _extract_incident_fields(payload if isinstance(payload, dict) else {})
     object_id = row[0] or fields.get("incident_id")
-    return (str(object_id) if object_id else None), bool(fields.get("is_alert"))
+    return _Source(
+        object_id=str(object_id) if object_id else None,
+        is_alert=bool(fields.get("is_alert")),
+        anchor_alert_id=str(row[2]) if row[2] else None,
+        anchor_update_id=row[3],
+    )
 
 
-def _target_incident(client: IncidentioClient, object_id: str, is_alert: bool) -> Tuple[Optional[str], str]:
+def _target_rank(incident: Dict[str, Any]) -> Tuple[int, int, str]:
+    """Sort key when an alert is attached to several open incidents: the one still being
+    worked on first (live, then triage, paused, learning, closed), oldest first within a
+    category. Deterministic, so the same alert always lands on the same incident."""
+    category = str(incident.get("status_category") or "")
+    rank = _OPEN_CATEGORY_ORDER.get(category, len(_OPEN_CATEGORY_ORDER))
+    external_id = incident.get("external_id")
+    return rank, (int(external_id) if isinstance(external_id, int) else 1 << 62), str(incident.get("id"))
+
+
+def _target_incident(client: IncidentioClient, source: _Source) -> Tuple[Optional[str], str]:
     """(incident.io incident id to post to, reason-when-none)."""
-    if not is_alert:
-        return object_id, ""
-    links = (client.list_incident_alerts(object_id) or {}).get("incident_alerts") or []
-    for link in links:
-        incident = link.get("incident") or {}
-        if incident.get("id") and incident.get("status_category") not in _CLOSED_CATEGORIES:
-            return str(incident["id"]), ""
-    return None, "alert is not attached to an open incident (escalation only)"
+    if not source.is_alert:
+        return source.object_id, ""
+    links = (client.list_incident_alerts(source.object_id) or {}).get("incident_alerts") or []
+    candidates = [
+        link["incident"] for link in links
+        if (link.get("incident") or {}).get("id")
+        and link["incident"].get("status_category") not in _CLOSED_CATEGORIES
+    ]
+    if not candidates:
+        return None, "alert is not attached to an open incident (escalation only)"
+    return str(min(candidates, key=_target_rank)["id"]), ""
 
 
-def _anchor_covers_target(
-    client: IncidentioClient, incident_data: Dict[str, Any], target: str, user_id: str
-) -> bool:
+def _anchor_covers_target(client: IncidentioClient, source: _Source, target: str) -> bool:
     """True when this alert-triggered recurrence's anchor already posted (or is posting)
     to the same incident.io incident, i.e. the anchor's alert is attached to it too."""
-    anchor_id = incident_data.get("recurrence_of")
-    if not anchor_id:
+    if not source.anchor_alert_id or not source.anchor_update_id:
         return False
-    with db_pool.get_admin_connection() as conn:
-        with conn.cursor() as cursor:
-            if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG):
-                raise RuntimeError(f"cannot resolve org for user {user_id}")
-            cursor.execute(
-                "SELECT a.incident_id, i.incidentio_update_id FROM incidents i "
-                "JOIN incidentio_alerts a ON a.id = i.source_alert_id WHERE i.id = %s",
-                (anchor_id,),
-            )
-            row = cursor.fetchone()
-    if not row or not row[0] or not row[1]:
-        return False
-    anchor_alert_id = str(row[0])
     links = (client.list_incident_alerts(incident_id=target) or {}).get("incident_alerts") or []
-    return any(str((link.get("alert") or {}).get("id")) == anchor_alert_id for link in links)
+    return any(str((link.get("alert") or {}).get("id")) == source.anchor_alert_id for link in links)
 
 
 def _handle_post_error(e: IncidentioAPIError, incident_id: str, user_id: str) -> None:
@@ -148,16 +164,16 @@ def _handle_post_error(e: IncidentioAPIError, incident_id: str, user_id: str) ->
 
 def _resolve_target(client: IncidentioClient, incident_data: Dict[str, Any], user_id: str) -> Tuple[Optional[str], str]:
     """(incident.io incident id to post to, reason-when-none) for this Aurora incident."""
-    object_id, is_alert = _source_event(incident_data["source_alert_id"], user_id)
-    if not object_id:
+    source = _read_source(incident_data, user_id)
+    if not source or not source.object_id:
         return None, "source event has no incident.io id"
     try:
-        target, reason = _target_incident(client, object_id, is_alert)
-        if target and is_alert and _anchor_covers_target(client, incident_data, target, user_id):
+        target, reason = _target_incident(client, source)
+        if target and source.is_alert and _anchor_covers_target(client, source, target):
             return None, "an earlier alert of this recurrence group already posted to that incident"
         return target, reason
     except IncidentioAPIError as e:
-        return None, f"could not resolve the incident for alert {object_id}: {e.code}"
+        return None, f"could not resolve the incident for alert {source.object_id}: {e.code}"
 
 
 def send_incidentio_incident_update(user_id: str, incident_data: Dict[str, Any]) -> bool:

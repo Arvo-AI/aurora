@@ -68,13 +68,13 @@ def _get_org_severity_ranks(user_id: str) -> Dict[str, int]:
         logger.debug("[INCIDENTIO] Severity-rank cache read failed", exc_info=True)
 
     # Cache miss (or no Redis) — fetch the org's alert priorities from the API.
-    from routes.incidentio.incidentio_routes import IncidentioAPIError
+    from routes.incidentio.incidentio_client import IncidentioAPIError
 
     ranks: Dict[str, int] = {}
     denied = False
     try:
         from utils.auth.token_management import get_token_data
-        from routes.incidentio.incidentio_routes import IncidentioClient
+        from routes.incidentio.incidentio_client import IncidentioClient
 
         creds = get_token_data(user_id, "incidentio")
         if not creds or not creds.get("api_key"):

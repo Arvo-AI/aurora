@@ -48,13 +48,13 @@ class PostbackClaim:
         self._log = log_prefix
 
     def _update(self, user_id: str, sql: str, params: tuple) -> int:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                if not set_rls_context(cursor, conn, user_id, log_prefix=self._log):
-                    # Without RLS vars the UPDATE silently matches 0 rows
-                    raise RuntimeError(f"cannot resolve org for user {user_id}")
-                cursor.execute(sql, params)
-                rowcount = cursor.rowcount
+        """Run one UPDATE under the user's RLS context; returns the row count."""
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            if not set_rls_context(cursor, conn, user_id, log_prefix=self._log):
+                # Without RLS vars the UPDATE silently matches 0 rows
+                raise RuntimeError(f"cannot resolve org for user {user_id}")
+            cursor.execute(sql, params)
+            rowcount = cursor.rowcount
             conn.commit()
         return rowcount
 
@@ -82,6 +82,7 @@ class PostbackClaim:
             logger.exception("%s Failed to release claim on incident %s", self._log, incident_id)
 
     def record(self, incident_id: str, user_id: str, remote_id: str) -> None:
+        """Replace the 'pending' marker with the id the remote side returned."""
         try:
             self._update(
                 user_id,

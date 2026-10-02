@@ -60,8 +60,8 @@ def wired(monkeypatch, patched_db):
     monkeypatch.setattr(svc, "IncidentioClient", fake_client)
     monkeypatch.setattr(svc, "get_token_data", lambda user_id, provider: {"api_key": "key-1"})
     monkeypatch.setattr(svc, "FRONTEND_URL", "http://localhost:3000")
-    # incidentio_alerts row the incident was created from: (incident_id, payload)
-    patched_db.cursor.fetchone.return_value = ("inc_1", INCIDENT_EVENT)
+    # source row: (incident.io object id, payload, anchor object id, anchor update id)
+    patched_db.cursor.fetchone.return_value = ("inc_1", INCIDENT_EVENT, None, None)
     return SimpleNamespace(pool=patched_db, client=client, built=built)
 
 
@@ -82,17 +82,46 @@ def test_post_incident_update_sends_idempotency_key(monkeypatch):
     assert calls == [("POST", "/incident_updates", {"json": {"incident_id": "inc_1", "message": "hello", "idempotency_key": "aurora-rca-i1"}})]
 
 
+def _page(links, after=None):
+    response = MagicMock()
+    response.json.return_value = {"incident_alerts": links, "pagination_meta": {"after": after, "page_size": 50}}
+    return response
+
+
 def test_list_incident_alerts_filters_by_alert(monkeypatch):
     client = IncidentioClient("k")
     calls = []
 
     def fake_request(method, path, **kwargs):
         calls.append((method, path, kwargs))
-        return MagicMock()
+        return _page([{"id": "link_1"}], after="cursor-1")  # short page: no second request
 
     monkeypatch.setattr(client, "_request", fake_request)
-    client.list_incident_alerts("alert_1")
+    assert client.list_incident_alerts("alert_1") == {"incident_alerts": [{"id": "link_1"}]}
     assert calls == [("GET", "/incident_alerts", {"params": {"alert_id": "alert_1", "page_size": 50}})]
+
+
+def test_list_incident_alerts_pages_through_a_full_incident(monkeypatch):
+    # an incident with >50 attached alerts: the anchor's alert may sit on page 2
+    client = IncidentioClient("k")
+    pages = [
+        _page([{"alert": {"id": f"alert_{i}"}} for i in range(50)], after="c1"),
+        _page([{"alert": {"id": "alert_50"}}, {"alert": {"id": "anchor"}}], after="c2"),
+    ]
+    calls = []
+
+    def fake_request(method, path, **kwargs):
+        calls.append(kwargs["params"])
+        return pages.pop(0)
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    links = client.list_incident_alerts(incident_id="inc_9")["incident_alerts"]
+    assert len(links) == 52
+    assert links[-1]["alert"]["id"] == "anchor"
+    assert calls == [
+        {"page_size": 50, "incident_id": "inc_9"},
+        {"page_size": 50, "incident_id": "inc_9", "after": "c1"},
+    ]
 
 
 def test_list_incident_alerts_by_incident(monkeypatch):
@@ -101,7 +130,7 @@ def test_list_incident_alerts_by_incident(monkeypatch):
 
     def fake_request(method, path, **kwargs):
         calls.append((method, path, kwargs))
-        return MagicMock()
+        return _page([])
 
     monkeypatch.setattr(client, "_request", fake_request)
     client.list_incident_alerts(incident_id="inc_9")
@@ -133,8 +162,9 @@ def test_timeout_has_no_status_code(monkeypatch):
         raise requests.exceptions.Timeout()
 
     monkeypatch.setattr("routes.incidentio.incidentio_client.requests.request", fake_request)
+    client = IncidentioClient("k")
     with pytest.raises(IncidentioAPIError) as exc:
-        IncidentioClient("k").get_incident("inc_1")
+        client.get_incident("inc_1")
     assert exc.value.status_code is None
     assert exc.value.code == IncidentioAPIError.TIMEOUT
 
@@ -166,9 +196,11 @@ def test_markdown_note_neutralises_asterisks_but_keeps_identifiers():
 
     body = "handler.py keeps a global _connection_pool; p95*2 nodes and 3*4 workers hit MAX_POOL_BROKEN."
     note = compose_note_markdown(body, "i1")
-    assert "p95*2" not in note and "3*4" not in note
+    assert "p95*2" not in note
+    assert "3*4" not in note
     assert "p95\u22172 nodes and 3\u22174 workers" in note
-    assert "_connection_pool" in note and "MAX_POOL_BROKEN" in note
+    assert "_connection_pool" in note
+    assert "MAX_POOL_BROKEN" in note
     assert "\\" not in note  # incident.io shows backslash escapes literally
 
 
@@ -209,16 +241,31 @@ def test_incident_event_posts_to_that_incident(wired):
     assert wired.built == ["key-1"]
 
 
-def test_source_event_is_read_by_the_incident_source_alert_id(wired):
-    svc.send_incidentio_incident_update("u1", _anchor(source_alert_id=42))
-    sql, params = wired.pool.executes[0]
-    assert sql == "SELECT incident_id, payload FROM incidentio_alerts WHERE id = %s"
-    assert params == (42,)
+def test_source_and_anchor_are_read_in_one_query(wired):
+    svc.send_incidentio_incident_update("u1", _anchor(source_alert_id=42, recurrence_of="root-1"))
+    reads = [(sql, params) for sql, params in wired.pool.executes if sql.startswith("SELECT")]
+    assert len(reads) == 1
+    sql, params = reads[0]
+    assert sql.startswith("SELECT a.incident_id, a.payload, anc_a.incident_id, anc.incidentio_update_id FROM incidentio_alerts a")
+    assert "LEFT JOIN incidents anc ON anc.id = %s" in sql
+    assert params == ("root-1", 42)
+
+
+def test_alert_on_several_open_incidents_picks_the_live_one_then_the_oldest(wired):
+    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT, None, None)
+    wired.client.list_incident_alerts.return_value = _attached(
+        {"id": "inc_closed", "status_category": "closed", "external_id": 1},
+        {"id": "inc_live_new", "status_category": "live", "external_id": 40},
+        {"id": "inc_live_old", "status_category": "live", "external_id": 12},
+        {"id": "inc_triage", "status_category": "triage", "external_id": 3},
+    )
+    assert svc.send_incidentio_incident_update("u1", _anchor()) is True
+    assert wired.client.post_incident_update.call_args.args[0] == "inc_live_old"
 
 
 def test_alert_event_posts_to_the_incident_it_is_attached_to(wired):
-    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT)
-    wired.client.list_incident_alerts.return_value = _attached({"id": "inc_9", "status_category": "active"})
+    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT, None, None)
+    wired.client.list_incident_alerts.return_value = _attached({"id": "inc_9", "status_category": "live"})
     assert svc.send_incidentio_incident_update("u1", _anchor()) is True
     wired.client.list_incident_alerts.assert_called_once_with("alert_1")
     assert wired.client.post_incident_update.call_args.args[0] == "inc_9"
@@ -226,18 +273,18 @@ def test_alert_event_posts_to_the_incident_it_is_attached_to(wired):
 
 
 def test_alert_event_stored_as_json_text_is_still_recognised(wired):
-    wired.pool.cursor.fetchone.return_value = ("alert_1", json.dumps(ALERT_EVENT))
+    wired.pool.cursor.fetchone.return_value = ("alert_1", json.dumps(ALERT_EVENT), None, None)
     wired.client.list_incident_alerts.return_value = _attached({"id": "inc_9", "status_category": "triage"})
     assert svc.send_incidentio_incident_update("u1", _anchor()) is True
     wired.client.list_incident_alerts.assert_called_once_with("alert_1")
 
 
 def test_alert_skips_incidents_nobody_reads_any_more(wired):
-    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT)
+    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT, None, None)
     wired.client.list_incident_alerts.return_value = _attached(
         {"id": "inc_old", "status_category": "merged"},
         {"id": "inc_dup", "status_category": "declined"},
-        {"id": "inc_live", "status_category": "active"},
+        {"id": "inc_live", "status_category": "live"},
     )
     assert svc.send_incidentio_incident_update("u1", _anchor()) is True
     assert wired.client.post_incident_update.call_args.args[0] == "inc_live"
@@ -258,10 +305,10 @@ def _links_by(alert_filter, incident_filter):
 
 
 def test_alert_recurrence_skips_when_anchor_alert_is_on_the_same_incident(wired):
-    # source event of this recurrence, then the anchor's (alert id, update id)
-    wired.pool.cursor.fetchone.side_effect = [("alert_2", ALERT_EVENT), ("alert_1", "upd_0")]
+    # this recurrence's alert, and its anchor's alert which already posted
+    wired.pool.cursor.fetchone.return_value = ("alert_2", ALERT_EVENT, "alert_1", "upd_0")
     wired.client.list_incident_alerts.side_effect = _links_by(
-        [{"id": "inc_9", "status_category": "active"}],
+        [{"id": "inc_9", "status_category": "live"}],
         [{"alert": {"id": "alert_1"}}, {"alert": {"id": "alert_2"}}],
     )
     assert svc.send_incidentio_incident_update("u1", _anchor(recurrence_of="root-1")) is False
@@ -271,9 +318,9 @@ def test_alert_recurrence_skips_when_anchor_alert_is_on_the_same_incident(wired)
 
 
 def test_alert_recurrence_posts_when_anchor_is_on_another_incident(wired):
-    wired.pool.cursor.fetchone.side_effect = [("alert_2", ALERT_EVENT), ("alert_1", "upd_0")]
+    wired.pool.cursor.fetchone.return_value = ("alert_2", ALERT_EVENT, "alert_1", "upd_0")
     wired.client.list_incident_alerts.side_effect = _links_by(
-        [{"id": "inc_9", "status_category": "active"}],
+        [{"id": "inc_9", "status_category": "live"}],
         [{"alert": {"id": "alert_2"}}, {"alert": {"id": "alert_7"}}],
     )
     assert svc.send_incidentio_incident_update("u1", _anchor(recurrence_of="root-1")) is True
@@ -281,22 +328,22 @@ def test_alert_recurrence_posts_when_anchor_is_on_another_incident(wired):
 
 
 def test_alert_recurrence_posts_when_anchor_never_posted(wired):
-    wired.pool.cursor.fetchone.side_effect = [("alert_2", ALERT_EVENT), ("alert_1", None)]
-    wired.client.list_incident_alerts.side_effect = _links_by([{"id": "inc_9", "status_category": "active"}], [])
+    wired.pool.cursor.fetchone.return_value = ("alert_2", ALERT_EVENT, "alert_1", None)
+    wired.client.list_incident_alerts.side_effect = _links_by([{"id": "inc_9", "status_category": "live"}], [])
     assert svc.send_incidentio_incident_update("u1", _anchor(recurrence_of="root-1")) is True
     # no need to ask incident.io which alerts are attached when the anchor posted nothing
     assert all(c.kwargs.get("incident_id") is None for c in wired.client.list_incident_alerts.call_args_list)
 
 
 def test_alert_without_an_incident_posts_nothing_and_claims_nothing(wired):
-    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT)
+    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT, None, None)
     assert svc.send_incidentio_incident_update("u1", _anchor()) is False
     assert wired.pool.updates == []
     wired.client.post_incident_update.assert_not_called()
 
 
 def test_alert_lookup_failure_posts_nothing_and_claims_nothing(wired):
-    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT)
+    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT, None, None)
     wired.client.list_incident_alerts.side_effect = IncidentioAPIError(IncidentioAPIError.API_ERROR, 500)
     assert svc.send_incidentio_incident_update("u1", _anchor()) is False
     assert wired.pool.updates == []

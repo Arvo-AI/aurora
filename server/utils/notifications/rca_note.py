@@ -28,7 +28,7 @@ _LIST_ITEM_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s")
 # Section headings. The summarizer is asked for three paragraphs (what happened,
 # root cause, impact & timeline) followed by "## Ruled Out" / "## Not Checked";
 # models render the paragraph labels as "## X", "**X**" or bare "X" lines, or not at all.
-_MD_HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t#]*$")
+_MD_HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.*)$")  # trailing " #" trimmed in code: keeps the match linear
 _BOLD_LINE_RE = re.compile(r"^(?:\*\*|__)([^*_.|]{1,80}?)(?:\*\*|__):?$")
 _KNOWN_TITLE_RE = re.compile(
     r"^(?:summary|what happened|root cause|impact|timeline|incident report|ruled out|not checked|"
@@ -85,7 +85,7 @@ def heading_text(line: str) -> Optional[str]:
     """Lower-case title if the line is a section heading ("## X", "**X**", or a bare known title)."""
     m = _MD_HEADING_RE.match(line)
     if m:
-        return m.group(1).strip("*_ :").lower()
+        return m.group(1).rstrip(" \t#").strip("*_ :").lower()
     m = _BOLD_LINE_RE.match(line)
     if m:
         return m.group(1).strip(" :").lower()
@@ -131,35 +131,48 @@ def sections(summary: str) -> list:
     return [(heading, paragraphs) for heading, paragraphs in sections]
 
 
-def extract_note_body(summary: Optional[str]) -> Tuple[str, str]:
-    """(root cause, impact) paragraphs as plain text; impact may be "".
-
-    Headed reports are read by section title. Unheaded ones fall back to the
-    summarizer's paragraph order: the root-cause paragraph is the one opening
-    with its prescribed phrase (else the 2nd), and impact is the paragraph
-    after it. Nothing after "Ruled Out" / "Not Checked" / next-steps is used.
-    """
+def _headed_parts(summary: str) -> Tuple[Optional[str], Optional[str], list]:
+    """(root cause, impact, other prose paragraphs) read by section title; stops at
+    "Ruled Out" / "Not Checked" / next-steps."""
     root: Optional[str] = None
     impact: Optional[str] = None
     narrative: list = []
-    for heading, paragraphs in sections(summary or ""):
+    for heading, paragraphs in sections(summary):
         if _END_SECTION_RE.match(heading):
             break
+        first = paragraphs[0] if paragraphs else None
         if root is None and _ROOT_HEADING_RE.search(heading):
-            root = paragraphs[0] if paragraphs else None
+            root = first
         elif impact is None and _IMPACT_HEADING_RE.search(heading):
-            impact = paragraphs[0] if paragraphs else None
+            impact = first
         else:
             narrative.extend(paragraphs)
+    return root, impact, narrative
 
-    if root is None and narrative:
-        index = next((i for i, p in enumerate(narrative) if _ROOT_CAUSE_RE.match(p)), None)
-        if index is None:
-            index = 1 if len(narrative) >= 2 else 0
-        root = narrative[index]
-        if impact is None and index + 1 < len(narrative):
-            impact = narrative[index + 1]
 
+def _root_from_narrative(narrative: list) -> Tuple[Optional[str], Optional[str]]:
+    """Unheaded report: the root-cause paragraph is the one opening with the
+    summarizer's prescribed phrase (else the 2nd), impact the paragraph after it."""
+    if not narrative:
+        return None, None
+    index = next((i for i, p in enumerate(narrative) if _ROOT_CAUSE_RE.match(p)), None)
+    if index is None:
+        index = 1 if len(narrative) >= 2 else 0
+    impact = narrative[index + 1] if index + 1 < len(narrative) else None
+    return narrative[index], impact
+
+
+def extract_note_body(summary: Optional[str]) -> Tuple[str, str]:
+    """(root cause, impact) paragraphs as plain text; impact may be "".
+
+    Headed reports are read by section title; unheaded ones fall back to the
+    summarizer's paragraph order. Nothing after "Ruled Out" / "Not Checked" /
+    next-steps is used.
+    """
+    root, impact, narrative = _headed_parts(summary or "")
+    if root is None:
+        root, fallback_impact = _root_from_narrative(narrative)
+        impact = impact if impact is not None else fallback_impact
     # Identification above relies on the opening phrase; only now drop an inline label.
     root = _INLINE_LABEL_RE.sub("", root or "")
     impact = _INLINE_LABEL_RE.sub("", impact or "")
@@ -167,6 +180,7 @@ def extract_note_body(summary: Optional[str]) -> Tuple[str, str]:
 
 
 def _note_sections(root_cause: str, impact: str) -> list:
+    """[(label, paragraph)] in note order; impact only when the report had one."""
     sections = [("Root cause", root_cause)]
     if impact:
         sections.append(("Impact", impact))
@@ -174,6 +188,7 @@ def _note_sections(root_cause: str, impact: str) -> list:
 
 
 def _investigation_url(incident_id: str, base_url: Optional[str]) -> str:
+    """Link to the incident page, or "" when no frontend URL is configured."""
     base_url = (base_url or "").rstrip("/")
     return f"{base_url}/incidents/{incident_id}" if base_url else ""
 
@@ -197,6 +212,7 @@ _MD_INERT_STAR = "\u2217"
 
 
 def _markdown_safe(text: str) -> str:
+    """Body text that cannot open markdown emphasis."""
     return text.replace("*", _MD_INERT_STAR)
 
 

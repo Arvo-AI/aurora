@@ -8,6 +8,9 @@ import requests
 
 INCIDENTIO_API_BASE = "https://api.incident.io/v2"
 INCIDENTIO_TIMEOUT = 15
+# incident_alerts paging: 50 is the API maximum; 20 pages = 1000 links per lookup
+_PAGE_SIZE = 50
+_MAX_PAGES = 20
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,7 @@ class IncidentioClient:
 
     @property
     def headers(self) -> Dict[str, str]:
+        """Bearer auth + JSON headers for every request."""
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -54,6 +58,7 @@ class IncidentioClient:
         }
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
+        """One API call; network and HTTP failures surface as IncidentioAPIError."""
         url = f"{INCIDENTIO_API_BASE}{path}"
         try:
             response = requests.request(
@@ -75,12 +80,15 @@ class IncidentioClient:
             raise IncidentioAPIError(IncidentioAPIError.API_ERROR, status)
 
     def list_incidents(self, page_size: int = 5) -> Dict[str, Any]:
+        """First page of the org's incidents (used to validate a key on connect)."""
         return self._request("GET", "/incidents", params={"page_size": page_size}).json()
 
     def get_incident(self, incident_id: str) -> Dict[str, Any]:
+        """One incident by id."""
         return self._request("GET", f"/incidents/{incident_id}").json()
 
     def get_incident_updates(self, incident_id: str) -> Dict[str, Any]:
+        """Timeline updates of one incident."""
         return self._request("GET", "/incident_updates", params={"incident_id": incident_id}).json()
 
     def post_incident_update(
@@ -97,16 +105,66 @@ class IncidentioClient:
     def list_incident_alerts(
         self, alert_id: Optional[str] = None, *, incident_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Alert <-> incident links: by alert (incidents it is attached to; empty when
-        it only escalated) or by incident (alerts attached to it)."""
+        """All alert <-> incident links, by alert (incidents it is attached to; empty
+        when it only escalated) or by incident (alerts attached to it).
+
+        Pages through the API (50 per page, the maximum) so an incident with many
+        attached alerts still returns every link; capped at _MAX_PAGES pages.
+        """
         if not alert_id and not incident_id:
             raise ValueError("alert_id or incident_id is required")
-        params: Dict[str, Any] = {"page_size": 50}
+        base: Dict[str, Any] = {"page_size": _PAGE_SIZE}
         if alert_id:
-            params["alert_id"] = alert_id
+            base["alert_id"] = alert_id
         if incident_id:
-            params["incident_id"] = incident_id
-        return self._request("GET", "/incident_alerts", params=params).json()
+            base["incident_id"] = incident_id
+        links: list = []
+        after = None
+        for _ in range(_MAX_PAGES):
+            params = dict(base, after=after) if after else dict(base)
+            page = self._request("GET", "/incident_alerts", params=params).json() or {}
+            batch = page.get("incident_alerts") or []
+            links.extend(batch)
+            after = (page.get("pagination_meta") or {}).get("after")
+            # incident.io returns `after` even on the final page: stop on a short page
+            if len(batch) < _PAGE_SIZE or not after:
+                break
+        return {"incident_alerts": links}
+
+    def _paged(self, path: str, key: str, params: Dict[str, Any]) -> list:
+        """All items of a paginated catalog endpoint (page_size 250, capped at 20 pages)."""
+        items: list = []
+        after = None
+        for _ in range(20):  # hard cap: 20 pages x 250 = 5000 items
+            page_params = dict(params, page_size=250)
+            if after:
+                page_params["after"] = after
+            page = self._request("GET", path, params=page_params).json()
+            batch = page.get(key, []) or []
+            items.extend(batch)
+            after = (page.get("pagination_meta") or {}).get("after")
+            # incident.io returns `after` even on the final page, so stop when a
+            # page came back short (fewer than page_size) or empty.
+            if len(batch) < 250 or not after:
+                break
+        return items
+
+    def _alert_priority_type_id(self) -> Optional[str]:
+        """Id of the org-specific "AlertPriority" catalog type, paging until found."""
+        after = None
+        for _ in range(20):
+            params: Dict[str, Any] = {"page_size": 250}
+            if after:
+                params["after"] = after
+            types = self._request("GET", "/catalog_types", params=params).json()
+            batch = types.get("catalog_types", []) or []
+            type_id = next((t.get("id") for t in batch if t.get("type_name") == "AlertPriority"), None)
+            if type_id:
+                return type_id
+            after = (types.get("pagination_meta") or {}).get("after")
+            if len(batch) < 250 or not after:
+                return None
+        return None
 
     def list_alert_priorities(self) -> Dict[str, Any]:
         """Fetch the org's *alert priorities* as {name, rank} entries.
@@ -119,50 +177,11 @@ class IncidentioClient:
         Returns {"severities": [{"name": str, "rank": int}, ...]} to match the
         shape the caller expects. Raises IncidentioAPIError on API failure.
         """
-        # Find the AlertPriority catalog type — its id is org-specific. Orgs
-        # with many catalog types paginate, so page through until we find it
-        # rather than reading only the first page (else priority filtering is
-        # silently disabled for orgs where AlertPriority isn't on page 1).
-        type_id = None
-        after = None
-        for _ in range(20):  # hard cap: 20 pages × 250 = 5000 types
-            params: Dict[str, Any] = {"page_size": 250}
-            if after:
-                params["after"] = after
-            types = self._request("GET", "/catalog_types", params=params).json()
-            batch = types.get("catalog_types", []) or []
-            type_id = next(
-                (t.get("id") for t in batch if t.get("type_name") == "AlertPriority"),
-                None,
-            )
-            if type_id:
-                break
-            after = (types.get("pagination_meta") or {}).get("after")
-            # incident.io returns `after` even on the final page, so stop when a
-            # page came back short (fewer than page_size) or empty.
-            if len(batch) < 250 or not after:
-                break
-
-        # Org has no alert-priority catalog configured — nothing to rank by.
+        type_id = self._alert_priority_type_id()
         if not type_id:
+            # Org has no alert-priority catalog configured: nothing to rank by.
             return {"severities": []}
-
-        # Page through the catalog entries (page_size is required by the API).
-        entries: list = []
-        after = None
-        for _ in range(20):  # hard cap: 20 pages × 250 = 5000 entries
-            params: Dict[str, Any] = {"catalog_type_id": type_id, "page_size": 250}
-            if after:
-                params["after"] = after
-            page = self._request("GET", "/catalog_entries", params=params).json()
-            batch = page.get("catalog_entries", []) or []
-            entries.extend(batch)
-            after = (page.get("pagination_meta") or {}).get("after")
-            # incident.io returns `after` even on the final page, so stop when a
-            # page came back short (fewer than page_size) or empty.
-            if len(batch) < 250 or not after:
-                break
-
+        entries = self._paged("/catalog_entries", "catalog_entries", {"catalog_type_id": type_id})
         severities = [
             {"name": e.get("name"), "rank": e.get("rank")}
             for e in entries

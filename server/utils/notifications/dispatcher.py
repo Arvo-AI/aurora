@@ -492,9 +492,10 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
             except Exception:
                 logger.exception("[Dispatcher] PagerDuty note failed")
 
-        # --- incident.io update --- (completion only, anchors only, once; the
-        # post-back toggle is the one on the incident.io connector page, stored
-        # org-wide with the other incident.io RCA settings)
+        # --- incident.io update --- (completion only, once per incident; recurrences
+        # post too since each is a distinct incident.io incident. The post-back
+        # toggle is the one on the incident.io connector page, stored org-wide
+        # with the other incident.io RCA settings)
         if (not refresh_only and incident_data.get('source_type') == 'incidentio'
                 and bool(get_user_preference(user_id, 'incidentio_postback_enabled', default=False))):
             try:
