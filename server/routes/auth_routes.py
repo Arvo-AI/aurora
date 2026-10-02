@@ -30,6 +30,12 @@ RESEND_COOLDOWN_MINUTES = 1
 PASSWORD_RESET_CODE_EXPIRY_MINUTES = 15
 PASSWORD_RESET_MAX_ATTEMPTS = 5
 PASSWORD_RESET_RESEND_COOLDOWN_MINUTES = 1
+# How long an expired code keeps its guess count alive. Issuing a new code does
+# NOT hand out a fresh batch of guesses: otherwise the 5-guess cap is only
+# per-code, and anyone who can request codes (20/hour) gets ~100 guesses/hour
+# with no cumulative ceiling. The budget lapses only after the account has been
+# quiet this long, so a legitimate user who burns their guesses isn't stuck.
+PASSWORD_RESET_ATTEMPT_BUDGET_LAPSE_MINUTES = 45
 _SERVER_ERROR = "Server error"
 
 # Returned for every /forgot-password outcome — found, not found, or send
@@ -188,13 +194,25 @@ def send_password_reset_email(user_id: str, email: str) -> bool:
 
     code, code_hash = _generate_code()
     expires = datetime.now() + timedelta(minutes=PASSWORD_RESET_CODE_EXPIRY_MINUTES)
+    # Past this point the previous code has been dead long enough that the
+    # account counts as quiet and earns a fresh guess budget.
+    budget_lapsed_before = datetime.now() - timedelta(
+        minutes=PASSWORD_RESET_ATTEMPT_BUDGET_LAPSE_MINUTES
+    )
 
     with db_pool.get_admin_connection() as c, c.cursor() as cur:
+        # Attempts carry over in the same statement that issues the code, so a
+        # reissue can't be raced against a guess to clear the counter.
         cur.execute(
             "UPDATE users SET password_reset_code = %s, "
-            "password_reset_code_expires_at = %s, password_reset_attempts = 0 "
+            "password_reset_code_expires_at = %s, "
+            "password_reset_attempts = CASE "
+            "  WHEN password_reset_code_expires_at IS NULL "
+            "    OR password_reset_code_expires_at < %s THEN 0 "
+            "  ELSE COALESCE(password_reset_attempts, 0) "
+            "END "
             "WHERE id = %s",
-            (code_hash, expires, user_id),
+            (code_hash, expires, budget_lapsed_before, user_id),
         )
         c.commit()
 
@@ -884,8 +902,10 @@ def _verify_reset_code(conn, cursor, user_id: str, code: str):
         return jsonify({"error": _RESET_CODE_INVALID}), 400
 
     # Checked before the comparison, so guessing right on attempt 6 still fails.
+    # Requesting a new code no longer clears this, so the message must not tell
+    # the user to do that — the budget only lapses once the account goes quiet.
     if attempts >= PASSWORD_RESET_MAX_ATTEMPTS:
-        return jsonify({"error": "Too many attempts. Please request a new code."}), 429
+        return jsonify({"error": "Too many attempts. Please try again later."}), 429
 
     if expires_at and datetime.now() > expires_at:
         return jsonify({"error": _RESET_CODE_INVALID}), 400

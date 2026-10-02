@@ -611,7 +611,7 @@ function AuthPage() {
                 resetSent={resetSent}
                 resetComplete={resetComplete}
                 isSubmitting={isResetSubmitting}
-                resendDisabled={isResendingReset || resendCooldown > 0 || resetComplete}
+                resendDisabled={isResendingReset || isResetSubmitting || resendCooldown > 0 || resetComplete}
                 resendLabel={resendLabel}
                 error={error}
                 notice={notice}

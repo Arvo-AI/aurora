@@ -73,6 +73,23 @@ class _FakeCursor:
             prev = self.reset_state[uid]
             self.reset_state[uid] = (prev[0], prev[1], prev[2] + 1)
             self._result = []
+        # Issuance: new code + expiry. Mirrors the real UPDATE, which carries
+        # attempts over unless the previous code lapsed outside the budget
+        # window. Both SQL shapes are honoured so a regression to the old
+        # unconditional `= 0` fails on the attempt count, not on unpacking.
+        elif "SET password_reset_code = %s" in normalized:
+            code_hash, expires, uid = params[0], params[1], params[-1]
+            prev = self.reset_state.get(uid)
+            spent = prev[2] if prev else 0
+            prev_expiry = prev[1] if prev else None
+            carries_over = "password_reset_attempts = CASE" in normalized
+            if not carries_over or prev_expiry is None:
+                carried = 0
+            else:
+                lapsed_before = params[2]
+                carried = 0 if prev_expiry < lapsed_before else spent
+            self.reset_state[uid] = (code_hash, expires, carried)
+            self._result = []
         # Success path: new password written, code burned.
         elif "SET password_hash = %s" in normalized:
             uid = params[-1]
@@ -573,6 +590,63 @@ class TestCodeEmails:
             label = "Enter this verification code in Aurora:"
         assert label in body["text"]
         assert label in body["html"]
+
+
+class TestAttemptBudgetSurvivesReissue:
+    """The 5-guess cap has to be per account, not per code.
+
+    Reissuing used to zero password_reset_attempts, so an attacker who can
+    request codes (20/hour) got a fresh 5 guesses each time — ~100/hour, with no
+    cumulative ceiling. The budget now carries across reissues and lapses only
+    once the account has been quiet.
+    """
+
+    def test_reissue_keeps_the_attempts_already_spent(self, reset_env):
+        client, cursor, email_svc = reset_env
+        # 4 guesses burned, and the code is old enough to be reissued but well
+        # inside the budget window.
+        _issue_code(cursor, expires_in_min=13, attempts=4)
+        _forgot(client, _EMAIL)
+        email_svc.send_password_reset_email.assert_called_once()
+        assert cursor.reset_state[_UID][2] == 4
+
+    def test_reissue_cannot_buy_a_sixth_guess(self, reset_env):
+        client, cursor, email_svc = reset_env
+        _issue_code(cursor, expires_in_min=13, attempts=5)
+        _forgot(client, _EMAIL)
+        # A new code was mailed, but the spent budget came with it.
+        new_code = email_svc.send_password_reset_email.call_args.args[1]
+        status, body = _reset(client, _EMAIL, new_code)
+        assert status == 429
+        assert "Too many attempts" in body["error"]
+        assert cursor.sql_for("SET password_hash = %s") is None
+
+    def test_429_does_not_tell_the_user_to_request_a_new_code(self, reset_env):
+        # Requesting one no longer clears the counter, so advising it would
+        # just send the user in a loop.
+        client, cursor, _svc = reset_env
+        _issue_code(cursor, attempts=5)
+        _status, body = _reset(client, _EMAIL, "123456")
+        assert "new code" not in body["error"].lower()
+
+    def test_budget_lapses_once_the_account_goes_quiet(self, reset_env):
+        # Code expired longer ago than the lapse window — a legitimate user who
+        # burned their guesses must not be locked out forever.
+        from routes import auth_routes
+
+        client, cursor, email_svc = reset_env
+        _issue_code(
+            cursor,
+            expires_in_min=-(auth_routes.PASSWORD_RESET_ATTEMPT_BUDGET_LAPSE_MINUTES + 5),
+            attempts=5,
+        )
+        _forgot(client, _EMAIL)
+        email_svc.send_password_reset_email.assert_called_once()
+        assert cursor.reset_state[_UID][2] == 0
+
+        new_code = email_svc.send_password_reset_email.call_args.args[1]
+        status, _body = _reset(client, _EMAIL, new_code)
+        assert status == 200
 
 
 class TestPerAccountCooldown:
