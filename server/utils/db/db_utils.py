@@ -3486,6 +3486,7 @@ def initialize_tables():
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_code VARCHAR(64);
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_code_expires_at TIMESTAMP;
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_attempts INTEGER DEFAULT 0;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_attempts_at TIMESTAMP;
                 """)
                 conn.commit()
                 logging.info("Ensured password reset columns exist on users table.")

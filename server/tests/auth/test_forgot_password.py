@@ -67,33 +67,35 @@ class _FakeCursor:
         elif "SELECT password_reset_code" in normalized:
             self._result = [self.reset_state.get(params[-1])]
             self._result = [r for r in self._result if r is not None]
-        # Wrong-code path: bump the attempt counter.
-        elif "password_reset_attempts = COALESCE" in normalized:
-            uid = params[-1]
+        # Wrong-code path: record the guess and when it happened.
+        elif "SET password_reset_attempts = %s" in normalized:
+            attempts, attempts_at, uid = params
             prev = self.reset_state[uid]
-            self.reset_state[uid] = (prev[0], prev[1], prev[2] + 1)
+            self.reset_state[uid] = (prev[0], prev[1], attempts, attempts_at)
             self._result = []
         # Issuance: new code + expiry. Mirrors the real UPDATE, which carries
-        # attempts over unless the previous code lapsed outside the budget
-        # window. Both SQL shapes are honoured so a regression to the old
-        # unconditional `= 0` fails on the attempt count, not on unpacking.
+        # attempts over unless the last failed guess is outside the budget
+        # window. Keyed on the attempt timestamp, not the code expiry, so a
+        # reissue can't extend a lockout.
         elif "SET password_reset_code = %s" in normalized:
             code_hash, expires, uid = params[0], params[1], params[-1]
             prev = self.reset_state.get(uid)
             spent = prev[2] if prev else 0
-            prev_expiry = prev[1] if prev else None
+            prev_attempts_at = prev[3] if prev else None
             carries_over = "password_reset_attempts = CASE" in normalized
-            if not carries_over or prev_expiry is None:
-                carried = 0
+            if not carries_over or prev_attempts_at is None:
+                carried, carried_at = 0, None
             else:
                 lapsed_before = params[2]
-                carried = 0 if prev_expiry < lapsed_before else spent
-            self.reset_state[uid] = (code_hash, expires, carried)
+                lapsed = prev_attempts_at < lapsed_before
+                carried = 0 if lapsed else spent
+                carried_at = None if lapsed else prev_attempts_at
+            self.reset_state[uid] = (code_hash, expires, carried, carried_at)
             self._result = []
         # Success path: new password written, code burned.
         elif "SET password_hash = %s" in normalized:
             uid = params[-1]
-            self.reset_state[uid] = (None, None, 0)
+            self.reset_state[uid] = (None, None, 0, None)
             self._result = []
         else:
             self._result = []
@@ -173,12 +175,20 @@ def reset_env(monkeypatch):
     return application.test_client(), cursor, email_svc
 
 
-def _issue_code(cursor, code="123456", *, expires_in_min=15, attempts=0, uid=_UID):
-    """Seed a reset code for ``uid`` exactly as send_password_reset_email would."""
+def _issue_code(
+    cursor, code="123456", *, expires_in_min=15, attempts=0, attempts_min_ago=0,
+    uid=_UID,
+):
+    """Seed a reset code for ``uid`` exactly as send_password_reset_email would.
+
+    ``attempts_min_ago`` ages the last-failed-guess stamp, which is what the
+    budget window is measured against.
+    """
     cursor.reset_state[uid] = (
         hashlib.sha256(code.encode()).hexdigest(),
         datetime.now() + timedelta(minutes=expires_in_min),
         attempts,
+        datetime.now() - timedelta(minutes=attempts_min_ago) if attempts else None,
     )
     return code
 
@@ -409,7 +419,7 @@ class TestResetPasswordRejections:
     def test_never_issued_code_rejected(self, reset_env):
         # No reset was ever requested for this account.
         client, cursor, _svc = reset_env
-        cursor.reset_state[_UID] = (None, None, 0)
+        cursor.reset_state[_UID] = (None, None, 0, None)
         status, body = _reset(client, _EMAIL, "123456")
         assert status == 400
         assert body["error"] == _INVALID
@@ -593,26 +603,29 @@ class TestCodeEmails:
 
 
 class TestAttemptBudgetSurvivesReissue:
-    """The 5-guess cap has to be per account, not per code.
+    """The 5-guess cap has to be per account, not per code — but it must also
+    not become a lockout an outsider can hold open.
 
-    Reissuing used to zero password_reset_attempts, so an attacker who can
-    request codes (20/hour) got a fresh 5 guesses each time — ~100/hour, with no
-    cumulative ceiling. The budget now carries across reissues and lapses only
-    once the account has been quiet.
+    Reissuing used to zero password_reset_attempts, so an attacker who could
+    request codes (20/hour) got a fresh 5 guesses each time — ~100/hour with no
+    cumulative ceiling. The budget now carries across reissues, keyed on the
+    last failed guess rather than the code's expiry: keying on the expiry would
+    let anyone who knows the address refresh it indefinitely and pin the account
+    at 429.
     """
 
     def test_reissue_keeps_the_attempts_already_spent(self, reset_env):
         client, cursor, email_svc = reset_env
-        # 4 guesses burned, and the code is old enough to be reissued but well
+        # 4 guesses burned a moment ago; code old enough to reissue but well
         # inside the budget window.
-        _issue_code(cursor, expires_in_min=13, attempts=4)
+        _issue_code(cursor, expires_in_min=13, attempts=4, attempts_min_ago=1)
         _forgot(client, _EMAIL)
         email_svc.send_password_reset_email.assert_called_once()
         assert cursor.reset_state[_UID][2] == 4
 
     def test_reissue_cannot_buy_a_sixth_guess(self, reset_env):
         client, cursor, email_svc = reset_env
-        _issue_code(cursor, expires_in_min=13, attempts=5)
+        _issue_code(cursor, expires_in_min=13, attempts=5, attempts_min_ago=1)
         _forgot(client, _EMAIL)
         # A new code was mailed, but the spent budget came with it.
         new_code = email_svc.send_password_reset_email.call_args.args[1]
@@ -625,20 +638,54 @@ class TestAttemptBudgetSurvivesReissue:
         # Requesting one no longer clears the counter, so advising it would
         # just send the user in a loop.
         client, cursor, _svc = reset_env
-        _issue_code(cursor, attempts=5)
+        _issue_code(cursor, attempts=5, attempts_min_ago=1)
         _status, body = _reset(client, _EMAIL, "123456")
         assert "new code" not in body["error"].lower()
 
-    def test_budget_lapses_once_the_account_goes_quiet(self, reset_env):
-        # Code expired longer ago than the lapse window — a legitimate user who
-        # burned their guesses must not be locked out forever.
+    def test_reissue_cannot_extend_the_lockout(self, reset_env):
+        """A stranger must not be able to keep an account locked out.
+
+        The lapse is measured from the last failed guess, so requesting codes
+        after someone else burned the budget cannot push the window out. Once
+        the guessing stops, the real owner's next code works.
+        """
         from routes import auth_routes
 
+        lapse = auth_routes.PASSWORD_RESET_ATTEMPT_BUDGET_LAPSE_MINUTES
+        client, cursor, email_svc = reset_env
+        # 5 wrong guesses, last one longer ago than the lapse window. The code
+        # is past the resend cooldown so a new one actually gets mailed.
+        _issue_code(cursor, expires_in_min=13, attempts=5, attempts_min_ago=lapse + 5)
+
+        # An attacker keeps requesting fresh codes to hold the lockout open.
+        _forgot(client, _EMAIL)
+        assert cursor.reset_state[_UID][2] == 0
+
+        new_code = email_svc.send_password_reset_email.call_args.args[1]
+        status, _body = _reset(client, _EMAIL, new_code)
+        assert status == 200
+
+    def test_a_wrong_guess_after_the_window_starts_a_new_budget(self, reset_env):
+        # The stale counter must not make this guess the 6th of an expired
+        # budget — it's the 1st of a new one.
+        from routes import auth_routes
+
+        lapse = auth_routes.PASSWORD_RESET_ATTEMPT_BUDGET_LAPSE_MINUTES
+        client, cursor, _svc = reset_env
+        _issue_code(cursor, "123456", attempts=5, attempts_min_ago=lapse + 5)
+        status, body = _reset(client, _EMAIL, "654321")
+        assert status == 400
+        assert body["error"] == _INVALID
+        assert cursor.reset_state[_UID][2] == 1
+
+    def test_budget_lapses_once_the_guessing_stops(self, reset_env):
+        # A legitimate user who burned their guesses must not be stuck forever.
+        from routes import auth_routes
+
+        lapse = auth_routes.PASSWORD_RESET_ATTEMPT_BUDGET_LAPSE_MINUTES
         client, cursor, email_svc = reset_env
         _issue_code(
-            cursor,
-            expires_in_min=-(auth_routes.PASSWORD_RESET_ATTEMPT_BUDGET_LAPSE_MINUTES + 5),
-            attempts=5,
+            cursor, expires_in_min=-5, attempts=5, attempts_min_ago=lapse + 5,
         )
         _forgot(client, _EMAIL)
         email_svc.send_password_reset_email.assert_called_once()

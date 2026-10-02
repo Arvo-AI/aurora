@@ -30,11 +30,10 @@ RESEND_COOLDOWN_MINUTES = 1
 PASSWORD_RESET_CODE_EXPIRY_MINUTES = 15
 PASSWORD_RESET_MAX_ATTEMPTS = 5
 PASSWORD_RESET_RESEND_COOLDOWN_MINUTES = 1
-# How long an expired code keeps its guess count alive. Issuing a new code does
-# NOT hand out a fresh batch of guesses: otherwise the 5-guess cap is only
-# per-code, and anyone who can request codes (20/hour) gets ~100 guesses/hour
-# with no cumulative ceiling. The budget lapses only after the account has been
-# quiet this long, so a legitimate user who burns their guesses isn't stuck.
+# How long a spent guess budget survives. Keyed on when the last failed attempt
+# happened, NOT on the code's expiry: a reissue refreshes the expiry, so keying
+# on that would let anyone who knows an email hold the account in a permanent
+# 429 by requesting a code every so often after 5 wrong guesses.
 PASSWORD_RESET_ATTEMPT_BUDGET_LAPSE_MINUTES = 45
 _SERVER_ERROR = "Server error"
 
@@ -194,8 +193,8 @@ def send_password_reset_email(user_id: str, email: str) -> bool:
 
     code, code_hash = _generate_code()
     expires = datetime.now() + timedelta(minutes=PASSWORD_RESET_CODE_EXPIRY_MINUTES)
-    # Past this point the previous code has been dead long enough that the
-    # account counts as quiet and earns a fresh guess budget.
+    # Measured from the last failed guess, so reissuing cannot push the lapse
+    # out and keep an account locked.
     budget_lapsed_before = datetime.now() - timedelta(
         minutes=PASSWORD_RESET_ATTEMPT_BUDGET_LAPSE_MINUTES
     )
@@ -207,12 +206,17 @@ def send_password_reset_email(user_id: str, email: str) -> bool:
             "UPDATE users SET password_reset_code = %s, "
             "password_reset_code_expires_at = %s, "
             "password_reset_attempts = CASE "
-            "  WHEN password_reset_code_expires_at IS NULL "
-            "    OR password_reset_code_expires_at < %s THEN 0 "
+            "  WHEN password_reset_attempts_at IS NULL "
+            "    OR password_reset_attempts_at < %s THEN 0 "
             "  ELSE COALESCE(password_reset_attempts, 0) "
+            "END, "
+            "password_reset_attempts_at = CASE "
+            "  WHEN password_reset_attempts_at IS NULL "
+            "    OR password_reset_attempts_at < %s THEN NULL "
+            "  ELSE password_reset_attempts_at "
             "END "
             "WHERE id = %s",
-            (code_hash, expires, budget_lapsed_before, user_id),
+            (code_hash, expires, budget_lapsed_before, budget_lapsed_before, user_id),
         )
         c.commit()
 
@@ -880,11 +884,12 @@ def _verify_reset_code(conn, cursor, user_id: str, code: str):
     """Check a reset code for ``user_id``, returning an error response or None.
 
     On a wrong code the attempt counter is incremented before returning, so
-    guessing is bounded by PASSWORD_RESET_MAX_ATTEMPTS.
+    guessing is bounded by PASSWORD_RESET_MAX_ATTEMPTS per lapse window.
     """
     cursor.execute(
         "SELECT password_reset_code, password_reset_code_expires_at, "
-        "COALESCE(password_reset_attempts, 0) FROM users WHERE id = %s "
+        "COALESCE(password_reset_attempts, 0), password_reset_attempts_at "
+        "FROM users WHERE id = %s "
         # FOR UPDATE: without the row lock two concurrent requests can both read
         # the same attempt count, so the 6th guess slips past the cap and a single
         # valid code can be redeemed twice.
@@ -895,16 +900,22 @@ def _verify_reset_code(conn, cursor, user_id: str, code: str):
     if not reset_row:
         return jsonify({"error": _RESET_CODE_INVALID}), 400
 
-    stored_hash, expires_at, attempts = reset_row
+    stored_hash, expires_at, attempts, attempts_at = reset_row
 
     # No code was ever issued for this account.
     if not stored_hash:
         return jsonify({"error": _RESET_CODE_INVALID}), 400
 
+    # The budget lapses on time since the last failed guess, so a stale counter
+    # that issuance hasn't rewritten yet can't lock the account out here either.
+    budget_lapsed = attempts_at is None or attempts_at < datetime.now() - timedelta(
+        minutes=PASSWORD_RESET_ATTEMPT_BUDGET_LAPSE_MINUTES
+    )
+
     # Checked before the comparison, so guessing right on attempt 6 still fails.
-    # Requesting a new code no longer clears this, so the message must not tell
-    # the user to do that — the budget only lapses once the account goes quiet.
-    if attempts >= PASSWORD_RESET_MAX_ATTEMPTS:
+    # Requesting a new code does NOT clear this, so the message must not suggest
+    # it — the budget only lapses once the account stops guessing.
+    if attempts >= PASSWORD_RESET_MAX_ATTEMPTS and not budget_lapsed:
         return jsonify({"error": "Too many attempts. Please try again later."}), 429
 
     if expires_at and datetime.now() > expires_at:
@@ -914,10 +925,12 @@ def _verify_reset_code(conn, cursor, user_id: str, code: str):
     # compare_digest, not ==, so a wrong code can't be narrowed down
     # byte-by-byte from response timing.
     if not hmac.compare_digest(stored_hash, code_hash):
+        # Restart the count when the window had already lapsed, so this guess is
+        # the first of a new budget rather than the 6th of an expired one.
         cursor.execute(
-            "UPDATE users SET password_reset_attempts = "
-            "COALESCE(password_reset_attempts, 0) + 1 WHERE id = %s",
-            (user_id,),
+            "UPDATE users SET password_reset_attempts = %s, "
+            "password_reset_attempts_at = %s WHERE id = %s",
+            (1 if budget_lapsed else attempts + 1, datetime.now(), user_id),
         )
         conn.commit()
         return jsonify({"error": _RESET_CODE_INVALID}), 400
@@ -961,7 +974,8 @@ def reset_password():
             cursor.execute(
                 "UPDATE users SET password_hash = %s, must_change_password = FALSE, "
                 "email_verified = TRUE, password_reset_code = NULL, "
-                "password_reset_code_expires_at = NULL, password_reset_attempts = 0 "
+                "password_reset_code_expires_at = NULL, password_reset_attempts = 0, "
+                "password_reset_attempts_at = NULL "
                 "WHERE id = %s",
                 (new_hash, user_id),
             )
