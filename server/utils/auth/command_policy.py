@@ -751,7 +751,7 @@ def get_policy_templates() -> List[dict]:
                 {"priority": 200, "pattern": r"^(ls|cat|head|tail|wc|grep|find|stat|file|du|df|sort|uniq|awk|sed|tr|cut|tee|less|more|xargs|realpath|readlink|basename|dirname)\b",
                  "description": "Read-only filesystem inspection"},
                 # Kubernetes read-only
-                {"priority": 190, "pattern": r"^(kubectl|oc)\s+(get|describe|logs|top|explain|api-resources|api-versions|cluster-info|config\s+(view|get-contexts|current-context|use-context))\b",
+                {"priority": 190, "pattern": r"^(kubectl|oc)\s+(get|describe|logs|top|explain|api-resources|api-versions|cluster-info|rollout\s+(history|status)|config\s+(view|get-contexts|current-context|use-context))\b",
                  "description": "Read-only Kubernetes queries"},
                 # AWS CLI -- matches all read-only verbs and subcommands that the session policy permits
                 {"priority": 180, "pattern": r"^aws\s+\S+\s+(ls|list|describe[-\w]*|get[-\w]*|show[-\w]*|head[-\w]*|filter[-\w]*|start-query|stop-query|test-metric-filter|update-kubeconfig|wait)\b",
@@ -812,7 +812,7 @@ def get_policy_templates() -> List[dict]:
             ],
             "deny": [
                 *_UNIVERSAL_DENY_RULES,
-                {"priority": 50, "pattern": r"\bkubectl\s+(exec|cp|run|attach|port-forward|apply|delete|create|edit|patch|replace|scale|rollout|drain|cordon|uncordon|taint)\b",
+                {"priority": 50, "pattern": r"\bkubectl\s+(exec|cp|run|attach|port-forward|apply|delete|create|edit|patch|replace|scale|rollout\s+(restart|undo|pause|resume)|drain|cordon|uncordon|taint)\b",
                  "description": "Mutating kubectl operations"},
                 {"priority": 48, "pattern": r"^(ssh|scp|sftp)\s",
                  "description": "SSH access (use Standard Operations template to enable)"},
@@ -836,7 +836,7 @@ def get_policy_templates() -> List[dict]:
                 {"priority": 200, "pattern": r"^(ls|cat|head|tail|wc|grep|find|stat|file|du|df|sort|uniq|awk|sed|tr|cut|tee|less|more|xargs|realpath|readlink|basename|dirname)\b",
                  "description": "Filesystem inspection"},
                 # Kubernetes read + interactive
-                {"priority": 190, "pattern": r"^(kubectl|oc)\s+(get|describe|logs|top|explain|api-resources|api-versions|cluster-info|config\s+(view|get-contexts|current-context|use-context)|exec|cp|attach|port-forward|run\s+.*--rm\b.*--restart=Never)\b",
+                {"priority": 190, "pattern": r"^(kubectl|oc)\s+(get|describe|logs|top|explain|api-resources|api-versions|cluster-info|rollout\s+(history|status)|config\s+(view|get-contexts|current-context|use-context)|exec|cp|attach|port-forward|run\s+.*--rm\b.*--restart=Never)\b",
                  "description": "Kubernetes read and interactive debug operations"},
                 # AWS full read + config
                 {"priority": 180, "pattern": r"^aws\s+\S+\s+(ls|list|describe[-\w]*|get[-\w]*|show[-\w]*|head[-\w]*|filter[-\w]*|start-query|stop-query|test-metric-filter|update-kubeconfig|configure|wait)\b",
@@ -898,7 +898,7 @@ def get_policy_templates() -> List[dict]:
             ],
             "deny": [
                 *_UNIVERSAL_DENY_RULES,
-                {"priority": 50, "pattern": r"\bkubectl\s+(apply|delete|create|edit|patch|replace|scale|rollout|drain|cordon|uncordon|taint)\b",
+                {"priority": 50, "pattern": r"\bkubectl\s+(apply|delete|create|edit|patch|replace|scale|rollout\s+(restart|undo|pause|resume)|drain|cordon|uncordon|taint)\b",
                  "description": "Mutating kubectl operations (use Full Cloud Access to enable)"},
             ],
         },
