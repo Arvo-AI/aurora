@@ -21,11 +21,9 @@ from services.memory import (
     USER_WRITABLE_CATEGORIES,
     SYSTEM_CATEGORY,
     PROTECTED_ENTRIES,
-    SLACK_MEMORY_CATEGORY,
-    SLACK_MEMORY_TITLE,
 )
 from services.memory.queries import fetch_entry_by_id, fetch_entry_by_title
-from services.memory.slack_memory import seed_slack_memory
+from services.memory.platform_memory import get_spec, seed_platform_memory
 from services.artifacts.store import create_version
 from utils.validation import strip_nul
 
@@ -90,6 +88,7 @@ def list_entries(user_id):
                 "last_edited_by": row[4],
                 "last_edited_by_name": row[5],
                 "updated_at": row[6].isoformat() if row[6] else None,
+                "is_protected": (row[2], row[1]) in PROTECTED_ENTRIES,
             }
             for row in rows
         ]
@@ -397,20 +396,22 @@ def update_entry(user_id, entry_id):
         return jsonify({"error": "Failed to update memory entry"}), 500
 
 
-@memory_bp.route("/slack", methods=["GET"])
-@require_permission("memory", "read")
-def get_slack_memory(user_id):
-    """Fetch the well-known "Slack" memory entry, seeding it if absent.
+def _platform_memory_response(user_id: str, platform: str):
+    """Fetch a platform's well-known policy memory entry, seeding it if absent.
 
-    Surfaced so the Slack connector page can show/edit Slack behaviour in place,
-    instead of making people hunt for the entry in the full memory list. Edits go
-    through the normal ``PUT /entries/<id>`` so versioning stays identical.
+    Surfaced so a connector's manage page can show/edit the platform's behaviour
+    in place, instead of making people hunt for the entry in the full memory
+    list. Edits go through the normal ``PUT /entries/<id>`` so versioning stays
+    identical.
 
-    Normally the entry already exists — ``seed_slack_memory`` runs on Slack
-    connect. The seed-on-read below covers orgs that connected before seeding
-    shipped, or whose connect-time seed failed (it's best-effort there), so the
-    card never has to render an "it's missing" state.
+    Normally the entry already exists — seeding runs on connect. The
+    seed-on-read below covers orgs that connected before seeding shipped, or
+    whose connect-time seed failed (it's best-effort there), so the card never
+    has to render an "it's missing" state.
     """
+    spec = get_spec(platform)
+    if spec is None:
+        return jsonify({"error": "Unknown platform"}), 404
     org_id = get_org_id_from_request()
 
     try:
@@ -419,34 +420,45 @@ def get_slack_memory(user_id):
             # Pin RLS to the same org the WHERE clause filters on (and that RBAC
             # authorized) — if they disagree, RLS hides the row and this 500s.
             set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
-            entry = fetch_entry_by_title(
-                cursor, org_id, SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE
-            )
+            entry = fetch_entry_by_title(cursor, org_id, spec.category, spec.title)
 
         # Missing — seed the default policy, then read it back on a fresh
         # connection (seeding commits on its own admin connection). Seed into the
         # same org this read filtered on, so the re-read below can actually see it.
         if entry is None:
-            seed_slack_memory(user_id, org_id=org_id)
+            seed_platform_memory(user_id, spec.platform, org_id=org_id)
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
                 set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
-                entry = fetch_entry_by_title(
-                    cursor, org_id, SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE
-                )
+                entry = fetch_entry_by_title(cursor, org_id, spec.category, spec.title)
 
         # Still missing means seeding failed (it logs its own reason) — report it
         # rather than handing the UI a null entry it can no longer act on.
         if entry is None:
-            return jsonify({"error": "Failed to load the Slack memory entry"}), 500
+            return jsonify({"error": f"Failed to load the {spec.title} memory entry"}), 500
 
         return jsonify({"entry": entry}), 200
 
     except Exception:
         # Lazy/no interpolation: logger.exception already records the traceback,
         # and the message must not embed request-derived values.
-        logger.exception("[Memory] Error getting Slack memory")
-        return jsonify({"error": "Failed to get the Slack memory entry"}), 500
+        logger.exception("[Memory] Error getting platform memory")
+        return jsonify({"error": f"Failed to get the {spec.title} memory entry"}), 500
+
+
+@memory_bp.route("/platform/<platform>", methods=["GET"])
+@require_permission("memory", "read")
+def get_platform_memory(user_id, platform):
+    """``GET /api/memory/platform/<platform>`` — the platform's policy memory."""
+    return _platform_memory_response(user_id, platform)
+
+
+@memory_bp.route("/slack", methods=["GET"])
+@require_permission("memory", "read")
+def get_slack_memory(user_id):
+    """Backward-compatible alias for ``/platform/slack`` (the Slack manage page
+    now calls the platform route; this stays for external API consumers)."""
+    return _platform_memory_response(user_id, "slack")
 
 
 @memory_bp.route("/upload", methods=["POST"])
