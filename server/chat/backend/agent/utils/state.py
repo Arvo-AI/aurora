@@ -39,6 +39,11 @@ class State(BaseModel):
         # every background session — including non-RCA ones like "team_routing"
         # that have no rca_context. Used to pick source-specific policy memories.
     )
+    trigger_platform: Optional[str] = (
+        None  # Chat platform the trigger speaks on (trigger_metadata["platform"]),
+        # set by sources that are not themselves a platform (e.g. "team_routing")
+        # so the matching platform policy memory can be force-injected.
+    )
     storage_chat_files: Optional[List[Dict[str, Any]]] = (
         None  # Files found in the chat's storage directory
     )
