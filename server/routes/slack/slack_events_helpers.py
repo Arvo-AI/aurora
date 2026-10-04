@@ -680,31 +680,12 @@ def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
 
 
 def _resolve_channel_label(user_id: str, channel_id: str) -> str:
-    """Return a human 'name (id)' label for a Slack channel so the agent knows
+    """Return a human '#name (id)' label for a Slack channel so the agent knows
     which channel a message came from — critical for scoped directives like
     "in this channel". Prefers our registered slack_channels row (no API call),
     falls back to the bare id. Never raises."""
-    if not channel_id:
-        return "unknown"
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[SlackChannelLabel]")
-                cursor.execute(
-                    """SELECT channel_name FROM slack_channels
-                       WHERE user_id = %s AND channel_id = %s AND provider = 'slack'
-                       LIMIT 1""",
-                    (user_id, channel_id),
-                )
-                row = cursor.fetchone()
-        # Registered channel — use its name so it matches routing/descriptions.
-        if row and row[0]:
-            return f"#{row[0]} ({channel_id})"
-    except Exception:
-        logger.warning("[SlackChannelLabel] Could not resolve channel name for %s",
-                       sanitize(channel_id), exc_info=True)
-    # Unregistered or lookup failed — the id alone still anchors "this channel".
-    return channel_id
+    from services.channels import registry
+    return registry.get_channel_label(user_id, "slack", channel_id)
 
 
 def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread_ts: str = None, 

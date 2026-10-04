@@ -53,11 +53,12 @@ Endpoints (all behind ``connectors`` RBAC):
 """
 import json
 import logging
-import re
 
 from flask import Blueprint, jsonify, request
 
 from connectors.slack_connector.client import get_slack_client_for_user
+from services.channels import registry
+from services.channels.classify import classify_slack
 from routes.slack.slack_backfill_config import BACKFILL_STALE_MINUTES
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
@@ -99,112 +100,22 @@ LIST_CHANNELS_CAP = 2000
 AVAILABLE_CHANNELS_CACHE_TTL = 300
 
 
-# Word-boundary patterns for incident-platform detection. Using anchored regex
-# (rather than a bare substring `in` check) both avoids matching a platform
-# name embedded in an unrelated token and clears CodeQL's "incomplete URL
-# substring sanitization" rule, which flags substring checks on URL-like text.
-_PLATFORM_PATTERNS = (
-    ("incident.io", re.compile(r"\bincident\.io\b|\bincidentio\b")),
-    ("pagerduty", re.compile(r"\bpagerduty\b|\bpd-incident\b")),
-    ("opsgenie", re.compile(r"\bopsgenie\b")),
-)
-
-# Channel-name heuristics. Anchored on the left (token start) so we match
-# "incident"/"alert" as words/prefixes, not an arbitrary substring mid-token
-# (also clears CodeQL's URL-substring sanitization rule). Right side is loose so
-# "alerts"/"oncall-db"/"incident-42" still match.
-_INCIDENT_NAME_RE = re.compile(r"(?:^|[\s\-_])inc(?:ident)?(?:[\s\-_]|$)|\bincident")
-_TEAM_NAME_RE = re.compile(r"\balert|\bon-?call|\bsev(?:[\s\-_]|$)")
-
-
 def _classify_channel(channel: dict) -> tuple[str, str | None]:
     """Best-effort (channel_type, detected_platform) from a Slack channel dict.
-
-    Generic heuristic (per product requirement: support any platform that
-    creates channels, e.g. incident.io/PagerDuty/Opsgenie). The LLM description
-    task refines this later; this is only the fast, offline first guess so the
-    UI/agent have something immediately.
-    """
-    name = (channel.get("name") or "").lower()
-    topic = ((channel.get("topic") or {}).get("value") or "").lower()
-    purpose = ((channel.get("purpose") or {}).get("value") or "").lower()
-    haystack = f"{name} {topic} {purpose}"
-
-    # Detect the incident-management platform that spawned the channel, if any.
-    platform = None
-    for platform_name, pattern in _PLATFORM_PATTERNS:
-        if pattern.search(haystack):
-            platform = platform_name
-            break
-
-    # Incident channels: platform-created OR named like one. Anchored patterns
-    # (not bare `in name`) both read as intent and clear CodeQL's URL-substring
-    # rule, which flags substring membership on URL-like text.
-    if platform or _INCIDENT_NAME_RE.search(name):
-        return "incident", platform
-    # Alerting/on-call channels are still team-facing routing targets.
-    if _TEAM_NAME_RE.search(name):
-        return "team", platform
-    return "general", platform
+    Thin wrapper over the shared classifier so callers keep their import."""
+    return classify_slack(channel)
 
 
 def _upsert_channel(cur, user_id: str, org_id: str | None, ch: dict,
                     existing: dict, initial_status: str = "pending") -> tuple[str | None, bool]:
-    """Upsert one channel row. Returns (channel_id, was_newly_added).
-
-    ``existing`` maps channel_id -> owner_user_id and is mutated in place so a
-    channel already connected by another org member keeps its original owner on
-    the conflict key (mirrors github save_repo_selections).
-
-    ``initial_status`` is the metadata_status for a NEW row: 'pending' when a
-    description will be generated, 'skipped' when the channel is registered for
-    awareness but intentionally not described (bulk auto-register beyond the
-    recency cap). Existing rows never have their status reset (ON CONFLICT does
-    not touch metadata_status), so a prior 'ready' description is preserved.
-    """
-    channel_id = ch.get("channel_id") or ch.get("id")
-    if not channel_id:
-        return None, False
-    owner_id = existing.get(channel_id, user_id)
-    channel_type, platform = _classify_channel(ch)
-    cur.execute(
-        """INSERT INTO slack_channels
-               (user_id, org_id, provider, team_id, channel_id, channel_name,
-                is_private, is_member, channel_type, detected_platform,
-                channel_data, metadata_status)
-           VALUES (%s, %s, 'slack', %s, %s, %s, %s, %s, %s, %s, %s, %s)
-           ON CONFLICT (user_id, provider, channel_id) DO UPDATE SET
-               channel_name = EXCLUDED.channel_name,
-               is_private = EXCLUDED.is_private,
-               is_member = EXCLUDED.is_member,
-               channel_type = EXCLUDED.channel_type,
-               detected_platform = EXCLUDED.detected_platform,
-               channel_data = EXCLUDED.channel_data,
-               -- Don't bump updated_at for a row awaiting a description:
-               -- auto_register upserts every member on each reconcile, and
-               -- updated_at is "time since the description was queued", which the
-               -- staleness checks use to spot a lost task. Bumping it would keep a
-               -- stuck row looking fresh forever. 'generating' counts too: the
-               -- sweep recovers one abandoned by a killed worker on the same
-               -- window, and a page load must not reset its age.
-               updated_at = CASE
-                   WHEN slack_channels.metadata_status IN ('pending', 'generating')
-                   THEN slack_channels.updated_at
-                   ELSE NOW()
-               END""",
-        (
-            owner_id, org_id, ch.get("team_id"), channel_id,
-            ch.get("channel_name") or ch.get("name"),
-            ch.get("is_private", False), ch.get("is_member", False),
-            channel_type, platform,
-            json.dumps(ch),
-            initial_status,
-        ),
+    """Upsert one Slack channel row. Returns (channel_id, was_newly_added).
+    See ``services.channels.registry.upsert_channel`` for the contract
+    (``existing`` ownership, ``initial_status`` semantics)."""
+    channel_type, platform = classify_slack(ch)
+    return registry.upsert_channel(
+        cur, user_id, org_id, "slack", ch, existing,
+        initial_status=initial_status, channel_type=channel_type, detected_platform=platform,
     )
-    is_new = channel_id not in existing
-    if is_new:
-        existing[channel_id] = user_id
-    return channel_id, is_new
 
 
 def _rank_channels(channels: list[dict]) -> list[dict]:
