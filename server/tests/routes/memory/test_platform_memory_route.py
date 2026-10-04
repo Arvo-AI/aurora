@@ -22,11 +22,14 @@ SLACK_ROW = (ENTRY_ID, "Slack", "context", "desc", "policy text", "agent", None,
 @pytest.fixture
 def memory_client(monkeypatch):
     pytest.importorskip("flask")
+    # Evict so Werkzeug proxies bind to the app this fixture creates; monkeypatch
+    # restores the original module objects after the test.
     for mod in [m for m in list(sys.modules) if m.startswith(("routes.", "utils.auth.rbac"))]:
-        del sys.modules[mod]
+        monkeypatch.delitem(sys.modules, mod)
     for heavy in ("celery_config", "celery", "routes.audit_routes"):
-        sys.modules.setdefault(heavy, MagicMock())
-    sys.modules["routes.audit_routes"].record_audit_event = MagicMock()
+        if heavy not in sys.modules:
+            monkeypatch.setitem(sys.modules, heavy, MagicMock())
+    monkeypatch.setattr(sys.modules["routes.audit_routes"], "record_audit_event", MagicMock(), raising=False)
 
     from flask import Flask
 
@@ -67,7 +70,8 @@ def test_platform_route_and_slack_alias_return_the_same_body(memory_client):
     assert a.get_json() == b.get_json()
     entry = a.get_json()["entry"]
     assert entry["id"] == ENTRY_ID
-    assert entry["title"] == "Slack" and entry["category"] == "context"
+    assert entry["title"] == "Slack"
+    assert entry["category"] == "context"
     assert entry["content"] == "policy text"
     assert entry["is_protected"] is True
     memory_client.seed.assert_not_called()  # entry existed; no seed-on-read

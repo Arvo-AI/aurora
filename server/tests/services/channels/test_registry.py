@@ -55,7 +55,8 @@ def test_slack_upsert_binds_provider_classifies_and_preserves_owner():
     existing = {"C1": "owner"}
     assert slack_channels._upsert_channel(cur, "u2", "org", ch, existing, initial_status="skipped") == ("C1", False)
     params = cur.execute.call_args.args[1]
-    assert params[0] == "owner" and params[11] == "skipped"
+    assert params[0] == "owner"
+    assert params[11] == "skipped"
     assert existing == {"C1": "owner"}
 
 
@@ -82,7 +83,8 @@ def test_is_member_channel_sql_and_tri_state(row, expected):
     with p1, p2, p3, p4:
         assert slack_tool._is_member_channel("u1", "C1") is expected
     sql, params = cur.execute.call_args.args
-    assert "provider = %s" in sql and "is_member" in sql
+    assert "provider = %s" in sql
+    assert "is_member" in sql
     assert "metadata_status" not in sql  # a description is not required to post
     assert params == ("slack", "C1", "org-1")
     with patch.object(registry.org_scope, "resolve_org", side_effect=RuntimeError("db down")):

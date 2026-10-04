@@ -10,7 +10,6 @@ from typing import Any, Dict
 from utils.notifications import team_routing as _tr
 
 SLACK = _tr.SPECS["slack"]
-_LOG_PREFIX = SLACK.log_prefix
 
 
 def _recurrence_context(incident_data: Dict[str, Any]) -> str:

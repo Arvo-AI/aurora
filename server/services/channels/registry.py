@@ -111,27 +111,26 @@ def get_connected_channels(user_id: str, provider: str) -> List[Dict[str, Any]]:
     _check_provider(provider)
     org_id = org_scope.resolve_org(user_id)
     predicate, pred_params = org_scope.org_read_predicate(user_id, org_id)
-    with db_pool.get_admin_connection() as conn:
-        with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix=f"[channels:{provider}:connected]")
-            # Active = described member channels: a channel being active IS
-            # the permission to post teammate messages here (the structured
-            # incident card is separate — it goes only to the single
-            # configured incidents channel). Membership is the source of
-            # truth, so there's no separate "dismissed" flag to filter on.
-            cur.execute(
-                f"""SELECT DISTINCT ON (channel_id)
-                          channel_id, channel_name, channel_type,
-                          detected_platform, metadata_summary, is_member
-                     FROM slack_channels
-                    WHERE provider = %s
-                      AND is_member
-                      AND metadata_status = 'ready'
-                      AND {predicate}
-                    ORDER BY channel_id, updated_at DESC""",
-                (provider, *pred_params),
-            )
-            rows = cur.fetchall()
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        set_rls_context(cur, conn, user_id, log_prefix=f"[channels:{provider}:connected]")
+        # Active = described member channels: a channel being active IS
+        # the permission to post teammate messages here (the structured
+        # incident card is separate — it goes only to the single
+        # configured incidents channel). Membership is the source of
+        # truth, so there's no separate "dismissed" flag to filter on.
+        cur.execute(
+            f"""SELECT DISTINCT ON (channel_id)
+                      channel_id, channel_name, channel_type,
+                      detected_platform, metadata_summary, is_member
+                 FROM slack_channels
+                WHERE provider = %s
+                  AND is_member
+                  AND metadata_status = 'ready'
+                  AND {predicate}
+                ORDER BY channel_id, updated_at DESC""",
+            (provider, *pred_params),
+        )
+        rows = cur.fetchall()
 
     return [
         {
@@ -164,17 +163,16 @@ def channel_membership(user_id: str, provider: str, channel_id: str) -> Optional
     try:
         org_id = org_scope.resolve_org(user_id)
         predicate, pred_params = org_scope.org_read_predicate(user_id, org_id)
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix=f"[channels:{provider}:active]")
-                cur.execute(
-                    f"""SELECT 1 FROM slack_channels
-                         WHERE provider = %s AND channel_id = %s AND {predicate}
-                           AND is_member
-                         LIMIT 1""",
-                    (provider, channel_id, *pred_params),
-                )
-                return cur.fetchone() is not None
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix=f"[channels:{provider}:active]")
+            cur.execute(
+                f"""SELECT 1 FROM slack_channels
+                     WHERE provider = %s AND channel_id = %s AND {predicate}
+                       AND is_member
+                     LIMIT 1""",
+                (provider, channel_id, *pred_params),
+            )
+            return cur.fetchone() is not None
     except Exception:
         logger.exception("[channels:%s] Could not verify membership of channel %s; refusing post",
                          provider, sanitize(channel_id))
@@ -191,16 +189,15 @@ def get_channel_label(user_id: str, provider: str, channel_id: str) -> str:
     if not channel_id:
         return "unknown"
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix=f"[channels:{provider}:label]")
-                cursor.execute(
-                    """SELECT channel_name FROM slack_channels
-                       WHERE user_id = %s AND channel_id = %s AND provider = %s
-                       LIMIT 1""",
-                    (user_id, channel_id, provider),
-                )
-                row = cursor.fetchone()
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            set_rls_context(cursor, conn, user_id, log_prefix=f"[channels:{provider}:label]")
+            cursor.execute(
+                """SELECT channel_name FROM slack_channels
+                   WHERE user_id = %s AND channel_id = %s AND provider = %s
+                   LIMIT 1""",
+                (user_id, channel_id, provider),
+            )
+            row = cursor.fetchone()
         # Registered channel — use its name so it matches routing/descriptions.
         if row and row[0]:
             fmt = _LABEL_FORMATS.get(provider, _DEFAULT_LABEL_FORMAT)
