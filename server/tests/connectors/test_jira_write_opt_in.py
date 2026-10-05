@@ -33,12 +33,29 @@ def test_unset_preference_resolves_to_read_only(monkeypatch):
     assert settings.get_jira_mode("uid-1") == settings.READ_ONLY
 
 
+def test_mode_key_is_not_the_legacy_key():
+    """A missing legacy row meant "commenting on"; reading it would carry that
+    permission forward into the new default."""
+    assert settings.JIRA_MODE_KEY != settings.LEGACY_JIRA_MODE_KEY
+
+
+def test_a_legacy_opt_in_does_not_grant_writes(monkeypatch):
+    """An org that had the old comment_only default must re-opt-in."""
+    import utils.auth.stateless_auth as stateless_auth
+
+    def _prefs(user_id, key, default=None):
+        return "comment_only" if key == settings.LEGACY_JIRA_MODE_KEY else default
+
+    monkeypatch.setattr(stateless_auth, "get_user_preference", _prefs)
+    assert settings.get_jira_mode("uid-1") == settings.READ_ONLY
+
+
 @pytest.mark.parametrize("stored", ["full", "FULL", " Full "])
 def test_stored_mode_is_normalized(monkeypatch, stored):
     import utils.auth.stateless_auth as stateless_auth
     monkeypatch.setattr(
         stateless_auth, "get_user_preference",
-        lambda user_id, key, default=None: stored,
+        lambda user_id, key, default=None: stored if key == settings.JIRA_MODE_KEY else default,
     )
     assert settings.get_jira_mode("uid-1") == settings.FULL
 

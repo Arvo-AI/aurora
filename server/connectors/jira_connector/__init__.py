@@ -7,6 +7,7 @@ from .settings import (
     DEFAULT_MODE,
     FULL,
     JIRA_MODE_KEY,
+    LEGACY_JIRA_MODE_KEY,
     READ_ONLY,
     VALID_MODES,
     get_jira_mode,

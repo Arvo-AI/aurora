@@ -27,6 +27,10 @@ Whichever mode is on, every comment and issue description Aurora writes is wrapp
 
 Changing the mode takes effect on the next investigation; it is not retroactive.
 
+:::note Upgrading from an earlier version
+Earlier versions had no read-only tier and commented on issues as soon as Jira was connected. On upgrade, every org is reset to **Read only** — including orgs that had previously chosen to allow comments. Re-select the mode you want under **Connectors → Jira**.
+:::
+
 ## What You Get
 
 | Capability | Description |

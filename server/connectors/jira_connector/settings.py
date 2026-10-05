@@ -13,7 +13,14 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-JIRA_MODE_KEY = "jira_mode"
+# Deliberately not the old "jira_mode": that key's absence used to mean
+# "commenting is on", so reading it would carry the old permission forward.
+# Starting from a new key resets every org to read-only and makes them opt in
+# again, without a one-shot UPDATE (there's no migration-tracking table, so a
+# reset in the startup path would re-run on every boot). The old rows stay in
+# user_preferences, unread, if anyone needs to see what an org had chosen.
+JIRA_MODE_KEY = "jira_write_mode"
+LEGACY_JIRA_MODE_KEY = "jira_mode"
 
 # Search and read issues only — never posts.
 READ_ONLY = "read_only"

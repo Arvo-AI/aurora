@@ -229,6 +229,11 @@ preference that defaults to off:
 For Jira specifically:
 - `server/connectors/jira_connector/settings.py` is the only place that resolves
   the mode. Unknown or unset values fail closed to `read_only`.
+- The preference key is `jira_write_mode`, deliberately **not** the old
+  `jira_mode`. The old key's *absence* meant "commenting is on", so reading it
+  would carry that permission forward; a new key resets every org to read-only
+  idempotently. There's no migration-tracking table, so a one-shot `UPDATE` in
+  the startup path would re-run on every boot and pin orgs to read-only forever.
 - Enforced in three layers, because each covers a hole the others don't: tool
   *registration* (`cloud_tools.py`) keeps a disallowed tool out of the model's
   hands; the tool *body* (`jira_tool.py`) catches a mode change mid-session or a
