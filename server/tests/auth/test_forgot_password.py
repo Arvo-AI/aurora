@@ -47,6 +47,7 @@ class _FakeCursor:
         self.reset_state = reset_state
         self.executed: list[tuple[str, tuple]] = []
         self._result: list = []
+        self.rowcount = 0
 
     def execute(self, query, params=None):
         params = params or ()
@@ -76,10 +77,20 @@ class _FakeCursor:
         # Issuance: new code + expiry. Mirrors the real UPDATE, which carries
         # attempts over unless the last failed guess is outside the budget
         # window. Keyed on the attempt timestamp, not the code expiry, so a
-        # reissue can't extend a lockout.
+        # reissue can't extend a lockout. The WHERE claims the row: a code
+        # still inside the cooldown matches nothing, so a second sender loses.
         elif "SET password_reset_code = %s" in normalized:
-            code_hash, expires, uid = params[0], params[1], params[-1]
+            code_hash, expires, uid = params[0], params[1], params[4]
             prev = self.reset_state.get(uid)
+            expires_at = prev[1] if prev else None
+            # Missing predicate: don't invent the lock. The race test then sees
+            # a second email and fails.
+            if "password_reset_code_expires_at <=" in normalized:
+                bound = params[5]
+                if expires_at is not None and expires_at > bound:
+                    self.rowcount = 0
+                    self._result = []
+                    return
             spent = prev[2] if prev else 0
             prev_attempts_at = prev[3] if prev else None
             carries_over = "password_reset_attempts = CASE" in normalized
@@ -91,6 +102,7 @@ class _FakeCursor:
                 carried = 0 if lapsed else spent
                 carried_at = None if lapsed else prev_attempts_at
             self.reset_state[uid] = (code_hash, expires, carried, carried_at)
+            self.rowcount = 1
             self._result = []
         # Success path: new password written, code burned.
         elif "SET password_hash = %s" in normalized:
@@ -406,7 +418,9 @@ class TestResetPasswordRejections:
         client, cursor, _svc = reset_env
         code = _issue_code(cursor)
         _reset(client, _EMAIL, code)
-        assert cursor.sql_for("password_reset_attempts = COALESCE") is None
+        # Only the wrong-guess UPDATE uses this placeholder. Issuance writes a
+        # CASE and success writes 0, so a broader fragment never matches.
+        assert cursor.sql_for("SET password_reset_attempts = %s") is None
 
     def test_expired_code_rejected(self, reset_env):
         client, cursor, _svc = reset_env
@@ -430,8 +444,8 @@ class TestResetPasswordRejections:
         client, cursor, _svc = reset_env
         code = _issue_code(cursor, attempts=5)
         status, body = _reset(client, _EMAIL, code)
-        assert status == 429
-        assert "Too many attempts" in body["error"]
+        assert status == 400
+        assert body["error"] == _INVALID
         assert cursor.sql_for("SET password_hash = %s") is None
 
     def test_unknown_email_rejected_generically(self, reset_env):
@@ -610,8 +624,8 @@ class TestAttemptBudgetSurvivesReissue:
     request codes (20/hour) got a fresh 5 guesses each time — ~100/hour with no
     cumulative ceiling. The budget now carries across reissues, keyed on the
     last failed guess rather than the code's expiry: keying on the expiry would
-    let anyone who knows the address refresh it indefinitely and pin the account
-    at 429.
+    let anyone who knows the address refresh it indefinitely and keep the real
+    owner from resetting.
     """
 
     def test_reissue_keeps_the_attempts_already_spent(self, reset_env):
@@ -630,17 +644,20 @@ class TestAttemptBudgetSurvivesReissue:
         # A new code was mailed, but the spent budget came with it.
         new_code = email_svc.send_password_reset_email.call_args.args[1]
         status, body = _reset(client, _EMAIL, new_code)
-        assert status == 429
-        assert "Too many attempts" in body["error"]
+        assert status == 400
+        assert body["error"] == _INVALID
         assert cursor.sql_for("SET password_hash = %s") is None
 
-    def test_429_does_not_tell_the_user_to_request_a_new_code(self, reset_env):
-        # Requesting one no longer clears the counter, so advising it would
-        # just send the user in a loop.
+    def test_spent_budget_looks_like_an_unknown_account(self, reset_env):
+        # Five failures then one more fit inside the 10/min limit. A 429 on
+        # the sixth would confirm the address has an account; an unknown
+        # address already answers with the generic 400.
         client, cursor, _svc = reset_env
         _issue_code(cursor, attempts=5, attempts_min_ago=1)
-        _status, body = _reset(client, _EMAIL, "123456")
-        assert "new code" not in body["error"].lower()
+        status, body = _reset(client, _EMAIL, "000000")
+        unknown_status, unknown_body = _reset(client, "nobody@example.com", "000000")
+        assert (status, body) == (unknown_status, unknown_body)
+        assert body["error"] == _INVALID
 
     def test_reissue_cannot_extend_the_lockout(self, reset_env):
         """A stranger must not be able to keep an account locked out.
@@ -742,14 +759,35 @@ class TestPerAccountCooldown:
         monkeypatch.setattr(auth_routes, "db_pool", broken_pool)
         assert auth_routes._reset_code_is_fresh(_UID) is False
 
-    def test_freshness_failure_still_sends_the_code(self, monkeypatch, reset_env):
+    def test_freshness_failure_still_sends_once_cooldown_has_passed(
+        self, monkeypatch, reset_env
+    ):
+        # The read fails open, and an eligible row must still get a code.
+        client, cursor, email_svc = reset_env
+        _issue_code(cursor, expires_in_min=13)
+        monkeypatch.setattr(
+            "routes.auth_routes._reset_code_is_fresh", lambda _uid: False
+        )
+        _forgot(client, _EMAIL)
+        email_svc.send_password_reset_email.assert_called_once()
+
+    def test_a_stale_freshness_read_cannot_issue_a_second_code(
+        self, monkeypatch, reset_env
+    ):
+        # Both requests can pass the SELECT — it runs on its own connection.
+        # The UPDATE has to refuse by itself, or the first code is already dead
+        # by the time the user opens the email.
         client, cursor, email_svc = reset_env
         _issue_code(cursor, expires_in_min=15)
         monkeypatch.setattr(
             "routes.auth_routes._reset_code_is_fresh", lambda _uid: False
         )
         _forgot(client, _EMAIL)
-        email_svc.send_password_reset_email.assert_called_once()
+        email_svc.send_password_reset_email.assert_not_called()
+        query, _params = cursor.sql_for("SET password_reset_code = %s")
+        flat = " ".join(query.split())
+        assert "password_reset_code_expires_at IS NULL" in flat
+        assert "password_reset_code_expires_at <= %s" in flat
 
 
 class TestResetCodeRowLock:

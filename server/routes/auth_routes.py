@@ -32,8 +32,8 @@ PASSWORD_RESET_MAX_ATTEMPTS = 5
 PASSWORD_RESET_RESEND_COOLDOWN_MINUTES = 1
 # How long a spent guess budget survives. Keyed on when the last failed attempt
 # happened, NOT on the code's expiry: a reissue refreshes the expiry, so keying
-# on that would let anyone who knows an email hold the account in a permanent
-# 429 by requesting a code every so often after 5 wrong guesses.
+# on that would let anyone who knows an email keep the account from resetting
+# by requesting a code every so often after 5 wrong guesses.
 PASSWORD_RESET_ATTEMPT_BUDGET_LAPSE_MINUTES = 45
 _SERVER_ERROR = "Server error"
 
@@ -45,8 +45,8 @@ _RESET_REQUESTED_MESSAGE = (
     "Check your spam folder if you don't see it."
 )
 
-# One message for wrong, expired, never-issued, and unknown-account codes, so a
-# guess can't be narrowed down by which rejection came back.
+# One message for wrong, expired, never-issued, exhausted, and unknown-account
+# codes, so a guess can't be narrowed down by which rejection came back.
 _RESET_CODE_INVALID = "Invalid or expired reset code"
 
 SLUG_REGEX = re.compile(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$')
@@ -175,13 +175,10 @@ def _reset_code_is_fresh(user_id: str) -> bool:
 
 
 def send_password_reset_email(user_id: str, email: str) -> bool:
-    """Generate a password reset code, store its hash, and email it.
+    """Store a reset-code hash and email it.
 
-    Unlike verification there is no auto-approve fallback when SMTP is
-    unconfigured: a reset with no email to prove inbox ownership would let
-    anyone take over any account. Callers get False and must surface an error.
-
-    Returns True if the email was sent, False otherwise.
+    No auto-approve when SMTP is down: a reset with no emailed code is account
+    takeover. True only if the row was claimed and the mail went out.
     """
     from utils.notifications.email_service import get_email_service
 
@@ -192,13 +189,22 @@ def send_password_reset_email(user_id: str, email: str) -> bool:
         return False
 
     code, code_hash = _generate_code()
-    expires = datetime.now() + timedelta(minutes=PASSWORD_RESET_CODE_EXPIRY_MINUTES)
+    now = datetime.now()
+    expires = now + timedelta(minutes=PASSWORD_RESET_CODE_EXPIRY_MINUTES)
     # Measured from the last failed guess, so reissuing cannot push the lapse
     # out and keep an account locked.
-    budget_lapsed_before = datetime.now() - timedelta(
+    budget_lapsed_before = now - timedelta(
         minutes=PASSWORD_RESET_ATTEMPT_BUDGET_LAPSE_MINUTES
     )
+    # A code mailed inside the cooldown still has an expiry later than this.
+    # The freshness SELECT runs on its own connection, so this predicate is
+    # what actually stops two concurrent requests from both sending.
+    claimable_if_expires_by = now + timedelta(
+        minutes=PASSWORD_RESET_CODE_EXPIRY_MINUTES
+        - PASSWORD_RESET_RESEND_COOLDOWN_MINUTES
+    )
 
+    claimed = False
     with db_pool.get_admin_connection() as c, c.cursor() as cur:
         # Attempts carry over in the same statement that issues the code, so a
         # reissue can't be raced against a guess to clear the counter.
@@ -215,12 +221,36 @@ def send_password_reset_email(user_id: str, email: str) -> bool:
             "    OR password_reset_attempts_at < %s THEN NULL "
             "  ELSE password_reset_attempts_at "
             "END "
-            "WHERE id = %s",
-            (code_hash, expires, budget_lapsed_before, budget_lapsed_before, user_id),
+            "WHERE id = %s AND ("
+            "  password_reset_code_expires_at IS NULL "
+            "  OR password_reset_code_expires_at <= %s"
+            ")",
+            (
+                code_hash,
+                expires,
+                budget_lapsed_before,
+                budget_lapsed_before,
+                user_id,
+                claimable_if_expires_by,
+            ),
         )
-        c.commit()
+        # Lost the race, or still inside the cooldown — don't mail a code we
+        # didn't store. The other request owns the one the user will receive.
+        if cur.rowcount == 1:
+            c.commit()
+            claimed = True
+        else:
+            logging.info(
+                "Suppressed duplicate password reset request for %s", user_id
+            )
 
-    return email_svc.send_password_reset_email(email, code)
+    if not claimed:
+        return False
+
+    mailed = email_svc.send_password_reset_email(email, code)
+    if not mailed:
+        logging.warning("Failed to send password reset email for user %s", user_id)
+    return mailed
 
 
 @auth_bp.after_request
@@ -794,8 +824,9 @@ def _dispatch_reset_code(email: str) -> None:
             logging.info("Suppressed duplicate password reset request for %s", user_id)
             return
 
+        # False covers a lost claim as well as a send failure; both are logged
+        # inside send_password_reset_email, and neither may change the response.
         if not send_password_reset_email(user_id, user_email):
-            logging.warning("Failed to send password reset email for user %s", user_id)
             return
 
         from utils.auth.stateless_auth import resolve_org_id
@@ -913,10 +944,10 @@ def _verify_reset_code(conn, cursor, user_id: str, code: str):
     )
 
     # Checked before the comparison, so guessing right on attempt 6 still fails.
-    # Requesting a new code does NOT clear this, so the message must not suggest
-    # it — the budget only lapses once the account stops guessing.
+    # Same 400 as a wrong code: a distinct 429 after five failures would confirm
+    # the account exists, and a new code does not clear the budget anyway.
     if attempts >= PASSWORD_RESET_MAX_ATTEMPTS and not budget_lapsed:
-        return jsonify({"error": "Too many attempts. Please try again later."}), 429
+        return jsonify({"error": _RESET_CODE_INVALID}), 400
 
     if expires_at and datetime.now() > expires_at:
         return jsonify({"error": _RESET_CODE_INVALID}), 400
