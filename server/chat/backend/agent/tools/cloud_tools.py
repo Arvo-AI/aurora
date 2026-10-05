@@ -3065,7 +3065,28 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         import traceback
         logging.error(f"Traceback: {traceback.format_exc()}")
         # Continue with native tools even if MCP fails
-    
+
+    # Add customer-registered MCP servers (DEV-1604). Separate from the built-in
+    # servers above: tools come from cached schemas in Vault (no network calls
+    # here), and write tools are withheld entirely in background/PR-review where
+    # no human can approve them.
+    try:
+        from .custom_mcp_tools import get_custom_mcp_tools
+
+        tools.extend(get_custom_mcp_tools(
+            user_id,
+            is_background=is_background,
+            is_pr_review=is_pr_review,
+            tool_capture=tool_capture,
+            send_tool_start=send_tool_start,
+            send_tool_completion=send_tool_completion,
+            send_tool_error=send_tool_error,
+            run_async_in_thread=run_async_in_thread,
+            wrap_func_with_capture=wrap_func_with_capture,
+        ))
+    except Exception as e:
+        logging.warning(f"Failed to add custom MCP tools (treating as not connected): {e}")
+
     # Add web_search tool with explicit args_schema so LLM sees full parameter schema
     # Apply context and notification wrappers similar to other tools
     context_wrapped_ws = with_user_context(web_search)

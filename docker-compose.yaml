@@ -35,6 +35,12 @@ x-common-env: &common-env
   # Terraform
   TF_CLI_CONFIG_FILE: /etc/terraform.rc
 
+  # Custom MCP server connector: allow registering MCP servers on private or
+  # loopback addresses. Keep false on multi-tenant deployments (a tenant could
+  # otherwise point Aurora at internal services); set true when self-hosting
+  # alongside MCP servers inside your own network.
+  MCP_ALLOW_PRIVATE_TARGETS: ${MCP_ALLOW_PRIVATE_TARGETS:-false}
+
   # SSL/TLS for external services
   POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-prefer}
   POSTGRES_SSLROOTCERT: ${POSTGRES_SSLROOTCERT:-}
