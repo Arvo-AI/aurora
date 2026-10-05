@@ -9,7 +9,6 @@ connection_check:
   required_any_fields:
     - access_token
     - pat_token
-  feature_flag: is_jira_enabled
 tools:
   - jira_search_issues
   - jira_get_issue

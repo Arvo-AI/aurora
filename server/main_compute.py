@@ -516,10 +516,8 @@ from routes.atlassian import bp as atlassian_bp  # noqa: F401
 app.register_blueprint(atlassian_bp, url_prefix="/atlassian")
 
 # --- Jira Integration Routes ---
-from utils.flags.feature_flags import is_jira_enabled
-if is_jira_enabled():
-    from routes.jira import bp as jira_bp  # noqa: F401
-    app.register_blueprint(jira_bp, url_prefix="/jira")
+from routes.jira import bp as jira_bp  # noqa: F401
+app.register_blueprint(jira_bp, url_prefix="/jira")
 
 # --- SharePoint Integration Routes ---
 from utils.flags.feature_flags import is_sharepoint_enabled

@@ -957,7 +957,6 @@ For Atlassian Cloud (`*.atlassian.net`):
 ##### 2. Configure Environment
 
 ```bash
-NEXT_PUBLIC_ENABLE_JIRA=true
 ATLASSIAN_CLIENT_ID=your-client-id
 ATLASSIAN_CLIENT_SECRET=your-client-secret
 ```
