@@ -115,6 +115,8 @@
     "picomatch": "^4.0.4",
     "yaml": "^2.8.3",
     "flatted": "^3.4.2",
-    "postcss": "$postcss"
+    "postcss": "$postcss",
+    "chokidar": "^4.0.3",
+    "braces": "https://github.com/micromatch/braces/tarball/28d440b5dd449dbf1fe6f3506cf94ecca4d02660"
   }
 }
