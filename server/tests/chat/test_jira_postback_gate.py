@@ -23,7 +23,7 @@ def task(monkeypatch):
     """
     import utils.cache.redis_client as redis_client
 
-    monkeypatch.setattr(redis_client, "get_redis_client", lambda: MagicMock())
+    monkeypatch.setattr(redis_client, "get_redis_client", MagicMock)
     monkeypatch.delitem(sys.modules, "chat.background.task", raising=False)
     import chat.background.task as task_mod
 
