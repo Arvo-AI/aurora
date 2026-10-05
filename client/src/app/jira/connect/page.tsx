@@ -15,10 +15,10 @@ export default function JiraConnectPage() {
         patUrlPlaceholder: "https://jira.yourcompany.com",
         storageKey: "isJiraConnected",
         patSteps: [
-          "In Jira Data Center, click your profile photo, then Profile.",
-          "Open Personal Access Tokens and choose Create token. Name it Aurora.",
-          "Copy the token immediately. Jira shows it only once.",
-          "Paste your site URL and that token below. Jira Cloud uses the OAuth button above instead.",
+          "Self-hosted Jira Data Center or Server 8.14+ only. Jira Cloud has no PAT — use Connect with Atlassian above.",
+          "Avatar (top right) → Profile → Personal access tokens in the left sidebar (not the main profile page).",
+          "Create token, name it Aurora, copy it once, then paste your site URL and token below.",
+          "Don't see Personal access tokens? You're on Cloud, on an older Server version, or your admin disabled PATs.",
         ],
       }}
       sibling={{

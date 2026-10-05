@@ -981,10 +981,15 @@ For self-hosted Confluence or Jira instances:
 2. Click **Create token**, name: `Aurora`, set expiry as needed
 3. Copy the token
 
-**Jira:**
-1. In Jira, go to your profile > **Personal Access Tokens**
-2. Click **Create token**, name: `Aurora`, set expiry as needed
-3. Copy the token
+**Jira (Data Center / Server 8.14+ only — not Jira Cloud):**
+1. Click your avatar (top right) → **Profile**
+2. In the **left sidebar**, select **Personal access tokens**
+3. Click **Create token**, name: `Aurora`, set expiry as needed
+4. Copy the token immediately (shown once)
+
+:::note Jira Cloud has no PAT
+If you use `*.atlassian.net`, you will not see **Personal access tokens** under Profile. Use **Option A (OAuth)** above instead.
+:::
 
 ##### 2. Connect via Aurora UI
 
