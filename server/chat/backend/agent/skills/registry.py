@@ -27,7 +27,6 @@ from utils.auth.stateless_auth import set_rls_context
 from utils.auth.token_management import get_token_data
 from utils.auth.stateless_auth import get_connected_providers
 from utils.flags import feature_flags
-from connectors.jira_connector.settings import get_jira_mode, normalize_jira_mode
 
 logger = logging.getLogger(__name__)
 
@@ -391,12 +390,6 @@ class SkillRegistry:
                 is_connected=False,
             )
 
-        # The Jira skill body states the org's write permission, which lives in
-        # preferences rather than the connection context. Resolved here so the
-        # interactive load_skill path renders it too, not just the RCA prompt.
-        if skill_id == "jira":
-            context = {**context, "jira_mode": get_jira_mode(user_id)}
-
         if extra_context:
             context = {**context, **extra_context}
         rendered = resolve_template(body, context)
@@ -544,8 +537,8 @@ class SkillRegistry:
                     logger.warning(f"Failed to fetch {provider_key} deployments: {e}")
                     ctx[f"{provider_key}_deploys_section"] = "(deployment data unavailable)"
 
-        # Jira mode — read-only unless the org opted into letting Aurora post
-        ctx["jira_mode"] = normalize_jira_mode(integrations.get("jira_mode"))
+        # Jira mode
+        ctx["jira_mode"] = integrations.get("jira_mode", "comment_only")
 
         # Bitbucket workspace selection
         if integrations.get("bitbucket"):

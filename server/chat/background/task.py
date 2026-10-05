@@ -20,12 +20,6 @@ from utils.cache.redis_client import get_redis_client
 from utils.log_sanitizer import sanitize
 from utils.auth.stateless_auth import set_rls_context, get_org_id_for_user
 from connectors.google_chat_connector.client import get_chat_app_client
-from connectors.jira_connector.settings import (
-    COMMENT_ONLY as JIRA_COMMENT_ONLY,
-    get_jira_mode,
-    jira_writes_allowed,
-    normalize_jira_mode,
-)
 from connectors.slack_connector.client import get_slack_client_for_user
 from utils.db.connection_pool import db_pool
 from chat.background.visualization_generator import update_visualization
@@ -414,11 +408,6 @@ def _build_rca_context(
     providers = sorted(set(verified_cloud + list(integrations.keys())))
 
     logger.info(f"[BackgroundChat] User {user_id} verified providers: {providers}, integrations: {list(integrations.keys())}")
-
-    # Jira's write permission travels with the integration map so the skill
-    # prompt and Phase 2 both see the same mode without re-reading prefs.
-    if integrations.get('jira'):
-        integrations['jira_mode'] = get_jira_mode(user_id)
 
     return {
         'source': source,
@@ -1036,6 +1025,17 @@ def run_background_chat(
 _JIRA_TOOL_NAMES = frozenset(('jira_add_comment', 'jira_create_issue'))
 
 
+def _should_file_in_jira(rca_context: Optional[Dict[str, Any]], session_id: str, user_id: str) -> bool:
+    """Whether the post-investigation Jira filing step should run."""
+    if not (rca_context and rca_context.get('integrations', {}).get('jira')):
+        return False
+    # Connected Jira is a context source until the org turns comment-back on.
+    from routes.jira.jira_routes import jira_comment_back_enabled
+    if not jira_comment_back_enabled(user_id):
+        return False
+    return not _session_has_successful_jira_action(session_id, user_id=user_id)
+
+
 def _session_has_successful_jira_action(session_id: str, user_id: str) -> bool:
     """Return True if the session already contains a successful Jira tool call.
 
@@ -1161,7 +1161,7 @@ def _build_jira_followup_prompt(jira_mode: str, service_name: str = "") -> str:
             "   jira_search_issues(jql='text ~ \"<service_name>\" AND type in "
             "(Bug, Incident) ORDER BY updated DESC')\n"
         )
-    if jira_mode == JIRA_COMMENT_ONLY:
+    if jira_mode == "comment_only":
         return (
             base
             + "2. Add your RCA findings as a single comment on the most relevant issue "
@@ -1257,23 +1257,6 @@ def _merge_investigation_messages(session_id: str, investigation_messages: list,
         logger.error(f"[JiraFollowup] Failed to merge messages: {exc}")
 
 
-def _should_file_in_jira(rca_context: Optional[Dict[str, Any]], session_id: str, user_id: str) -> bool:
-    """Whether the post-investigation Jira filing step should run.
-
-    Jira writes are authored by the Atlassian account that connected the
-    integration, so a merely-connected Jira (used as a context source) must not
-    file anything — the org has to opt in.
-    """
-    integrations = (rca_context or {}).get('integrations', {})
-    if not integrations.get('jira'):
-        return False
-    if not jira_writes_allowed(integrations.get('jira_mode')):
-        logger.info("[JiraAction] Skipping filing — Jira is read-only for this org")
-        return False
-    # The agent may already have filed mid-investigation; don't double-post.
-    return not _session_has_successful_jira_action(session_id, user_id=user_id)
-
-
 async def _run_jira_action(
     *,
     session_id: str,
@@ -1294,7 +1277,7 @@ async def _run_jira_action(
     from chat.backend.agent.llm import ModelConfig
     from main_chatbot import process_workflow_async
 
-    jira_mode = normalize_jira_mode(rca_context.get('integrations', {}).get('jira_mode'))
+    jira_mode = rca_context.get('integrations', {}).get('jira_mode', 'comment_only')
 
     service_name = ""
     if incident_id:
@@ -1567,8 +1550,7 @@ async def _execute_background_chat(
                 logger.exception("[BackgroundChat] Failed early Slack send")
 
         # --- Phase 2: Jira action ---
-        # Investigation is done. Now deterministically file in Jira, if the org
-        # opted into letting Aurora post.
+        # Investigation is done. File in Jira only if the org opted in.
         if _should_file_in_jira(rca_context, session_id, user_id):
             await _run_jira_action(
                 session_id=session_id,

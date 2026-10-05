@@ -11,16 +11,8 @@ from flask import Blueprint, jsonify, request
 from connectors.atlassian_auth.auth import refresh_access_token
 from connectors.jira_connector.client import JiraClient
 from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
-from connectors.jira_connector.attribution import attribute_adf
-from connectors.jira_connector.settings import (
-    FULL,
-    JIRA_MODE_KEY,
-    VALID_MODES,
-    get_jira_mode,
-    jira_writes_allowed,
-)
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import store_user_preference
+from utils.auth.stateless_auth import get_user_preference, store_user_preference
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
@@ -106,30 +98,6 @@ def _refresh_jira_credentials(user_id: str, creds: Dict[str, Any]) -> Optional[D
     return updated
 
 
-def _write_blocked(user_id: str, operation: str, require_full: bool = False) -> Optional[tuple]:
-    """Refuse a Jira write unless the org opted into letting Aurora post.
-
-    Returns a Flask (response, status) tuple when blocked, else None. Jira
-    writes are authored by the Atlassian account that connected the
-    integration, so they stay off until someone turns them on. ``require_full``
-    marks the operations (create/update/link) that comment_only excludes.
-    """
-    mode = get_jira_mode(user_id)
-    allowed = mode == FULL if require_full else jira_writes_allowed(mode)
-    if allowed:
-        return None
-    logger.info("[JIRA] Blocked %s — jiraMode is %s for user %s",
-                operation, sanitize(mode), sanitize(user_id))
-    hint = (
-        "Set Jira to \"Create & comment\" under Connectors → Jira → RCA permissions "
-        "to allow this."
-        if require_full else
-        "Enable writes under Connectors → Jira → RCA permissions to let Aurora post to Jira."
-    )
-    return jsonify({"error": f"Jira {operation} is not permitted in '{mode}' mode. {hint}",
-                    "jiraMode": mode}), 403
-
-
 # ------------------------------------------------------------------
 # POST /jira/search
 # ------------------------------------------------------------------
@@ -182,10 +150,6 @@ def get_issue(user_id, issue_key):
 @jira_bp.route("/issue", methods=["POST"])
 @require_permission("connectors", "write")
 def create_issue(user_id):
-    blocked = _write_blocked(user_id, "issue creation", require_full=True)
-    if blocked:
-        return blocked
-
     client, creds, error = _get_jira_client(user_id)
     if error:
         return jsonify({"error": error}), 404 if not creds else 400
@@ -197,7 +161,7 @@ def create_issue(user_id):
         return jsonify({"error": "projectKey and summary are required"}), 400
 
     description = data.get("description", "")
-    description_adf = attribute_adf(markdown_to_adf(description)) if description else None
+    description_adf = markdown_to_adf(description) if description else None
     issue_type = data.get("issueType", "Task")
     labels = data.get("labels")
     parent_key = data.get("parentKey")
@@ -224,10 +188,6 @@ def create_issue(user_id):
 @jira_bp.route("/issue/<issue_key>", methods=["PATCH"])
 @require_permission("connectors", "write")
 def update_issue(user_id, issue_key):
-    blocked = _write_blocked(user_id, "issue update", require_full=True)
-    if blocked:
-        return blocked
-
     client, creds, error = _get_jira_client(user_id)
     if error:
         return jsonify({"error": error}), 404 if not creds else 400
@@ -252,10 +212,6 @@ def update_issue(user_id, issue_key):
 @jira_bp.route("/issue/<issue_key>/comment", methods=["POST"])
 @require_permission("connectors", "write")
 def add_comment(user_id, issue_key):
-    blocked = _write_blocked(user_id, "commenting")
-    if blocked:
-        return blocked
-
     client, creds, error = _get_jira_client(user_id)
     if error:
         return jsonify({"error": error}), 404 if not creds else 400
@@ -265,7 +221,7 @@ def add_comment(user_id, issue_key):
     if not body_text:
         return jsonify({"error": "body is required"}), 400
 
-    body_adf = attribute_adf(text_to_adf(body_text))
+    body_adf = text_to_adf(body_text)
 
     try:
         result = _with_refresh(user_id, creds, client, lambda c: c.add_comment(issue_key, body_adf))
@@ -282,10 +238,6 @@ def add_comment(user_id, issue_key):
 @jira_bp.route("/issue/link", methods=["POST"])
 @require_permission("connectors", "write")
 def link_issues(user_id):
-    blocked = _write_blocked(user_id, "issue linking", require_full=True)
-    if blocked:
-        return blocked
-
     client, creds, error = _get_jira_client(user_id)
     if error:
         return jsonify({"error": error}), 404 if not creds else 400
@@ -310,10 +262,26 @@ def link_issues(user_id):
 # GET /jira/settings
 # ------------------------------------------------------------------
 
+JIRA_MODE_KEY = "jira_mode"
+JIRA_COMMENT_BACK_KEY = "jira_comment_back"
+VALID_MODES = ("full", "comment_only")
+
+
+def jira_comment_back_enabled(user_id: str) -> bool:
+    """True only when the org opted in. Unset stays off, unlike the old jira_mode default."""
+    # Anything other than an explicit true stays off.
+    return get_user_preference(user_id, JIRA_COMMENT_BACK_KEY, default=False) is True
+
+
+def _settings_payload(user_id: str) -> Dict[str, Any]:
+    mode = get_user_preference(user_id, JIRA_MODE_KEY, default="comment_only")
+    return {"jiraMode": mode, "commentBack": jira_comment_back_enabled(user_id)}
+
+
 @jira_bp.route("/settings", methods=["GET"])
 @require_permission("connectors", "read")
 def get_settings(user_id):
-    return jsonify({"jiraMode": get_jira_mode(user_id)})
+    return jsonify(_settings_payload(user_id))
 
 
 # ------------------------------------------------------------------
@@ -325,14 +293,33 @@ def get_settings(user_id):
 def update_settings(user_id):
     data = request.get_json(force=True, silent=True) or {}
     mode = data.get("jiraMode")
+    comment_back = data.get("commentBack")
 
-    if mode not in VALID_MODES:
-        return jsonify({"error": f"jiraMode must be one of: {', '.join(VALID_MODES)}"}), 400
+    # Either field can be saved on its own — the mode picker and the
+    # comment-back switch are separate controls.
+    if mode is None and comment_back is None:
+        return jsonify({"error": "jiraMode or commentBack is required"}), 400
 
-    store_user_preference(user_id, JIRA_MODE_KEY, mode)
-    logger.info("[JIRA] Updated settings for user %s: jiraMode=%s", sanitize(user_id), sanitize(mode))
+    if mode is not None:
+        if mode not in VALID_MODES:
+            return jsonify({"error": f"jiraMode must be one of: {', '.join(VALID_MODES)}"}), 400
+        store_user_preference(user_id, JIRA_MODE_KEY, mode)
 
-    return jsonify({"success": True, "jiraMode": mode})
+    if comment_back is not None:
+        if not isinstance(comment_back, bool):
+            return jsonify({"error": "commentBack must be a boolean"}), 400
+        store_user_preference(user_id, JIRA_COMMENT_BACK_KEY, comment_back)
+
+    logger.info(
+        "[JIRA] Updated settings for user %s: jiraMode=%s commentBack=%s",
+        sanitize(user_id),
+        sanitize(mode),
+        comment_back,
+    )
+
+    payload = _settings_payload(user_id)
+    payload["success"] = True
+    return jsonify(payload)
 
 
 # ------------------------------------------------------------------

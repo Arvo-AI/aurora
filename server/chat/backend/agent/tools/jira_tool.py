@@ -9,33 +9,9 @@ from pydantic import BaseModel, Field
 
 from connectors.jira_connector.client import JiraClient
 from connectors.jira_connector.adf_converter import markdown_to_adf
-from connectors.jira_connector.attribution import attribute_adf
-from connectors.jira_connector.settings import FULL, get_jira_mode, jira_writes_allowed
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 
 logger = logging.getLogger(__name__)
-
-
-def _refuse_write(user_id: str, operation: str, require_full: bool = False) -> Optional[str]:
-    """Return a tool-shaped refusal unless the org opted into Jira writes.
-
-    Belt-and-braces with the tool registration gate in cloud_tools: a mode
-    change mid-session, or a model that calls a stale tool handle, must not
-    reach Jira. ``require_full`` covers create/update/link, which comment_only
-    excludes.
-    """
-    mode = get_jira_mode(user_id)
-    allowed = mode == FULL if require_full else jira_writes_allowed(mode)
-    if allowed:
-        return None
-    logger.info("[JIRA-TOOL] Refused %s — jira_mode=%s", operation, mode)
-    return json.dumps(
-        {"status": "error",
-         "error": f"Jira {operation} is not permitted: this organization has Jira in "
-                  f"'{mode}' mode. Do not retry — report the finding in your answer instead.",
-         "jira_mode": mode},
-        ensure_ascii=False,
-    )
 
 
 def _refresh_oauth_token(user_id: str, creds: dict) -> Optional[dict]:
@@ -267,13 +243,9 @@ def jira_add_comment(
     if not user_id:
         raise ValueError("user_id is required for Jira comment")
 
-    refusal = _refuse_write(user_id, "commenting")
-    if refusal:
-        return refusal
-
     try:
         client = _get_client(user_id)
-        body_adf = attribute_adf(markdown_to_adf(comment))
+        body_adf = markdown_to_adf(comment)
         result = client.add_comment(issue_key, body_adf)
     except ValueError:
         raise
@@ -313,13 +285,9 @@ def jira_create_issue(
     if not user_id:
         raise ValueError("user_id is required for Jira issue creation")
 
-    refusal = _refuse_write(user_id, "issue creation", require_full=True)
-    if refusal:
-        return refusal
-
     try:
         client = _get_client(user_id)
-        desc_adf = attribute_adf(markdown_to_adf(description)) if description else None
+        desc_adf = markdown_to_adf(description) if description else None
         result = client.create_issue(
             project_key=project_key,
             summary=summary,
@@ -372,10 +340,6 @@ def jira_update_issue(
     if not fields:
         raise ValueError("fields dict is required")
 
-    refusal = _refuse_write(user_id, "issue update", require_full=True)
-    if refusal:
-        return refusal
-
     try:
         client = _get_client(user_id)
         client.update_issue(issue_key, fields=fields)
@@ -402,10 +366,6 @@ def jira_link_issues(
     _ = session_id
     if not user_id:
         raise ValueError("user_id is required for Jira issue linking")
-
-    refusal = _refuse_write(user_id, "issue linking", require_full=True)
-    if refusal:
-        return refusal
 
     try:
         client = _get_client(user_id)

@@ -22,23 +22,17 @@ rca_priority: 1
 allowed-tools: jira_search_issues, jira_get_issue, jira_add_comment, jira_create_issue, jira_update_issue, jira_link_issues
 metadata:
   author: aurora
-  version: "2.0"
+  version: "1.0"
 ---
 
 # Jira Integration
 
 ## Overview
-Jira is a **context source** for Root Cause Analysis: search it for recent changes, open bugs and past incidents BEFORE infrastructure or CI/CD tools.
+Jira integration for searching recent development context during Root Cause Analysis and tracking incidents afterward. Jira is a **mandatory first step** in any RCA investigation -- search here BEFORE infrastructure or CI/CD tools.
 
-Whether Aurora may also *write* to Jira is an org setting (`jira_mode`), and it is **off by default**:
-- `read_only` (default): search and read only. `jira_search_issues` and `jira_get_issue`.
-- `comment_only`: may also comment on issues that already exist.
-- `full`: may also create, update and link issues.
-
-**This org is in `{jira_mode}` mode.** Tools outside that mode are not registered; calling one fails.
-
-### Why writes are off by default
-Atlassian OAuth has no bot identity. Anything Aurora posts is authored by the Atlassian account that connected the integration, so it shows up under a real person's name. Every write therefore carries an Aurora attribution banner, and writes stay disabled until an admin turns them on.
+Jira operates in one of two modes based on user preference (`jira_mode`):
+- `comment_only` (default): Only `jira_search_issues`, `jira_get_issue`, and `jira_add_comment` are available.
+- `full`: All six tools are available including create, update, and link.
 
 ## Instructions
 
@@ -54,12 +48,12 @@ Your FIRST tool calls MUST be `jira_search_issues`.
 **Investigation tools (always available):**
 - `jira_search_issues(jql='...')` -- Search Jira issues using JQL. Returns matching issues with key, summary, status, assignee, labels.
 - `jira_get_issue(issue_key='PROJ-123')` -- Get full details of a Jira issue by key. Returns description, status, comments, linked PRs.
+- `jira_add_comment(issue_key='PROJ-123', comment='...')` -- Add a comment to a Jira issue. Non-destructive operation.
 
-**Write tools (only when `jira_mode` allows):**
-- `jira_add_comment(issue_key='PROJ-123', comment='...')` -- `comment_only` or `full`.
-- `jira_create_issue(project_key='PROJ', summary='...', description='...', issue_type='Bug')` -- `full` only.
-- `jira_update_issue(issue_key='PROJ-123', ...)` -- `full` only.
-- `jira_link_issues(inward_issue='PROJ-123', outward_issue='PROJ-456', link_type='Relates')` -- `full` only.
+**Write tools (full mode only):**
+- `jira_create_issue(project_key='PROJ', summary='...', description='...', issue_type='Bug')` -- Create a new Jira issue in a project.
+- `jira_update_issue(issue_key='PROJ-123', ...)` -- Update fields on an existing Jira issue.
+- `jira_link_issues(inward_issue='PROJ-123', outward_issue='PROJ-456', link_type='Relates')` -- Create a link between two Jira issues (Relates, Blocks, Clones, etc.).
 
 ### RCA Investigation Flow
 
@@ -80,27 +74,22 @@ Your FIRST tool calls MUST be `jira_search_issues`.
 #### Step 3 -- Use Jira findings to NARROW infrastructure investigation
 If a ticket mentions a DB migration, focus on DB connectivity. If a ticket mentions a config change, check configs first.
 
-### Post-Investigation (read_only mode)
-- Do NOT attempt any Jira write. Put the findings in your answer and cite the Jira issues you read as markdown links.
-
 ### Post-Investigation (comment_only mode)
-- `jira_add_comment(issue_key='PROJ-123', comment='update')` -- Add findings to an existing issue.
-- Do NOT create new issues or link issues.
-- After commenting, the tool returns a `url` field. Share it as a markdown link.
+- `jira_add_comment(issue_key='PROJ-123', comment='update')` -- Add findings to existing issue
+- After adding a comment, the tool returns a `url` field. Always share this link with the user as a markdown link so they can click through to Jira.
 - Write comments as short, clean plain text. No markdown syntax. Structure: Title, Root Cause, Impact, Evidence, Remediation. Under 15 lines.
+- NOTE: In comment_only mode, do NOT create new issues or link issues.
 
 ### Post-Investigation (full mode)
-- `jira_create_issue(project_key='PROJ', summary='title', description='details', issue_type='Bug')` -- Create incident tracking issue.
-- `jira_add_comment(issue_key='PROJ-123', comment='update')` -- Add findings to an existing issue.
-- Prefer commenting on a matching issue over creating a new one.
-- After commenting or creating, the tool returns a `url` field. Share it as a markdown link.
+- `jira_create_issue(project_key='PROJ', summary='title', description='details', issue_type='Bug')` -- Create incident tracking issue
+- `jira_add_comment(issue_key='PROJ-123', comment='update')` -- Add findings to existing issue
+- After adding a comment or creating an issue, the tool returns a `url` field. Always share this link with the user as a markdown link so they can click through to Jira.
 - Write comments as short, clean plain text. No markdown syntax. Structure: Title, Root Cause, Impact, Evidence, Remediation. Under 15 lines.
 
 ### Important Rules
 - **CRITICAL: During the investigation phase, ONLY use jira_search_issues and jira_get_issue.**
 - Do NOT use jira_create_issue, jira_add_comment, jira_update_issue, or jira_link_issues during investigation.
-- Jira filing, when the org has enabled it, happens automatically in a separate step after your investigation completes.
-- If a write tool returns a permission error, do NOT retry it — the org has writes disabled. Report the finding in your answer instead.
+- Do not file during the investigation. A later step posts to Jira only if this org turned on comment-back.
 - After Jira context, proceed to infrastructure/CI tools.
 
 ## RCA Investigation (Mandatory First Step)
@@ -123,4 +112,4 @@ If a ticket mentions a DB migration, focus on DB connectivity. If a ticket menti
 Use findings to NARROW infrastructure investigation.
 
 **CRITICAL: During investigation, ONLY use jira_search_issues and jira_get_issue.**
-Jira filing happens after investigation completes, and only if this org enabled Jira writes.
+Do not file during the investigation. A later step posts to Jira only if this org turned on comment-back.

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
-import { Loader2, CheckCircle, ExternalLink, PenLine, FilePlus2, AlertTriangle, Copy, Webhook, Eye, Info, type LucideIcon } from "lucide-react";
+import { Loader2, CheckCircle, ExternalLink, PenLine, FilePlus2, AlertTriangle, Copy, Webhook } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { atlassianService, AtlassianStatus } from "@/lib/services/atlassian";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 
 interface ProductConfig {
   key: "jira" | "confluence";
@@ -31,32 +32,6 @@ interface SiblingConfig {
   enabled: boolean;
 }
 
-// How much Aurora may write back to Jira. Read-only is the default: Atlassian
-// OAuth has no bot identity, so anything Aurora posts is authored by the
-// account that connected the integration.
-type JiraMode = "read_only" | "comment_only" | "full";
-
-const JIRA_MODES: { value: JiraMode; label: string; description: string; icon: LucideIcon }[] = [
-  {
-    value: "read_only",
-    label: "Read only (recommended)",
-    description: "Search and read issues for investigation context — Aurora never posts to Jira",
-    icon: Eye,
-  },
-  {
-    value: "comment_only",
-    label: "Comment on existing issues",
-    description: "Post RCA findings as a comment on a matching issue — no new issues or links",
-    icon: PenLine,
-  },
-  {
-    value: "full",
-    label: "Create & comment",
-    description: "Create new issues, link related issues, and comment on existing ones",
-    icon: FilePlus2,
-  },
-];
-
 interface AtlassianConnectPageProps {
   product: ProductConfig;
   sibling?: SiblingConfig;
@@ -72,7 +47,8 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const [patUrl, setPatUrl] = useState("");
   const [patToken, setPatToken] = useState("");
   const [isPatConnecting, setIsPatConnecting] = useState(false);
-  const [jiraMode, setJiraMode] = useState<JiraMode>("read_only");
+  const [jiraMode, setJiraMode] = useState<"full" | "comment_only">("comment_only");
+  const [commentBack, setCommentBack] = useState(false);
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [oauthConfigError, setOauthConfigError] = useState(false);
@@ -101,7 +77,8 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
       const res = await fetch("/api/jira/settings", { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
-        if (data.jiraMode) setJiraMode(data.jiraMode as JiraMode);
+        if (data.jiraMode) setJiraMode(data.jiraMode);
+        setCommentBack(data.commentBack === true);
       }
     } catch { /* silent */ } finally { setIsLoadingSettings(false); }
     try {
@@ -113,7 +90,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
     } catch { /* silent */ }
   };
 
-  const saveJiraMode = async (mode: JiraMode) => {
+  const saveJiraMode = async (mode: "full" | "comment_only") => {
     const previousMode = jiraMode;
     setJiraMode(mode);
     setIsSavingSettings(true);
@@ -125,16 +102,41 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
         body: JSON.stringify({ jiraMode: mode }),
       });
       if (res.ok) {
-        toast({
-          title: "Settings saved",
-          description: JIRA_MODES.find((m) => m.value === mode)?.description,
-        });
+        toast({ title: "Settings saved", description: mode === "full" ? "Aurora can create issues and comment" : "Aurora will only comment on existing issues" });
       } else {
         setJiraMode(previousMode);
         toast({ title: "Failed to save settings", variant: "destructive" });
       }
     } catch {
       setJiraMode(previousMode);
+      toast({ title: "Failed to save settings", variant: "destructive" });
+    } finally { setIsSavingSettings(false); }
+  };
+
+  const saveCommentBack = async (enabled: boolean) => {
+    const previous = commentBack;
+    setCommentBack(enabled);
+    setIsSavingSettings(true);
+    try {
+      const res = await fetch("/api/jira/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ commentBack: enabled }),
+      });
+      if (res.ok) {
+        toast({
+          title: "Settings saved",
+          description: enabled
+            ? "Aurora will comment back on Jira tickets after an investigation"
+            : "Aurora will not comment on Jira tickets",
+        });
+      } else {
+        setCommentBack(previous);
+        toast({ title: "Failed to save settings", variant: "destructive" });
+      }
+    } catch {
+      setCommentBack(previous);
       toast({ title: "Failed to save settings", variant: "destructive" });
     } finally { setIsSavingSettings(false); }
   };
@@ -251,7 +253,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">RCA Permissions</CardTitle>
                 <CardDescription className="text-xs">
-                  Choose what Aurora can do with Jira during Root Cause Analysis
+                  Aurora reads Jira for investigation context. Commenting back stays off until you turn it on.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2 pt-0">
@@ -261,43 +263,73 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                   </div>
                 ) : (
                   <>
-                    {JIRA_MODES.map(({ value, label, description, icon: Icon }) => (
-                      <button
-                        key={value}
-                        onClick={() => saveJiraMode(value)}
-                        disabled={isSavingSettings}
-                        className={`w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors ${
-                          jiraMode === value
-                            ? "border-[#2684FF] bg-[#2684FF]/[0.04]"
-                            : "border-border hover:bg-muted/50"
-                        }`}
-                      >
-                        <div className={`mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                          jiraMode === value ? "border-[#2684FF]" : "border-muted-foreground/30"
-                        }`}>
-                          {jiraMode === value && <div className="h-2.5 w-2.5 rounded-full bg-[#2684FF]" />}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span className="text-sm font-medium">{label}</span>
-                          </div>
-                          <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
-                        </div>
-                      </button>
-                    ))}
-
-                    {/* Atlassian OAuth has no bot principal, so a posted comment
-                        carries the connecting user's name — warn before they opt in. */}
-                    {jiraMode !== "read_only" && (
-                      <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/40 bg-amber-500/[0.05] p-3">
-                        <Info className="h-4 w-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-                        <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
-                          Atlassian has no bot identity for OAuth apps, so anything Aurora posts
-                          will show the account that connected Jira as the author. Every post
-                          includes an Aurora attribution banner saying it was generated automatically.
+                    <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                      <div className="space-y-0.5">
+                        <Label htmlFor="jira-comment-back" className="text-sm font-medium">
+                          Comment back on Jira tickets
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          After an investigation, post the RCA onto the matching ticket.
+                          Comments are posted by the account that connected Jira.
                         </p>
                       </div>
+                      <Switch
+                        id="jira-comment-back"
+                        checked={commentBack}
+                        onCheckedChange={saveCommentBack}
+                        disabled={isSavingSettings}
+                      />
+                    </div>
+                    {commentBack && (
+                    <button
+                      onClick={() => saveJiraMode("comment_only")}
+                      disabled={isSavingSettings}
+                      className={`w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors ${
+                        jiraMode === "comment_only"
+                          ? "border-[#2684FF] bg-[#2684FF]/[0.04]"
+                          : "border-border hover:bg-muted/50"
+                      }`}
+                    >
+                      <div className={`mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                        jiraMode === "comment_only" ? "border-[#2684FF]" : "border-muted-foreground/30"
+                      }`}>
+                        {jiraMode === "comment_only" && <div className="h-2.5 w-2.5 rounded-full bg-[#2684FF]" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <PenLine className="h-3.5 w-3.5 text-muted-foreground" />
+                          <span className="text-sm font-medium">Comment only</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Only add comments to existing issues — no new issues or links
+                        </p>
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={() => saveJiraMode("full")}
+                      disabled={isSavingSettings}
+                      className={`w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors ${
+                        jiraMode === "full"
+                          ? "border-[#2684FF] bg-[#2684FF]/[0.04]"
+                          : "border-border hover:bg-muted/50"
+                      }`}
+                    >
+                      <div className={`mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                        jiraMode === "full" ? "border-[#2684FF]" : "border-muted-foreground/30"
+                      }`}>
+                        {jiraMode === "full" && <div className="h-2.5 w-2.5 rounded-full bg-[#2684FF]" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <FilePlus2 className="h-3.5 w-3.5 text-muted-foreground" />
+                          <span className="text-sm font-medium">Create & comment</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Create new issues, link related issues, and comment on existing ones
+                        </p>
+                      </div>
+                    </button>
                     )}
                   </>
                 )}

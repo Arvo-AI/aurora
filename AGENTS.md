@@ -205,48 +205,6 @@ kubectl top nodes
 token-returning read such as `aws sts get-session-token`, `aws eks get-token`,
 `aws ecr get-login-password`, or `aws ssm get-parameter --with-decryption`.
 
-## Writing Back to Connected Tools
-
-A connector added as a *context source* must not start writing on its own. Two
-things decide whether a write-back is acceptable:
-
-**Can it post under its own identity?** Slack, PagerDuty and incident.io issue
-bot/app credentials, so an Aurora post is visibly Aurora's. Atlassian 3LO does
-not: the token acts *as the user who authorized it*, so a Jira comment Aurora
-posts shows that person as the author, with no way to override it. There is no
-API fix — attribution has to go in the body, and the capability has to be
-opt-in.
-
-**Did the org ask for it?** Every write-back is gated on an explicit org
-preference that defaults to off:
-
-| Connector | Preference | Default |
-|---|---|---|
-| Jira | `jira_write_mode` (`read_only` / `comment_only` / `full`) | `read_only` |
-| incident.io | `incidentio_postback_enabled` | off |
-| PagerDuty | org opt-in toggle | off |
-
-For Jira specifically:
-- `server/connectors/jira_connector/settings.py` is the only place that resolves
-  the mode. Unknown or unset values fail closed to `read_only`.
-- The preference key is `jira_write_mode`, deliberately **not** the old
-  `jira_mode`. The old key's *absence* meant "commenting is on", so reading it
-  would carry that permission forward; a new key resets every org to read-only
-  idempotently. There's no migration-tracking table, so a one-shot `UPDATE` in
-  the startup path would re-run on every boot and pin orgs to read-only forever.
-- Enforced in three layers, because each covers a hole the others don't: tool
-  *registration* (`cloud_tools.py`) keeps a disallowed tool out of the model's
-  hands; the tool *body* (`jira_tool.py`) catches a mode change mid-session or a
-  stale tool handle; the *route* (`jira_routes.py`) catches MCP and any direct
-  API caller.
-- `server/connectors/jira_connector/attribution.py` wraps every comment and
-  description. It's idempotent so a retry doesn't stack banners, and it survives
-  the ADF→plain-text conversion Jira Data Center needs.
-- The post-investigation filing step (`_should_file_in_jira` in
-  `chat/background/task.py`) is what used to post on every completed RCA with
-  Jira merely connected. The mode now rides on `rca_context['integrations']`,
-  so the skill prompt and that step agree without re-reading preferences.
-
 ## New Connector Checklist
 
 Every new connector (or connector route file) **must** satisfy all of the following before merge. CI enforces RBAC via `server/tests/architectural/test_connector_rbac.py`.

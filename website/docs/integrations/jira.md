@@ -4,42 +4,16 @@ sidebar_position: 5
 
 # Jira
 
-Aurora integrates with [Jira](https://www.atlassian.com/software/jira) in two directions:
-
-1. **As a context source for RCA** (always on). Aurora searches Jira for recent changes, open bugs and past incidents before touching infrastructure tools.
-2. **As a webhook trigger**. When a supported issue type (Bug, Incident, Problem, Defect, Production Issue) is created, Aurora creates an incident and runs its full RCA pipeline — the same investigation flow triggered by Datadog, Grafana, or PagerDuty alerts.
-
-Aurora does **not** write to Jira unless you turn it on. See [RCA permissions](#rca-permissions).
-
-## RCA Permissions
-
-Atlassian OAuth apps have no bot identity. A token issued through the Atlassian authorization flow acts *as the user who authorized it*, so a comment Aurora posts shows **that person** as its author — there is no "Aurora" account to post as.
-
-Because of that, Jira write access is opt-in per org, configured under **Connectors → Jira → RCA Permissions**:
-
-| Mode | What Aurora may do |
-|------|--------------------|
-| **Read only** (default) | Search and read issues for investigation context. Never posts. |
-| **Comment on existing issues** | Also posts RCA findings as a comment on a matching issue. No new issues or links. |
-| **Create & comment** | Also creates new issues, updates fields, and links related issues. |
-
-Whichever mode is on, every comment and issue description Aurora writes is wrapped in an attribution banner stating that it was generated automatically by Aurora through the connected account and that the named author did not write it. This is the only attribution mechanism available, since the author field is not Aurora's to set.
-
-Changing the mode takes effect on the next investigation; it is not retroactive.
-
-:::note Upgrading from an earlier version
-Earlier versions had no read-only tier and commented on issues as soon as Jira was connected. On upgrade, every org is reset to **Read only** — including orgs that had previously chosen to allow comments. Re-select the mode you want under **Connectors → Jira**.
-:::
+Aurora integrates with [Jira](https://www.atlassian.com/software/jira) to automatically trigger root cause analysis when supported issue types (Bug, Incident, Problem, Defect, Production Issue) are created. When such an issue is created in Jira, Aurora creates an incident and runs its full RCA pipeline — the same investigation flow triggered by Datadog, Grafana, or PagerDuty alerts.
 
 ## What You Get
 
 | Capability | Description |
 |------------|-------------|
-| **Jira as RCA context** | The agent searches Jira for recent deploys, open bugs and prior incidents before investigating infrastructure |
 | **Automatic RCA from bugs** | Bug issues created in Jira trigger Aurora's background RCA pipeline |
 | **Incident creation** | Each qualifying Jira issue becomes an Aurora incident with full tracking |
 | **Alert correlation** | Incoming issues are correlated with existing incidents by title, service, and time |
-| **Optional write-back** | With writes enabled, findings are filed as a comment (or a new issue) after the investigation completes |
+| **RCA with full context** | The RCA agent uses the Jira issue details (summary, description, priority, components) plus all connected observability tools |
 
 ## Supported Issue Types
 
