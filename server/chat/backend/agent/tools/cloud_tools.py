@@ -2741,19 +2741,32 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             from utils.auth.token_management import get_token_data as _get_jira_creds
             _jira_creds = _get_jira_creds(user_id, "jira")
             if _jira_creds:
-                from utils.auth.stateless_auth import get_user_preference
-                _jira_mode = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
+                from connectors.jira_connector.settings import (
+                    COMMENT_ONLY as _JIRA_COMMENT_ONLY,
+                    FULL as _JIRA_FULL,
+                    get_jira_mode as _get_jira_mode,
+                )
+                _jira_mode = _get_jira_mode(user_id)
 
+                # Read tools are always available — Jira's value during RCA is
+                # as a context source, which needs no write access.
                 _jira_tools = [
                     (jira_search_issues, "jira_search_issues", JiraSearchIssuesArgs,
                      "Search Jira issues using JQL. Returns matching issues with key, summary, status, assignee, labels."),
                     (jira_get_issue, "jira_get_issue", JiraGetIssueArgs,
                      "Get full details of a Jira issue by key (e.g. OPS-123). Returns description, status, comments."),
-                    (jira_add_comment, "jira_add_comment", JiraAddCommentArgs,
-                     "Add a comment to a Jira issue. Non-destructive operation."),
                 ]
 
-                if _jira_mode != "comment_only":
+                # Commenting posts as the Atlassian account that connected Jira,
+                # so it's only registered once the org opts in.
+                if _jira_mode in (_JIRA_COMMENT_ONLY, _JIRA_FULL):
+                    _jira_tools.append(
+                        (jira_add_comment, "jira_add_comment", JiraAddCommentArgs,
+                         "Add a comment to a Jira issue. The comment is authored by the Atlassian "
+                         "account that connected Jira and carries an Aurora attribution banner."),
+                    )
+
+                if _jira_mode == _JIRA_FULL:
                     _jira_tools.extend([
                         (jira_create_issue, "jira_create_issue", JiraCreateIssueArgs,
                          "Create a new Jira issue in a project. Requires project key, summary, and optional description."),

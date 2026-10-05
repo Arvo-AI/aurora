@@ -970,7 +970,7 @@ ATLASSIAN_CLIENT_SECRET=your-client-secret
 3. Click **Connect with Atlassian**
 4. Authorize Aurora in the Atlassian popup
 5. Connection complete - the site URL is detected automatically
-6. For Jira, choose the agent permission tier (Read Only or Full Access)
+6. For Jira, choose what Aurora may do with it. **Read only** is the default and recommended: Aurora searches Jira for investigation context and never posts. See [Jira](./jira.md#rca-permissions) before enabling writes — Atlassian OAuth has no bot identity, so anything Aurora posts is authored by the account that connected the integration.
 
 #### Option B: Data Center (PAT)
 

@@ -703,9 +703,12 @@ def export_to_jira(user_id, incident_id):
         return jsonify({"error": "Jira credentials incomplete: base_url required for PAT auth"}), 400
 
     from connectors.jira_connector.adf_converter import markdown_to_adf, extract_action_items, text_to_adf
+    from connectors.jira_connector.attribution import attribute_adf
     from connectors.jira_connector.client import JiraClient
 
-    description_adf = markdown_to_adf(content)
+    # Export is an explicit user action (no jira_mode gate), but the issue is
+    # still authored by the connected Atlassian account — label it as Aurora's.
+    description_adf = attribute_adf(markdown_to_adf(content))
     title = f"Postmortem - Incident {incident_id[:8]}"
 
     try:

@@ -11,8 +11,16 @@ from flask import Blueprint, jsonify, request
 from connectors.atlassian_auth.auth import refresh_access_token
 from connectors.jira_connector.client import JiraClient
 from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
+from connectors.jira_connector.attribution import attribute_adf
+from connectors.jira_connector.settings import (
+    FULL,
+    JIRA_MODE_KEY,
+    VALID_MODES,
+    get_jira_mode,
+    jira_writes_allowed,
+)
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_user_preference, store_user_preference
+from utils.auth.stateless_auth import store_user_preference
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
@@ -98,6 +106,30 @@ def _refresh_jira_credentials(user_id: str, creds: Dict[str, Any]) -> Optional[D
     return updated
 
 
+def _write_blocked(user_id: str, operation: str, require_full: bool = False) -> Optional[tuple]:
+    """Refuse a Jira write unless the org opted into letting Aurora post.
+
+    Returns a Flask (response, status) tuple when blocked, else None. Jira
+    writes are authored by the Atlassian account that connected the
+    integration, so they stay off until someone turns them on. ``require_full``
+    marks the operations (create/update/link) that comment_only excludes.
+    """
+    mode = get_jira_mode(user_id)
+    allowed = mode == FULL if require_full else jira_writes_allowed(mode)
+    if allowed:
+        return None
+    logger.info("[JIRA] Blocked %s — jiraMode is %s for user %s",
+                operation, sanitize(mode), sanitize(user_id))
+    hint = (
+        "Set Jira to \"Create & comment\" under Connectors → Jira → RCA permissions "
+        "to allow this."
+        if require_full else
+        "Enable writes under Connectors → Jira → RCA permissions to let Aurora post to Jira."
+    )
+    return jsonify({"error": f"Jira {operation} is not permitted in '{mode}' mode. {hint}",
+                    "jiraMode": mode}), 403
+
+
 # ------------------------------------------------------------------
 # POST /jira/search
 # ------------------------------------------------------------------
@@ -150,6 +182,10 @@ def get_issue(user_id, issue_key):
 @jira_bp.route("/issue", methods=["POST"])
 @require_permission("connectors", "write")
 def create_issue(user_id):
+    blocked = _write_blocked(user_id, "issue creation", require_full=True)
+    if blocked:
+        return blocked
+
     client, creds, error = _get_jira_client(user_id)
     if error:
         return jsonify({"error": error}), 404 if not creds else 400
@@ -161,7 +197,7 @@ def create_issue(user_id):
         return jsonify({"error": "projectKey and summary are required"}), 400
 
     description = data.get("description", "")
-    description_adf = markdown_to_adf(description) if description else None
+    description_adf = attribute_adf(markdown_to_adf(description)) if description else None
     issue_type = data.get("issueType", "Task")
     labels = data.get("labels")
     parent_key = data.get("parentKey")
@@ -188,6 +224,10 @@ def create_issue(user_id):
 @jira_bp.route("/issue/<issue_key>", methods=["PATCH"])
 @require_permission("connectors", "write")
 def update_issue(user_id, issue_key):
+    blocked = _write_blocked(user_id, "issue update", require_full=True)
+    if blocked:
+        return blocked
+
     client, creds, error = _get_jira_client(user_id)
     if error:
         return jsonify({"error": error}), 404 if not creds else 400
@@ -212,6 +252,10 @@ def update_issue(user_id, issue_key):
 @jira_bp.route("/issue/<issue_key>/comment", methods=["POST"])
 @require_permission("connectors", "write")
 def add_comment(user_id, issue_key):
+    blocked = _write_blocked(user_id, "commenting")
+    if blocked:
+        return blocked
+
     client, creds, error = _get_jira_client(user_id)
     if error:
         return jsonify({"error": error}), 404 if not creds else 400
@@ -221,7 +265,7 @@ def add_comment(user_id, issue_key):
     if not body_text:
         return jsonify({"error": "body is required"}), 400
 
-    body_adf = text_to_adf(body_text)
+    body_adf = attribute_adf(text_to_adf(body_text))
 
     try:
         result = _with_refresh(user_id, creds, client, lambda c: c.add_comment(issue_key, body_adf))
@@ -238,6 +282,10 @@ def add_comment(user_id, issue_key):
 @jira_bp.route("/issue/link", methods=["POST"])
 @require_permission("connectors", "write")
 def link_issues(user_id):
+    blocked = _write_blocked(user_id, "issue linking", require_full=True)
+    if blocked:
+        return blocked
+
     client, creds, error = _get_jira_client(user_id)
     if error:
         return jsonify({"error": error}), 404 if not creds else 400
@@ -262,15 +310,10 @@ def link_issues(user_id):
 # GET /jira/settings
 # ------------------------------------------------------------------
 
-JIRA_MODE_KEY = "jira_mode"
-VALID_MODES = ("full", "comment_only")
-
-
 @jira_bp.route("/settings", methods=["GET"])
 @require_permission("connectors", "read")
 def get_settings(user_id):
-    mode = get_user_preference(user_id, JIRA_MODE_KEY, default="comment_only")
-    return jsonify({"jiraMode": mode})
+    return jsonify({"jiraMode": get_jira_mode(user_id)})
 
 
 # ------------------------------------------------------------------
