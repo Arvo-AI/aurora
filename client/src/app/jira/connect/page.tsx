@@ -14,6 +14,12 @@ export default function JiraConnectPage() {
         dcLabel: "Jira Data Center",
         patUrlPlaceholder: "https://jira.yourcompany.com",
         storageKey: "isJiraConnected",
+        patSteps: [
+          "In Jira Data Center, click your profile photo, then Profile.",
+          "Open Personal Access Tokens and choose Create token. Name it Aurora.",
+          "Copy the token immediately. Jira shows it only once.",
+          "Paste your site URL and that token below. Jira Cloud uses the OAuth button above instead.",
+        ],
       }}
       sibling={{
         key: "confluence",

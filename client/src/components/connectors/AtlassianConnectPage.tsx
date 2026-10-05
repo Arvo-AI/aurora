@@ -21,6 +21,7 @@ interface ProductConfig {
   dcLabel: string;
   patUrlPlaceholder: string;
   storageKey: string;
+  patSteps?: string[];
 }
 
 interface SiblingConfig {
@@ -499,6 +500,13 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
             <CardHeader>
               <CardTitle className="text-base">{product.dcLabel}</CardTitle>
               <CardDescription>Connect via Personal Access Token</CardDescription>
+              {product.patSteps && product.patSteps.length > 0 && (
+                <ol className="list-decimal space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground">
+                  {product.patSteps.map((step) => (
+                    <li key={step}>{step}</li>
+                  ))}
+                </ol>
+              )}
             </CardHeader>
             <CardContent>
               <form onSubmit={handlePatConnect} className="space-y-3">
