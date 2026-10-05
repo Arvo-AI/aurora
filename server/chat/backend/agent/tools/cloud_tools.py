@@ -984,7 +984,6 @@ __all__ = [
 
 # Import MCP functionality from separate module
 from .mcp_tools import (
-    REAL_MCP_ENABLED,
     REAL_MCP_SERVER_PATHS,
     RealMCPServerManager,
     _mcp_manager,

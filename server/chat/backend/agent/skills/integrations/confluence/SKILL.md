@@ -9,7 +9,6 @@ connection_check:
   required_any_fields:
     - access_token
     - pat_token
-  feature_flag: is_confluence_enabled
 tools:
   - confluence_search_similar
   - confluence_search_runbooks

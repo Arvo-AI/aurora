@@ -24,7 +24,6 @@ from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
 
 # Real MCP client integration
-REAL_MCP_ENABLED = True
 REAL_MCP_SERVER_PATHS = {
     "aws": "aws-api-mcp-server",  # Not used for path, just for type
     # "azure": "npx-azure-mcp",  # Not used for path, just for type - DISABLED
