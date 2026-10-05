@@ -1272,7 +1272,7 @@ def _cloud_exec_aws_multi_account(
             )
             if not success:
                 return {"account_id": account_id, "region": region, "success": False,
-                        "error": _credential_setup_error(
+                        "error": (
                             "Failed to assume role — check the server log for the "
                             "underlying STS error (ExternalId mismatch and a missing "
                             "trust-policy principal both surface as AccessDenied)"
@@ -1757,7 +1757,13 @@ Security & Compliance
                 target_account_id=account_id,
             )
             if not success:
-                return _credential_setup_failure(f"Failed to setup AWS environment with {provider_preference} authentication", command)
+                return json.dumps({
+                    "error": (
+                        f"Failed to setup AWS environment with {provider_preference} "
+                        "authentication"
+                    ),
+                    "final_command": command,
+                })
             resource_id = region
         elif normalized_provider == 'ovh':
             # OVH isolated setup

@@ -63,17 +63,18 @@ class TestAvailabilityIsRetried:
         with patch("hvac.Client", return_value=_client(True)):
             assert backend.is_available() is True
 
-    def test_missing_token_is_retried_once_provided(self, vault_env, monkeypatch):
-        """VAULT_TOKEN is read per attempt, so a later-mounted secret is picked up."""
+    def test_missing_token_is_config_blocked_without_retry_storm(self, vault_env, monkeypatch):
+        """Unset VAULT_TOKEN is a deploy-time config gap, not a transient outage."""
         monkeypatch.delenv("VAULT_TOKEN", raising=False)
         backend = VaultSecretsBackend()
         backend.RETRY_INTERVAL_SECONDS = 0
 
-        assert backend.is_available() is False
-
-        monkeypatch.setenv("VAULT_TOKEN", "now-present")
-        with patch("hvac.Client", return_value=_client(True)):
-            assert backend.is_available() is True
+        with patch("hvac.Client", return_value=_client(True)) as ctor:
+            assert backend.is_available() is False
+            assert backend._config_blocked is True
+            for _ in range(5):
+                assert backend.is_available() is False
+            assert ctor.call_count == 0, "config gap must not reconnect on every lookup"
 
     def test_failures_are_rate_limited(self, vault_env):
         """Retrying is not the same as reconnecting on every lookup: a real outage
@@ -138,7 +139,8 @@ class TestSuccessLatches:
         with patch("hvac.Client", return_value=_client(True)) as ctor:
             for _ in range(5):
                 assert backend.is_available() is True
-            assert ctor.call_count == 1
+            # Probe client plus the stored operations client.
+            assert ctor.call_count == 2
 
     def test_get_secret_raises_while_unavailable(self, vault_env):
         """The guard still fails closed rather than returning an empty secret."""
@@ -257,8 +259,9 @@ class TestAvailabilityIsRevalidatedAfterOperations:
         client = _client(True)
         self._connected(backend, client)
 
-        client.secrets.kv.v2.read_secret_version.side_effect = RuntimeError("permission denied")
-        with pytest.raises(RuntimeError):
+        Unauthorized = type("Unauthorized", (Exception,), {})
+        client.secrets.kv.v2.read_secret_version.side_effect = Unauthorized("token expired")
+        with pytest.raises(Unauthorized):
             backend.get_secret(self._REF)
 
         with patch("hvac.Client", return_value=_client(False)), patch(
@@ -292,7 +295,7 @@ class TestAvailabilityIsRevalidatedAfterOperations:
             assert raised.value is exc
 
             assert backend.is_available() is True
-            assert ctor.call_count == 1, "a missing secret must not trigger a re-probe"
+            assert ctor.call_count == 2, "a missing secret must not trigger a re-probe"
 
     def test_malformed_reference_leaves_the_latch_intact(self, vault_env):
         """A bad ref is a caller bug, so it must not cost a re-probe either."""
@@ -304,25 +307,26 @@ class TestAvailabilityIsRevalidatedAfterOperations:
                 backend.get_secret("not-a-vault-ref")
 
             assert backend.is_available() is True
-            assert ctor.call_count == 1
+            assert ctor.call_count == 2
 
-    def test_healthy_vault_relatches_so_no_outage_is_invented(self, vault_env):
-        """A per-path ACL denial on a reachable Vault must still read as a
-        credential problem: the re-probe succeeds and the provider message survives."""
+    def test_forbidden_on_one_path_does_not_declare_an_outage(self, vault_env):
+        """A per-path ACL denial must not force a re-probe or flip the outage latch."""
         from utils.secrets import credential_error_message
 
         backend = VaultSecretsBackend()
         client = _client(True)
+        Forbidden = type("Forbidden", (Exception,), {})
 
-        with patch("hvac.Client", return_value=client):
+        with patch("hvac.Client", return_value=client) as ctor:
             assert backend.is_available() is True
-            client.secrets.kv.v2.read_secret_version.side_effect = Exception("permission denied")
-            with pytest.raises(Exception, match="permission denied"):
+            client.secrets.kv.v2.read_secret_version.side_effect = Forbidden("permission denied")
+            with pytest.raises(Forbidden, match="permission denied"):
                 backend.get_secret(self._REF)
 
             with patch("utils.secrets.get_secrets_backend", return_value=backend):
                 assert credential_error_message("boom") == "boom"
             assert backend.is_available() is True
+            assert ctor.call_count == 2
 
     @pytest.mark.parametrize("operation", ["store", "delete"])
     def test_write_failures_also_re_open_the_availability_check(self, vault_env, operation):

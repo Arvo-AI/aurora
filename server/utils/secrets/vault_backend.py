@@ -34,7 +34,7 @@ class VaultSecretsBackend(SecretsBackend):
 
     # Minimum gap between initialization attempts once one has failed.
     RETRY_INTERVAL_SECONDS = 30
-    # Cap on the auth probe, which runs while _init_lock is held.
+    # Cap only on the throwaway auth probe, which runs while _init_lock is held.
     CONNECT_TIMEOUT_SECONDS = 10
 
     def __init__(self):
@@ -45,6 +45,9 @@ class VaultSecretsBackend(SecretsBackend):
         # Monotonic timestamp of the last failed init, so a transient failure is
         # retried instead of disabling Vault for the life of the process.
         self._last_failure_at = None
+        # Missing hvac or VAULT_TOKEN will not self-heal without a redeploy.
+        self._config_blocked = False
+        self._logged_init_traceback = False
         self._init_lock = threading.Lock()
         self.mount_point = os.getenv("VAULT_KV_MOUNT", "aurora")
         self.vault_addr = os.getenv("VAULT_ADDR", "http://vault:8200")
@@ -59,6 +62,9 @@ class VaultSecretsBackend(SecretsBackend):
         RETRY_INTERVAL_SECONDS so an outage doesn't reconnect on every lookup.
         """
         if self._initialized:
+            return
+
+        if self._config_blocked:
             return
 
         # Checked before taking the lock: the lock is held across a network call,
@@ -76,7 +82,8 @@ class VaultSecretsBackend(SecretsBackend):
                 self._initialized = True
                 self._available = True
                 self._last_failure_at = None
-            else:
+                self._logged_init_traceback = False
+            elif not self._config_blocked:
                 self._available = False
                 self._last_failure_at = time.monotonic()
 
@@ -99,6 +106,27 @@ class VaultSecretsBackend(SecretsBackend):
         text = str(exc).lower()
         return "not found" in text or "no versions" in text or "invalidpath" in text
 
+    @staticmethod
+    def _is_vault_outage(exc: Exception) -> bool:
+        """True when Vault itself is unreachable or unhealthy, not one path or request."""
+        name = type(exc).__name__
+        # Per-path ACL or bad request shape — not a cluster health signal.
+        if name in ("Forbidden", "InvalidRequest"):
+            return False
+
+        if name in ("Unauthorized", "VaultDown"):
+            return True
+
+        if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+            return True
+
+        module = type(exc).__module__ or ""
+        if module.startswith("requests.exceptions"):
+            return True
+
+        text = str(exc).lower()
+        return "sealed" in text or "vault is down" in text
+
     def _invalidate_after_operation_failure(self, exc: Exception, client=None) -> None:
         """Drop the cached availability latch when an operation suggests an outage.
 
@@ -109,7 +137,12 @@ class VaultSecretsBackend(SecretsBackend):
         """
         # A malformed reference is a caller bug and a missing secret is a per-secret
         # condition; neither says anything about Vault's health.
-        if not self._initialized or isinstance(exc, ValueError) or self._is_missing_secret(exc):
+        if (
+            not self._initialized
+            or isinstance(exc, ValueError)
+            or self._is_missing_secret(exc)
+            or not self._is_vault_outage(exc)
+        ):
             return
 
         with self._init_lock:
@@ -133,6 +166,8 @@ class VaultSecretsBackend(SecretsBackend):
             logger.warning(
                 "hvac package not installed. Install with: pip install hvac"
             )
+            self._config_blocked = True
+            self._initialized = True
             return False
 
         vault_token = os.getenv("VAULT_TOKEN")
@@ -141,19 +176,20 @@ class VaultSecretsBackend(SecretsBackend):
             logger.warning(
                 "VAULT_TOKEN not set. Vault secrets backend will not be available."
             )
+            self._config_blocked = True
+            self._initialized = True
             return False
 
         try:
-            # Bounded: this call runs under _init_lock, so an unbounded wait on an
-            # unreachable Vault would stall every other caller behind it.
-            client = hvac.Client(
+            # Short timeout only on the probe: it runs under _init_lock, so an
+            # unbounded wait would stall every other caller behind it.
+            probe = hvac.Client(
                 url=self.vault_addr,
                 token=vault_token,
                 timeout=self.CONNECT_TIMEOUT_SECONDS,
             )
 
-            # Verify connection and authentication
-            if not client.is_authenticated():
+            if not probe.is_authenticated():
                 logger.error(
                     "Vault authentication failed (unreachable, sealed, or expired "
                     "VAULT_TOKEN). Will retry in %ss.",
@@ -161,7 +197,8 @@ class VaultSecretsBackend(SecretsBackend):
                 )
                 return False
 
-            self._client = client
+            # Operations keep hvac's default (30s) request timeout.
+            self._client = hvac.Client(url=self.vault_addr, token=vault_token)
 
             # Auto-enable KV v2 engine if not already enabled
             self._ensure_kv_engine()
@@ -175,12 +212,19 @@ class VaultSecretsBackend(SecretsBackend):
             return True
 
         except Exception:
-            # Traceback matters here: the cause (DNS, TLS, refused, sealed) decides
-            # whether an operator looks at Vault or at the network.
-            logger.exception(
-                "Failed to initialize Vault client. Will retry in %ss.",
-                self.RETRY_INTERVAL_SECONDS,
-            )
+            # Traceback on the first failure only — during an outage every service
+            # would otherwise print a full stack every 30s.
+            if not self._logged_init_traceback:
+                logger.exception(
+                    "Failed to initialize Vault client. Will retry in %ss.",
+                    self.RETRY_INTERVAL_SECONDS,
+                )
+                self._logged_init_traceback = True
+            else:
+                logger.warning(
+                    "Failed to initialize Vault client. Will retry in %ss.",
+                    self.RETRY_INTERVAL_SECONDS,
+                )
             return False
 
     def _ensure_kv_engine(self):
