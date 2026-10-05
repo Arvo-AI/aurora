@@ -2045,6 +2045,16 @@ def _update_incident_status(incident_id: str, status: str, user_id: str) -> None
         logger.error(f"[BackgroundChat] Failed to update incident {incident_id} status to '{status}': {e}")
 
 
+_CODE_FENCE = "```"
+
+
+def _close_dangling_code_fence(text: str) -> str:
+    """Close a code block left open by truncation, else Slack eats the rest of the message."""
+    if text.count(_CODE_FENCE) % 2 == 0:
+        return text
+    return text + ("" if text.endswith("\n") else "\n") + _CODE_FENCE
+
+
 def _send_response_to_slack(
     user_id: str,
     session_id: str,
@@ -2164,8 +2174,21 @@ def _send_response_to_slack(
         
         # Slack messages have a ~3000 char limit for update_message
         SLACK_MSG_LIMIT = 2900
-        if len(formatted_message) > SLACK_MSG_LIMIT:
-            formatted_message = formatted_message[:SLACK_MSG_LIMIT] + "\n\n_...truncated. See full results in Aurora._"
+        # Always point back at the session: the Slack reply is a clipped view, and
+        # this link is the only way to find the run again in the console.
+        frontend_url = os.getenv("FRONTEND_URL", "").rstrip("/")
+        session_link = (
+            f"\n\n<{frontend_url}/chat?sessionId={session_id}|Open the full response in Aurora>"
+            if frontend_url else ""
+        )
+        if len(formatted_message) + len(session_link) > SLACK_MSG_LIMIT:
+            # The link itself says where to go, so the note just marks the cut
+            note = "\n\n_...truncated._" if session_link else "\n\n_...truncated. See full results in Aurora._"
+            # Reserve room for a closing fence up front — the cut may land inside a
+            # code block, and an unclosed fence swallows the note and link as plain text.
+            budget = max(SLACK_MSG_LIMIT - len(session_link) - len(note) - len("\n" + _CODE_FENCE), 0)
+            formatted_message = _close_dangling_code_fence(formatted_message[:budget]) + note
+        formatted_message += session_link
 
         # Update the "Thinking..." message if we have the timestamp, otherwise send a new message
         if thinking_message_ts:

@@ -13,6 +13,8 @@ from flask import Blueprint, request, jsonify
 from utils.db.db_utils import connect_to_db_as_user
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_auth_only
+from utils.auth import normalize_email
+from utils.log_sanitizer import sanitize
 from utils.web.limiter_ext import limiter
 import os
 
@@ -35,6 +37,23 @@ def _name_to_slug(name: str) -> str:
     if len(slug) < 2:
         slug = slug + '-org'
     return slug
+
+
+def _password_matches(password, password_hash) -> bool:
+    """bcrypt comparison that returns False instead of raising.
+
+    A malformed hash, non-string password, or over-long password all make bcrypt
+    raise, which would 500 instead of 401 and abort the candidate loop early.
+    The isinstance guard is needed because .encode() on a non-string raises
+    AttributeError, which (ValueError, TypeError) below does not catch.
+    """
+    if not password_hash or not isinstance(password, str) or not isinstance(password_hash, str):
+        return False
+    try:
+        return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+    except (ValueError, TypeError) as e:
+        logging.warning("Password verification failed on malformed hash: %s", e)
+        return False
 
 
 def send_verification_email(user_id: str, email: str) -> bool:
@@ -94,17 +113,24 @@ def register():
     """
     try:
         data = request.get_json()
-        if not data:
+        # A hand-crafted body can be a JSON list or scalar; .get() on those
+        # raises AttributeError and would surface as a 500 instead of a 400.
+        if not isinstance(data, dict):
             return jsonify({"error": "Invalid request body"}), 400
-        
-        email = data.get('email')
+
+        email = normalize_email(data.get('email'))
         password = data.get('password')
         name = data.get('name')
         org_name = (data.get('org_name') or '').strip()
         
         if not email or not password:
             return jsonify({"error": "Email and password are required"}), 400
-            
+
+        # A non-string password from a hand-crafted body would make len() and
+        # .encode() raise, surfacing as a 500 rather than a 400.
+        if not isinstance(password, str):
+            return jsonify({"error": "Password must be a string"}), 400
+
         if len(password) < 8:
             return jsonify({"error": "Password must be at least 8 characters"}), 400
 
@@ -123,8 +149,10 @@ def register():
         try:
             with conn.cursor() as cursor:
                 # No RLS needed — users, organizations not RLS-protected
+                # Compare on the normalized email so a capitalized spelling
+                # can't register a second account alongside an existing one.
                 cursor.execute(
-                    "SELECT id FROM users WHERE email = %s",
+                    "SELECT id FROM users WHERE LOWER(email) = %s",
                     (email,)
                 )
                 if cursor.fetchone():
@@ -421,10 +449,12 @@ def login():
     """Authenticate user with email and password."""
     try:
         data = request.get_json()
-        if not data:
+        # A hand-crafted body can be a JSON list or scalar; .get() on those
+        # raises AttributeError and would surface as a 500 instead of a 400.
+        if not isinstance(data, dict):
             return jsonify({"error": "Invalid request body"}), 400
-        
-        email = data.get('email')
+
+        email = normalize_email(data.get('email'))
         password = data.get('password')
         
         if not email or not password:
@@ -435,40 +465,51 @@ def login():
         try:
             with conn.cursor() as cursor:
                 # No RLS needed — users not RLS-protected
+                # Match on the normalized email so an account stays reachable
+                # however the user capitalizes it. Newest first: a duplicate pair
+                # is an admin-created row the case bug locked the user out of,
+                # plus the row they then self-registered and actually use.
                 cursor.execute(
                     "SELECT u.id, u.email, u.name, u.password_hash, u.role, u.org_id, o.name, "
                     "COALESCE(u.must_change_password, FALSE), COALESCE(u.email_verified, FALSE), "
                     "(u.github_user_id IS NOT NULL) "
                     "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
-                    "WHERE u.email = %s",
+                    "WHERE LOWER(u.email) = %s "
+                    "ORDER BY u.created_at DESC",
                     (email,)
                 )
-                user = cursor.fetchone()
+                candidates = cursor.fetchall()
 
-                # Always perform password check to prevent timing attacks
-                # Use dummy hash if user doesn't exist
-                if user:
-                    user_id, user_email, user_name, password_hash, user_role, user_org_id, user_org_name, must_change_pw, email_verified, is_github = user
+                # No account for this email — still run one bcrypt check against
+                # the dummy hash so response time doesn't reveal which emails exist.
+                if not candidates:
+                    _password_matches(password, _DUMMY_BCRYPT_HASH)
+                    user = None
                 else:
-                    # Dummy hash to maintain consistent timing
-                    password_hash = _DUMMY_BCRYPT_HASH
-                
-                # Verify password (runs regardless of whether user exists)
-                password_valid = bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
-                
-                # Resolve audit identifiers before branching so the variable
-                # lookups don't create a measurable timing difference.
-                _audit_org = (user_org_id or "") if user else ""
-                _audit_uid = user_id if user else ""
-                _login_failed = not user or not password_valid
+                    # Legacy case-variant duplicates exist, so let the password
+                    # pick the account rather than row order. Nothing is mutated —
+                    # merging would lock out whoever owns the other row.
+                    user = next(
+                        (c for c in candidates if _password_matches(password, c[3])),
+                        None,
+                    )
+
+                # Resolved before branching so variable lookups can't introduce a
+                # timing difference. A failed password is attributed to the first
+                # candidate, matching the old single-row behaviour.
+                _attributed = user or (candidates[0] if candidates else None)
+                _audit_org = (_attributed[5] or "") if _attributed else ""
+                _audit_uid = _attributed[0] if _attributed else ""
 
                 # Always perform one DB round-trip (audit INSERT) regardless of
                 # success/failure to preserve the timing-attack protection from
                 # _DUMMY_BCRYPT_HASH.
-                if _login_failed:
-                    _detail = {"reason": "invalid_password", "email": email} if user else {
+                if not user:
+                    # An account exists for this email but no candidate's
+                    # password verified — distinct from "no such email at all".
+                    _detail = {"reason": "invalid_password", "email": email} if candidates else {
                         "reason": "unknown_email",
-                        "email_sha256": hashlib.sha256(email[:254].lower().encode()).hexdigest(),
+                        "email_sha256": hashlib.sha256(email[:254].encode()).hexdigest(),
                     }
                     record_audit_event(
                         _audit_org, _audit_uid,
@@ -477,7 +518,21 @@ def login():
                         request,
                     )
                     return jsonify({"error": "Invalid credentials"}), 401
-                
+
+                # password_hash is intentionally discarded — already consumed by
+                # _password_matches() above.
+                (user_id, user_email, user_name, _password_hash, user_role,
+                 user_org_id, user_org_name, must_change_pw, email_verified, is_github) = user
+
+                # Flag the legacy pair for manual reconciliation. Never merged
+                # here — picking a winner would destroy an account's data.
+                if len(candidates) > 1:
+                    logging.warning(
+                        "Multiple accounts share the normalized email %s; authenticated user_id=%s. "
+                        "These should be reconciled manually.",
+                        sanitize(email), user_id,
+                    )
+
                 record_audit_event(_audit_org, _audit_uid, "login", "session", _audit_uid, {"email": email}, request)
 
                 return jsonify({

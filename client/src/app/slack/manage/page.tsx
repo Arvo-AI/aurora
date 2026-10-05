@@ -12,7 +12,9 @@ import { slackService, type SlackStatus, type SlackConnectedChannel } from "@/li
 import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite as checkCanWrite } from "@/lib/roles";
 import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
+import { SlackMemoryCard } from "@/components/SlackMemoryCard";
 import { queryClient, jsonFetcher } from "@/lib/query";
+import { apiErrorMessage } from "@/lib/services/api-client";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
@@ -127,7 +129,8 @@ export default function SlackManagePage() {
 
   // Description generation runs async on the worker, so poll the channel list
   // until nothing is still 'generating'/'pending' (capped so we never poll
-  // forever). Cleared on unmount.
+  // forever — the cap is on consecutive no-change ticks, not total time).
+  // Cleared on unmount.
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Each polling chain gets a generation token. Starting a new chain (or
   // unmounting) bumps the token, so a callback from a superseded chain — e.g. a
@@ -145,11 +148,17 @@ export default function SlackManagePage() {
     keepGoingWhileEmpty = false,
     awaitingIds: string[] = [],
     gen?: number,
+    lastProgress = -1,
   ) => {
     // First call in a chain claims a fresh generation; recursive calls carry it.
     const myGen = gen ?? ++pollGenRef.current;
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-    // ~30s ceiling (15 tries × 2s) — generation is normally a few seconds.
+    // ~30s ceiling (15 tries × 2s), but the counter resets on every observed
+    // change (see `progress` below), so this bounds how long we wait on a STALLED
+    // job, not total runtime. A bulk activation joins ~40 channels/min for many
+    // minutes; a fixed budget would stop updating the list after 30s and leave
+    // the rest visible only on a manual refresh. Every tick is a ?live=0 read
+    // (DB only, ~15ms), so a long poll never touches Slack's rate limits.
     if (attempt >= 15) return;
     pollTimerRef.current = setTimeout(async () => {
       try {
@@ -182,8 +191,17 @@ export default function SlackManagePage() {
         // absence of pending rows isn't "done" yet — keep polling until every
         // submitted id has actually shown up in the connected list.
         const waitingForQueuedIds = awaitingIds.some((id) => !connectedIds.has(id));
+        // Anything still happening? Counts rows arriving (a join landed) AND
+        // descriptions finishing, so either kind of progress keeps the poll alive.
+        // Monotonic, so it can't be gamed by a row disappearing.
+        const described = data.connected.filter(
+          (c) => c.metadata_status !== "generating" && c.metadata_status !== "pending",
+        ).length;
+        const progress = Math.max(data.connected.length + described, lastProgress);
+        // Made progress this tick — reset the stall budget. Otherwise count down.
+        const nextAttempt = progress > lastProgress ? 0 : attempt + 1;
         if (stillWorking || waitingForFirstRows || waitingForQueuedIds) {
-          pollChannelsUntilSettled(attempt + 1, keepGoingWhileEmpty, awaitingIds, myGen);
+          pollChannelsUntilSettled(nextAttempt, keepGoingWhileEmpty, awaitingIds, myGen, progress);
         }
       } catch (error) {
         console.error("Error polling Slack channels:", error);
@@ -321,7 +339,8 @@ export default function SlackManagePage() {
   // LLM generation as the regenerate action (result lands on next load).
   const handleGenerateFromEditor = (channelId: string) => {
     setEditingChannelId(null);
-    handleRegenerateDescription(channelId);
+    // Fire-and-forget: it handles its own errors and the result lands via polling.
+    void handleRegenerateDescription(channelId);
   };
 
   const handleRegenerateDescription = async (channelId: string) => {
@@ -364,9 +383,16 @@ export default function SlackManagePage() {
         title: "Activating channels",
         description: `Joining and describing ${queued} channel${queued === 1 ? "" : "s"}.`,
       });
-    } catch {
+    } catch (error) {
       await loadChannels(); // Reconcile optimistic flip on failure.
-      toast({ title: "Error", description: "Failed to activate channels", variant: "destructive" });
+      // Show the backend's reason verbatim — it returns actionable 400s (e.g.
+      // invalid channel_ids), and a generic message made those look like an
+      // unexplained failure.
+      toast({
+        title: "Error",
+        description: apiErrorMessage(error, "Failed to activate channels"),
+        variant: "destructive",
+      });
     } finally {
       setIsActivating(false);
     }
@@ -459,7 +485,8 @@ export default function SlackManagePage() {
         localStorage.removeItem("isSlackConnected");
         globalThis.window.dispatchEvent(new CustomEvent("providerStateChanged"));
       }
-      queryClient.invalidate("/api/connectors/status", jsonFetcher);
+      // Fire-and-forget revalidation — we navigate away regardless.
+      void queryClient.invalidate("/api/connectors/status", jsonFetcher);
       toast({ title: "Success", description: "Slack disconnected successfully" });
       router.push("/connectors");
     } catch (error: any) {
@@ -605,8 +632,8 @@ export default function SlackManagePage() {
               cause, links. It goes to <span className="font-medium">one</span>{" "}
               channel. This does not affect Aurora replying when @mentioned, or
               posting an investigation&apos;s conclusion to relevant team
-              channels — that routing is always on and tuned in Aurora&apos;s
-              Slack memory.
+              channels — that routing is always on and tuned in the Slack memory
+              below.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -979,6 +1006,10 @@ export default function SlackManagePage() {
             )}
           </CardContent>
         </Card>
+
+        {/* Slack Memory — the teammate policy that governs tone/routing, mirrored
+            from the shared memory system so it's editable in context here. */}
+        <SlackMemoryCard canWrite={canWrite} />
 
         {/* Danger Zone */}
         <Card className="border-destructive/50">

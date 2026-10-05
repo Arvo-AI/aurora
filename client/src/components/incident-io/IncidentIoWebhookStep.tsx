@@ -269,7 +269,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
         toast({
           title: enabled ? "Post-back Enabled" : "Post-back Disabled",
           description: enabled
-            ? "RCA results will be posted to the incident.io timeline"
+            ? "The root cause will be posted as an incident.io update when each investigation completes"
             : "RCA results will only be available in Aurora",
         });
       } else {
@@ -406,7 +406,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
                   Post RCA to incident.io
                 </Label>
                 <p className="text-sm text-muted-foreground">
-                  Automatically post RCA results back to the incident timeline
+                  When an investigation completes, post the root cause as an update on the incident.io incident, so responders see it through the incident&apos;s own notifications. Alerts are posted to the incident they are attached to.
                 </p>
               </div>
               {loadingSettings ? (

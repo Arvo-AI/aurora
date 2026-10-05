@@ -363,7 +363,7 @@ class Agent:
                         _force_entries = None
                         _rca_ctx = getattr(state, "rca_context", None) or {}
                         _src = str(_rca_ctx.get("source") or getattr(state, "trigger_source", None) or "").lower()
-                        from services.memory.slack_memory import (
+                        from services.memory import (
                             SLACK_MEMORY_CATEGORY,
                             SLACK_MEMORY_TITLE,
                             SLACK_POLICY_SOURCES,

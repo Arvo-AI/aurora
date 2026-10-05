@@ -5,6 +5,8 @@ import sys
 import logging
 from dotenv import load_dotenv
 
+from routes.slack.slack_backfill_config import BACKFILL_INTERVAL_SECONDS
+
 # ------------------------------------------------------------
 # Configure root logger BEFORE Celery starts.
 # Uses stdout-only logging for container-native log aggregation.
@@ -119,6 +121,11 @@ celery_app.conf.update(
     # Bitbucket Incident Prevention must not sit behind a Save of N metadata jobs.
     task_routes={
         "bitbucket.enable_change_gating_bulk": {"queue": "high"},
+        # Same reason: a user clicking "Activate" on the Slack manage page must not
+        # queue behind the description backfill, which can hold hundreds of
+        # generate_channel_metadata jobs in the default queue (observed: an
+        # activation sat at position 289/453, ~85 min behind).
+        "routes.slack.slack_channel_metadata.bulk_activate_channels_task": {"queue": "high"},
     },
     # Explicitly include task modules from their new locations
     include=[
@@ -187,6 +194,14 @@ celery_app.conf.update(
         'run-scheduled-actions': {
             'task': 'services.actions.scheduler.run_scheduled_actions',
             'schedule': 60.0,  # Check every minute
+        },
+        # Safety net so every Slack channel Aurora is a member of eventually gets
+        # an LLM description (agent routing only offers described channels).
+        # Reconcile passes are user-triggered and capped per pass, so without this
+        # the tail of a large membership stays invisible to routing.
+        'backfill-slack-channel-descriptions': {
+            'task': 'routes.slack.slack_channel_metadata.backfill_channel_descriptions',
+            'schedule': BACKFILL_INTERVAL_SECONDS,  # Every 15 minutes
         },
     },
     beat_schedule_filename='celerybeat-schedule',

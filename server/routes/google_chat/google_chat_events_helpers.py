@@ -89,16 +89,37 @@ def get_org_google_chat_credentials(sender_email: str) -> Optional[Tuple[str, st
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 # No RLS needed — users not RLS-protected
+                # Google sends whatever case is on the Workspace profile. Fetch 2
+                # so an ambiguous case-insensitive match is detectable below.
                 cursor.execute(
-                    "SELECT id, org_id FROM users WHERE email = %s",
-                    (sender_email,),
+                    "SELECT id, org_id, email FROM users WHERE LOWER(email) = LOWER(%s) "
+                    "ORDER BY (email = %s) DESC, created_at ASC LIMIT 2",
+                    (sender_email, sender_email),
                 )
-                user_row = cursor.fetchone()
-                if not user_row or not user_row[1]:
+                user_rows = cursor.fetchall()
+                if not user_rows:
                     logger.warning(f"No Aurora user or org found for {_mask_email(sender_email)}")
                     return None
 
-                sender_user_id, org_id = user_row
+                # users.email is UNIQUE, so an exact-case hit is unambiguous.
+                exact_match = user_rows[0][2] == sender_email
+
+                # Case-variant rows can span two orgs and, unlike /login, there's
+                # no password here to prove ownership — the OIDC check only
+                # authenticates Google's service account, not the sender. Guessing
+                # would run the event in the wrong tenant, so fail closed.
+                if not exact_match and len(user_rows) > 1:
+                    logger.warning(
+                        "Ambiguous Aurora accounts for Google Chat sender %s; "
+                        "refusing to guess an organization. Reconcile the duplicate users.",
+                        _mask_email(sender_email),
+                    )
+                    return None
+
+                sender_user_id, org_id = user_rows[0][0], user_rows[0][1]
+                if not org_id:
+                    logger.warning(f"No Aurora org found for {_mask_email(sender_email)}")
+                    return None
 
                 from utils.auth.stateless_auth import set_rls_context
                 set_rls_context(cursor, conn, sender_user_id, log_prefix="[GChatHelpers:get_org_creds]")
