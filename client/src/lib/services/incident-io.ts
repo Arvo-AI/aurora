@@ -57,21 +57,35 @@ export interface IncidentIoPostbackAccess {
   alerts: boolean;
 }
 
+export interface PostbackAccessWarning {
+  consequence: string;
+  permission: string;
+}
+
 // Shown on the connector when post-back cannot reach every destination.
 // Null when the key can write both, or when the check itself did not run.
-export function postbackAccessMessage(access: IncidentIoPostbackAccess | null | undefined): string | null {
+export function postbackAccessMessage(access: IncidentIoPostbackAccess | null | undefined): PostbackAccessWarning | null {
   // Nothing to warn about when the check did not run, or when both writes work.
   if (!access?.checked || (access.incidents && access.alerts)) return null;
   // Incident updates will post; alert notes will not.
   if (access.incidents) {
-    return "Aurora can write to incidents, but not to alerts. Add the Manage on-call resources permission to this API key so the root cause is also posted on alerts that aren't attached to an incident.";
+    return {
+      consequence: "Can write back to incidents but not alerts",
+      permission: "Add the Manage on-call resources permission",
+    };
   }
   // Alert notes will post; incident updates will not.
   if (access.alerts) {
-    return "Aurora can write to alerts, but not to incidents. Add the Edit incidents permission to this API key so the root cause is posted on the incident.";
+    return {
+      consequence: "Can write back to alerts but not incidents",
+      permission: "Add the Edit incidents permission",
+    };
   }
   // Neither destination is writable.
-  return "This API key can't write to incidents or alerts. Add the Edit incidents and Manage on-call resources permissions in incident.io, or the root cause will not be posted back.";
+  return {
+    consequence: "Can't write back to incidents or alerts",
+    permission: "Add the Edit incidents and Manage on-call resources permissions",
+  };
 }
 
 export interface IncidentIoRcaSettings {

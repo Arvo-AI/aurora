@@ -170,14 +170,17 @@ function WebhookConfig({
 }
 
 function PostbackAccessNotice({ access }: { readonly access: IncidentIoPostbackAccess | null }) {
-  const message = postbackAccessMessage(access);
-  if (!message) return null;
+  const warning = postbackAccessMessage(access);
+  if (!warning) return null;
   // Neither destination is writable — stronger than a partial gap.
   const blocked = !access?.incidents && !access?.alerts;
   return (
     <p className={`mt-2 flex items-start gap-2 text-sm ${blocked ? "text-red-600 dark:text-red-400" : "text-amber-700 dark:text-amber-400"}`}>
       <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-      <span>{message}</span>
+      <span>
+        <span className="block">{warning.consequence}</span>
+        <span className="block">{warning.permission}</span>
+      </span>
     </p>
   );
 }
@@ -288,14 +291,14 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
         // The key can write nowhere, so the server left the toggle off.
         if (enabled && !result.postbackEnabled) {
           toast({
-            title: "Post-back needs write access",
-            description: accessWarning ?? "This API key can't write to incidents or alerts.",
+            title: accessWarning?.consequence ?? "Can't write back to incidents or alerts",
+            description: accessWarning?.permission,
             variant: "destructive",
           });
         } else if (enabled && accessWarning) {
           toast({
-            title: "Post-back enabled with limited access",
-            description: accessWarning,
+            title: accessWarning.consequence,
+            description: accessWarning.permission,
           });
         } else {
           toast({
