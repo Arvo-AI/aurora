@@ -27,7 +27,7 @@ from utils.auth.stateless_auth import set_rls_context
 from utils.auth.token_management import get_token_data
 from utils.auth.stateless_auth import get_connected_providers
 from utils.flags import feature_flags
-from connectors.jira_connector.settings import normalize_jira_mode
+from connectors.jira_connector.settings import get_jira_mode, normalize_jira_mode
 
 logger = logging.getLogger(__name__)
 
@@ -390,6 +390,12 @@ class SkillRegistry:
                 tools=meta.tools,
                 is_connected=False,
             )
+
+        # The Jira skill body states the org's write permission, which lives in
+        # preferences rather than the connection context. Resolved here so the
+        # interactive load_skill path renders it too, not just the RCA prompt.
+        if skill_id == "jira":
+            context = {**context, "jira_mode": get_jira_mode(user_id)}
 
         if extra_context:
             context = {**context, **extra_context}

@@ -187,3 +187,49 @@ def test_comment_only_permits_commenting(monkeypatch, jira_tool):
     assert posted["issue_key"] == "PROJ-1"
     # The comment carries Aurora's name even though Jira shows the user's.
     assert attribution.HEADER in adf_to_plain_text(posted["body"])
+
+
+# ---------------------------------------------------------------------------
+# Skill rendering
+# ---------------------------------------------------------------------------
+
+def test_skill_body_states_the_actual_mode(monkeypatch):
+    """The Jira SKILL.md has a {jira_mode} placeholder. The mode lives in
+    preferences, not in the connection context, so loading the skill without
+    resolving it leaves the model reading the placeholder literally."""
+    from chat.backend.agent.skills.registry import SkillRegistry
+
+    registry = SkillRegistry.get_instance()
+    monkeypatch.setattr(
+        registry, "check_connection",
+        lambda skill_id, user_id: (True, {"base_url": "https://example.atlassian.net"}),
+    )
+    monkeypatch.setattr(
+        "chat.backend.agent.skills.registry.get_jira_mode",
+        lambda user_id: settings.FULL,
+    )
+
+    result = registry.load_skill("jira", "uid-1")
+
+    assert "{jira_mode}" not in result.content
+    assert settings.FULL in result.content
+
+
+def test_explicit_context_still_wins(monkeypatch):
+    """The RCA path passes the mode via extra_context; it must not be clobbered."""
+    from chat.backend.agent.skills.registry import SkillRegistry
+
+    registry = SkillRegistry.get_instance()
+    monkeypatch.setattr(
+        registry, "check_connection", lambda skill_id, user_id: (True, {})
+    )
+    monkeypatch.setattr(
+        "chat.backend.agent.skills.registry.get_jira_mode",
+        lambda user_id: settings.FULL,
+    )
+
+    result = registry.load_skill(
+        "jira", "uid-1", extra_context={"jira_mode": settings.READ_ONLY}
+    )
+
+    assert f"**This org is in `{settings.READ_ONLY}` mode.**" in result.content

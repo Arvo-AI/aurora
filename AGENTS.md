@@ -222,7 +222,7 @@ preference that defaults to off:
 
 | Connector | Preference | Default |
 |---|---|---|
-| Jira | `jira_mode` (`read_only` / `comment_only` / `full`) | `read_only` |
+| Jira | `jira_write_mode` (`read_only` / `comment_only` / `full`) | `read_only` |
 | incident.io | `incidentio_postback_enabled` | off |
 | PagerDuty | org opt-in toggle | off |
 

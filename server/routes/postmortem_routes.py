@@ -762,7 +762,7 @@ def export_to_jira(user_id, incident_id):
                 parent_key=parent_key,
                 project_key=project_key,
                 summary=item["text"][:255],
-                description_adf=text_to_adf(item["text"]),
+                description_adf=attribute_adf(text_to_adf(item["text"])),
             )
             subtask_keys.append(sub_result.get("key"))
         except Exception as sub_exc:
