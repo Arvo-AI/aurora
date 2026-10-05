@@ -314,7 +314,7 @@ def update_settings(user_id):
         "[JIRA] Updated settings for user %s: jiraMode=%s commentBack=%s",
         sanitize(user_id),
         sanitize(mode),
-        comment_back,
+        sanitize(comment_back),
     )
 
     payload = _settings_payload(user_id)
