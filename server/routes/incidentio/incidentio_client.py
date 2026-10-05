@@ -17,6 +17,32 @@ _MAX_PAGES = 20
 
 logger = logging.getLogger(__name__)
 
+# Account-level "Edit incidents". A message-only incident update is this role,
+# not a separate "create updates" permission.
+INCIDENT_WRITE_ROLE = "incident_editor"
+# "Manage on-call resources" bundles alerts.edit (alert notes). It can also be
+# granted for specific teams via team_roles.
+ALERT_WRITE_ROLE = "on_call_editor"
+
+
+def classify_postback_roles(roles, team_roles=None) -> Dict[str, bool]:
+    """Which RCA destinations this key's roles can write, from GET /v1/identity."""
+    account = set(roles or [])
+    teams = set(team_roles or [])
+    return {
+        "incidents": INCIDENT_WRITE_ROLE in account,
+        "alerts": ALERT_WRITE_ROLE in account or ALERT_WRITE_ROLE in teams,
+    }
+
+
+def postback_can_enable(access: Dict[str, Any]) -> bool:
+    """Whether turning post-back on would reach at least one destination."""
+    # Identity was unreachable — don't block the toggle on a blip.
+    if not access.get("checked"):
+        return True
+    # A key that can write nowhere would accept the toggle and then drop every RCA.
+    return bool(access.get("incidents") or access.get("alerts"))
+
 
 class IncidentioAPIError(Exception):
     """Error codes avoid leaking HTTP response bodies through str(exc).
@@ -83,6 +109,26 @@ class IncidentioClient:
             if status == 403:
                 raise IncidentioAPIError(IncidentioAPIError.FORBIDDEN, status)
             raise IncidentioAPIError(IncidentioAPIError.API_ERROR, status)
+
+    def get_identity(self) -> Dict[str, Any]:
+        """Roles on this API key. Any valid key can call it, and it writes nothing."""
+        return self._request("GET", "/identity", api_version="v1").json()
+
+    def read_postback_access(self) -> Dict[str, Any]:
+        """Whether this key can post incident updates and alert notes.
+
+        ``checked`` is false when identity could not be read, so the caller
+        does not treat a timeout as a missing permission.
+        """
+        unknown = {"checked": False, "incidents": False, "alerts": False}
+        try:
+            payload = self.get_identity() or {}
+        except IncidentioAPIError:
+            logger.warning("[INCIDENTIO] Could not read API key roles for the post-back check")
+            return unknown
+        identity = payload.get("identity") or {}
+        caps = classify_postback_roles(identity.get("roles"), identity.get("team_roles"))
+        return {"checked": True, **caps}
 
     def list_incidents(self, page_size: int = 5) -> Dict[str, Any]:
         """First page of the org's incidents (used to validate a key on connect)."""

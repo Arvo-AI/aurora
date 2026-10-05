@@ -49,9 +49,35 @@ export interface IncidentIoSeveritiesResponse {
   severities: IncidentIoOrgSeverity[];
 }
 
+// What the connected API key can write, from incident.io's identity roles.
+// `checked` is false when the roles could not be read.
+export interface IncidentIoPostbackAccess {
+  checked: boolean;
+  incidents: boolean;
+  alerts: boolean;
+}
+
+// Shown on the connector when post-back cannot reach every destination.
+// Null when the key can write both, or when the check itself did not run.
+export function postbackAccessMessage(access: IncidentIoPostbackAccess | null | undefined): string | null {
+  // Nothing to warn about when the check did not run, or when both writes work.
+  if (!access?.checked || (access.incidents && access.alerts)) return null;
+  // Incident updates will post; alert notes will not.
+  if (access.incidents) {
+    return "Aurora can write to incidents, but not to alerts. Add the Manage on-call resources permission to this API key so the root cause is also posted on alerts that aren't attached to an incident.";
+  }
+  // Alert notes will post; incident updates will not.
+  if (access.alerts) {
+    return "Aurora can write to alerts, but not to incidents. Add the Edit incidents permission to this API key so the root cause is posted on the incident.";
+  }
+  // Neither destination is writable.
+  return "This API key can't write to incidents or alerts. Add the Edit incidents and Manage on-call resources permissions in incident.io, or the root cause will not be posted back.";
+}
+
 export interface IncidentIoRcaSettings {
   rcaEnabled: boolean;
   postbackEnabled: boolean;
+  postbackAccess?: IncidentIoPostbackAccess;
   // RCA on incident.io *alert* events (public_alert.*), not just incidents.
   alertRcaEnabled: boolean;
   // Minimum severity to investigate when no allowlist is set. Either a fixed

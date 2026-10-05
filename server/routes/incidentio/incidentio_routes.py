@@ -10,7 +10,11 @@ from typing import Any, Dict, Optional
 
 from flask import Blueprint, jsonify, request
 
-from routes.incidentio.incidentio_client import IncidentioAPIError, IncidentioClient
+from routes.incidentio.incidentio_client import (
+    IncidentioAPIError,
+    IncidentioClient,
+    postback_can_enable,
+)
 from routes.incidentio.tasks import (
     process_incidentio_event,
     get_org_severities,
@@ -304,23 +308,35 @@ def list_org_severities(user_id):
     return jsonify(result)
 
 
+def _postback_access(user_id: str) -> Dict[str, Any]:
+    """Write reach of the stored key: incidents, alerts, or neither."""
+    creds = _get_stored_credentials(user_id) or {}
+    api_key = creds.get("api_key")
+    # Nothing stored — there is no key to grade, and no warning to show.
+    if not api_key:
+        return {"checked": False, "incidents": False, "alerts": False}
+    return IncidentioClient(api_key).read_postback_access()
+
+
+def _rca_settings_payload(user_id: str, access: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if access is None:
+        access = _postback_access(user_id)
+    return {
+        "rcaEnabled": get_user_preference(user_id, "incidentio_rca_enabled", default=True),
+        "postbackEnabled": get_user_preference(user_id, "incidentio_postback_enabled", default=False),
+        "alertRcaEnabled": get_user_preference(user_id, "incidentio_alert_rca_enabled", default=True),
+        "alertMinSeverity": get_user_preference(user_id, "incidentio_alert_min_severity", default="low"),
+        "alertSeverityAllowlist": get_user_preference(
+            user_id, "incidentio_alert_severity_allowlist", default=None
+        ),
+        "postbackAccess": access,
+    }
+
+
 @incidentio_bp.route("/rca-settings", methods=["GET"])
 @require_permission("connectors", "read")
 def get_rca_settings(user_id):
-    rca_enabled = get_user_preference(user_id, "incidentio_rca_enabled", default=True)
-    postback_enabled = get_user_preference(user_id, "incidentio_postback_enabled", default=False)
-    alert_rca_enabled = get_user_preference(user_id, "incidentio_alert_rca_enabled", default=True)
-    alert_min_severity = get_user_preference(user_id, "incidentio_alert_min_severity", default="low")
-    alert_severity_allowlist = get_user_preference(
-        user_id, "incidentio_alert_severity_allowlist", default=None
-    )
-    return jsonify({
-        "rcaEnabled": rca_enabled,
-        "postbackEnabled": postback_enabled,
-        "alertRcaEnabled": alert_rca_enabled,
-        "alertMinSeverity": alert_min_severity,
-        "alertSeverityAllowlist": alert_severity_allowlist,
-    })
+    return jsonify(_rca_settings_payload(user_id))
 
 
 # Severity labels accepted by the alert RCA filter (normalized values only).
@@ -340,6 +356,8 @@ def update_rca_settings(user_id):
     alert_rca_enabled = data.get("alertRcaEnabled")
     alert_min_severity = data.get("alertMinSeverity")
     alert_severity_allowlist = data.get("alertSeverityAllowlist")
+    # Reused in the response so a refused enable doesn't call identity twice.
+    access = None
 
     if rca_enabled is not None:
         if not isinstance(rca_enabled, bool):
@@ -349,7 +367,15 @@ def update_rca_settings(user_id):
     if postback_enabled is not None:
         if not isinstance(postback_enabled, bool):
             return jsonify({"error": "postbackEnabled must be a boolean"}), 400
-        store_user_preference(user_id, "incidentio_postback_enabled", postback_enabled)
+        # Turning on with a key that can write nowhere would silently drop every RCA.
+        if postback_enabled:
+            access = _postback_access(user_id)
+            if not postback_can_enable(access):
+                logger.info("[INCIDENTIO] Post-back left off: API key cannot write incidents or alerts")
+            else:
+                store_user_preference(user_id, "incidentio_postback_enabled", True)
+        else:
+            store_user_preference(user_id, "incidentio_postback_enabled", False)
 
     if alert_rca_enabled is not None:
         if not isinstance(alert_rca_enabled, bool):
@@ -401,13 +427,4 @@ def update_rca_settings(user_id):
             normalized or None,
         )
 
-    return jsonify({
-        "success": True,
-        "rcaEnabled": get_user_preference(user_id, "incidentio_rca_enabled", default=True),
-        "postbackEnabled": get_user_preference(user_id, "incidentio_postback_enabled", default=False),
-        "alertRcaEnabled": get_user_preference(user_id, "incidentio_alert_rca_enabled", default=True),
-        "alertMinSeverity": get_user_preference(user_id, "incidentio_alert_min_severity", default="low"),
-        "alertSeverityAllowlist": get_user_preference(
-            user_id, "incidentio_alert_severity_allowlist", default=None
-        ),
-    })
+    return jsonify({"success": True, **_rca_settings_payload(user_id, access)})
