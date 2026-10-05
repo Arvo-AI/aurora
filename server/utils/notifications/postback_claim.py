@@ -58,25 +58,25 @@ class PostbackClaim:
             conn.commit()
         return rowcount
 
-    def claim(self, incident_id: str, user_id: str) -> bool:
-        """Mark the incident 'pending' iff nothing is posted or in flight."""
+    def claim(self, incident_id: str, user_id: str, token: str = PENDING) -> bool:
+        """Mark the incident `token` iff nothing is posted or in flight."""
         try:
             return self._update(
                 user_id,
                 self._claim_sql,
-                (PENDING, incident_id),
+                (token, incident_id),
             ) == 1
         except Exception:
             logger.exception("%s Failed to claim incident %s", self._log, incident_id)
             return False
 
-    def release(self, incident_id: str, user_id: str) -> None:
+    def release(self, incident_id: str, user_id: str, token: str = PENDING) -> None:
         """Undo a claim whose POST was definitively rejected, so a later completion can retry."""
         try:
             self._update(
                 user_id,
                 self._release_sql,
-                (incident_id, PENDING),
+                (incident_id, token),
             )
         except Exception:
             logger.exception("%s Failed to release claim on incident %s", self._log, incident_id)

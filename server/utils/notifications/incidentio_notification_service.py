@@ -32,17 +32,23 @@ from routes.incidentio.incidentio_client import IncidentioAPIError, IncidentioCl
 from utils.auth.stateless_auth import set_rls_context
 from utils.auth.token_management import get_token_data
 from utils.db.connection_pool import db_pool
-from utils.notifications.postback_claim import PostbackClaim
+from utils.notifications.postback_claim import PENDING, PostbackClaim
 from utils.notifications.rca_note import MIN_SUMMARY_CHARS, compose_note_markdown, extract_note_body
 
 logger = logging.getLogger(__name__)
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 _LOG = "[IncidentioUpdate]"
-# incident.io status categories. An alert can stay attached to an incident nobody
-# will read any more; among the rest, prefer the one still being worked on.
+# declined/merged/canceled are dead ends, so they don't count as an attachment and
+# the RCA falls through to an alert note. A closed incident still has a timeline,
+# so it stays a target — just the last choice after live, triage, paused, learning.
 _CLOSED_CATEGORIES = frozenset(("declined", "merged", "canceled"))
 _OPEN_CATEGORY_ORDER = {"live": 0, "triage": 1, "paused": 2, "learning": 3, "closed": 4}
+# Note claims share incidentio_update_id with incident updates. The prefix marks
+# both the in-flight token and the recorded id, so a note is never read as
+# coverage of an incident timeline.
+_NOTE_ID_PREFIX = "note:"
+_NOTE_PENDING = f"{_NOTE_ID_PREFIX}pending"
 
 _claims = PostbackClaim("incidentio_update_id", _LOG)
 
@@ -143,6 +149,10 @@ def _anchor_covers_target(client: IncidentioClient, source: _Source, target: str
     to the same incident.io incident, i.e. the anchor's alert is attached to it too."""
     if not source.anchor_alert_id or not source.anchor_update_id:
         return False
+    # A note, posted or still in flight, reached no incident timeline — including
+    # this one, even once the anchor's alert gets attached to it.
+    if source.anchor_update_id.startswith(_NOTE_ID_PREFIX):
+        return False
     links = (client.list_incident_alerts(incident_id=target) or {}).get("incident_alerts") or []
     return any(str((link.get("alert") or {}).get("id")) == source.anchor_alert_id for link in links)
 
@@ -157,7 +167,8 @@ def _handle_post_error(e: IncidentioAPIError, incident_id: str, user_id: str, *,
             _LOG, incident_id, e.code,
         )
         return
-    _claims.release(incident_id, user_id)
+    # Release the same token we claimed; a note's token is not bare 'pending'
+    _claims.release(incident_id, user_id, _NOTE_PENDING if is_alert_note else PENDING)
     if e.status_code in (401, 403):
         # Name the permission the key is missing so the fix is obvious from the log alone.
         needed = (
@@ -225,14 +236,18 @@ def send_incidentio_incident_update(user_id: str, incident_data: Dict[str, Any])
 
         # Claimed before the POST: /v1/alert_notes has no idempotency key, so for notes
         # this claim is the only thing standing between a retry and a duplicate.
-        if not _claims.claim(incident_id, user_id):
+        # Notes use a tagged token so 'pending' cannot be read as an incident update.
+        token = _NOTE_PENDING if target.is_alert_note else PENDING
+        if not _claims.claim(incident_id, user_id, token):
             logger.info("%s Incident %s already has a post-back posted or in flight", _LOG, incident_id)
             return False
 
         try:
             if target.is_alert_note:
                 response = client.post_alert_note(target.object_id, content)
-                posted_id = ((response or {}).get("alert_note") or {}).get("id") or "posted"
+                note_id = ((response or {}).get("alert_note") or {}).get("id") or "posted"
+                # Tagged: a recurrence must not read this as coverage of an incident timeline
+                posted_id = f"{_NOTE_ID_PREFIX}{note_id}"
             else:
                 response = client.post_incident_update(
                     target.object_id, content, idempotency_key=f"aurora-rca-{incident_id}"
