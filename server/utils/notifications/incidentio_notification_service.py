@@ -157,6 +157,31 @@ def _anchor_covers_target(client: IncidentioClient, source: _Source, target: str
     return any(str((link.get("alert") or {}).get("id")) == source.anchor_alert_id for link in links)
 
 
+def _remote_id(response: Optional[Dict[str, Any]], key: str) -> str:
+    """Id incident.io returned, or 'posted' when the body has none."""
+    return ((response or {}).get(key) or {}).get("id") or "posted"
+
+
+def _post_root_cause(
+    client: IncidentioClient, target: _Target, content: str, incident_id: str, user_id: str
+) -> Optional[str]:
+    """Claim value to record, or None when the POST failed (the claim is already settled)."""
+    try:
+        # Alert notes have no idempotency key, and the id must stay distinguishable
+        # from an incident update in the shared claim column.
+        if target.is_alert_note:
+            note_id = _remote_id(client.post_alert_note(target.object_id, content), "alert_note")
+            return f"{_NOTE_ID_PREFIX}{note_id}"
+        # Incident update: the idempotency key makes a repeat a no-op on incident.io's side
+        response = client.post_incident_update(
+            target.object_id, content, idempotency_key=f"aurora-rca-{incident_id}"
+        )
+        return _remote_id(response, "incident_update")
+    except IncidentioAPIError as e:
+        _handle_post_error(e, incident_id, user_id, is_alert_note=target.is_alert_note)
+        return None
+
+
 def _handle_post_error(e: IncidentioAPIError, incident_id: str, user_id: str, *, is_alert_note: bool) -> None:
     """Release the claim only when incident.io definitively rejected the POST (4xx)."""
     if e.status_code is None or e.status_code >= 500:
@@ -242,19 +267,9 @@ def send_incidentio_incident_update(user_id: str, incident_data: Dict[str, Any])
             logger.info("%s Incident %s already has a post-back posted or in flight", _LOG, incident_id)
             return False
 
-        try:
-            if target.is_alert_note:
-                response = client.post_alert_note(target.object_id, content)
-                note_id = ((response or {}).get("alert_note") or {}).get("id") or "posted"
-                # Tagged: a recurrence must not read this as coverage of an incident timeline
-                posted_id = f"{_NOTE_ID_PREFIX}{note_id}"
-            else:
-                response = client.post_incident_update(
-                    target.object_id, content, idempotency_key=f"aurora-rca-{incident_id}"
-                )
-                posted_id = ((response or {}).get("incident_update") or {}).get("id") or "posted"
-        except IncidentioAPIError as e:
-            _handle_post_error(e, incident_id, user_id, is_alert_note=target.is_alert_note)
+        posted_id = _post_root_cause(client, target, content, incident_id, user_id)
+        # None: incident.io rejected the POST, or the outcome is unknown and the claim stays
+        if not posted_id:
             return False
 
         _claims.record(incident_id, user_id, posted_id)
