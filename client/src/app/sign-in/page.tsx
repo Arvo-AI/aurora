@@ -7,10 +7,12 @@ import Link from "next/link"
 import Image from "next/image"
 import dynamic from "next/dynamic"
 import { useDarkPageBackground } from "@/hooks/useDarkPageBackground"
+import { usePasswordReset, usePasswordResetAvailable } from "@/hooks/usePasswordReset"
+import { ForgotPasswordPanel, ResetPasswordPanel } from "./PasswordResetPanels"
 
 const AuroraShader = dynamic(() => import('@/app/components/AuroraShader'), { ssr: false })
 
-type AuthMode = "signin" | "signup" | "verify-email" | "change-password"
+type AuthMode = "signin" | "signup" | "verify-email" | "change-password" | "forgot-password" | "reset-password"
 
 const taglines: Record<AuthMode, { line1: string; line2: string; desc: string }> = {
   "signin": {
@@ -33,14 +35,29 @@ const taglines: Record<AuthMode, { line1: string; line2: string; desc: string }>
     line2: "Fresh start.",
     desc: "Your account was created by an admin. Please choose a new password to continue.",
   },
+  "forgot-password": {
+    line1: "Locked out happens,",
+    line2: "We\u2019ll get you back in.",
+    desc: "Enter your email and we\u2019ll send you a code to reset your password.",
+  },
+  "reset-password": {
+    line1: "One code away,",
+    line2: "From getting back in.",
+    desc: "Enter the code we emailed you and choose a new password.",
+  },
 }
+
+// Shown wherever we tell the user a code is on its way. Transactional code
+// emails are routinely spam-filtered, and a user who never finds the code reads
+// it as a broken product rather than a misplaced email.
+const SPAM_FOLDER_HINT = "Don't see it? Check your spam or junk folder."
+
+const AUTH_MODES = ["signup", "verify-email", "change-password", "forgot-password", "reset-password"] as const
 
 function getInitialMode(searchParams: URLSearchParams): AuthMode {
   const mode = searchParams.get("mode")
-  if (mode === "signup") return "signup"
-  if (mode === "verify-email") return "verify-email"
-  if (mode === "change-password") return "change-password"
-  return "signin"
+  // Anything unrecognized (or absent) lands on sign-in rather than a blank panel.
+  return AUTH_MODES.find((m) => m === mode) ?? "signin"
 }
 
 function AuthPage() {
@@ -75,6 +92,41 @@ function AuthPage() {
   const [currentPassword, setCurrentPassword] = useState("")
   const [newPassword, setNewPassword] = useState("")
   const [confirmNewPassword, setConfirmNewPassword] = useState("")
+
+  // Forgot/reset-password state. The flow itself lives in usePasswordReset so
+  // this component stays a set of panels; email + password fields stay here
+  // because sign-in and change-password share them.
+  const [notice, setNotice] = useState("")
+  // Probed only once the user is actually in the flow, so a plain sign-in visit
+  // doesn't pay for the request.
+  const resetAvailable = usePasswordResetAvailable(
+    mode === "forgot-password" || mode === "reset-password"
+  )
+  const {
+    resetCode, setResetCode, resetSent, resetComplete,
+    isSubmitting: isResetSubmitting, isResending: isResendingReset,
+    requestCode, submitReset, resendCode: handleResendReset,
+  } = usePasswordReset({
+    email,
+    newPassword,
+    confirmNewPassword,
+    setError,
+    setNotice,
+    startCooldown: () => setResendCooldown(60),
+    // Wrapped in an arrow so switchMode is looked up when the callback fires,
+    // not at hook-call time — it is declared below this point.
+    onCodeSent: () => switchMode("reset-password", true),
+    onResetComplete: (signedIn) => {
+      // Signed in with the new password — go where they were headed.
+      if (signedIn) {
+        setTimeout(() => { router.push(callbackUrl); router.refresh() }, 800)
+        return
+      }
+      // Password did change; only the follow-up sign-in failed.
+      setNotice("Password reset. Please sign in with your new password.")
+      setTimeout(() => switchMode("signin", true), 1200)
+    },
+  })
 
   useDarkPageBackground()
 
@@ -137,10 +189,14 @@ function AuthPage() {
     return () => clearTimeout(t)
   }, [resendCooldown])
 
-  const switchMode = (newMode: AuthMode) => {
+  // keepNotice: the forgot/reset steps set a confirmation message *and* move to
+  // the next panel, and that message is the only feedback the user gets — the
+  // default clear would wipe it in the same render.
+  const switchMode = (newMode: AuthMode, keepNotice = false) => {
     if (switching.current) return
     switching.current = true
     setError("")
+    if (!keepNotice) setNotice("")
     setFormVisible(false)
     setTaglineVisible(false)
     const url = new URL(globalThis.location.href)
@@ -298,9 +354,20 @@ function AuthPage() {
     }
   }
 
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    await requestCode()
+  }
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    await submitReset()
+  }
+
   const tagline = taglines[mode]
   let resendLabel = "Resend code"
-  if (isResending) resendLabel = "Resending..."
+  // Shared by the verify-email and reset panels; either one can be in flight.
+  if (isResending || isResendingReset) resendLabel = "Resending..."
   else if (resendCooldown > 0) resendLabel = `Resend in ${resendCooldown}s`
 
   return (
@@ -401,7 +468,11 @@ function AuthPage() {
                       <input id="signin-password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="Enter your password" disabled={isLoading} />
                     </div>
                   </div>
+                  <div className="flex justify-end">
+                    <button type="button" onClick={() => switchMode('forgot-password')} className="text-xs text-[#888] hover:text-white transition-colors">Forgot password?</button>
+                  </div>
                   {error && <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3"><p className="text-sm text-red-400">{error}</p></div>}
+                  {notice && !error && <div className="rounded-lg bg-white/[0.04] border border-white/[0.12] px-4 py-3"><p className="text-sm text-[#bbb]">{notice}</p></div>}
                   <button type="submit" disabled={isLoading} className="w-full py-2.5 px-4 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#0a0a0a] disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
                     {isLoading ? <span className="flex items-center justify-center gap-2"><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>Signing in...</span> : "Sign in"}
                   </button>
@@ -418,6 +489,7 @@ function AuthPage() {
                 <div>
                   <h2 className="text-2xl font-semibold text-white">Create your workspace</h2>
                   <p className="mt-2 text-[#888] text-sm">Set up your organization and start resolving incidents.</p>
+                  <p className="mt-2 text-[#666] text-xs">We&apos;ll email you a 6-digit confirmation code. {SPAM_FOLDER_HINT}</p>
                 </div>
                 <form className="space-y-3" onSubmit={handleSignUp}>
                   <div>
@@ -457,6 +529,7 @@ function AuthPage() {
                 <div>
                   <h2 className="text-2xl font-semibold text-white">Verify your email</h2>
                   <p className="mt-2 text-[#888] text-sm">Enter the 6-digit code sent to {session?.user?.email || "your email"}</p>
+                  <p className="mt-2 text-[#666] text-xs">{SPAM_FOLDER_HINT}</p>
                 </div>
                 <div className="space-y-4">
                   <div>
@@ -510,6 +583,44 @@ function AuthPage() {
                   </button>
                 </form>
               </div>
+            )}
+
+            {mode === 'forgot-password' && (
+              <ForgotPasswordPanel
+                email={email}
+                setEmail={setEmail}
+                error={error}
+                isSubmitting={isResetSubmitting}
+                spamHint={SPAM_FOLDER_HINT}
+                resetAvailable={resetAvailable}
+                onSubmit={handleForgotPassword}
+                onBack={() => switchMode('signin')}
+              />
+            )}
+
+            {mode === 'reset-password' && (
+              <ResetPasswordPanel
+                email={email}
+                setEmail={setEmail}
+                resetCode={resetCode}
+                setResetCode={setResetCode}
+                newPassword={newPassword}
+                setNewPassword={setNewPassword}
+                confirmNewPassword={confirmNewPassword}
+                setConfirmNewPassword={setConfirmNewPassword}
+                resetSent={resetSent}
+                resetComplete={resetComplete}
+                isSubmitting={isResetSubmitting}
+                resendDisabled={isResendingReset || isResetSubmitting || resendCooldown > 0 || resetComplete}
+                resendLabel={resendLabel}
+                error={error}
+                notice={notice}
+                spamHint={SPAM_FOLDER_HINT}
+                resetAvailable={resetAvailable}
+                onSubmit={handleResetPassword}
+                onResend={handleResendReset}
+                onBack={() => switchMode('signin')}
+              />
             )}
           </div>
         </div>

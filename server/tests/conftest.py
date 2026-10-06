@@ -150,6 +150,7 @@ for _pkg in _OPTIONAL_PACKAGES:
     if not _is_installed(_pkg):
         _stub(_pkg)
 
+
 # Whether the real google.oauth2 is importable must be sampled BEFORE any
 # stubbing runs. Once `google.oauth2` is placed in sys.modules, find_spec()
 # returns that stub's own ModuleSpec, so _is_installed() answers True and the
@@ -200,11 +201,18 @@ def _install_flask_limiter_stub() -> None:
         # @limiter.limit("10 per minute") / @limiter.shared_limit(...)
         limit = staticmethod(_passthrough_decorator)
         shared_limit = staticmethod(_passthrough_decorator)
-        exempt = staticmethod(_passthrough_decorator)
 
         # Bare decorators — applied directly to a function, not called first.
+        # `exempt` belongs here, not with `limit` above: chat_routes.py applies
+        # it as a plain `@limiter.exempt`, so a decorator-factory would hand
+        # Flask the factory's inner function and every route would register
+        # under the same `__name__`.
         @staticmethod
         def request_filter(func):
+            return func
+
+        @staticmethod
+        def exempt(func):
             return func
 
         def init_app(self, _app: Any) -> None:
