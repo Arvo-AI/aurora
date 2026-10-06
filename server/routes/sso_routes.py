@@ -307,10 +307,13 @@ def _idp_from_form(data: dict) -> tuple[dict, list]:
 
 def _sso_url_allowed(url: str) -> bool:
     parsed = urlparse(url)
-    if not parsed.netloc:
+    if not parsed.hostname:
         return False
-    # Plain http is only acceptable when Aurora itself runs on http (local dev).
-    return parsed.scheme == "https" or (parsed.scheme == "http" and not sso.backend_is_https())
+    if sso.backend_is_https():
+        return parsed.scheme == "https"
+    # Over http the request cookie is SameSite=Lax, so a cross-site IdP's POST
+    # would arrive without it; only a same-host IdP (local dev) can work.
+    return parsed.hostname == urlparse(sso.public_backend_url()).hostname
 
 
 def _validated_pems(certs: list) -> list[str] | None:
@@ -342,7 +345,11 @@ def _parse_idp_fields(data: dict) -> tuple[dict | None, str | None]:
     if len("".join(certs)) > _MAX_METADATA_BYTES:
         return None, "IdP certificate is too large"
     if not _sso_url_allowed(fields["idp_sso_url"]):
-        return None, "IdP SSO URL must use https"
+        return None, (
+            "IdP SSO URL must use https"
+            if sso.backend_is_https()
+            else "Aurora is served over http, so only an IdP on the same host can be used; serve Aurora over https"
+        )
 
     pems = _validated_pems(certs)
     if pems is None:

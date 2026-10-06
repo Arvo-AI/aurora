@@ -210,6 +210,17 @@ class TestMetadataAndConfigParsing:
         assert fields is None
         assert error
 
+    @pytest.mark.parametrize("idp_url, allowed", [
+        ("http://localhost:8080/realms/dev/protocol/saml", True),
+        ("https://login.example.net/saml2", False),
+        ("http://idp.example.org/sso", False),
+    ])
+    def test_http_backend_only_accepts_same_host_idp(self, saml_app, monkeypatch, idp_url, allowed):
+        # A cross-site IdP's POST would drop the SameSite=Lax request cookie.
+        _, mod, _ = saml_app
+        monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "http://localhost:5080")
+        assert mod._sso_url_allowed(idp_url) is allowed
+
 
 class TestDnsVerification:
     def test_non_ascii_txt_record_does_not_crash(self, monkeypatch):

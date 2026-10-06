@@ -14,6 +14,7 @@ import secrets
 from urllib.parse import urlparse
 
 import bcrypt
+import psycopg2.errors
 
 from utils.auth import VALID_ROLES, normalize_email
 
@@ -274,7 +275,9 @@ def burn_request_id(cur, request_id: str, org_id: str) -> bool:
     return cur.fetchone() is not None
 
 
-def resolve_user(cur, org_id: str, identity: dict, default_role: str) -> tuple[str, bool]:
+def resolve_user(
+    cur, org_id: str, identity: dict, default_role: str, _retried: bool = False,
+) -> tuple[str, bool]:
     """Find, link or create the Aurora user for a verified assertion.
 
     Returns ``(user_id, created)``; raises ``SsoError`` on refusal.
@@ -319,8 +322,12 @@ def resolve_user(cur, org_id: str, identity: dict, default_role: str) -> tuple[s
         # address, and silently re-pointing the account would hand it over.
         if linked_subject and linked_subject != subject:
             raise SsoError("identity_mismatch")
+        # An invited member's must_change_password would trap them on a
+        # password screen they have no reason to use once SSO owns sign-in.
         cur.execute(
-            "UPDATE users SET sso_subject = %s, email_verified = TRUE WHERE id = %s",
+            """UPDATE users SET sso_subject = %s, email_verified = TRUE,
+                              must_change_password = FALSE
+                WHERE id = %s""",
             (subject, user_id),
         )
         return user_id, False
@@ -332,14 +339,23 @@ def resolve_user(cur, org_id: str, identity: dict, default_role: str) -> tuple[s
     # First login — just-in-time provision. Unusable password: SSO users never
     # need one, and must_change_password would block them on first login.
     unusable = bcrypt.hashpw(os.urandom(32), bcrypt.gensalt()).decode("utf-8")
-    cur.execute(
-        """INSERT INTO users (email, password_hash, name, role, org_id,
-                              email_verified, must_change_password,
-                              sso_subject, created_at)
-           VALUES (%s, %s, %s, %s, %s, TRUE, FALSE, %s, NOW())
-           RETURNING id""",
-        (email, unusable, identity["name"], default_role, org_id, subject),
-    )
+    cur.execute("SAVEPOINT sso_provision")
+    try:
+        cur.execute(
+            """INSERT INTO users (email, password_hash, name, role, org_id,
+                                  email_verified, must_change_password,
+                                  sso_subject, created_at)
+               VALUES (%s, %s, %s, %s, %s, TRUE, FALSE, %s, NOW())
+               RETURNING id""",
+            (email, unusable, identity["name"], default_role, org_id, subject),
+        )
+    except psycopg2.errors.UniqueViolation:
+        cur.execute("ROLLBACK TO SAVEPOINT sso_provision")
+        # A concurrent login (e.g. a second tab) provisioned the user first;
+        # resolve again so this one finds that row instead of failing.
+        if _retried:
+            raise
+        return resolve_user(cur, org_id, identity, default_role, _retried=True)
     return cur.fetchone()[0], True
 
 

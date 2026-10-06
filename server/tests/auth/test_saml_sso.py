@@ -6,6 +6,7 @@ assertion; these tests pin what happens to the *user* once that's established.
 
 from __future__ import annotations
 
+import psycopg2.errors
 import pytest
 
 from utils.auth import saml_sso as sso
@@ -18,9 +19,10 @@ class FakeCursor:
         self.users = users or []        # dicts: id, email, org_id, sso_subject
         self.domains = domains or []    # dicts: org_id, domain, verified
         self.configs = configs or {}    # org_id -> dict(enabled, require_sso)
+        self.race_winner = None
         self._result = []
 
-    def execute(self, sql, params):
+    def execute(self, sql, params=None):
         sql = " ".join(sql.split())
         if sql.startswith("SELECT 1 FROM org_sso_domains"):
             org_id, domain = params
@@ -35,10 +37,20 @@ class FakeCursor:
             self._result = [(u["id"], u["org_id"], u["sso_subject"]) for u in self.users if u["email"].lower() == email]
         elif sql.startswith("UPDATE users SET sso_subject"):
             subject, user_id = params
-            next(u for u in self.users if u["id"] == user_id)["sso_subject"] = subject
+            user = next(u for u in self.users if u["id"] == user_id)
+            user["sso_subject"] = subject
+            if "must_change_password = FALSE" in sql:
+                user["must_change_password"] = False
+            self._result = []
+        elif sql.startswith(("SAVEPOINT", "ROLLBACK TO SAVEPOINT")):
             self._result = []
         elif sql.startswith("INSERT INTO users"):
             email, _pw, _name, _role, org_id, subject = params
+            # Simulates a concurrent login committing the same user first.
+            if self.race_winner:
+                self.users.append(self.race_winner)
+                self.race_winner = None
+                raise psycopg2.errors.UniqueViolation()
             new_id = f"uid-{len(self.users) + 1}"
             self.users.append({"id": new_id, "email": email, "org_id": org_id, "sso_subject": subject})
             self._result = [(new_id,)]
@@ -79,6 +91,11 @@ class TestResolveUser:
         assert created is True
         assert cur.users == [{"id": user_id, "email": "first.last@example.com", "org_id": "org-acme", "sso_subject": "sub-1"}]
 
+    def test_concurrent_first_login_resolves_to_winner(self):
+        cur = FakeCursor(domains=[ACME_DOMAIN])
+        cur.race_winner = {"id": "uid-tab1", "email": "first.last@example.com", "org_id": "org-acme", "sso_subject": "sub-1"}
+        assert sso.resolve_user(cur, "org-acme", _identity(), "viewer") == ("uid-tab1", False)
+
     def test_returning_user_matched_by_subject_not_email(self):
         # The IdP renamed the user's address; the immutable subject still matches.
         cur = FakeCursor(
@@ -90,10 +107,13 @@ class TestResolveUser:
     def test_existing_password_member_gets_linked(self):
         cur = FakeCursor(
             domains=[ACME_DOMAIN],
-            users=[{"id": "uid-a", "email": "First.Last@example.com", "org_id": "org-acme", "sso_subject": None}],
+            users=[{"id": "uid-a", "email": "First.Last@example.com", "org_id": "org-acme",
+                    "sso_subject": None, "must_change_password": True}],
         )
         assert sso.resolve_user(cur, "org-acme", _identity(), "viewer") == ("uid-a", False)
         assert cur.users[0]["sso_subject"] == "sub-1"
+        # Invited with a temp password; SSO now owns sign-in.
+        assert cur.users[0]["must_change_password"] is False
 
     def test_member_linked_to_other_subject_is_refused(self):
         cur = FakeCursor(
