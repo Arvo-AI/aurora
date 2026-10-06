@@ -270,7 +270,7 @@ def _settings_response(org_id: str):
         "config": config,
         "domains": domains,
         "serviceProvider": sso.sp_urls(org_id),
-        "domainVerificationRequired": not sso.skip_domain_verification(),
+        "domainVerificationRequired": sso.enforce_domain_verification(),
     })
 
 
@@ -419,7 +419,7 @@ def add_domain(user_id):
     if not domain:
         return jsonify({"error": "Enter a valid domain, like example.com"}), 400
 
-    skip = sso.skip_domain_verification()
+    skip = not sso.enforce_domain_verification()
     try:
         with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
             cur.execute(
@@ -464,7 +464,7 @@ def verify_domain(user_id, domain_id):
             domain, token, verified_at = row
 
             if not verified_at:
-                if not sso.skip_domain_verification() and not sso.domain_has_txt_token(domain, token):
+                if sso.enforce_domain_verification() and not sso.domain_has_txt_token(domain, token):
                     return jsonify({
                         "error": "DNS record not found yet. DNS changes can take a few minutes to propagate.",
                     }), 400

@@ -61,9 +61,9 @@ def backend_is_https() -> bool:
     return urlparse(public_backend_url()).scheme == "https"
 
 
-def skip_domain_verification() -> bool:
-    """Self-hosted operators own every org, so DNS proof adds nothing there."""
-    return os.getenv("SSO_SKIP_DOMAIN_VERIFICATION", "false").lower() == "true"
+def enforce_domain_verification() -> bool:
+    """DNS proof of domain ownership; required wherever orgs don't trust each other (SaaS)."""
+    return os.getenv("SSO_ENFORCE_DOMAIN_VERIFICATION", "false").lower() == "true"
 
 
 def sp_urls(org_id: str) -> dict:

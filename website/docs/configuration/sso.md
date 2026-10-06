@@ -49,7 +49,7 @@ _aurora-sso.example.com  TXT  "aurora-sso-verification=<token>"
 
 Click **Verify** once the record has propagated. A domain can only be verified by one organization.
 
-Self-hosted, single-tenant deployments can skip DNS proof by setting `SSO_SKIP_DOMAIN_VERIFICATION=true`. Never enable this on a multi-tenant deployment: it lets any org claim any domain.
+DNS proof is only required when `SSO_ENFORCE_DOMAIN_VERIFICATION=true`; otherwise added domains are trusted immediately. Enable it on any deployment where organizations don't trust each other (multi-tenant, or internet-facing with open sign-up): without it, any org admin can claim any domain and route its users' sign-ins to their own IdP.
 
 ### 3. Connect your IdP
 
