@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
 import { Copy, Loader2, Trash2 } from "lucide-react";
+import { SsoIdpSetupGuides } from "@/components/SsoIdpSetupGuides";
 
 type SsoDomain = {
   id: string;
@@ -161,13 +162,17 @@ export function SsoSettings() {
           <div>
             <h3 className="font-semibold">1. Register Aurora in your identity provider</h3>
             <p className="text-xs text-muted-foreground mt-1">
-              Create a SAML application and paste these values, or import the metadata URL.
+              Create a SAML application in your IdP, then copy these values into it (or import the metadata URL).
             </p>
           </div>
-          <CopyField label="Identifier (Entity ID)" value={sp.entityId} />
-          <CopyField label="Reply URL (Assertion Consumer Service URL)" value={sp.acsUrl} />
-          <CopyField label="Sign on URL" value={sp.loginUrl} />
-          <CopyField label="Metadata URL" value={sp.metadataUrl} />
+          <SsoIdpSetupGuides />
+          <div className="space-y-3 pt-1">
+            <p className="text-xs font-medium text-muted-foreground">Aurora service provider values</p>
+            <CopyField label="Identifier (Entity ID) — Entra: Identifier" value={sp.entityId} />
+            <CopyField label="Reply URL (ACS) — Entra: Reply URL; SAML post-back (not OAuth Redirect URI)" value={sp.acsUrl} />
+            <CopyField label="Sign on URL — optional; Entra My Apps tile" value={sp.loginUrl} />
+            <CopyField label="Metadata URL — optional; import all SP fields at once" value={sp.metadataUrl} />
+          </div>
         </CardContent>
       </Card>
 
