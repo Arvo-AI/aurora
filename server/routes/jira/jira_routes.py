@@ -300,15 +300,18 @@ def update_settings(user_id):
     if mode is None and comment_back is None:
         return jsonify({"error": "jiraMode or commentBack is required"}), 400
 
+    if mode is not None and mode not in VALID_MODES:
+        return jsonify({"error": f"jiraMode must be one of: {', '.join(VALID_MODES)}"}), 400
+    if comment_back is not None and not isinstance(comment_back, bool):
+        return jsonify({"error": "commentBack must be a boolean"}), 400
+
     if mode is not None:
-        if mode not in VALID_MODES:
-            return jsonify({"error": f"jiraMode must be one of: {', '.join(VALID_MODES)}"}), 400
-        store_user_preference(user_id, JIRA_MODE_KEY, mode)
+        if not store_user_preference(user_id, JIRA_MODE_KEY, mode):
+            return jsonify({"error": "Failed to store Jira settings"}), 500
 
     if comment_back is not None:
-        if not isinstance(comment_back, bool):
-            return jsonify({"error": "commentBack must be a boolean"}), 400
-        store_user_preference(user_id, JIRA_COMMENT_BACK_KEY, comment_back)
+        if not store_user_preference(user_id, JIRA_COMMENT_BACK_KEY, comment_back):
+            return jsonify({"error": "Failed to store Jira settings"}), 500
 
     logger.info(
         "[JIRA] Updated settings for user %s: jiraMode=%s commentBack=%s",

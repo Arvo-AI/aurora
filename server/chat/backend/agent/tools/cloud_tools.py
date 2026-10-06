@@ -2738,27 +2738,34 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         from utils.auth.token_management import get_token_data as _get_jira_creds
         _jira_creds = _get_jira_creds(user_id, "jira")
         if _jira_creds:
+            from routes.jira.jira_routes import jira_comment_back_enabled
             from utils.auth.stateless_auth import get_user_preference
-            _jira_mode = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
 
             _jira_tools = [
                 (jira_search_issues, "jira_search_issues", JiraSearchIssuesArgs,
                  "Search Jira issues using JQL. Returns matching issues with key, summary, status, assignee, labels."),
                 (jira_get_issue, "jira_get_issue", JiraGetIssueArgs,
                  "Get full details of a Jira issue by key (e.g. OPS-123). Returns description, status, comments."),
-                (jira_add_comment, "jira_add_comment", JiraAddCommentArgs,
-                 "Add a comment to a Jira issue. Non-destructive operation."),
             ]
 
-            if _jira_mode != "comment_only":
-                _jira_tools.extend([
-                    (jira_create_issue, "jira_create_issue", JiraCreateIssueArgs,
-                     "Create a new Jira issue in a project. Requires project key, summary, and optional description."),
-                    (jira_update_issue, "jira_update_issue", JiraUpdateIssueArgs,
-                     "Update fields on an existing Jira issue."),
-                    (jira_link_issues, "jira_link_issues", JiraLinkIssuesArgs,
-                     "Create a link between two Jira issues (Relates, Blocks, Clones, etc.)."),
-                ])
+            # Writes stay off until the org opts in on the connector page.
+            if jira_comment_back_enabled(user_id):
+                _jira_mode = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
+                _jira_tools.append(
+                    (jira_add_comment, "jira_add_comment", JiraAddCommentArgs,
+                     "Add a comment to a Jira issue. Non-destructive operation."),
+                )
+                if _jira_mode != "comment_only":
+                    _jira_tools.extend([
+                        (jira_create_issue, "jira_create_issue", JiraCreateIssueArgs,
+                         "Create a new Jira issue in a project. Requires project key, summary, and optional description."),
+                        (jira_update_issue, "jira_update_issue", JiraUpdateIssueArgs,
+                         "Update fields on an existing Jira issue."),
+                        (jira_link_issues, "jira_link_issues", JiraLinkIssuesArgs,
+                         "Create a link between two Jira issues (Relates, Blocks, Clones, etc.)."),
+                    ])
+            else:
+                _jira_mode = "comment_only"
 
             for _func, _name, _schema, _desc in _jira_tools:
                 _ctx = with_user_context(_func)

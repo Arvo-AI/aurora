@@ -968,7 +968,7 @@ ATLASSIAN_CLIENT_SECRET=your-client-secret
 3. Click **Connect with Atlassian**
 4. Authorize Aurora in the Atlassian popup
 5. Connection complete - the site URL is detected automatically
-6. For Jira, choose the agent permission tier (Read Only or Full Access)
+6. For Jira, turn on **Comment back on Jira tickets** if you want Aurora to post after an investigation, then choose **Comment only** or **Create & comment**
 
 #### Option B: Data Center (PAT)
 

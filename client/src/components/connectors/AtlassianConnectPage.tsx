@@ -282,6 +282,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                       />
                     </div>
                     {commentBack && (
+                      <>
                     <button
                       onClick={() => saveJiraMode("comment_only")}
                       disabled={isSavingSettings}
@@ -331,6 +332,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                         </p>
                       </div>
                     </button>
+                      </>
                     )}
                   </>
                 )}

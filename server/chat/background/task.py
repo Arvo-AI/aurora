@@ -1277,7 +1277,9 @@ async def _run_jira_action(
     from chat.backend.agent.llm import ModelConfig
     from main_chatbot import process_workflow_async
 
-    jira_mode = rca_context.get('integrations', {}).get('jira_mode', 'comment_only')
+    from utils.auth.stateless_auth import get_user_preference
+
+    jira_mode = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
 
     service_name = ""
     if incident_id:
