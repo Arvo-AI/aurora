@@ -1,6 +1,5 @@
 """GET /api/memory/platform/<platform> surfaces a platform's policy memory
-(seeding on read); /api/memory/slack stays as an alias with the same body.
-``is_protected`` is reported on serialized entries so the client can stop
+(seeding on read). ``is_protected`` is reported on serialized entries so the client can stop
 mirroring PROTECTED_ENTRIES."""
 
 import sys
@@ -63,12 +62,10 @@ def memory_client(monkeypatch):
     return client
 
 
-def test_platform_route_and_slack_alias_return_the_same_body(memory_client):
-    a = memory_client.get("/platform/slack", headers=HEADERS)
-    b = memory_client.get("/slack", headers=HEADERS)
-    assert a.status_code == b.status_code == 200
-    assert a.get_json() == b.get_json()
-    entry = a.get_json()["entry"]
+def test_platform_route_returns_the_policy_entry(memory_client):
+    resp = memory_client.get("/platform/slack", headers=HEADERS)
+    assert resp.status_code == 200
+    entry = resp.get_json()["entry"]
     assert entry["id"] == ENTRY_ID
     assert entry["title"] == "Slack"
     assert entry["category"] == "context"

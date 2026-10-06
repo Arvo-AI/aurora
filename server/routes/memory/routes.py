@@ -396,7 +396,9 @@ def update_entry(user_id, entry_id):
         return jsonify({"error": "Failed to update memory entry"}), 500
 
 
-def _platform_memory_response(user_id: str, platform: str):
+@memory_bp.route("/platform/<platform>", methods=["GET"])
+@require_permission("memory", "read")
+def get_platform_memory(user_id, platform):
     """Fetch a platform's well-known policy memory entry, seeding it if absent.
 
     Surfaced so a connector's manage page can show/edit the platform's behaviour
@@ -444,21 +446,6 @@ def _platform_memory_response(user_id: str, platform: str):
         # and the message must not embed request-derived values.
         logger.exception("[Memory] Error getting platform memory")
         return jsonify({"error": f"Failed to get the {spec.title} memory entry"}), 500
-
-
-@memory_bp.route("/platform/<platform>", methods=["GET"])
-@require_permission("memory", "read")
-def get_platform_memory(user_id, platform):
-    """``GET /api/memory/platform/<platform>`` — the platform's policy memory."""
-    return _platform_memory_response(user_id, platform)
-
-
-@memory_bp.route("/slack", methods=["GET"])
-@require_permission("memory", "read")
-def get_slack_memory(user_id):
-    """Backward-compatible alias for ``/platform/slack`` (the Slack manage page
-    now calls the platform route; this stays for external API consumers)."""
-    return _platform_memory_response(user_id, "slack")
 
 
 @memory_bp.route("/upload", methods=["POST"])
