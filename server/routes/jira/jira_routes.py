@@ -13,7 +13,7 @@ from connectors.atlassian_auth.auth import refresh_access_token
 from connectors.jira_connector.client import JiraClient
 from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_user_preference, set_rls_context
+from utils.auth.stateless_auth import get_user_preference, resolve_org_id, set_rls_context
 from utils.db.db_utils import connect_to_db_as_user
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.log_sanitizer import sanitize
@@ -357,10 +357,17 @@ def update_settings(user_id):
     if not _store_jira_settings(user_id, mode=mode, comment_back=comment_back):
         return jsonify({"error": "Failed to store Jira settings"}), 500
 
-    # Tool registration caches Jira write tools until expiry — drop stale entries.
-    from chat.backend.agent.tools.mcp_tools import clear_credentials_cache
+    # Jira prefs are org-scoped — invalidate every member's cached tool list.
+    from chat.backend.agent.tools.mcp_tools import (
+        clear_credentials_cache,
+        clear_credentials_cache_for_org,
+    )
 
-    clear_credentials_cache(user_id)
+    org_id = resolve_org_id(user_id)
+    if org_id:
+        clear_credentials_cache_for_org(org_id)
+    else:
+        clear_credentials_cache(user_id)
 
     logger.info(
         "[JIRA] Updated settings for user %s: jiraMode=%s commentBack=%s",

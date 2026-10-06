@@ -846,6 +846,26 @@ def clear_credentials_cache(user_id: str = None):
         _langchain_tools_cache_expiry.clear()
         logging.info("Cleared all credentials and MCP tools cache")
 
+
+def clear_credentials_cache_for_org(org_id: str) -> None:
+    """Drop per-user tool caches for every member of an org."""
+    if not org_id:
+        return
+
+    from utils.db.connection_pool import db_pool
+
+    try:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE org_id = %s", (org_id,))
+            user_ids = [row[0] for row in cur.fetchall()]
+    except Exception:
+        logging.exception("Failed to list users for org cache invalidation")
+        return
+
+    for member_id in user_ids:
+        clear_credentials_cache(member_id)
+
+
 def get_user_cloud_credentials(user_id: str) -> Dict[str, Dict]:
     """Get user's cloud credentials from Aurora's authentication system with caching."""
     current_time = time.time()
