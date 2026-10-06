@@ -50,6 +50,7 @@
     "ansi-to-html": "^0.7.2",
     "autoprefixer": "^10.4.20",
     "bcrypt": "^6.0.0",
+    "braces": "file:vendor/braces",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "1.0.4",
@@ -117,6 +118,7 @@
     "flatted": "^3.4.2",
     "postcss": "$postcss",
     "chokidar": "^4.0.3",
-    "braces": "https://github.com/micromatch/braces/tarball/28d440b5dd449dbf1fe6f3506cf94ecca4d02660"
+    "braces": "$braces",
+    "postcss-selector-parser": "7.1.6"
   }
 }
