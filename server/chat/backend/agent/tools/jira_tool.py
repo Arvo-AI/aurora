@@ -16,24 +16,13 @@ logger = logging.getLogger(__name__)
 _JIRA_MODE_KEY = "jira_mode"
 
 
-def _is_interactive_session() -> bool:
-    from chat.backend.agent.tools.cloud_tools import get_state_context
-
-    try:
-        state = get_state_context()
-    except Exception:
-        state = None
-    # No state means we can't prove a user asked, so treat it as background
-    if state is None:
-        return False
-    return not getattr(state, "is_background", True)
-
-
 def _require_jira_comment_back(user_id: str) -> None:
+    from chat.backend.agent.tools.cloud_tools import _is_background_rca, get_state_context
     from routes.jira.jira_routes import jira_comment_back_enabled
 
-    # A user asking in chat is consent enough; the opt-in only gates unattended posts
-    if _is_interactive_session():
+    state = get_state_context()
+    # Outside an RCA a user asked for the write; unknown sessions still need the opt-in
+    if state is not None and not _is_background_rca(state, getattr(state, "is_background", False)):
         return
 
     if not jira_comment_back_enabled(user_id):

@@ -2748,10 +2748,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                  "Get full details of a Jira issue by key (e.g. OPS-123). Returns description, status, comments."),
             ]
 
-            _jira_interactive = bool(state_context) and not getattr(state_context, 'is_background', True)
-
-            # Chat users can ask for writes; unattended runs need the org opt-in
-            if _jira_interactive or jira_comment_back_enabled(user_id):
+            # Only RCA runs need the org opt-in; elsewhere a user asked for the write
+            if not _is_background_rca(state_context, is_background) or jira_comment_back_enabled(user_id):
                 _jira_mode = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
                 _jira_tools.append(
                     (jira_add_comment, "jira_add_comment", JiraAddCommentArgs,

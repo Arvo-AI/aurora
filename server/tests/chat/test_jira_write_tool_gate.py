@@ -9,6 +9,11 @@ import pytest
 from chat.backend.agent.tools import jira_tool
 
 
+_RCA_SESSION = SimpleNamespace(
+    is_background=True, incident_id="inc-1", rca_context={"source": "grafana"},
+)
+
+
 def _set_session(monkeypatch, state):
     monkeypatch.setattr(
         "chat.backend.agent.tools.cloud_tools.get_state_context",
@@ -37,8 +42,8 @@ def comment_back_off(monkeypatch):
 )
 @pytest.mark.parametrize(
     "state",
-    [None, SimpleNamespace(is_background=True)],
-    ids=["no-session", "background"],
+    [None, _RCA_SESSION],
+    ids=["no-session", "background-rca"],
 )
 def test_write_tools_blocked_when_comment_back_off(monkeypatch, comment_back_off, fn, args, state):
     _set_session(monkeypatch, state)
@@ -46,6 +51,14 @@ def test_write_tools_blocked_when_comment_back_off(monkeypatch, comment_back_off
         fn(*args, user_id="uid-1")
 
 
-def test_interactive_chat_can_write_when_comment_back_off(monkeypatch, comment_back_off):
-    _set_session(monkeypatch, SimpleNamespace(is_background=False))
+@pytest.mark.parametrize(
+    "state",
+    [
+        SimpleNamespace(is_background=False, incident_id=None, rca_context=None),
+        SimpleNamespace(is_background=False, incident_id="inc-1", rca_context={"source": "chat"}),
+    ],
+    ids=["chat", "chat-about-incident"],
+)
+def test_user_requested_write_allowed_when_comment_back_off(monkeypatch, comment_back_off, state):
+    _set_session(monkeypatch, state)
     jira_tool._require_jira_comment_back("uid-1")
