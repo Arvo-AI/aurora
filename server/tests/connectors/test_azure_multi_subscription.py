@@ -235,6 +235,10 @@ def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent", login
     src = _read(CLOUD_EXEC)
     ns = {"shlex": shlex, "re": re, "json": __import__("json"), "time": __import__("time"),
           "contextvars": __import__("contextvars"),
+          # Identity stub: the helper only decides *which* message to show (see
+          # tests/secrets/test_vault_backend_availability.py). These tests are
+          # about the fan-out failing closed, so keep the fallback text.
+          "_credential_setup_error": lambda fallback: fallback,
           "Optional": typing.Optional, "logger": __import__("logging").getLogger("test")}
 
     # The fan-out calls the Ask-mode gate, which now lives in its own module.
