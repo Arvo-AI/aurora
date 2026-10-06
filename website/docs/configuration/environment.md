@@ -223,6 +223,7 @@ At least one LLM provider API key is required. See [LLM Providers](/docs/integra
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OPENROUTER_API_KEY` | - | OpenRouter API key (recommended) |
+| `REQUESTY_API_KEY` | - | Requesty API key |
 | `OPENAI_API_KEY` | - | OpenAI API key |
 | `ANTHROPIC_API_KEY` | - | Anthropic API key |
 | `GOOGLE_AI_API_KEY` | - | Google AI API key |
@@ -236,6 +237,7 @@ Controls how Aurora routes LLM requests:
 | Mode | Description | Required key |
 |------|-------------|--------------|
 | `openrouter` | All requests go through OpenRouter. One key gives access to models from Anthropic, OpenAI, Google, and others. | `OPENROUTER_API_KEY` |
+| `requesty` | All requests go through Requesty, an OpenAI-compatible gateway. One key gives access to models from Anthropic, OpenAI, Google, and others. | `REQUESTY_API_KEY` |
 | `direct` | Requests go directly to each provider's API based on the model prefix (e.g. `anthropic/...` → Anthropic API). No OpenRouter account needed, but you need a separate API key for each provider you use. | Provider-specific key(s) |
 | `auto` | Same behaviour as `direct`. | Provider-specific key(s) |
 | _provider name_ | Set to a provider such as `bedrock`, `vertex`, `anthropic`, `openai`, `google`, or `ollama` to route **every** model selection through that provider (clean model picks are translated to its native id). Models the provider can't serve fall back to their own native provider. | That provider's config |
@@ -245,11 +247,12 @@ Controls how Aurora routes LLM requests:
 ```bash
 # Use one of these
 OPENROUTER_API_KEY=sk-or-v1-your-key
+REQUESTY_API_KEY=rqsty-your-key
 OPENAI_API_KEY=sk-your-key
 ANTHROPIC_API_KEY=sk-ant-your-key
 GOOGLE_AI_API_KEY=your-key
 
-LLM_PROVIDER_MODE=openrouter   # or: direct
+LLM_PROVIDER_MODE=openrouter   # or: requesty, direct
 AGENT_RECURSION_LIMIT=240
 ```
 
