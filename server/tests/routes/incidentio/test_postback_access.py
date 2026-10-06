@@ -4,8 +4,10 @@ import json
 from unittest.mock import MagicMock
 
 from routes.incidentio.incidentio_client import (
+    INCIDENTIO_TIMEOUT,
     IncidentioAPIError,
     IncidentioClient,
+    _POSTBACK_IDENTITY_TIMEOUT,
     classify_postback_roles,
     postback_can_enable,
 )
@@ -64,9 +66,25 @@ def test_read_postback_access_reads_identity_roles(monkeypatch):
     monkeypatch.setattr(
         client,
         "get_identity",
-        lambda: {"identity": {"roles": ["incident_editor"], "team_roles": []}},
+        lambda **_kwargs: {"identity": {"roles": ["incident_editor"], "team_roles": []}},
     )
     assert client.read_postback_access() == {"checked": True, "incidents": True, "alerts": False}
+
+
+def test_read_postback_access_uses_a_short_identity_timeout(monkeypatch):
+    client = IncidentioClient("test-key")
+    seen = {}
+
+    def _request(method, path, **kwargs):
+        seen["timeout"] = kwargs.get("timeout")
+        response = MagicMock()
+        response.json.return_value = {"identity": {"roles": ["incident_editor"], "team_roles": []}}
+        return response
+
+    monkeypatch.setattr(client, "_request", _request)
+    client.read_postback_access()
+    assert seen["timeout"] == _POSTBACK_IDENTITY_TIMEOUT
+    assert seen["timeout"] < INCIDENTIO_TIMEOUT
 
 
 def test_get_postback_access_refetches_when_cache_has_partial_access(monkeypatch):
@@ -126,7 +144,7 @@ def test_get_postback_access_uses_redis_cache(monkeypatch):
 def test_read_postback_access_is_unchecked_when_identity_fails(monkeypatch):
     client = IncidentioClient("test-key")
 
-    def _boom():
+    def _boom(**_kwargs):
         raise IncidentioAPIError(IncidentioAPIError.TIMEOUT)
 
     monkeypatch.setattr(client, "get_identity", _boom)

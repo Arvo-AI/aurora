@@ -11,6 +11,9 @@ INCIDENTIO_API_HOST = "https://api.incident.io"
 # alert notes only exist on v1, so the version is part of the request not the base.
 INCIDENTIO_DEFAULT_API_VERSION = "v2"
 INCIDENTIO_TIMEOUT = 15
+# Settings re-check identity whenever scopes are incomplete (that result is not
+# cached), so a hung call must not hold the page for the normal API timeout.
+_POSTBACK_IDENTITY_TIMEOUT = 3
 # incident_alerts paging: 50 is the API maximum; 20 pages = 1000 links per lookup
 _PAGE_SIZE = 50
 _MAX_PAGES = 20
@@ -87,13 +90,19 @@ class IncidentioClient:
         }
 
     def _request(
-        self, method: str, path: str, *, api_version: str = INCIDENTIO_DEFAULT_API_VERSION, **kwargs
+        self,
+        method: str,
+        path: str,
+        *,
+        api_version: str = INCIDENTIO_DEFAULT_API_VERSION,
+        timeout: float = INCIDENTIO_TIMEOUT,
+        **kwargs,
     ) -> requests.Response:
         """One API call; network and HTTP failures surface as IncidentioAPIError."""
         url = f"{INCIDENTIO_API_HOST}/{api_version}{path}"
         try:
             response = requests.request(
-                method, url, headers=self.headers, timeout=INCIDENTIO_TIMEOUT, **kwargs
+                method, url, headers=self.headers, timeout=timeout, **kwargs
             )
             response.raise_for_status()
             return response
@@ -110,9 +119,9 @@ class IncidentioClient:
                 raise IncidentioAPIError(IncidentioAPIError.FORBIDDEN, status)
             raise IncidentioAPIError(IncidentioAPIError.API_ERROR, status)
 
-    def get_identity(self) -> Dict[str, Any]:
+    def get_identity(self, *, timeout: float = INCIDENTIO_TIMEOUT) -> Dict[str, Any]:
         """Roles on this API key. Any valid key can call it, and it writes nothing."""
-        return self._request("GET", "/identity", api_version="v1").json()
+        return self._request("GET", "/identity", api_version="v1", timeout=timeout).json()
 
     def read_postback_access(self) -> Dict[str, Any]:
         """Whether this key can post incident updates and alert notes.
@@ -122,7 +131,7 @@ class IncidentioClient:
         """
         unknown = {"checked": False, "incidents": False, "alerts": False}
         try:
-            payload = self.get_identity() or {}
+            payload = self.get_identity(timeout=_POSTBACK_IDENTITY_TIMEOUT) or {}
         except IncidentioAPIError:
             logger.warning("[INCIDENTIO] Could not read API key roles for the post-back check")
             return unknown
