@@ -69,6 +69,45 @@ def test_read_postback_access_reads_identity_roles(monkeypatch):
     assert client.read_postback_access() == {"checked": True, "incidents": True, "alerts": False}
 
 
+def test_get_postback_access_refetches_when_cache_has_partial_access(monkeypatch):
+    from routes.incidentio import tasks
+
+    rc = MagicMock()
+    rc.get.return_value = json.dumps({"checked": True, "incidents": True, "alerts": False})
+    monkeypatch.setattr("utils.cache.redis_client.get_redis_client", lambda: rc)
+    monkeypatch.setattr(
+        "utils.auth.token_management.get_token_data",
+        lambda *_args, **_kwargs: {"api_key": "k"},
+    )
+
+    client = MagicMock()
+    client.read_postback_access.return_value = {"checked": True, "incidents": True, "alerts": True}
+    monkeypatch.setattr("routes.incidentio.incidentio_client.IncidentioClient", lambda *_args, **_kwargs: client)
+
+    assert tasks.get_postback_access("u1")["alerts"] is True
+    client.read_postback_access.assert_called_once()
+    rc.setex.assert_called_once()
+
+
+def test_get_postback_access_does_not_cache_partial_access(monkeypatch):
+    from routes.incidentio import tasks
+
+    rc = MagicMock()
+    rc.get.return_value = None
+    monkeypatch.setattr("utils.cache.redis_client.get_redis_client", lambda: rc)
+    monkeypatch.setattr(
+        "utils.auth.token_management.get_token_data",
+        lambda *_args, **_kwargs: {"api_key": "k"},
+    )
+
+    client = MagicMock()
+    client.read_postback_access.return_value = {"checked": True, "incidents": True, "alerts": False}
+    monkeypatch.setattr("routes.incidentio.incidentio_client.IncidentioClient", lambda *_args, **_kwargs: client)
+
+    tasks.get_postback_access("u1")
+    rc.setex.assert_not_called()
+
+
 def test_get_postback_access_uses_redis_cache(monkeypatch):
     from routes.incidentio import tasks
 

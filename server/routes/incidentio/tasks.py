@@ -150,10 +150,17 @@ def invalidate_org_severity_cache(user_id: str) -> None:
 _POSTBACK_ACCESS_CACHE_TTL_SECONDS = 300
 
 
+def _postback_access_fully_writable(access: Dict[str, Any]) -> bool:
+    """True when identity ran and the key can post to both incidents and alerts."""
+    return bool(access.get("checked") and access.get("incidents") and access.get("alerts"))
+
+
 def get_postback_access(user_id: str) -> Dict[str, Any]:
     """Whether the stored API key can post incident updates and alert notes.
 
-    Cached briefly so opening RCA settings does not hit identity on every GET.
+    Only the no-warning case (full write access) is cached briefly. Partial or
+    missing scopes re-hit identity on every load so a user can fix permissions
+    and refresh the connector settings right away.
     """
     import json as _json
 
@@ -166,7 +173,8 @@ def get_postback_access(user_id: str) -> Dict[str, Any]:
             cached = rc.get(cache_key)
             if cached is not None:
                 parsed = _json.loads(cached)
-                if isinstance(parsed, dict):
+                # Older entries may have cached a partial result — ignore those.
+                if isinstance(parsed, dict) and _postback_access_fully_writable(parsed):
                     return parsed
     except Exception:
         logger.debug("[INCIDENTIO] Post-back access cache read failed", exc_info=True)
@@ -179,7 +187,7 @@ def get_postback_access(user_id: str) -> Dict[str, Any]:
         return {"checked": False, "incidents": False, "alerts": False}
 
     access = IncidentioClient(creds["api_key"]).read_postback_access()
-    if access.get("checked"):
+    if _postback_access_fully_writable(access):
         try:
             from utils.cache.redis_client import get_redis_client
 
