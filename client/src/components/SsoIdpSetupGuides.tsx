@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { ExternalLink } from "lucide-react";
+import Image from "next/image";
 import { cn } from "@/lib/utils";
 
 type IdpGuide = {
@@ -104,21 +105,16 @@ const IDP_GUIDES: IdpGuide[] = [
 ];
 
 function IdpLogo({ guide }: Readonly<{ guide: IdpGuide }>) {
-  const wide = guide.id === "keycloak";
   return (
-    <span
-      className={cn(
-        "flex shrink-0 items-center justify-center overflow-visible rounded-md border border-border/60 bg-white",
-        wide ? "h-9 min-w-[2.75rem] px-1.5 py-1" : "h-9 w-9 p-1.5",
-      )}
-    >
-      {/* Native img so wide marks scale without Next/Image clipping */}
-      <img
+    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border bg-background p-1">
+      <Image
         src={guide.logo}
         alt=""
+        width={20}
+        height={20}
         className={cn(
-          "block object-contain object-center",
-          wide ? "h-[1.125rem] w-[2rem]" : "h-6 w-6",
+          "h-5 w-5 object-contain",
+          guide.id === "google" ? "dark:invert" : "dark:invert-[.85]",
         )}
       />
     </span>
