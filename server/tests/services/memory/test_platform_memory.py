@@ -1,7 +1,7 @@
 """Platform policy memories: the Slack identity/strings are unchanged (pinned by
 hash), the force-injection lookup behaves as before for every existing source,
-the generic path works for a second platform, and seeding is idempotent and
-lands in the caller's org."""
+a second platform plugs in and joins the single routing agent, and seeding is
+idempotent and lands in the caller's org."""
 
 import hashlib
 from unittest.mock import MagicMock, patch
@@ -13,7 +13,6 @@ from services.memory import (
     PROTECTED_ENTRIES,
     SLACK_MEMORY_CATEGORY,
     SLACK_MEMORY_TITLE,
-    SLACK_POLICY_SOURCES,
     PlatformMemoryIdentity,
     policy_entries_for_source,
 )
@@ -32,37 +31,34 @@ def _sha(s: str) -> str:
 def test_slack_identity_and_strings_unchanged():
     ident = PLATFORM_MEMORY_IDENTITIES["slack"]
     assert ident.key == (SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE) == ("context", "Slack")
-    assert ident.policy_sources == frozenset({"slack"})
-    assert SLACK_POLICY_SOURCES == frozenset({"slack", "team_routing"})
     assert PROTECTED_ENTRIES == frozenset({("context", "Slack")})
-    # The shim re-exports the spec's strings; both must be the pre-refactor text.
+    # slack_memory owns the strings the spec is built from; both must be the pre-refactor text.
     assert _sha(slack_memory.SLACK_MEMORY_DESCRIPTION) == _SLACK_DESCRIPTION_SHA
     assert _sha(slack_memory.SLACK_MEMORY_DEFAULT_CONTENT) == _SLACK_CONTENT_SHA
 
 
-@pytest.mark.parametrize("source,platform,expected", [
-    ("slack", None, [("context", "Slack")]),
-    ("SLACK", None, [("context", "Slack")]),
-    ("team_routing", None, [("context", "Slack")]),       # #670 default
-    ("team_routing", "slack", [("context", "Slack")]),
-    ("team_routing", "discord", []),                       # unknown platform: inject nothing
-    ("slack_button", None, []),
-    ("google_chat", None, []),
-    ("grafana", None, []),
-    ("chat", None, []),
-    ("", None, []),
-    (None, None, []),
+@pytest.mark.parametrize("source,expected", [
+    ("slack", [("context", "Slack")]),
+    ("SLACK", [("context", "Slack")]),
+    ("team_routing", [("context", "Slack")]),
+    ("slack_button", []),
+    ("google_chat", []),
+    ("grafana", []),
+    ("chat", []),
+    ("", []),
+    (None, []),
 ])
-def test_policy_entries_for_source_matches_pre_refactor_behaviour(source, platform, expected):
-    assert policy_entries_for_source(source, platform=platform) == expected
+def test_policy_entries_for_source_matches_pre_refactor_behaviour(source, expected):
+    assert policy_entries_for_source(source) == expected
 
 
-def test_policy_entries_generic_path_for_a_new_platform():
+def test_a_second_platform_gets_its_own_memory_and_joins_the_routing_agent():
     fake = PlatformMemoryIdentity("fake", "context", "Fake Chat", frozenset({"fake"}))
     with patch.dict(PLATFORM_MEMORY_IDENTITIES, {"fake": fake}):
         assert policy_entries_for_source("fake") == [("context", "Fake Chat")]
-        assert policy_entries_for_source("team_routing", platform="fake") == [("context", "Fake Chat")]
-        assert policy_entries_for_source("team_routing") == [("context", "Slack")]
+        assert policy_entries_for_source("slack") == [("context", "Slack")]
+        # One routing agent decides for every platform, so it gets every policy.
+        assert policy_entries_for_source("team_routing") == [("context", "Slack"), ("context", "Fake Chat")]
 
 
 def _db(existing_row=None, insert_row=("artifact-1",)):

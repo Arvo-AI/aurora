@@ -357,16 +357,13 @@ class Agent:
                     if _last_msg_content:
                         # For sessions that speak on a chat platform (@mention
                         # replies and the post-RCA team-routing agent), always
-                        # inject that platform's policy memory regardless of the
+                        # inject the platform policy memory regardless of the
                         # selector. team_routing has no rca_context, so check
-                        # the raw trigger source too; it names its platform via
-                        # trigger_metadata["platform"].
+                        # the raw trigger source too.
                         _rca_ctx = getattr(state, "rca_context", None) or {}
                         _src = str(_rca_ctx.get("source") or getattr(state, "trigger_source", None) or "").lower()
                         from services.memory import policy_entries_for_source
-                        _force_entries = policy_entries_for_source(
-                            _src, platform=getattr(state, "trigger_platform", None)
-                        ) or None
+                        _force_entries = policy_entries_for_source(_src) or None
                         _memory_prefetch = MemoryPrefetch(
                             user_id=state.user_id,
                             session_id=state.session_id,

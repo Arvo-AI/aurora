@@ -30,9 +30,9 @@ class PlatformMemoryIdentity:
     title: str
     # Background-session sources that speak on this platform and must always
     # have its memory injected (not left to the LLM memory selector): the
-    # @mention reply source. Do not list TEAM_ROUTING_SOURCE here — the post-RCA
-    # team-routing agent is dispatched with source="team_routing" plus a
-    # "platform" key and policy_entries_for_source resolves it by platform.
+    # @mention reply source. Do not list TEAM_ROUTING_SOURCE here — one post-RCA
+    # team-routing agent decides for every connected platform in the same run,
+    # so policy_entries_for_source gives it every registered platform's memory.
     policy_sources: frozenset
 
     @property
@@ -42,7 +42,6 @@ class PlatformMemoryIdentity:
 
 
 TEAM_ROUTING_SOURCE = "team_routing"
-_DEFAULT_ROUTING_PLATFORM = "slack"
 
 PLATFORM_MEMORY_IDENTITIES: Dict[str, PlatformMemoryIdentity] = {
     "slack": PlatformMemoryIdentity(
@@ -56,7 +55,6 @@ PLATFORM_MEMORY_IDENTITIES: Dict[str, PlatformMemoryIdentity] = {
 # Slack aliases — kept so existing imports keep working.
 SLACK_MEMORY_CATEGORY = PLATFORM_MEMORY_IDENTITIES["slack"].category
 SLACK_MEMORY_TITLE = PLATFORM_MEMORY_IDENTITIES["slack"].title
-SLACK_POLICY_SOURCES = PLATFORM_MEMORY_IDENTITIES["slack"].policy_sources | frozenset({TEAM_ROUTING_SOURCE})
 
 # Well-known entries whose (category, title) pair IS their stable identity —
 # seeders, the agent's prompt injector, and route lookups all pin to it rather
@@ -67,25 +65,23 @@ SLACK_POLICY_SOURCES = PLATFORM_MEMORY_IDENTITIES["slack"].policy_sources | froz
 PROTECTED_ENTRIES = frozenset(i.key for i in PLATFORM_MEMORY_IDENTITIES.values())
 
 
-def policy_entries_for_source(
-    source: Optional[str], platform: Optional[str] = None
-) -> List[Tuple[str, str]]:
+def policy_entries_for_source(source: Optional[str]) -> List[Tuple[str, str]]:
     """Memory entries to force-inject for a background session.
 
     ``source`` is the session's trigger source (``rca_context["source"]`` or the
-    raw ``trigger_metadata["source"]``); ``platform`` is the optional
-    ``trigger_metadata["platform"]`` that routing sessions carry.
+    raw ``trigger_metadata["source"]``).
 
-        slack                      -> [("context", "Slack")]
-        team_routing               -> the identity named by ``platform`` (Slack when unset)
-        anything else              -> []
+        slack         -> [("context", "Slack")]
+        team_routing  -> every registered platform's entry: one routing agent
+                         decides for all connected platforms in the same run
+                         (the injector skips an entry that was never seeded)
+        anything else -> []
     """
     src = (source or "").strip().lower()
     if not src:
         return []
     if src == TEAM_ROUTING_SOURCE:
-        ident = PLATFORM_MEMORY_IDENTITIES.get((platform or _DEFAULT_ROUTING_PLATFORM).lower())
-        return [ident.key] if ident else []
+        return [i.key for i in PLATFORM_MEMORY_IDENTITIES.values()]
     return [i.key for i in PLATFORM_MEMORY_IDENTITIES.values() if src in i.policy_sources]
 
 
