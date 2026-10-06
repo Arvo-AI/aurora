@@ -2,16 +2,15 @@
 
 Each chat platform Aurora acts on as a teammate gets one editable memory entry
 holding its operating policy: tone, when to speak, the service -> channel
-routing map, message format and per-channel notes. This module owns the
-default content of those entries and the seeding that runs on connect; their
-identity (category/title, policy sources) lives in ``services.memory`` so the
-agent and the memory routes can import it without pulling in the DB layer.
+routing map, message format and per-channel notes. This module owns the spec
+registry and the seeding that runs on connect. Each platform's wording lives in
+its own module (``slack_memory``), and the entries' identity (category/title,
+policy sources) lives in ``services.memory`` so the agent and the memory routes
+can import it without pulling in the DB layer.
 
-Contract: Slack rendering must stay byte-identical to the original
-``slack_memory`` module. Add a platform by adding one spec here (and one
-identity in ``services.memory.PLATFORM_MEMORY_IDENTITIES``); the
-platform-specific modules (``slack_memory``) are thin shims over this one so
-existing imports keep working.
+Add a platform by adding one spec here (built from that platform's module) and
+one identity in ``services.memory.PLATFORM_MEMORY_IDENTITIES``; the full list of
+registries a platform needs is in ``utils.notifications.team_routing``.
 
 Seeding only creates the starting policy and never overwrites an existing one.
 """
@@ -25,6 +24,7 @@ from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import sanitize
 from services.artifacts.store import create_version
 from services.memory import PLATFORM_MEMORY_IDENTITIES, PlatformMemoryIdentity
+from services.memory.slack_memory import SLACK_MEMORY_DEFAULT_CONTENT, SLACK_MEMORY_DESCRIPTION
 
 logger = logging.getLogger(__name__)
 
@@ -50,69 +50,11 @@ class PlatformMemorySpec:
         return self.identity.title
 
 
-# ---------------------------------------------------------------------------
-# Slack — strings moved verbatim from the original slack_memory module.
-# ---------------------------------------------------------------------------
-
-_SLACK_DESCRIPTION = (
-    "Slack behaviour: tone, when Aurora speaks, and which teams/channels to "
-    "notify. Aurora reads and updates this whenever Slack is involved."
-)
-
-# Default teammate policy — a conservative starting point users/agent refine over time.
-_SLACK_DEFAULT_CONTENT = """\
-This is Aurora's operating policy for Slack. Aurora acts like a teammate here, \
-not a notification bot. Update this entry as the team states preferences.
-
-## Tone
-- Concise and professional. Short, direct answers — no filler, no forced section \
-headers, minimal formatting.
-- Reply in the thread you were addressed in. Build on the existing conversation \
-rather than repeating it.
-
-## When to speak
-- When an investigation reaches a conclusion, post it to the relevant channel.
-- Otherwise stay quiet — don't narrate progress or post without something useful \
-to say.
-- Always respond when directly @mentioned.
-- If a team asks Aurora to be quieter (or more verbose) in a channel, record that \
-here per-channel and honour it.
-
-## Which channels / teams to notify
-- Aurora keeps a list of the Slack channels it can see, each with a description \
-(see the get_connected_slack_channels tool). Use those descriptions to pick the channel(s) \
-relevant to a given incident, service, or team.
-- Default fallback is the shared incidents channel when no better match exists.
-- Record team → channel routing preferences here as they are learned.
-
-## Service -> channel routing map
-Aurora learns, over time, which team channel owns which service/component, and \
-records it here so future incidents route straight to the right place without \
-re-deriving it. When you conclude an incident and post to a channel because it \
-owns the affected service, append the mapping here (e.g. "payments -> \
-#payments-oncall", "checkout-api -> #team-checkout"). On a new incident, consult \
-this map FIRST, before scanning channel descriptions. If a mapping turns out \
-wrong (a team redirects you), correct it here.
-
-(none yet — Aurora fills this in as it learns which channel owns which service)
-
-## Message format
-- Incident notifications are composed per channel. Some teams want a structured \
-summary (alert, severity, service, root cause, link); others want a short, human \
-one-liner. State the preference here — org-wide and/or per-channel.
-- Default: a concise structured summary. Record any channel/team that prefers a \
-different style under "Per-channel notes".
-
-## Per-channel notes
-(none yet — Aurora and the team add channel-specific preferences here over time)
-"""
-
-
 PLATFORM_MEMORY_SPECS: Dict[str, PlatformMemorySpec] = {
     "slack": PlatformMemorySpec(
         identity=PLATFORM_MEMORY_IDENTITIES["slack"],
-        description=_SLACK_DESCRIPTION,
-        default_content=_SLACK_DEFAULT_CONTENT,
+        description=SLACK_MEMORY_DESCRIPTION,
+        default_content=SLACK_MEMORY_DEFAULT_CONTENT,
     ),
 }
 
