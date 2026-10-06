@@ -70,7 +70,6 @@ Paste the IdP's federation metadata XML (Entra: **SAML Certificates → Federati
 
 ## Requirements
 
-- `NEXT_PUBLIC_BACKEND_URL` must be the backend's public URL as browsers see it; it is used to build the Entity ID and ACS URL, and SAML responses are validated against it.
 - The ACS relies on a `SameSite=None; Secure` cookie, so the backend must be served over HTTPS to use any hosted IdP (Entra ID, Okta, …). Over plain HTTP, only an IdP on the same host as the backend (e.g. a local Keycloak for development) is accepted.
 
 ## Not yet supported
