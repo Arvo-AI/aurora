@@ -20,7 +20,7 @@ class FakeCursor:
         self.configs = configs or {}    # org_id -> dict(enabled, require_sso)
         self._result = []
 
-    def execute(self, sql, params=()):
+    def execute(self, sql, params):
         sql = " ".join(sql.split())
         if sql.startswith("SELECT 1 FROM org_sso_domains"):
             org_id, domain = params
@@ -100,8 +100,9 @@ class TestResolveUser:
             domains=[ACME_DOMAIN],
             users=[{"id": "uid-a", "email": "first.last@example.com", "org_id": "org-acme", "sso_subject": "sub-OLD"}],
         )
+        identity = _identity(subject="sub-NEW")
         with pytest.raises(sso.SsoError) as exc:
-            sso.resolve_user(cur, "org-acme", _identity(subject="sub-NEW"), "viewer")
+            sso.resolve_user(cur, "org-acme", identity, "viewer")
         assert exc.value.code == "identity_mismatch"
 
     def test_account_in_another_org_is_never_moved(self):
@@ -109,8 +110,9 @@ class TestResolveUser:
             domains=[ACME_DOMAIN],
             users=[{"id": "uid-b", "email": "first.last@example.com", "org_id": "org-other", "sso_subject": None}],
         )
+        identity = _identity()
         with pytest.raises(sso.SsoError) as exc:
-            sso.resolve_user(cur, "org-acme", _identity(), "viewer")
+            sso.resolve_user(cur, "org-acme", identity, "viewer")
         assert exc.value.code == "account_in_other_org"
         assert cur.users[0]["org_id"] == "org-other"
 
@@ -122,8 +124,9 @@ class TestResolveUser:
     def test_unverified_domain_is_refused(self, domains):
         # Otherwise any org's IdP could assert any victim's address.
         cur = FakeCursor(domains=domains)
+        identity = _identity()
         with pytest.raises(sso.SsoError) as exc:
-            sso.resolve_user(cur, "org-acme", _identity(), "viewer")
+            sso.resolve_user(cur, "org-acme", identity, "viewer")
         assert exc.value.code == "domain_not_allowed"
         assert cur.users == []
 
@@ -131,8 +134,9 @@ class TestResolveUser:
     def test_missing_identity_fields(self, field, code):
         identity = _identity()
         identity[field] = ""
+        cur = FakeCursor(domains=[ACME_DOMAIN])
         with pytest.raises(sso.SsoError) as exc:
-            sso.resolve_user(FakeCursor(domains=[ACME_DOMAIN]), "org-acme", identity, "viewer")
+            sso.resolve_user(cur, "org-acme", identity, "viewer")
         assert exc.value.code == code
 
 
@@ -202,6 +206,19 @@ class TestPasswordLoginWhenSsoRequired:
 
     def test_unaffected_when_not_required(self, login):
         assert login("viewer", False).status_code == 200
+
+
+class TestSplitCerts:
+    def test_bundle_and_junk(self):
+        a = "-----BEGIN CERTIFICATE-----\nAAA\n-----END CERTIFICATE-----"
+        b = "-----BEGIN CERTIFICATE-----\nBBB\n-----END CERTIFICATE-----"
+        assert sso.split_certs(f"junk\n{a}\n\n{b}\ntrailing") == [a, b]
+        assert sso.split_certs("") == []
+
+    def test_repeated_begin_markers_stay_linear(self):
+        # The admin-supplied field must not trigger regex backtracking.
+        hostile = "-----BEGIN CERTIFICATE-----" * 50_000
+        assert sso.split_certs(hostile) == []
 
 
 class TestDomainNormalization:

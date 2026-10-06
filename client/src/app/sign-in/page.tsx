@@ -66,6 +66,16 @@ const SSO_ERRORS: Record<string, string> = {
   sso_internal: "Something went wrong during single sign-on. Please try again.",
 }
 
+const QUERY_ERRORS: Record<string, string> = {
+  // GitHub email already has an (unlinked) Aurora account — sign in normally instead
+  account_exists: "An account with your GitHub email already exists. Sign in below, then finish connecting GitHub from the Connectors page.",
+  ...SSO_ERRORS,
+}
+
+function errorFromQuery(code: string | null): string | null {
+  return code && Object.prototype.hasOwnProperty.call(QUERY_ERRORS, code) ? QUERY_ERRORS[code] : null
+}
+
 // Shown wherever we tell the user a code is on its way. Transactional code
 // emails are routinely spam-filtered, and a user who never finds the code reads
 // it as a broken product rather than a misplaced email.
@@ -196,15 +206,10 @@ function AuthPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
-  // Set by the signup callback when the GitHub email already has an
-  // (unlinked) Aurora account — sign in normally instead.
+  // ?error=<code> from the GitHub signup or SAML callbacks.
   useEffect(() => {
-    const errorCode = searchParams.get("error")
-    if (errorCode === "account_exists") {
-      setError("An account with your GitHub email already exists. Sign in below, then finish connecting GitHub from the Connectors page.")
-    } else if (errorCode && errorCode in SSO_ERRORS) {
-      setError(SSO_ERRORS[errorCode])
-    }
+    const message = errorFromQuery(searchParams.get("error"))
+    if (message) setError(message)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
@@ -549,7 +554,7 @@ function AuthPage() {
                 <form className="space-y-4" onSubmit={handleSso}>
                   <div>
                     <label htmlFor="sso-email" className="block text-xs font-medium text-[#888] mb-1.5">Work email</label>
-                    <input id="sso-email" type="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isLoading} autoFocus />
+                    <input id="sso-email" type="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isLoading} />
                   </div>
                   {error && <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3"><p className="text-sm text-red-400">{error}</p></div>}
                   <button type="submit" disabled={isLoading} className="w-full py-2.5 px-4 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#0a0a0a] disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">

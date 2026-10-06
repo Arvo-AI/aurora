@@ -56,6 +56,10 @@ def public_backend_url() -> str:
     return (os.getenv("NEXT_PUBLIC_BACKEND_URL") or "").rstrip("/")
 
 
+def backend_is_https() -> bool:
+    return urlparse(public_backend_url()).scheme == "https"
+
+
 def skip_domain_verification() -> bool:
     """Self-hosted operators own every org, so DNS proof adds nothing there."""
     return os.getenv("SSO_SKIP_DOMAIN_VERIFICATION", "false").lower() == "true"
@@ -116,12 +120,22 @@ def build_settings(org_id: str, config: dict | None) -> dict:
     return settings
 
 
-_PEM_RE = re.compile(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", re.DOTALL)
+_PEM_BEGIN = "-----BEGIN CERTIFICATE-----"
+_PEM_END = "-----END CERTIFICATE-----"
 
 
 def split_certs(bundle: str) -> list[str]:
-    """PEM bundle (one or more certs) -> list of PEM certs."""
-    return _PEM_RE.findall(bundle or "")
+    """PEM bundle (one or more certs) -> list of PEM certs.
+
+    Plain string splitting, not a regex: the input is admin-supplied and a
+    lazy DOTALL pattern backtracks quadratically on repeated BEGIN markers.
+    """
+    certs = []
+    for chunk in (bundle or "").split(_PEM_END)[:-1]:
+        start = chunk.rfind(_PEM_BEGIN)
+        if start != -1:
+            certs.append(chunk[start:] + _PEM_END)
+    return certs
 
 
 def request_data(flask_request) -> dict:

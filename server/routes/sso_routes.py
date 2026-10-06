@@ -8,6 +8,7 @@ dashboard tiles work by setting the app's sign-on URL to /login/<org_id>.
 import logging
 import os
 import re
+from urllib.parse import urlparse
 
 import flask
 import psycopg2
@@ -23,10 +24,13 @@ from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
-saml_bp = Blueprint("saml_sso", __name__, url_prefix="/api/auth/saml")
+_SAML_PREFIX = "/api/auth/saml"
+_DOMAIN_TAKEN = "This domain is already verified by another organization"
+
+saml_bp = Blueprint("saml_sso", __name__, url_prefix=_SAML_PREFIX)
 # Separate so it can be rate limited per email: it's reached via the Next
 # proxy, where a per-IP key would put every caller in one bucket.
-saml_discover_bp = Blueprint("saml_sso_discover", __name__, url_prefix="/api/auth/saml")
+saml_discover_bp = Blueprint("saml_sso_discover", __name__, url_prefix=_SAML_PREFIX)
 org_sso_bp = Blueprint("org_sso", __name__, url_prefix="/api/orgs/sso")
 
 FRONTEND_URL = os.getenv("FRONTEND_URL") or ""
@@ -38,7 +42,7 @@ _MAX_METADATA_BYTES = 256 * 1024
 def _fail(code: str) -> flask.Response:
     """Redirect to sign-in with a fixed error code the frontend maps to text."""
     resp = flask.redirect(f"{FRONTEND_URL}/sign-in?error=sso_{code}", code=302)
-    resp.delete_cookie(_REQUEST_COOKIE, path="/api/auth/saml")
+    resp.delete_cookie(_REQUEST_COOKIE, path=_SAML_PREFIX)
     return resp
 
 
@@ -46,7 +50,7 @@ def _cookie_flags() -> dict:
     # The ACS is a cross-site POST from the IdP, which only carries
     # SameSite=None cookies — and browsers only accept those when Secure.
     # Plain-http dev (IdP on localhost) is same-site, so Lax suffices there.
-    https = sso.public_backend_url().startswith("https://")
+    https = sso.backend_is_https()
     return {"secure": https, "samesite": "None" if https else "Lax", "httponly": True}
 
 
@@ -99,7 +103,7 @@ def login(org_id):
     resp = flask.redirect(redirect_url, code=302)
     resp.set_cookie(
         _REQUEST_COOKIE, request_id, max_age=sso.SAML_REQUEST_TTL_SEC,
-        path="/api/auth/saml", **_cookie_flags(),
+        path=_SAML_PREFIX, **_cookie_flags(),
     )
     return resp
 
@@ -177,7 +181,7 @@ def acs(org_id):
     _audit(org_id, user_id, "login", "session", {"via": "saml"})
 
     resp = flask.redirect(f"{FRONTEND_URL}/sign-in?handoff={handoff_token}&via=sso", code=302)
-    resp.delete_cookie(_REQUEST_COOKIE, path="/api/auth/saml")
+    resp.delete_cookie(_REQUEST_COOKIE, path=_SAML_PREFIX)
     return resp
 
 
@@ -276,44 +280,46 @@ def _settings_response(org_id: str):
     })
 
 
-def _parse_idp_fields(data: dict) -> tuple[dict | None, str | None]:
-    """IdP fields from pasted metadata XML or explicit values; returns (fields, error)."""
-    xml = data.get("idpMetadataXml")
-    if isinstance(xml, str) and xml.strip():
-        if len(xml.encode()) > _MAX_METADATA_BYTES:
-            return None, "Metadata XML is too large"
-        from onelogin.saml2.idp_metadata_parser import OneLogin_Saml2_IdPMetadataParser
+def _idp_from_metadata(xml: str) -> tuple[dict | None, list, str | None]:
+    if len(xml.encode()) > _MAX_METADATA_BYTES:
+        return None, [], "Metadata XML is too large"
+    from onelogin.saml2.idp_metadata_parser import OneLogin_Saml2_IdPMetadataParser
 
-        try:
-            idp = OneLogin_Saml2_IdPMetadataParser.parse(xml).get("idp") or {}
-        except Exception:
-            return None, "Could not parse the IdP metadata XML"
-        # Metadata with more than one signing cert (key rollover) comes back
-        # as x509certMulti instead of x509cert.
-        certs = (idp.get("x509certMulti") or {}).get("signing") or [idp.get("x509cert") or ""]
-        fields = {
-            "idp_entity_id": idp.get("entityId") or "",
-            "idp_sso_url": (idp.get("singleSignOnService") or {}).get("url") or "",
-        }
-    else:
-        def _text(key):
-            value = data.get(key)
-            return value.strip() if isinstance(value, str) else ""
+    try:
+        idp = OneLogin_Saml2_IdPMetadataParser.parse(xml).get("idp") or {}
+    except Exception:
+        return None, [], "Could not parse the IdP metadata XML"
+    # Metadata with more than one signing cert (key rollover) comes back
+    # as x509certMulti instead of x509cert.
+    certs = (idp.get("x509certMulti") or {}).get("signing") or [idp.get("x509cert") or ""]
+    fields = {
+        "idp_entity_id": idp.get("entityId") or "",
+        "idp_sso_url": (idp.get("singleSignOnService") or {}).get("url") or "",
+    }
+    return fields, certs, None
 
-        fields = {"idp_entity_id": _text("idpEntityId"), "idp_sso_url": _text("idpSsoUrl")}
-        raw_cert = _text("idpX509Cert")
-        # A saved config round-trips as a PEM bundle; bare base64 is one cert.
-        certs = sso.split_certs(raw_cert) if "BEGIN CERTIFICATE" in raw_cert else [raw_cert]
 
-    certs = [c for c in certs if isinstance(c, str) and c.strip()]
-    if not (fields["idp_entity_id"] and fields["idp_sso_url"] and certs):
-        return None, "IdP entity ID, SSO URL and certificate are all required"
+def _idp_from_form(data: dict) -> tuple[dict, list]:
+    def _text(key):
+        value = data.get(key)
+        return value.strip() if isinstance(value, str) else ""
 
+    fields = {"idp_entity_id": _text("idpEntityId"), "idp_sso_url": _text("idpSsoUrl")}
+    raw_cert = _text("idpX509Cert")
+    # A saved config round-trips as a PEM bundle; bare base64 is one cert.
+    certs = sso.split_certs(raw_cert) if "BEGIN CERTIFICATE" in raw_cert else [raw_cert]
+    return fields, certs
+
+
+def _sso_url_allowed(url: str) -> bool:
+    parsed = urlparse(url)
+    if not parsed.netloc:
+        return False
     # Plain http is only acceptable when Aurora itself runs on http (local dev).
-    allowed_schemes = ("https://",) if sso.public_backend_url().startswith("https://") else ("https://", "http://")
-    if not fields["idp_sso_url"].startswith(allowed_schemes):
-        return None, "IdP SSO URL must use https"
+    return parsed.scheme == "https" or (parsed.scheme == "http" and not sso.backend_is_https())
 
+
+def _validated_pems(certs: list) -> list[str] | None:
     from cryptography import x509
     from onelogin.saml2.utils import OneLogin_Saml2_Utils
 
@@ -322,6 +328,30 @@ def _parse_idp_fields(data: dict) -> tuple[dict | None, str | None]:
         for pem in pems:
             x509.load_pem_x509_certificate(pem.encode())
     except Exception:
+        return None
+    return pems
+
+
+def _parse_idp_fields(data: dict) -> tuple[dict | None, str | None]:
+    """IdP fields from pasted metadata XML or explicit values; returns (fields, error)."""
+    xml = data.get("idpMetadataXml")
+    if isinstance(xml, str) and xml.strip():
+        fields, certs, error = _idp_from_metadata(xml)
+        if error:
+            return None, error
+    else:
+        fields, certs = _idp_from_form(data)
+
+    certs = [c for c in certs if isinstance(c, str) and c.strip()]
+    if not (fields["idp_entity_id"] and fields["idp_sso_url"] and certs):
+        return None, "IdP entity ID, SSO URL and certificate are all required"
+    if len("".join(certs)) > _MAX_METADATA_BYTES:
+        return None, "IdP certificate is too large"
+    if not _sso_url_allowed(fields["idp_sso_url"]):
+        return None, "IdP SSO URL must use https"
+
+    pems = _validated_pems(certs)
+    if pems is None:
         return None, "IdP certificate is not a valid X.509 certificate"
     fields["idp_x509_cert"] = "\n".join(pems)
     return fields, None
@@ -398,7 +428,7 @@ def add_domain(user_id):
                     (domain, org_id),
                 )
                 if cur.fetchone():
-                    return jsonify({"error": "This domain is already verified by another organization"}), 409
+                    return jsonify({"error": _DOMAIN_TAKEN}), 409
                 cur.execute(
                     """INSERT INTO org_sso_domains (org_id, domain, verification_token, verified_at)
                        VALUES (%s, %s, %s, CASE WHEN %s THEN NOW() END)
@@ -408,7 +438,7 @@ def add_domain(user_id):
                 domains = _load_domains(cur, org_id)
                 conn.commit()
     except psycopg2.errors.UniqueViolation:
-        return jsonify({"error": "This domain is already verified by another organization"}), 409
+        return jsonify({"error": _DOMAIN_TAKEN}), 409
     except Exception:
         logger.exception("[SSO] failed to add domain")
         return jsonify({"error": "Failed to add domain"}), 500
@@ -446,7 +476,7 @@ def verify_domain(user_id, domain_id):
                 domains = _load_domains(cur, org_id)
                 conn.commit()
     except psycopg2.errors.UniqueViolation:
-        return jsonify({"error": "This domain is already verified by another organization"}), 409
+        return jsonify({"error": _DOMAIN_TAKEN}), 409
     except Exception:
         logger.exception("[SSO] failed to verify domain")
         return jsonify({"error": "Failed to verify domain"}), 500

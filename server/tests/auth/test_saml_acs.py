@@ -207,7 +207,8 @@ class TestMetadataAndConfigParsing:
     def test_invalid_fields_are_rejected(self, saml_app, body):
         _, mod, _ = saml_app
         fields, error = mod._parse_idp_fields(body)
-        assert fields is None and error
+        assert fields is None
+        assert error
 
 
 class TestDnsVerification:

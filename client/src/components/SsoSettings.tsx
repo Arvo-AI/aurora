@@ -38,14 +38,14 @@ type SsoSettingsResponse = {
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    headers: { "Content-Type": "application/json", ...init?.headers },
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Request failed");
   return data as T;
 }
 
-function CopyField({ label, value }: { label: string; value: string }) {
+function CopyField({ label, value }: Readonly<{ label: string; value: string }>) {
   const { toast } = useToast();
   return (
     <div className="space-y-1">
@@ -58,8 +58,10 @@ function CopyField({ label, value }: { label: string; value: string }) {
           className="h-8 w-8 p-0 shrink-0"
           aria-label={`Copy ${label}`}
           onClick={() => {
-            navigator.clipboard.writeText(value);
-            toast({ title: "Copied", description: label });
+            navigator.clipboard.writeText(value).then(
+              () => toast({ title: "Copied", description: label }),
+              () => toast({ title: "Couldn't copy", description: "Select the text and copy it manually.", variant: "destructive" }),
+            );
           }}
         >
           <Copy className="h-3.5 w-3.5" />
