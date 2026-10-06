@@ -9,13 +9,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { ExternalLink } from "lucide-react";
 import Image from "next/image";
+import { cn } from "@/lib/utils";
 
 type IdpGuide = {
   id: string;
   name: string;
   logo: string;
-  /** Color logos (e.g. Google) should not be inverted in dark mode */
-  logoColor?: boolean;
   tag?: string;
   consoleUrl: string;
   consoleLabel: string;
@@ -69,7 +68,6 @@ const IDP_GUIDES: IdpGuide[] = [
     id: "google",
     name: "Google Workspace",
     logo: "/sso-idp/google.svg",
-    logoColor: true,
     consoleUrl: "https://admin.google.com/ac/apps/unified",
     consoleLabel: "Open Google Admin → Apps",
     steps: [
@@ -104,6 +102,22 @@ const IDP_GUIDES: IdpGuide[] = [
     metadataHint: "Realm settings → SAML 2.0 Identity Provider Metadata, or copy from the client Keys tab.",
   },
 ];
+
+function IdpLogo({ guide }: Readonly<{ guide: IdpGuide }>) {
+  // White chip keeps mono marks readable in dark UI; Keycloak’s mark is wider than it is tall.
+  const keycloak = guide.id === "keycloak";
+  return (
+    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border/60 bg-white p-1">
+      <Image
+        src={guide.logo}
+        alt=""
+        width={24}
+        height={24}
+        className={cn("object-contain", keycloak ? "h-3.5 w-auto max-w-[1.65rem]" : "h-5 w-5")}
+      />
+    </span>
+  );
+}
 
 function GuideBody({ guide }: Readonly<{ guide: IdpGuide }>) {
   return (
@@ -159,15 +173,7 @@ export function SsoIdpSetupGuides() {
           <AccordionItem key={guide.id} value={guide.id} className="border-border/60">
             <AccordionTrigger className="py-3 text-sm hover:no-underline">
               <span className="flex items-center gap-2.5">
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border bg-background p-1">
-                  <Image
-                    src={guide.logo}
-                    alt=""
-                    width={20}
-                    height={20}
-                    className={`h-5 w-5 object-contain ${guide.logoColor ? "" : "dark:invert-[.85]"}`}
-                  />
-                </span>
+                <IdpLogo guide={guide} />
                 {guide.name}
                 {guide.tag && (
                   <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal">
