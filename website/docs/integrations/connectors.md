@@ -968,7 +968,7 @@ ATLASSIAN_CLIENT_SECRET=your-client-secret
 3. Click **Connect with Atlassian**
 4. Authorize Aurora in the Atlassian popup
 5. Connection complete - the site URL is detected automatically
-6. For Jira, turn on **Comment back on Jira tickets** if you want Aurora to post after an investigation, then choose **Comment only** or **Create & comment**
+6. For Jira, turn on **Comment back on Jira tickets** if you want Aurora to post after an investigation, then choose **Comment only** or **Create & comment**. This only gates automatic posts — asking Aurora in chat to comment on a ticket works either way
 
 #### Option B: Data Center (PAT)
 
