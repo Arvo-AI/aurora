@@ -684,8 +684,13 @@ def _resolve_channel_label(user_id: str, channel_id: str) -> str:
     which channel a message came from — critical for scoped directives like
     "in this channel". Prefers our registered slack_channels row (no API call),
     falls back to the bare id. Never raises."""
+    if not channel_id:
+        return "unknown"
     from services.channels import registry
-    return registry.get_channel_label(user_id, "slack", channel_id)
+    name = registry.get_channel_name(user_id, "slack", channel_id)
+    # Registered channel — use its name so it matches routing/descriptions.
+    # Unregistered or lookup failed — the id alone still anchors "this channel".
+    return f"#{name} ({channel_id})" if name else channel_id
 
 
 def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread_ts: str = None, 

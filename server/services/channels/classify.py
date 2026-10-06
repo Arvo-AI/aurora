@@ -1,8 +1,9 @@
 """Offline channel classification shared by chat-platform channel registries.
 
-Moved verbatim from routes.slack.slack_channels so every provider classifies the
-same way. Kept free of Celery/LLM imports so route modules can import it
-cheaply.
+The heuristics moved verbatim from routes.slack.slack_channels so every provider
+classifies the same way; each platform extracts the name and descriptive text
+from its own channel shape and passes them in. Kept free of Celery/LLM imports
+so route modules can import it cheaply.
 """
 
 import re
@@ -27,7 +28,15 @@ _INCIDENT_NAME_RE = re.compile(r"(?:^|[\s\-_])inc(?:ident)?(?:[\s\-_]|$)|\bincid
 _TEAM_NAME_RE = re.compile(r"\balert|\bon-?call|\bsev(?:[\s\-_]|$)")
 
 
-def _classify(name: str, haystack: str) -> Tuple[str, Optional[str]]:
+def classify_channel(name: str, haystack: str) -> Tuple[str, Optional[str]]:
+    """Best-effort (channel_type, detected_platform) from a channel's lowercased
+    ``name`` and ``haystack`` (name plus any descriptive text, lowercased).
+
+    Generic heuristic (per product requirement: support any platform that
+    creates channels, e.g. incident.io/PagerDuty/Opsgenie). The LLM description
+    task refines this later; this is only the fast, offline first guess so the
+    UI/agent have something immediately.
+    """
     # Detect the incident-management platform that spawned the channel, if any.
     platform = None
     for platform_name, pattern in _PLATFORM_PATTERNS:
@@ -44,17 +53,3 @@ def _classify(name: str, haystack: str) -> Tuple[str, Optional[str]]:
     if _TEAM_NAME_RE.search(name):
         return "team", platform
     return "general", platform
-
-
-def classify_slack(channel: dict) -> Tuple[str, Optional[str]]:
-    """Best-effort (channel_type, detected_platform) from a Slack channel dict.
-
-    Generic heuristic (per product requirement: support any platform that
-    creates channels, e.g. incident.io/PagerDuty/Opsgenie). The LLM description
-    task refines this later; this is only the fast, offline first guess so the
-    UI/agent have something immediately.
-    """
-    name = (channel.get("name") or "").lower()
-    topic = ((channel.get("topic") or {}).get("value") or "").lower()
-    purpose = ((channel.get("purpose") or {}).get("value") or "").lower()
-    return _classify(name, f"{name} {topic} {purpose}")

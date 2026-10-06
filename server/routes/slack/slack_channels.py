@@ -58,7 +58,7 @@ from flask import Blueprint, jsonify, request
 
 from connectors.slack_connector.client import get_slack_client_for_user
 from services.channels import registry
-from services.channels.classify import classify_slack
+from services.channels.classify import classify_channel
 from routes.slack.slack_backfill_config import BACKFILL_STALE_MINUTES
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
@@ -102,8 +102,12 @@ AVAILABLE_CHANNELS_CACHE_TTL = 300
 
 def _classify_channel(channel: dict) -> tuple[str, str | None]:
     """Best-effort (channel_type, detected_platform) from a Slack channel dict.
-    Thin wrapper over the shared classifier so callers keep their import."""
-    return classify_slack(channel)
+    Reads Slack's name/topic/purpose shape; the heuristics are shared
+    (``services.channels.classify``)."""
+    name = (channel.get("name") or "").lower()
+    topic = ((channel.get("topic") or {}).get("value") or "").lower()
+    purpose = ((channel.get("purpose") or {}).get("value") or "").lower()
+    return classify_channel(name, f"{name} {topic} {purpose}")
 
 
 def _upsert_channel(cur, user_id: str, org_id: str | None, ch: dict,
@@ -111,7 +115,7 @@ def _upsert_channel(cur, user_id: str, org_id: str | None, ch: dict,
     """Upsert one Slack channel row. Returns (channel_id, was_newly_added).
     See ``services.channels.registry.upsert_channel`` for the contract
     (``existing`` ownership, ``initial_status`` semantics)."""
-    channel_type, platform = classify_slack(ch)
+    channel_type, platform = _classify_channel(ch)
     return registry.upsert_channel(
         cur, user_id, org_id, "slack", ch, existing,
         initial_status=initial_status, channel_type=channel_type, detected_platform=platform,

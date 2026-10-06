@@ -5,8 +5,8 @@ the four queries a platform's agent tools and event handlers need and that the
 Slack code paths now call. Contract: the Slack SQL must stay byte-identical in
 substance to the pre-refactor inline queries (the Slack suites assert on its
 substrings), and ``provider`` is always a bound parameter, never interpolated.
-Add a platform by adding it to ``PROVIDERS`` (and a label format if the
-platform's channels are not spelled ``#name``).
+A new chat platform is added to ``PROVIDERS`` here and to the other platform
+registries listed in ``utils.notifications.team_routing``.
 
 Everything else about the Slack channel lifecycle (reconcile, backfill claims,
 activation) still lives in ``routes.slack.slack_channels`` and
@@ -25,10 +25,6 @@ from utils.log_sanitizer import sanitize
 logger = logging.getLogger(__name__)
 
 PROVIDERS = ("slack",)
-
-# How a channel is spelled when the agent is told where a message came from.
-_LABEL_FORMATS = {"slack": "#{name} ({id})"}
-_DEFAULT_LABEL_FORMAT = "{name} ({id})"
 
 
 def _check_provider(provider: str) -> str:
@@ -179,18 +175,18 @@ def channel_membership(user_id: str, provider: str, channel_id: str) -> Optional
         return None
 
 
-def get_channel_label(user_id: str, provider: str, channel_id: str) -> str:
-    """Return a human 'name (id)' label for a channel so the agent knows which
-    channel a message came from — critical for scoped directives like "in this
-    channel". Prefers our registered slack_channels row (no API call), falls
-    back to the bare id. Never raises for a registered ``provider`` (an
-    unregistered one is a programming error and raises ``ValueError``)."""
+def get_channel_name(user_id: str, provider: str, channel_id: str) -> Optional[str]:
+    """The registered name of ``channel_id`` from our slack_channels row (no API
+    call), or None when it isn't registered or the lookup failed. Callers spell
+    the label the way their platform writes channels. Never raises for a
+    registered ``provider`` (an unregistered one is a programming error and
+    raises ``ValueError``)."""
     _check_provider(provider)
     if not channel_id:
-        return "unknown"
+        return None
     try:
         with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
-            set_rls_context(cursor, conn, user_id, log_prefix=f"[channels:{provider}:label]")
+            set_rls_context(cursor, conn, user_id, log_prefix=f"[channels:{provider}:name]")
             cursor.execute(
                 """SELECT channel_name FROM slack_channels
                    WHERE user_id = %s AND channel_id = %s AND provider = %s
@@ -198,12 +194,8 @@ def get_channel_label(user_id: str, provider: str, channel_id: str) -> str:
                 (user_id, channel_id, provider),
             )
             row = cursor.fetchone()
-        # Registered channel — use its name so it matches routing/descriptions.
-        if row and row[0]:
-            fmt = _LABEL_FORMATS.get(provider, _DEFAULT_LABEL_FORMAT)
-            return fmt.format(name=row[0], id=channel_id)
+        return (row[0] or None) if row else None
     except Exception:
         logger.warning("[channels:%s] Could not resolve channel name for %s",
                        provider, sanitize(channel_id), exc_info=True)
-    # Unregistered or lookup failed — the id alone still anchors "this channel".
-    return channel_id
+        return None
