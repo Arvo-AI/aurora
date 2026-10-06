@@ -8,7 +8,6 @@ import {
 } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { ExternalLink } from "lucide-react";
-import Image from "next/image";
 import { cn } from "@/lib/utils";
 
 type IdpGuide = {
@@ -104,16 +103,22 @@ const IDP_GUIDES: IdpGuide[] = [
 ];
 
 function IdpLogo({ guide }: Readonly<{ guide: IdpGuide }>) {
-  // White chip keeps mono marks readable in dark UI; Keycloak’s mark is wider than it is tall.
-  const keycloak = guide.id === "keycloak";
+  const wide = guide.id === "keycloak";
   return (
-    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border/60 bg-white p-1">
-      <Image
+    <span
+      className={cn(
+        "flex shrink-0 items-center justify-center overflow-visible rounded-md border border-border/60 bg-white",
+        wide ? "h-9 min-w-[2.75rem] px-1.5 py-1" : "h-9 w-9 p-1.5",
+      )}
+    >
+      {/* Native img so wide marks scale without Next/Image clipping */}
+      <img
         src={guide.logo}
         alt=""
-        width={24}
-        height={24}
-        className={cn("object-contain", keycloak ? "h-3.5 w-auto max-w-[1.65rem]" : "h-5 w-5")}
+        className={cn(
+          "block object-contain object-center",
+          wide ? "h-[1.125rem] w-[2rem]" : "h-6 w-6",
+        )}
       />
     </span>
   );
