@@ -113,8 +113,8 @@ function IdpLogo({ guide }: Readonly<{ guide: IdpGuide }>) {
         width={20}
         height={20}
         className={cn(
-          "h-5 w-5 object-contain",
-          guide.id === "google" ? "dark:invert" : "dark:invert-[.85]",
+          "object-contain",
+          guide.id === "google" ? "h-6 w-6 dark:invert" : "h-5 w-5 dark:invert-[.85]",
         )}
       />
     </span>
