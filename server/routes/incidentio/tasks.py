@@ -147,6 +147,62 @@ def invalidate_org_severity_cache(user_id: str) -> None:
         logger.debug("[INCIDENTIO] Severity cache invalidation failed", exc_info=True)
 
 
+_POSTBACK_ACCESS_CACHE_TTL_SECONDS = 300
+
+
+def get_postback_access(user_id: str) -> Dict[str, Any]:
+    """Whether the stored API key can post incident updates and alert notes.
+
+    Cached briefly so opening RCA settings does not hit identity on every GET.
+    """
+    import json as _json
+
+    cache_key = f"incidentio:postback_access:{user_id}"
+    try:
+        from utils.cache.redis_client import get_redis_client
+
+        rc = get_redis_client()
+        if rc is not None:
+            cached = rc.get(cache_key)
+            if cached is not None:
+                parsed = _json.loads(cached)
+                if isinstance(parsed, dict):
+                    return parsed
+    except Exception:
+        logger.debug("[INCIDENTIO] Post-back access cache read failed", exc_info=True)
+
+    from utils.auth.token_management import get_token_data
+    from routes.incidentio.incidentio_client import IncidentioClient
+
+    creds = get_token_data(user_id, "incidentio")
+    if not creds or not creds.get("api_key"):
+        return {"checked": False, "incidents": False, "alerts": False}
+
+    access = IncidentioClient(creds["api_key"]).read_postback_access()
+    if access.get("checked"):
+        try:
+            from utils.cache.redis_client import get_redis_client
+
+            rc = get_redis_client()
+            if rc is not None:
+                rc.setex(cache_key, _POSTBACK_ACCESS_CACHE_TTL_SECONDS, _json.dumps(access))
+        except Exception:
+            logger.debug("[INCIDENTIO] Post-back access cache write failed", exc_info=True)
+    return access
+
+
+def invalidate_postback_access_cache(user_id: str) -> None:
+    """Drop cached post-back write access (connect/disconnect or key rotation)."""
+    try:
+        from utils.cache.redis_client import get_redis_client
+
+        rc = get_redis_client()
+        if rc is not None:
+            rc.delete(f"incidentio:postback_access:{user_id}")
+    except Exception:
+        logger.debug("[INCIDENTIO] Post-back access cache invalidation failed", exc_info=True)
+
+
 def get_org_severities(user_id: str) -> Dict[str, Any]:
     """Return the org's alert priorities for display, plus availability metadata.
 

@@ -289,7 +289,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
         setPostbackAccess(result.postbackAccess ?? null);
         const accessWarning = postbackAccessMessage(result.postbackAccess);
         // The key can write nowhere, so the server left the toggle off.
-        if (enabled && !result.postbackEnabled) {
+        if (enabled && (result.postbackRefused || !result.postbackEnabled)) {
           toast({
             title: accessWarning?.consequence ?? "Can't write back to incidents or alerts",
             description: accessWarning?.permission,
@@ -304,7 +304,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
           toast({
             title: enabled ? "Post-back Enabled" : "Post-back Disabled",
             description: enabled
-              ? "The root cause will be posted as an incident.io update when each investigation completes"
+              ? "The root cause will be posted as an incident.io incident update or alert note when each investigation completes"
               : "RCA results will only be available in Aurora",
           });
         }
@@ -442,7 +442,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
                   Post RCA to incident.io
                 </Label>
                 <p className="text-sm text-muted-foreground">
-                  When an investigation completes, post the root cause as an update on the incident.io incident, so responders see it through the incident&apos;s own notifications. Alerts are posted to the incident they are attached to.
+                  When an investigation completes, Aurora posts the root cause as an incident update (on the incident, or on the incident an alert is attached to). If the alert only escalated, it is posted as an alert note instead.
                 </p>
                 <PostbackAccessNotice access={postbackAccess} />
               </div>

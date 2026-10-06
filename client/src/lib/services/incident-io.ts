@@ -71,7 +71,7 @@ export function postbackAccessMessage(access: IncidentIoPostbackAccess | null | 
   if (access.incidents) {
     return {
       consequence: "Can write back to incidents but not alerts",
-      permission: "Add the Manage on-call resources permission",
+      permission: "Add the Create and manage on call ressources permission",
     };
   }
   // Alert notes will post; incident updates will not.
@@ -84,13 +84,15 @@ export function postbackAccessMessage(access: IncidentIoPostbackAccess | null | 
   // Neither destination is writable.
   return {
     consequence: "Can't write back to incidents or alerts",
-    permission: "Add the Edit incidents and Manage on-call resources permissions",
+    permission: "Add the Edit incidents and Create and manage on call ressources permissions",
   };
 }
 
 export interface IncidentIoRcaSettings {
   rcaEnabled: boolean;
   postbackEnabled: boolean;
+  // True when the client asked to enable post-back but the API key cannot write anywhere.
+  postbackRefused?: boolean;
   postbackAccess?: IncidentIoPostbackAccess;
   // RCA on incident.io *alert* events (public_alert.*), not just incidents.
   alertRcaEnabled: boolean;

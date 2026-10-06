@@ -18,7 +18,9 @@ from routes.incidentio.incidentio_client import (
 from routes.incidentio.tasks import (
     process_incidentio_event,
     get_org_severities,
+    get_postback_access,
     invalidate_org_severity_cache,
+    invalidate_postback_access_cache,
     _get_org_severity_ranks,
 )
 from utils.db.connection_pool import db_pool
@@ -89,6 +91,7 @@ def connect(user_id):
     # New/rotated key may have different scopes — drop any cached catalog so
     # the next fetch reflects this key's actual permissions.
     invalidate_org_severity_cache(user_id)
+    invalidate_postback_access_cache(user_id)
 
     return jsonify({"success": True, "connected": True})
 
@@ -126,6 +129,7 @@ def disconnect(user_id):
 
         # Clear cached severity catalog so a future reconnect re-fetches.
         invalidate_org_severity_cache(user_id)
+        invalidate_postback_access_cache(user_id)
 
         logger.info("[INCIDENTIO] Disconnected user %s", user_id)
         return jsonify({"success": True, "message": "incident.io disconnected successfully"})
@@ -308,20 +312,15 @@ def list_org_severities(user_id):
     return jsonify(result)
 
 
-def _postback_access(user_id: str) -> Dict[str, Any]:
-    """Write reach of the stored key: incidents, alerts, or neither."""
-    creds = _get_stored_credentials(user_id) or {}
-    api_key = creds.get("api_key")
-    # Nothing stored — there is no key to grade, and no warning to show.
-    if not api_key:
-        return {"checked": False, "incidents": False, "alerts": False}
-    return IncidentioClient(api_key).read_postback_access()
-
-
-def _rca_settings_payload(user_id: str, access: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _rca_settings_payload(
+    user_id: str,
+    access: Optional[Dict[str, Any]] = None,
+    *,
+    postback_refused: bool = False,
+) -> Dict[str, Any]:
     if access is None:
-        access = _postback_access(user_id)
-    return {
+        access = get_postback_access(user_id)
+    payload = {
         "rcaEnabled": get_user_preference(user_id, "incidentio_rca_enabled", default=True),
         "postbackEnabled": get_user_preference(user_id, "incidentio_postback_enabled", default=False),
         "alertRcaEnabled": get_user_preference(user_id, "incidentio_alert_rca_enabled", default=True),
@@ -331,6 +330,9 @@ def _rca_settings_payload(user_id: str, access: Optional[Dict[str, Any]] = None)
         ),
         "postbackAccess": access,
     }
+    if postback_refused:
+        payload["postbackRefused"] = True
+    return payload
 
 
 @incidentio_bp.route("/rca-settings", methods=["GET"])
@@ -358,6 +360,7 @@ def update_rca_settings(user_id):
     alert_severity_allowlist = data.get("alertSeverityAllowlist")
     # Reused in the response so a refused enable doesn't call identity twice.
     access = None
+    postback_refused = False
 
     if rca_enabled is not None:
         if not isinstance(rca_enabled, bool):
@@ -369,13 +372,14 @@ def update_rca_settings(user_id):
             return jsonify({"error": "postbackEnabled must be a boolean"}), 400
         # Turning on with a key that can write nowhere would silently drop every RCA.
         if postback_enabled:
-            access = _postback_access(user_id)
+            access = get_postback_access(user_id)
             if not postback_can_enable(access):
+                postback_refused = True
                 logger.info("[INCIDENTIO] Post-back left off: API key cannot write incidents or alerts")
             else:
-                store_user_preference(user_id, "incidentio_postback_enabled", True)
+                store_user_preference(user_id, "incidentio_postback_enabled", value=True)
         else:
-            store_user_preference(user_id, "incidentio_postback_enabled", False)
+            store_user_preference(user_id, "incidentio_postback_enabled", value=False)
 
     if alert_rca_enabled is not None:
         if not isinstance(alert_rca_enabled, bool):
@@ -427,4 +431,4 @@ def update_rca_settings(user_id):
             normalized or None,
         )
 
-    return jsonify({"success": True, **_rca_settings_payload(user_id, access)})
+    return jsonify({"success": True, **_rca_settings_payload(user_id, access, postback_refused=postback_refused)})

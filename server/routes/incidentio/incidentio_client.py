@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Account-level "Edit incidents". A message-only incident update is this role,
 # not a separate "create updates" permission.
 INCIDENT_WRITE_ROLE = "incident_editor"
-# "Manage on-call resources" bundles alerts.edit (alert notes). It can also be
+# "Create and manage on call ressources" (on_call_editor) bundles alerts.edit. It can also be
 # granted for specific teams via team_roles.
 ALERT_WRITE_ROLE = "on_call_editor"
 

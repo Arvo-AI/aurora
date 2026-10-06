@@ -1,5 +1,8 @@
 """Which incident.io API-key roles can receive an RCA post-back."""
 
+import json
+from unittest.mock import MagicMock
+
 from routes.incidentio.incidentio_client import (
     IncidentioAPIError,
     IncidentioClient,
@@ -23,7 +26,7 @@ def test_on_call_role_writes_alerts_only():
 
 
 def test_team_scoped_on_call_role_still_writes_alerts():
-    # Manage on-call resources can be granted for specific teams only.
+    # Create and manage on call ressources can be granted for specific teams only.
     assert classify_postback_roles(["viewer"], ["on_call_editor"]) == {
         "incidents": False,
         "alerts": True,
@@ -64,6 +67,21 @@ def test_read_postback_access_reads_identity_roles(monkeypatch):
         lambda: {"identity": {"roles": ["incident_editor"], "team_roles": []}},
     )
     assert client.read_postback_access() == {"checked": True, "incidents": True, "alerts": False}
+
+
+def test_get_postback_access_uses_redis_cache(monkeypatch):
+    from routes.incidentio import tasks
+
+    cached = {"checked": True, "incidents": True, "alerts": True}
+    rc = MagicMock()
+    rc.get.return_value = json.dumps(cached)
+    monkeypatch.setattr("utils.cache.redis_client.get_redis_client", lambda: rc)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("identity should not be called on cache hit")
+
+    monkeypatch.setattr("utils.auth.token_management.get_token_data", _boom)
+    assert tasks.get_postback_access("u1") == cached
 
 
 def test_read_postback_access_is_unchecked_when_identity_fails(monkeypatch):

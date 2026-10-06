@@ -197,9 +197,9 @@ def _handle_post_error(e: IncidentioAPIError, incident_id: str, user_id: str, *,
     if e.status_code in (401, 403):
         # Name the permission the key is missing so the fix is obvious from the log alone.
         needed = (
-            "the 'alerts.edit' scope to post alert notes (optional: incident updates still post without it)"
+            "the Create and manage on call ressources permission to post alert notes"
             if is_alert_note
-            else "the 'Create incident updates' permission for RCA post-back"
+            else "the Edit incidents permission for RCA post-back"
         )
         logger.warning(
             "%s incident.io refused the post-back for incident %s (%s): the API key needs %s",
