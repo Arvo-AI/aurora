@@ -8,10 +8,14 @@ import {
 } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { ExternalLink } from "lucide-react";
+import Image from "next/image";
 
 type IdpGuide = {
   id: string;
   name: string;
+  logo: string;
+  /** Color logos (e.g. Google) should not be inverted in dark mode */
+  logoColor?: boolean;
   tag?: string;
   consoleUrl: string;
   consoleLabel: string;
@@ -25,7 +29,7 @@ const IDP_GUIDES: IdpGuide[] = [
   {
     id: "entra",
     name: "Microsoft Entra ID",
-    tag: "Common",
+    logo: "/sso-idp/entra.svg",
     consoleUrl: "https://entra.microsoft.com/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/CustomAppApps",
     consoleLabel: "Open Enterprise applications",
     avoid: "App registrations (Redirect URI) is OAuth/OIDC — Aurora uses SAML.",
@@ -46,6 +50,7 @@ const IDP_GUIDES: IdpGuide[] = [
   {
     id: "okta",
     name: "Okta",
+    logo: "/sso-idp/okta.svg",
     consoleUrl: "https://login.okta.com/admin/apps/active",
     consoleLabel: "Open Okta Admin → Applications",
     steps: [
@@ -63,6 +68,8 @@ const IDP_GUIDES: IdpGuide[] = [
   {
     id: "google",
     name: "Google Workspace",
+    logo: "/sso-idp/google.svg",
+    logoColor: true,
     consoleUrl: "https://admin.google.com/ac/apps/unified",
     consoleLabel: "Open Google Admin → Apps",
     steps: [
@@ -80,6 +87,7 @@ const IDP_GUIDES: IdpGuide[] = [
   {
     id: "keycloak",
     name: "Keycloak",
+    logo: "/sso-idp/keycloak.svg",
     tag: "Self-hosted",
     consoleUrl: "https://www.keycloak.org/guides",
     consoleLabel: "Keycloak admin console",
@@ -150,7 +158,16 @@ export function SsoIdpSetupGuides() {
         {IDP_GUIDES.map((guide) => (
           <AccordionItem key={guide.id} value={guide.id} className="border-border/60">
             <AccordionTrigger className="py-3 text-sm hover:no-underline">
-              <span className="flex items-center gap-2">
+              <span className="flex items-center gap-2.5">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border bg-background p-1">
+                  <Image
+                    src={guide.logo}
+                    alt=""
+                    width={20}
+                    height={20}
+                    className={`h-5 w-5 object-contain ${guide.logoColor ? "" : "dark:invert-[.85]"}`}
+                  />
+                </span>
                 {guide.name}
                 {guide.tag && (
                   <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal">
