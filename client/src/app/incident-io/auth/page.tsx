@@ -154,6 +154,14 @@ export default function IncidentIoAuthPage() {
                         <strong>View data</strong> — lets Aurora read your organization&apos;s alert
                         priorities for severity filtering; without it, RCA still runs on all alerts
                       </li>
+                      <li>
+                        <strong>Edit incidents</strong> — lets Aurora post the root cause as an
+                        update on the incident
+                      </li>
+                      <li>
+                        <strong>Create and manage on call ressources</strong> — lets Aurora post the root cause
+                        as a note on an alert that only escalated; without it, incident updates still post
+                      </li>
                     </ul>
                     <p className="mt-1">Keys are stored securely in Vault.</p>
                   </div>

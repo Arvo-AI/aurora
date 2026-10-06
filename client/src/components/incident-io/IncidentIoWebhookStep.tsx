@@ -14,12 +14,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   incidentIoService,
   IncidentIoOrgSeverity,
+  IncidentIoPostbackAccess,
   IncidentIoWebhookUrlResponse,
+  postbackAccessMessage,
 } from "@/lib/services/incident-io";
 import { copyToClipboard } from "@/lib/utils";
 
@@ -167,6 +169,23 @@ function WebhookConfig({
   );
 }
 
+function PostbackAccessNotice({ access }: { readonly access: IncidentIoPostbackAccess | null }) {
+  const warning = postbackAccessMessage(access);
+  if (!warning) return null;
+  // Neither destination is writable — stronger than a partial gap.
+  // Team-scoped alert write can still post somewhere, so it stays a warning.
+  const blocked = !access?.incidents && !access?.alerts && !access?.alertsScoped;
+  return (
+    <p className={`mt-2 flex items-start gap-2 text-sm ${blocked ? "text-red-600 dark:text-red-400" : "text-amber-700 dark:text-amber-400"}`}>
+      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+      <span>
+        <span className="block">{warning.consequence}</span>
+        <span className="block">{warning.permission}</span>
+      </span>
+    </p>
+  );
+}
+
 export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebhookStepProps) {
   const router = useRouter();
   const { toast } = useToast();
@@ -174,6 +193,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
   const [loadingWebhook, setLoadingWebhook] = useState(true);
   const [rcaEnabled, setRcaEnabled] = useState(true);
   const [postbackEnabled, setPostbackEnabled] = useState(false);
+  const [postbackAccess, setPostbackAccess] = useState<IncidentIoPostbackAccess | null>(null);
   const [alertRcaEnabled, setAlertRcaEnabled] = useState(true);
   const [alertMinSeverity, setAlertMinSeverity] = useState<string>("low");
   const [orgSeverities, setOrgSeverities] = useState<IncidentIoOrgSeverity[]>([]);
@@ -214,6 +234,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
           if (rcaSettings) {
             setRcaEnabled(rcaSettings.rcaEnabled);
             setPostbackEnabled(rcaSettings.postbackEnabled);
+            setPostbackAccess(rcaSettings.postbackAccess ?? null);
             setAlertRcaEnabled(rcaSettings.alertRcaEnabled ?? true);
             setAlertMinSeverity(rcaSettings.alertMinSeverity ?? "low");
           }
@@ -266,12 +287,28 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
       const result = await incidentIoService.updateRcaSettings({ postbackEnabled: enabled });
       if (result) {
         setPostbackEnabled(result.postbackEnabled);
-        toast({
-          title: enabled ? "Post-back Enabled" : "Post-back Disabled",
-          description: enabled
-            ? "The root cause will be posted as an incident.io update when each investigation completes"
-            : "RCA results will only be available in Aurora",
-        });
+        setPostbackAccess(result.postbackAccess ?? null);
+        const accessWarning = postbackAccessMessage(result.postbackAccess);
+        // The key can write nowhere, so the server left the toggle off.
+        if (enabled && (result.postbackRefused || !result.postbackEnabled)) {
+          toast({
+            title: accessWarning?.consequence ?? "Can't write back to incidents or alerts",
+            description: accessWarning?.permission,
+            variant: "destructive",
+          });
+        } else if (enabled && accessWarning) {
+          toast({
+            title: accessWarning.consequence,
+            description: accessWarning.permission,
+          });
+        } else {
+          toast({
+            title: enabled ? "Post-back Enabled" : "Post-back Disabled",
+            description: enabled
+              ? "The root cause will be posted as an incident.io incident update or alert note when each investigation completes"
+              : "RCA results will only be available in Aurora",
+          });
+        }
       } else {
         toast({ title: "Failed to update settings", description: "Could not update post-back setting. Please try again.", variant: "destructive" });
       }
@@ -406,8 +443,9 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
                   Post RCA to incident.io
                 </Label>
                 <p className="text-sm text-muted-foreground">
-                  When an investigation completes, post the root cause as an update on the incident.io incident, so responders see it through the incident&apos;s own notifications. Alerts are posted to the incident they are attached to.
+                  When an investigation completes, Aurora posts the root cause as an incident update (on the incident, or on the incident an alert is attached to). If the alert only escalated, it is posted as an alert note instead.
                 </p>
+                <PostbackAccessNotice access={postbackAccess} />
               </div>
               {loadingSettings ? (
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
