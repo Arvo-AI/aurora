@@ -173,7 +173,8 @@ function PostbackAccessNotice({ access }: { readonly access: IncidentIoPostbackA
   const warning = postbackAccessMessage(access);
   if (!warning) return null;
   // Neither destination is writable — stronger than a partial gap.
-  const blocked = !access?.incidents && !access?.alerts;
+  // Team-scoped alert write can still post somewhere, so it stays a warning.
+  const blocked = !access?.incidents && !access?.alerts && !access?.alertsScoped;
   return (
     <p className={`mt-2 flex items-start gap-2 text-sm ${blocked ? "text-red-600 dark:text-red-400" : "text-amber-700 dark:text-amber-400"}`}>
       <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />

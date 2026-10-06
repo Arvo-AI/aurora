@@ -184,7 +184,7 @@ def get_postback_access(user_id: str) -> Dict[str, Any]:
 
     creds = get_token_data(user_id, "incidentio")
     if not creds or not creds.get("api_key"):
-        return {"checked": False, "incidents": False, "alerts": False}
+        return {"checked": False, "incidents": False, "alerts": False, "alertsScoped": False}
 
     access = IncidentioClient(creds["api_key"]).read_postback_access()
     if _postback_access_fully_writable(access):

@@ -54,7 +54,10 @@ export interface IncidentIoSeveritiesResponse {
 export interface IncidentIoPostbackAccess {
   checked: boolean;
   incidents: boolean;
+  // Account-level on-call edit: notes can land on every alert.
   alerts: boolean;
+  // Team-only on-call edit: notes 403 on alerts owned by other teams.
+  alertsScoped?: boolean;
 }
 
 export interface PostbackAccessWarning {
@@ -67,6 +70,20 @@ export interface PostbackAccessWarning {
 export function postbackAccessMessage(access: IncidentIoPostbackAccess | null | undefined): PostbackAccessWarning | null {
   // Nothing to warn about when the check did not run, or when both writes work.
   if (!access?.checked || (access.incidents && access.alerts)) return null;
+  // Team scope is not full alert write: other teams' alerts are refused.
+  if (access.alertsScoped && access.incidents) {
+    return {
+      consequence: "Can write back to incidents. Alert notes only reach this key's teams",
+      permission: "Grant Create and manage on call ressources at the account level to cover every alert",
+    };
+  }
+  // Notes only, and only on the key's teams. Incident updates will not post.
+  if (access.alertsScoped) {
+    return {
+      consequence: "Alert notes only reach this key's teams, and incident updates won't post",
+      permission: "Add the Edit incidents permission, and grant Create and manage on call ressources at the account level",
+    };
+  }
   // Incident updates will post; alert notes will not.
   if (access.incidents) {
     return {

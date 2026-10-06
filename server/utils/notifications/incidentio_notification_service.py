@@ -1,26 +1,8 @@
 """
-incident.io RCA post-back: post Aurora's root cause back onto the incident.io
-object that triggered the RCA, once, when the investigation completes.
-
-An incident-attached RCA posts an *incident update*, which goes through
-incident.io's own notification flow (incident channel, followers, app
-notifications). An alert that only escalated has no incident timeline, so the
-root cause goes on the alert itself as an *alert note*, which incident.io shows
-in the alert timeline and in the alert's Slack pulse thread. Either way
-responders see the cause where they were already paged. An incident-triggered
-RCA with no incident id has nowhere to post and is skipped.
-
-Recurrences post too, unlike PagerDuty notes: an incident.io object always maps
-onto the same Aurora incident (the ingest upserts on it), so a folded
-recurrence is always a different incident.io incident or alert with its own
-responders. The one exception is an alert storm: when several alerts of one
-recurrence group are attached to the same incident.io incident, only the
-first RCA is posted there.
-
-Posting is guarded by a claim on incidents.incidentio_update_id (see
-postback_claim). Incident updates also carry an idempotency key, so a repeat
-that does reach incident.io is a no-op there as well; /v1/alert_notes has no
-such key, which leaves the claim as the only guard for notes.
+incident.io RCA post-back: one root cause on the incident timeline, or as an
+alert note when the alert never attached. Grouped alerts share one pulse
+thread: the first RCA is the group note, later alerts get a short correlation
+note, and the group note is edited when a later RCA adds a new finding.
 """
 
 import json
@@ -76,9 +58,15 @@ class _Source(NamedTuple):
 
 
 class _Target(NamedTuple):
-    """Where the root cause goes: an incident.io incident timeline, or an alert's own notes."""
+    """Where the root cause goes: an incident timeline, one alert, or an alert group."""
     object_id: str
     is_alert_note: bool
+    # Set when the full RCA goes on the group's shared thread.
+    alert_group_id: Optional[str] = None
+    # A later alert in that group: short note on the alert, and maybe an edit of the group note.
+    correlation: bool = False
+    group_note_id: Optional[str] = None
+    anchor_incident_id: Optional[str] = None
 
 
 def _read_source(incident_data: Dict[str, Any], user_id: str) -> Optional[_Source]:
@@ -157,6 +145,157 @@ def _anchor_covers_target(client: IncidentioClient, source: _Source, target: str
     return any(str((link.get("alert") or {}).get("id")) == source.anchor_alert_id for link in links)
 
 
+def _alert_group_ids(client: IncidentioClient, alert_id: str) -> list:
+    """Sorted group ids for this alert. Empty when it was never grouped."""
+    payload = client.get_alert(alert_id) or {}
+    alert = payload.get("alert") if isinstance(payload, dict) else None
+    # Some responses are the alert object itself rather than {"alert": ...}.
+    if not isinstance(alert, dict):
+        alert = payload if isinstance(payload, dict) else {}
+    raw = alert.get("alert_group_ids") or []
+    if not isinstance(raw, list):
+        return []
+    return sorted({str(group_id) for group_id in raw if group_id})
+
+
+def _anchor_covers_group(client: IncidentioClient, source: _Source, group_ids: set) -> bool:
+    """True when the anchor already posted (or is posting) a note on a shared group.
+
+    An incident-update claim does not cover the group's pulse thread.
+    """
+    if not source.anchor_alert_id or not source.anchor_update_id:
+        return False
+    if not str(source.anchor_update_id).startswith(_NOTE_ID_PREFIX):
+        return False
+    try:
+        anchor_groups = set(_alert_group_ids(client, source.anchor_alert_id))
+    except IncidentioAPIError:
+        # Can't confirm the shared thread, so don't drop this RCA.
+        return False
+    return bool(group_ids & anchor_groups)
+
+
+def _recorded_note_id(claim: Optional[str]) -> Optional[str]:
+    """Alert-note id stored on the anchor, or None while that post is still in flight."""
+    if not claim or not str(claim).startswith(_NOTE_ID_PREFIX):
+        return None
+    note_id = str(claim)[len(_NOTE_ID_PREFIX):]
+    # "pending" and "posted" are claim tokens, not incident.io ids.
+    if not note_id or note_id in ("pending", "posted"):
+        return None
+    return note_id
+
+
+def _investigation_link(incident_id: Optional[str]) -> str:
+    base = (FRONTEND_URL or "").rstrip("/")
+    return f"{base}/incidents/{incident_id}" if base and incident_id else ""
+
+
+def _correlation_note(incident_id: str, anchor_incident_id: Optional[str]) -> str:
+    """Short note on a later alert: same issue, the full RCA lives on the group."""
+    lines = [
+        "**Correlated alert**",
+        "",
+        "Same issue as an earlier alert in this group. The root cause is on the group note.",
+        "",
+    ]
+    own = _investigation_link(incident_id)
+    if own:
+        lines.append(f"- [Open this investigation]({own})")
+    earlier = _investigation_link(anchor_incident_id)
+    if earlier:
+        lines.append(f"- [Open the first investigation]({earlier})")
+    if own or earlier:
+        lines.append("")
+    lines.append("_Generated automatically by Aurora. Verify before acting._")
+    return "\n".join(lines)
+
+
+def _contains_finding(note: str, text: str) -> bool:
+    if not text:
+        return True
+    folded = " ".join(note.split()).casefold()
+    # The posted note swaps "*" for a look-alike so markdown doesn't italicise it.
+    for variant in (text, text.replace("*", "\u2217")):
+        if " ".join(variant.split()).casefold() in folded:
+            return True
+    return False
+
+
+def _note_content(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    note = payload.get("alert_note")
+    if not isinstance(note, dict):
+        return ""
+    content = note.get("content")
+    return content if isinstance(content, str) else ""
+
+
+def _append_finding(content: str, root_cause: str, impact: str, incident_id: str) -> str:
+    lines = ["**Also found**", "", root_cause.replace("*", "\u2217"), ""]
+    if impact:
+        lines += ["**Impact**", "", impact.replace("*", "\u2217"), ""]
+    link = _investigation_link(incident_id)
+    if link:
+        lines.append(f"- [Open this investigation]({link})")
+    addition = "\n".join(lines)
+    return f"{content.rstrip()}\n\n{addition}" if content.strip() else addition
+
+
+def _extend_group_note(
+    client: IncidentioClient, note_id: str, root_cause: str, impact: str, incident_id: str
+) -> None:
+    """Add this RCA to the group note when the first post didn't already say it.
+
+    A lost race with another writer is retried once. Failure here does not
+    undo the correlation note already posted on this alert.
+    """
+    try:
+        content = _note_content(client.get_alert_note(note_id))
+        # Same root cause and impact: leave the group note alone.
+        if _contains_finding(content, root_cause) and _contains_finding(content, impact):
+            return
+        client.update_alert_note(note_id, _append_finding(content, root_cause, impact, incident_id))
+        refreshed = _note_content(client.get_alert_note(note_id))
+        # Another writer replaced the note between the read and the write.
+        if not _contains_finding(refreshed, root_cause):
+            client.update_alert_note(
+                note_id, _append_finding(refreshed, root_cause, impact, incident_id)
+            )
+    except IncidentioAPIError:
+        logger.warning("%s Could not add a later finding to group note %s", _LOG, note_id)
+
+
+def _note_target(
+    client: IncidentioClient, source: _Source, anchor_incident_id: Optional[str]
+) -> Tuple[Optional[_Target], str]:
+    """Where an unattached alert's note goes."""
+    try:
+        group_ids = _alert_group_ids(client, source.object_id)
+    except IncidentioAPIError:
+        # Group lookup failed: still post on the alert, which is the ungrouped path.
+        logger.warning(
+            "%s Could not read alert groups for %s; posting the note on the alert",
+            _LOG, source.object_id,
+        )
+        return _Target(source.object_id, is_alert_note=True), ""
+    # No group: each alert has its own timeline, so each recurrence posts its own note.
+    if not group_ids:
+        return _Target(source.object_id, is_alert_note=True), ""
+    # Same pulse thread as the anchor: point at it, and extend the group note only if this RCA is new.
+    if _anchor_covers_group(client, source, set(group_ids)):
+        return _Target(
+            source.object_id,
+            is_alert_note=True,
+            correlation=True,
+            group_note_id=_recorded_note_id(source.anchor_update_id),
+            anchor_incident_id=anchor_incident_id,
+        ), ""
+    # First RCA for the group. The first id is stable when an alert sits in several groups.
+    return _Target(group_ids[0], is_alert_note=True, alert_group_id=group_ids[0]), ""
+
+
 def _remote_id(response: Optional[Dict[str, Any]], key: str) -> str:
     """Id incident.io returned, or 'posted' when the body has none."""
     return ((response or {}).get(key) or {}).get("id") or "posted"
@@ -170,7 +309,12 @@ def _post_root_cause(
         # Alert notes have no idempotency key, and the id must stay distinguishable
         # from an incident update in the shared claim column.
         if target.is_alert_note:
-            note_id = _remote_id(client.post_alert_note(target.object_id, content), "alert_note")
+            # A group note lands once on the shared pulse thread; otherwise on this alert.
+            if target.alert_group_id:
+                response = client.post_alert_note(content, alert_group_id=target.alert_group_id)
+            else:
+                response = client.post_alert_note(content, alert_id=target.object_id)
+            note_id = _remote_id(response, "alert_note")
             return f"{_NOTE_ID_PREFIX}{note_id}"
         # Incident update: the idempotency key makes a repeat a no-op on incident.io's side
         response = client.post_incident_update(
@@ -226,10 +370,8 @@ def _resolve_target(client: IncidentioClient, incident_data: Dict[str, Any], use
             return None, "an earlier alert of this recurrence group already posted to that incident"
         if attached:
             return _Target(attached, is_alert_note=False), ""
-        # Escalation-only alert: no incident timeline, so the note goes on the alert itself.
-        # No recurrence folding needed — the ingest upserts one Aurora incident per alert, so
-        # the per-incident claim is already 1:1 with the alert whose timeline the note lands on.
-        return _Target(source.object_id, is_alert_note=True), ""
+        # No incident timeline. A grouped alert shares one pulse thread with the storm.
+        return _note_target(client, source, incident_data.get("recurrence_of"))
     except IncidentioAPIError as e:
         return None, f"could not resolve the incident for alert {source.object_id}: {e.code}"
 
@@ -257,7 +399,12 @@ def send_incidentio_incident_update(user_id: str, incident_data: Dict[str, Any])
             logger.info("%s Skipping incident %s: %s", _LOG, incident_id, reason)
             return False
 
-        content = compose_note_markdown(root_cause, incident_id, impact, FRONTEND_URL)
+        # A later alert in the group gets a pointer, not a second copy of the full RCA.
+        content = (
+            _correlation_note(incident_id, target.anchor_incident_id)
+            if target.correlation
+            else compose_note_markdown(root_cause, incident_id, impact, FRONTEND_URL)
+        )
 
         # Claimed before the POST: /v1/alert_notes has no idempotency key, so for notes
         # this claim is the only thing standing between a retry and a duplicate.
@@ -273,7 +420,15 @@ def send_incidentio_incident_update(user_id: str, incident_data: Dict[str, Any])
             return False
 
         _claims.record(incident_id, user_id, posted_id)
-        kind, where = ("note", "alert") if target.is_alert_note else ("update", "incident")
+        # The correlation note is already stored. Editing the group note is best-effort.
+        if target.group_note_id:
+            _extend_group_note(client, target.group_note_id, root_cause, impact, incident_id)
+        if target.alert_group_id:
+            kind, where = "note", "alert group"
+        elif target.is_alert_note:
+            kind, where = "note", "alert"
+        else:
+            kind, where = "update", "incident"
         logger.info(
             "%s Posted %s %s on incident.io %s %s for %s",
             _LOG, kind, posted_id, where, target.object_id, incident_id,

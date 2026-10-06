@@ -23,18 +23,25 @@ logger = logging.getLogger(__name__)
 # Account-level "Edit incidents". A message-only incident update is this role,
 # not a separate "create updates" permission.
 INCIDENT_WRITE_ROLE = "incident_editor"
-# "Create and manage on call ressources" (on_call_editor) bundles alerts.edit. It can also be
-# granted for specific teams via team_roles.
+# "Create and manage on call ressources" (on_call_editor) bundles alerts.edit.
+# Account-level covers every alert. The same role in team_roles covers only the key's teams.
 ALERT_WRITE_ROLE = "on_call_editor"
 
 
 def classify_postback_roles(roles, team_roles=None) -> Dict[str, bool]:
-    """Which RCA destinations this key's roles can write, from GET /v1/identity."""
+    """Which RCA destinations this key's roles can write, from GET /v1/identity.
+
+    team_roles apply only to resources owned by the key's teams, so a team-only
+    on_call_editor is not full alert write: another team's alert still 403s.
+    """
     account = set(roles or [])
     teams = set(team_roles or [])
+    # Account role already covers every team; team_roles don't narrow it.
+    alerts = ALERT_WRITE_ROLE in account
     return {
         "incidents": INCIDENT_WRITE_ROLE in account,
-        "alerts": ALERT_WRITE_ROLE in account or ALERT_WRITE_ROLE in teams,
+        "alerts": alerts,
+        "alertsScoped": (not alerts) and ALERT_WRITE_ROLE in teams,
     }
 
 
@@ -43,8 +50,8 @@ def postback_can_enable(access: Dict[str, Any]) -> bool:
     # Identity was unreachable — don't block the toggle on a blip.
     if not access.get("checked"):
         return True
-    # A key that can write nowhere would accept the toggle and then drop every RCA.
-    return bool(access.get("incidents") or access.get("alerts"))
+    # Team-scoped alert write still reaches that key's teams, so the toggle can turn on.
+    return bool(access.get("incidents") or access.get("alerts") or access.get("alertsScoped"))
 
 
 class IncidentioAPIError(Exception):
@@ -129,7 +136,7 @@ class IncidentioClient:
         ``checked`` is false when identity could not be read, so the caller
         does not treat a timeout as a missing permission.
         """
-        unknown = {"checked": False, "incidents": False, "alerts": False}
+        unknown = {"checked": False, "incidents": False, "alerts": False, "alertsScoped": False}
         try:
             payload = self.get_identity(timeout=_POSTBACK_IDENTITY_TIMEOUT) or {}
         except IncidentioAPIError:
@@ -162,16 +169,41 @@ class IncidentioClient:
             body["idempotency_key"] = idempotency_key
         return self._request("POST", "/incident_updates", json=body).json()
 
-    def post_alert_note(self, alert_id: str, content: str) -> Dict[str, Any]:
-        """Add a markdown note to an alert's timeline (and its Slack pulse thread).
+    def get_alert(self, alert_id: str) -> Dict[str, Any]:
+        """One alert, including the groups it belongs to."""
+        return self._request("GET", f"/alerts/{alert_id}").json()
 
-        Alert notes are a v1 service; everything else here is v2. Requires the
-        `alerts.edit` scope, and has no idempotency key, so the caller must not
-        retry blindly.
+    def post_alert_note(
+        self,
+        content: str,
+        *,
+        alert_id: Optional[str] = None,
+        alert_group_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Add a markdown note to one alert, or to an alert group's shared thread.
+
+        Provide exactly one of alert_id or alert_group_id. Grouped alerts share
+        one pulse thread, so a group note is posted once instead of per alert.
+        Alert notes are v1 and have no idempotency key.
         """
+        # The API rejects a body that sets both ids, or neither.
+        if bool(alert_id) == bool(alert_group_id):
+            raise ValueError("provide exactly one of alert_id or alert_group_id")
+        body: Dict[str, Any] = {"content": content}
+        if alert_group_id:
+            body["alert_group_id"] = alert_group_id
+        else:
+            body["alert_id"] = alert_id
+        return self._request("POST", "/alert_notes", api_version="v1", json=body).json()
+
+    def get_alert_note(self, note_id: str) -> Dict[str, Any]:
+        """One alert note, so a later finding can be appended instead of duplicated."""
+        return self._request("GET", f"/alert_notes/{note_id}", api_version="v1").json()
+
+    def update_alert_note(self, note_id: str, content: str) -> Dict[str, Any]:
+        """Replace a note's markdown. incident.io has no patch; the body is the whole note."""
         return self._request(
-            "POST", "/alert_notes", api_version="v1",
-            json={"alert_id": alert_id, "content": content},
+            "PUT", f"/alert_notes/{note_id}", api_version="v1", json={"content": content},
         ).json()
 
     def list_incident_alerts(

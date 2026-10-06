@@ -56,6 +56,9 @@ def wired(monkeypatch, patched_db):
     client.post_incident_update.return_value = {"incident_update": {"id": "upd_1"}}
     client.post_alert_note.return_value = {"alert_note": {"id": "note_1"}}
     client.list_incident_alerts.return_value = _attached()
+    client.get_alert.return_value = {"alert": {"alert_group_ids": []}}
+    # Same finding as SUMMARY, so a later grouped alert does not rewrite the group note.
+    client.get_alert_note.return_value = {"alert_note": {"id": "note_0", "content": ROOT_CAUSE_BODY}}
     built = []
 
     def fake_client(api_key):
@@ -98,9 +101,17 @@ def test_post_alert_note_targets_the_v1_service(monkeypatch):
         return response
 
     monkeypatch.setattr(client, "_request", fake_request)
-    assert client.post_alert_note("alert_1", "hello") == {"alert_note": {"id": "note_1"}}
+    assert client.post_alert_note("hello", alert_id="alert_1") == {"alert_note": {"id": "note_1"}}
     # alert notes are v1; no idempotency_key exists on this endpoint
     assert calls == [("POST", "/alert_notes", {"api_version": "v1", "json": {"alert_id": "alert_1", "content": "hello"}})]
+    client.post_alert_note("hello", alert_group_id="grp_9")
+    assert calls[-1] == ("POST", "/alert_notes", {"api_version": "v1", "json": {"alert_group_id": "grp_9", "content": "hello"}})
+    with pytest.raises(ValueError):
+        client.post_alert_note("hello")
+    with pytest.raises(ValueError):
+        client.post_alert_note("hello", alert_id="alert_1", alert_group_id="grp_9")
+    client.update_alert_note("note_1", "updated")
+    assert calls[-1] == ("PUT", "/alert_notes/note_1", {"api_version": "v1", "json": {"content": "updated"}})
 
 
 def _captured_urls(monkeypatch):
@@ -122,7 +133,7 @@ def test_alert_notes_use_v1_while_every_other_call_stays_on_v2(monkeypatch):
     client = IncidentioClient("k")
     client.get_incident("inc_1")
     client.post_incident_update("inc_1", "hello")
-    client.post_alert_note("alert_1", "hello")
+    client.post_alert_note("hello", alert_id="alert_1")
     assert urls == [
         "https://api.incident.io/v2/incidents/inc_1",
         "https://api.incident.io/v2/incident_updates",
@@ -405,8 +416,8 @@ def test_alert_without_an_incident_posts_a_note_on_the_alert(wired):
     assert svc.send_incidentio_incident_update("u1", _anchor()) is True
     wired.client.post_incident_update.assert_not_called()
     wired.client.post_alert_note.assert_called_once()
-    alert_id, content = wired.client.post_alert_note.call_args.args
-    assert alert_id == "alert_1"
+    assert wired.client.post_alert_note.call_args.kwargs["alert_id"] == "alert_1"
+    content = wired.client.post_alert_note.call_args.args[0]
     assert content.startswith("**Aurora RCA**\n\n**Root cause**\n\n" + ROOT_CAUSE_BODY + "\n\n")
     assert "- [Open the full investigation](http://localhost:3000/incidents/i1)" in content
     # the note id shares the claim column with incident updates, tagged so the two are distinguishable
@@ -429,7 +440,7 @@ def test_alert_note_is_claimed_before_the_post(wired):
         if "incidentio_update_id IS NULL" in sql:
             order.append("claim")
 
-    def record_post(alert_id, content):
+    def record_post(content, alert_id=None, alert_group_id=None):
         order.append("post")
         return {"alert_note": {"id": "note_1"}}
 
@@ -491,12 +502,102 @@ def test_unknown_alert_note_outcome_keeps_the_claim(wired, code, status):
 
 
 def test_alert_note_recurrence_posts_its_own_note(wired):
-    # each alert of a recurrence group is its own Aurora incident with its own claim and
-    # its own alert timeline, so an escalation-only recurrence is not folded away
+    # ungrouped alerts each have their own timeline, so a recurrence is not folded away
     wired.pool.cursor.fetchone.return_value = ("alert_2", ALERT_EVENT, "alert_1", "note:note_0")
     assert svc.send_incidentio_incident_update("u1", _anchor(recurrence_of="root-1")) is True
-    assert wired.client.post_alert_note.call_args.args[0] == "alert_2"
+    assert wired.client.post_alert_note.call_args.kwargs["alert_id"] == "alert_2"
     assert wired.pool.updates == [NOTE_CLAIM, RECORD_NOTE]
+
+
+def test_grouped_alert_posts_one_note_on_the_group(wired):
+    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT, None, None)
+    wired.client.get_alert.return_value = {"alert": {"alert_group_ids": ["grp_b", "grp_a"]}}
+    assert svc.send_incidentio_incident_update("u1", _anchor()) is True
+    # stable pick when an alert sits in more than one group
+    assert wired.client.post_alert_note.call_args.kwargs == {"alert_group_id": "grp_a"}
+    assert wired.pool.updates == [NOTE_CLAIM, RECORD_NOTE]
+
+
+def test_grouped_recurrence_notes_the_alert_without_rewriting_the_group(wired):
+    # same root cause as the group note: tell this alert it's correlated, leave the group note
+    wired.pool.cursor.fetchone.return_value = ("alert_2", ALERT_EVENT, "alert_1", "note:note_0")
+    wired.client.get_alert.side_effect = lambda alert_id: {"alert": {"alert_group_ids": ["grp_9"]}}
+    assert svc.send_incidentio_incident_update("u1", _anchor(recurrence_of="root-1")) is True
+    kwargs = wired.client.post_alert_note.call_args.kwargs
+    assert kwargs["alert_id"] == "alert_2"
+    assert "alert_group_id" not in kwargs
+    content = wired.client.post_alert_note.call_args.args[0]
+    assert "Same issue as an earlier alert" in content
+    assert "http://localhost:3000/incidents/i1" in content
+    assert "http://localhost:3000/incidents/root-1" in content
+    assert ROOT_CAUSE_BODY not in content
+    wired.client.update_alert_note.assert_not_called()
+    assert wired.pool.updates == [NOTE_CLAIM, RECORD_NOTE]
+
+
+def test_grouped_recurrence_appends_a_new_finding_to_the_group_note(wired):
+    new_cause = (
+        "Root cause: the pool exhaustion also stalled checkout once the retry budget was spent "
+        "and the queue stopped draining."
+    )
+    wired.pool.cursor.fetchone.return_value = ("alert_2", ALERT_EVENT, "alert_1", "note:note_0")
+    wired.client.get_alert.side_effect = lambda alert_id: {"alert": {"alert_group_ids": ["grp_9"]}}
+    stored = {"content": "Original RCA."}
+
+    def get_note(note_id):
+        return {"alert_note": {"id": note_id, "content": stored["content"]}}
+
+    def put_note(note_id, content):
+        stored["content"] = content
+        return {"alert_note": {"id": note_id, "content": content}}
+
+    wired.client.get_alert_note.side_effect = get_note
+    wired.client.update_alert_note.side_effect = put_note
+    summary = "What happened: retries piled up an hour later.\n\n" + new_cause
+    assert svc.send_incidentio_incident_update("u1", _anchor(recurrence_of="root-1", aurora_summary=summary)) is True
+    wired.client.update_alert_note.assert_called_once()
+    note_id, updated = wired.client.update_alert_note.call_args.args
+    assert note_id == "note_0"
+    assert updated.startswith("Original RCA.")
+    assert "stalled checkout" in updated
+    assert "http://localhost:3000/incidents/i1" in updated
+
+
+def test_in_flight_group_note_still_notes_the_later_alert(wired):
+    # the group note has no id yet, so this alert is marked correlated and the group note is left alone
+    wired.pool.cursor.fetchone.return_value = ("alert_2", ALERT_EVENT, "alert_1", "note:pending")
+    wired.client.get_alert.side_effect = lambda alert_id: {"alert": {"alert_group_ids": ["grp_9"]}}
+    assert svc.send_incidentio_incident_update("u1", _anchor(recurrence_of="root-1")) is True
+    assert wired.client.post_alert_note.call_args.kwargs["alert_id"] == "alert_2"
+    wired.client.update_alert_note.assert_not_called()
+    wired.client.get_alert_note.assert_not_called()
+
+
+def test_grouped_recurrence_posts_when_the_anchor_is_in_another_group(wired):
+    wired.pool.cursor.fetchone.return_value = ("alert_2", ALERT_EVENT, "alert_1", "note:note_0")
+
+    def groups(alert_id):
+        group_id = "grp_2" if alert_id == "alert_2" else "grp_1"
+        return {"alert": {"alert_group_ids": [group_id]}}
+
+    wired.client.get_alert.side_effect = groups
+    assert svc.send_incidentio_incident_update("u1", _anchor(recurrence_of="root-1")) is True
+    assert wired.client.post_alert_note.call_args.kwargs["alert_group_id"] == "grp_2"
+
+
+def test_anchor_incident_update_does_not_cover_the_group_thread(wired):
+    # the anchor posted to an incident timeline, not this group's pulse thread
+    wired.pool.cursor.fetchone.return_value = ("alert_2", ALERT_EVENT, "alert_1", "upd_0")
+    wired.client.get_alert.return_value = {"alert": {"alert_group_ids": ["grp_9"]}}
+    assert svc.send_incidentio_incident_update("u1", _anchor(recurrence_of="root-1")) is True
+    assert wired.client.post_alert_note.call_args.kwargs["alert_group_id"] == "grp_9"
+
+
+def test_group_lookup_failure_still_posts_on_the_alert(wired):
+    wired.pool.cursor.fetchone.return_value = ("alert_1", ALERT_EVENT, None, None)
+    wired.client.get_alert.side_effect = IncidentioAPIError(IncidentioAPIError.TIMEOUT)
+    assert svc.send_incidentio_incident_update("u1", _anchor()) is True
+    assert wired.client.post_alert_note.call_args.kwargs["alert_id"] == "alert_1"
 
 
 @pytest.mark.parametrize("anchor_claim", ["note:note_0", "note:pending"])
