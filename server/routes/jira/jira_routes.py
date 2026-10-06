@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any, Dict, Optional
@@ -12,7 +13,8 @@ from connectors.atlassian_auth.auth import refresh_access_token
 from connectors.jira_connector.client import JiraClient
 from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_user_preference, store_user_preference
+from utils.auth.stateless_auth import get_user_preference, set_rls_context, store_user_preference
+from utils.db.db_utils import connect_to_db_as_user
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
@@ -273,6 +275,53 @@ def jira_comment_back_enabled(user_id: str) -> bool:
     return get_user_preference(user_id, JIRA_COMMENT_BACK_KEY, default=False) is True
 
 
+def _store_jira_settings(
+    user_id: str,
+    *,
+    mode: Optional[str],
+    comment_back: Optional[bool],
+) -> bool:
+    """Write all supplied Jira prefs in one transaction."""
+    if mode is None and comment_back is None:
+        return True
+
+    conn = None
+    cursor = None
+    try:
+        conn = connect_to_db_as_user()
+        cursor = conn.cursor()
+        org_id = set_rls_context(cursor, conn, user_id, log_prefix="[JIRA:Settings]")
+        if not org_id:
+            return False
+
+        for key, value in ((JIRA_MODE_KEY, mode), (JIRA_COMMENT_BACK_KEY, comment_back)):
+            if value is None:
+                continue
+            cursor.execute(
+                "DELETE FROM user_preferences WHERE org_id = %s AND preference_key = %s",
+                (org_id, key),
+            )
+            cursor.execute(
+                """
+                INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (user_id, org_id, key, json.dumps(value)),
+            )
+        conn.commit()
+        return True
+    except Exception:
+        logger.exception("[JIRA] Failed to store settings for user %s", sanitize(user_id))
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
 def _settings_payload(user_id: str) -> Dict[str, Any]:
     mode = get_user_preference(user_id, JIRA_MODE_KEY, default="comment_only")
     return {"jiraMode": mode, "commentBack": jira_comment_back_enabled(user_id)}
@@ -305,13 +354,13 @@ def update_settings(user_id):
     if comment_back is not None and not isinstance(comment_back, bool):
         return jsonify({"error": "commentBack must be a boolean"}), 400
 
-    if mode is not None:
-        if not store_user_preference(user_id, JIRA_MODE_KEY, mode):
-            return jsonify({"error": "Failed to store Jira settings"}), 500
+    if not _store_jira_settings(user_id, mode=mode, comment_back=comment_back):
+        return jsonify({"error": "Failed to store Jira settings"}), 500
 
-    if comment_back is not None:
-        if not store_user_preference(user_id, JIRA_COMMENT_BACK_KEY, comment_back):
-            return jsonify({"error": "Failed to store Jira settings"}), 500
+    # Tool registration caches Jira write tools until expiry — drop stale entries.
+    from chat.backend.agent.tools.mcp_tools import clear_credentials_cache
+
+    clear_credentials_cache(user_id)
 
     logger.info(
         "[JIRA] Updated settings for user %s: jiraMode=%s commentBack=%s",

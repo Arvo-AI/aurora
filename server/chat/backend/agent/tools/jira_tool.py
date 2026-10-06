@@ -13,6 +13,29 @@ from utils.auth.token_management import get_token_data, store_tokens_in_db
 
 logger = logging.getLogger(__name__)
 
+_JIRA_MODE_KEY = "jira_mode"
+
+
+def _require_jira_comment_back(user_id: str) -> None:
+    from routes.jira.jira_routes import jira_comment_back_enabled
+
+    if not jira_comment_back_enabled(user_id):
+        raise ValueError(
+            "Jira comment-back is disabled. Turn on \"Comment back on Jira tickets\" "
+            "under Connectors > Jira before posting."
+        )
+
+
+def _require_jira_full_write_mode(user_id: str) -> None:
+    from utils.auth.stateless_auth import get_user_preference
+
+    mode = get_user_preference(user_id, _JIRA_MODE_KEY, default="comment_only") or "comment_only"
+    if mode != "full":
+        raise ValueError(
+            "Jira is set to comment-only. Choose \"Create & comment\" under Connectors > Jira "
+            "to create or update issues."
+        )
+
 
 def _refresh_oauth_token(user_id: str, creds: dict) -> Optional[dict]:
     """Attempt to refresh an expired OAuth access token and persist the result."""
@@ -243,6 +266,8 @@ def jira_add_comment(
     if not user_id:
         raise ValueError("user_id is required for Jira comment")
 
+    _require_jira_comment_back(user_id)
+
     try:
         client = _get_client(user_id)
         body_adf = markdown_to_adf(comment)
@@ -284,6 +309,9 @@ def jira_create_issue(
     _ = session_id
     if not user_id:
         raise ValueError("user_id is required for Jira issue creation")
+
+    _require_jira_comment_back(user_id)
+    _require_jira_full_write_mode(user_id)
 
     try:
         client = _get_client(user_id)
@@ -340,6 +368,9 @@ def jira_update_issue(
     if not fields:
         raise ValueError("fields dict is required")
 
+    _require_jira_comment_back(user_id)
+    _require_jira_full_write_mode(user_id)
+
     try:
         client = _get_client(user_id)
         client.update_issue(issue_key, fields=fields)
@@ -366,6 +397,9 @@ def jira_link_issues(
     _ = session_id
     if not user_id:
         raise ValueError("user_id is required for Jira issue linking")
+
+    _require_jira_comment_back(user_id)
+    _require_jira_full_write_mode(user_id)
 
     try:
         client = _get_client(user_id)
