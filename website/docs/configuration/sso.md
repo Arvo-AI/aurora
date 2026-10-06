@@ -25,11 +25,11 @@ Only SP-initiated logins are accepted. To launch Aurora from an IdP dashboard ti
 
 Create a custom SAML application and copy these values from **Settings → Organization → SSO**:
 
-| Aurora field | Entra ID | Okta |
-|---|---|---|
-| Identifier (Entity ID) | Identifier (Entity ID) | Audience URI (SP Entity ID) |
-| Reply URL (ACS URL) | Reply URL | Single sign-on URL |
-| Sign on URL | Sign on URL | — |
+| Aurora field | Entra ID | Okta | Google Workspace |
+|---|---|---|---|
+| Identifier (Entity ID) | Identifier (Entity ID) | Audience URI (SP Entity ID) | Service provider details → Entity ID |
+| Reply URL (ACS URL) | Reply URL | Single sign-on URL (SP ACS) | Service provider details → ACS URL |
+| Sign on URL | Sign on URL (optional) | — | Start URL (optional) |
 
 Assertions must be signed (the default in Entra ID, Okta and Google Workspace). Aurora reads these claims:
 
