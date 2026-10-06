@@ -313,7 +313,8 @@ def _sso_url_allowed(url: str) -> bool:
         return parsed.scheme == "https"
     # Over http the request cookie is SameSite=Lax, so a cross-site IdP's POST
     # would arrive without it; only a same-host IdP (local dev) can work.
-    return parsed.hostname == urlparse(sso.public_backend_url()).hostname
+    # Browsers treat a scheme change as cross-site too, so it must also be http.
+    return parsed.scheme == "http" and parsed.hostname == urlparse(sso.public_backend_url()).hostname
 
 
 def _validated_pems(certs: list) -> list[str] | None:

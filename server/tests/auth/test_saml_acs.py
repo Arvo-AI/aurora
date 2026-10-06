@@ -212,6 +212,7 @@ class TestMetadataAndConfigParsing:
 
     @pytest.mark.parametrize("idp_url, allowed", [
         ("http://localhost:8080/realms/dev/protocol/saml", True),
+        ("https://localhost:8443/realms/dev/protocol/saml", False),
         ("https://login.example.net/saml2", False),
         ("http://idp.example.org/sso", False),
     ])
