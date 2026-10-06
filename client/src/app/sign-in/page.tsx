@@ -73,7 +73,7 @@ const QUERY_ERRORS: Record<string, string> = {
 }
 
 function errorFromQuery(code: string | null): string | null {
-  return code && Object.prototype.hasOwnProperty.call(QUERY_ERRORS, code) ? QUERY_ERRORS[code] : null
+  return code && Object.hasOwn(QUERY_ERRORS, code) ? QUERY_ERRORS[code] : null
 }
 
 // Shown wherever we tell the user a code is on its way. Transactional code
@@ -89,15 +89,16 @@ function getInitialMode(searchParams: URLSearchParams): AuthMode {
   return AUTH_MODES.find((m) => m === mode) ?? "signin"
 }
 
+// Same-origin paths only — "//host" is protocol-relative and would leave the app.
+function safeCallbackUrl(raw: string | null): string {
+  return raw?.startsWith("/") && !raw.startsWith("//") ? raw : "/"
+}
+
 function AuthPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { data: session, update } = useSession()
-  const rawCallbackUrl = searchParams.get("callbackUrl") || "/"
-  const callbackUrl =
-    rawCallbackUrl.startsWith("/") && !rawCallbackUrl.startsWith("//")
-      ? rawCallbackUrl
-      : "/"
+  const callbackUrl = safeCallbackUrl(searchParams.get("callbackUrl"))
 
   const [mode, setMode] = useState<AuthMode>(() => getInitialMode(searchParams))
   const [formVisible, setFormVisible] = useState(true)

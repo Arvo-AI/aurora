@@ -69,9 +69,8 @@ def discover():
     data = request.get_json(silent=True)
     email = data.get("email") if isinstance(data, dict) else None
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                org_id = sso.find_org_for_email(cur, email or "")
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            org_id = sso.find_org_for_email(cur, email or "")
     except Exception:
         logger.exception("[SSO] discovery failed")
         return jsonify({"error": "SSO lookup failed"}), 500
@@ -86,16 +85,15 @@ def login(org_id):
     if not _ORG_ID_RE.match(org_id):
         return _fail("not_configured")
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                config = sso.load_enabled_config(cur, org_id)
-                if not config:
-                    return _fail("not_configured")
-                auth = _saml_auth(org_id, config)
-                redirect_url = auth.login()
-                request_id = auth.get_last_request_id()
-                sso.store_request_id(cur, request_id, org_id)
-                conn.commit()
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            config = sso.load_enabled_config(cur, org_id)
+            if not config:
+                return _fail("not_configured")
+            auth = _saml_auth(org_id, config)
+            redirect_url = auth.login()
+            request_id = auth.get_last_request_id()
+            sso.store_request_id(cur, request_id, org_id)
+            conn.commit()
     except Exception:
         logger.exception("[SSO] could not start login for org=%s", sanitize(org_id))
         return _fail("internal")
@@ -118,9 +116,8 @@ def acs(org_id):
         return _fail("expired")
 
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                config = sso.load_enabled_config(cur, org_id)
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            config = sso.load_enabled_config(cur, org_id)
             conn.commit()
     except Exception:
         logger.exception("[SSO] config load failed for org=%s", sanitize(org_id))
@@ -147,20 +144,19 @@ def acs(org_id):
     identity = sso.extract_identity(auth)
     refusal = None
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                # Committed on its own so a refused response stays burned.
-                burned = sso.burn_request_id(cur, request_id, org_id)
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            # Committed on its own so a refused response stays burned.
+            burned = sso.burn_request_id(cur, request_id, org_id)
+            conn.commit()
+            if not burned:
+                return _fail("expired")
+            try:
+                user_id, created = sso.resolve_user(cur, org_id, identity, config["default_role"])
+                handoff_token = mint_handoff(cur, user_id)
                 conn.commit()
-                if not burned:
-                    return _fail("expired")
-                try:
-                    user_id, created = sso.resolve_user(cur, org_id, identity, config["default_role"])
-                    handoff_token = mint_handoff(cur, user_id)
-                    conn.commit()
-                except sso.SsoError as e:
-                    conn.rollback()
-                    refusal = e.code
+            except sso.SsoError as e:
+                conn.rollback()
+                refusal = e.code
     except Exception:
         logger.exception("[SSO] provisioning failed for org=%s", sanitize(org_id))
         return _fail("internal")
@@ -192,10 +188,9 @@ def metadata(org_id):
     if not _ORG_ID_RE.match(org_id):
         return jsonify({"error": "Not found"}), 404
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1 FROM organizations WHERE id = %s", (org_id,))
-                exists = cur.fetchone() is not None
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM organizations WHERE id = %s", (org_id,))
+            exists = cur.fetchone() is not None
     except Exception:
         logger.exception("[SSO] metadata org lookup failed")
         return jsonify({"error": "Metadata unavailable"}), 500
@@ -248,16 +243,15 @@ def get_sso_settings(user_id):
 
 def _settings_response(org_id: str):
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """SELECT idp_entity_id, idp_sso_url, idp_x509_cert, default_role,
-                              enabled, require_sso
-                         FROM org_sso_configs WHERE org_id = %s""",
-                    (org_id,),
-                )
-                row = cur.fetchone()
-                domains = _load_domains(cur, org_id)
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT idp_entity_id, idp_sso_url, idp_x509_cert, default_role,
+                          enabled, require_sso
+                     FROM org_sso_configs WHERE org_id = %s""",
+                (org_id,),
+            )
+            row = cur.fetchone()
+            domains = _load_domains(cur, org_id)
     except Exception:
         logger.exception("[SSO] failed to load settings")
         return jsonify({"error": "Failed to load SSO settings"}), 500
@@ -379,26 +373,25 @@ def update_sso_settings(user_id):
         return jsonify({"error": "SSO must be enabled before it can be required"}), 400
 
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """INSERT INTO org_sso_configs (org_id, idp_entity_id, idp_sso_url,
-                                                   idp_x509_cert, default_role, enabled,
-                                                   require_sso, updated_by)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                       ON CONFLICT (org_id) DO UPDATE SET
-                            idp_entity_id = EXCLUDED.idp_entity_id,
-                            idp_sso_url = EXCLUDED.idp_sso_url,
-                            idp_x509_cert = EXCLUDED.idp_x509_cert,
-                            default_role = EXCLUDED.default_role,
-                            enabled = EXCLUDED.enabled,
-                            require_sso = EXCLUDED.require_sso,
-                            updated_by = EXCLUDED.updated_by,
-                            updated_at = NOW()""",
-                    (org_id, fields["idp_entity_id"], fields["idp_sso_url"],
-                     fields["idp_x509_cert"], default_role, enabled, require_sso, user_id),
-                )
-                conn.commit()
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO org_sso_configs (org_id, idp_entity_id, idp_sso_url,
+                                               idp_x509_cert, default_role, enabled,
+                                               require_sso, updated_by)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (org_id) DO UPDATE SET
+                        idp_entity_id = EXCLUDED.idp_entity_id,
+                        idp_sso_url = EXCLUDED.idp_sso_url,
+                        idp_x509_cert = EXCLUDED.idp_x509_cert,
+                        default_role = EXCLUDED.default_role,
+                        enabled = EXCLUDED.enabled,
+                        require_sso = EXCLUDED.require_sso,
+                        updated_by = EXCLUDED.updated_by,
+                        updated_at = NOW()""",
+                (org_id, fields["idp_entity_id"], fields["idp_sso_url"],
+                 fields["idp_x509_cert"], default_role, enabled, require_sso, user_id),
+            )
+            conn.commit()
     except Exception:
         logger.exception("[SSO] failed to save settings")
         return jsonify({"error": "Failed to save SSO settings"}), 500
@@ -420,23 +413,22 @@ def add_domain(user_id):
 
     skip = sso.skip_domain_verification()
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """SELECT 1 FROM org_sso_domains
-                        WHERE domain = %s AND verified_at IS NOT NULL AND org_id <> %s""",
-                    (domain, org_id),
-                )
-                if cur.fetchone():
-                    return jsonify({"error": _DOMAIN_TAKEN}), 409
-                cur.execute(
-                    """INSERT INTO org_sso_domains (org_id, domain, verification_token, verified_at)
-                       VALUES (%s, %s, %s, CASE WHEN %s THEN NOW() END)
-                       ON CONFLICT (org_id, domain) DO NOTHING""",
-                    (org_id, domain, sso.new_verification_token(), skip),
-                )
-                domains = _load_domains(cur, org_id)
-                conn.commit()
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT 1 FROM org_sso_domains
+                    WHERE domain = %s AND verified_at IS NOT NULL AND org_id <> %s""",
+                (domain, org_id),
+            )
+            if cur.fetchone():
+                return jsonify({"error": _DOMAIN_TAKEN}), 409
+            cur.execute(
+                """INSERT INTO org_sso_domains (org_id, domain, verification_token, verified_at)
+                   VALUES (%s, %s, %s, CASE WHEN %s THEN NOW() END)
+                   ON CONFLICT (org_id, domain) DO NOTHING""",
+                (org_id, domain, sso.new_verification_token(), skip),
+            )
+            domains = _load_domains(cur, org_id)
+            conn.commit()
     except psycopg2.errors.UniqueViolation:
         return jsonify({"error": _DOMAIN_TAKEN}), 409
     except Exception:
@@ -452,29 +444,28 @@ def add_domain(user_id):
 def verify_domain(user_id, domain_id):
     org_id = get_org_id_from_request()
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT domain, verification_token, verified_at
+                     FROM org_sso_domains WHERE id = %s AND org_id = %s""",
+                (domain_id, org_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return jsonify({"error": "Domain not found"}), 404
+            domain, token, verified_at = row
+
+            if not verified_at:
+                if not sso.skip_domain_verification() and not sso.domain_has_txt_token(domain, token):
+                    return jsonify({
+                        "error": "DNS record not found yet. DNS changes can take a few minutes to propagate.",
+                    }), 400
                 cur.execute(
-                    """SELECT domain, verification_token, verified_at
-                         FROM org_sso_domains WHERE id = %s AND org_id = %s""",
+                    "UPDATE org_sso_domains SET verified_at = NOW() WHERE id = %s AND org_id = %s",
                     (domain_id, org_id),
                 )
-                row = cur.fetchone()
-                if not row:
-                    return jsonify({"error": "Domain not found"}), 404
-                domain, token, verified_at = row
-
-                if not verified_at:
-                    if not sso.skip_domain_verification() and not sso.domain_has_txt_token(domain, token):
-                        return jsonify({
-                            "error": "DNS record not found yet. DNS changes can take a few minutes to propagate.",
-                        }), 400
-                    cur.execute(
-                        "UPDATE org_sso_domains SET verified_at = NOW() WHERE id = %s AND org_id = %s",
-                        (domain_id, org_id),
-                    )
-                domains = _load_domains(cur, org_id)
-                conn.commit()
+            domains = _load_domains(cur, org_id)
+            conn.commit()
     except psycopg2.errors.UniqueViolation:
         return jsonify({"error": _DOMAIN_TAKEN}), 409
     except Exception:
@@ -490,15 +481,14 @@ def verify_domain(user_id, domain_id):
 def delete_domain(user_id, domain_id):
     org_id = get_org_id_from_request()
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "DELETE FROM org_sso_domains WHERE id = %s AND org_id = %s RETURNING domain",
-                    (domain_id, org_id),
-                )
-                row = cur.fetchone()
-                domains = _load_domains(cur, org_id)
-                conn.commit()
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM org_sso_domains WHERE id = %s AND org_id = %s RETURNING domain",
+                (domain_id, org_id),
+            )
+            row = cur.fetchone()
+            domains = _load_domains(cur, org_id)
+            conn.commit()
     except Exception:
         logger.exception("[SSO] failed to delete domain")
         return jsonify({"error": "Failed to remove domain"}), 500
