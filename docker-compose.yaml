@@ -259,6 +259,9 @@ services:
       HOSTED_SIGNUP_ENABLED: ${HOSTED_SIGNUP_ENABLED:-false}
       GITHUB_APP_CLIENT_SECRET: ${GITHUB_APP_CLIENT_SECRET}
 
+      # SAML SSO domain ownership check (only skip on single-tenant installs)
+      SSO_SKIP_DOMAIN_VERIFICATION: ${SSO_SKIP_DOMAIN_VERIFICATION:-false}
+
       # Bitbucket OAuth
       BB_OAUTH_CLIENT_ID: ${BB_OAUTH_CLIENT_ID}
       BB_OAUTH_CLIENT_SECRET: ${BB_OAUTH_CLIENT_SECRET}

@@ -51,6 +51,8 @@ proto-plus==1.25.0
 protobuf==5.29.6
 psycopg2-binary
 bcrypt>=4.0.0
+python3-saml==1.16.0  # SAML SSO; xmlsec/lxml ship self-contained wheels, no apt deps
+dnspython==2.8.0  # SSO domain ownership checks (DNS TXT)
 pyasn1==0.6.4
 pyasn1_modules==0.4.1
 pydantic>=2.9.0  # Flexible for langchain compatibility

@@ -51,7 +51,6 @@ states are handed to ``github_app.github_app_install_callback`` unchanged.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -67,6 +66,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from utils.auth.github_app_jwt import GitHubAppJWTError, mint_app_jwt
 from utils.auth import normalize_email
+from utils.auth.handoff import mint_handoff as _mint_handoff
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -79,10 +79,6 @@ _GH_JSON_MEDIA_TYPE = "application/vnd.github+json"
 
 _SIGNUP_STATE_TTL_SEC = 30 * 60
 _SIGNUP_STATE_SALT = "aurora.github.app.signup-state.v1"
-
-# One-time handoff token: minted after provisioning, redeemed exactly once
-# by the frontend's NextAuth handler within this window.
-HANDOFF_TTL_SEC = 120
 
 # Hard-coded user-facing error strings. NEVER substitute query params.
 _ERROR_NOT_AVAILABLE = "One-click signup is not available on this deployment"
@@ -399,25 +395,6 @@ def _unique_org_identity(cur, base_name: str) -> tuple[str, str]:
         if cur.fetchone():
             slug = f"{slug[:42]}-{uuid_mod.uuid4().hex[:6]}"
     return name, slug
-
-
-def _mint_handoff(cur, user_id: str) -> str:
-    """Store a hashed one-time login token on the user row; return the raw token.
-
-    Expiry is computed with Postgres ``NOW()`` — the same clock the
-    redemption query compares against — so app-vs-DB clock skew can't
-    shrink or stretch the window.
-    """
-    token = secrets.token_urlsafe(32)
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    cur.execute(
-        """UPDATE users
-              SET signup_handoff_hash = %s,
-                  signup_handoff_expires_at = NOW() + make_interval(secs => %s)
-            WHERE id = %s""",
-        (token_hash, HANDOFF_TTL_SEC, user_id),
-    )
-    return token
 
 
 def _link_installation(cur, user_id: str, org_id: str | None, install_data: dict) -> None:

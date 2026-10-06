@@ -1256,6 +1256,49 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_org_invitations_org_id ON org_invitations(org_id);
                     CREATE INDEX IF NOT EXISTS idx_org_invitations_email ON org_invitations(email);
                 """,
+                # SAML SSO. Read before any session exists (domain discovery,
+                # ACS), so these are not RLS-protected — like organizations.
+                "org_sso_configs": """
+                    CREATE TABLE IF NOT EXISTS org_sso_configs (
+                        org_id VARCHAR(255) PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+                        idp_entity_id TEXT NOT NULL,
+                        idp_sso_url TEXT NOT NULL,
+                        idp_x509_cert TEXT NOT NULL,
+                        default_role VARCHAR(50) NOT NULL DEFAULT 'viewer',
+                        enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                        require_sso BOOLEAN NOT NULL DEFAULT FALSE,
+                        updated_by VARCHAR(255) REFERENCES users(id) ON DELETE SET NULL,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    );
+                """,
+                # Several orgs may claim a domain, but only one can verify it:
+                # the verified owner is who SSO discovery routes that domain to.
+                "org_sso_domains": """
+                    CREATE TABLE IF NOT EXISTS org_sso_domains (
+                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        domain VARCHAR(253) NOT NULL,
+                        verification_token VARCHAR(64) NOT NULL,
+                        verified_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        UNIQUE(org_id, domain)
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_org_sso_domains_verified
+                        ON org_sso_domains(domain) WHERE verified_at IS NOT NULL;
+                """,
+                # Outstanding AuthnRequest IDs; the ACS burns one per response
+                # so an assertion can't be replayed or posted to another org.
+                "saml_requests": """
+                    CREATE TABLE IF NOT EXISTS saml_requests (
+                        request_id VARCHAR(255) PRIMARY KEY,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        expires_at TIMESTAMP NOT NULL
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_saml_requests_expires ON saml_requests(expires_at);
+                """,
                 "knowledge_base_memory": """
                     CREATE TABLE IF NOT EXISTS knowledge_base_memory (
                         id SERIAL PRIMARY KEY,
@@ -3081,6 +3124,20 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(f"Error adding GitHub signup columns: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_gh_signup_cols")
+
+            # Migration: SAML SSO identity. The IdP's subject is only unique
+            # within that org's IdP, so the auto-login key is (org, subject).
+            try:
+                cursor.execute("SAVEPOINT sp_sso_cols")
+                cursor.execute("""
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS sso_subject TEXT;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_org_sso_subject
+                        ON users (org_id, sso_subject) WHERE sso_subject IS NOT NULL;
+                """)
+                cursor.execute("RELEASE SAVEPOINT sp_sso_cols")
+            except Exception as e:
+                logging.warning(f"Error adding SSO columns: {e}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_sso_cols")
 
             conn.commit()
 

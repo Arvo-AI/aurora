@@ -15,6 +15,7 @@ from utils.db.db_utils import connect_to_db_as_user
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_auth_only
 from utils.auth import normalize_email
+from utils.auth.saml_sso import org_requires_sso
 from utils.log_sanitizer import sanitize
 from utils.web.limiter_ext import get_public_auth_rate_limit_key, limiter
 import os
@@ -535,17 +536,11 @@ def setup_org(user_id):
 def exchange_handoff():
     """Exchange a one-time signup handoff token for a session payload.
 
-    Body: { token }. Minted by the GitHub one-click signup callback
-    (routes/github/github_signup.py) and redeemed exactly once by the
-    frontend's NextAuth handler — the row is burned before the payload is
-    returned, so a replayed token gets 401. Constant generic error for
-    every failure mode (unknown/expired/used) to avoid oracle behavior.
+    Body: { token }. Minted by GitHub one-click signup or the SAML ACS and
+    redeemed once by the frontend's NextAuth handler — the row is burned
+    before the payload is returned, so a replay gets 401. One generic error
+    for unknown/expired/used to avoid oracle behavior.
     """
-    from routes.github.github_signup import is_hosted_signup_enabled
-
-    if not is_hosted_signup_enabled():
-        return jsonify({"error": "Not available"}), 404
-
     try:
         data = request.get_json(silent=True) or {}
         token = data.get('token') or ''
@@ -585,7 +580,7 @@ def exchange_handoff():
 
         record_audit_event(
             user_org_id or "", user_id, "login", "session", user_id,
-            {"via": "github_one_click_handoff"}, request,
+            {"via": "handoff"}, request,
         )
         return jsonify({
             "id": user_id,
@@ -693,6 +688,16 @@ def login():
                         "These should be reconciled manually.",
                         sanitize(email), user_id,
                     )
+
+                # Org requires SSO for this domain. Checked only after the
+                # password verifies so it can't reveal which emails exist.
+                # Admins keep password login as break-glass if the IdP breaks.
+                if user_role != "admin" and org_requires_sso(cursor, user_org_id, user_email):
+                    record_audit_event(
+                        _audit_org, _audit_uid, "login_failed", "session", None,
+                        {"reason": "sso_required", "email": email}, request,
+                    )
+                    return jsonify({"error": "sso_required"}), 403
 
                 record_audit_event(_audit_org, _audit_uid, "login", "session", _audit_uid, {"email": email}, request)
 
