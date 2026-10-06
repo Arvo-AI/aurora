@@ -309,6 +309,24 @@ class TestAvailabilityIsRevalidatedAfterOperations:
             assert backend.is_available() is True
             assert ctor.call_count == 2
 
+    @pytest.mark.parametrize(
+        "exc_type",
+        ["InternalServerError", "BadGateway", "VaultNotInitialized"],
+    )
+    def test_vault_server_errors_re_open_the_availability_check(self, vault_env, exc_type):
+        """Storage-backend 5xx and init failures are cluster health signals."""
+        backend = VaultSecretsBackend()
+        client = _client(True)
+        ServerError = type(exc_type, (Exception,), {})
+
+        with patch("hvac.Client", return_value=client):
+            assert backend.is_available() is True
+            client.secrets.kv.v2.read_secret_version.side_effect = ServerError("vault unhealthy")
+            with pytest.raises(ServerError):
+                backend.get_secret(self._REF)
+
+            assert backend._initialized is False
+
     def test_forbidden_on_one_path_does_not_declare_an_outage(self, vault_env):
         """A per-path ACL denial must not force a re-probe or flip the outage latch."""
         from utils.secrets import credential_error_message

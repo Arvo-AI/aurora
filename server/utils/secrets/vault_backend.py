@@ -114,7 +114,13 @@ class VaultSecretsBackend(SecretsBackend):
         if name in ("Forbidden", "InvalidRequest"):
             return False
 
-        if name in ("Unauthorized", "VaultDown"):
+        if name in (
+            "Unauthorized",
+            "VaultDown",
+            "InternalServerError",
+            "BadGateway",
+            "VaultNotInitialized",
+        ):
             return True
 
         if isinstance(exc, (ConnectionError, TimeoutError, OSError)):

@@ -28,11 +28,15 @@ def run_terraform_command(
 ) -> Dict[str, Any]:
     """Execute a Terraform command in the specified directory."""
     try:
-        success, resource_id, isolated_env = setup_terraform_environment_isolated(user_id)
+        success, resource_id, isolated_env, provider = setup_terraform_environment_isolated(user_id)
         if not success or isolated_env is None:
+            fallback = "Failed to setup Terraform environment"
+            # AWS Terraform setup is Postgres + STS only — no Vault read to misattribute.
+            if (provider or "").lower() == "aws":
+                return {"error": fallback}
             from utils.secrets import credential_error_message
 
-            return {"error": credential_error_message("Failed to setup Terraform environment")}
+            return {"error": credential_error_message(fallback)}
 
         tf_config = os.environ.get("TF_CLI_CONFIG_FILE")
         if tf_config:
