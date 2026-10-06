@@ -6,7 +6,7 @@ sidebar_label: Single Sign-On (SAML)
 
 # Single Sign-On (SAML)
 
-Aurora supports SAML 2.0 single sign-on with any standards-compliant identity provider (IdP): Microsoft Entra ID, Okta, Google Workspace, OneLogin, JumpCloud, Keycloak and others. SSO is configured per organization by an org admin under **Settings → Single Sign-On**.
+Aurora supports SAML 2.0 single sign-on with any standards-compliant identity provider (IdP): Microsoft Entra ID, Okta, Google Workspace, OneLogin, JumpCloud, Keycloak and others. SSO is configured per organization by an org admin under **Settings → Organization → SSO**.
 
 ## How it works
 
@@ -23,7 +23,7 @@ Only SP-initiated logins are accepted. To launch Aurora from an IdP dashboard ti
 
 ### 1. Register Aurora in your IdP
 
-Create a custom SAML application and copy these values from **Settings → Single Sign-On**:
+Create a custom SAML application and copy these values from **Settings → Organization → SSO**:
 
 | Aurora field | Entra ID | Okta |
 |---|---|---|

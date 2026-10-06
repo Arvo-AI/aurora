@@ -152,12 +152,9 @@ export function SsoSettings() {
 
   return (
     <div className="space-y-6 max-w-3xl">
-      <div>
-        <h2 className="text-2xl font-bold">Single Sign-On (SAML)</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Let members sign in with your identity provider, such as Microsoft Entra ID, Okta or Google Workspace.
-        </p>
-      </div>
+      <p className="text-sm text-muted-foreground">
+        Let members sign in with your identity provider (SAML), such as Microsoft Entra ID, Okta or Google Workspace.
+      </p>
 
       <Card>
         <CardContent className="pt-6 space-y-4">

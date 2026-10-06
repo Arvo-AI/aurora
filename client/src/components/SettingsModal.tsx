@@ -3,14 +3,13 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Settings, User, BookOpen, Building2, Shield, DollarSign, KeyRound } from "lucide-react";
+import { Settings, User, BookOpen, Building2, Shield, DollarSign } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneralSettings } from "@/components/GeneralSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { MemorySettings } from "@/components/MemorySettings";
 import { OrgSettings } from "@/components/OrgSettings";
 import { SecuritySettings } from "@/components/SecuritySettings";
-import { SsoSettings } from "@/components/SsoSettings";
 import { useUser, useAuth } from "@/hooks/useAuthHooks";
 import { isAdmin } from "@/lib/roles";
 import { PeriodSelector, type Period } from "@/app/monitor/components/charts";
@@ -21,7 +20,7 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'organization' | 'general' | 'profile' | 'memory' | 'security' | 'sso' | 'usage';
+type SettingsTab = 'organization' | 'general' | 'profile' | 'memory' | 'security' | 'usage';
 
 const UsageTab = React.lazy(() => import('@/app/monitor/components/usage-tab'));
 
@@ -61,13 +60,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       label: 'Security',
       icon: Shield,
       description: 'Agent command policies'
-    },
-    {
-      id: 'sso' as SettingsTab,
-      label: 'Single Sign-On',
-      icon: KeyRound,
-      description: 'SAML login for your organization',
-      adminOnly: true,
     },
     {
       id: 'usage' as SettingsTab,
@@ -134,14 +126,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         return (
           <div className="p-6 h-full overflow-y-auto">
             <SecuritySettings />
-          </div>
-        );
-
-      case 'sso':
-        if (!isAdmin(role)) return null;
-        return (
-          <div className="p-6 h-full overflow-y-auto">
-            <SsoSettings />
           </div>
         );
 

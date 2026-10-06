@@ -14,6 +14,9 @@ import OrgMembers from "@/app/org/components/OrgMembers";
 import OrgActivity from "@/app/org/components/OrgActivity";
 import OrgInvitations from "@/app/org/components/OrgInvitations";
 import McpTokens from "@/app/org/components/McpTokens";
+import { SsoSettings } from "@/components/SsoSettings";
+
+const BASE_ORG_TABS = ["overview", "members", "invitations", "activity", "mcp"];
 
 interface OrgData {
   id: string;
@@ -43,6 +46,8 @@ export function OrgSettings() {
   const [savingName, setSavingName] = useState(false);
 
   const isAdmin = checkAdmin(user?.role);
+  // SSO config is admin-only (backend enforces org:manage too)
+  const orgTabs = isAdmin ? [...BASE_ORG_TABS, "sso"] : BASE_ORG_TABS;
   const editingNameRef = React.useRef(false);
   editingNameRef.current = editingName;
 
@@ -177,13 +182,13 @@ export function OrgSettings() {
       <Tabs defaultValue="overview" className="w-full">
         <div className="border-b border-border mb-6">
           <TabsList className="h-auto p-0 bg-transparent rounded-none gap-5">
-            {["overview", "members", "invitations", "activity", "mcp"].map((tab) => (
+            {orgTabs.map((tab) => (
               <TabsTrigger
                 key={tab}
                 value={tab}
                 className="px-0 pb-2 pt-0 rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-muted-foreground data-[state=active]:text-foreground capitalize text-sm font-medium"
               >
-                {tab === "mcp" ? "MCP" : tab}
+                {tab === "mcp" || tab === "sso" ? tab.toUpperCase() : tab}
               </TabsTrigger>
             ))}
           </TabsList>
@@ -204,6 +209,11 @@ export function OrgSettings() {
         <TabsContent value="mcp">
           <McpTokens />
         </TabsContent>
+        {isAdmin && (
+          <TabsContent value="sso">
+            <SsoSettings />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );
