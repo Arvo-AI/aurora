@@ -13,7 +13,7 @@ from connectors.atlassian_auth.auth import refresh_access_token
 from connectors.jira_connector.client import JiraClient
 from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_user_preference, set_rls_context, store_user_preference
+from utils.auth.stateless_auth import get_user_preference, set_rls_context
 from utils.db.db_utils import connect_to_db_as_user
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.log_sanitizer import sanitize
