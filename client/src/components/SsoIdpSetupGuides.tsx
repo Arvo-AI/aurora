@@ -33,10 +33,10 @@ const IDP_GUIDES: IdpGuide[] = [
     consoleLabel: "Open Enterprise applications",
     avoid: "App registrations (Redirect URI) is OAuth/OIDC — Aurora uses SAML.",
     steps: [
-      "Microsoft Entra admin center → Entra ID → Applications → Enterprise applications → New application.",
+      "Microsoft Entra admin center → expand Entra ID → Enterprise applications → New application.",
       "Create your own application → name it (e.g. Aurora) → Integrate any other application you don't find in the gallery (Non-gallery) → Create.",
-      "Single sign-on → SAML → Edit Basic SAML Configuration → paste Aurora Identifier and Reply URL → Save.",
-      "Attributes & Claims: ensure email is sent (default claims usually include mail / user.mail).",
+      "Open the new app → Single sign-on → SAML → Edit Basic SAML Configuration → paste Aurora Identifier and Reply URL → Save.",
+      "Attributes & Claims: confirm an email claim is present (often user.mail or emailaddress).",
       "Users and groups → assign who may sign in.",
     ],
     fieldMap: [
@@ -53,9 +53,9 @@ const IDP_GUIDES: IdpGuide[] = [
     consoleUrl: "https://login.okta.com/admin/apps/active",
     consoleLabel: "Open Okta Admin → Applications",
     steps: [
-      "Applications → Create App Integration → SAML 2.0 → Next.",
-      "App name (e.g. Aurora) → Next → on Configure SAML paste Aurora values → Next → Finish.",
-      "Sign On tab → Edit → Name ID format: EmailAddress (or Persistent if you prefer).",
+      "Okta Admin Console → Applications → Create App Integration → SAML 2.0 → Next.",
+      "App name (e.g. Aurora) → Next → Configure SAML: paste Aurora Audience URI and Single sign-on URL → Next → Finish.",
+      "Sign On tab → Edit → Name ID format: EmailAddress (recommended).",
       "Assignments → assign users or groups.",
     ],
     fieldMap: [
@@ -71,10 +71,10 @@ const IDP_GUIDES: IdpGuide[] = [
     consoleUrl: "https://admin.google.com/ac/apps/unified",
     consoleLabel: "Open Google Admin → Apps",
     steps: [
-      "Admin console → Apps → Web and mobile apps → Add app → Add custom SAML app → name → Continue.",
-      "Google IdP details → Continue (optionally download Google IdP metadata for Aurora step 3).",
-      "Service provider details → Entity ID = Aurora Identifier; ACS URL = Aurora Reply URL. Start URL optional (Aurora Sign on URL). Name ID: EMAIL.",
-      "Attribute mapping → map Primary email (or leave default). Turn app ON for your OU → User access → assign groups.",
+      "Google Admin console → Apps → Web and mobile apps → Add app → Add custom SAML app.",
+      "App name → Continue → Google IdP details → Continue (download metadata here if you want it for Aurora step 3).",
+      "Service provider details → Entity ID = Aurora Identifier; ACS URL = Aurora Reply URL. Start URL optional (Aurora Sign on URL). Name ID format: EMAIL.",
+      "Attribute mapping → Continue → Turn ON for your organizational unit → User access → assign groups.",
     ],
     fieldMap: [
       { aurora: "Identifier (Entity ID)", idp: "Service provider details → Entity ID" },
@@ -91,10 +91,10 @@ const IDP_GUIDES: IdpGuide[] = [
     consoleUrl: "https://www.keycloak.org/docs/latest/server_admin/#_saml_clients",
     consoleLabel: "Keycloak SAML client docs",
     steps: [
-      "Open your Keycloak Admin Console → select realm → Clients → Create client.",
-      "Client type SAML → Client ID = Aurora Identifier (Entity ID) → Save.",
-      "Settings → Valid redirect URIs = Aurora Reply URL (ACS). Root URL optional.",
-      "Client scopes / Mappers: ensure email is in the assertion (default mappers usually include it).",
+      "Keycloak Admin Console → select realm → Clients → Create client.",
+      "Client type SAML → Client ID = Aurora Identifier (Entity ID) → Next → Save.",
+      "Client settings → Valid redirect URIs = Aurora Reply URL (ACS). Save.",
+      "Use the realm’s default SAML mappers so email is in the assertion (or add an email mapper on the client).",
     ],
     fieldMap: [
       { aurora: "Identifier (Entity ID)", idp: "Client ID" },
