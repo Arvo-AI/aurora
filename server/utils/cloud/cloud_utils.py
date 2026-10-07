@@ -150,3 +150,19 @@ def set_provider_preference(provider: Union[str, List[str]]):
             if p not in valid_providers:
                 raise ValueError(f"Invalid provider: {p}. Must be one of {valid_providers}")
         _set_ctx("provider_preference", provider)
+
+
+_NON_RCA_SOURCES = frozenset(("action", "prediscovery"))
+
+
+def _is_background_rca(state_context, is_background: bool) -> bool:
+    """True when the session is a background RCA investigating a real incident."""
+    if not state_context or not is_background:
+        return False
+    incident_id = getattr(state_context, "incident_id", None)
+    if not incident_id:
+        return False
+    rca_source = (
+        (getattr(state_context, "rca_context", None) or {}).get("source", "") or ""
+    ).lower()
+    return bool(rca_source) and rca_source not in _NON_RCA_SOURCES
