@@ -82,11 +82,14 @@ export default function McpAuthPage() {
   const [maxServers, setMaxServers] = useState(10);
   const [form, setForm] = useState<McpRegisterPayload>(EMPTY_FORM);
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
+  // Named rather than a bare boolean so the button can say which of the three
+  // waits is happening -- they take seconds each and look identical otherwise.
+  const [phase, setPhase] = useState<"idle" | "checking" | "signin" | "connecting">("idle");
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   // What the probe found this URL needs; null until it runs or the URL changes.
   const [detected, setDetected] = useState<McpDetectResult["authType"] | null>(null);
   const [manual, setManual] = useState(false);
+  const submitting = phase !== "idle";
 
   const load = useCallback(async () => {
     try {
@@ -106,10 +109,10 @@ export default function McpAuthPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const handleRegister = async () => {
-    setSubmitting(true);
+  const handleRegister = async (payload: McpRegisterPayload = form) => {
+    setPhase("connecting");
     try {
-      const { server, warning } = await mcpService.register(form);
+      const { server, warning } = await mcpService.register(payload);
       toast({
         title: `Connected to ${server.label}`,
         description: warning
@@ -129,7 +132,7 @@ export default function McpAuthPage() {
         variant: "destructive",
       });
     } finally {
-      setSubmitting(false);
+      setPhase("idle");
     }
   };
 
@@ -139,18 +142,28 @@ export default function McpAuthPage() {
    * Aurora registers itself with the provider (Dynamic Client Registration),
    * the user consents in the popup, and the callback page posts the code back.
    * The code is exchanged server-side, where the PKCE verifier lives.
+   *
+   * *prepared* is a window already opened by the click handler; see the note
+   * there on why it cannot be opened here when detection ran first.
    */
-  const handleOAuth = async () => {
-    setSubmitting(true);
-    let popup: Window | null = null;
+  const handleOAuth = async (prepared?: Window | null) => {
+    setPhase("signin");
+    let popup: Window | null = prepared ?? null;
     try {
       const { authorizeUrl, state } = await mcpService.startOAuth(form);
-      popup = window.open(authorizeUrl, "mcp-oauth", "width=600,height=760");
+      if (popup) {
+        popup.location.href = authorizeUrl;
+      } else {
+        popup = window.open(authorizeUrl, "mcp-oauth", "width=600,height=760");
+      }
       if (!popup) {
         throw new Error("Allow pop-ups for this site to authorize the server.");
       }
 
       const { code } = await waitForOAuthCode(popup, state);
+      // Consent is done and the popup has closed itself; what follows is the
+      // token exchange plus tool discovery, which is not a wait on the user.
+      setPhase("connecting");
       const { server, warning } = await mcpService.completeOAuth(code, state);
       toast({
         title: `Connected to ${server.label}`,
@@ -170,7 +183,7 @@ export default function McpAuthPage() {
       });
     } finally {
       popup?.close();
-      setSubmitting(false);
+      setPhase("idle");
     }
   };
 
@@ -248,35 +261,59 @@ export default function McpAuthPage() {
     !atCapacity;
 
   /**
-   * Detect what the URL needs, then connect.
+   * Detect what the URL needs, then connect in the same click.
    *
    * Users cannot be expected to know whether a URL is OAuth, an API key, or
-   * open, so the first click probes and the second connects. Once detection has
-   * run (or the user set auth manually) this goes straight through.
+   * open, so the first thing this does is probe. Detection used to stop here
+   * and make the user press Connect again, which read as a dead button: the
+   * spinner ran for the length of the probe and then nothing visibly happened,
+   * because the only change was a hidden state flag.
+   *
+   * So it now continues straight into the connect it already has enough
+   * information to perform. It can only stop when it genuinely needs something
+   * from the user: a token it does not have.
    */
   const handleSubmit = async () => {
     if (manual || detected) {
       return isOAuth ? handleOAuth() : handleRegister();
     }
-    setSubmitting(true);
+
+    // Opened before any await: a window.open that is not synchronous with the
+    // click is blocked by default in Chrome and Safari. Used only if detection
+    // comes back "oauth" -- otherwise closed immediately below.
+    const popup = window.open("", "mcp-oauth", "width=600,height=760");
+
+    setPhase("checking");
     try {
       const { authType } = await mcpService.detect(form.url.trim());
       setDetected(authType);
+
       if (authType === "oauth") {
         setForm((f) => ({ ...f, authType: "oauth" }));
-        return;
+        return await handleOAuth(popup);
       }
-      // "token" needs a value we do not have yet; "none" is shown for
-      // confirmation rather than saved silently, so neither connects here.
-      setForm((f) => ({ ...f, authType: authType === "none" ? "none" : "bearer" }));
+
+      popup?.close();
+      if (authType === "none") {
+        // Nothing to collect, so saving is the obvious next step. The form
+        // state update is async, hence passing the payload explicitly.
+        const payload = { ...form, authType: "none" as const };
+        setForm(payload);
+        return await handleRegister(payload);
+      }
+      // Needs a token we do not have. This is the one case where stopping is
+      // correct, and the field appearing makes that visible.
+      setForm((f) => ({ ...f, authType: "bearer" }));
     } catch (error: unknown) {
+      popup?.close();
       toast({
         title: "Could not reach the server",
         description: getUserFriendlyError(error),
         variant: "destructive",
       });
     } finally {
-      setSubmitting(false);
+      // handleOAuth and handleRegister own the phase once handed to them.
+      setPhase((p) => (p === "checking" ? "idle" : p));
     }
   };
 
@@ -327,10 +364,9 @@ export default function McpAuthPage() {
               </p>
             </div>
 
-            {detected === "none" && (
+            {detected === "token" && (
               <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-                This server accepted the connection without credentials. Connect again
-                to save it, or enter credentials below if it should be authenticated.
+                This server requires credentials. Paste its token below to connect.
               </p>
             )}
 
@@ -421,7 +457,11 @@ export default function McpAuthPage() {
               {submitting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {isOAuth ? "Waiting for sign-in\u2026" : "Connecting\u2026"}
+                  {phase === "checking"
+                    ? "Checking server\u2026"
+                    : phase === "signin"
+                      ? "Waiting for sign-in\u2026"
+                      : "Discovering tools\u2026"}
                 </>
               ) : (
                 <>
