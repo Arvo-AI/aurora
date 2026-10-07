@@ -197,9 +197,10 @@ from .flyio_tool import (
 # Import all context management functions from utils
 from utils.cloud.cloud_utils import (
     get_user_context, set_user_context, get_state_context, get_workflow_context,
-    set_websocket_context, get_websocket_context, get_selected_project_id, 
+    set_websocket_context, get_websocket_context, get_selected_project_id,
     set_selected_project_id, set_tool_capture, get_tool_capture,
-    get_provider_preference, set_provider_preference, _set_ctx, get_mode_from_context
+    get_provider_preference, set_provider_preference, _set_ctx, get_mode_from_context,
+    _is_background_rca,
 )
 from chat.backend.agent.access import ModeAccessController
 
@@ -996,24 +997,6 @@ from .mcp_tools import (
     _langchain_tools_cache_expiry,
     LANGCHAIN_TOOLS_CACHE_DURATION
 )
-
-
-_NON_RCA_SOURCES = frozenset(('action', 'prediscovery'))
-
-
-def _is_background_rca(state_context, is_background: bool) -> bool:
-    """True when the session is a background RCA investigating a real incident.
-
-    Used to gate tools like github_fix that only make sense during incident
-    investigation (where the user will see the incident card afterwards).
-    """
-    if not state_context or not is_background:
-        return False
-    incident_id = getattr(state_context, 'incident_id', None)
-    if not incident_id:
-        return False
-    rca_source = ((getattr(state_context, 'rca_context', None) or {}).get('source', '') or '').lower()
-    return bool(rca_source) and rca_source not in _NON_RCA_SOURCES
 
 
 # Bitbucket tool actions that mutate state. Read-only sessions (PR change-

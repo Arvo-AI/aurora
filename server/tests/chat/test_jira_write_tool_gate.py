@@ -16,7 +16,7 @@ _RCA_SESSION = SimpleNamespace(
 
 def _set_session(monkeypatch, state):
     monkeypatch.setattr(
-        "chat.backend.agent.tools.cloud_tools.get_state_context",
+        "utils.cloud.cloud_utils.get_state_context",
         lambda: state,
     )
 

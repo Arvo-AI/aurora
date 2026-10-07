@@ -17,8 +17,8 @@ _JIRA_MODE_KEY = "jira_mode"
 
 
 def _require_jira_comment_back(user_id: str) -> None:
-    from chat.backend.agent.tools.cloud_tools import _is_background_rca, get_state_context
     from routes.jira.jira_routes import jira_comment_back_enabled
+    from utils.cloud.cloud_utils import _is_background_rca, get_state_context
 
     state = get_state_context()
     # Outside an RCA a user asked for the write; unknown sessions still need the opt-in
