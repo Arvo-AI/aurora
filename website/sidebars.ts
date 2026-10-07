@@ -66,6 +66,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'integrations/connectors',
         'integrations/mcp',
+        'integrations/custom-mcp-servers',
         'integrations/spinnaker',
         'integrations/llm-providers',
       ],

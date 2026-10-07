@@ -614,6 +614,16 @@ SMTP_FROM_NAME=Aurora
 
 The MCP server authenticates clients via Bearer tokens stored in the `mcp_tokens` database table. No additional environment variable is needed for token configuration -- see the [MCP integration guide](../integrations/mcp) for details.
 
+## Custom MCP Servers
+
+Controls Aurora connecting **out** to MCP servers you register, which is the opposite direction from the section above. See [Custom MCP Servers](../integrations/custom-mcp-servers).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_ALLOW_PRIVATE_TARGETS` | `false` | Allow registering MCP servers on private, loopback or link-local addresses. Needed for self-hosted installs whose MCP servers run inside their own network. Leave `false` on multi-tenant deployments: with it on, anyone holding `connectors:write` can aim Aurora at any address it can reach, including cloud metadata endpoints. |
+
+The redirect URI Aurora presents to OAuth providers is derived from `FRONTEND_URL` as `<FRONTEND_URL>/mcp/callback`. Credentials go to the configured secrets backend, so there is no env var for them.
+
 ## Rate Limiting
 
 | Variable | Default | Description |

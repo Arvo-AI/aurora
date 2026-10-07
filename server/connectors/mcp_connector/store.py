@@ -66,8 +66,8 @@ def is_read_tool(tool: Any) -> bool:
     3. Name verb, for servers that send no annotations at all (DeepWiki).
 
     A hostile server can of course claim ``readOnlyHint`` on a destructive tool.
-    That is what the per-tool ``never`` override and the read-only registration
-    switch exist for; annotations buy accuracy, not trust.
+    That is what the per-tool ``confirm`` override exists for; annotations buy
+    accuracy, not trust.
     """
     if isinstance(tool, dict):
         name = tool.get("name", "")
