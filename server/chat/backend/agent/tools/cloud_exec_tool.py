@@ -32,6 +32,12 @@ from .cloud_provider_utils import determine_target_provider_from_context
 from chat.backend.agent.prompt.prompt_builder import CLOUD_EXEC_PROVIDERS
 from chat.backend.agent.access import ModeAccessController
 from utils.cloud.cloud_utils import get_mode_from_context
+# Ask-mode read-only gate. Re-exported here because callers (and tests) have
+# always imported it from this module.
+from utils.security.read_only_classifier import (  # noqa: F401
+    describe_rejection,
+    is_read_only_command,
+)
 from utils.log_sanitizer import hash_for_log
 
 
@@ -125,6 +131,34 @@ def check_cli_availability(cli_tool: str) -> bool:
 # OLD GLOBAL AZURE FUNCTION REMOVED - Use setup_azure_environment_isolated() instead
 
 
+def _credential_setup_error(fallback: str) -> str:
+    """Name the secrets backend when it, rather than the provider, is the problem.
+
+    Every provider's credentials are read through the same backend, so an outage
+    there fails them all at once. Thin wrapper kept so the provider setup paths
+    below don't each import from utils.secrets.
+    """
+    from utils.secrets import credential_error_message
+
+    return credential_error_message(fallback)
+
+
+def _credential_setup_failure(fallback: str, command: str, requires_connection: bool = False) -> str:
+    """Build the JSON error payload for a provider whose credential setup failed.
+
+    `requires_connection` drives a "connect your account" prompt in the UI, which
+    is actively misleading during a secrets-backend outage: the connector is fine
+    and reconnecting cannot help, so the flag is dropped in that case.
+    """
+    message = _credential_setup_error(fallback)
+    payload = {"error": message, "final_command": command}
+    # Message unchanged means the backend is healthy, so this really is a
+    # missing/invalid credential and the reconnect prompt is correct.
+    if requires_connection and message == fallback:
+        payload["requires_connection"] = True
+    return json.dumps(payload)
+
+
 def setup_azure_environment_isolated(user_id: str, subscription_id: str | None = None):
     """Set up Azure environment with isolated credentials - NO global state modification."""
     try:
@@ -212,7 +246,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
         try:
             # Single source of truth: read from user_connections
             from utils.db.connection_utils import get_user_aws_connection
-            from utils.workspace.workspace_utils import get_or_create_workspace
+            from utils.workspace.workspace_utils import resolve_connection_external_id
             from utils.aws.aws_sts_client import assume_workspace_role
             from utils.aws.aws_session_policies import get_read_only_session_policy
 
@@ -236,12 +270,17 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
             if conn_region and not selected_region:
                 selected_region = conn_region
 
-            # Get external_id from workspace (needed for STS AssumeRole)
-            ws = get_or_create_workspace(user_id, "default")
-            external_id = ws.get("aws_external_id")
+            # ExternalId must come from the workspace that owns this connection,
+            # not the caller's -- org-shared connectors make those differ.
+            external_id = resolve_connection_external_id(aws_conn, user_id)
             if not external_id:
-                logger.error("Workspace %s for user %s missing aws_external_id", hash_for_log(str(ws["id"])), hash_for_log(user_id))
+                logger.error(
+                    "Could not resolve AWS ExternalId for account %s (user %s)",
+                    hash_for_log(str(aws_conn.get("account_id"))), hash_for_log(user_id),
+                )
                 return False, None, None, None
+
+            workspace_id = aws_conn["workspace_id"]
 
             current_mode = get_mode_from_context()
             role_arn = aws_conn.get("role_arn")
@@ -271,7 +310,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
             sts_creds = assume_workspace_role(
                 role_arn=role_arn,
                 external_id=external_id,
-                workspace_id=ws["id"],
+                workspace_id=workspace_id,
                 region=selected_region or "us-east-1",
                 session_policy=session_policy,
                 user_id=user_id,
@@ -287,7 +326,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
 
             logger.info(
                 "Assumed workspace role for %s in region %s",
-                hash_for_log(str(ws["id"])),
+                hash_for_log(str(workspace_id)),
                 selected_region or "us-east-1",
             )
 
@@ -407,15 +446,9 @@ def setup_aws_environments_all_accounts(user_id: str):
     accounts that were successfully assumed.
     """
     from utils.db.connection_utils import get_all_user_aws_connections
-    from utils.workspace.workspace_utils import get_or_create_workspace
+    from utils.workspace.workspace_utils import resolve_connection_external_id
     from utils.aws.aws_sts_client import assume_workspace_role
     from utils.aws.aws_session_policies import get_read_only_session_policy
-
-    ws = get_or_create_workspace(user_id, "default")
-    external_id = ws.get("aws_external_id")
-    if not external_id:
-        logger.error("Workspace %s for user %s missing aws_external_id", hash_for_log(str(ws["id"])), hash_for_log(user_id))
-        return []
 
     connections = get_all_user_aws_connections(user_id)
     if not connections:
@@ -438,6 +471,12 @@ def setup_aws_environments_all_accounts(user_id: str):
             logger.warning("Skipping account %s – no role_arn", account_id)
             continue
 
+        # Each account's ExternalId belongs to the workspace that registered it
+        external_id = resolve_connection_external_id(conn, user_id)
+        if not external_id:
+            logger.warning("Skipping account %s – could not resolve ExternalId", account_id)
+            continue
+
         if ModeAccessController.is_read_only_mode(current_mode):
             ro_arn = conn.get("read_only_role_arn")
             if ro_arn:
@@ -448,7 +487,7 @@ def setup_aws_environments_all_accounts(user_id: str):
             creds = assume_workspace_role(
                 role_arn=role_arn,
                 external_id=external_id,
-                workspace_id=ws["id"],
+                workspace_id=conn["workspace_id"],
                 region=region,
                 session_policy=session_policy,
                 user_id=user_id,
@@ -1156,64 +1195,6 @@ def setup_flyio_environment_isolated(user_id: str, selected_org: str | None = No
         return False, None, None, None
 
 
-def is_read_only_command(command: str) -> bool:
-    """Check if a cloud command is read-only (list, describe, get, etc.).
-
-    Matches on the command's verb tokens, not a substring scan: a bare
-    `verb in command` test classifies `az group delete --name my-logs-rg` as
-    read-only because "logs" appears in the resource name. Defaults to False.
-    """
-    READ_ONLY_VERBS = frozenset({
-        'list', 'describe', 'get', 'show', 'config', 'version', 'info', 'status',
-        'read', 'view', 'help', 'logs', 'log', 'top', 'explain', 'diff', 'search',
-        'query', 'export', 'devices', 'keys', 'routes', 'settings',
-        # Hyphenated subcommands are single tokens, so they need listing outright.
-        # `aks get-credentials` only writes a local kubeconfig and is the required
-        # first step of AKS investigation, so Ask mode must allow it.
-        'get-credentials', 'list-keys', 'show-connection-string', 'get-versions',
-        'list-deleted', 'check-name', 'show-usage',
-    })
-    WRITE_VERBS = frozenset({
-        'delete', 'destroy', 'remove', 'rm', 'create', 'apply', 'update', 'set',
-        'patch', 'replace', 'edit', 'scale', 'drain', 'cordon', 'uncordon', 'exec',
-        'attach', 'port-forward', 'cp', 'run', 'restart', 'start', 'stop', 'add',
-        'put', 'write', 'invoke', 'rollout', 'taint', 'label', 'annotate', 'login',
-    })
-
-    try:
-        tokens = [t.lower() for t in shlex.split(command) if not t.startswith('-')]
-    except ValueError:
-        return False
-
-    # Some reads return credentials. They pass a verb check ("list", "show") but
-    # hand back keys, secrets or connection strings, so Ask mode must refuse them
-    # even though they mutate nothing.
-    CREDENTIAL_READS = (
-        ('storage', 'account', 'keys'), ('storage', 'account', 'show-connection-string'),
-        ('keyvault', 'secret'), ('keyvault', 'key'), ('keyvault', 'certificate'),
-        ('ad', 'sp', 'credential'), ('ad', 'app', 'credential'),
-        ('redis', 'list-keys'), ('cosmosdb', 'keys'),
-        ('servicebus', 'namespace', 'authorization-rule', 'keys'),
-        ('eventhubs', 'namespace', 'authorization-rule', 'keys'),
-        ('acr', 'credential'), ('batch', 'account', 'keys'),
-        ('secrets', 'get'), ('secrets', 'versions'),   # gcloud
-        ('secretsmanager', 'get-secret-value'), ('iam', 'create-access-key'),  # aws
-    )
-    if any(all(part in tokens for part in combo) for combo in CREDENTIAL_READS):
-        return False
-
-    # Any write verb anywhere disqualifies the command outright.
-    if any(t in WRITE_VERBS for t in tokens):
-        return False
-    if any(t in READ_ONLY_VERBS for t in tokens):
-        return True
-    if '--dry-run' in command.lower():
-        return True
-
-    # Default to **not** read-only to err on the side of caution.
-    return False
-
-
 def get_command_timeout(command: str, user_timeout: int = None) -> int:
     """Determine timeout for a command. Use user_timeout if provided, else adapt based on command type."""
     if user_timeout is not None:
@@ -1268,6 +1249,7 @@ def _cloud_exec_aws_multi_account(
         current_mode,
         is_read_only_command(command),
         command,
+        describe_rejection(command),
     )
     if not allowed:
         logger.warning(read_only_message)
@@ -1281,6 +1263,7 @@ def _cloud_exec_aws_multi_account(
         })
 
     def _run_on_account(conn: dict) -> dict:
+        """Run the command against one account with its own isolated credential env."""
         account_id = conn.get("account_id", "unknown")
         region = conn.get("region") or "us-east-1"
         try:
@@ -1289,7 +1272,11 @@ def _cloud_exec_aws_multi_account(
             )
             if not success:
                 return {"account_id": account_id, "region": region, "success": False,
-                        "error": "Failed to assume role"}
+                        "error": (
+                            "Failed to assume role — check the server log for the "
+                            "underlying STS error (ExternalId mismatch and a missing "
+                            "trust-policy principal both surface as AccessDenied)"
+                        )}
 
             cmd = command.strip()
             if not cmd.startswith("aws"):
@@ -1513,7 +1500,7 @@ def _cloud_exec_azure_multi_subscription(
 
     current_mode = get_mode_from_context()
     allowed, read_only_message = ModeAccessController.ensure_cloud_command_allowed(
-        current_mode, is_read_only_command(command), command,
+        current_mode, is_read_only_command(command), command, describe_rejection(command),
     )
     if not allowed:
         return json.dumps({
@@ -1530,7 +1517,7 @@ def _cloud_exec_azure_multi_subscription(
     if not setup_ok:
         return json.dumps({
             "success": False,
-            "error": "Failed to authenticate with Azure",
+            "error": _credential_setup_error("Failed to authenticate with Azure"),
             "multi_subscription": True,
             "command": command,
             "provider": "azure",
@@ -1743,7 +1730,7 @@ Security & Compliance
                     )
             success, subscription_id, auth_method, isolated_env, auth_argv = setup_azure_environment_isolated(user_id, target_subscription)
             if not success:
-                return json.dumps({"error": f"Failed to setup Azure environment with {provider_preference} authentication", "final_command": command})
+                return _credential_setup_failure(f"Failed to setup Azure environment with {provider_preference} authentication", command)
             resource_id = subscription_id
             # Reuse an existing `az login` for these credentials when one is cached.
             # None means this command keeps its private directory and logs in itself.
@@ -1770,31 +1757,37 @@ Security & Compliance
                 target_account_id=account_id,
             )
             if not success:
-                return json.dumps({"error": f"Failed to setup AWS environment with {provider_preference} authentication", "final_command": command})
+                return json.dumps({
+                    "error": (
+                        f"Failed to setup AWS environment with {provider_preference} "
+                        "authentication"
+                    ),
+                    "final_command": command,
+                })
             resource_id = region
         elif normalized_provider == 'ovh':
             # OVH isolated setup
             success, project_id, auth_method, isolated_env = setup_ovh_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": f"Failed to setup OVH environment with {provider_preference} authentication. Please connect your OVH account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure(f"Failed to setup OVH environment with {provider_preference} authentication. Please connect your OVH account first.", command, requires_connection=True)
             resource_id = project_id
         elif normalized_provider == 'scaleway':
             # Scaleway isolated setup
             success, project_id, auth_method, isolated_env = setup_scaleway_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": f"Failed to setup Scaleway environment with {provider_preference} authentication. Please connect your Scaleway account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure(f"Failed to setup Scaleway environment with {provider_preference} authentication. Please connect your Scaleway account first.", command, requires_connection=True)
             resource_id = project_id
         elif normalized_provider == 'tailscale':
             # Tailscale isolated setup - uses REST API, not CLI
             success, tailnet, auth_method, isolated_env = setup_tailscale_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": f"Failed to setup Tailscale environment. Please connect your Tailscale account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure("Failed to setup Tailscale environment. Please connect your Tailscale account first.", command, requires_connection=True)
             resource_id = tailnet
         elif normalized_provider == 'flyio':
             # Fly.io isolated setup - uses FLY_API_TOKEN env var
             success, org_slug, auth_method, isolated_env = setup_flyio_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": "Failed to setup Fly.io environment. Please connect your Fly.io account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure("Failed to setup Fly.io environment. Please connect your Fly.io account first.", command, requires_connection=True)
             resource_id = org_slug
         elif normalized_provider not in CLOUD_EXEC_PROVIDERS:
             return json.dumps({
@@ -1808,7 +1801,7 @@ Security & Compliance
             # GCP isolated setup (default)
             success, project_id, auth_method, isolated_env = setup_gcp_environment_isolated(user_id, selected_project_id, provider_preference)
             if not success:
-                return json.dumps({"error": f"Failed to setup GCP environment with {provider_preference} authentication", "final_command": command})
+                return _credential_setup_failure(f"Failed to setup GCP environment with {provider_preference} authentication", command)
             resource_id = project_id
 
         logger.info(f"Using {auth_method} authentication for resource {resource_id}")
@@ -1949,6 +1942,7 @@ Security & Compliance
                     current_mode,
                     is_read_only_command(command),
                     command,
+                    describe_rejection(command),
                 )
                 if not allowed:
                     logger.warning(read_only_message)
@@ -2141,6 +2135,7 @@ Security & Compliance
             current_mode,
             is_read_only_command(command),
             command,
+            describe_rejection(command),
         )
         if not allowed:
             logger.warning(read_only_message)

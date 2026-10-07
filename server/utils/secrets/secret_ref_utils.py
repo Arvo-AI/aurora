@@ -107,11 +107,20 @@ class SecretRefManager:
     # ------------------------------------------------------------------
 
     def store_secret(self, secret_name: str, secret_value: str) -> str:
-        """Store a secret in Vault and return the reference."""
-        return self.backend.store_secret(
+        """Store a secret in Vault and return the reference.
+
+        Re-storing under an existing name yields the same reference, so any
+        copy of the previous value in the shared Redis cache must go — otherwise
+        every container keeps serving the old value for the cache TTL (e.g. a
+        Slack credential blob still carrying a card channel the user just
+        removed, so incident cards keep landing in the deactivated channel).
+        """
+        secret_ref = self.backend.store_secret(
             secret_name=secret_name,
             secret_value=secret_value,
         )
+        clear_secret_cache(secret_ref)
+        return secret_ref
 
     def get_secret(self, secret_ref: str) -> str:
         """Retrieve a secret from Vault using a reference."""

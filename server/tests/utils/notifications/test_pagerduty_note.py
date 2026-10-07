@@ -7,12 +7,15 @@ import pytest
 
 from routes.pagerduty.pagerduty_helpers import PD_READ_ONLY_ROLES, PagerDutyAPIError, PagerDutyClient, validate_token
 from utils.notifications import pagerduty_notification_service as svc
+from utils.notifications import postback_claim, rca_note
 
 ROOT_CAUSE = (
     "Root cause: the connection pool was exhausted after a deploy doubled the worker count "
     "without raising the Postgres max_connections limit."
 )
 SUMMARY = "What happened: the API tier fell over during the 14:00 deploy.\n\n" + ROOT_CAUSE
+# What the note shows: the summarizer's inline "Root cause:" label is dropped
+ROOT_CAUSE_BODY = ROOT_CAUSE[len("Root cause: "):]
 
 # The shape summarization.py produces: heading, metadata line, rule, 3 prose paragraphs, bullet sections.
 REPORT = (
@@ -79,27 +82,27 @@ def _anchor(**over):
 
 def test_plain_text_strips_markdown_citations_and_links():
     text = "**Root cause**: the *pod* was OOMKilled [1] after `memory` spiked [2, 3]. See [runbook](https://x.y/z)."
-    assert svc._to_plain_text(text) == "Root cause: the pod was OOMKilled after memory spiked. See runbook (https://x.y/z)."
+    assert rca_note.to_plain_text(text) == "Root cause: the pod was OOMKilled after memory spiked. See runbook (https://x.y/z)."
 
 
 def test_plain_text_keeps_stars_glued_to_words():
     text = "p95*2 latency across 3*4 nodes; **a*b** is bold and *.log* is a glob"
-    assert svc._to_plain_text(text) == "p95*2 latency across 3*4 nodes; a*b is bold and .log is a glob"
+    assert rca_note.to_plain_text(text) == "p95*2 latency across 3*4 nodes; a*b is bold and .log is a glob"
 
 
 def test_plain_text_keeps_paragraph_breaks_and_drops_heading_marks():
-    assert svc._to_plain_text("## Summary\n\nA b\nc.\n\n\n* item\n") == "Summary\n\nA b c.\n\n- item"
+    assert rca_note.to_plain_text("## Summary\n\nA b\nc.\n\n\n* item\n") == "Summary\n\nA b c.\n\n- item"
 
 
 def test_plain_text_truncates_on_a_word_boundary():
-    out = svc._to_plain_text("word " * 200)
+    out = rca_note.to_plain_text("word " * 200)
     assert out.endswith("word...")
-    assert len(out) <= svc.NOTE_MAX_CHARS + 3
+    assert len(out) <= rca_note.NOTE_MAX_CHARS + 3
 
 
 def test_truncate_hard_cuts_when_no_early_space():
-    out = svc._truncate("x" * 900)
-    assert out == "x" * svc.NOTE_MAX_CHARS + "..."
+    out = rca_note.truncate("x" * 900)
+    assert out == "x" * rca_note.NOTE_MAX_CHARS + "..."
 
 
 # --- _should_post -------------------------------------------------------------
@@ -132,36 +135,36 @@ def test_should_post_decodes_string_alert_metadata():
 
 
 def test_root_cause_is_the_second_paragraph():
-    assert svc._pick_root_cause_paragraph(SUMMARY) == ROOT_CAUSE
-    assert svc._pick_root_cause_paragraph(ROOT_CAUSE) == ROOT_CAUSE
+    assert rca_note.extract_note_body(SUMMARY)[0] == ROOT_CAUSE_BODY
+    assert rca_note.extract_note_body(ROOT_CAUSE)[0] == ROOT_CAUSE_BODY
 
 
 def test_unheaded_report_yields_root_cause_and_the_paragraph_after_it_as_impact():
-    assert svc._extract_note_body(REPORT) == (REPORT_ROOT_CAUSE, REPORT_IMPACT)
-    assert svc._pick_root_cause_paragraph(REPORT) == REPORT_ROOT_CAUSE
+    assert rca_note.extract_note_body(REPORT) == (REPORT_ROOT_CAUSE, REPORT_IMPACT)
+    assert rca_note.extract_note_body(REPORT)[0] == REPORT_ROOT_CAUSE
 
 
 def test_bold_headed_report_is_read_by_section_title():
-    assert svc._extract_note_body(HEADED_BOLD) == (REPORT_ROOT_CAUSE, REPORT_IMPACT)
+    assert rca_note.extract_note_body(HEADED_BOLD) == (REPORT_ROOT_CAUSE, REPORT_IMPACT)
 
 
 def test_markdown_headed_report_is_read_by_section_title():
-    root, impact = svc._extract_note_body(HEADED_MD)
+    root, impact = rca_note.extract_note_body(HEADED_MD)
     assert root.startswith("Root cause confirmed: This is a test or validation alert with no production impact. The alert references")
     assert root.endswith("does not exist in the infrastructure inventory.")
     assert impact == "No operational impact. The alert was triggered at 20:44:11 UTC and remains in triggered status."
 
 
 def test_two_paragraph_summary_has_no_impact():
-    assert svc._extract_note_body(SUMMARY) == (ROOT_CAUSE, "")
+    assert rca_note.extract_note_body(SUMMARY) == (ROOT_CAUSE_BODY, "")
 
 
 def test_bold_metadata_line_is_not_a_heading():
-    assert svc._heading_text("**2026-09-08 13:49:02 UTC | Critical | payments-api**") is None
-    assert svc._heading_text("**Root cause confirmed: nothing was deployed.**") is None
-    assert svc._heading_text("**Impact & Timeline**") == "impact & timeline"
-    assert svc._heading_text("### Root Cause") == "root cause"
-    assert svc._heading_text("Summary") == "summary"
+    assert rca_note.heading_text("**2026-09-08 13:49:02 UTC | Critical | payments-api**") is None
+    assert rca_note.heading_text("**Root cause confirmed: nothing was deployed.**") is None
+    assert rca_note.heading_text("**Impact & Timeline**") == "impact & timeline"
+    assert rca_note.heading_text("### Root Cause") == "root cause"
+    assert rca_note.heading_text("Summary") == "summary"
 
 
 def test_root_cause_undetermined_paragraph_is_preferred_wherever_it_sits():
@@ -171,18 +174,29 @@ def test_root_cause_undetermined_paragraph_is_preferred_wherever_it_sits():
         "Root cause undetermined. No checkout API service exists in any observable infrastructure.\n\n"
         "**Next Steps**\n\n- do something"
     )
-    assert svc._pick_root_cause_paragraph(text).startswith("Root cause undetermined.")
+    assert rca_note.extract_note_body(text)[0].startswith("Root cause undetermined.")
+
+
+def test_inline_section_labels_are_dropped_but_prose_openers_stay():
+    text = (
+        "Root Cause: the pool was exhausted after the deploy doubled the worker count without raising the limit.\n\n"
+        "Impact & Timeline: no production systems, users or services were affected during the window.\n\n"
+    )
+    root, impact = rca_note.extract_note_body(text)
+    assert root.startswith("the pool was exhausted")
+    assert impact.startswith("no production systems")
+    undetermined = "Root cause undetermined — no production incident occurred and nothing was deployed in the window."
+    assert rca_note.extract_note_body(undetermined)[0] == undetermined
 
 
 def test_bullet_sections_never_leak_when_no_prose_precedes_them():
-    assert svc._extract_note_body("## Ruled Out\n\n- **Hypothesis** — killed by evidence [1].\n") == ("", "")
+    assert rca_note.extract_note_body("## Ruled Out\n\n- **Hypothesis** — killed by evidence [1].\n") == ("", "")
 
 
 # --- _compose_note ------------------------------------------------------------
 
-def test_note_has_root_cause_impact_link_and_disclaimer(monkeypatch):
-    monkeypatch.setattr(svc, "FRONTEND_URL", "https://aurora.example.com/")
-    note = svc._compose_note("Because X.", "i1", "Nobody noticed.")
+def test_note_has_root_cause_impact_link_and_disclaimer():
+    note = rca_note.compose_note("Because X.", "i1", "Nobody noticed.", "https://aurora.example.com/")
     assert note == (
         "Aurora RCA\n\nRoot cause\nBecause X.\n\nImpact\nNobody noticed.\n\n"
         "Full investigation: https://aurora.example.com/incidents/i1\n\n"
@@ -190,16 +204,14 @@ def test_note_has_root_cause_impact_link_and_disclaimer(monkeypatch):
     )
 
 
-def test_note_omits_impact_block_when_none_was_found(monkeypatch):
-    monkeypatch.setattr(svc, "FRONTEND_URL", "https://aurora.example.com")
-    note = svc._compose_note("Because X.", "i1")
+def test_note_omits_impact_block_when_none_was_found():
+    note = rca_note.compose_note("Because X.", "i1", base_url="https://aurora.example.com")
     assert "Impact" not in note
     assert note.startswith("Aurora RCA\n\nRoot cause\nBecause X.\n\nFull investigation:")
 
 
-def test_note_omits_link_when_frontend_url_unset(monkeypatch):
-    monkeypatch.setattr(svc, "FRONTEND_URL", "")
-    note = svc._compose_note("Because X.", "i1")
+def test_note_omits_link_when_frontend_url_unset():
+    note = rca_note.compose_note("Because X.", "i1")
     assert "Full investigation" not in note
     assert "/incidents/" not in note
     assert note.endswith("Generated automatically by Aurora. Verify before acting.")
@@ -334,7 +346,7 @@ def test_happy_path_claims_posts_then_records(wired, monkeypatch):
     wired.client.create_note.assert_called_once()
     pd_incident_id, content = wired.client.create_note.call_args.args
     assert pd_incident_id == "PABC123"
-    assert content.startswith("Aurora RCA\n\nRoot cause\n" + ROOT_CAUSE + "\n\n")
+    assert content.startswith("Aurora RCA\n\nRoot cause\n" + ROOT_CAUSE_BODY + "\n\n")
     assert "Full investigation: http://localhost:3000/incidents/i1" in content
     assert content.endswith("Generated automatically by Aurora. Verify before acting.")
     assert "**" not in content
@@ -379,7 +391,7 @@ def test_unexpected_error_keeps_the_claim_and_does_not_raise(wired):
 
 
 def test_unresolvable_org_never_posts(wired, monkeypatch):
-    monkeypatch.setattr(svc, "set_rls_context", lambda *a, **k: None)
+    monkeypatch.setattr(postback_claim, "set_rls_context", lambda *a, **k: None)
     assert svc.send_pagerduty_incident_note("u1", _anchor()) is False
     wired.client.create_note.assert_not_called()
 

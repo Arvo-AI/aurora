@@ -5,6 +5,7 @@ from psycopg2 import DatabaseError
 from dotenv import load_dotenv
 import os
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 
 # Load environment variables
 load_dotenv()
@@ -345,7 +346,6 @@ def initialize_tables():
                         is_archived BOOLEAN DEFAULT false,
                         channel_type VARCHAR(20) DEFAULT 'unknown',
                         detected_platform VARCHAR(40),
-                        is_dismissed BOOLEAN DEFAULT false,
                         metadata_summary TEXT,
                         metadata_status VARCHAR(20) DEFAULT 'pending',
                         channel_data JSONB,
@@ -785,6 +785,7 @@ def initialize_tables():
                          slack_message_ts VARCHAR(50),
                          google_chat_message_name VARCHAR(255),
                          pagerduty_note_id VARCHAR(64),
+                         incidentio_update_id VARCHAR(64),
                          active_tab VARCHAR(10) DEFAULT 'thoughts',
                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1809,22 +1810,15 @@ def initialize_tables():
                 )
                 conn.rollback()
 
-            # Migration: Add is_dismissed to slack_channels so users can hide
-            # irrelevant channels from routing/UI without leaving them on Slack.
-            # Dismissed channels are also not re-added by auto-register/refresh.
-            try:
-                cursor.execute(
-                    "ALTER TABLE slack_channels ADD COLUMN IF NOT EXISTS is_dismissed BOOLEAN DEFAULT FALSE;"
-                )
-                conn.commit()
-                logging.info(
-                    "Ensured is_dismissed column exists on slack_channels table."
-                )
-            except Exception as e:
-                logging.warning(
-                    f"Error adding is_dismissed column to slack_channels: {e}"
-                )
-                conn.rollback()
+            # NOTE: The slack_channels.is_dismissed column is now unused —
+            # channel membership is the single source of truth (a channel is
+            # Active iff Aurora is a member of it), so the old "dismiss without
+            # leaving" flag no longer exists. We intentionally do NOT drop it here
+            # yet: dropping a column at startup breaks any still-running pods from
+            # the previous release during a rolling deploy (their INSERT/SELECT of
+            # is_dismissed would error until the rollout completes). Leaving the
+            # column in place is harmless (nothing reads or writes it). Drop it in
+            # a follow-up release once all pods are on this version.
 
             # Migration: Bitbucket Incident Prevention (DEV-1439).
             # - webhook_hook_uuid: the Bitbucket repo hook UUID (when Aurora
@@ -2468,6 +2462,20 @@ def initialize_tables():
                 conn.commit()
             except Exception:
                 logging.exception("Failed to add pagerduty_note_id column to incidents")
+                conn.rollback()
+
+            # Add incidentio_update_id column to incidents: id of the RCA update posted
+            # back to the incident.io incident ('pending' while a post is in flight)
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS incidentio_update_id VARCHAR(64);
+                    """
+                )
+                conn.commit()
+            except Exception:
+                logging.exception("Failed to add incidentio_update_id column to incidents")
                 conn.rollback()
 
             # Migration: Add active_tab column to incidents for UI state persistence
@@ -3218,6 +3226,69 @@ def initialize_tables():
                 logging.warning(f"Error adding users.org_id FK: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_org_fk")
 
+            # Migration: normalize users.email to lowercase and enforce
+            # case-insensitive uniqueness. Login matched email case-sensitively
+            # while registration stored a lowercased copy, so a user typing any
+            # capitalization got "Invalid credentials" and could then register a
+            # duplicate row. Enforced in the DB so no code path can reintroduce it.
+            try:
+                cursor.execute("SAVEPOINT sp_email_ci")
+
+                # Skip rows that would collide — genuine duplicates are reported
+                # below, never merged, since picking a winner discards an account.
+                cursor.execute("""
+                    UPDATE users u
+                    SET email = LOWER(u.email)
+                    WHERE u.email <> LOWER(u.email)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM users o
+                          WHERE o.id <> u.id AND LOWER(o.email) = LOWER(u.email)
+                      );
+                """)
+                if cursor.rowcount:
+                    logging.info(
+                        "Normalized %d mixed-case user email(s) to lowercase.",
+                        cursor.rowcount,
+                    )
+
+                # Surface any remaining collisions for manual reconciliation.
+                cursor.execute("""
+                    SELECT LOWER(email), COUNT(*) FROM users
+                    GROUP BY LOWER(email) HAVING COUNT(*) > 1;
+                """)
+                dupes = cursor.fetchall()
+                for norm_email, dupe_count in dupes:
+                    logging.error(
+                        "Duplicate accounts share email %s (%d rows). "
+                        "Case-insensitive unique index NOT applied. Reconcile these "
+                        "accounts manually, then restart to enforce uniqueness.",
+                        # /register does not validate email format, so a stored
+                        # address can carry newlines and forge log lines here.
+                        sanitize(norm_email), dupe_count,
+                    )
+
+                # Only safe to add the unique index once no collisions remain —
+                # creating it with duplicates present would fail the whole
+                # migration and, worse, imply the data is already clean.
+                if not dupes:
+                    cursor.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower "
+                        "ON users (LOWER(email));"
+                    )
+                    logging.info("Enforced case-insensitive uniqueness on users.email.")
+
+                cursor.execute("RELEASE SAVEPOINT sp_email_ci")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error normalizing user emails: {e}")
+                # Defensive: if the transaction is already aborted the rollback
+                # itself raises, which at boot would take the whole server down
+                # over a non-critical migration.
+                try:
+                    cursor.execute("ROLLBACK TO SAVEPOINT sp_email_ci")
+                except Exception:
+                    logging.debug("ROLLBACK TO SAVEPOINT also failed for sp_email_ci")
+
             # Backfill org_id on all data tables — single source of truth
             # in utils/db/org_backfill.py.  Covers user-scoped tables (dynamic
             # discovery) AND incident child tables (via incident_id FK).
@@ -3404,6 +3475,24 @@ def initialize_tables():
             except Exception as e:
                 conn.rollback()
                 raise RuntimeError("Required email verification migration failed") from e
+
+            # Migration: Add password reset columns to users table.
+            # Mirrors the email_verification_* columns — a hashed one-time code,
+            # its expiry, and an attempt counter so a stolen code can't be
+            # brute-forced. Non-fatal: a deployment missing these columns should
+            # lose "forgot password", not fail to boot.
+            try:
+                cursor.execute("""
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_code VARCHAR(64);
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_code_expires_at TIMESTAMP;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_attempts INTEGER DEFAULT 0;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_attempts_at TIMESTAMP;
+                """)
+                conn.commit()
+                logging.info("Ensured password reset columns exist on users table.")
+            except Exception as e:
+                logging.warning("Error adding password reset columns to users: %s", e)
+                conn.rollback()
 
             # Create k8s_clusters view (after org_id migration so the column exists)
             # DROP first because CREATE OR REPLACE VIEW cannot remove columns from an existing view

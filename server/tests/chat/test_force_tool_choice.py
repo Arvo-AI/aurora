@@ -133,3 +133,156 @@ def test_uses_model_request_override_when_available(force_tool_module):
     assert patched is not request
     assert patched.tool_choice == "trigger_rca"
     assert request.tool_choice is None
+
+
+# ---------------------------------------------------------------------------
+# Fallback for models that reject a forced tool_choice (Opus 5.5, Fable 5.1)
+# ---------------------------------------------------------------------------
+
+_REJECTION = (
+    'Error code: 400 - tool_choice: type "tool" and "any" are not supported '
+    "for this model."
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_unsupported_cache(force_tool_module):
+    """The rejection cache is module-global; isolate it between tests."""
+    force_tool_module._FORCE_UNSUPPORTED.clear()
+    yield
+    force_tool_module._FORCE_UNSUPPORTED.clear()
+
+
+def _messages_request(model=None):
+    return SimpleNamespace(model=model, tool_choice=None, messages=["original"])
+
+
+def test_falls_back_to_auto_when_model_rejects_forcing(force_tool_module):
+    """Opus 5.5 rejects forcing; Trigger RCA must still reach the tool, not 400."""
+    calls = []
+
+    def call_next(request):
+        calls.append(request.tool_choice)
+        # First (forced) attempt is what the provider rejects.
+        if request.tool_choice != "auto":
+            raise RuntimeError(_REJECTION)
+        return "ok"
+
+    request = _messages_request(_model("ChatAnthropic", "langchain_anthropic.chat_models",
+                                      model_name="claude-opus-5-5"))
+    middleware = force_tool_module.ForceToolChoice("trigger_rca", provider="anthropic")
+
+    assert middleware.wrap_model_call(request, call_next) == "ok"
+    assert calls == [{"type": "tool", "name": "trigger_rca"}, "auto"]
+
+
+def test_fallback_appends_prompt_directive_naming_the_tool(force_tool_module):
+    """Without a forced tool_choice the instruction has to be in the prompt."""
+    seen = {}
+
+    def call_next(request):
+        if request.tool_choice != "auto":
+            raise RuntimeError(_REJECTION)
+        seen["messages"] = request.messages
+        return "ok"
+
+    request = _messages_request(_model("ChatAnthropic", "langchain_anthropic.chat_models",
+                                      model_name="claude-opus-5-5"))
+    force_tool_module.ForceToolChoice("trigger_rca", provider="anthropic").wrap_model_call(
+        request, call_next
+    )
+
+    assert seen["messages"][0] == "original"
+    assert "trigger_rca" in str(seen["messages"][-1].content)
+
+
+def test_rejection_is_remembered_so_later_runs_skip_the_400(force_tool_module):
+    """Second invocation for the same model must not repeat the wasted call."""
+    model = _model("ChatAnthropic", "langchain_anthropic.chat_models",
+                   model_name="claude-opus-5-5")
+
+    def call_next(request):
+        if request.tool_choice != "auto":
+            raise RuntimeError(_REJECTION)
+        return "ok"
+
+    force_tool_module.ForceToolChoice("trigger_rca", provider="anthropic").wrap_model_call(
+        _messages_request(model), call_next
+    )
+
+    attempts = []
+
+    def counting_call_next(request):
+        attempts.append(request.tool_choice)
+        return "ok"
+
+    force_tool_module.ForceToolChoice("trigger_rca", provider="anthropic").wrap_model_call(
+        _messages_request(model), counting_call_next
+    )
+
+    assert attempts == ["auto"], "forced attempt should be skipped after a known rejection"
+
+
+def test_unrelated_errors_are_not_swallowed(force_tool_module):
+    """Only tool_choice rejections trigger the fallback — everything else propagates."""
+    def call_next(request):
+        raise RuntimeError("Error code: 429 - rate limit exceeded")
+
+    request = _messages_request()
+    middleware = force_tool_module.ForceToolChoice("trigger_rca", provider="anthropic")
+
+    with pytest.raises(RuntimeError, match="rate limit"):
+        middleware.wrap_model_call(request, call_next)
+
+
+def test_supported_model_still_gets_a_hard_forced_tool_choice(force_tool_module):
+    """No behaviour change for Sonnet 5 and friends: one call, forced."""
+    calls = []
+
+    def call_next(request):
+        calls.append(request.tool_choice)
+        return "ok"
+
+    request = _messages_request(_model("ChatAnthropic", "langchain_anthropic.chat_models",
+                                      model_name="claude-sonnet-5"))
+    force_tool_module.ForceToolChoice("trigger_rca", provider="anthropic").wrap_model_call(
+        request, call_next
+    )
+
+    assert calls == [{"type": "tool", "name": "trigger_rca"}]
+
+
+def test_later_turns_pass_through_untouched(force_tool_module):
+    """The middleware forces only the first turn, then steps aside."""
+    calls = []
+
+    def call_next(request):
+        calls.append(request.tool_choice)
+        return "ok"
+
+    middleware = force_tool_module.ForceToolChoice("trigger_rca", provider="anthropic")
+    middleware.wrap_model_call(_messages_request(), call_next)
+    middleware.wrap_model_call(_messages_request(), call_next)
+
+    assert calls == [{"type": "tool", "name": "trigger_rca"}, None]
+
+
+def test_async_path_falls_back_the_same_way(force_tool_module):
+    # asyncio.run rather than pytest-asyncio: the CI test env installs neither
+    # pytest-asyncio nor anyio, and pytest.ini runs with --strict-markers.
+    import asyncio
+
+    calls = []
+
+    async def call_next(request):
+        calls.append(request.tool_choice)
+        if request.tool_choice != "auto":
+            raise RuntimeError(_REJECTION)
+        return "ok"
+
+    request = _messages_request(_model("ChatAnthropic", "langchain_anthropic.chat_models",
+                                      model_name="claude-opus-5-5"))
+    middleware = force_tool_module.ForceToolChoice("trigger_rca", provider="anthropic")
+
+    assert asyncio.run(middleware.awrap_model_call(request, call_next)) == "ok"
+    assert calls == [{"type": "tool", "name": "trigger_rca"}, "auto"]

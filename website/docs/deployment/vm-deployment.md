@@ -139,7 +139,7 @@ RCA_MODEL=google/gemini-2.5-flash
 SUMMARIZATION_MODEL=google/gemini-2.5-flash
 
 # Example: Anthropic (default, no need to set explicitly)
-MAIN_MODEL=anthropic/claude-sonnet-4.6
+MAIN_MODEL=anthropic/claude-opus-5.5
 RCA_MODEL=anthropic/claude-haiku-4.5
 ```
 

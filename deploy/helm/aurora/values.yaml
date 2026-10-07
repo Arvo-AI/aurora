@@ -22,6 +22,23 @@ fullnameOverride: ""
 services:
   postgres:
     enabled: true    # Set false to use external Postgres (RDS, Cloud SQL, etc.)
+    # max_connections for the in-cluster Postgres (postgres:15-alpine ships 100).
+    # Every Aurora Python process opens its own pool of up to config.DB_POOL_MAX
+    # connections, so the worst case the configured pods can open is:
+    #   server pods  x GUNICORN_WORKERS   x (DB_POOL_MAX + 15)   # +15 for the RBAC engine
+    # + worker pods  x CELERY_CONCURRENCY x DB_POOL_MAX
+    # + chatbot pods x DB_POOL_MAX + celery-beat x DB_POOL_MAX + mcp x 10
+    # With the config defaults (2 workers, pool 20, concurrency 4) one replica of
+    # each is 200, two server + two worker replicas is 350 and 3 + 3 is 500. The
+    # chart refuses to render when that worst case exceeds maxConnections, so
+    # raise it here before adding replicas or enabling autoscaling, and size
+    # resources.postgres.limits.memory with it (about 10Mi per connection on top
+    # of shared_buffers). Changing it restarts the Postgres pod once. Ignored
+    # when services.postgres.enabled is false: set max_connections on your
+    # managed Postgres instead.
+    maxConnections: 300
+    # Extra "postgres -c key=value" style arguments, e.g. ["-c", "shared_buffers=256MB"]
+    extraArgs: []
   redis:
     enabled: true    # Set false to use external Redis (ElastiCache, Memorystore, etc.)
   vault:
@@ -30,6 +47,33 @@ services:
     enabled: true    # Set false if graph features are not needed
   minio:
     enabled: false   # Set true for local dev (provides S3-compatible storage in-cluster)
+    # minio/minio was pulled from Docker Hub in Sept 2026. pgsty/silo is a
+    # maintained fork of its final release: same S3 API, MINIO_* vars, and
+    # on-disk format, so existing volumes need no migration.
+    # Digest-pinned because Docker Hub tags are mutable.
+    image:
+      repository: docker.io/pgsty/silo
+      # digest wins: to move to another tag, set it AND clear digest to "".
+      tag: "RELEASE.2026-09-16T00-00-00Z"
+      # Multi-arch index (linux/amd64 + linux/arm64) for the tag above.
+      digest: "sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46"
+    # Bucket-creation hook. aws-cli, not minio/mc — that was deleted too.
+    initImage: "amazon/aws-cli:2.34.6"
+
+# ------------------------------------------------------------------------------
+# Slack Socket Mode (optional)
+# ------------------------------------------------------------------------------
+# Socket Mode runs a listener that opens an OUTBOUND WebSocket to Slack, so
+# Slack events/interactions work with NO public inbound webhook URL — the path
+# for private / self-hosted clusters. The listener deployment renders when
+# either of these is true:
+#   - slackSocketMode.enabled: true, OR
+#   - secrets.backend.SLACK_APP_TOKEN is set inline (see secrets.backend below).
+# If you provide the app token via an EXISTING SECRET (secrets.backend.existingSecret),
+# the chart can't see the value, so you MUST set slackSocketMode.enabled: true to
+# render the listener. The secret must contain SLACK_APP_TOKEN (xapp-...).
+slackSocketMode:
+  enabled: false
 
 # ------------------------------------------------------------------------------
 # ServiceAccount configuration
@@ -101,18 +145,57 @@ frontendImage: {}
 # ------------------------------------------------------------------------------
 # Autoscaling (HPA)
 # ------------------------------------------------------------------------------
+# Every extra server or worker replica adds GUNICORN_WORKERS x (DB_POOL_MAX + 15)
+# or CELERY_CONCURRENCY x DB_POOL_MAX Postgres connections. With the config
+# defaults, maxReplicas 3 + 3 can open ~500, so raise
+# services.postgres.maxConnections (and the Postgres memory limit) first:
+# helm refuses to render when the worst case for maxReplicas exceeds it.
 autoscaling:
   server:
     enabled: false
     minReplicas: 2
-    maxReplicas: 6
+    maxReplicas: 3
     targetCPU: 70
     targetMemory:         # optional — set to e.g. 80 to also scale on memory
   celeryWorker:
     enabled: false
     minReplicas: 2
-    maxReplicas: 6
+    maxReplicas: 3
     targetCPU: 70
+
+# ------------------------------------------------------------------------------
+# API server probes
+# ------------------------------------------------------------------------------
+# Liveness is a TCP check on port 5080 by default: a saturated pod (every
+# gunicorn thread busy with requests or SSE streams) is not restarted, readiness
+# takes it out of the Service until it drains. server.probes.liveness.type: http
+# instead restarts a pod that cannot answer GET /health/liveness (which needs a
+# free thread) for failureThreshold x periodSeconds.
+# /health/readiness checks Postgres + Redis with short bounded waits and reports
+# a busy connection pool as degraded (HTTP 200) instead of 503, so a busy pool
+# alone never takes the pod out of the Service; only a pod with no free thread
+# for failureThreshold x timeoutSeconds is.
+server:
+  probes:
+    startup:
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 30
+    readiness:
+      periodSeconds: 10
+      timeoutSeconds: 10
+      failureThreshold: 3
+    liveness:
+      # "tcp" (default) = restart only when port 5080 stops accepting
+      # connections; gunicorn's own --timeout replaces a worker whose main loop
+      # hangs. "http" = GET /health/liveness, which needs a free gunicorn
+      # thread, so a pod saturated by an alert burst is restarted after
+      # failureThreshold x periodSeconds instead of being left to drain.
+      type: tcp
+      periodSeconds: 20
+      timeoutSeconds: 10
+      failureThreshold: 6
 
 # ------------------------------------------------------------------------------
 # Extra environment variables (for marketplace metering, custom integrations, etc.)
@@ -235,11 +318,24 @@ config:
   GUARDRAILS_LLM_MODEL: ""
 
   # --- Concurrency & Pool Sizing ---
+  # Each of GUNICORN_WORKERS and CELERY_CONCURRENCY is a separate process with
+  # its own DB_POOL_MAX-sized pool, and this config reaches every pod (server,
+  # worker, chatbot, beat), so size Postgres for all of them: see
+  # services.postgres.maxConnections. A request that finds its pool empty waits
+  # DB_POOL_WAIT_TIMEOUT seconds before failing; the readiness probe waits 1s
+  # and reports "degraded" instead. DB_CONNECT_TIMEOUT bounds the TCP connect
+  # to Postgres so an unreachable database fails fast instead of hanging threads.
+  # Incident SSE streams (one per open Incidents tab; each pins a thread for
+  # its lifetime) are capped per server process at SSE_MAX_STREAMS_PER_PROCESS,
+  # never more than GUNICORN_THREADS - 2; extra tabs are told to retry in 15s.
   GUNICORN_WORKERS: "2"
   GUNICORN_THREADS: "32"
   CELERY_CONCURRENCY: "4"
   DB_POOL_MIN: "2"
   DB_POOL_MAX: "20"
+  DB_POOL_WAIT_TIMEOUT: "5"
+  DB_CONNECT_TIMEOUT: "10"
+  SSE_MAX_STREAMS_PER_PROCESS: "8"
 
   # --- Performance & Caching ---
   AURORA_SETUP_CACHE_ENABLED: "true"
@@ -310,7 +406,6 @@ config:
   NEXT_PUBLIC_ENABLE_OVH: "false"            # OVH Cloud integration
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: "false" # PagerDuty integration
   NEXT_PUBLIC_ENABLE_SHAREPOINT: "false"     # SharePoint integration
-  NEXT_PUBLIC_ENABLE_JIRA: "false"           # Jira integration
   NEXT_PUBLIC_ENABLE_NOTION: "false"         # Notion integration
   NEXT_PUBLIC_ENABLE_SPINNAKER: "false"      # Spinnaker integration
   NEXT_PUBLIC_ENABLE_VISUALIZATION: "false"  # Incident infra visualization UI (pairs with VISUALIZATION_ENABLED)
@@ -386,6 +481,14 @@ secrets:
     SLACK_CLIENT_ID: ""          # Get from: https://api.slack.com/apps
     SLACK_CLIENT_SECRET: ""
     SLACK_SIGNING_SECRET: ""
+    # Socket Mode: for private/self-hosted clusters with NO public webhook URL.
+    # Set SLACK_APP_TOKEN to an app-level token (xapp-...) with connections:write
+    # to make Aurora open an outbound WebSocket to Slack (no ingress/TLS endpoint
+    # needed) and render the slack-socket-mode deployment. Leave empty for HTTP
+    # webhooks. Also enable Socket Mode in the Slack app config. If you supply this
+    # token via existingSecret instead of inline, set slackSocketMode.enabled: true
+    # (above) so the listener still renders.
+    SLACK_APP_TOKEN: ""
 
     # --- Optional: Google Chat Integration ---
     GOOGLE_CHAT_CLIENT_ID: ""              # OAuth client ID (for setup flow)
@@ -566,6 +669,15 @@ resources:
     limits:
       cpu: "500m"
       memory: "512Mi"
+  # Slack Socket Mode listener: lightweight, just holds a WebSocket and
+  # dispatches events into the same background chat pipeline as the webhook.
+  slackSocketMode:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "300m"
+      memory: "512Mi"
   chatbot:
     requests:
       cpu: "200m"
@@ -621,13 +733,16 @@ resources:
       memory: "256Mi"
       ephemeral-storage: "1Gi"
   postgres:
+    # Each open connection is a Postgres backend (~5-10Mi); size the limit for
+    # services.postgres.maxConnections on top of shared_buffers (128MB on this
+    # image) so a busy hour cannot OOMKill the database.
     requests:
       cpu: "100m"
-      memory: "512Mi"
+      memory: "1Gi"
       ephemeral-storage: "50Mi"
     limits:
-      cpu: "500m"
-      memory: "1Gi"
+      cpu: "1000m"
+      memory: "2Gi"
       ephemeral-storage: "1Gi"
   minio:
     requests:

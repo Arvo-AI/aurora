@@ -8,13 +8,19 @@ import os
 import re
 from typing import Any, Dict, Optional
 
-import requests
 from flask import Blueprint, jsonify, request
 
+from routes.incidentio.incidentio_client import (
+    IncidentioAPIError,
+    IncidentioClient,
+    postback_can_enable,
+)
 from routes.incidentio.tasks import (
     process_incidentio_event,
     get_org_severities,
+    get_postback_access,
     invalidate_org_severity_cache,
+    invalidate_postback_access_cache,
     _get_org_severity_ranks,
 )
 from utils.db.connection_pool import db_pool
@@ -27,9 +33,6 @@ from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.secrets.secret_ref_utils import delete_user_secret
 
-INCIDENTIO_API_BASE = "https://api.incident.io/v2"
-INCIDENTIO_TIMEOUT = 15
-
 _SAFE_LOG_RE = re.compile(r"[^a-zA-Z0-9._\-]")
 
 logger = logging.getLogger(__name__)
@@ -40,141 +43,6 @@ incidentio_bp = Blueprint("incidentio", __name__)
 def _sanitize_for_log(value: str, max_len: int = 80) -> str:
     """Strip any character that isn't alphanumeric, dot, dash, or underscore."""
     return _SAFE_LOG_RE.sub("", value)[:max_len]
-
-
-class IncidentioAPIError(Exception):
-    """Error codes avoid leaking HTTP response bodies through str(exc)."""
-    INVALID_KEY = "invalid_key"
-    FORBIDDEN = "forbidden"
-    TIMEOUT = "timeout"
-    UNREACHABLE = "unreachable"
-    API_ERROR = "api_error"
-
-    _USER_MESSAGES = {
-        INVALID_KEY: "Invalid API key",
-        FORBIDDEN: "API key lacks required permissions",
-        TIMEOUT: "Connection to incident.io timed out",
-        UNREACHABLE: "Unable to reach incident.io API",
-        API_ERROR: "Failed to validate API key with incident.io",
-    }
-
-    def __init__(self, code: str):
-        self.code = code
-        super().__init__(self._USER_MESSAGES.get(code, self._USER_MESSAGES[self.API_ERROR]))
-
-
-class IncidentioClient:
-    """Client for the incident.io REST API."""
-
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-
-    @property
-    def headers(self) -> Dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-
-    def _request(self, method: str, path: str, **kwargs) -> requests.Response:
-        url = f"{INCIDENTIO_API_BASE}{path}"
-        try:
-            response = requests.request(
-                method, url, headers=self.headers, timeout=INCIDENTIO_TIMEOUT, **kwargs
-            )
-            response.raise_for_status()
-            return response
-        except requests.exceptions.Timeout:
-            raise IncidentioAPIError(IncidentioAPIError.TIMEOUT)
-        except requests.exceptions.ConnectionError:
-            raise IncidentioAPIError(IncidentioAPIError.UNREACHABLE)
-        except requests.HTTPError as exc:
-            status = exc.response.status_code if exc.response is not None else None
-            logger.warning("[INCIDENTIO] HTTP %s from %s", status, path)
-            if status == 401:
-                raise IncidentioAPIError(IncidentioAPIError.INVALID_KEY)
-            if status == 403:
-                raise IncidentioAPIError(IncidentioAPIError.FORBIDDEN)
-            raise IncidentioAPIError(IncidentioAPIError.API_ERROR)
-
-    def list_incidents(self, page_size: int = 5) -> Dict[str, Any]:
-        return self._request("GET", "/incidents", params={"page_size": page_size}).json()
-
-    def get_incident(self, incident_id: str) -> Dict[str, Any]:
-        return self._request("GET", f"/incidents/{incident_id}").json()
-
-    def get_incident_updates(self, incident_id: str) -> Dict[str, Any]:
-        return self._request("GET", "/incident_updates", params={"incident_id": incident_id}).json()
-
-    def post_incident_update(self, incident_id: str, message: str) -> Dict[str, Any]:
-        return self._request(
-            "POST",
-            "/incident_updates",
-            json={"incident_id": incident_id, "message": message},
-        ).json()
-
-    def list_alert_priorities(self) -> Dict[str, Any]:
-        """Fetch the org's *alert priorities* as {name, rank} entries.
-
-        Alerts are categorized by priority, which incident.io models as a
-        ranked Catalog type named "AlertPriority" (entries like "Urgent",
-        "In-hours"). Higher rank = more urgent. We first resolve the catalog
-        type id (org-specific), then page through its entries.
-
-        Returns {"severities": [{"name": str, "rank": int}, ...]} to match the
-        shape the caller expects. Raises IncidentioAPIError on API failure.
-        """
-        # Find the AlertPriority catalog type — its id is org-specific. Orgs
-        # with many catalog types paginate, so page through until we find it
-        # rather than reading only the first page (else priority filtering is
-        # silently disabled for orgs where AlertPriority isn't on page 1).
-        type_id = None
-        after = None
-        for _ in range(20):  # hard cap: 20 pages × 250 = 5000 types
-            params: Dict[str, Any] = {"page_size": 250}
-            if after:
-                params["after"] = after
-            types = self._request("GET", "/catalog_types", params=params).json()
-            batch = types.get("catalog_types", []) or []
-            type_id = next(
-                (t.get("id") for t in batch if t.get("type_name") == "AlertPriority"),
-                None,
-            )
-            if type_id:
-                break
-            after = (types.get("pagination_meta") or {}).get("after")
-            # incident.io returns `after` even on the final page, so stop when a
-            # page came back short (fewer than page_size) or empty.
-            if len(batch) < 250 or not after:
-                break
-
-        # Org has no alert-priority catalog configured — nothing to rank by.
-        if not type_id:
-            return {"severities": []}
-
-        # Page through the catalog entries (page_size is required by the API).
-        entries: list = []
-        after = None
-        for _ in range(20):  # hard cap: 20 pages × 250 = 5000 entries
-            params: Dict[str, Any] = {"catalog_type_id": type_id, "page_size": 250}
-            if after:
-                params["after"] = after
-            page = self._request("GET", "/catalog_entries", params=params).json()
-            batch = page.get("catalog_entries", []) or []
-            entries.extend(batch)
-            after = (page.get("pagination_meta") or {}).get("after")
-            # incident.io returns `after` even on the final page, so stop when a
-            # page came back short (fewer than page_size) or empty.
-            if len(batch) < 250 or not after:
-                break
-
-        severities = [
-            {"name": e.get("name"), "rank": e.get("rank")}
-            for e in entries
-            if isinstance(e.get("name"), str) and isinstance(e.get("rank"), int)
-        ]
-        return {"severities": severities}
 
 
 def _get_stored_credentials(user_id: str) -> Optional[Dict[str, Any]]:
@@ -223,6 +91,7 @@ def connect(user_id):
     # New/rotated key may have different scopes — drop any cached catalog so
     # the next fetch reflects this key's actual permissions.
     invalidate_org_severity_cache(user_id)
+    invalidate_postback_access_cache(user_id)
 
     return jsonify({"success": True, "connected": True})
 
@@ -260,6 +129,7 @@ def disconnect(user_id):
 
         # Clear cached severity catalog so a future reconnect re-fetches.
         invalidate_org_severity_cache(user_id)
+        invalidate_postback_access_cache(user_id)
 
         logger.info("[INCIDENTIO] Disconnected user %s", user_id)
         return jsonify({"success": True, "message": "incident.io disconnected successfully"})
@@ -442,23 +312,33 @@ def list_org_severities(user_id):
     return jsonify(result)
 
 
+def _rca_settings_payload(
+    user_id: str,
+    access: Optional[Dict[str, Any]] = None,
+    *,
+    postback_refused: bool = False,
+) -> Dict[str, Any]:
+    if access is None:
+        access = get_postback_access(user_id)
+    payload = {
+        "rcaEnabled": get_user_preference(user_id, "incidentio_rca_enabled", default=True),
+        "postbackEnabled": get_user_preference(user_id, "incidentio_postback_enabled", default=False),
+        "alertRcaEnabled": get_user_preference(user_id, "incidentio_alert_rca_enabled", default=True),
+        "alertMinSeverity": get_user_preference(user_id, "incidentio_alert_min_severity", default="low"),
+        "alertSeverityAllowlist": get_user_preference(
+            user_id, "incidentio_alert_severity_allowlist", default=None
+        ),
+        "postbackAccess": access,
+    }
+    if postback_refused:
+        payload["postbackRefused"] = True
+    return payload
+
+
 @incidentio_bp.route("/rca-settings", methods=["GET"])
 @require_permission("connectors", "read")
 def get_rca_settings(user_id):
-    rca_enabled = get_user_preference(user_id, "incidentio_rca_enabled", default=True)
-    postback_enabled = get_user_preference(user_id, "incidentio_postback_enabled", default=False)
-    alert_rca_enabled = get_user_preference(user_id, "incidentio_alert_rca_enabled", default=True)
-    alert_min_severity = get_user_preference(user_id, "incidentio_alert_min_severity", default="low")
-    alert_severity_allowlist = get_user_preference(
-        user_id, "incidentio_alert_severity_allowlist", default=None
-    )
-    return jsonify({
-        "rcaEnabled": rca_enabled,
-        "postbackEnabled": postback_enabled,
-        "alertRcaEnabled": alert_rca_enabled,
-        "alertMinSeverity": alert_min_severity,
-        "alertSeverityAllowlist": alert_severity_allowlist,
-    })
+    return jsonify(_rca_settings_payload(user_id))
 
 
 # Severity labels accepted by the alert RCA filter (normalized values only).
@@ -478,6 +358,9 @@ def update_rca_settings(user_id):
     alert_rca_enabled = data.get("alertRcaEnabled")
     alert_min_severity = data.get("alertMinSeverity")
     alert_severity_allowlist = data.get("alertSeverityAllowlist")
+    # Reused in the response so a refused enable doesn't call identity twice.
+    access = None
+    postback_refused = False
 
     if rca_enabled is not None:
         if not isinstance(rca_enabled, bool):
@@ -487,7 +370,16 @@ def update_rca_settings(user_id):
     if postback_enabled is not None:
         if not isinstance(postback_enabled, bool):
             return jsonify({"error": "postbackEnabled must be a boolean"}), 400
-        store_user_preference(user_id, "incidentio_postback_enabled", postback_enabled)
+        # Turning on with a key that can write nowhere would silently drop every RCA.
+        if postback_enabled:
+            access = get_postback_access(user_id)
+            if not postback_can_enable(access):
+                postback_refused = True
+                logger.info("[INCIDENTIO] Post-back left off: API key cannot write incidents or alerts")
+            else:
+                store_user_preference(user_id, "incidentio_postback_enabled", value=True)
+        else:
+            store_user_preference(user_id, "incidentio_postback_enabled", value=False)
 
     if alert_rca_enabled is not None:
         if not isinstance(alert_rca_enabled, bool):
@@ -539,13 +431,4 @@ def update_rca_settings(user_id):
             normalized or None,
         )
 
-    return jsonify({
-        "success": True,
-        "rcaEnabled": get_user_preference(user_id, "incidentio_rca_enabled", default=True),
-        "postbackEnabled": get_user_preference(user_id, "incidentio_postback_enabled", default=False),
-        "alertRcaEnabled": get_user_preference(user_id, "incidentio_alert_rca_enabled", default=True),
-        "alertMinSeverity": get_user_preference(user_id, "incidentio_alert_min_severity", default="low"),
-        "alertSeverityAllowlist": get_user_preference(
-            user_id, "incidentio_alert_severity_allowlist", default=None
-        ),
-    })
+    return jsonify({"success": True, **_rca_settings_payload(user_id, access, postback_refused=postback_refused)})

@@ -14,8 +14,55 @@ load_dotenv()
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# How long to wait for a connection before giving up (seconds)
+# How long a caller waits for a pooled connection before giving up (seconds).
+# DB_POOL_WAIT_TIMEOUT tunes it per deployment; the readiness probe passes its
+# own, shorter value to get_connection().
 _POOL_WAIT_TIMEOUT = 5.0
+
+
+def _env_number(name, default, cast):
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return cast(raw)
+    except (TypeError, ValueError):
+        logger.warning("%s=%r is not a number; using %s", name, raw, default)
+        return default
+
+
+def _pool_wait_timeout() -> float:
+    return _env_number('DB_POOL_WAIT_TIMEOUT', _POOL_WAIT_TIMEOUT, float)
+
+
+def _connect_kwargs_from_env() -> dict:
+    """psycopg2 connection parameters from the POSTGRES_* environment.
+
+    ``connect_timeout`` (DB_CONNECT_TIMEOUT, default 10s) makes an unreachable
+    Postgres fail fast instead of hanging a request thread, and the readiness
+    probe behind it, on TCP connect. The TCP keepalives let the kernel notice
+    a dead peer, so a connection stuck on a hung Postgres or a dropped network
+    path errors out and leaves the pool instead of being held forever.
+    """
+    params = {
+        'dbname': os.getenv('POSTGRES_DB'),
+        'user': os.getenv('POSTGRES_USER'),
+        'password': os.getenv('POSTGRES_PASSWORD'),
+        'host': os.getenv('POSTGRES_HOST'),
+        'port': int(os.getenv('POSTGRES_PORT')),
+        'connect_timeout': _env_number('DB_CONNECT_TIMEOUT', 10, int),
+        'keepalives': 1,
+        'keepalives_idle': 30,
+        'keepalives_interval': 10,
+        'keepalives_count': 3,
+    }
+    pg_sslmode = os.getenv('POSTGRES_SSLMODE', 'prefer')
+    if pg_sslmode:
+        params['sslmode'] = pg_sslmode
+        pg_sslrootcert = os.getenv('POSTGRES_SSLROOTCERT')
+        if pg_sslrootcert:
+            params['sslrootcert'] = pg_sslrootcert
+    return params
 
 
 class DatabaseConnectionPool:
@@ -36,19 +83,7 @@ class DatabaseConnectionPool:
             return
 
         # Unified database configuration using POSTGRES_* env vars
-        self.db_params = {
-            'dbname': os.getenv('POSTGRES_DB'),
-            'user': os.getenv('POSTGRES_USER'),
-            'password': os.getenv('POSTGRES_PASSWORD'),
-            'host': os.getenv('POSTGRES_HOST'),
-            'port': int(os.getenv('POSTGRES_PORT'))
-        }
-        pg_sslmode = os.getenv('POSTGRES_SSLMODE', 'prefer')
-        if pg_sslmode:
-            self.db_params['sslmode'] = pg_sslmode
-            pg_sslrootcert = os.getenv('POSTGRES_SSLROOTCERT')
-            if pg_sslrootcert:
-                self.db_params['sslrootcert'] = pg_sslrootcert
+        self.db_params = _connect_kwargs_from_env()
 
         self.min_connections = int(os.getenv('DB_POOL_MIN', '2'))
         self.max_connections = int(os.getenv('DB_POOL_MAX', '20'))
@@ -105,15 +140,21 @@ class DatabaseConnectionPool:
                         raise
         return self._pool
 
-    def _getconn_with_retry(self, pool):
-        """Get a connection, waiting up to _POOL_WAIT_TIMEOUT if exhausted.
+    def _getconn_with_retry(self, pool, wait_timeout: Optional[float] = None):
+        """Get a connection, waiting up to ``wait_timeout`` seconds if exhausted.
 
         psycopg2's ThreadedConnectionPool raises PoolError immediately when
         all connections are checked out. This wrapper retries with backoff so
         that short-lived queries (sub-agents, tool callbacks) don't fail just
         because they collided at the same instant.
+
+        ``wait_timeout`` defaults to ``DB_POOL_WAIT_TIMEOUT`` (5s). Callers that
+        must not block a request thread for long (health probes) pass a small
+        value; ``0`` means "fail immediately if the pool is empty".
         """
-        deadline = time.monotonic() + _POOL_WAIT_TIMEOUT
+        if wait_timeout is None:
+            wait_timeout = _pool_wait_timeout()
+        deadline = time.monotonic() + wait_timeout
         attempt = 0
         while True:
             try:
@@ -138,18 +179,22 @@ class DatabaseConnectionPool:
             self._pool_available.notify()
 
     @contextmanager
-    def get_connection(self):
+    def get_connection(self, wait_timeout: Optional[float] = None):
         """Get a connection from the pool with automatic cleanup.
 
         Automatically sets RLS session variables (myapp.current_user_id,
         myapp.current_org_id) from the Flask request context when available.
         This ensures all queries on RLS-protected tables work correctly
         without callers needing to SET them manually.
+
+        ``wait_timeout`` bounds how long to wait for a free pooled connection
+        (default ``DB_POOL_WAIT_TIMEOUT``, 5s); a ``psycopg2.pool.PoolError``
+        is raised when it expires.
         """
         pool = self._get_pool()
         connection = None
         try:
-            connection = self._getconn_with_retry(pool)
+            connection = self._getconn_with_retry(pool, wait_timeout)
             if connection:
                 connection.autocommit = False
                 self._set_rls_vars(connection)
@@ -221,6 +266,9 @@ class DatabaseConnectionPool:
             status['pool'] = {
                 'min_connections': self.min_connections,
                 'max_connections': self.max_connections,
+                # psycopg2 keeps checked-out connections in the private ``_used``
+                # dict; exposing its size lets /health report pool pressure.
+                'in_use': len(getattr(self._pool, '_used', {}) or {}),
                 'closed': self._pool.closed
             }
 

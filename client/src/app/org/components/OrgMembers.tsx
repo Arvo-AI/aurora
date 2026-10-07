@@ -78,12 +78,17 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
     setError("");
     if (!email) { setError("Email is required"); return; }
 
+    // The backend stores and matches a lowercase form. Normalizing here keeps
+    // the check_only probe, the invitation and the created account all keyed on
+    // the same spelling the invited user will later be able to log in with.
+    const normalizedEmail = email.trim().toLowerCase();
+
     setChecking(true);
     try {
       const checkRes = await fetch("/api/admin/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, role, check_only: true }),
+        body: JSON.stringify({ email: normalizedEmail, role, check_only: true }),
       });
       const checkData = await checkRes.json();
 
@@ -93,7 +98,7 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
         const res = await fetch("/api/admin/users", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, role }),
+          body: JSON.stringify({ email: normalizedEmail, role }),
         });
         const data = await res.json();
 
@@ -132,7 +137,7 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
       const res = await fetch("/api/admin/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, name, role }),
+        body: JSON.stringify({ email: email.trim().toLowerCase(), password, name, role }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || "Failed to create user"); return; }
@@ -168,7 +173,7 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
             <div className="grid gap-4 py-4">
               <div className="grid gap-1.5">
                 <Label htmlFor="add-email" className="text-xs">Email</Label>
-                <Input id="add-email" type="email" placeholder="jane@company.com" required value={email} onChange={(e) => setEmail(e.target.value)} className="h-9" autoFocus />
+                <Input id="add-email" type="email" placeholder="jane@company.com" required autoCapitalize="none" autoCorrect="off" spellCheck={false} value={email} onChange={(e) => setEmail(e.target.value)} className="h-9" autoFocus />
               </div>
               <div className="grid gap-1.5">
                 <Label className="text-xs">Role</Label>

@@ -24,7 +24,7 @@ def _row(incident_id, *, recurrence_of=None, anchor_ts=None, anchor_title=None, 
         uuid.UUID(incident_id), "u1", "datadog", "investigating", "critical", "High CPU",
         "api", "completed", "summary text", _T0, _T0, _T0, "1700000000.000100", None,
         uuid.UUID(recurrence_of) if recurrence_of else None, anchor_ts, anchor_title, n, size, last_fired,
-        {"incidentId": "PABC123"}, None,
+        {"incidentId": "PABC123"}, None, None, 7,
     )
 
 

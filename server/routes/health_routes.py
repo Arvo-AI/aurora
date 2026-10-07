@@ -9,6 +9,7 @@ import os
 import socket
 from datetime import datetime, timezone
 from flask import Blueprint, jsonify
+import psycopg2.pool
 import redis
 from celery_config import celery_app
 
@@ -18,8 +19,23 @@ logger = logging.getLogger(__name__)
 # Create blueprint
 health_bp = Blueprint('health', __name__)
 
-def check_database_health():
-    """Check PostgreSQL database connectivity using the shared connection pool."""
+# The kubelet readiness probe times out at 10s (deploy/helm/aurora/values.yaml,
+# server.probes.readiness). The shared pool waits 5s by default before giving up,
+# so a probe that used the default wait on a busy pool spent its whole budget
+# queueing behind application requests and failed for a reason that is not "the
+# database is down". Probes wait 1s for a pooled connection and 2s for Redis.
+_PROBE_POOL_WAIT_SECONDS = 1.0
+_PROBE_REDIS_TIMEOUT_SECONDS = 2.0
+
+
+def check_database_health(wait_timeout=None):
+    """Check PostgreSQL database connectivity using the shared connection pool.
+
+    ``wait_timeout`` bounds how long to wait for a free pooled connection. When
+    every pooled connection is checked out the result is ``degraded`` rather
+    than ``unhealthy``: the pool only holds open, working connections, so an
+    exhausted pool means the process is busy, not that Postgres is unreachable.
+    """
     try:
         user = os.getenv('POSTGRES_USER')
         password = os.getenv('POSTGRES_PASSWORD')
@@ -28,29 +44,47 @@ def check_database_health():
             return {"status": "unhealthy", "error": "Database credentials not configured"}
 
         from utils.db.connection_pool import db_pool
-        with db_pool.get_connection() as conn:
+        with db_pool.get_connection(wait_timeout=wait_timeout) as conn:
             with conn.cursor() as cursor:
                 # No RLS needed — infrastructure health check
                 cursor.execute("SELECT 1")
 
         return {"status": "healthy", "message": "Database connection successful"}
+    except psycopg2.pool.PoolError as e:
+        logger.warning("Database health check: connection pool busy (%s)", e)
+        return {"status": "degraded", "warning": "Connection pool busy"}
     except Exception as e:
         logger.warning(f"Database health check failed: {e}", exc_info=True)
         return {"status": "unhealthy", "error": "Database connection failed"}
 
-def check_redis_health():
-    """Check Redis connectivity."""
+def check_redis_health(timeout=None):
+    """Check Redis connectivity.
+
+    ``timeout`` bounds both connect and command time so a hung Redis cannot
+    block the calling thread indefinitely (redis-py has no default timeout).
+    """
     if not redis:
         return {"status": "unhealthy", "error": "redis library not installed"}
+    r = None
     try:
         from utils.cache.redis_client import get_redis_ssl_kwargs
         redis_url = os.getenv('REDIS_URL', 'redis://redis:6379/0')
-        r = redis.from_url(redis_url, **get_redis_ssl_kwargs())
+        kwargs = dict(get_redis_ssl_kwargs())
+        if timeout is not None:
+            kwargs.setdefault("socket_connect_timeout", timeout)
+            kwargs.setdefault("socket_timeout", timeout)
+        r = redis.from_url(redis_url, **kwargs)
         r.ping()
         return {"status": "healthy", "message": "Redis connection successful"}
     except Exception as e:
         logger.warning(f"Redis health check failed: {e}", exc_info=True)
         return {"status": "unhealthy", "error": "Redis connection failed"}
+    finally:
+        if r is not None:
+            try:
+                r.close()
+            except Exception:
+                pass
 
 def check_celery_health():
     """Check Celery worker health."""
@@ -142,6 +176,9 @@ def health_check():
 def liveness_check():
     """
     Kubernetes liveness probe. Checks if the Flask app is running.
+
+    Deliberately touches nothing: it needs one free gunicorn thread and
+    nothing else, so it only fails when the process itself is saturated.
     """
     return jsonify({"status": "alive"}), 200
 
@@ -149,17 +186,21 @@ def liveness_check():
 def readiness_check():
     """
     Kubernetes readiness probe. Checks if critical dependencies are available.
-    """
-    db_health = check_database_health()
-    redis_health = check_redis_health()
 
-    if db_health["status"] == "healthy" and redis_health["status"] == "healthy":
-        return jsonify({"status": "ready"}), 200
+    Waits at most ``_PROBE_POOL_WAIT_SECONDS`` for a pooled DB connection and
+    ``_PROBE_REDIS_TIMEOUT_SECONDS`` for Redis so the probe answers well inside
+    the kubelet timeout. A busy pool is reported as ``degraded`` with HTTP 200:
+    the pod is still serving, it is just under load, and pulling it out of the
+    Service (or, one probe later, killing it) would only make the load worse.
+    A real Postgres or Redis failure still returns 503.
+    """
+    db_health = check_database_health(wait_timeout=_PROBE_POOL_WAIT_SECONDS)
+    redis_health = check_redis_health(timeout=_PROBE_REDIS_TIMEOUT_SECONDS)
+
+    checks = {"database": db_health, "redis": redis_health}
+    db_ok = db_health["status"] in ("healthy", "degraded")
+    if db_ok and redis_health["status"] == "healthy":
+        status = "ready" if db_health["status"] == "healthy" else "degraded"
+        return jsonify({"status": status, "checks": checks}), 200
     else:
-        return jsonify({
-            "status": "not_ready",
-            "checks": {
-                "database": db_health,
-                "redis": redis_health,
-            }
-        }), 503
+        return jsonify({"status": "not_ready", "checks": checks}), 503

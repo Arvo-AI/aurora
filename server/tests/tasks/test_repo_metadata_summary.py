@@ -3,7 +3,7 @@
 Gemini 2.5/3.x models (google or vertex provider) return ``response.content`` as a
 list of ``thinking`` + ``text`` blocks once ``include_thoughts`` is on. The old
 ``response.content.strip()`` raised ``AttributeError: 'list' object has no attribute
-'strip'`` on every Bitbucket/GitLab repo, every retry (Bombora, Aug 2026).
+'strip'`` on every Bitbucket/GitLab repo, every retry (seen on a self-hosted deployment, Aug 2026).
 """
 import sys
 from types import SimpleNamespace

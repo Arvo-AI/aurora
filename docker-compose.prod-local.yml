@@ -57,7 +57,6 @@ x-common-env: &common-env
   # Feature Flags (all disabled by default for minimal local setup)
   NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
-  NEXT_PUBLIC_ENABLE_JIRA: ${NEXT_PUBLIC_ENABLE_JIRA}
   NEXT_PUBLIC_ENABLE_SHAREPOINT: ${NEXT_PUBLIC_ENABLE_SHAREPOINT}
   NEXT_PUBLIC_ENABLE_NOTION: ${NEXT_PUBLIC_ENABLE_NOTION}
   NEXT_PUBLIC_ENABLE_SPINNAKER: ${NEXT_PUBLIC_ENABLE_SPINNAKER}
@@ -68,6 +67,9 @@ x-common-env: &common-env
   SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
   SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
   SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
+  # Slack Socket Mode: SLACK_APP_TOKEN is intentionally NOT in this shared env —
+  # it is a sensitive app-level secret only the slack_socket_mode listener
+  # needs, so it is scoped to that service alone (below).
 
   # Atlassian OAuth (Confluence + Jira)
   ATLASSIAN_CLIENT_ID: ${ATLASSIAN_CLIENT_ID}
@@ -211,6 +213,8 @@ services:
       - terraform-workdir:/app/terraform_workdir
     command: ["sh", "-c", "gunicorn main_compute:app --bind 0.0.0.0:${FLASK_PORT:-5080} -k gthread --threads ${GUNICORN_THREADS:-32} --workers ${GUNICORN_WORKERS:-2} --timeout 300 --preload"]
     environment:
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+      GUNICORN_THREADS: ${GUNICORN_THREADS:-32}
       <<: *common-env
       OTEL_SERVICE_NAME: aurora-server
       FLASK_PORT: ${FLASK_PORT}
@@ -489,6 +493,34 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Slack Socket Mode listener. Opens an OUTBOUND WebSocket to Slack so Slack
+  # events/interactions work without a public inbound webhook URL — for private
+  # / self-hosted deployments. No-op unless SLACK_APP_TOKEN (xapp-...) is set,
+  # so it is safe to leave running in every deployment.
+  slack_socket_mode:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: prod
+    image: aurora_slack_socket_mode:latest
+    logging: *default-logging
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["python", "-m", "services.slack.socket_mode"]
+    environment:
+      <<: *common-env
+      # Scoped here (not in *common-env) — only the listener needs this secret.
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+      OTEL_SERVICE_NAME: slack_socket_mode
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
+      FRONTEND_URL: ${FRONTEND_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    restart: unless-stopped
+
   postgres:
     image: postgres:15-alpine
     container_name: aurora-postgres
@@ -546,7 +578,6 @@ services:
         NEXT_PUBLIC_WEBSOCKET_URL: ${NEXT_PUBLIC_WEBSOCKET_URL}
         NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
         NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
-        NEXT_PUBLIC_ENABLE_JIRA: ${NEXT_PUBLIC_ENABLE_JIRA}
         NEXT_PUBLIC_ENABLE_SHAREPOINT: ${NEXT_PUBLIC_ENABLE_SHAREPOINT}
         NEXT_PUBLIC_ENABLE_NOTION: ${NEXT_PUBLIC_ENABLE_NOTION}
         NEXT_PUBLIC_ENABLE_SPINNAKER: ${NEXT_PUBLIC_ENABLE_SPINNAKER}
@@ -565,7 +596,6 @@ services:
       NEXT_PUBLIC_WEBSOCKET_URL: ${NEXT_PUBLIC_WEBSOCKET_URL}
       NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
       NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
-      NEXT_PUBLIC_ENABLE_JIRA: ${NEXT_PUBLIC_ENABLE_JIRA}
       NEXT_PUBLIC_ENABLE_SHAREPOINT: ${NEXT_PUBLIC_ENABLE_SHAREPOINT}
       NEXT_PUBLIC_ENABLE_NOTION: ${NEXT_PUBLIC_ENABLE_NOTION}
       NEXT_PUBLIC_ENABLE_SPINNAKER: ${NEXT_PUBLIC_ENABLE_SPINNAKER}

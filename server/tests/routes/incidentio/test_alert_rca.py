@@ -550,7 +550,7 @@ class _FakeRedis:
 
 class TestGetOrgSeverityRanks:
     def _import_error(self):
-        from routes.incidentio.incidentio_routes import IncidentioAPIError
+        from routes.incidentio.incidentio_client import IncidentioAPIError
         return IncidentioAPIError
 
     def test_success_parses_and_caches_catalog(self):
@@ -565,7 +565,7 @@ class TestGetOrgSeverityRanks:
         }
         with patch("utils.cache.redis_client.get_redis_client", return_value=rc), \
              patch("utils.auth.token_management.get_token_data", return_value={"api_key": "k"}), \
-             patch("routes.incidentio.incidentio_routes.IncidentioClient", return_value=client):
+             patch("routes.incidentio.incidentio_client.IncidentioClient", return_value=client):
             ranks = tasks._get_org_severity_ranks("u1")
 
         # Ranks kept as-is (higher = more urgent), no inversion.
@@ -582,7 +582,7 @@ class TestGetOrgSeverityRanks:
         client.list_alert_priorities.side_effect = IncidentioAPIError(IncidentioAPIError.FORBIDDEN)
         with patch("utils.cache.redis_client.get_redis_client", return_value=rc), \
              patch("utils.auth.token_management.get_token_data", return_value={"api_key": "k"}), \
-             patch("routes.incidentio.incidentio_routes.IncidentioClient", return_value=client):
+             patch("routes.incidentio.incidentio_client.IncidentioClient", return_value=client):
             ranks = tasks._get_org_severity_ranks("u1")
 
         assert ranks == {}
@@ -595,7 +595,7 @@ class TestGetOrgSeverityRanks:
         client = MagicMock()
         with patch("utils.cache.redis_client.get_redis_client", return_value=rc), \
              patch("utils.auth.token_management.get_token_data", return_value={"api_key": "k"}), \
-             patch("routes.incidentio.incidentio_routes.IncidentioClient", return_value=client):
+             patch("routes.incidentio.incidentio_client.IncidentioClient", return_value=client):
             ranks = tasks._get_org_severity_ranks("u1")
 
         assert ranks == {}
@@ -609,7 +609,7 @@ class TestGetOrgSeverityRanks:
         client.list_alert_priorities.side_effect = IncidentioAPIError(IncidentioAPIError.TIMEOUT)
         with patch("utils.cache.redis_client.get_redis_client", return_value=rc), \
              patch("utils.auth.token_management.get_token_data", return_value={"api_key": "k"}), \
-             patch("routes.incidentio.incidentio_routes.IncidentioClient", return_value=client):
+             patch("routes.incidentio.incidentio_client.IncidentioClient", return_value=client):
             ranks = tasks._get_org_severity_ranks("u1")
 
         assert ranks == {}

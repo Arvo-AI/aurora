@@ -7,14 +7,12 @@ import logging
 
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
+from utils.log_sanitizer import sanitize
 from services.artifacts.store import create_version
-from services.memory.queries import get_memory_content
+from services.memory import SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE
 
 logger = logging.getLogger(__name__)
 
-# Well-known identity of the Slack memory entry — referenced by seeding + injector.
-SLACK_MEMORY_CATEGORY = "context"
-SLACK_MEMORY_TITLE = "Slack"
 SLACK_MEMORY_DESCRIPTION = (
     "Slack behaviour: tone, when Aurora speaks, and which teams/channels to "
     "notify. Aurora reads and updates this whenever Slack is involved."
@@ -69,29 +67,28 @@ different style under "Per-channel notes".
 """
 
 
-def read_slack_memory(user_id: str) -> str:
-    """Return the org's current "Slack" memory content, or "" if none/error.
+def seed_slack_memory(user_id: str, org_id: str | None = None) -> bool:
+    """Create the default "Slack" memory for an org if absent (idempotent,
+    non-destructive). Returns True if a new entry was created.
 
-    Thin wrapper over the shared ``get_memory_content`` helper, pinned to the
-    Slack entry's (category, title) and normalising its ``None`` to "" for the
-    routing / non-agent callers that expect a string.
+    ``org_id`` should be passed by request handlers, which resolve it from the
+    request (``get_org_id_from_request``) so the seed lands in the same org the
+    caller reads back. Omitting it falls back to ``users.org_id`` — correct for
+    background/OAuth callers with no request context, but that lookup is
+    TTL-cached and can lag an org reassignment, seeding one org while the caller
+    reads another.
     """
-    if not user_id:
-        return ""
-    return get_memory_content(user_id, SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE) or ""
-
-
-def seed_slack_memory(user_id: str) -> bool:
-    """Create the default "Slack" memory for the user's org if absent (idempotent,
-    non-destructive). Returns True if a new entry was created."""
     if not user_id:
         return False
 
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # One SET, from the org we're about to write. The INSERT must run
+                # with myapp.current_org_id matching its org_id or FORCE ROW LEVEL
+                # SECURITY rejects the row.
                 org_id = set_rls_context(
-                    cursor, conn, user_id, log_prefix="[SlackMemory:seed]"
+                    cursor, conn, user_id, org_id=org_id, log_prefix="[SlackMemory:seed]"
                 )
                 if not org_id:
                     logger.warning(
@@ -143,7 +140,13 @@ def seed_slack_memory(user_id: str) -> bool:
                     source="agent",
                 )
                 conn.commit()
-                logger.info("[SlackMemory] Seeded default Slack memory for org %s", org_id)
+                # org_id can arrive from a request header (X-Org-ID), so strip
+                # control chars before logging — a newline would let a caller
+                # forge log lines (S5145).
+                logger.info(
+                    "[SlackMemory] Seeded default Slack memory for org %s",
+                    sanitize(org_id),
+                )
                 return True
     except Exception:
         logger.exception("[SlackMemory] Failed to seed Slack memory")

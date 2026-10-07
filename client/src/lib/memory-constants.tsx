@@ -40,10 +40,21 @@ export interface MemoryEntry {
   category: MemoryCategory;
   description: string | null;
   last_edited_by: string | null;
-  // Actual display name of the person who last edited (e.g. "Olivier").
+  // Actual display name of the person who last edited (e.g. "Alex").
   // Null for agent edits or pre-migration entries — fall back to last_edited_by.
   last_edited_by_name?: string | null;
   updated_at: string | null;
+}
+
+// Mirrors PROTECTED_ENTRIES in server/services/memory/__init__.py. These entries
+// live in user-writable categories and their content is freely editable, but a
+// feature pins to their (category, title) pair — so renaming, recategorizing, or
+// deleting one would silently detach it. The backend rejects those with 403; the
+// UI hides the affordances so it never comes up.
+const PROTECTED_ENTRIES: ReadonlySet<string> = new Set(["context/Slack"]);
+
+export function isProtectedEntry(entry: Pick<MemoryEntry, "category" | "title">): boolean {
+  return PROTECTED_ENTRIES.has(`${entry.category}/${entry.title}`);
 }
 
 /**
@@ -51,7 +62,7 @@ export interface MemoryEntry {
  * Prefers the real person's name, falling back to the generic "User"/"Agent".
  */
 export function formatEditedBy(entry: Pick<MemoryEntry, "last_edited_by" | "last_edited_by_name">): string | null {
-  // Real person's name recorded — show it (e.g. "Olivier").
+  // Real person's name recorded — show it (e.g. "Alex").
   if (entry.last_edited_by_name && entry.last_edited_by_name.trim()) {
     return entry.last_edited_by_name.trim();
   }

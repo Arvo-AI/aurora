@@ -20,7 +20,7 @@ Deploy Aurora on any Kubernetes cluster using Helm.
 - **GCP GKE / Azure AKS:** Create a cluster with default settings
 
 :::note Third-party images
-Aurora deploys several third-party images from public registries. Your nodes must be able to pull: `postgres:15-alpine`, `redis:7-alpine`, `hashicorp/vault:1.15`, `searxng/searxng:*`, `memgraph/memgraph-mage:3.8.1`. Optional components (e.g. `services.minio.enabled: true`) may pull additional images. For air-gapped clusters, mirror these to a private registry and review enabled services in your `values.yaml`.
+Aurora deploys several third-party images from public registries. Your nodes must be able to pull: `postgres:15-alpine`, `redis:7-alpine`, `hashicorp/vault:1.15`, `searxng/searxng:*`, `memgraph/memgraph-mage:3.8.1`. With `services.minio.enabled: true` you also need `pgsty/silo` and `amazon/aws-cli` (bucket-creation hook). For air-gapped clusters, mirror these to a private registry and review enabled services in your `values.yaml`.
 :::
 
 ### Required tools
@@ -41,7 +41,7 @@ Aurora stores files in S3-compatible object storage. Have your bucket details re
 | AWS S3 | `https://s3.amazonaws.com` | [EKS guide](./eks-setup) covers bucket creation |
 | GCS (S3 interop) | `https://storage.googleapis.com` | [Create HMAC keys](https://cloud.google.com/storage/docs/authentication/hmackeys) |
 | Cloudflare R2 | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` | Region: `auto` |
-| MinIO | `http://minio:9000` | Self-hosted |
+| MinIO | `http://minio:9000` | Self-hosted; see the [storage guide](../configuration/storage#minio) — upstream images were pulled from public registries in Sept 2026 |
 
 ### LLM provider
 
@@ -452,7 +452,7 @@ For local dev on OrbStack, Docker Desktop, or Rancher Desktop:
 ./deploy/k8s-deploy.sh --local
 ```
 
-This builds images locally (no push), enables built-in MinIO for S3 storage, and uses nip.io URLs.
+This builds images locally (no push), enables built-in S3-compatible storage for local dev, and uses nip.io URLs. The storage image is `pgsty/silo`, a maintained MinIO fork — see the [storage guide](../configuration/storage#minio) for why.
 
 ## Upgrading
 
@@ -542,29 +542,73 @@ autoscaling:
   server:
     enabled: true
     minReplicas: 2
-    maxReplicas: 6
+    maxReplicas: 3
     targetCPU: 70
     targetMemory: 80
   celeryWorker:
     enabled: true
     minReplicas: 2
-    maxReplicas: 6
+    maxReplicas: 3
     targetCPU: 70
 ```
 
 When enabled, `replicaCounts.*` values are ignored -- HPA manages replicas.
+Size the Postgres connection budget below for `maxReplicas` before enabling it;
+`helm` refuses to render otherwise.
 
-### Per-pod concurrency
+### Per-pod concurrency and the Postgres connection budget
 
 ```yaml
 config:
-  GUNICORN_WORKERS: "4"    # 1 per vCPU
-  GUNICORN_THREADS: "4"    # threads per worker
-  DB_POOL_MAX: "20"        # connections per worker process
-  CELERY_CONCURRENCY: "4"  # parallel tasks per pod
+  GUNICORN_WORKERS: "2"             # processes per API server pod
+  GUNICORN_THREADS: "32"            # request threads per process
+  DB_POOL_MAX: "20"                 # connections per Python process (server, worker, chatbot, beat)
+  DB_POOL_WAIT_TIMEOUT: "5"         # seconds a request waits for a pooled connection
+  DB_CONNECT_TIMEOUT: "10"          # seconds before an unreachable Postgres fails the connect
+  CELERY_CONCURRENCY: "4"           # parallel tasks (processes) per worker pod
+  SSE_MAX_STREAMS_PER_PROCESS: "8"  # open Incidents tabs per server process
+services:
+  postgres:
+    maxConnections: 300             # in-cluster Postgres only; the image default is 100
 ```
 
-Ensure PostgreSQL `max_connections` can handle `pods x DB_POOL_MAX`.
+Every Python process opens its own pool, so the worst case the configured pods
+can open is:
+
+```
+  server pods   x GUNICORN_WORKERS   x (DB_POOL_MAX + 15)   # +15 for the RBAC engine
++ worker pods   x CELERY_CONCURRENCY x DB_POOL_MAX
++ chatbot pods  x DB_POOL_MAX
++ celery-beat   x DB_POOL_MAX
++ mcp           x 10
+```
+
+With the defaults above one replica of each service is 200 connections, two
+server plus two worker replicas is 350, and the HPA's `maxReplicas` 3 + 3 is
+500. `helm` refuses to render when the worst case for your replica counts (or
+`maxReplicas`) exceeds `services.postgres.maxConnections`: raise it first, and
+size `resources.postgres.limits.memory` with it (about 10Mi per connection on
+top of `shared_buffers`). The check covers the in-cluster Postgres only; with
+an external one set `max_connections` there. Changing `maxConnections` restarts
+the in-cluster Postgres pod once.
+
+Each open Incidents tab (the list and every incident page) holds one server
+thread for its Server-Sent Events stream. `SSE_MAX_STREAMS_PER_PROCESS`
+(default 8, never more than `GUNICORN_THREADS - 2`) caps them per process; a
+tab beyond the cap is told to reconnect in 15s, and streams rotate every ~5
+minutes so it gets a slot.
+
+### API server probes
+
+Liveness is a TCP check on port 5080 (`server.probes.liveness.type: tcp`), so
+a pod whose threads are all busy is not restarted: readiness
+(`/health/readiness`, 10s timeout, 3 failures) takes it out of the Service
+until it drains, and gunicorn's `--timeout` replaces a worker whose main loop
+hangs. Set `type: http` to restart a pod that cannot answer
+`GET /health/liveness` for `failureThreshold x periodSeconds` (120s by
+default). `/health/readiness` checks Postgres and Redis with short bounded
+waits and reports a busy connection pool as `degraded` (HTTP 200) rather than
+taking the pod out of the Service.
 
 ## Using Pre-Existing Kubernetes Secrets
 

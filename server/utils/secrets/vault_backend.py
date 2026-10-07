@@ -7,6 +7,7 @@ This is the OSS-first default for Aurora deployments.
 
 import os
 import logging
+import threading
 import time
 from typing import Optional
 
@@ -31,33 +32,149 @@ class VaultSecretsBackend(SecretsBackend):
         vault:kv/data/{mount}/{base_path}/{secret_name}
     """
 
+    # Minimum gap between initialization attempts once one has failed.
+    RETRY_INTERVAL_SECONDS = 30
+    # Cap only on the throwaway auth probe, which runs while _init_lock is held.
+    CONNECT_TIMEOUT_SECONDS = 10
+
     def __init__(self):
+        """Nothing connects here — the client is built lazily on first lookup."""
         self._client = None
         self._initialized = False
         self._available = False
+        # Monotonic timestamp of the last failed init, so a transient failure is
+        # retried instead of disabling Vault for the life of the process.
+        self._last_failure_at = None
+        # Missing hvac or VAULT_TOKEN will not self-heal without a redeploy.
+        self._config_blocked = False
+        self._logged_init_traceback = False
+        self._init_lock = threading.Lock()
         self.mount_point = os.getenv("VAULT_KV_MOUNT", "aurora")
         self.vault_addr = os.getenv("VAULT_ADDR", "http://vault:8200")
         self.base_path = os.getenv("VAULT_KV_BASE_PATH", "users")
 
     def _initialize_client(self):
-        """Lazily initialize the Vault client.
+        """Lazily initialize the Vault client, retrying after a failure.
 
-        Only attempts initialization once to avoid repeated failures
-        on startup when Vault may not be needed.
+        Failure must not latch: a pod that first touched Vault while it was
+        unreachable, sealed, or holding an expired token kept failing every lookup
+        until restarted, long after Vault recovered. Retried at most once per
+        RETRY_INTERVAL_SECONDS so an outage doesn't reconnect on every lookup.
         """
         if self._initialized:
             return
 
-        self._initialized = True
+        if self._config_blocked:
+            return
 
+        # Checked before taking the lock: the lock is held across a network call,
+        # so during an outage this keeps callers from queueing behind it instead of
+        # failing fast on the backoff they are already inside.
+        if self._in_retry_backoff():
+            return
+
+        with self._init_lock:
+            # Another thread initialized or failed while this one waited.
+            if self._initialized or self._in_retry_backoff():
+                return
+
+            if self._try_initialize():
+                self._initialized = True
+                self._available = True
+                self._last_failure_at = None
+                self._logged_init_traceback = False
+            elif not self._config_blocked:
+                self._available = False
+                self._last_failure_at = time.monotonic()
+
+    def _in_retry_backoff(self) -> bool:
+        """True while a recent failed attempt should suppress another one."""
+        last_failure = self._last_failure_at
+        if last_failure is None:
+            return False
+        return (time.monotonic() - last_failure) < self.RETRY_INTERVAL_SECONDS
+
+    @staticmethod
+    def _is_missing_secret(exc: Exception) -> bool:
+        """True when the failure is about one absent secret, not Vault's health.
+
+        Mirrors the classification in ``secret_ref_utils._clear_secret_ref`` so the
+        two agree on what "not found" means.
+        """
+        if type(exc).__name__ == "InvalidPath":
+            return True
+        text = str(exc).lower()
+        return "not found" in text or "no versions" in text or "invalidpath" in text
+
+    @staticmethod
+    def _is_vault_outage(exc: Exception) -> bool:
+        """True when Vault itself is unreachable or unhealthy, not one path or request."""
+        name = type(exc).__name__
+        # Per-path ACL or bad request shape — not a cluster health signal.
+        if name in ("Forbidden", "InvalidRequest"):
+            return False
+
+        if name in (
+            "Unauthorized",
+            "VaultDown",
+            "InternalServerError",
+            "BadGateway",
+            "VaultNotInitialized",
+        ):
+            return True
+
+        if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+            return True
+
+        module = type(exc).__module__ or ""
+        if module.startswith("requests.exceptions"):
+            return True
+
+        text = str(exc).lower()
+        return "sealed" in text or "vault is down" in text
+
+    def _invalidate_after_operation_failure(self, exc: Exception, client=None) -> None:
+        """Drop the cached availability latch when an operation suggests an outage.
+
+        Availability is otherwise only probed at init, so a Vault that seals *after*
+        that keeps reporting available and the outage gets blamed on the provider's
+        credentials. A healthy Vault re-latches on the next probe, so this cannot
+        invent an outage.
+        """
+        # A malformed reference is a caller bug and a missing secret is a per-secret
+        # condition; neither says anything about Vault's health.
+        if (
+            not self._initialized
+            or isinstance(exc, ValueError)
+            or self._is_missing_secret(exc)
+            or not self._is_vault_outage(exc)
+        ):
+            return
+
+        with self._init_lock:
+            # A slow failure can land after another thread already re-probed and
+            # published a healthy client; only the client that failed may clear it.
+            if client is not None and self._client is not client:
+                return
+
+            logger.warning(
+                "Vault operation failed (%s); re-checking availability on next use.",
+                type(exc).__name__,
+            )
+            self._initialized = False
+            self._available = False
+
+    def _try_initialize(self) -> bool:
+        """One initialization attempt. True on success; never raises."""
         try:
             import hvac
         except ImportError:
             logger.warning(
                 "hvac package not installed. Install with: pip install hvac"
             )
-            self._available = False
-            return
+            self._config_blocked = True
+            self._initialized = True
+            return False
 
         vault_token = os.getenv("VAULT_TOKEN")
 
@@ -65,32 +182,56 @@ class VaultSecretsBackend(SecretsBackend):
             logger.warning(
                 "VAULT_TOKEN not set. Vault secrets backend will not be available."
             )
-            self._available = False
-            return
+            self._config_blocked = True
+            self._initialized = True
+            return False
 
         try:
-            self._client = hvac.Client(url=self.vault_addr, token=vault_token)
+            # Short timeout only on the probe: it runs under _init_lock, so an
+            # unbounded wait would stall every other caller behind it.
+            probe = hvac.Client(
+                url=self.vault_addr,
+                token=vault_token,
+                timeout=self.CONNECT_TIMEOUT_SECONDS,
+            )
 
-            # Verify connection and authentication
-            if not self._client.is_authenticated():
-                logger.error("Vault authentication failed. Check VAULT_TOKEN.")
-                self._available = False
-                return
+            if not probe.is_authenticated():
+                logger.error(
+                    "Vault authentication failed (unreachable, sealed, or expired "
+                    "VAULT_TOKEN). Will retry in %ss.",
+                    self.RETRY_INTERVAL_SECONDS,
+                )
+                return False
+
+            # Operations keep hvac's default (30s) request timeout.
+            self._client = hvac.Client(url=self.vault_addr, token=vault_token)
 
             # Auto-enable KV v2 engine if not already enabled
             self._ensure_kv_engine()
 
-            self._available = True
             logger.info(
                 "VaultSecretsBackend initialized (addr: %s, mount: %s, base_path: %s)",
                 self.vault_addr,
                 self.mount_point,
                 self.base_path,
             )
+            return True
 
-        except Exception as e:
-            logger.error("Failed to initialize Vault client: %s", e)
-            self._available = False
+        except Exception:
+            # Traceback on the first failure only — during an outage every service
+            # would otherwise print a full stack every 30s.
+            if not self._logged_init_traceback:
+                logger.exception(
+                    "Failed to initialize Vault client. Will retry in %ss.",
+                    self.RETRY_INTERVAL_SECONDS,
+                )
+                self._logged_init_traceback = True
+            else:
+                logger.warning(
+                    "Failed to initialize Vault client. Will retry in %ss.",
+                    self.RETRY_INTERVAL_SECONDS,
+                )
+            return False
 
     def _ensure_kv_engine(self):
         """Enable KV v2 secrets engine if not already enabled."""
@@ -153,11 +294,15 @@ class VaultSecretsBackend(SecretsBackend):
                 "Check VAULT_ADDR and VAULT_TOKEN configuration."
             )
 
+        # Pinned for the whole operation so a concurrent re-probe can't swap the
+        # client mid-call, and so the failure handler knows which one failed.
+        client = self._client
+
         try:
             path = f"{self.base_path}/{secret_name}"
 
             # Store the secret in KV v2
-            self._client.secrets.kv.v2.create_or_update_secret(
+            client.secrets.kv.v2.create_or_update_secret(
                 mount_point=self.mount_point,
                 path=path,
                 secret={"value": secret_value},
@@ -173,6 +318,7 @@ class VaultSecretsBackend(SecretsBackend):
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             logger.error("Failed to store secret '%s' (%.1fms): %s", secret_name, elapsed_ms, e)
+            self._invalidate_after_operation_failure(e, client)
             raise
 
     def get_secret(self, secret_ref: str) -> str:
@@ -195,6 +341,8 @@ class VaultSecretsBackend(SecretsBackend):
                 "Check VAULT_ADDR and VAULT_TOKEN configuration."
             )
 
+        client = self._client
+
         try:
             # Parse the secret reference to extract the path
             # Format: vault:kv/data/{mount}/{path}
@@ -211,7 +359,7 @@ class VaultSecretsBackend(SecretsBackend):
             else:
                 path = path_with_mount
 
-            response = self._client.secrets.kv.v2.read_secret_version(
+            response = client.secrets.kv.v2.read_secret_version(
                 mount_point=self.mount_point,
                 path=path,
                 raise_on_deleted_version=True,
@@ -237,6 +385,7 @@ class VaultSecretsBackend(SecretsBackend):
                 error_type,
                 path if 'path' in locals() else secret_ref,
             )
+            self._invalidate_after_operation_failure(e, client)
             raise
 
     def delete_secret(self, secret_ref: str) -> None:
@@ -262,6 +411,8 @@ class VaultSecretsBackend(SecretsBackend):
                 "Check VAULT_ADDR and VAULT_TOKEN configuration."
             )
 
+        client = self._client
+
         try:
             # Parse the secret reference
             if not secret_ref.startswith(VAULT_REF_PREFIX):
@@ -275,7 +426,7 @@ class VaultSecretsBackend(SecretsBackend):
                 path = path_with_mount
 
             # Delete all versions and metadata
-            self._client.secrets.kv.v2.delete_metadata_and_all_versions(
+            client.secrets.kv.v2.delete_metadata_and_all_versions(
                 mount_point=self.mount_point,
                 path=path,
             )
@@ -286,4 +437,5 @@ class VaultSecretsBackend(SecretsBackend):
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             logger.error("Failed to delete secret (%.1fms): %s", elapsed_ms, e)
+            self._invalidate_after_operation_failure(e, client)
             raise

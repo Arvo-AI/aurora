@@ -197,9 +197,10 @@ from .flyio_tool import (
 # Import all context management functions from utils
 from utils.cloud.cloud_utils import (
     get_user_context, set_user_context, get_state_context, get_workflow_context,
-    set_websocket_context, get_websocket_context, get_selected_project_id, 
+    set_websocket_context, get_websocket_context, get_selected_project_id,
     set_selected_project_id, set_tool_capture, get_tool_capture,
-    get_provider_preference, set_provider_preference, _set_ctx, get_mode_from_context
+    get_provider_preference, set_provider_preference, _set_ctx, get_mode_from_context,
+    _is_background_rca,
 )
 from chat.backend.agent.access import ModeAccessController
 
@@ -984,7 +985,6 @@ __all__ = [
 
 # Import MCP functionality from separate module
 from .mcp_tools import (
-    REAL_MCP_ENABLED,
     REAL_MCP_SERVER_PATHS,
     RealMCPServerManager,
     _mcp_manager,
@@ -998,24 +998,6 @@ from .mcp_tools import (
     LANGCHAIN_TOOLS_CACHE_DURATION
 )
 from connectors.mcp_connector.store import fingerprint as mcp_fingerprint
-
-
-_NON_RCA_SOURCES = frozenset(('action', 'prediscovery'))
-
-
-def _is_background_rca(state_context, is_background: bool) -> bool:
-    """True when the session is a background RCA investigating a real incident.
-
-    Used to gate tools like github_fix that only make sense during incident
-    investigation (where the user will see the incident card afterwards).
-    """
-    if not state_context or not is_background:
-        return False
-    incident_id = getattr(state_context, 'incident_id', None)
-    if not incident_id:
-        return False
-    rca_source = ((getattr(state_context, 'rca_context', None) or {}).get('source', '') or '').lower()
-    return bool(rca_source) and rca_source not in _NON_RCA_SOURCES
 
 
 # Bitbucket tool actions that mutate state. Read-only sessions (PR change-
@@ -2732,9 +2714,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to add HPA/VPA right-sizing tools: {e}")
 
-    # Add Jira tools if enabled
+    # Add Jira tools when the user has connected Jira
     try:
-        from utils.flags.feature_flags import is_jira_enabled
         from .jira_tool import (
             jira_search_issues, jira_get_issue, jira_add_comment,
             jira_create_issue, jira_update_issue, jira_link_issues,
@@ -2742,22 +2723,26 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             JiraCreateIssueArgs, JiraUpdateIssueArgs, JiraLinkIssuesArgs,
         )
 
-        if is_jira_enabled():
-            from utils.auth.token_management import get_token_data as _get_jira_creds
-            _jira_creds = _get_jira_creds(user_id, "jira")
-            if _jira_creds:
-                from utils.auth.stateless_auth import get_user_preference
-                _jira_mode = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
+        from utils.auth.token_management import get_token_data as _get_jira_creds
+        _jira_creds = _get_jira_creds(user_id, "jira")
+        if _jira_creds:
+            from routes.jira.jira_routes import jira_comment_back_enabled
+            from utils.auth.stateless_auth import get_user_preference
 
-                _jira_tools = [
-                    (jira_search_issues, "jira_search_issues", JiraSearchIssuesArgs,
-                     "Search Jira issues using JQL. Returns matching issues with key, summary, status, assignee, labels."),
-                    (jira_get_issue, "jira_get_issue", JiraGetIssueArgs,
-                     "Get full details of a Jira issue by key (e.g. OPS-123). Returns description, status, comments."),
+            _jira_tools = [
+                (jira_search_issues, "jira_search_issues", JiraSearchIssuesArgs,
+                 "Search Jira issues using JQL. Returns matching issues with key, summary, status, assignee, labels."),
+                (jira_get_issue, "jira_get_issue", JiraGetIssueArgs,
+                 "Get full details of a Jira issue by key (e.g. OPS-123). Returns description, status, comments."),
+            ]
+
+            # Only RCA runs need the org opt-in; elsewhere a user asked for the write
+            if not _is_background_rca(state_context, is_background) or jira_comment_back_enabled(user_id):
+                _jira_mode = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
+                _jira_tools.append(
                     (jira_add_comment, "jira_add_comment", JiraAddCommentArgs,
                      "Add a comment to a Jira issue. Non-destructive operation."),
-                ]
-
+                )
                 if _jira_mode != "comment_only":
                     _jira_tools.extend([
                         (jira_create_issue, "jira_create_issue", JiraCreateIssueArgs,
@@ -2767,15 +2752,17 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                         (jira_link_issues, "jira_link_issues", JiraLinkIssuesArgs,
                          "Create a link between two Jira issues (Relates, Blocks, Clones, etc.)."),
                     ])
+            else:
+                _jira_mode = "comment_only"
 
-                for _func, _name, _schema, _desc in _jira_tools:
-                    _ctx = with_user_context(_func)
-                    _notif = with_completion_notification(_ctx)
-                    _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
-                    tools.append(StructuredTool.from_function(
-                        func=_final, name=_name, description=_desc, args_schema=_schema,
-                    ))
-                logging.info(f"Added {len(_jira_tools)} Jira tools for user {user_id} (mode={_jira_mode})")
+            for _func, _name, _schema, _desc in _jira_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final, name=_name, description=_desc, args_schema=_schema,
+                ))
+            logging.info(f"Added {len(_jira_tools)} Jira tools for user {user_id} (mode={_jira_mode})")
     except Exception as e:
         logging.warning(f"Failed to add Jira tools: {e}")
 

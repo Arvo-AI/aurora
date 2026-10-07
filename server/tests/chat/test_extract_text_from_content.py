@@ -2,7 +2,7 @@
 
 ``tests/fixtures/gemini_thinking_responses.json`` holds four real gemini-3.6-flash
 responses captured through Aurora's google provider with thinking on: the exact
-payloads the recommender stages receive on a Gemini deployment (Bombora).
+payloads the recommender stages receive on a Gemini-backed deployment.
 """
 import json
 from pathlib import Path

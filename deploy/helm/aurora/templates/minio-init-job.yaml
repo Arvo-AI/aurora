@@ -6,33 +6,76 @@ metadata:
   labels:
     {{- include "aurora.labels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": post-install
+    # Creates the bucket the app needs: storage.py verifies it on startup but
+    # never creates it. post-upgrade so a hook that failed at install (e.g.
+    # unpullable image) can recover; the script is idempotent.
+    "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "0"
-    "helm.sh/hook-delete-policy": hook-succeeded
+    # before-hook-creation matters: hook-succeeded leaves a failed Job behind,
+    # and the next hook would then die on AlreadyExists.
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   template:
     spec:
       restartPolicy: OnFailure
+      automountServiceAccountToken: false
       containers:
+        # aws-cli, not minio/mc — that was deleted alongside the server image.
         - name: minio-init
-          image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+          image: {{ .Values.services.minio.initImage | default "amazon/aws-cli:2.34.6" | quote }}
+          imagePullPolicy: IfNotPresent
+          # Overrides the image's `aws` ENTRYPOINT so we can run a script.
           command:
             - /bin/sh
             - -c
             - |
-              until mc alias set aurora http://{{ include "aurora.fullname" . }}-minio:9000 "$ACCESS_KEY" "$SECRET_KEY" 2>/dev/null; do
+              set -eu
+              ENDPOINT="http://{{ include "aurora.fullname" . }}-minio:9000"
+              # --cli-connect-timeout: the default is 60s, so without it one
+              # unreachable-endpoint attempt outlasts the whole wait budget.
+              AWS="aws --endpoint-url $ENDPOINT --cli-connect-timeout 5 --cli-read-timeout 10"
+
+              # No startup ordering vs. the StatefulSet — wait for the S3 API.
+              # Deadline, not an attempt count: attempts have no fixed duration.
+              DEADLINE=$(( $(date +%s) + 180 ))
+              until $AWS s3api list-buckets >/dev/null 2>&1; do
+                if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+                  echo "MinIO did not become ready in time" >&2
+                  exit 1
+                fi
                 echo "Waiting for MinIO..."
                 sleep 2
               done
-              mc mb --ignore-existing aurora/{{ .Values.config.STORAGE_BUCKET }}
+
+              # head-bucket also fails on 403, so a denied check must not turn
+              # into a failed create and block the whole upgrade.
+              if $AWS s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
+                echo "Bucket already exists"
+              elif out=$($AWS s3api create-bucket --bucket "$BUCKET" 2>&1); then
+                echo "Bucket created"
+              else
+                case "$out" in
+                  *BucketAlreadyOwnedByYou*|*BucketAlreadyExists*)
+                    echo "Bucket already exists" ;;
+                  *)
+                    echo "$out" >&2; exit 1 ;;
+                esac
+              fi
               echo "Bucket ready"
           env:
-            - name: ACCESS_KEY
+            - name: BUCKET
+              value: {{ .Values.config.STORAGE_BUCKET | quote }}
+            # Retries would multiply each attempt's timeout by 3.
+            - name: AWS_MAX_ATTEMPTS
+              value: "1"
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.config.STORAGE_REGION | default "us-east-1" | quote }}
+            - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
                   name: {{ include "aurora.secretName.backend" . }}
                   key: STORAGE_ACCESS_KEY
-            - name: SECRET_KEY
+            - name: AWS_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "aurora.secretName.backend" . }}

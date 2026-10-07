@@ -653,7 +653,7 @@ def run_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to link session to incident: {e}")
 
-            # FUTURE (root-cause dedup, build-order step 4 — needs Noah's sign-off
+            # FUTURE (root-cause dedup, build-order step 4 — needs maintainer sign-off
             # plus shadow-mode precision data before building): pre-investigation
             # early exit. This is the single choke point covering all RCA
             # producers, so the gate belongs here, before
@@ -1025,6 +1025,17 @@ def run_background_chat(
 _JIRA_TOOL_NAMES = frozenset(('jira_add_comment', 'jira_create_issue'))
 
 
+def _should_file_in_jira(rca_context: Optional[Dict[str, Any]], session_id: str, user_id: str) -> bool:
+    """Whether the post-investigation Jira filing step should run."""
+    if not (rca_context and rca_context.get('integrations', {}).get('jira')):
+        return False
+    # Connected Jira is a context source until the org turns comment-back on.
+    from routes.jira.jira_routes import jira_comment_back_enabled
+    if not jira_comment_back_enabled(user_id):
+        return False
+    return not _session_has_successful_jira_action(session_id, user_id=user_id)
+
+
 def _session_has_successful_jira_action(session_id: str, user_id: str) -> bool:
     """Return True if the session already contains a successful Jira tool call.
 
@@ -1266,7 +1277,9 @@ async def _run_jira_action(
     from chat.backend.agent.llm import ModelConfig
     from main_chatbot import process_workflow_async
 
-    jira_mode = rca_context.get('integrations', {}).get('jira_mode', 'comment_only')
+    from utils.auth.stateless_auth import get_user_preference
+
+    jira_mode = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
 
     service_name = ""
     if incident_id:
@@ -1489,6 +1502,7 @@ async def _execute_background_chat(
             is_hpa_vpa_action=_is_hpa_vpa_action,
             is_pr_review=_is_pr_review,
             rca_context=rca_context,
+            trigger_source=_tm_source or None,
             permitted_tools=_resolve_permitted_tools(user_id),
         )
         logger.info(
@@ -1538,9 +1552,8 @@ async def _execute_background_chat(
                 logger.exception("[BackgroundChat] Failed early Slack send")
 
         # --- Phase 2: Jira action ---
-        # Investigation is done. Now deterministically file in Jira.
-        if rca_context and rca_context.get('integrations', {}).get('jira') \
-                and not _session_has_successful_jira_action(session_id, user_id=user_id):
+        # Investigation is done. File in Jira only if the org opted in.
+        if _should_file_in_jira(rca_context, session_id, user_id):
             await _run_jira_action(
                 session_id=session_id,
                 user_id=user_id,
@@ -2044,6 +2057,16 @@ def _update_incident_status(incident_id: str, status: str, user_id: str) -> None
         logger.error(f"[BackgroundChat] Failed to update incident {incident_id} status to '{status}': {e}")
 
 
+_CODE_FENCE = "```"
+
+
+def _close_dangling_code_fence(text: str) -> str:
+    """Close a code block left open by truncation, else Slack eats the rest of the message."""
+    if text.count(_CODE_FENCE) % 2 == 0:
+        return text
+    return text + ("" if text.endswith("\n") else "\n") + _CODE_FENCE
+
+
 def _send_response_to_slack(
     user_id: str,
     session_id: str,
@@ -2163,8 +2186,21 @@ def _send_response_to_slack(
         
         # Slack messages have a ~3000 char limit for update_message
         SLACK_MSG_LIMIT = 2900
-        if len(formatted_message) > SLACK_MSG_LIMIT:
-            formatted_message = formatted_message[:SLACK_MSG_LIMIT] + "\n\n_...truncated. See full results in Aurora._"
+        # Always point back at the session: the Slack reply is a clipped view, and
+        # this link is the only way to find the run again in the console.
+        frontend_url = os.getenv("FRONTEND_URL", "").rstrip("/")
+        session_link = (
+            f"\n\n<{frontend_url}/chat?sessionId={session_id}|Open the full response in Aurora>"
+            if frontend_url else ""
+        )
+        if len(formatted_message) + len(session_link) > SLACK_MSG_LIMIT:
+            # The link itself says where to go, so the note just marks the cut
+            note = "\n\n_...truncated._" if session_link else "\n\n_...truncated. See full results in Aurora._"
+            # Reserve room for a closing fence up front — the cut may land inside a
+            # code block, and an unclosed fence swallows the note and link as plain text.
+            budget = max(SLACK_MSG_LIMIT - len(session_link) - len(note) - len("\n" + _CODE_FENCE), 0)
+            formatted_message = _close_dangling_code_fence(formatted_message[:budget]) + note
+        formatted_message += session_link
 
         # Update the "Thinking..." message if we have the timestamp, otherwise send a new message
         if thinking_message_ts:

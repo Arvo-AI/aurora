@@ -282,13 +282,13 @@ OLLAMA_BASE_URL=http://host.docker.internal:11434
 
 One `bedrock` provider with two modes, auto-selected: set `BEDROCK_BASE_URL` for **gateway mode** (OpenAI-compatible endpoint in front of Bedrock), or leave it unset for **native mode** (AWS SDK). `BEDROCK_*` variables take precedence over the standard `AWS_*` ones.
 
-For native mode, set **`LLM_PROVIDER_MODE=bedrock`** to route clean model picks (e.g. `anthropic/claude-sonnet-4.6`) through Bedrock automatically — translated to the matching inference-profile id, region-aware. For gateway mode (or to pin specific ids), use `LLM_PROVIDER_MODE=direct` and point `MAIN_MODEL` (etc.) at an explicit `bedrock/<id>` model.
+For native mode, set **`LLM_PROVIDER_MODE=bedrock`** to route clean model picks (e.g. `anthropic/claude-sonnet-5`) through Bedrock automatically — translated to the matching inference-profile id, region-aware. For gateway mode (or to pin specific ids), use `LLM_PROVIDER_MODE=direct` and point `MAIN_MODEL` (etc.) at an explicit `bedrock/<id>` model.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BEDROCK_BASE_URL` | - | Gateway mode: OpenAI-compatible base URL (e.g. `.../v1`). When set, Aurora uses gateway mode. |
 | `BEDROCK_API_KEY` | `not-needed` | Gateway mode only. Optional — many VPC gateways need no key. |
-| `BEDROCK_REGION` | - | Native mode AWS region. Falls back to `AWS_REGION` / `AWS_DEFAULT_REGION`. |
+| `BEDROCK_REGION` | - | Native mode AWS region. Falls back to `AWS_REGION` / `AWS_DEFAULT_REGION`. Set to `global` to use Bedrock's `global.` inference profiles, which bill at the direct list price instead of the ~10% cross-region premium. |
 | `BEDROCK_ACCESS_KEY_ID` | _(AWS_ACCESS_KEY_ID)_ | Native mode access key. Omit to use an IAM role / default credential chain. |
 | `BEDROCK_SECRET_ACCESS_KEY` | _(AWS_SECRET_ACCESS_KEY)_ | Native mode secret key. |
 | `BEDROCK_SESSION_TOKEN` | _(AWS_SESSION_TOKEN)_ | Native mode session token, used alongside `BEDROCK_ACCESS_KEY_ID` / `BEDROCK_SECRET_ACCESS_KEY` for temporary / STS credentials. Omit for long-lived keys, a profile, or an IAM role. |
@@ -307,7 +307,7 @@ BEDROCK_ACCESS_KEY_ID=AKIA...          # or use BEDROCK_PROFILE / an IAM role
 BEDROCK_SECRET_ACCESS_KEY=...
 BEDROCK_SESSION_TOKEN=                  # omit unless using temporary / STS credentials
 LLM_PROVIDER_MODE=bedrock               # routes clean model picks through Bedrock
-MAIN_MODEL=anthropic/claude-sonnet-4.6  # auto-translated to us.anthropic.claude-sonnet-4-6
+MAIN_MODEL=anthropic/claude-sonnet-5    # auto-translated to us.anthropic.claude-sonnet-5
 ```
 
 ### Web Search
@@ -322,7 +322,7 @@ MAIN_MODEL=anthropic/claude-sonnet-4.6  # auto-translated to us.anthropic.claude
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RCA_MODEL` | - | Model for background RCA (format: `provider/model`). Overrides `RCA_OPTIMIZE_COSTS` when set. Default RCA path when `ORCHESTRATOR_ENABLED=false`. |
-| `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` = `anthropic/claude-haiku-4.5`, `false` = `anthropic/claude-opus-4.6` |
+| `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` = `anthropic/claude-haiku-4.5`, `false` = `anthropic/claude-opus-5.5` |
 | `ORCHESTRATOR_ENABLED` | `false` | Multi-agent RCA orchestrator (opt-in). When `true`, a lead orchestrator triages each background RCA and may fan out parallel read-only sub-agents; `RCA_MODEL` is ignored. When `false` (default), RCA uses the single-agent path with `RCA_MODEL`. |
 | `RCA_ORCHESTRATOR_MODEL` | - | *Only when `ORCHESTRATOR_ENABLED=true`.* Brain model for triage + synthesis. Format: `provider/model`. |
 | `RCA_SUBAGENT_MODEL` | - | *Only when `ORCHESTRATOR_ENABLED=true`.* Sub-agent investigator model. Per-role overrides in `orchestrator/roles/*.md` frontmatter take precedence. Format: `provider/model`. |
@@ -477,11 +477,15 @@ See the [Bitbucket connector guide](../integrations/connectors.md#bitbucket) for
 | `SLACK_CLIENT_ID` | Slack App Client ID |
 | `SLACK_CLIENT_SECRET` | Slack App Client Secret |
 | `SLACK_SIGNING_SECRET` | Slack App Signing Secret |
+| `SLACK_APP_TOKEN` | App-level token (`xapp-...`) with `connections:write`. Set it to enable Socket Mode (outbound WebSocket) instead of HTTP webhooks — for private/self-hosted deployments with no public URL. Leave empty to use HTTP webhooks. |
 
 ```bash
 SLACK_CLIENT_ID=your-client-id
 SLACK_CLIENT_SECRET=your-client-secret
 SLACK_SIGNING_SECRET=your-signing-secret
+
+# Private/self-hosted only (no public webhook URL) — see the Slack connector docs
+SLACK_APP_TOKEN=
 ```
 
 ### Google Chat
@@ -534,15 +538,7 @@ OVH_EU_CLIENT_SECRET=your-eu-client-secret
 
 ### Scaleway
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NEXT_PUBLIC_ENABLE_SCALEWAY` | `false` | Enable Scaleway connector in UI |
-
-```bash
-NEXT_PUBLIC_ENABLE_SCALEWAY=true
-```
-
-> No additional server-side credentials required. Users connect via API key through the UI.
+The Scaleway connector is always available. Users connect with an API key; no server-side credentials are required.
 
 ### Confluence
 

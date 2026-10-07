@@ -1,6 +1,6 @@
 """dispatcher.notify_investigation_completed(refresh_only=True): a follow-up
 re-summary refreshes the Google Chat card in place and announces nothing
-(no email, no Slack post, no PagerDuty note)."""
+(no email, no Slack post, no PagerDuty note, no incident.io update)."""
 
 import sys
 import types
@@ -15,7 +15,7 @@ from utils.notifications import dispatcher, slack_notification_service as svc
 def wired(monkeypatch):
     calls = {
         "slack": MagicMock(return_value=True), "gchat": MagicMock(return_value=True),
-        "email": MagicMock(), "pd": MagicMock(return_value=True),
+        "email": MagicMock(), "pd": MagicMock(return_value=True), "incidentio": MagicMock(return_value=True),
     }
     monkeypatch.setattr(dispatcher, "get_org_id_for_user", lambda user_id: "org-1")
     monkeypatch.setattr(dispatcher, "get_org_preference", lambda org_id, key, default=None: True)
@@ -30,6 +30,10 @@ def wired(monkeypatch):
     pd = types.ModuleType("utils.notifications.pagerduty_notification_service")
     pd.send_pagerduty_incident_note = calls["pd"]
     monkeypatch.setitem(sys.modules, "utils.notifications.pagerduty_notification_service", pd)
+    incidentio = types.ModuleType("utils.notifications.incidentio_notification_service")
+    incidentio.send_incidentio_incident_update = calls["incidentio"]
+    monkeypatch.setitem(sys.modules, "utils.notifications.incidentio_notification_service", incidentio)
+    monkeypatch.setattr(dispatcher, "get_user_preference", lambda user_id, key, default=None: True)
     return calls
 
 
@@ -66,6 +70,36 @@ def test_pagerduty_note_needs_the_org_opt_in(wired, monkeypatch):
     dispatcher.notify_investigation_completed("u1", "i1", session_id="s1")
     wired["slack"].assert_called_once()
     wired["pd"].assert_not_called()
+
+
+def test_incidentio_update_posts_on_first_completion_only(wired, monkeypatch):
+    incident = _incident(source_type="incidentio")
+    monkeypatch.setattr(dispatcher, "_get_incident_data", lambda incident_id, user_id: incident)
+    dispatcher.notify_investigation_completed("u1", "i1", session_id="s1")
+    wired["incidentio"].assert_called_once_with("u1", incident)
+    wired["incidentio"].reset_mock()
+    dispatcher.notify_investigation_completed("u1", "i1", session_id="s1", refresh_only=True)
+    wired["incidentio"].assert_not_called()
+
+
+def test_incidentio_update_needs_the_postback_toggle(wired, monkeypatch):
+    monkeypatch.setattr(dispatcher, "_get_incident_data", lambda incident_id, user_id: _incident(source_type="incidentio"))
+    monkeypatch.setattr(
+        dispatcher, "get_user_preference",
+        lambda user_id, key, default=None: default if key == "incidentio_postback_enabled" else True,
+    )
+    dispatcher.notify_investigation_completed("u1", "i1", session_id="s1")
+    wired["slack"].assert_called_once()
+    wired["incidentio"].assert_not_called()
+
+
+def test_incidentio_update_never_runs_for_other_sources(wired, monkeypatch):
+    monkeypatch.setattr(dispatcher, "_get_incident_data", lambda incident_id, user_id: _incident(source_type="pagerduty"))
+    looked_up = []
+    monkeypatch.setattr(dispatcher, "get_user_preference", lambda user_id, key, default=None: looked_up.append(key) or True)
+    dispatcher.notify_investigation_completed("u1", "i1", session_id="s1")
+    wired["incidentio"].assert_not_called()
+    assert looked_up == []  # no preference round-trip for non-incident.io incidents
 
 
 def test_refresh_only_without_a_card_skips_google_chat(wired, monkeypatch):
