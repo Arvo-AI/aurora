@@ -90,6 +90,15 @@ class ModeAccessController:
                 filtered.append(tool)
                 continue
 
+            # Customer-registered MCP servers tag their tools with a read/write
+            # classification, because the blanket `mcp_` block below cannot tell
+            # a lookup from a mutation and the allowlist above only knows
+            # GitHub's tool names. Without this, Ask mode silently dropped every
+            # tool from every custom server.
+            if (getattr(tool, "metadata", None) or {}).get("mcp_read_only"):
+                filtered.append(tool)
+                continue
+
             if any(name.startswith(prefix) for prefix in cls._POLICY.blocked_tool_prefixes):
                 LOGGER.info("ModeAccessController dropped tool %s due to read-only mode prefix match", name)
                 continue

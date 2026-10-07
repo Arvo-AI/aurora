@@ -15,7 +15,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { getUserFriendlyError } from "@/lib/utils";
 import {
-  mcpService, McpRegisterPayload, McpServerSummary,
+  mcpService, McpRegisterPayload, McpServerSummary, McpToolMode,
 } from "@/lib/services/mcp";
 
 const EMPTY_FORM: McpRegisterPayload = {
@@ -186,6 +186,27 @@ export default function McpAuthPage() {
       });
     } finally {
       setBusyLabel(null);
+    }
+  };
+
+  /**
+   * Persist one tool's override, updating the badge before the request lands so
+   * the dropdown does not snap back while the PATCH is in flight.
+   */
+  const handleToolMode = async (label: string, toolName: string, mode: McpToolMode) => {
+    setServers((prev) => prev.map((s) => s.label !== label ? s : {
+      ...s,
+      tools: s.tools.map((t) => (t.name === toolName ? { ...t, mode } : t)),
+    }));
+    try {
+      await mcpService.setToolMode(label, toolName, mode);
+    } catch (error: unknown) {
+      toast({
+        title: `Could not update ${toolName}`,
+        description: getUserFriendlyError(error),
+        variant: "destructive",
+      });
+      await load();
     }
   };
 
@@ -434,17 +455,42 @@ export default function McpAuthPage() {
                       </div>
                     </div>
                     {server.tools.length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-1.5">
+                      <div className="mt-3 space-y-1.5">
                         {server.tools.map((tool) => (
-                          <Badge
-                            key={tool.name}
-                            variant={tool.write ? "destructive" : "secondary"}
-                            className="font-mono text-xs font-normal"
-                            title={tool.write ? "Write tool — requires confirmation" : "Read-only tool"}
-                          >
-                            {tool.name}
-                          </Badge>
+                          <div key={tool.name} className="flex items-center gap-2">
+                            <Badge
+                              variant={tool.write ? "destructive" : "secondary"}
+                              className="font-mono text-xs font-normal"
+                              title={
+                                `${tool.write ? "Write tool" : "Read-only tool"} — ` +
+                                `${tool.declared ? "declared by the server" : "inferred from its name"}`
+                              }
+                            >
+                              {tool.name}
+                            </Badge>
+                            <Select
+                              value={tool.mode}
+                              onValueChange={(mode) =>
+                                handleToolMode(server.label, tool.name, mode as McpToolMode)
+                              }
+                            >
+                              <SelectTrigger className="h-7 w-[150px] text-xs">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="auto">
+                                  {tool.write ? "Ask first" : "Run automatically"}
+                                </SelectItem>
+                                <SelectItem value="always">Always allow</SelectItem>
+                                <SelectItem value="never">Never use</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
                         ))}
+                        <p className="pt-1 text-xs text-muted-foreground">
+                          Always allow skips the confirmation prompt and lets Aurora use the
+                          tool during automated investigations. Never use hides it entirely.
+                        </p>
                       </div>
                     )}
                   </li>

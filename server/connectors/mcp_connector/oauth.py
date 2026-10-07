@@ -13,14 +13,16 @@ authorization endpoint at 169.254.169.254 is the obvious SSRF bypass.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlencode, urlparse
 
 import httpx
-from mcp.client.auth import PKCEParameters
 
 from connectors.mcp_connector.net import assert_allowed_target
 
@@ -168,6 +170,18 @@ async def register_client(auth_server: AuthServer, redirect_uri: str) -> Dict[st
     return {"client_id": client_id, "client_secret": body.get("client_secret")}
 
 
+def _generate_pkce() -> Tuple[str, str]:
+    """Return a fresh (code_verifier, code_challenge) pair per RFC 7636 S256.
+
+    Stdlib rather than the SDK's PKCEParameters: four lines here, versus a hard
+    import that CI cannot satisfy and that a test stub would silently turn into
+    a constant verifier -- defeating the test that proves each flow differs.
+    """
+    verifier = secrets.token_urlsafe(64)[:128]
+    digest = hashlib.sha256(verifier.encode()).digest()
+    return verifier, base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
 def build_authorize_url(
     auth_server: AuthServer,
     client_id: str,
@@ -180,13 +194,13 @@ def build_authorize_url(
     The caller must persist the verifier against ``state``; it is required to
     redeem the code and never leaves Aurora.
     """
-    pkce = PKCEParameters.generate()
+    verifier, challenge = _generate_pkce()
     params = {
         "response_type": "code",
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "state": state,
-        "code_challenge": pkce.code_challenge,
+        "code_challenge": challenge,
         "code_challenge_method": "S256",
         # RFC 8707: binds the token to this MCP server, so a token minted for
         # one resource cannot be replayed against another.
@@ -197,7 +211,7 @@ def build_authorize_url(
     separator = "&" if urlparse(auth_server.authorization_endpoint).query else "?"
     return (
         f"{auth_server.authorization_endpoint}{separator}{urlencode(params)}",
-        pkce.code_verifier,
+        verifier,
     )
 
 

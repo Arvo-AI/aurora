@@ -2,9 +2,14 @@
 
 import { apiRequest } from '@/lib/services/api-client';
 
+export type McpToolMode = 'auto' | 'always' | 'never';
+
 export interface McpToolSummary {
   name: string;
   write: boolean;
+  /** True when the server itself annotated the tool, rather than us guessing. */
+  declared: boolean;
+  mode: McpToolMode;
 }
 
 export interface McpServerSummary {
@@ -80,6 +85,13 @@ export const mcpService = {
       { ...REGISTER_OPTIONS, method: 'POST', cache: 'no-store' },
     );
     return { server: data.server, warning: data.warning };
+  },
+
+  async setToolMode(label: string, toolName: string, mode: McpToolMode): Promise<void> {
+    await apiRequest(
+      `${API_BASE}/${encodeURIComponent(label)}/tools/${encodeURIComponent(toolName)}`,
+      { method: 'PATCH', body: JSON.stringify({ mode }), retries: 0, cache: 'no-store' },
+    );
   },
 
   async remove(label: string): Promise<void> {

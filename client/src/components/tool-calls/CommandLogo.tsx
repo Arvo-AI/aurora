@@ -395,6 +395,18 @@ const logos = {
   )
 }
 
+/** Tool names exposed by the built-in GitHub MCP server, as `mcp_<name>`. */
+const GITHUB_MCP_TOOLS = new Set([
+  'search_repositories', 'create_repository', 'get_repository', 'list_repositories',
+  'get_file_contents', 'create_or_update_file', 'push_files', 'create_issue',
+  'get_issue', 'list_issues', 'update_issue', 'add_issue_comment',
+  'create_pull_request', 'list_pull_requests', 'get_pull_request',
+  'create_pull_request_review', 'merge_pull_request', 'get_pull_request_files',
+  'get_pull_request_status', 'update_pull_request_branch', 'get_pull_request_comments',
+  'get_pull_request_reviews', 'create_release', 'fork_repository', 'create_branch',
+  'list_commits', 'search_code', 'search_issues', 'search_users',
+])
+
 const getLogoForCommand = (command: string | any, toolName: string, provider?: string): keyof typeof logos => {
   const cmd = (typeof command === 'string' ? command : String(command || '')).toLowerCase().trim()
   const tool = toolName.toLowerCase()
@@ -587,40 +599,12 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
     return 'aws'
   }
 
-  // GitHub MCP tools - detect with mcp_ prefix
+  // GitHub's MCP server registers its tools as `mcp_<tool>`. Customer-registered
+  // MCP servers are namespaced `mcp_<label>_<tool>`, so matching the tool name
+  // *exactly* after the prefix is what keeps the two apart -- a substring match
+  // gave any custom server exposing a `get_issue` the GitHub logo.
   const isGithubMcpTool = (
-    // Check for GitHub MCP tools with mcp_ prefix
-    tool.startsWith('mcp_') && (
-      tool.includes('search_repositories') ||
-      tool.includes('create_repository') ||
-      tool.includes('get_repository') ||
-      tool.includes('list_repositories') ||
-      tool.includes('get_file_contents') ||
-      tool.includes('create_or_update_file') ||
-      tool.includes('push_files') ||
-      tool.includes('create_issue') ||
-      tool.includes('get_issue') ||
-      tool.includes('list_issues') ||
-      tool.includes('update_issue') ||
-      tool.includes('add_issue_comment') ||
-      tool.includes('create_pull_request') ||
-      tool.includes('list_pull_requests') ||
-      tool.includes('get_pull_request') ||
-      tool.includes('create_pull_request_review') ||
-      tool.includes('merge_pull_request') ||
-      tool.includes('get_pull_request_files') ||
-      tool.includes('get_pull_request_status') ||
-      tool.includes('update_pull_request_branch') ||
-      tool.includes('get_pull_request_comments') ||
-      tool.includes('get_pull_request_reviews') ||
-      tool.includes('create_release') ||
-      tool.includes('fork_repository') ||
-      tool.includes('create_branch') ||
-      tool.includes('list_commits') ||
-      tool.includes('search_code') ||
-      tool.includes('search_issues') ||
-      tool.includes('search_users')
-    ) ||
+    (tool.startsWith('mcp_') && GITHUB_MCP_TOOLS.has(tool.slice(4))) ||
     tool === 'github' ||
     tool === 'github_rca' ||
     // Also check command for GitHub-related keywords

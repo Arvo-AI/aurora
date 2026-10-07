@@ -24,20 +24,26 @@ MAX_TOOL_NAME_CHARS = 64
 TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 TOOL_PREFIX = "mcp"
 
-# Read-prefix allowlist. Inverted relative to the built-in servers' denylist in
+# Read-verb allowlist, used only when the server declares no annotations.
+# Inverted relative to the built-in servers' denylist in
 # mcp_tools.is_destructive_mcp_tool: that one knows its servers' naming, while a
 # customer server can call a destructive tool anything ("purge_cache", "apply",
 # "scale"). Unknown names must therefore be treated as writes, not reads.
-READ_PREFIXES = (
-    "get_", "get-",
-    "list_", "list-",
-    "search_", "search-",
-    "read_", "read-",
-    "describe_", "describe-",
-    "query_", "query-",
-    "fetch_", "fetch-",
-    "check_", "check-",
+READ_VERBS = (
+    "get", "list", "search", "read", "describe", "query", "fetch", "check",
+    # Verbs real servers use for pure lookups: Context7 names its lookup
+    # "resolve-library-id", DeepWiki names one "ask_wiki_question". Omitting
+    # these classified both as destructive.
+    "resolve", "ask", "find", "show", "view", "inspect", "lookup", "count",
+    "diff", "explain", "summarize", "analyze", "validate",
 )
+READ_PREFIXES = tuple(f"{verb}{sep}" for verb in READ_VERBS for sep in ("_", "-"))
+
+# Per-tool user override of the automatic classification.
+#   auto   -- follow the classifier (reads free, writes gated, writes off in RCA)
+#   always -- the user vouched for this tool: no prompt, available in RCA too
+#   never  -- never expose it, whatever the classifier or the server says
+TOOL_MODES = ("auto", "always", "never")
 
 
 def slugify_label(raw: Any) -> str:
@@ -46,9 +52,32 @@ def slugify_label(raw: Any) -> str:
     return text[:MAX_LABEL_CHARS].strip("-")
 
 
-def is_read_tool(tool_name: str) -> bool:
-    """True if the tool name begins with a known read verb."""
-    return str(tool_name or "").lower().startswith(READ_PREFIXES)
+def is_read_tool(tool: Any) -> bool:
+    """Whether a tool is safe to run without confirmation.
+
+    Accepts a tool dict (preferred) or a bare name. Precedence:
+
+    1. ``annotations.destructiveHint`` -- an explicit "this mutates" always wins.
+    2. ``annotations.readOnlyHint`` -- trust the server author over our guess.
+       Context7 sets this on both its tools; ignoring it classified its
+       mandatory ``resolve-library-id`` lookup as destructive and withheld it.
+    3. Name verb, for servers that send no annotations at all (DeepWiki).
+
+    A hostile server can of course claim ``readOnlyHint`` on a destructive tool.
+    That is what the per-tool ``never`` override and the read-only registration
+    switch exist for; annotations buy accuracy, not trust.
+    """
+    if isinstance(tool, dict):
+        name = tool.get("name", "")
+        annotations = tool.get("annotations")
+        if isinstance(annotations, dict):
+            if annotations.get("destructiveHint") is True:
+                return False
+            if annotations.get("readOnlyHint") is True:
+                return True
+    else:
+        name = tool
+    return str(name or "").lower().startswith(READ_PREFIXES)
 
 
 def qualified_tool_name(label: str, tool_name: str) -> str:
@@ -67,6 +96,39 @@ def qualified_tool_name(label: str, tool_name: str) -> str:
     return f"{name[: MAX_TOOL_NAME_CHARS - 9]}_{digest}"
 
 
+def tool_mode(server: Dict[str, Any], tool_name: str) -> str:
+    """The user's override for one tool, defaulting to ``auto``.
+
+    Reads the legacy ``allow_in_background`` list as ``always`` so servers
+    registered before per-tool modes existed keep working.
+    """
+    modes = server.get("tool_modes")
+    if isinstance(modes, dict):
+        mode = modes.get(tool_name)
+        if mode in TOOL_MODES:
+            return mode
+    if tool_name in (server.get("allow_in_background") or []):
+        return "always"
+    return "auto"
+
+
+def fingerprint(user_id: str) -> str:
+    """Cheap identity of a user's MCP config, for cache keys.
+
+    Changes whenever a server is registered, refreshed, removed, or a tool mode
+    is flipped -- all of which change the tool list the agent is built with.
+    Returns "" on any failure so a Vault hiccup degrades to the old behaviour
+    (a stale list for one cache window) rather than breaking tool building.
+    """
+    try:
+        return ",".join(sorted(
+            f"{s.get('label')}@{s.get('validated_at')}:{sorted((s.get('tool_modes') or {}).items())}"
+            for s in list_servers(user_id)
+        ))
+    except Exception:
+        return ""
+
+
 def server_summary(server: Dict[str, Any]) -> Dict[str, Any]:
     """Credential-free view of a server, safe for API responses and the agent."""
     tools = server.get("tools") or []
@@ -79,10 +141,15 @@ def server_summary(server: Dict[str, Any]) -> Dict[str, Any]:
         "readOnly": bool(server.get("read_only", True)),
         "toolCount": len(tools),
         "tools": [
-            {"name": t.get("name", ""), "write": not is_read_tool(t.get("name", ""))}
+            {
+                "name": t.get("name", ""),
+                "write": not is_read_tool(t),
+                # Lets the UI say "the server told us" rather than "we guessed".
+                "declared": isinstance(t.get("annotations"), dict),
+                "mode": tool_mode(server, t.get("name", "")),
+            }
             for t in tools
         ],
-        "allowInBackground": list(server.get("allow_in_background") or []),
         "validatedAt": server.get("validated_at"),
     }
 
@@ -132,6 +199,37 @@ def upsert_server(user_id: str, server: Dict[str, Any]) -> Tuple[bool, str]:
         servers.append(server)
     else:
         servers[existing] = server
+    save_servers(user_id, servers)
+    return True, ""
+
+
+def set_tool_mode(user_id: str, label: str, tool_name: str, mode: str) -> Tuple[bool, str]:
+    """Persist one tool's override. Returns (ok, error_message).
+
+    Targeted rather than a full upsert so changing a mode never re-probes the
+    server or risks overwriting its cached tool list.
+    """
+    if mode not in TOOL_MODES:
+        return False, f"mode must be one of: {', '.join(TOOL_MODES)}"
+
+    target = slugify_label(label)
+    servers = list_servers(user_id)
+    server = next((s for s in servers if s.get("label") == target), None)
+    if server is None:
+        return False, "Unknown MCP server"
+    if not any(t.get("name") == tool_name for t in server.get("tools") or []):
+        return False, f"Server '{target}' exposes no tool named '{tool_name}'"
+
+    modes = dict(server.get("tool_modes") or {})
+    # Drop the legacy list once modes exist, so the two cannot disagree.
+    for legacy in server.pop("allow_in_background", None) or []:
+        modes.setdefault(legacy, "always")
+    if mode == "auto":
+        modes.pop(tool_name, None)
+    else:
+        modes[tool_name] = mode
+    server["tool_modes"] = modes
+
     save_servers(user_id, servers)
     return True, ""
 
@@ -187,7 +285,7 @@ def mcp_servers_section(user_id: str) -> str:
         lines.append(f"- {server['label']} ({len(tools)} tools)")
         for tool in tools:
             name = tool.get("name", "")
-            marker = "" if is_read_tool(name) else "  [write — needs confirmation]"
+            marker = "" if is_read_tool(tool) else "  [write — needs confirmation]"
             summary = (tool.get("description") or "").strip().splitlines()
             first_line = summary[0][:120] if summary else ""
             lines.append(

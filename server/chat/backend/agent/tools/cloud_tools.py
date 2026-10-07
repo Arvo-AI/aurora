@@ -997,6 +997,7 @@ from .mcp_tools import (
     _langchain_tools_cache_expiry,
     LANGCHAIN_TOOLS_CACHE_DURATION
 )
+from connectors.mcp_connector.store import fingerprint as mcp_fingerprint
 
 
 _NON_RCA_SOURCES = frozenset(('action', 'prediscovery'))
@@ -1090,7 +1091,11 @@ def get_cloud_tools():
     # hpa_vpa is part of the key for the same reason postmortem is: it changes
     # which tools are returned, so sharing a cache entry across contexts would
     # leak the card tool into an ordinary chat (or withhold it from the action).
-    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}"
+    # The MCP fingerprint is in the key so connecting a server takes effect on
+    # the next turn: without it the agent ran on a stale tool list for up to
+    # LANGCHAIN_TOOLS_CACHE_DURATION after registration and insisted the tools
+    # did not exist.
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}"
     
     current_time = time.time()
     if (

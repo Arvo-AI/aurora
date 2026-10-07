@@ -25,6 +25,7 @@ from connectors.mcp_connector.store import (
     is_read_tool,
     list_servers,
     qualified_tool_name,
+    tool_mode,
     update_auth,
 )
 from utils.auth.command_gate import gate_action
@@ -40,19 +41,30 @@ def is_mcp_connected(user_id: str) -> bool:
 
 
 def _tool_allowed(
-    server: Dict[str, Any], tool_name: str, is_background: bool, is_pr_review: bool
+    server: Dict[str, Any], tool: Dict[str, Any], is_background: bool, is_pr_review: bool
 ) -> bool:
     """Whether this tool may be offered to the agent in the current context.
 
-    Reads are always offered. Writes are offered in foreground chat only, where
-    ``gate_action`` can ask a human. In background (RCA) and PR review there is
-    no human to approve, so a write is withheld entirely rather than offered and
-    then denied mid-investigation.
+    The user's per-tool override wins over everything -- ``never`` hides a tool
+    the classifier called safe, and ``always`` means always, including during
+    RCA and PR review where nothing else can offer a write.
+
+    Otherwise: reads are always offered; writes only in foreground chat, where
+    ``gate_action`` can ask a human. In background there is nobody to approve,
+    so a write is withheld rather than offered and then denied mid-investigation.
+
+    ``read_only`` is enforced here rather than at registration, so flipping it
+    takes effect on the next turn without re-probing the server.
     """
-    if is_read_tool(tool_name):
+    mode = tool_mode(server, tool.get("name", ""))
+    if mode == "never":
+        return False
+    if mode == "always":
         return True
-    if tool_name in (server.get("allow_in_background") or []):
+    if is_read_tool(tool):
         return True
+    if server.get("read_only", True):
+        return False
     return not (is_background or is_pr_review)
 
 
@@ -182,7 +194,7 @@ def get_custom_mcp_tools(
         label = server["label"]
         for tool_def in server.get("tools") or []:
             tool_name = tool_def.get("name", "")
-            if not tool_name or not _tool_allowed(server, tool_name, is_background, is_pr_review):
+            if not tool_name or not _tool_allowed(server, tool_def, is_background, is_pr_review):
                 continue
 
             public_name = qualified_tool_name(label, tool_name)
@@ -198,7 +210,8 @@ def get_custom_mcp_tools(
                 server,
                 tool_name,
                 public_name,
-                needs_gate=not is_read_tool(tool_name),
+                needs_gate=not is_read_tool(tool_def)
+                and tool_mode(server, tool_name) != "always",
                 user_id=user_id,
                 send_tool_start=send_tool_start,
                 send_tool_completion=send_tool_completion,
@@ -213,6 +226,10 @@ def get_custom_mcp_tools(
                 "func": func,
                 "name": public_name,
                 "description": f"[MCP:{label}] {description}",
+                # Ask mode blocks the whole `mcp_` prefix because a bare tool name
+                # says nothing about what the tool does. Carry the classification
+                # we already computed so reads survive the filter.
+                "metadata": {"mcp_read_only": is_read_tool(tool_def)},
             }
             schema = extract_mcp_tool_schema(tool_def)
             if schema:

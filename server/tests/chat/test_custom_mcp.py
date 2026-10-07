@@ -11,6 +11,7 @@ import os
 import sys
 import time
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
@@ -102,6 +103,49 @@ def test_everything_else_is_a_write(name):
     assert not store.is_read_tool(name)
 
 
+@pytest.mark.parametrize("name", [
+    "resolve-library-id",   # Context7's mandatory lookup
+    "ask_wiki_question",    # DeepWiki
+    "find_services", "show_config", "lookup_host", "explain_query",
+])
+def test_lookup_verbs_are_reads(name):
+    """These read like writes to a naive prefix list but mutate nothing.
+
+    'resolve-library-id' is the regression: classifying Context7's lookup as
+    destructive meant a read-only registration dropped it, and query-docs is
+    useless without the ID it returns -- so the agent reported it could not
+    find anything.
+    """
+    assert store.is_read_tool(name)
+
+
+def test_server_annotations_beat_the_name_heuristic():
+    """A server that declares readOnlyHint knows better than our verb list."""
+    assert store.is_read_tool(
+        {"name": "purge_everything", "annotations": {"readOnlyHint": True}}
+    )
+
+
+def test_destructive_hint_overrides_a_read_looking_name():
+    assert not store.is_read_tool(
+        {"name": "get_and_delete_all", "annotations": {"destructiveHint": True}}
+    )
+
+
+def test_destructive_hint_wins_over_read_only_hint():
+    """A server sending both contradicts itself; resolve toward safety."""
+    assert not store.is_read_tool({
+        "name": "whatever",
+        "annotations": {"readOnlyHint": True, "destructiveHint": True},
+    })
+
+
+def test_name_heuristic_still_applies_without_annotations():
+    """DeepWiki sends no annotations at all, so the verb list must still work."""
+    assert store.is_read_tool({"name": "read_wiki_contents"})
+    assert not store.is_read_tool({"name": "delete_wiki", "annotations": {}})
+
+
 # --------------------------------------------------------------------------- #
 # Tool naming -- a bad name fails the whole model request, not just one tool
 # --------------------------------------------------------------------------- #
@@ -163,18 +207,154 @@ def _server(**overrides):
     return base
 
 
+READ = {"name": "list_devices", "description": "List devices", "inputSchema": {}}
+WRITE = {"name": "restart_device", "description": "Restart", "inputSchema": {}}
+
+
 def test_background_withholds_writes_but_keeps_reads():
     srv = _server()
-    assert _tool_allowed(srv, "list_devices", is_background=True, is_pr_review=False)
-    assert not _tool_allowed(srv, "restart_device", is_background=True, is_pr_review=False)
-    assert not _tool_allowed(srv, "restart_device", is_background=False, is_pr_review=True)
+    assert _tool_allowed(srv, READ, is_background=True, is_pr_review=False)
+    assert not _tool_allowed(srv, WRITE, is_background=True, is_pr_review=False)
+    assert not _tool_allowed(srv, WRITE, is_background=False, is_pr_review=True)
     # Foreground chat may offer the write (gate_action prompts the human).
-    assert _tool_allowed(srv, "restart_device", is_background=False, is_pr_review=False)
+    assert _tool_allowed(srv, WRITE, is_background=False, is_pr_review=False)
 
 
 def test_allow_in_background_readmits_a_named_write():
     srv = _server(allow_in_background=["restart_device"])
-    assert _tool_allowed(srv, "restart_device", is_background=True, is_pr_review=False)
+    assert _tool_allowed(srv, WRITE, is_background=True, is_pr_review=False)
+
+
+def test_read_only_server_withholds_writes_even_in_chat():
+    """read_only is enforced at build time now that registration keeps every tool.
+
+    Without this the switch would be decorative: the tools are stored, so
+    nothing else would stop the agent from calling them.
+    """
+    srv = _server(read_only=True)
+    assert _tool_allowed(srv, READ, is_background=False, is_pr_review=False)
+    assert not _tool_allowed(srv, WRITE, is_background=False, is_pr_review=False)
+
+
+# --------------------------------------------------------------------------- #
+# Per-tool overrides
+# --------------------------------------------------------------------------- #
+
+def test_always_beats_every_other_restriction():
+    """The user said always, so read_only and RCA must not override them."""
+    srv = _server(read_only=True, tool_modes={"restart_device": "always"})
+    assert _tool_allowed(srv, WRITE, is_background=True, is_pr_review=False)
+    assert _tool_allowed(srv, WRITE, is_background=False, is_pr_review=True)
+
+
+def test_never_hides_a_tool_the_classifier_called_safe():
+    srv = _server(tool_modes={"list_devices": "never"})
+    assert not _tool_allowed(srv, READ, is_background=False, is_pr_review=False)
+
+
+def test_always_suppresses_the_confirmation_prompt():
+    """``needs_gate`` is what makes a write prompt; always must clear it."""
+    srv = _server(tool_modes={"restart_device": "always"})
+    assert store.tool_mode(srv, "restart_device") == "always"
+    assert store.tool_mode(srv, "list_devices") == "auto", "default is auto"
+
+
+def test_set_tool_mode_rejects_junk(fake_vault):
+    store.upsert_server("u1", _server())
+    assert store.set_tool_mode("u1", "netbox", "restart_device", "sometimes")[0] is False
+    assert store.set_tool_mode("u1", "nope", "restart_device", "always")[0] is False
+    # A tool the server does not expose is a typo, not a setting to remember.
+    assert store.set_tool_mode("u1", "netbox", "no_such_tool", "always")[0] is False
+
+
+def test_set_tool_mode_persists_without_touching_the_tool_list(fake_vault):
+    store.upsert_server("u1", _server())
+    assert store.set_tool_mode("u1", "netbox", "restart_device", "always") == (True, "")
+    stored = fake_vault["blob"]["servers"][0]
+    assert stored["tool_modes"] == {"restart_device": "always"}
+    assert len(stored["tools"]) == 2, "changing a mode must not re-probe or drop tools"
+
+
+def test_legacy_allow_in_background_still_reads_as_always():
+    """Servers registered before per-tool modes existed must keep working."""
+    assert store.tool_mode(_server(allow_in_background=["restart_device"]),
+                           "restart_device") == "always"
+
+
+def test_ask_mode_keeps_custom_mcp_reads_but_not_writes():
+    """Ask mode blocks the whole ``mcp_`` prefix; reads must opt back in.
+
+    Regression: every Context7 tool was dropped after being built, so the agent
+    answered from guesswork instead of the server. The classification has to
+    travel with the tool because the filter only sees its name.
+    """
+    from chat.backend.agent.access.mode_access_controller import ModeAccessController
+    from langchain_core.tools import StructuredTool
+
+    def _tool(name, read_only):
+        return StructuredTool.from_function(
+            func=lambda **_: "ok", name=name, description="d",
+            metadata={"mcp_read_only": read_only},
+        )
+
+    read, write = _tool("mcp_c7_query_docs", True), _tool("mcp_c7_purge", False)
+    kept = [t.name for t in ModeAccessController.filter_tools("ask", [read, write])]
+    assert kept == ["mcp_c7_query_docs"]
+    # Agent mode is unaffected: both remain available.
+    assert len(ModeAccessController.filter_tools("agent", [read, write])) == 2
+
+
+def test_custom_tools_carry_their_read_classification():
+    """The metadata tag is what survives into ``filter_tools``."""
+    source = (Path(__file__).parents[2] / "chat" / "backend" / "agent" / "tools"
+              / "custom_mcp_tools.py").read_text()
+    assert '"metadata": {"mcp_read_only": is_read_tool(tool_def)}' in source
+
+
+def test_fingerprint_changes_when_the_tool_list_would(fake_vault):
+    """The tool-list cache keys on this; it must move whenever tools change.
+
+    Regression: registering a server left the agent on a stale cached tool list
+    for 10 minutes, so it insisted the new tools did not exist.
+    """
+    store.upsert_server("u1", _server())
+    before = store.fingerprint("u1")
+    assert before, "a registered server must produce a non-empty fingerprint"
+
+    store.upsert_server("u1", _server(label="linear"))
+    after_add = store.fingerprint("u1")
+    assert after_add != before, "registering a server must invalidate"
+
+    store.set_tool_mode("u1", "netbox", "restart_device", "never")
+    assert store.fingerprint("u1") != after_add, "a mode change must invalidate"
+
+    store.remove_server("u1", "linear")
+    assert store.fingerprint("u1") != after_add, "removal must invalidate"
+
+
+def test_fingerprint_is_stable_and_fails_soft(monkeypatch):
+    """Stable across calls, and a Vault outage must not break tool building."""
+    monkeypatch.setattr(store, "list_servers", lambda uid: [_server()])
+    assert store.fingerprint("u1") == store.fingerprint("u1")
+
+    def _boom(uid):
+        raise RuntimeError("vault down")
+
+    monkeypatch.setattr(store, "list_servers", _boom)
+    assert store.fingerprint("u1") == ""
+
+
+def test_refresh_preserves_tool_modes():
+    """A refresh re-probes the server; it must not reset the user's choices.
+
+    Asserted against the source text rather than by calling the route, because
+    importing the blueprint needs a live Redis for the OAuth state cache.
+    """
+    source = (Path(__file__).parents[2] / "routes" / "mcp" / "mcp_routes.py").read_text()
+    refresh = source.split("def refresh_server")[1].split("\n@")[0]
+    register = source.split("def _register")[1].split("\n@")[0]
+    assert "toolModes" in refresh, "refresh must pass the stored modes through"
+    assert '"tool_modes": tool_modes' in register, "_register must persist them"
 
 
 # --------------------------------------------------------------------------- #
@@ -350,27 +530,31 @@ def test_flatten_marks_errors_and_empty_results():
     assert flatten_content(Empty()) == "(tool returned no content)"
 
 
-def test_probe_does_not_truncate_before_read_filtering():
-    """probe() must return every tool; the route caps *after* filtering.
+def test_probe_returns_every_tool_untruncated():
+    """Capping belongs to the caller, which sorts reads first before cutting.
 
-    A server listing 30 writes followed by 5 reads would otherwise report
-    "no read-only tools" when registered read-only, because the reads fell
-    outside the cap.
+    A server listing 30 writes then 5 reads would otherwise strand the reads
+    outside the cap and report "no read-only tools".
     """
     import inspect
 
     from connectors.mcp_connector import client as mcp_client
 
-    source = inspect.getsource(mcp_client.probe)
-    assert "tools[:MAX_TOOLS_PER_SERVER]" not in source, (
-        "probe truncates before the route can filter reads from writes"
+    assert "MAX_TOOLS_PER_SERVER" not in inspect.getsource(mcp_client.probe), (
+        "probe truncates before the route can sort reads ahead of writes"
     )
-    route_source = inspect.getsource(
-        __import__("routes.mcp.mcp_routes", fromlist=["_register"])._register
+
+
+def test_registration_cap_keeps_reads_ahead_of_writes():
+    """The route's cap must not strand reads behind a wall of writes."""
+    from connectors.mcp_connector.client import MAX_TOOLS_PER_SERVER
+
+    tools = (
+        [{"name": f"delete_{i}"} for i in range(MAX_TOOLS_PER_SERVER)]
+        + [{"name": "get_the_one_that_matters"}]
     )
-    filter_at = route_source.index("is_read_tool")
-    cap_at = route_source.index("MAX_TOOLS_PER_SERVER")
-    assert filter_at < cap_at, "cap must come after the read/write filter"
+    kept = sorted(tools, key=lambda t: not store.is_read_tool(t))[:MAX_TOOLS_PER_SERVER]
+    assert any(t["name"] == "get_the_one_that_matters" for t in kept)
 
 
 def test_description_cap_is_sane():

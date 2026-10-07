@@ -225,11 +225,23 @@ def _clean_tool(tool: Any) -> Optional[Dict[str, Any]]:
         return None
     description = (getattr(tool, "description", "") or "")[:MAX_DESCRIPTION_CHARS]
     schema = getattr(tool, "inputSchema", None)
-    return {
+    cleaned = {
         "name": name,
         "description": description,
         "inputSchema": schema if isinstance(schema, dict) else {},
     }
+    # Keep only the two hints that drive classification. The SDK model carries
+    # more (title, idempotentHint, openWorldHint) that we would be storing in
+    # Vault for nothing.
+    annotations = getattr(tool, "annotations", None)
+    hints = {
+        key: getattr(annotations, key)
+        for key in ("readOnlyHint", "destructiveHint")
+        if isinstance(getattr(annotations, key, None), bool)
+    } if annotations is not None else {}
+    if hints:
+        cleaned["annotations"] = hints
+    return cleaned
 
 
 async def probe(

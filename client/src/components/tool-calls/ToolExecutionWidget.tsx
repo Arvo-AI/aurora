@@ -15,7 +15,7 @@ import { GitHubCommitTool } from "@/components/GitHubCommitTool"
 import {
   extractIacAction,
   parseCloudExecCommand,
-  parseGitHubToolCommand,
+  parseMcpToolCommand,
   parseGitHubRcaCommand,
   parseJenkinsRcaCommand,
   parseCloudbeesRcaCommand,
@@ -141,9 +141,9 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
       ? tool.command
       : parsed.command
   }
-  // GitHub MCP tools parsing
+  // MCP tool parsing (built-in GitHub/AWS servers and customer-registered ones)
   else if (tool.tool_name.startsWith("mcp_") && typeof command === "string" && command.trim().startsWith("{")) {
-    command = parseGitHubToolCommand(tool.tool_name, command)
+    command = parseMcpToolCommand(tool.tool_name, command)
   }
   // GitHub RCA tool parsing
   else if (tool.tool_name === "github_rca" && typeof command === "string" && command.trim().startsWith("{")) {

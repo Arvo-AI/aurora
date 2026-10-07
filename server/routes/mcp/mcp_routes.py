@@ -40,6 +40,7 @@ from connectors.mcp_connector.store import (
     is_read_tool,
     remove_server,
     server_summary,
+    set_tool_mode,
     slugify_label,
     upsert_server,
 )
@@ -125,6 +126,9 @@ def _register(user_id: str, data: Dict[str, Any], label: str) -> Tuple[Any, int]
     allow_in_background = [
         str(t) for t in (data.get("allowInBackground") or data.get("allow_in_background") or [])
     ]
+    # Carried through rather than rebuilt: a refresh re-probes the server, and
+    # dropping these would silently reset every per-tool override the user set.
+    tool_modes = data.get("toolModes") or data.get("tool_modes") or {}
 
     # The probe can refresh an OAuth token; keep whichever blob we end up with
     # so the stored credentials are the ones that actually worked.
@@ -148,17 +152,21 @@ def _register(user_id: str, data: Dict[str, Any], label: str) -> Tuple[Any, int]
         logger.exception("[MCP] Unexpected probe failure for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to connect to the MCP server"}), 502
 
-    if bool(read_only):
-        tools = [t for t in tools if is_read_tool(t.get("name", ""))]
-        if not tools:
-            return jsonify({
-                "error": "This server exposes no read-only tools. Uncheck read-only to "
-                         "register its write tools (they will require confirmation)."
-            }), 400
+    # Every tool is stored regardless of read_only, which is applied as a filter
+    # at agent-build time instead. Dropping tools here made the switch
+    # destructive: flipping it later required re-registering the server, and the
+    # cached list no longer described what the server actually offers.
+    if bool(read_only) and not any(is_read_tool(t) for t in tools):
+        return jsonify({
+            "error": "This server exposes no read-only tools. Uncheck read-only to "
+                     "register its write tools (they will require confirmation)."
+        }), 400
 
-    # Cap after filtering so a server's reads are never hidden behind its writes.
     truncated = len(tools) > MAX_TOOLS_PER_SERVER
-    tools = tools[:MAX_TOOLS_PER_SERVER]
+    if truncated:
+        # Keep reads first so a cap can never strand the tools the agent is
+        # most likely to need (GitHub's MCP exposes 49).
+        tools = sorted(tools, key=lambda t: not is_read_tool(t))[:MAX_TOOLS_PER_SERVER]
 
     server = {
         "label": label,
@@ -167,6 +175,7 @@ def _register(user_id: str, data: Dict[str, Any], label: str) -> Tuple[Any, int]
         "auth": final_auth,
         "read_only": bool(read_only),
         "allow_in_background": allow_in_background,
+        "tool_modes": tool_modes,
         "tools": tools,
         "validated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -343,10 +352,30 @@ def refresh_server(user_id, label):
         "transport": existing.get("transport"),
         "readOnly": existing.get("read_only", True),
         "allowInBackground": existing.get("allow_in_background") or [],
+        "toolModes": existing.get("tool_modes") or {},
         # Reuse the stored credentials verbatim rather than re-deriving them:
         # an OAuth blob cannot be rebuilt from form fields.
         "_auth": auth,
     }, existing["label"])
+
+
+@mcp_bp.route("/servers/<label>/tools/<tool_name>", methods=["PATCH"])
+@require_permission("connectors", "write")
+def patch_tool_mode(user_id, label, tool_name):
+    """Set one tool's override to auto, always or never.
+
+    Scoped to a single tool so the caller never has to round-trip the whole
+    server definition (and its cached tool list) to change one setting.
+    """
+    mode = str((request.get_json(silent=True) or {}).get("mode", ""))
+    ok, error = set_tool_mode(user_id, label, tool_name, mode)
+    if not ok:
+        return jsonify({"error": error}), 404 if "Unknown" in error else 400
+    logger.info(
+        "[MCP] Tool '%s' on '%s' set to '%s' for user %s",
+        sanitize(tool_name), sanitize(label), sanitize(mode), sanitize(user_id),
+    )
+    return jsonify({"success": True, "mode": mode})
 
 
 @mcp_bp.route("/servers/<label>", methods=["DELETE"])
