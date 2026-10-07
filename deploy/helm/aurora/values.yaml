@@ -297,6 +297,12 @@ config:
   SPLUNK_SSL_VERIFY: "false" # "false" (default), "true", or path to a private CA bundle
   ELASTIC_SSL_VERIFY: "true" # "true" (default), "false", or path to a private CA bundle
   AURORA_VERIFY_CLI_IDENTITY: "false"
+  # Custom MCP servers: by default Aurora refuses to connect to private, loopback
+  # or link-local addresses, which blocks SSRF (e.g. aiming it at cloud instance
+  # metadata). Set "true" for a self-hosted install whose MCP servers live on
+  # private addresses inside the cluster. Only safe when everyone holding
+  # connectors:write is trusted with whatever the cluster can reach.
+  MCP_ALLOW_PRIVATE_TARGETS: "false"
   
   # --- Optional Features (enable as needed) ---
   ENABLE_POD_ISOLATION: "false"               # Isolate terminal commands in separate pods
