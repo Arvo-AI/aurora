@@ -50,10 +50,9 @@ _OPTIONAL_PACKAGES = (
     "hvac", "redis", "celery", "flask_socketio",
     "flask_cors", "langchain", "langgraph", "requests", "tiktoken",
     "dotenv", "flask",
-    # The MCP SDK, used by connectors/mcp_connector/client.py. CI does not install
-    # it, so the custom-MCP tests cover the pure logic against these stubs; the
-    # protocol itself is exercised by tests/manual/mcp_e2e_check.py. httpx comes
-    # in with the SDK, so it is absent from CI for the same reason.
+    # The MCP SDK, used by connectors/mcp_connector/client.py. CI does not
+    # install it, so it is stubbed here. httpx comes in with the SDK, so it is
+    # absent from CI for the same reason.
     "mcp", "mcp.client", "mcp.client.sse", "mcp.client.streamable_http",
     "mcp.client.auth", "httpx",
     "langchain_core", "langchain_core.tools", "langchain_core.language_models",

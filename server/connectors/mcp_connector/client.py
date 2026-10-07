@@ -1,13 +1,10 @@
 """MCP protocol client for customer-registered remote MCP servers.
 
 Remote transports only: Streamable HTTP, or HTTP+SSE for servers that predate
-it. The transport is detected at registration (streamable HTTP, then SSE) and
-stored, so later calls go straight to the one that worked. stdio is
-deliberately unsupported -- spawning a customer-supplied command inside the
-Aurora container would be remote code execution.
-
-No connection pooling or session reuse -- each call opens a session and closes
-it. See the ponytail note on ``_run``.
+it. The transport is detected at registration and stored, so later calls go
+straight to the one that worked. stdio is deliberately unsupported -- spawning a
+customer-supplied command inside the Aurora container would be remote code
+execution.
 """
 
 from __future__ import annotations
@@ -18,23 +15,8 @@ from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
 
-from connectors.mcp_connector.net import allow_private_targets, assert_allowed_target
+from connectors.mcp_connector.net import assert_allowed_target
 from connectors.mcp_connector.oauth import OAuthDiscoveryError, is_expired, refresh_token
-
-__all__ = [
-    "AUTH_TYPES",
-    "MAX_DESCRIPTION_CHARS",
-    "MAX_TOOLS_PER_SERVER",
-    "TRANSPORTS",
-    "MCPAuthError",
-    "MCPConnectionError",
-    "allow_private_targets",
-    "assert_allowed_target",
-    "build_headers",
-    "call",
-    "flatten_content",
-    "probe",
-]
 
 _T = TypeVar("_T")
 
@@ -70,25 +52,27 @@ class MCPAuthError(MCPConnectionError):
     """
 
 
-def _is_auth_failure(exc: BaseException) -> bool:
-    """True when the exception chain carries a genuine HTTP 401/403.
+def _auth_failure_status(exc: BaseException) -> Optional[int]:
+    """The HTTP 401 or 403 carried by the exception chain, else None.
 
-    Status code only -- never message text. A proxy's 403 body, a gateway page,
-    or a tool result that merely mentions "401" must not be reported as "check
-    your token", which sends the user to fix a credential that was never the
-    problem. This also gates the OAuth refresh retry, so a false positive would
-    hammer the vendor's token endpoint on an unrelated network error.
+    Status code only -- never message text. A proxy's 403 body or a tool result
+    that merely mentions "401" must not be reported as "check your token". This
+    also gates the OAuth refresh retry, so a false positive would hammer the
+    vendor's token endpoint on an unrelated network error.
+
+    The code is returned rather than a bool because 401 means a bad or expired
+    credential and 403 means a valid one without the required access.
     """
     response = getattr(exc, "response", None)
-    if getattr(response, "status_code", None) in (401, 403):
-        return True
-    if getattr(exc, "status_code", None) in (401, 403):
-        return True
+    for status in (getattr(response, "status_code", None), getattr(exc, "status_code", None)):
+        if status in (401, 403):
+            return status
     for sub in getattr(exc, "exceptions", ()) or ():
-        if _is_auth_failure(sub):
-            return True
+        found = _auth_failure_status(sub)
+        if found:
+            return found
     cause = exc.__cause__
-    return cause is not None and _is_auth_failure(cause)
+    return _auth_failure_status(cause) if cause is not None else None
 
 
 def build_headers(auth: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -119,27 +103,20 @@ async def _run(
     auth blob so the caller can persist it -- most servers rotate the refresh
     token, and dropping the new one disconnects the server at the next expiry.
 
-    No automatic transport fallback: the user picks the transport when
-    registering, and silently trying the other one turned a single wrong URL
-    into two confusing failures. SSE stays selectable for servers that only
-    speak the older HTTP+SSE protocol.
-
     ponytail: one handshake per operation, no session reuse or pooling. Ceiling
     is added latency on turns that make several calls to the same server.
     Upgrade path: cache the session per (user, server) behind a short TTL.
     """
     assert_allowed_target(url)
 
-    # "auto" (the default for a new registration) tries streamable HTTP and
-    # falls back to SSE, the order the MCP spec recommends. Users cannot be
-    # expected to know which one a URL speaks, so it is detected rather than
-    # asked; ``probe`` returns whichever worked and the caller stores it, so
-    # only the first connection ever pays for two attempts.
+    # "auto" (the default for a new registration) tries streamable HTTP then
+    # SSE, the order the MCP spec recommends. Users cannot be expected to know
+    # which one a URL speaks. ``probe`` returns whichever worked and the caller
+    # stores it, so only the first connection ever pays for two attempts.
     chosen = transport if transport in TRANSPORTS else "auto"
 
     # Refresh up front when the token is already known to be expired: the
-    # request would fail anyway, and this saves a guaranteed-404 round-trip to
-    # the customer's server on every call after expiry.
+    # request would fail anyway, and this saves a guaranteed round-trip.
     if is_expired(auth) and _can_refresh(auth):
         auth = await _refresh(auth)
         if on_refresh:
@@ -222,9 +199,16 @@ async def _attempt(
                 await session.initialize()
                 return await op(session)
     except Exception as exc:
-        if _is_auth_failure(exc):
+        status = _auth_failure_status(exc)
+        if status == 403:
             raise MCPAuthError(
-                "Server rejected the credentials (HTTP 401/403). Check the token."
+                "The server accepted the credentials but refused access (HTTP 403). "
+                "The token is valid; it lacks the permissions this server needs."
+            ) from exc
+        if status:
+            raise MCPAuthError(
+                "The server rejected the credentials (HTTP 401). Check that the "
+                "token is correct, complete, and has not expired."
             ) from exc
         raise MCPConnectionError(_describe(exc)) from exc
 
@@ -284,10 +268,8 @@ async def probe(
     """Handshake and list every tool. Returns (tools, transport_used).
 
     ``transport`` defaults to "auto", which tries streamable HTTP then SSE. Pass
-    a stored value to skip detection.
-
-    Raises ``ValueError`` for a rejected URL, ``MCPAuthError`` for bad
-    credentials, ``MCPConnectionError`` for anything else.
+    a stored value to skip detection. Raises ``ValueError`` for a rejected URL,
+    ``MCPAuthError`` for bad credentials, ``MCPConnectionError`` otherwise.
     """
 
     async def _list(session: ClientSession) -> List[Dict[str, Any]]:

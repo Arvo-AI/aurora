@@ -2,12 +2,11 @@
 
 Pure functions, no Flask. The flow spans two HTTP requests to Aurora (start,
 then callback), so it cannot use the SDK's ``OAuthClientProvider`` -- that helper
-blocks awaiting the authorization code on a loopback listener, which only works
-for a desktop app running in one process. We reuse the SDK's models and drive
-the steps ourselves.
+blocks awaiting the authorization code in one process, which only works for a
+desktop app. We drive the steps ourselves.
 
 Every outbound call here targets a URL derived from customer input, so each one
-goes through ``assert_allowed_target``. A server whose metadata points its
+goes through ``assert_allowed_target``: a server whose metadata points its
 authorization endpoint at 169.254.169.254 is the obvious SSRF bypass.
 """
 
@@ -138,9 +137,8 @@ async def discover(server_url: str) -> AuthServer:
 async def register_client(auth_server: AuthServer, redirect_uri: str) -> Dict[str, Any]:
     """Register Aurora as a client (RFC 7591). Returns {client_id, client_secret?}.
 
-    Requested as a public client: with PKCE there is no secret to store, which
-    is both simpler and safer. Servers that insist on a confidential client
-    return one anyway and we keep it.
+    Requested as a public client: with PKCE there is no secret to store. Servers
+    that insist on a confidential client return one anyway and we keep it.
     """
     if not auth_server.supports_dcr:
         raise OAuthRegistrationUnsupported(
@@ -171,12 +169,7 @@ async def register_client(auth_server: AuthServer, redirect_uri: str) -> Dict[st
 
 
 def _generate_pkce() -> Tuple[str, str]:
-    """Return a fresh (code_verifier, code_challenge) pair per RFC 7636 S256.
-
-    Stdlib rather than the SDK's PKCEParameters: four lines here, versus a hard
-    import that CI cannot satisfy and that a test stub would silently turn into
-    a constant verifier -- defeating the test that proves each flow differs.
-    """
+    """A fresh (code_verifier, code_challenge) pair per RFC 7636 S256."""
     verifier = secrets.token_urlsafe(64)[:128]
     digest = hashlib.sha256(verifier.encode()).digest()
     return verifier, base64.urlsafe_b64encode(digest).decode().rstrip("=")

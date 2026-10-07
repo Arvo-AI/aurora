@@ -89,6 +89,12 @@ def _parse_auth(data: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
     if len(token) > MAX_TOKEN_CHARS:
         return {}, "token is too long"
     auth: Dict[str, Any] = {"type": auth_type, "token": token.strip()}
+    # Length only, never the value. A credential that arrives truncated is
+    # indistinguishable from a wrong one in the server's 401, and this is the
+    # only way to tell "the user pasted a bad token" from "the form mangled it".
+    logger.info(
+        "[MCP] Parsed %s auth, token length %d", auth_type, len(token.strip())
+    )
 
     if auth_type == "header":
         name = data.get("headerName") or data.get("header_name") or ""
@@ -125,9 +131,6 @@ def _register(user_id: str, data: Dict[str, Any], label: str) -> Tuple[Any, int]
         if auth_error:
             return jsonify({"error": auth_error}), 400
 
-    allow_in_background = [
-        str(t) for t in (data.get("allowInBackground") or data.get("allow_in_background") or [])
-    ]
     # Carried through rather than rebuilt: a refresh re-probes the server, and
     # dropping these would silently reset every per-tool override the user set.
     tool_modes = data.get("toolModes") or data.get("tool_modes") or {}
@@ -165,7 +168,6 @@ def _register(user_id: str, data: Dict[str, Any], label: str) -> Tuple[Any, int]
         "url": url,
         "transport": transport_used,
         "auth": final_auth,
-        "allow_in_background": allow_in_background,
         "tool_modes": tool_modes,
         "tools": tools,
         "validated_at": datetime.now(timezone.utc).isoformat(),
@@ -220,12 +222,12 @@ def detect(user_id):
         return jsonify({"error": "Failed to connect to the MCP server"}), 502
 
     try:
-        auth_server = asyncio.run(discover(url))
+        asyncio.run(discover(url))
     except Exception:
         # No OAuth metadata is a normal outcome, not an error: it means the
         # server wants a plain API token.
         return jsonify({"authType": "token"})
-    return jsonify({"authType": "oauth", "supportsDcr": auth_server.supports_dcr})
+    return jsonify({"authType": "oauth"})
 
 
 @mcp_bp.route("/servers/oauth/start", methods=["POST"])
@@ -256,16 +258,13 @@ def oauth_start(user_id):
 
     try:
         auth_server = asyncio.run(discover(url))
-        client_id = str(data.get("clientId") or "").strip()
-        client_secret = str(data.get("clientSecret") or "").strip() or None
-        if not client_id:
-            creds = asyncio.run(register_client(auth_server, _redirect_uri()))
-            client_id, client_secret = creds["client_id"], creds.get("client_secret")
+        creds = asyncio.run(register_client(auth_server, _redirect_uri()))
+        client_id, client_secret = creds["client_id"], creds.get("client_secret")
     except ValueError as exc:  # SSRF guard on a discovered endpoint
         logger.warning("[MCP] OAuth target rejected for %s: %s", sanitize(user_id), sanitize(exc))
         return jsonify({"error": str(exc)}), 400
     except OAuthRegistrationUnsupported as exc:
-        return jsonify({"error": str(exc), "needsClientId": True}), 400
+        return jsonify({"error": str(exc)}), 400
     except OAuthDiscoveryError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception:
@@ -382,7 +381,6 @@ def refresh_server(user_id, label):
     return _register(user_id, {
         "url": existing.get("url"),
         "transport": existing.get("transport"),
-        "allowInBackground": existing.get("allow_in_background") or [],
         "toolModes": existing.get("tool_modes") or {},
         # Reuse the stored credentials verbatim rather than re-deriving them:
         # an OAuth blob cannot be rebuilt from form fields.
@@ -393,7 +391,7 @@ def refresh_server(user_id, label):
 @mcp_bp.route("/servers/<label>/tools/<tool_name>", methods=["PATCH"])
 @require_permission("connectors", "write")
 def patch_tool_mode(user_id, label, tool_name):
-    """Set one tool's override to auto, always or never.
+    """Set one tool's mode to allow or confirm.
 
     Scoped to a single tool so the caller never has to round-trip the whole
     server definition (and its cached tool list) to change one setting.

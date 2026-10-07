@@ -30,11 +30,8 @@ def assert_allowed_target(url: str) -> None:
     Raises ``ValueError`` with a user-facing message. Mirrors the SSRF guard in
     ``chat/backend/agent/tools/notion/workspace.py``: every resolved address
     must pass, so a hostname with both a public and a loopback A record cannot
-    slip through.
-
-    Applied to OAuth metadata, registration, and token endpoints too, not just
-    the MCP connection -- a server whose metadata points its token endpoint at
-    169.254.169.254 would otherwise be a clean bypass.
+    slip through. Applied to OAuth metadata, registration, and token endpoints
+    too, not just the MCP connection.
 
     ponytail: resolve-then-connect leaves a TOCTOU window (DNS can change
     between this check and the request). Accepted, same as the Notion path.

@@ -288,9 +288,15 @@ export default function McpAuthPage() {
       }
 
       if (authType === "none") {
-        // Nothing to collect, so saving is the obvious next step. The form
-        // state update is async, hence passing the payload explicitly.
-        const payload = { ...form, authType: "none" as const };
+        // The server answered without credentials, but a token in the form means
+        // the user wants to be authenticated. Servers that accept anonymous
+        // connections *and* honour a token (Hugging Face, which returns more
+        // tools when authenticated) report "none", so registering as "none" here
+        // would silently drop the token the user pasted.
+        const token = form.token?.trim();
+        const payload: McpRegisterPayload = token
+          ? { ...form, authType: form.authType === "header" ? "header" : "bearer" }
+          : { ...form, authType: "none" };
         setForm(payload);
         return await handleRegister(payload);
       }

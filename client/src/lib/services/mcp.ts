@@ -19,7 +19,6 @@ export interface McpServerSummary {
   authType: 'bearer' | 'header' | 'oauth' | 'none';
   toolCount: number;
   tools: McpToolSummary[];
-  allowInBackground: string[];
   validatedAt?: string;
 }
 
@@ -36,15 +35,12 @@ export interface McpRegisterPayload {
   authType: 'bearer' | 'header' | 'oauth' | 'none';
   token?: string;
   headerName?: string;
-  clientId?: string;
-  clientSecret?: string;
 }
 
 /** What a URL needs to connect, probed before the user is asked anything. */
 export interface McpDetectResult {
   authType: 'none' | 'oauth' | 'token';
   transport?: 'streamable_http' | 'sse';
-  supportsDcr?: boolean;
 }
 
 const API_BASE = '/api/mcp/servers';

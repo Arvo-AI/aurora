@@ -12,7 +12,6 @@ name, description and JSON schema entered the prompt on every turn, so three
 servers with 150 tools each cost ~160k tokens before the user typed anything.
 Same shape as ``get_connected_clusters`` then ``kubectl``: discover, then call.
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -73,7 +72,10 @@ class McpCallToolArgs(BaseModel):
 
 
 def is_mcp_connected(user_id: str) -> bool:
-    """True when the org has at least one registered MCP server."""
+    """True when the org has at least one registered MCP server.
+
+    Resolved by name from the ``mcp`` SKILL.md frontmatter, not called directly.
+    """
     return bool(list_servers(user_id))
 
 
@@ -314,10 +316,9 @@ def _arg_summary(tool_def: Dict[str, Any]) -> List[str]:
     """Argument names with types and required markers, instead of raw JSON Schema.
 
     Full schemas dominate a listing: 25 Linear tools cost 38KB, of which 30KB
-    was inputSchema, one tool contributing 8KB by itself. That recreated inside
-    a tool result the same blowup this indirection removes from the prompt.
-    The agent gets the full schema from ``mcp_list_tools(server=, tool=)`` or
-    from the missing_arguments error, both of which cover a single tool.
+    was inputSchema. That recreated inside a tool result the same blowup this
+    indirection removes from the prompt. The agent gets the full schema from
+    ``mcp_list_tools(server=, tool=)`` or from the missing_arguments error.
     """
     schema = tool_def.get("inputSchema") or {}
     properties = schema.get("properties") or {}
@@ -353,12 +354,9 @@ def _list_tools(
     with 150 tools each would otherwise return 1500 names and recreate the
     context blowup this indirection exists to prevent.
 
-    ``query`` without ``server`` searches across every server, so finding a
-    tool among ten of them costs one call instead of ten.
-
-    ``tool`` returns the full description and JSON Schema for that one tool.
-    Listings carry a compact arg summary instead, because full schemas are 80%
-    of a listing's bytes.
+    ``query`` without ``server`` searches across every server. ``tool`` returns
+    the full description and JSON Schema for that one tool; listings carry a
+    compact arg summary instead.
     """
     try:
         limit = max(1, min(int(limit), MAX_LIST_LIMIT))
@@ -437,8 +435,8 @@ def get_custom_mcp_tools(
 
     Registering one StructuredTool per remote tool put every name, description
     and JSON schema into the prompt on every turn: three servers with 150 tools
-    each cost ~160k tokens before the user said anything. These two cost a fixed
-    ~400 and read the same Vault cache on demand.
+    each cost ~160k tokens. These two cost a fixed ~400 and read the same Vault
+    cache on demand.
 
     The price is that the model can now name any string, so every rule that used
     to be enforced by *not building* a tool is enforced by refusing the call --
