@@ -11,6 +11,11 @@ from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import apply_correlation_outcome
+from services.incidents.repeat_investigation import (
+    lock_existing_incident,
+    should_start_investigation,
+    try_reopen_incident,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -743,10 +748,13 @@ def _try_correlate(cursor, conn, *, user_id, alert_db_id, fields, service,
 
 def _create_and_link_incident(cursor, conn, *, user_id, org_id, alert_db_id,
                               fields, service, normalized_severity,
-                              alert_metadata, received_at) -> Optional[str]:
-    """Create Aurora incident record and link the alert. Returns incident_id or None."""
-    # Environment (prod/staging/…) from the alert's attributes, when present.
+                              alert_metadata, received_at):
+    """Create or refresh the Aurora incident. Returns (incident_id, start_rca)."""
     environment = fields.get("environment") or None
+    existing = lock_existing_incident(
+        cursor, org_id=org_id, source_type="incidentio",
+        source_alert_id=alert_db_id, user_id=user_id,
+    )
     cursor.execute(
         """
         INSERT INTO incidents
@@ -756,7 +764,7 @@ def _create_and_link_incident(cursor, conn, *, user_id, org_id, alert_db_id,
         ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
         SET updated_at = CURRENT_TIMESTAMP,
             alert_metadata = EXCLUDED.alert_metadata
-        RETURNING id
+        RETURNING id, (xmax = 0) AS inserted
         """,
         (
             user_id, org_id, "incidentio", alert_db_id,
@@ -766,34 +774,49 @@ def _create_and_link_incident(cursor, conn, *, user_id, org_id, alert_db_id,
     )
     row = cursor.fetchone()
     incident_id = row[0] if row else None
+    was_inserted = bool(row[1]) if row else False
+    start_rca = should_start_investigation(
+        was_inserted, existing,
+        title=fields["incident_name"], service=service, severity=normalized_severity,
+    )
+    if incident_id and start_rca and not was_inserted:
+        if not try_reopen_incident(
+            cursor, log_prefix="[INCIDENTIO]",
+            incident_id=incident_id, user_id=user_id, org_id=org_id,
+            severity=normalized_severity, title=fields["incident_name"], service=service,
+            started_at=received_at, previous_status=existing.status if existing else None,
+        ):
+            start_rca = False
     conn.commit()
 
     if not incident_id:
-        return None
+        return None, False
 
-    try:
-        cursor.execute(
-            """INSERT INTO incident_alerts
-               (user_id, org_id, incident_id, source_type, source_alert_id,
-                alert_title, alert_service, alert_severity, correlation_strategy,
-                correlation_score, alert_metadata)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (
-                user_id, org_id, incident_id, "incidentio", alert_db_id,
-                fields["incident_name"], service, normalized_severity,
-                "primary", 1.0, json.dumps(alert_metadata),
-            ),
-        )
-        cursor.execute(
-            "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
-            (service, incident_id),
-        )
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        logger.warning("[INCIDENTIO] Failed to link alert: %s", e)
+    # Another row per replay would flood the incident with copies of the same alert.
+    if start_rca:
+        try:
+            cursor.execute(
+                """INSERT INTO incident_alerts
+                   (user_id, org_id, incident_id, source_type, source_alert_id,
+                    alert_title, alert_service, alert_severity, correlation_strategy,
+                    correlation_score, alert_metadata)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    user_id, org_id, incident_id, "incidentio", alert_db_id,
+                    fields["incident_name"], service, normalized_severity,
+                    "primary", 1.0, json.dumps(alert_metadata),
+                ),
+            )
+            cursor.execute(
+                "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
+                (service, incident_id),
+            )
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.warning("[INCIDENTIO] Failed to link alert: %s", e)
 
-    return str(incident_id)
+    return str(incident_id), start_rca
 
 
 @celery_app.task(
@@ -833,6 +856,7 @@ def _store_and_process_event(user_id: str, event_type: str,
     from utils.auth.stateless_auth import set_rls_context
 
     incident_id = None
+    start_rca = False
     service = ""
     normalized_severity = ""
     alert_metadata: Dict[str, Any] = {}
@@ -915,19 +939,21 @@ def _store_and_process_event(user_id: str, event_type: str,
                     )
                     return
 
-            incident_id = _create_and_link_incident(
+            incident_id, start_rca = _create_and_link_incident(
                 cursor, conn, user_id=user_id, org_id=org_id,
                 alert_db_id=alert_db_id, fields=fields, service=service,
                 normalized_severity=normalized_severity,
                 alert_metadata=alert_metadata, received_at=received_at,
             )
 
-    if incident_id:
+    if incident_id and start_rca:
         _trigger_rca_pipeline(
             user_id=user_id, incident_id=incident_id, fields=fields,
             payload=payload, alert_metadata=alert_metadata,
             service=service, severity=normalized_severity,
         )
+    elif incident_id:
+        logger.info("[INCIDENTIO] Repeat event for incident %s; keeping the existing RCA", incident_id)
 
 
 def _upsert_alert(cursor, conn, *, user_id, org_id, fields, payload,
