@@ -16,6 +16,24 @@ logger = logging.getLogger(__name__)
 
 CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4"
 
+# Ruleset engine phases.  Zone and account entry points share the names.
+PHASE_FIREWALL_CUSTOM = "http_request_firewall_custom"
+PHASE_FIREWALL_MANAGED = "http_request_firewall_managed"
+PHASE_RATELIMIT = "http_ratelimit"
+PHASE_REDIRECT = "http_request_dynamic_redirect"
+PHASE_CACHE = "http_request_cache_settings"
+PHASE_CONFIG = "http_config_settings"
+PHASE_ORIGIN = "http_request_origin"
+PHASE_TRANSFORM_URL = "http_request_transform"
+PHASE_TRANSFORM_REQUEST_HEADERS = "http_request_late_transform"
+PHASE_TRANSFORM_RESPONSE_HEADERS = "http_response_headers_transform"
+
+# Fields Cloudflare accepts when a rule is re-sent whole (rule PATCH has no
+# partial form: every field left out is dropped from the rule).
+RULE_EDITABLE_FIELDS = ("action", "action_parameters", "description", "enabled",
+                        "expression", "exposed_credential_check", "logging",
+                        "ratelimit", "ref")
+
 
 class CloudflareAPIError(Exception):
     """Raised when Cloudflare returns success=false in a 200 response."""
@@ -66,12 +84,24 @@ class CloudflareClient:
     # -----------------------------------------------------------------
 
     def list_accounts(self) -> List[Dict]:
-        """Return accounts the token has access to (first page only).
+        """Return every account the token can see. Paginates automatically.
 
-        We only need the first result, hence why we only fetch one page.
+        A user-owned token can span several accounts.  Keeping only the first
+        one hid every other account's zones and Workers from the agent.
         """
-        data = self._request("GET", "/accounts", params={"per_page": 1})
-        return data.get("result", [])
+        all_accounts: List[Dict] = []
+        page = 1
+
+        while True:
+            data = self._request("GET", "/accounts", params={"per_page": 50, "page": page})
+            all_accounts.extend(data.get("result", []))
+
+            total_pages = data.get("result_info", {}).get("total_pages", 1)
+            if page >= total_pages:
+                break
+            page += 1
+
+        return all_accounts
 
     def get_current_user(self) -> Dict:
         """Get the user associated with the current token."""
@@ -417,46 +447,52 @@ class CloudflareClient:
         return []
 
     # -----------------------------------------------------------------
-    # WAF / Firewall rules
+    # Rulesets (WAF custom rules, rate limiting, managed rules, cache /
+    # configuration / origin / redirect / transform rules)
+    #
+    # Cloudflare retired the Firewall Rules API and the previous Rate
+    # Limiting API on 2025-06-15; both endpoints now answer 410 Gone.
+    # Every rule type lives in a phase entry point ruleset instead.
     # -----------------------------------------------------------------
+
+    def get_phase_entrypoint(self, scope: str, scope_id: str, phase: str) -> Optional[Dict]:
+        """Return the entry point ruleset (rules included) for a phase.
+
+        ``scope`` is ``"zones"`` or ``"accounts"``.  Cloudflare answers 404
+        when nothing was ever deployed in that phase: that is "no rules",
+        not an error, so None is returned.
+        """
+        try:
+            data = self._request(
+                "GET", f"/{scope}/{scope_id}/rulesets/phases/{phase}/entrypoint")
+        except requests.exceptions.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                return None
+            raise
+        return data.get("result") or None
+
+    def get_ruleset(self, scope: str, scope_id: str, ruleset_id: str) -> Dict:
+        """Fetch one ruleset with its rules (zone or account scope)."""
+        data = self._request("GET", f"/{scope}/{scope_id}/rulesets/{ruleset_id}")
+        return data.get("result", {})
+
+    def list_rulesets(self, scope: str, scope_id: str) -> List[Dict]:
+        """List the rulesets visible at a scope (metadata only, no rules)."""
+        data = self._request("GET", f"/{scope}/{scope_id}/rulesets")
+        return data.get("result", [])
+
+    def list_phase_rules(self, scope: str, scope_id: str, phase: str) -> List[Dict]:
+        """Rules deployed in a phase at a scope, in evaluation order."""
+        ruleset = self.get_phase_entrypoint(scope, scope_id, phase)
+        return list((ruleset or {}).get("rules") or [])
 
     def list_firewall_rules(self, zone_id: str) -> List[Dict]:
-        """List all firewall rules for a zone. Paginates automatically."""
-        all_rules: List[Dict] = []
-        page = 1
-
-        while True:
-            params: Dict[str, Any] = {"per_page": 100, "page": page}
-            data = self._request("GET", f"/zones/{zone_id}/firewall/rules", params=params)
-            all_rules.extend(data.get("result", []))
-
-            total_pages = data.get("result_info", {}).get("total_pages", 1)
-            if page >= total_pages:
-                break
-            page += 1
-
-        return all_rules
-
-    # -----------------------------------------------------------------
-    # Rate Limiting
-    # -----------------------------------------------------------------
+        """WAF custom rules for a zone (the successor of firewall rules)."""
+        return self.list_phase_rules("zones", zone_id, PHASE_FIREWALL_CUSTOM)
 
     def list_rate_limits(self, zone_id: str) -> List[Dict]:
-        """List rate limiting rules for a zone. Paginates automatically."""
-        all_rules: List[Dict] = []
-        page = 1
-
-        while True:
-            params: Dict[str, Any] = {"per_page": 100, "page": page}
-            data = self._request("GET", f"/zones/{zone_id}/rate_limits", params=params)
-            all_rules.extend(data.get("result", []))
-
-            total_pages = data.get("result_info", {}).get("total_pages", 1)
-            if page >= total_pages:
-                break
-            page += 1
-
-        return all_rules
+        """Rate limiting rules for a zone (``http_ratelimit`` phase)."""
+        return self.list_phase_rules("zones", zone_id, PHASE_RATELIMIT)
 
     # -----------------------------------------------------------------
     # Workers
@@ -572,13 +608,37 @@ class CloudflareClient:
 
     def update_firewall_rule_paused(self, zone_id: str, rule_id: str,
                                     paused: bool) -> Dict[str, Any]:
-        """Enable or disable a firewall rule by setting its paused state."""
+        """Enable or disable one of the zone's WAF custom rules.
+
+        The Rulesets API has no partial update, so the rule is re-sent whole
+        with ``enabled`` flipped.  Rules deployed from the account level are
+        not editable through a zone and raise.
+        """
+        ruleset = self.get_phase_entrypoint("zones", zone_id, PHASE_FIREWALL_CUSTOM) or {}
+        rule = next((r for r in ruleset.get("rules") or [] if r.get("id") == rule_id), None)
+        if rule is None:
+            raise CloudflareAPIError(
+                f"Rule {rule_id} is not one of this zone's WAF custom rules. "
+                "Rules deployed from the account level must be changed at the account.")
+
+        body = {k: rule[k] for k in RULE_EDITABLE_FIELDS if k in rule}
+        body["enabled"] = not paused
         data = self._request(
             "PATCH",
-            f"/zones/{zone_id}/firewall/rules/{rule_id}",
-            json_data={"paused": paused},
+            f"/zones/{zone_id}/rulesets/{ruleset.get('id')}/rules/{rule_id}",
+            json_data=body,
         )
-        return data.get("result", {})
+        updated = next(
+            (r for r in data.get("result", {}).get("rules") or [] if r.get("id") == rule_id),
+            {},
+        )
+        enabled = updated.get("enabled", not paused)
+        return {
+            "id": rule_id,
+            "enabled": enabled,
+            "paused": not enabled,
+            "description": updated.get("description", rule.get("description")),
+        }
 
     # -----------------------------------------------------------------
     # Healthchecks

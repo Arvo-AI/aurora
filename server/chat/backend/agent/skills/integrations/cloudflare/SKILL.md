@@ -38,11 +38,13 @@ Cloudflare is connected for DNS, CDN, WAF, and edge diagnostics with full remedi
   - Bucket granularity is auto-selected: minute buckets for <=100 min, hourly for <=100 h, daily beyond that.
   - Default limit=50 returns a bucketed time-series (e.g., last 24h yields multiple hourly buckets). Set `limit=1` to force a single aggregate covering the entire window.
 - **Security events**: `query_cloudflare(resource_type='firewall_events', zone_id='...')` -- recent WAF blocks, challenges, JS challenges.
-- **Firewall rules**: `query_cloudflare(resource_type='firewall_rules', zone_id='...')` -- active firewall rules and expressions.
-- **Rate limits**: `query_cloudflare(resource_type='rate_limits', zone_id='...')` -- rate limiting rules (thresholds, actions, URL patterns).
+- **Firewall rules**: `query_cloudflare(resource_type='firewall_rules', zone_id='...')` -- WAF custom rules (expression, action, enabled) in evaluation order, plus `account_level`: rules deployed from the account to this zone (Enterprise).
+- **Rate limits**: `query_cloudflare(resource_type='rate_limits', zone_id='...')` -- rate limiting rules: `ratelimit.requests_per_period` per `period` seconds, counted by `characteristics`, `mitigation_timeout`, plus account-level ones.
+- **Managed WAF**: `query_cloudflare(resource_type='managed_rules', zone_id='...')` -- which WAF managed rulesets are deployed and their overrides (disabled rules, downgraded actions).
+- **Rules that replaced Page Rules**: `query_cloudflare(resource_type='redirect_rules' | 'cache_rules' | 'config_rules' | 'origin_rules' | 'transform_rules', zone_id='...')` -- single redirects, cache rules, configuration rules, origin rules (host/port/SNI overrides), URL rewrite and header transform rules.
 - **Zone settings**: `query_cloudflare(resource_type='zone_settings', zone_id='...')` -- ALL zone settings (security level, caching, dev mode, WAF, TLS version, minification, etc.).
-- **Page rules**: `query_cloudflare(resource_type='page_rules', zone_id='...')` -- URL-based redirects, forwarding, cache overrides.
-- **Workers**: `query_cloudflare(resource_type='workers')` -- list Cloudflare Workers scripts.
+- **Page rules**: `query_cloudflare(resource_type='page_rules', zone_id='...')` -- legacy Page Rules only; Cloudflare is migrating them into the rules above, so an empty answer is normal.
+- **Workers**: `query_cloudflare(resource_type='workers')` -- Workers scripts across every account the token can see.
 - **Load balancers**: `query_cloudflare(resource_type='load_balancers', zone_id='...')` -- LB config, pools, failover.
 - **SSL/TLS**: `query_cloudflare(resource_type='ssl', zone_id='...')` -- TLS mode (off/flexible/full/strict) and cert status.
 - **Healthchecks**: `query_cloudflare(resource_type='healthchecks', zone_id='...')` -- origin health monitors.
@@ -70,11 +72,11 @@ All remediation uses one tool: `cloudflare_action(action_type='...', zone_id='..
 2. Check `zone_settings` for current security level, dev mode, caching config.
 3. Check `analytics` for traffic spikes, elevated error rates (5xx), or threat surges.
 4. Check `firewall_events` if traffic is being blocked unexpectedly.
-5. Check `firewall_rules` and `rate_limits` if legitimate traffic appears throttled.
+5. Check `firewall_rules`, `rate_limits` and `managed_rules` if legitimate traffic appears blocked or throttled. Rules under `account_level` apply too even though they are not on the zone.
 6. Check `dns_records` if a domain resolution issue is suspected.
 7. Check `ssl` if TLS handshake errors are reported.
 8. Check `healthchecks` and `load_balancers` if origin availability is degraded.
-9. Check `page_rules` if redirects or caching overrides are misbehaving.
+9. Check `redirect_rules`, `cache_rules`, `config_rules`, `origin_rules`, `transform_rules` (and legacy `page_rules`) if redirects, caching overrides or origin routing are misbehaving.
 
 ### CRITICAL RULES
 - NEVER call cloud_exec with provider='cloudflare' -- it will fail.
@@ -82,4 +84,5 @@ All remediation uses one tool: `cloudflare_action(action_type='...', zone_id='..
 - Always get zone IDs first before querying zone-specific data.
 - Only zones enabled by the user are accessible; others will be rejected.
 - Analytics covers the last 24h by default; use the `since` parameter for custom ranges.
+- List answers carry `count` and `total`; when `total` is larger, call again with a higher `limit` (max 500) before concluding something is missing.
 - Remediation actions require write permissions on the token; if a 403 is returned, tell the user which permission to add.

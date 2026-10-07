@@ -16,10 +16,23 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from utils.auth.token_management import get_token_data
+from connectors.cloudflare_connector.api_client import (
+    PHASE_CACHE,
+    PHASE_CONFIG,
+    PHASE_FIREWALL_CUSTOM,
+    PHASE_FIREWALL_MANAGED,
+    PHASE_ORIGIN,
+    PHASE_RATELIMIT,
+    PHASE_REDIRECT,
+    PHASE_TRANSFORM_REQUEST_HEADERS,
+    PHASE_TRANSFORM_RESPONSE_HEADERS,
+    PHASE_TRANSFORM_URL,
+)
 
 logger = logging.getLogger(__name__)
 
 MAX_OUTPUT_SIZE = 2 * 1024 * 1024  # 2 MB
+MAX_LIMIT = 500  # per-call result cap; MAX_OUTPUT_SIZE still bounds the bytes
 
 VALID_RESOURCE_TYPES = {
     "dns_records",
@@ -27,12 +40,28 @@ VALID_RESOURCE_TYPES = {
     "firewall_events",
     "firewall_rules",
     "rate_limits",
+    "managed_rules",
+    "redirect_rules",
+    "cache_rules",
+    "config_rules",
+    "origin_rules",
+    "transform_rules",
     "workers",
     "load_balancers",
     "ssl",
     "healthchecks",
     "zone_settings",
     "page_rules",
+}
+
+# Rule phases served by the generic handler, keyed by resource_type.
+_PHASE_RESOURCES = {
+    "redirect_rules": (PHASE_REDIRECT,),
+    "cache_rules": (PHASE_CACHE,),
+    "config_rules": (PHASE_CONFIG,),
+    "origin_rules": (PHASE_ORIGIN,),
+    "transform_rules": (PHASE_TRANSFORM_URL, PHASE_TRANSFORM_REQUEST_HEADERS,
+                        PHASE_TRANSFORM_RESPONSE_HEADERS),
 }
 
 
@@ -48,9 +77,13 @@ class CloudflareQueryArgs(BaseModel):
             "'dns_records' (DNS records for a zone), "
             "'analytics' (traffic/threat/status-code dashboard for a zone), "
             "'firewall_events' (recent WAF/security events for a zone), "
-            "'firewall_rules' (active firewall rules for a zone), "
-            "'rate_limits' (rate limiting rules for a zone), "
-            "'workers' (list Workers scripts), "
+            "'firewall_rules' (WAF custom rules for a zone, plus rules deployed from the account level), "
+            "'rate_limits' (rate limiting rules for a zone, plus account-level ones), "
+            "'managed_rules' (WAF managed rulesets deployed on a zone and their overrides), "
+            "'redirect_rules', 'cache_rules', 'config_rules', 'origin_rules', 'transform_rules' "
+            "(the Rules that replaced Page Rules: single redirects, cache rules, configuration rules, "
+            "origin rules, URL rewrite and header transform rules), "
+            "'workers' (list Workers scripts across all accounts), "
             "'load_balancers' (load balancers for a zone), "
             "'ssl' (SSL/TLS mode and certificate status for a zone), "
             "'healthchecks' (configured healthchecks for a zone), "
@@ -81,7 +114,7 @@ class CloudflareQueryArgs(BaseModel):
     )
     limit: int = Field(
         default=50,
-        description="Maximum results to return (default 50). For analytics with limit > 1, returns time-series buckets instead of a single aggregate.",
+        description="Maximum results to return (default 50, max 500). Responses report 'total' so you can raise it when more exist. For analytics with limit > 1, returns time-series buckets instead of a single aggregate.",
     )
 
 
@@ -191,9 +224,110 @@ def _build_client(creds: Dict[str, Any]):
     return CloudflareClient(creds["api_token"])
 
 
+def _get_accounts(creds: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Accounts stored at connect time. Connections made before every
+    account was stored only carry ``account_id``; fall back to it."""
+    accounts = [a for a in (creds.get("accounts") or [])
+                if isinstance(a, dict) and a.get("id")]
+    if not accounts and creds.get("account_id"):
+        accounts = [{"id": creds["account_id"], "name": creds.get("account_name")}]
+    return accounts
+
+
+def _apply_limit(result: Dict[str, Any], items: List[Any], limit: int) -> Dict[str, Any]:
+    """Slice ``items`` to ``limit`` and say so, so the agent knows more exist."""
+    result["results"] = items[:limit]
+    result["count"] = len(result["results"])
+    result["total"] = len(items)
+    if len(items) > limit:
+        result["note"] = (f"Showing {limit} of {len(items)}. "
+                          f"Raise 'limit' (max {MAX_LIMIT}) to see the rest.")
+    return result
+
+
+def _account_error_note(exc: Exception) -> str:
+    """One line explaining why an account-level read was skipped."""
+    import requests as _requests
+    from connectors.cloudflare_connector.api_client import CloudflareAPIError
+    if isinstance(exc, _requests.exceptions.HTTPError):
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        if status == 403:
+            return ("Token lacks 'Account WAF Read' (or 'Account Rulesets Read'); "
+                    "account-level rules not shown.")
+        body = exc.response.text[:200] if exc.response is not None else ""
+        return f"Cloudflare API error ({status}): {body}"
+    if isinstance(exc, CloudflareAPIError):
+        return f"Cloudflare API error: {exc}"
+    return f"Unexpected error: {exc}"
+
+
+def _rule_summary(rule: Dict[str, Any], phase: Optional[str] = None) -> Dict[str, Any]:
+    """Flatten a Rulesets API rule to what the agent needs."""
+    out: Dict[str, Any] = {
+        "id": rule.get("id"),
+        "description": rule.get("description"),
+        "enabled": rule.get("enabled", True),
+        "action": rule.get("action"),
+        "expression": rule.get("expression"),
+        "last_updated": rule.get("last_updated"),
+    }
+    if phase:
+        out["phase"] = phase
+    if rule.get("ref"):
+        out["ref"] = rule["ref"]
+    if rule.get("action_parameters"):
+        out["action_parameters"] = rule["action_parameters"]
+    if rule.get("ratelimit"):
+        rl = rule["ratelimit"]
+        out["ratelimit"] = {
+            "characteristics": rl.get("characteristics"),
+            "period": rl.get("period"),
+            "requests_per_period": rl.get("requests_per_period"),
+            "score_per_period": rl.get("score_per_period"),
+            "mitigation_timeout": rl.get("mitigation_timeout"),
+            "counting_expression": rl.get("counting_expression"),
+            "requests_to_origin": rl.get("requests_to_origin"),
+        }
+    return out
+
+
+def _account_phase_rules(client, creds: Dict[str, Any], phase: str,
+                         expand_custom: bool) -> List[Dict[str, Any]]:
+    """Rules deployed from the account level (Enterprise), one entry per account.
+
+    Account entry points hold ``execute`` rules that deploy a ruleset to the
+    zones matched by ``expression``.  Custom rulesets are expanded so the
+    actual rules show; managed ones are listed by id with their overrides.
+    A missing permission or plan becomes a note, never a failure.
+    """
+    out: List[Dict[str, Any]] = []
+    for acct in _get_accounts(creds):
+        entry: Dict[str, Any] = {
+            "account_id": acct["id"],
+            "account_name": acct.get("name"),
+            "rules": [],
+        }
+        try:
+            for rule in client.list_phase_rules("accounts", acct["id"], phase):
+                summary = _rule_summary(rule)
+                target = (rule.get("action_parameters") or {}).get("id")
+                if rule.get("action") == "execute" and target:
+                    summary["ruleset_id"] = target
+                    if expand_custom:
+                        ruleset = client.get_ruleset("accounts", acct["id"], target)
+                        summary["ruleset_name"] = ruleset.get("name")
+                        summary["rules"] = [_rule_summary(r) for r in ruleset.get("rules") or []]
+                entry["rules"].append(summary)
+        except Exception as exc:  # one account must not sink the zone read
+            entry["note"] = _account_error_note(exc)
+        out.append(entry)
+    return out
+
+
 def _query_zones(creds: Dict, **_kw) -> Dict[str, Any]:
     client = _build_client(creds)
-    zones = client.list_zones(account_id=creds.get("account_id"))
+    # No account filter: a token spanning several accounts lists them all.
+    zones = client.list_zones()
     return {
         "resource_type": "zones",
         "count": len(zones),
@@ -204,6 +338,8 @@ def _query_zones(creds: Dict, **_kw) -> Dict[str, Any]:
                 "status": z.get("status"),
                 "paused": z.get("paused"),
                 "plan": z.get("plan", {}).get("name"),
+                "account_id": (z.get("account") or {}).get("id"),
+                "account_name": (z.get("account") or {}).get("name"),
                 "name_servers": z.get("name_servers"),
             }
             for z in zones
@@ -214,12 +350,10 @@ def _query_zones(creds: Dict, **_kw) -> Dict[str, Any]:
 def _query_dns_records(creds: Dict, zone_id: str, record_type: Optional[str] = None,
                        name: Optional[str] = None, limit: int = 50, **_kw) -> Dict[str, Any]:
     client = _build_client(creds)
-    records = client.list_dns_records(zone_id, record_type=record_type, name=name)[:limit]
-    return {
-        "resource_type": "dns_records",
-        "zone_id": zone_id,
-        "count": len(records),
-        "results": [
+    records = client.list_dns_records(zone_id, record_type=record_type, name=name)
+    return _apply_limit(
+        {"resource_type": "dns_records", "zone_id": zone_id},
+        [
             {
                 "id": r.get("id"),
                 "type": r.get("type"),
@@ -230,7 +364,8 @@ def _query_dns_records(creds: Dict, zone_id: str, record_type: Optional[str] = N
             }
             for r in records
         ],
-    }
+        limit,
+    )
 
 
 def _query_analytics(creds: Dict, zone_id: str, since: Optional[str] = None,
@@ -364,68 +499,129 @@ def _query_firewall_events(creds: Dict, zone_id: str, limit: int = 50,
 
 
 def _query_firewall_rules(creds: Dict, zone_id: str, limit: int = 50, **_kw) -> Dict[str, Any]:
+    """WAF custom rules. Cloudflare upgraded every firewall rule into a custom
+    rule and retired the Firewall Rules API (410 Gone since 2025-06-15)."""
     client = _build_client(creds)
-    rules = client.list_firewall_rules(zone_id)[:limit]
-    return {
-        "resource_type": "firewall_rules",
-        "zone_id": zone_id,
-        "count": len(rules),
-        "results": [
-            {
-                "id": r.get("id"),
-                "description": r.get("description"),
-                "action": r.get("action"),
-                "paused": r.get("paused"),
-                "filter_expression": r.get("filter", {}).get("expression"),
-            }
-            for r in rules
-        ],
-    }
+    ruleset = client.get_phase_entrypoint("zones", zone_id, PHASE_FIREWALL_CUSTOM) or {}
+    rules = []
+    for r in ruleset.get("rules") or []:
+        summary = _rule_summary(r)
+        summary["paused"] = not summary["enabled"]  # cloudflare_action toggles by 'paused'
+        rules.append(summary)
+    result = _apply_limit(
+        {
+            "resource_type": "firewall_rules",
+            "zone_id": zone_id,
+            "ruleset_id": ruleset.get("id"),
+            "source": f"WAF custom rules, phase {PHASE_FIREWALL_CUSTOM}",
+        },
+        rules,
+        limit,
+    )
+    result["account_level"] = _account_phase_rules(
+        client, creds, PHASE_FIREWALL_CUSTOM, expand_custom=True)
+    return result
 
 
 def _query_rate_limits(creds: Dict, zone_id: str, limit: int = 50, **_kw) -> Dict[str, Any]:
+    """Rate limiting rules from the ``http_ratelimit`` phase. The previous
+    Rate Limiting API answers 410 Gone since 2025-06-15."""
     client = _build_client(creds)
-    rules = client.list_rate_limits(zone_id)[:limit]
-    return {
-        "resource_type": "rate_limits",
-        "zone_id": zone_id,
-        "count": len(rules),
-        "results": [
-            {
-                "id": r.get("id"),
-                "description": r.get("description"),
-                "disabled": r.get("disabled"),
-                "threshold": r.get("threshold"),
-                "period": r.get("period"),
-                "action": r.get("action", {}).get("mode"),
-                "action_timeout": r.get("action", {}).get("timeout"),
-                "match_url": r.get("match", {}).get("request", {}).get("url"),
-                "match_methods": r.get("match", {}).get("request", {}).get("methods"),
-            }
-            for r in rules
-        ],
-    }
+    ruleset = client.get_phase_entrypoint("zones", zone_id, PHASE_RATELIMIT) or {}
+    rules = [_rule_summary(r) for r in ruleset.get("rules") or []]
+    result = _apply_limit(
+        {
+            "resource_type": "rate_limits",
+            "zone_id": zone_id,
+            "ruleset_id": ruleset.get("id"),
+            "source": f"Rate limiting rules, phase {PHASE_RATELIMIT}",
+        },
+        rules,
+        limit,
+    )
+    result["account_level"] = _account_phase_rules(
+        client, creds, PHASE_RATELIMIT, expand_custom=True)
+    return result
 
 
-def _query_workers(creds: Dict, **_kw) -> Dict[str, Any]:
-    account_id = creds.get("account_id")
-    if not account_id:
+def _query_managed_rules(creds: Dict, zone_id: str, limit: int = 50, **_kw) -> Dict[str, Any]:
+    """WAF managed rulesets deployed on the zone, with their overrides."""
+    client = _build_client(creds)
+    names: Dict[str, Any] = {}
+    try:
+        names = {rs.get("id"): rs.get("name") for rs in client.list_rulesets("zones", zone_id)}
+    except Exception as exc:  # names are a nicety; the deployment list is the data
+        logger.info("[CLOUDFLARE-TOOL] ruleset names unavailable for zone %s: %s", zone_id, exc)
+    ruleset = client.get_phase_entrypoint("zones", zone_id, PHASE_FIREWALL_MANAGED) or {}
+    rules = []
+    for r in ruleset.get("rules") or []:
+        summary = _rule_summary(r)
+        params = summary.pop("action_parameters", None) or {}
+        summary["managed_ruleset_id"] = params.get("id")
+        summary["managed_ruleset_name"] = names.get(params.get("id"))
+        summary["overrides"] = params.get("overrides")
+        rules.append(summary)
+    result = _apply_limit(
+        {
+            "resource_type": "managed_rules",
+            "zone_id": zone_id,
+            "ruleset_id": ruleset.get("id"),
+            "source": f"WAF managed rules, phase {PHASE_FIREWALL_MANAGED}",
+        },
+        rules,
+        limit,
+    )
+    result["account_level"] = _account_phase_rules(
+        client, creds, PHASE_FIREWALL_MANAGED, expand_custom=False)
+    return result
+
+
+def _make_phase_handler(resource_type: str, phases: tuple):
+    """Handler for the Rules products that replaced Page Rules."""
+    def handler(creds: Dict, zone_id: str, limit: int = 50, **_kw) -> Dict[str, Any]:
+        client = _build_client(creds)
+        rules: List[Dict[str, Any]] = []
+        for phase in phases:
+            rules.extend(_rule_summary(r, phase=phase)
+                         for r in client.list_phase_rules("zones", zone_id, phase))
+        return _apply_limit(
+            {"resource_type": resource_type, "zone_id": zone_id, "phases": list(phases)},
+            rules,
+            limit,
+        )
+    handler.__name__ = f"_query_{resource_type}"
+    return handler
+
+
+def _query_workers(creds: Dict, limit: int = 50, **_kw) -> Dict[str, Any]:
+    accounts = _get_accounts(creds)
+    if not accounts:
         return {"resource_type": "workers", "error": "No account_id available", "results": []}
     client = _build_client(creds)
-    workers = client.list_workers(account_id)
-    return {
-        "resource_type": "workers",
-        "count": len(workers),
-        "results": [
-            {
-                "id": w.get("id"),
-                "created_on": w.get("created_on"),
-                "modified_on": w.get("modified_on"),
-                "etag": w.get("etag"),
-            }
-            for w in workers
-        ],
-    }
+    workers: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+    for acct in accounts:
+        try:
+            for w in client.list_workers(acct["id"]):
+                workers.append({
+                    "id": w.get("id"),
+                    "account_id": acct["id"],
+                    "account_name": acct.get("name"),
+                    "created_on": w.get("created_on"),
+                    "modified_on": w.get("modified_on"),
+                    "etag": w.get("etag"),
+                })
+        except Exception as exc:  # keep the other accounts' Workers
+            errors.append({"account_id": acct["id"], "account_name": acct.get("name"),
+                           "error": _account_error_note(exc)})
+    if errors and not workers:
+        return {"resource_type": "workers", "error": errors[0]["error"],
+                "account_errors": errors, "results": []}
+    result = _apply_limit(
+        {"resource_type": "workers", "accounts_queried": len(accounts)}, workers, limit)
+    if errors:
+        result["account_errors"] = errors
+    return result
 
 
 def _query_load_balancers(creds: Dict, zone_id: str, **_kw) -> Dict[str, Any]:
@@ -546,10 +742,17 @@ def _query_page_rules(creds: Dict, zone_id: str, **_kw) -> Dict[str, Any]:
                         "note": "Page Rules API does not support account-owned tokens. Use a user-owned API token to access page rules.",
                     }
         raise
+    note = None
+    if not rules:
+        note = ("No legacy Page Rules on this zone. Cloudflare is migrating Page Rules into "
+                "Cache, Configuration, Origin, Redirect and Transform Rules: query "
+                "resource_type='cache_rules', 'config_rules', 'origin_rules', "
+                "'redirect_rules' or 'transform_rules'.")
     return {
         "resource_type": "page_rules",
         "zone_id": zone_id,
         "count": len(rules),
+        **({"note": note} if note else {}),
         "results": [
             {
                 "id": r.get("id"),
@@ -575,6 +778,8 @@ _HANDLERS = {
     "firewall_events": _query_firewall_events,
     "firewall_rules": _query_firewall_rules,
     "rate_limits": _query_rate_limits,
+    "managed_rules": _query_managed_rules,
+    **{name: _make_phase_handler(name, phases) for name, phases in _PHASE_RESOURCES.items()},
     "workers": _query_workers,
     "load_balancers": _query_load_balancers,
     "ssl": _query_ssl,
@@ -584,7 +789,8 @@ _HANDLERS = {
 }
 
 _ZONE_REQUIRED = {"dns_records", "analytics", "firewall_events", "firewall_rules",
-                   "rate_limits", "load_balancers", "ssl", "healthchecks",
+                   "rate_limits", "managed_rules", *_PHASE_RESOURCES,
+                   "load_balancers", "ssl", "healthchecks",
                    "zone_settings", "page_rules"}
 
 
@@ -647,7 +853,7 @@ def query_cloudflare(
                          "Enable it on the Cloudflare settings page or use cloudflare_list_zones() to see available zones."
             })
 
-    limit = min(max(limit, 1), 100) #Limit between 1 and 100
+    limit = min(max(limit, 1), MAX_LIMIT)
     logger.info("[CLOUDFLARE-TOOL] user=%s resource=%s zone=%s", user_id, resource_type, zone_id or "all")
 
     try:
@@ -691,6 +897,9 @@ def query_cloudflare(
                 return json.dumps({"error": "Token lacks the required permission for this resource type."})
             if status == 404:
                 return json.dumps({"error": f"Resource not found. Verify zone_id='{zone_id}' is correct."})
+            if status == 410:
+                return json.dumps({"error": "Cloudflare has retired the API behind this resource type (410 Gone). "
+                                            "Aurora needs an update to read it through the Rulesets API."})
             body = exc.response.text[:200] if exc.response is not None else ""
             return json.dumps({"error": f"Cloudflare API error ({status}): {body}"})
         if isinstance(exc, _requests.exceptions.Timeout):
@@ -846,7 +1055,7 @@ def _action_toggle_firewall_rule(client, zone_id: str, **kw) -> Dict[str, Any]:
         "rule_id": rule_id,
         "paused": result.get("paused", paused),
         "description": result.get("description"),
-        "message": f"Firewall rule {state}.",
+        "message": f"WAF custom rule {state}.",
     }
 
 
@@ -863,7 +1072,7 @@ _ACTION_PERMISSIONS = {
     "security_level": "Zone Settings Write",
     "development_mode": "Zone Settings Write",
     "dns_update": "DNS Write",
-    "toggle_firewall_rule": "Firewall Services Write",
+    "toggle_firewall_rule": "Zone WAF Write",
 }
 
 
@@ -931,6 +1140,9 @@ def cloudflare_action(
                     "error": f"Token lacks the '{perm}' permission required for {action_type}. "
                              f"Add the permission to the Cloudflare API token."
                 })
+            if status == 410:
+                return json.dumps({"error": "Cloudflare has retired the API behind this action (410 Gone). "
+                                            "Aurora needs an update to perform it through the Rulesets API."})
             body = exc.response.text[:200] if exc.response is not None else ""
             return json.dumps({"error": f"Cloudflare API error ({status}): {body}"})
         if isinstance(exc, _requests.exceptions.Timeout):

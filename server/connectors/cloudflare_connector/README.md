@@ -29,14 +29,14 @@ The Cloudflare connector allows Aurora to read DNS zones, analyze permissions, a
 1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/) > **My Profile** > **API Tokens**
 2. Click **Create Token**
 3. Use the **"Read all resources"** template as a starting point
-4. Add the **Account — API Tokens — Read** permission (required for Aurora to audit token permissions)
+4. Add the **Account — API Tokens — Read** permission (required for Aurora to audit token permissions) and **Zone — Zone WAF — Read** (WAF custom rules, rate limiting rules, managed rules and the rules that replaced Page Rules are all read through the Rulesets API). On an Enterprise plan add **Account — Account WAF — Read** so rules deployed from the account level show up too.
 5. Optionally add write permissions depending on your needs:
 
 | Permission | Purpose |
 |------------|---------|
 | Zone — DNS — Edit | DNS record management |
 | Zone — Cache Purge — Purge | Cache purging |
-| Zone — Firewall Services — Edit | WAF & firewall rules |
+| Zone — Zone WAF — Edit | Enable / disable WAF custom rules |
 | Account — Load Balancers — Edit | Load balancer control |
 
 6. Click **Continue to summary** > **Create Token**
@@ -86,7 +86,7 @@ Credentials are stored in HashiCorp Vault (never in the database directly). The 
 - `permissions` — List of granted permission names
 - `email` — User email (user-owned tokens only)
 - `account_name` / `account_id` — Primary Cloudflare account info
-- `accounts` — Full list of accessible accounts
+- `accounts` — Every account the token can see (zones and Workers are read across all of them)
 
 ## Troubleshooting
 
@@ -96,4 +96,5 @@ Credentials are stored in HashiCorp Vault (never in the database directly). The 
 | "Could not determine the account for this token" | Account-owned tokens (`cfat_`) need account-level access. Check the token's permissions |
 | "Access denied / token revoked" | The token was revoked or disabled. Create a new one |
 | "Missing required permissions" | The permission audit in the UI lists exactly which permissions are missing. Edit the token in Cloudflare to add them |
+| Firewall rules / rate limits come back empty or erroring on older Aurora versions | Cloudflare retired the Firewall Rules API and the previous Rate Limiting API on 2025-06-15 (410 Gone). Aurora now reads them through the Rulesets API; the token needs **Zone — Zone WAF — Read** |
 | Connection status shows disconnected after working | The `/status` endpoint re-validates the token on every call. If Cloudflare rejects it, Aurora auto-cleans the stored secret |
