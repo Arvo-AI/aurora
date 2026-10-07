@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.5.4] - 2026-10-02
+## [1.5.5] - 2026-10-07
+
+### Added
+- Auth: users who forgot their password can request a 6-digit reset code by
+  email and set a new one without an admin. Signup and reset code emails now
+  say to check the spam folder.
+- incident.io: when an alert-triggered RCA has no open incident to update
+  (escalation-only alerts), Aurora posts the root cause as a note on the alert
+  itself. Gated by the existing org-wide post-back toggle.
+
+### Fixed
+- Secrets backend: a Vault that was sealed, unreachable, or holding an expired
+  token no longer stays marked unavailable until the process restarts. Failed
+  init is retried, and credential errors name the secrets backend when that is
+  the actual cause instead of the cloud provider.
+- Slack: every background reply includes a link back to the Aurora session, and
+  the link is kept when the message is trimmed to Slack's length limit.
+- Slack: channel descriptions converge on a 15-minute backfill, so member
+  channels past the per-pass enqueue cap become visible to agent routing
+  without anyone reloading the Manage page.
+- Jira: RCA comment-back is now an org setting, off until someone turns it on.
+  Existing orgs stop posting on upgrade until they opt in on the connector
+  page. Comment-only vs create-and-comment is unchanged once the switch is on.
+
+### Security
+- Closed open dependency and workflow alerts: Werkzeug 3.1.9, axios, and the
+  remaining npm findings (postcss-selector-parser, tinypool, katex), plus
+  replacing `wget` with pinned-protocol `curl` in image and linter builds.
 
 ### Added
 - incident.io: completed RCAs are now posted back onto the incident itself as an

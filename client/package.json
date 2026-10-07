@@ -117,6 +117,7 @@
     "flatted": "^3.4.2",
     "postcss": "$postcss",
     "chokidar": "^4.0.3",
-    "braces": "https://github.com/micromatch/braces/tarball/28d440b5dd449dbf1fe6f3506cf94ecca4d02660"
+    "braces": "https://github.com/micromatch/braces/tarball/28d440b5dd449dbf1fe6f3506cf94ecca4d02660",
+    "postcss-selector-parser": "7.1.6"
   }
 }

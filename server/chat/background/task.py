@@ -1025,6 +1025,17 @@ def run_background_chat(
 _JIRA_TOOL_NAMES = frozenset(('jira_add_comment', 'jira_create_issue'))
 
 
+def _should_file_in_jira(rca_context: Optional[Dict[str, Any]], session_id: str, user_id: str) -> bool:
+    """Whether the post-investigation Jira filing step should run."""
+    if not (rca_context and rca_context.get('integrations', {}).get('jira')):
+        return False
+    # Connected Jira is a context source until the org turns comment-back on.
+    from routes.jira.jira_routes import jira_comment_back_enabled
+    if not jira_comment_back_enabled(user_id):
+        return False
+    return not _session_has_successful_jira_action(session_id, user_id=user_id)
+
+
 def _session_has_successful_jira_action(session_id: str, user_id: str) -> bool:
     """Return True if the session already contains a successful Jira tool call.
 
@@ -1266,7 +1277,9 @@ async def _run_jira_action(
     from chat.backend.agent.llm import ModelConfig
     from main_chatbot import process_workflow_async
 
-    jira_mode = rca_context.get('integrations', {}).get('jira_mode', 'comment_only')
+    from utils.auth.stateless_auth import get_user_preference
+
+    jira_mode = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
 
     service_name = ""
     if incident_id:
@@ -1539,9 +1552,8 @@ async def _execute_background_chat(
                 logger.exception("[BackgroundChat] Failed early Slack send")
 
         # --- Phase 2: Jira action ---
-        # Investigation is done. Now deterministically file in Jira.
-        if rca_context and rca_context.get('integrations', {}).get('jira') \
-                and not _session_has_successful_jira_action(session_id, user_id=user_id):
+        # Investigation is done. File in Jira only if the org opted in.
+        if _should_file_in_jira(rca_context, session_id, user_id):
             await _run_jira_action(
                 session_id=session_id,
                 user_id=user_id,

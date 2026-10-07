@@ -538,15 +538,7 @@ OVH_EU_CLIENT_SECRET=your-eu-client-secret
 
 ### Scaleway
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NEXT_PUBLIC_ENABLE_SCALEWAY` | `false` | Enable Scaleway connector in UI |
-
-```bash
-NEXT_PUBLIC_ENABLE_SCALEWAY=true
-```
-
-> No additional server-side credentials required. Users connect via API key through the UI.
+The Scaleway connector is always available. Users connect with an API key; no server-side credentials are required.
 
 ### Confluence
 

@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 
 interface ProductConfig {
   key: "jira" | "confluence";
@@ -20,6 +21,7 @@ interface ProductConfig {
   dcLabel: string;
   patUrlPlaceholder: string;
   storageKey: string;
+  patSteps?: string[];
 }
 
 interface SiblingConfig {
@@ -47,6 +49,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const [patToken, setPatToken] = useState("");
   const [isPatConnecting, setIsPatConnecting] = useState(false);
   const [jiraMode, setJiraMode] = useState<"full" | "comment_only">("comment_only");
+  const [commentBack, setCommentBack] = useState(false);
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [oauthConfigError, setOauthConfigError] = useState(false);
@@ -76,6 +79,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
       if (res.ok) {
         const data = await res.json();
         if (data.jiraMode) setJiraMode(data.jiraMode);
+        setCommentBack(data.commentBack === true);
       }
     } catch { /* silent */ } finally { setIsLoadingSettings(false); }
     try {
@@ -106,6 +110,34 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
       }
     } catch {
       setJiraMode(previousMode);
+      toast({ title: "Failed to save settings", variant: "destructive" });
+    } finally { setIsSavingSettings(false); }
+  };
+
+  const saveCommentBack = async (enabled: boolean) => {
+    const previous = commentBack;
+    setCommentBack(enabled);
+    setIsSavingSettings(true);
+    try {
+      const res = await fetch("/api/jira/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ commentBack: enabled }),
+      });
+      if (res.ok) {
+        toast({
+          title: "Settings saved",
+          description: enabled
+            ? "Aurora will comment back on Jira tickets after an investigation"
+            : "Aurora will not comment on Jira tickets",
+        });
+      } else {
+        setCommentBack(previous);
+        toast({ title: "Failed to save settings", variant: "destructive" });
+      }
+    } catch {
+      setCommentBack(previous);
       toast({ title: "Failed to save settings", variant: "destructive" });
     } finally { setIsSavingSettings(false); }
   };
@@ -222,7 +254,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">RCA Permissions</CardTitle>
                 <CardDescription className="text-xs">
-                  Choose what Aurora can do with Jira during Root Cause Analysis
+                  Aurora reads Jira for investigation context. Commenting back stays off until you turn it on.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2 pt-0">
@@ -232,6 +264,25 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                   </div>
                 ) : (
                   <>
+                    <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                      <div className="space-y-0.5">
+                        <Label htmlFor="jira-comment-back" className="text-sm font-medium">
+                          Comment back on Jira tickets
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          After an investigation, post the RCA onto the matching ticket.
+                          Comments are posted by the account that connected Jira.
+                        </p>
+                      </div>
+                      <Switch
+                        id="jira-comment-back"
+                        checked={commentBack}
+                        onCheckedChange={saveCommentBack}
+                        disabled={isSavingSettings}
+                      />
+                    </div>
+                    {commentBack && (
+                      <>
                     <button
                       onClick={() => saveJiraMode("comment_only")}
                       disabled={isSavingSettings}
@@ -281,6 +332,8 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                         </p>
                       </div>
                     </button>
+                      </>
+                    )}
                   </>
                 )}
               </CardContent>
@@ -449,6 +502,13 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
             <CardHeader>
               <CardTitle className="text-base">{product.dcLabel}</CardTitle>
               <CardDescription>Connect via Personal Access Token</CardDescription>
+              {product.patSteps && product.patSteps.length > 0 && (
+                <ol className="list-decimal space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground">
+                  {product.patSteps.map((step) => (
+                    <li key={step}>{step}</li>
+                  ))}
+                </ol>
+              )}
             </CardHeader>
             <CardContent>
               <form onSubmit={handlePatConnect} className="space-y-3">
