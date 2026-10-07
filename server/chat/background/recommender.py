@@ -23,6 +23,7 @@ from langchain_core.messages import HumanMessage
 
 from chat.background.citation_extractor import Citation
 from chat.background.suggestion_extractor import Suggestion, is_command_safe
+from chat.backend.agent.llm import COST_OPTIMIZED_MODEL, resolve_background_model
 from chat.backend.agent.utils.message_content import extract_text_from_content
 
 from chat.background.citation_extractor import _TOOL_NAME_MAPPING
@@ -49,7 +50,18 @@ _CODE_TOOLS = frozenset({
 
 _VALID_TYPES = frozenset({"mitigation", "diagnostic", "remediate", "prevent"})
 _VALID_RISKS = frozenset({"safe", "low", "medium", "high"})
-_ENRICHMENT_MODEL = os.environ.get("ENRICHMENT_MODEL", "anthropic/claude-haiku-4.5")
+
+
+def _resolve_enrichment_model() -> str:
+    """Cheap model for suggestion enrichment — light polishing work.
+
+    Shares ModelConfig.RCA_MODEL's precedence so a non-Anthropic deployment doesn't
+    RuntimeError at create_chat_model on a hardcoded Anthropic default.
+    """
+    return resolve_background_model("ENRICHMENT_MODEL", COST_OPTIMIZED_MODEL)
+
+
+_ENRICHMENT_MODEL = _resolve_enrichment_model()
 
 _TYPE_SORT_ORDER = {"mitigation": 0, "diagnostic": 1, "remediate": 2, "prevent": 3}
 
