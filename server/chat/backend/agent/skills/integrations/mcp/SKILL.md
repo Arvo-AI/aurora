@@ -31,16 +31,16 @@ them through two tools: `mcp_list_tools` to discover, then `mcp_call_tool` to in
 
 ## Instructions
 
-1. **Discover before calling.** `mcp_list_tools()` with no arguments gives the server list
-   and counts. `mcp_list_tools(query="...")` searches across every server at once — use it
-   when you do not know which server holds what you need. `mcp_list_tools(server="...")`
-   lists one server's tools with their input schemas.
-2. **Call with exact names.** Pass the `server` and `tool` strings from the discovery result
-   verbatim to `mcp_call_tool`, with `arguments` matching the `inputSchema` it showed you.
-   Guessing a tool name wastes a turn; the call is refused with the known server list.
-3. **Read the schema, not your assumptions.** These tools are defined by whoever built the
-   server, not by Aurora. The `description` and `inputSchema` from discovery are
-   authoritative, including which arguments are required.
+1. **Narrow, do not dump.** `mcp_list_tools()` with no arguments gives the server list and
+   counts. `mcp_list_tools(query="...")` searches across every server at once — prefer this
+   when you do not know which server holds what you need, because it is far smaller than
+   listing a whole server. `mcp_list_tools(server="...")` lists one server's tools.
+2. **Listings show `args` as `name:type`, with `?` meaning optional.** That is usually enough
+   to build the call. When a tool's arguments are complex or you need the exact schema, ask
+   for the one tool: `mcp_list_tools(server="...", tool="...")` returns its full inputSchema.
+3. **Call with exact names.** Pass the `server` and `tool` strings from discovery verbatim to
+   `mcp_call_tool`. Guessing a name wastes a turn; the call is refused with the server list.
+   A missing required argument comes back naming it, along with the schema.
 4. **Prefer a specific tool over a broad one.** If a server offers both `get_zone` and
    `list_zones`, fetch the single record you need rather than listing everything.
 5. **Report which server answered.** When a finding comes from a custom MCP server, name the

@@ -42,15 +42,21 @@ from utils.log_sanitizer import sanitize
 logger = logging.getLogger(__name__)
 
 # Discovery response caps. A server can expose hundreds of tools; returning all
-# of them with schemas would move the context blowup from the prompt into the
-# tool result.
+# of them with full JSON Schemas would move the context blowup from the prompt
+# into the tool result. Schemas are 80% of a listing's bytes (25 Linear tools:
+# 30KB of 38KB), so listings carry a compact arg summary and the full schema is
+# only ever returned for a single named tool.
 DEFAULT_LIST_LIMIT = 25
 MAX_LIST_LIMIT = 100
+LIST_DESCRIPTION_CHARS = 200
 
 
 class McpListToolsArgs(BaseModel):
     server: Optional[str] = Field(
         default=None, description="Server label from a bare call. Omit for the server list."
+    )
+    tool: Optional[str] = Field(
+        default=None, description="Tool name, to get its full input schema before calling it."
     )
     query: Optional[str] = Field(
         default=None, description="Substring to match against tool names and descriptions."
@@ -318,11 +324,44 @@ def _matches(tool_def: Dict[str, Any], query: str) -> bool:
     return q in tool_def.get("name", "").lower() or q in (tool_def.get("description") or "").lower()
 
 
+def _arg_summary(tool_def: Dict[str, Any]) -> List[str]:
+    """Argument names with types and required markers, instead of raw JSON Schema.
+
+    Full schemas dominate a listing: 25 Linear tools cost 38KB, of which 30KB
+    was inputSchema, one tool contributing 8KB by itself. That recreated inside
+    a tool result the same blowup this indirection removes from the prompt.
+    The agent gets the full schema from ``mcp_list_tools(server=, tool=)`` or
+    from the missing_arguments error, both of which cover a single tool.
+    """
+    schema = tool_def.get("inputSchema") or {}
+    properties = schema.get("properties") or {}
+    required = set(schema.get("required") or [])
+    out: List[str] = []
+    for name, spec in properties.items():
+        kind = (spec or {}).get("type") or "any"
+        out.append(f"{name}:{kind}{'' if name in required else '?'}")
+    return out
+
+
+def _shape(server: Dict[str, Any], tool_def: Dict[str, Any]) -> Dict[str, Any]:
+    """One tool as it appears in a listing: compact, with '?' marking optional."""
+    description = (tool_def.get("description") or "").strip()
+    return {
+        "server": server["label"],
+        "tool": tool_def["name"],
+        # Enough to choose a tool; the detail view carries the rest.
+        "description": description[:LIST_DESCRIPTION_CHARS],
+        "write": not is_read_tool(tool_def),
+        "args": _arg_summary(tool_def),
+    }
+
+
 def _list_tools(
     user_id: str, is_background: bool, is_pr_review: bool, mode: Optional[str],
-    server: Optional[str] = None, query: Optional[str] = None, limit: int = DEFAULT_LIST_LIMIT,
+    server: Optional[str] = None, tool: Optional[str] = None,
+    query: Optional[str] = None, limit: int = DEFAULT_LIST_LIMIT,
 ) -> str:
-    """Discovery. Three modes, so one tool covers the whole funnel.
+    """Discovery, narrowing in three steps so no step returns an unbounded blob.
 
     Bare: labels and counts only -- deliberately NOT tool names. Ten servers
     with 150 tools each would otherwise return 1500 names and recreate the
@@ -330,6 +369,10 @@ def _list_tools(
 
     ``query`` without ``server`` searches across every server, so finding a
     tool among ten of them costs one call instead of ten.
+
+    ``tool`` returns the full description and JSON Schema for that one tool.
+    Listings carry a compact arg summary instead, because full schemas are 80%
+    of a listing's bytes.
     """
     try:
         limit = max(1, min(int(limit), MAX_LIST_LIMIT))
@@ -346,6 +389,24 @@ def _list_tools(
         if not pairs:
             known = sorted({s["label"] for s, _ in _visible(user_id, is_background, is_pr_review, mode)})
             return json.dumps({"error": f"Unknown MCP server '{server}'", "known_servers": known})
+
+    # One named tool: the only place a full JSON Schema is returned, since it is
+    # bounded to a single tool and is exactly what building a call needs.
+    if tool:
+        match = next((p for p in pairs if p[1]["name"] == tool), None)
+        if match is None:
+            return json.dumps({
+                "error": f"No tool '{tool}'" + (f" on '{server}'" if server else ""),
+                "hint": "Use mcp_list_tools(server=...) for exact names.",
+            })
+        srv, tool_def = match
+        return json.dumps({
+            "server": srv["label"],
+            "tool": tool_def["name"],
+            "description": (tool_def.get("description") or "").strip(),
+            "write": not is_read_tool(tool_def),
+            "inputSchema": tool_def.get("inputSchema") or {},
+        })
 
     if query:
         pairs = [(s, t) for s, t in pairs if _matches(t, query)]
@@ -365,18 +426,10 @@ def _list_tools(
 
     total = len(pairs)
     return json.dumps({
-        "tools": [
-            {
-                "server": s["label"],
-                "tool": t["name"],
-                "description": (t.get("description") or "").strip(),
-                "write": not is_read_tool(t),
-                "inputSchema": t.get("inputSchema") or {},
-            }
-            for s, t in pairs[:limit]
-        ],
+        "tools": [_shape(s, t) for s, t in pairs[:limit]],
         "returned": min(total, limit),
         "total_matches": total,
+        "args_legend": "name:type, '?' means optional. Use tool= for the full schema.",
         **({"hint": f"{total} matches; showing {limit}. Narrow with query= or raise limit."}
            if total > limit else {}),
     })
@@ -408,11 +461,11 @@ def get_custom_mcp_tools(
     if not list_servers(user_id):
         return []
 
-    def _list(server: Optional[str] = None, query: Optional[str] = None,
-              limit: int = DEFAULT_LIST_LIMIT, **_: Any) -> str:
+    def _list(server: Optional[str] = None, tool: Optional[str] = None,
+              query: Optional[str] = None, limit: int = DEFAULT_LIST_LIMIT, **_: Any) -> str:
         return _list_tools(
             user_id, is_background, is_pr_review, mode,
-            server=server, query=query, limit=limit,
+            server=server, tool=tool, query=query, limit=limit,
         )
 
     def _call(server: str, tool: str, arguments: Optional[Dict[str, Any]] = None, **_: Any) -> str:
@@ -438,9 +491,10 @@ def get_custom_mcp_tools(
             name="mcp_list_tools",
             description=(
                 f"Discover tools on your organisation's MCP servers ({labels}). "
-                "Call with no arguments for the server list and tool counts; with "
-                "server= for one server's tools and their input schemas; with "
-                "query= to search across all servers. Then use mcp_call_tool."
+                "No arguments gives the server list and tool counts; server= lists "
+                "one server's tools; query= searches across all servers; "
+                "server= with tool= gives one tool's full input schema. "
+                "Then use mcp_call_tool."
             ),
             args_schema=McpListToolsArgs,
             metadata={"mcp_read_only": True},

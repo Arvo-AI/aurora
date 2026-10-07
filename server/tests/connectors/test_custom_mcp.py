@@ -502,7 +502,7 @@ def test_always_mode_skips_the_gate_in_the_dispatcher_too():
 
 
 def test_the_discovery_response_is_bounded():
-    """A 300-tool server must not dump 300 schemas into one tool result."""
+    """A 300-tool server must not dump 300 entries into one tool result."""
     big = _server(tools=[
         {"name": f"get_thing_{i}", "description": "d" * 200, "inputSchema": {}}
         for i in range(300)
@@ -516,6 +516,52 @@ def test_the_discovery_response_is_bounded():
     with _servers(big):
         capped = json.loads(_list_tools("u1", False, False, None, server="netbox", limit=10_000))
     assert capped["returned"] <= 100, "limit must be clamped to MAX_LIST_LIMIT"
+
+
+def test_listings_summarise_arguments_instead_of_shipping_schemas():
+    """Full JSON Schema per tool was 80% of a listing's bytes.
+
+    Measured on a real Linear server: 25 tools cost 38KB, 30KB of it schemas,
+    one tool contributing 8KB alone. That rebuilt the context blowup inside the
+    tool result. A listing says name:type with '?' for optional; the full schema
+    comes from a single-tool lookup.
+    """
+    fat = {
+        "name": "save_issue",
+        "description": "d",
+        "inputSchema": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+                "id": {"type": "string", "description": "x" * 4000},
+                "labels": {"type": "array", "description": "y" * 4000},
+            },
+        },
+    }
+    with _servers(_server(tools=[fat])):
+        listed = _list_tools("u1", False, False, None, server="netbox")
+        detail = _list_tools("u1", False, False, None, server="netbox", tool="save_issue")
+
+    entry = json.loads(listed)["tools"][0]
+    assert entry["args"] == ["id:string", "labels:array?"], entry["args"]
+    assert "inputSchema" not in entry
+    # The 8KB of property descriptions must not ride along in a listing.
+    assert len(listed) < 1000, len(listed)
+    # A single-tool lookup is where the full schema lives.
+    assert json.loads(detail)["inputSchema"]["required"] == ["id"]
+
+
+def test_a_long_description_is_truncated_in_listings():
+    """MAX_DESCRIPTION_CHARS is 1000; 100 of those in one listing is 100KB."""
+    with _servers(_server(tools=[{"name": "get_x", "description": "d" * 1000, "inputSchema": {}}])):
+        entry = json.loads(_list_tools("u1", False, False, None, server="netbox"))["tools"][0]
+    assert len(entry["description"]) == 200
+
+
+def test_an_unknown_tool_lookup_does_not_claim_success():
+    with _servers(_server()):
+        out = json.loads(_list_tools("u1", False, False, None, server="netbox", tool="nope"))
+    assert "error" in out and "inputSchema" not in out
 
 
 def test_no_servers_means_no_dispatchers():
