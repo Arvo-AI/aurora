@@ -373,6 +373,9 @@ def register():
                 
                 logging.info(f"New user registered: {email[:3]}***@*** (role=admin, org={org_id})")
 
+                from utils.hooks import get_hook
+                get_hook("after_user_created")(user_id, org_id, email, "password", True)
+
                 try:
                     from utils.auth.command_policy import seed_default_command_policy
                     seed_default_command_policy(org_id, user_id)
