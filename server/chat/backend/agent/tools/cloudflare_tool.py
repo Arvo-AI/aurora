@@ -548,8 +548,12 @@ def _query_managed_rules(creds: Dict, zone_id: str, limit: int = 50, **_kw) -> D
     """WAF managed rulesets deployed on the zone, with their overrides."""
     client = _build_client(creds)
     names: Dict[str, Any] = {}
+    available: List[Dict[str, Any]] = []
     try:
-        names = {rs.get("id"): rs.get("name") for rs in client.list_rulesets("zones", zone_id)}
+        for rs in client.list_rulesets("zones", zone_id):
+            names[rs.get("id")] = rs.get("name")
+            if rs.get("kind") == "managed":
+                available.append({"id": rs.get("id"), "name": rs.get("name"), "phase": rs.get("phase")})
     except Exception as exc:  # names are a nicety; the deployment list is the data
         logger.info("[CLOUDFLARE-TOOL] ruleset names unavailable for zone %s: %s", zone_id, exc)
     ruleset = client.get_phase_entrypoint("zones", zone_id, PHASE_FIREWALL_MANAGED) or {}
@@ -571,6 +575,10 @@ def _query_managed_rules(creds: Dict, zone_id: str, limit: int = 50, **_kw) -> D
         rules,
         limit,
     )
+    result["available_managed_rulesets"] = available
+    if not rules and available:
+        result["note"] = ("Nothing is deployed in this phase's entry point. "
+                          "'available_managed_rulesets' lists the managed rulesets Cloudflare offers this zone.")
     result["account_level"] = _account_phase_rules(
         client, creds, PHASE_FIREWALL_MANAGED, expand_custom=False)
     return result

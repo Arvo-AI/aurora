@@ -54,7 +54,7 @@ class FakeClient:
         return self.rulesets[(scope_id, ruleset_id)]
 
     def list_rulesets(self, scope, scope_id):
-        return [{"id": rid, "name": rs.get("name")}
+        return [{"id": rid, "name": rs.get("name"), "kind": rs.get("kind"), "phase": rs.get("phase")}
                 for (sid, rid), rs in self.rulesets.items() if sid == scope_id]
 
     def list_workers(self, account_id):
@@ -152,12 +152,31 @@ def test_managed_rules_show_ruleset_name_and_overrides():
             {"id": "m1", "action": "execute", "expression": "true", "enabled": True,
              "action_parameters": {"id": "managed-1", "overrides": {"action": "log"}}},
         ]}},
-        rulesets={("z1", "managed-1"): {"id": "managed-1", "name": "Cloudflare Managed Ruleset"}},
+        rulesets={("z1", "managed-1"): {"id": "managed-1", "name": "Cloudflare Managed Ruleset",
+                                          "kind": "managed", "phase": PHASE_FIREWALL_MANAGED}},
     )
     out = _query(client, resource_type="managed_rules", zone_id="z1")
     assert out["results"][0]["managed_ruleset_name"] == "Cloudflare Managed Ruleset"
     assert out["results"][0]["overrides"] == {"action": "log"}
     assert "action_parameters" not in out["results"][0]
+    assert out["available_managed_rulesets"] == [
+        {"id": "managed-1", "name": "Cloudflare Managed Ruleset", "phase": PHASE_FIREWALL_MANAGED}]
+    assert "note" not in out
+
+
+def test_managed_rules_with_nothing_deployed_still_lists_what_is_available():
+    """A Free zone: no entry point in the managed phase (Cloudflare answers 404)
+    but the Managed Free Ruleset is offered. The agent must see it."""
+    client = FakeClient(rulesets={
+        ("z1", "free-1"): {"id": "free-1", "name": "Cloudflare Managed Free Ruleset",
+                           "kind": "managed", "phase": PHASE_FIREWALL_MANAGED},
+        ("z1", "custom-x"): {"id": "custom-x", "name": "default", "kind": "zone",
+                             "phase": PHASE_FIREWALL_CUSTOM},
+    })
+    out = _query(client, resource_type="managed_rules", zone_id="z1")
+    assert out["count"] == 0 and out["ruleset_id"] is None
+    assert [a["name"] for a in out["available_managed_rulesets"]] == ["Cloudflare Managed Free Ruleset"]
+    assert "available_managed_rulesets" in out["note"]
 
 
 def test_cache_rules_served_from_the_cache_phase():
