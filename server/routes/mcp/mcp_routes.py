@@ -60,6 +60,24 @@ MAX_HEADER_NAME_CHARS = 64
 # cannot be redeemed here.
 _OAUTH_ENDPOINT = "mcp_server"
 
+MAX_CLIENT_ERROR_CHARS = 300
+
+
+def _client_error(exc: BaseException) -> str:
+    """One short, single-line reason safe to return to the caller.
+
+    Registration failures have to be actionable -- "set MCP_ALLOW_PRIVATE_TARGETS"
+    or "check the token" -- so the messages our own exception types carry are
+    deliberately surfaced rather than replaced with a generic string.
+
+    What is *not* safe is the text a third party put in the exception.
+    ``MCPConnectionError`` wraps whatever the MCP SDK or the network stack
+    raised, which can run to many lines and carry internal detail. Collapsing
+    whitespace and truncating strips the multi-line shape a traceback or a
+    gateway error page would have, leaving the one-line cause.
+    """
+    return " ".join(str(exc).split())[:MAX_CLIENT_ERROR_CHARS]
+
 
 def _redirect_uri() -> str:
     """The fixed callback URL registered with every provider.
@@ -147,12 +165,12 @@ def _register(user_id: str, data: Dict[str, Any], label: str) -> Tuple[Any, int]
         tools, transport_used = _probe_sync(url, auth, transport, _capture)
     except ValueError as exc:  # SSRF / malformed URL — message is user-facing
         logger.warning("[MCP] Rejected target for user %s: %s", sanitize(user_id), sanitize(exc))
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": _client_error(exc)}), 400
     except MCPAuthError as exc:
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": _client_error(exc)}), 400
     except MCPConnectionError as exc:
         logger.warning("[MCP] Probe failed for user %s: %s", sanitize(user_id), sanitize(exc))
-        return jsonify({"error": f"Could not reach the MCP server: {exc}"}), 502
+        return jsonify({"error": f"Could not reach the MCP server: {_client_error(exc)}"}), 502
     except Exception:
         logger.exception("[MCP] Unexpected probe failure for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to connect to the MCP server"}), 502
@@ -211,12 +229,12 @@ def detect(user_id):
         _, transport_used = _probe_sync(url, {"type": "none"}, "auto")
         return jsonify({"authType": "none", "transport": transport_used})
     except ValueError as exc:  # SSRF / malformed URL -- message is user-facing
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": _client_error(exc)}), 400
     except MCPAuthError:
         pass  # Needs credentials; which kind is decided below.
     except MCPConnectionError as exc:
         logger.warning("[MCP] Detect failed for user %s: %s", sanitize(user_id), sanitize(exc))
-        return jsonify({"error": f"Could not reach the MCP server: {exc}"}), 502
+        return jsonify({"error": f"Could not reach the MCP server: {_client_error(exc)}"}), 502
     except Exception:
         logger.exception("[MCP] Unexpected detect failure for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to connect to the MCP server"}), 502
@@ -262,11 +280,11 @@ def oauth_start(user_id):
         client_id, client_secret = creds["client_id"], creds.get("client_secret")
     except ValueError as exc:  # SSRF guard on a discovered endpoint
         logger.warning("[MCP] OAuth target rejected for %s: %s", sanitize(user_id), sanitize(exc))
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": _client_error(exc)}), 400
     except OAuthRegistrationUnsupported as exc:
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": _client_error(exc)}), 400
     except OAuthDiscoveryError as exc:
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": _client_error(exc)}), 400
     except Exception:
         logger.exception("[MCP] OAuth discovery failed for user %s", sanitize(user_id))
         return jsonify({"error": "Could not start the OAuth flow for this server"}), 502
@@ -331,9 +349,9 @@ def oauth_complete(user_id):
             code, verifier, _redirect_uri(), url,
         ))
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": _client_error(exc)}), 400
     except OAuthDiscoveryError as exc:
-        return jsonify({"error": f"Could not complete authorization: {exc}"}), 400
+        return jsonify({"error": f"Could not complete authorization: {_client_error(exc)}"}), 400
     except Exception:
         logger.exception("[MCP] Token exchange failed for user %s", sanitize(user_id))
         return jsonify({"error": "Could not complete the OAuth flow"}), 502
