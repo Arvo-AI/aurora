@@ -21,7 +21,6 @@ from connectors.mcp_connector.oauth import OAuthDiscoveryError, is_expired, refr
 _T = TypeVar("_T")
 
 HANDSHAKE_TIMEOUT = 20.0
-CALL_TIMEOUT = 60.0
 
 # Storage bound, not a prompt bound: the agent reaches these tools through
 # mcp_list_tools/mcp_call_tool, so a server's tool count no longer affects the

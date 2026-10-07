@@ -157,8 +157,10 @@ def _make_wrapper(
                 if send_tool_completion:
                     try:
                         send_tool_completion(public_name, message, "cancelled", tool_call_id)
-                    except Exception:
-                        pass
+                    except Exception as notify_exc:
+                        logger.warning(
+                            "Failed to send cancellation for %s: %s", public_name, notify_exc
+                        )
                 return message
 
         args = {k: v for k, v in kwargs.items() if v is not None}
@@ -173,16 +175,20 @@ def _make_wrapper(
             if send_tool_error:
                 try:
                     send_tool_error(public_name, str(exc))
-                except Exception:
-                    pass
+                except Exception as notify_exc:
+                    logger.warning(
+                        "Failed to send error for %s: %s", public_name, notify_exc
+                    )
             return message
         except Exception as exc:
             logger.exception("[MCP] Unexpected failure calling %s", sanitize(public_name))
             if send_tool_error:
                 try:
                     send_tool_error(public_name, str(exc))
-                except Exception:
-                    pass
+                except Exception as notify_exc:
+                    logger.warning(
+                        "Failed to send error for %s: %s", public_name, notify_exc
+                    )
             return f"Error calling {tool_name} on '{label}': {exc}"
 
         text = cap_tool_output(result if isinstance(result, str) else str(result), public_name)
