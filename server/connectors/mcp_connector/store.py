@@ -39,11 +39,13 @@ READ_VERBS = (
 )
 READ_PREFIXES = tuple(f"{verb}{sep}" for verb in READ_VERBS for sep in ("_", "-"))
 
-# Per-tool user override of the automatic classification.
-#   auto   -- follow the classifier (reads free, writes gated, writes off in RCA)
-#   always -- the user vouched for this tool: no prompt, available in RCA too
-#   never  -- never expose it, whatever the classifier or the server says
-TOOL_MODES = ("auto", "always", "never")
+# What the agent may do with one tool. Two states, because that is all there is
+# to decide: run it, or ask the user first.
+#   allow   -- no prompt, and usable during automated investigations
+#   confirm -- prompt the user; withheld in background where nobody can answer
+# Nothing stored means "derive from the read/write classification", which is why
+# there is no third mode: the absence of an override is not a choice.
+TOOL_MODES = ("allow", "confirm")
 
 
 def slugify_label(raw: Any) -> str:
@@ -96,20 +98,33 @@ def qualified_tool_name(label: str, tool_name: str) -> str:
     return f"{name[: MAX_TOOL_NAME_CHARS - 9]}_{digest}"
 
 
-def tool_mode(server: Dict[str, Any], tool_name: str) -> str:
-    """The user's override for one tool, defaulting to ``auto``.
+def tool_mode(server: Dict[str, Any], tool: Any) -> str:
+    """What the agent may do with one tool: ``allow`` or ``confirm``.
 
-    Reads the legacy ``allow_in_background`` list as ``always`` so servers
-    registered before per-tool modes existed keep working.
+    Takes a tool dict (preferred) or a bare name. With no stored override the
+    answer is derived from the read/write classification, so the common case
+    needs no configuration and the UI can always show the real behaviour rather
+    than a neutral "auto" that means different things on different rows.
+
+    A bare name can only be classified by its verb prefix, which is the same
+    fallback ``is_read_tool`` uses when a server sends no annotations.
     """
+    name = tool.get("name", "") if isinstance(tool, dict) else tool
     modes = server.get("tool_modes")
     if isinstance(modes, dict):
-        mode = modes.get(tool_name)
+        mode = modes.get(name)
         if mode in TOOL_MODES:
             return mode
-    if tool_name in (server.get("allow_in_background") or []):
-        return "always"
-    return "auto"
+        # Vocabulary before allow/confirm. Servers registered then still carry
+        # these, and a stale value must not fall through to the derived default:
+        # "never" in particular meant "withhold", so it maps to the safer state.
+        legacy = {"always": "allow", "never": "confirm"}.get(mode)
+        if legacy:
+            return legacy
+    # Predates per-tool modes entirely.
+    if name in (server.get("allow_in_background") or []):
+        return "allow"
+    return "allow" if is_read_tool(tool) else "confirm"
 
 
 def fingerprint(user_id: str) -> str:
@@ -145,7 +160,7 @@ def server_summary(server: Dict[str, Any]) -> Dict[str, Any]:
                 "write": not is_read_tool(t),
                 # Lets the UI say "the server told us" rather than "we guessed".
                 "declared": isinstance(t.get("annotations"), dict),
-                "mode": tool_mode(server, t.get("name", "")),
+                "mode": tool_mode(server, t),
             }
             for t in tools
         ],
@@ -222,11 +237,8 @@ def set_tool_mode(user_id: str, label: str, tool_name: str, mode: str) -> Tuple[
     modes = dict(server.get("tool_modes") or {})
     # Drop the legacy list once modes exist, so the two cannot disagree.
     for legacy in server.pop("allow_in_background", None) or []:
-        modes.setdefault(legacy, "always")
-    if mode == "auto":
-        modes.pop(tool_name, None)
-    else:
-        modes[tool_name] = mode
+        modes.setdefault(legacy, "allow")
+    modes[tool_name] = mode
     server["tool_modes"] = modes
 
     save_servers(user_id, servers)

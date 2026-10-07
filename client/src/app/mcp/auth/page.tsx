@@ -404,10 +404,10 @@ export default function McpAuthPage() {
             )}
 
             <p className="rounded-md border p-3 text-xs text-muted-foreground">
-              Aurora cannot tell what a third-party tool changes, so any tool that is not
-              clearly a read is treated as a write: it needs your confirmation in chat and
-              is unavailable during automated investigations. You can change this per tool
-              once the server is connected.
+              Aurora cannot tell what a third-party tool changes, so tools that do not look
+              like reads default to asking you for confirmation before they run, which also
+              keeps them out of automated investigations. You can set this per tool once the
+              server is connected.
             </p>
 
             {atCapacity && (
@@ -509,18 +509,18 @@ export default function McpAuthPage() {
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
-                                <SelectItem value="auto">
-                                  {tool.write ? "Ask first" : "Run automatically"}
-                                </SelectItem>
-                                <SelectItem value="always">Always allow</SelectItem>
-                                <SelectItem value="never">Never use</SelectItem>
+                                <SelectItem value="allow">Allow</SelectItem>
+                                <SelectItem value="confirm">Confirm</SelectItem>
                               </SelectContent>
                             </Select>
                           </div>
                         ))}
                         <p className="pt-1 text-xs text-muted-foreground">
-                          Always allow skips the confirmation prompt and lets Aurora use the
-                          tool during automated investigations. Never use hides it entirely.
+                          <span className="font-medium">Allow</span> runs without asking,
+                          including during automated investigations.{" "}
+                          <span className="font-medium">Confirm</span> asks you first, so it
+                          is skipped when no one is there to answer. Writes default to
+                          Confirm, reads to Allow.
                         </p>
                       </div>
                     )}

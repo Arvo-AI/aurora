@@ -49,15 +49,15 @@ them through two tools: `mcp_list_tools` to discover, then `mcp_call_tool` to in
    on to another source. Do not retry the same call repeatedly — the server may be
    unreachable from Aurora's network, which is a real finding worth reporting.
 
-## Tools marked `"write": true`
+## Tools marked `"needs_confirmation": true`
 
-Any tool whose name does not begin with a read verb (`get_`, `list_`, `search_`, `read_`,
-`describe_`, `query_`, `fetch_`, `check_`) is treated as a write, unless the server declared
-otherwise.
+Each tool is either **allow** (runs without asking) or **confirm** (asks the user first).
+Tools that look like reads default to allow; everything else defaults to confirm, and the
+user can override either per tool.
 
-- In interactive chat, calling one prompts the user to confirm first.
-- During RCA and other background work these tools are **not listed and cannot be called** —
-  no human is present to approve them. Do not plan around them; investigate with reads only.
+- In interactive chat, calling a confirm tool prompts the user before it runs.
+- During RCA and other background work confirm tools are **not listed and cannot be called** —
+  no human is present to approve them. Do not plan around them; investigate with allow tools.
 
-Aurora cannot determine what a third-party tool actually changes, so this classification is
-based on naming. If a read-looking tool appears to have modified something, report it.
+Aurora cannot determine what a third-party tool actually changes, so the default is based on
+naming. If a tool that ran without asking appears to have modified something, report it.

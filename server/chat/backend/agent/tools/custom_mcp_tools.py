@@ -82,20 +82,11 @@ def _tool_allowed(
 ) -> bool:
     """Whether this tool may be offered to the agent in the current context.
 
-    The user's per-tool override wins -- ``never`` hides a tool the classifier
-    called safe, and ``always`` means always, including during RCA and PR review
-    where nothing else can offer a write.
-
-    Otherwise: reads are always offered; writes only in foreground chat, where
-    ``gate_action`` can ask a human. In background there is nobody to approve,
-    so a write is withheld rather than offered and then denied mid-investigation.
+    ``allow`` runs anywhere. ``confirm`` runs only in foreground chat, where
+    ``gate_action`` can ask a human; in background there is nobody to approve,
+    so it is withheld rather than offered and then denied mid-investigation.
     """
-    mode = tool_mode(server, tool.get("name", ""))
-    if mode == "never":
-        return False
-    if mode == "always":
-        return True
-    if is_read_tool(tool):
+    if tool_mode(server, tool) == "allow":
         return True
     return not (is_background or is_pr_review)
 
@@ -240,21 +231,16 @@ def _call_tool(
             found = next((t for t in s.get("tools") or [] if t.get("name") == tool), None)
             if found is None:
                 continue
-            if tool_mode(s, tool) == "never":
-                return json.dumps({
-                    "error": "tool_disabled",
-                    "detail": f"'{tool}' is set to never on '{target}'. The user can change this in MCP settings.",
-                })
             if ModeAccessController.is_read_only_mode(mode):
                 return json.dumps({
                     "error": "read_only_mode",
                     "detail": f"'{tool}' writes, and Ask mode is read-only. Switch to Agent mode.",
                 })
             return json.dumps({
-                "error": "unavailable_in_background",
+                "error": "needs_confirmation_unavailable",
                 "detail": (
-                    f"'{tool}' writes and nobody can approve it during an automated "
-                    "investigation. Report the intended action instead."
+                    f"'{tool}' requires user confirmation and nobody can approve it "
+                    "during an automated investigation. Report the intended action instead."
                 ),
             })
         known = sorted({s["label"] for s, _ in pairs})
@@ -284,7 +270,7 @@ def _call_tool(
         srv,
         tool,
         qualified_tool_name(srv["label"], tool),
-        needs_gate=not is_read_tool(tool_def) and tool_mode(srv, tool) != "always",
+        needs_gate=tool_mode(srv, tool_def) == "confirm",
         user_id=user_id,
         send_tool_start=send_tool_start,
         send_tool_completion=send_tool_completion,
@@ -351,7 +337,7 @@ def _shape(server: Dict[str, Any], tool_def: Dict[str, Any]) -> Dict[str, Any]:
         "tool": tool_def["name"],
         # Enough to choose a tool; the detail view carries the rest.
         "description": description[:LIST_DESCRIPTION_CHARS],
-        "write": not is_read_tool(tool_def),
+        "needs_confirmation": tool_mode(server, tool_def) == "confirm",
         "args": _arg_summary(tool_def),
     }
 
@@ -404,7 +390,7 @@ def _list_tools(
             "server": srv["label"],
             "tool": tool_def["name"],
             "description": (tool_def.get("description") or "").strip(),
-            "write": not is_read_tool(tool_def),
+            "needs_confirmation": tool_mode(srv, tool_def) == "confirm",
             "inputSchema": tool_def.get("inputSchema") or {},
         })
 

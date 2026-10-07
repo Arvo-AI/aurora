@@ -2,7 +2,7 @@
 
 import { apiRequest } from '@/lib/services/api-client';
 
-export type McpToolMode = 'auto' | 'always' | 'never';
+export type McpToolMode = 'allow' | 'confirm';
 
 export interface McpToolSummary {
   name: string;

@@ -263,45 +263,70 @@ def test_a_stale_read_only_flag_is_ignored():
 # Per-tool overrides
 # --------------------------------------------------------------------------- #
 
-def test_always_beats_every_other_restriction():
-    """The user said always, so RCA and PR review must not override them."""
-    srv = _server(tool_modes={"restart_device": "always"})
+def test_allow_beats_every_other_restriction():
+    """Allow means allow, including during RCA and PR review."""
+    srv = _server(tool_modes={"restart_device": "allow"})
     assert _tool_allowed(srv, WRITE, is_background=True, is_pr_review=False)
     assert _tool_allowed(srv, WRITE, is_background=False, is_pr_review=True)
 
 
-def test_never_hides_a_tool_the_classifier_called_safe():
-    srv = _server(tool_modes={"list_devices": "never"})
-    assert not _tool_allowed(srv, READ, is_background=False, is_pr_review=False)
+def test_confirm_withholds_a_read_the_classifier_called_safe():
+    """The override wins over the classifier in both directions."""
+    srv = _server(tool_modes={"list_devices": "confirm"})
+    # Foreground can ask, so the tool is still offered.
+    assert _tool_allowed(srv, READ, is_background=False, is_pr_review=False)
+    # Background cannot ask, so a confirm tool is withheld even though it reads.
+    assert not _tool_allowed(srv, READ, is_background=True, is_pr_review=False)
 
 
-def test_always_suppresses_the_confirmation_prompt():
-    """``needs_gate`` is what makes a write prompt; always must clear it."""
-    srv = _server(tool_modes={"restart_device": "always"})
-    assert store.tool_mode(srv, "restart_device") == "always"
-    assert store.tool_mode(srv, "list_devices") == "auto", "default is auto"
+def test_the_default_mode_is_derived_from_the_classification():
+    """No stored override is not a third mode -- it resolves to one of the two.
+
+    This is why "auto" was the wrong name: it described the absence of a choice,
+    and rendered as a label that meant different things on reads and writes.
+    """
+    srv = _server()
+    assert store.tool_mode(srv, READ) == "allow"
+    assert store.tool_mode(srv, WRITE) == "confirm"
+    # An explicit override replaces the derived value.
+    assert store.tool_mode(_server(tool_modes={"restart_device": "allow"}), WRITE) == "allow"
+
+
+def test_legacy_mode_values_map_onto_the_two_that_remain():
+    """Servers configured before allow/confirm must not silently change behaviour.
+
+    ``never`` meant withhold, so it maps to confirm rather than falling through
+    to the derived default, which would have made a read run unattended.
+    """
+    assert store.tool_mode(_server(tool_modes={"restart_device": "always"}), WRITE) == "allow"
+    assert store.tool_mode(_server(tool_modes={"list_devices": "never"}), READ) == "confirm"
+    # Unrecognised junk falls back to the classification, not to allow.
+    assert store.tool_mode(_server(tool_modes={"restart_device": "bogus"}), WRITE) == "confirm"
 
 
 def test_set_tool_mode_rejects_junk(fake_vault):
     store.upsert_server("u1", _server())
     assert store.set_tool_mode("u1", "netbox", "restart_device", "sometimes")[0] is False
-    assert store.set_tool_mode("u1", "nope", "restart_device", "always")[0] is False
+    # The removed vocabulary must not be accepted as input any more.
+    assert store.set_tool_mode("u1", "netbox", "restart_device", "always")[0] is False
+    assert store.set_tool_mode("u1", "netbox", "restart_device", "never")[0] is False
+    assert store.set_tool_mode("u1", "netbox", "restart_device", "auto")[0] is False
+    assert store.set_tool_mode("u1", "nope", "restart_device", "allow")[0] is False
     # A tool the server does not expose is a typo, not a setting to remember.
-    assert store.set_tool_mode("u1", "netbox", "no_such_tool", "always")[0] is False
+    assert store.set_tool_mode("u1", "netbox", "no_such_tool", "allow")[0] is False
 
 
 def test_set_tool_mode_persists_without_touching_the_tool_list(fake_vault):
     store.upsert_server("u1", _server())
-    assert store.set_tool_mode("u1", "netbox", "restart_device", "always") == (True, "")
+    assert store.set_tool_mode("u1", "netbox", "restart_device", "allow") == (True, "")
     stored = fake_vault["blob"]["servers"][0]
-    assert stored["tool_modes"] == {"restart_device": "always"}
+    assert stored["tool_modes"] == {"restart_device": "allow"}
     assert len(stored["tools"]) == 2, "changing a mode must not re-probe or drop tools"
 
 
-def test_legacy_allow_in_background_still_reads_as_always():
+def test_legacy_allow_in_background_still_reads_as_allow():
     """Servers registered before per-tool modes existed must keep working."""
-    assert store.tool_mode(_server(allow_in_background=["restart_device"]),
-                           "restart_device") == "always"
+    assert store.tool_mode(_server(allow_in_background=["restart_device"]), WRITE) == "allow"
 
 
 # --------------------------------------------------------------------------- #
@@ -362,7 +387,7 @@ def test_discovery_and_invocation_cannot_disagree():
     If these drifted the agent would advertise a capability that does not exist,
     then burn turns retrying a call that is refused every time.
     """
-    srv = _server(tool_modes={"restart_device": "never"})
+    srv = _server(tool_modes={"list_devices": "confirm"})
     for ctx in ({"is_background": False}, {"is_background": True}):
         with _servers(srv):
             listed = {
@@ -378,18 +403,22 @@ def test_discovery_and_invocation_cannot_disagree():
         assert listed == callable_now, ctx
 
 
-def test_a_disabled_tool_is_refused_when_named_directly():
-    """The bypass attempt: `never` no longer hides the tool, so it must refuse."""
-    with _servers(_server(tool_modes={"restart_device": "never"})):
-        out = _call(tool="restart_device")
-    assert out["error"] == "tool_disabled"
+def test_a_confirm_read_is_refused_in_background_when_named_directly():
+    """The bypass attempt: discovery hides it, so the call must refuse it too.
+
+    A read the user moved to confirm is the interesting case, because the
+    classifier would otherwise wave it through.
+    """
+    with _servers(_server(tool_modes={"list_devices": "confirm"})):
+        out = _call(tool="list_devices", is_background=True)
+    assert out["error"] == "needs_confirmation_unavailable"
 
 
 def test_a_write_is_refused_in_background_not_silently_attempted():
     """RCA has nobody to approve a write, so the dispatcher must stop it."""
     with _servers(_server()):
         out = _call(tool="restart_device", is_background=True)
-    assert out["error"] == "unavailable_in_background"
+    assert out["error"] == "needs_confirmation_unavailable"
 
 
 def test_ask_mode_refuses_writes_at_call_time():
@@ -480,12 +509,12 @@ def test_a_foreground_write_is_gated_with_the_qualified_name():
     assert "not approved" in out
 
 
-def test_always_mode_skips_the_gate_in_the_dispatcher_too():
-    """`always` means the user vouched for it; a prompt would contradict them."""
+def test_allow_mode_skips_the_gate_in_the_dispatcher_too():
+    """Allow means the user vouched for it; a prompt would contradict them."""
     import chat.backend.agent.tools.custom_mcp_tools as cmt
 
     def _boom(**_):
-        raise AssertionError("gate must not be consulted for an 'always' tool")
+        raise AssertionError("gate must not be consulted for an 'allow' tool")
 
     async def _fake_call(*a, **k):
         return "restarted"
@@ -493,7 +522,7 @@ def test_always_mode_skips_the_gate_in_the_dispatcher_too():
     orig_gate, orig_call = cmt.gate_action, cmt.call
     cmt.gate_action, cmt.call = _boom, _fake_call
     try:
-        with _servers(_server(tool_modes={"restart_device": "always"})):
+        with _servers(_server(tool_modes={"restart_device": "allow"})):
             out = _call(tool="restart_device", is_background=True)
     finally:
         cmt.gate_action, cmt.call = orig_gate, orig_call
@@ -634,7 +663,7 @@ def test_fingerprint_changes_when_the_tool_list_would(fake_vault):
     after_add = store.fingerprint("u1")
     assert after_add != before, "registering a server must invalidate"
 
-    store.set_tool_mode("u1", "netbox", "restart_device", "never")
+    store.set_tool_mode("u1", "netbox", "restart_device", "confirm")
     assert store.fingerprint("u1") != after_add, "a mode change must invalidate"
 
     store.remove_server("u1", "linear")
