@@ -41,11 +41,12 @@ _T = TypeVar("_T")
 HANDSHAKE_TIMEOUT = 20.0
 CALL_TIMEOUT = 60.0
 
-# Every registered tool's name, description, and JSON schema enters the system
-# prompt on every turn, so this is a prompt-budget limit, not politeness. Set
-# above the largest server observed (GitHub's MCP exposes 49) while still
-# stopping one server from crowding out Aurora's own tools.
-MAX_TOOLS_PER_SERVER = 64
+# Storage bound, not a prompt bound: the agent reaches these tools through
+# mcp_list_tools/mcp_call_tool, so a server's tool count no longer affects the
+# per-turn prompt. All of an org's servers share one Vault secret, and this caps
+# that blob (~1.5KB/tool, so 10 servers x 256 is ~3.8MB against an 8MB measured
+# ceiling on file storage). Well above the largest server seen (GitHub's 49).
+MAX_TOOLS_PER_SERVER = 256
 MAX_DESCRIPTION_CHARS = 1000
 
 # tools/list is paginated and the SDK does not follow the cursor for us. Bound

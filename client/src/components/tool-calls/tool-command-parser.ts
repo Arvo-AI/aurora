@@ -114,6 +114,19 @@ export function parseMcpToolCommand(toolName: string, toolInput: string): string
     const parsed = JSON.parse(parsableCommand)
     const args = parsed?.kwargs || parsed || {}
 
+    // Customer MCP servers are reached through two dispatcher tools, so the
+    // LangChain name is always the same -- the server and tool the user cares
+    // about are in the arguments. Handled before the GitHub switch because
+    // "call_tool"/"list_tools" are not GitHub tool names.
+    if (toolName === "mcp_call_tool") {
+      return args.server && args.tool ? `${args.server}: ${args.tool}` : "MCP: call tool"
+    }
+    if (toolName === "mcp_list_tools") {
+      if (args.query) return `MCP: search tools "${args.query}"`
+      if (args.server) return `MCP: list ${args.server} tools`
+      return "MCP: list servers"
+    }
+
     const githubTool = toolName.replace("mcp_", "")
 
     switch(githubTool) {

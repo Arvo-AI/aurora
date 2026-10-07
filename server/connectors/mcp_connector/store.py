@@ -269,7 +269,11 @@ def update_auth(user_id: str, label: str, auth: Dict[str, Any]) -> None:
 
 
 def mcp_servers_section(user_id: str) -> str:
-    """Render connected servers and their tools for the skill template.
+    """Render connected servers for the skill template: labels and counts only.
+
+    Deliberately not the tool names. Ten servers with 150 tools each would put
+    1500 names into the system prompt on every turn, which is exactly what the
+    mcp_list_tools indirection exists to avoid.
 
     Lives here rather than beside the tool builder so ``SkillRegistry`` can
     import it without pulling in langchain.
@@ -281,13 +285,7 @@ def mcp_servers_section(user_id: str) -> str:
     lines: List[str] = []
     for server in servers:
         tools = server.get("tools") or []
-        lines.append(f"- {server['label']} ({len(tools)} tools)")
-        for tool in tools:
-            name = tool.get("name", "")
-            marker = "" if is_read_tool(tool) else "  [write — needs confirmation]"
-            summary = (tool.get("description") or "").strip().splitlines()
-            first_line = summary[0][:120] if summary else ""
-            lines.append(
-                f"    {qualified_tool_name(server['label'], name)}: {first_line}{marker}"
-            )
+        writes = sum(1 for t in tools if not is_read_tool(t))
+        suffix = f", {writes} need confirmation" if writes else ""
+        lines.append(f"- {server['label']} ({len(tools)} tools{suffix})")
     return "\n".join(lines)

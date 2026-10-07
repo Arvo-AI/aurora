@@ -7,9 +7,11 @@ exercised against a fake in-memory Vault blob.
 import asyncio
 import base64
 import hashlib
+import json
 import os
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,7 +31,14 @@ from connectors.mcp_connector.client import (  # noqa: E402
     build_headers,
     flatten_content,
 )
-from chat.backend.agent.tools.custom_mcp_tools import _tool_allowed  # noqa: E402
+from chat.backend.agent.access.mode_access_controller import ModeAccessController  # noqa: E402
+from chat.backend.agent.tools.custom_mcp_tools import (  # noqa: E402
+    _call_tool,
+    _list_tools,
+    _tool_allowed,
+    _visible,
+    get_custom_mcp_tools,
+)
 from utils.secrets.secret_ref_utils import SUPPORTED_SECRET_PROVIDERS  # noqa: E402
 
 
@@ -210,6 +219,19 @@ READ = {"name": "list_devices", "description": "List devices", "inputSchema": {}
 WRITE = {"name": "restart_device", "description": "Restart", "inputSchema": {}}
 
 
+@contextmanager
+def _servers(*servers):
+    """Patch the Vault-backed server list for the duration of a block."""
+    import chat.backend.agent.tools.custom_mcp_tools as cmt
+
+    original = cmt.list_servers
+    cmt.list_servers = lambda uid: list(servers)
+    try:
+        yield
+    finally:
+        cmt.list_servers = original
+
+
 def test_background_withholds_writes_but_keeps_reads():
     srv = _server()
     assert _tool_allowed(srv, READ, is_background=True, is_pr_review=False)
@@ -282,6 +304,226 @@ def test_legacy_allow_in_background_still_reads_as_always():
                            "restart_device") == "always"
 
 
+# --------------------------------------------------------------------------- #
+# The two dispatchers
+#
+# Every rule below used to be enforced by *not building* a tool, which was
+# self-enforcing: the model could not name what it could not see. It can now
+# name any string, so each rule has to be re-checked inside _call_tool. These
+# tests are the proof that it is.
+# --------------------------------------------------------------------------- #
+
+def _call(server="netbox", tool="list_devices", arguments=None, **ctx):
+    """Invoke the dispatcher with defaults, returning the parsed JSON or raw text."""
+    ctx.setdefault("is_background", False)
+    ctx.setdefault("is_pr_review", False)
+    ctx.setdefault("mode", None)
+    out = _call_tool("u1", server, tool, arguments, **ctx)
+    try:
+        return json.loads(out)
+    except (ValueError, TypeError):
+        return out
+
+
+def test_bare_list_returns_counts_but_no_tool_names():
+    """The mistake worth guarding: 10 servers x 150 tools = 1500 names in one reply.
+
+    That would move the context blowup from the prompt into the tool result
+    rather than removing it.
+    """
+    with _servers(_server(), _server(label="linear", tools=[
+        {"name": f"get_issue_{i}", "description": "d", "inputSchema": {}} for i in range(150)
+    ])):
+        out = json.loads(_list_tools("u1", False, False, None))
+
+    assert {s["server"] for s in out["servers"]} == {"netbox", "linear"}
+    assert [s["tool_count"] for s in out["servers"] if s["server"] == "linear"] == [150]
+    assert "get_issue_0" not in json.dumps(out)
+
+
+def test_query_searches_across_servers_in_one_call():
+    """Without this, locating a tool among ten servers costs ten round-trips."""
+    with _servers(
+        _server(tools=[{"name": "list_devices", "description": "network gear", "inputSchema": {}}]),
+        _server(label="linear", tools=[{"name": "list_issues", "description": "tickets", "inputSchema": {}}]),
+    ):
+        out = json.loads(_list_tools("u1", False, False, None, query="list"))
+
+    assert {(t["server"], t["tool"]) for t in out["tools"]} == {
+        ("netbox", "list_devices"), ("linear", "list_issues"),
+    }
+    # Each match is attributed, or the agent cannot build the follow-up call.
+    assert all(t["server"] for t in out["tools"])
+
+
+def test_discovery_and_invocation_cannot_disagree():
+    """Anything listed must be callable, and anything callable must be listed.
+
+    If these drifted the agent would advertise a capability that does not exist,
+    then burn turns retrying a call that is refused every time.
+    """
+    srv = _server(tool_modes={"restart_device": "never"})
+    for ctx in ({"is_background": False}, {"is_background": True}):
+        with _servers(srv):
+            listed = {
+                (t["server"], t["tool"])
+                for t in json.loads(_list_tools(
+                    "u1", ctx["is_background"], False, None, server="netbox"
+                )).get("tools", [])
+            }
+            callable_now = {
+                (s["label"], t["name"])
+                for s, t in _visible("u1", ctx["is_background"], False, None)
+            }
+        assert listed == callable_now, ctx
+
+
+def test_a_disabled_tool_is_refused_when_named_directly():
+    """The bypass attempt: `never` no longer hides the tool, so it must refuse."""
+    with _servers(_server(tool_modes={"restart_device": "never"})):
+        out = _call(tool="restart_device")
+    assert out["error"] == "tool_disabled"
+
+
+def test_a_write_is_refused_in_background_not_silently_attempted():
+    """RCA has nobody to approve a write, so the dispatcher must stop it."""
+    with _servers(_server()):
+        out = _call(tool="restart_device", is_background=True)
+    assert out["error"] == "unavailable_in_background"
+
+
+def test_ask_mode_refuses_writes_at_call_time():
+    """filter_tools can no longer see individual tools, so this moved here."""
+    import chat.backend.agent.tools.custom_mcp_tools as cmt
+
+    async def _fake_call(*a, **k):
+        return "devices"
+
+    original = cmt.call
+    cmt.call = _fake_call
+    try:
+        with _servers(_server()):
+            assert _call(tool="restart_device", mode="ask")["error"] == "read_only_mode"
+            # Reads are untouched: Ask mode is read-only, not MCP-off.
+            assert _call(tool="list_devices", mode="ask") == "devices"
+    finally:
+        cmt.call = original
+
+
+def test_an_unknown_tool_gets_the_server_list_back():
+    """A refusal has to be actionable or the agent guesses again next turn."""
+    with _servers(_server()):
+        out = _call(tool="no_such_tool")
+    assert out["error"] == "unknown_tool"
+    assert out["known_servers"] == ["netbox"]
+
+
+def test_missing_required_arguments_are_caught_before_the_network():
+    """Replaces the per-tool args_schema that LangChain used to validate."""
+    srv = _server(tools=[{
+        "name": "get_device",
+        "description": "d",
+        "inputSchema": {"type": "object", "required": ["device_id"], "properties": {}},
+    }])
+    with _servers(srv):
+        out = _call(tool="get_device", arguments={})
+    assert out["error"] == "missing_arguments"
+    assert out["missing"] == ["device_id"]
+    # The schema comes back so the agent can fix the call without re-discovering.
+    assert out["inputSchema"]["required"] == ["device_id"]
+
+
+def test_a_read_reaches_the_transport_with_its_arguments():
+    """The happy path: dispatcher -> existing wrapper -> MCP client call()."""
+    import chat.backend.agent.tools.custom_mcp_tools as cmt
+
+    seen = {}
+
+    async def _fake_call(url, auth, transport, tool_name, args, on_refresh=None):
+        seen.update(url=url, tool=tool_name, args=args, transport=transport)
+        return "device-list"
+
+    original = cmt.call
+    cmt.call = _fake_call
+    try:
+        with _servers(_server()):
+            out = _call(tool="list_devices", arguments={"site": "dc1"})
+    finally:
+        cmt.call = original
+
+    assert out == "device-list"
+    assert seen["tool"] == "list_devices"
+    assert seen["args"] == {"site": "dc1"}
+    assert seen["url"] == "https://mcp.example.com/mcp"
+
+
+def test_a_foreground_write_is_gated_with_the_qualified_name():
+    """The approval prompt must name the server and show the arguments."""
+    import chat.backend.agent.tools.custom_mcp_tools as cmt
+
+    captured = {}
+
+    def _fake_gate(*, user_id, tool_name, summary):
+        captured.update(tool_name=tool_name, summary=summary)
+        return SimpleNamespace(allowed=False)
+
+    original = cmt.gate_action
+    cmt.gate_action = _fake_gate
+    try:
+        with _servers(_server()):
+            out = _call(tool="restart_device", arguments={"device_id": "d1"})
+    finally:
+        cmt.gate_action = original
+
+    assert captured["tool_name"] == "mcp_netbox_restart_device"
+    assert "netbox" in captured["summary"] and "d1" in captured["summary"]
+    assert "not approved" in out
+
+
+def test_always_mode_skips_the_gate_in_the_dispatcher_too():
+    """`always` means the user vouched for it; a prompt would contradict them."""
+    import chat.backend.agent.tools.custom_mcp_tools as cmt
+
+    def _boom(**_):
+        raise AssertionError("gate must not be consulted for an 'always' tool")
+
+    async def _fake_call(*a, **k):
+        return "restarted"
+
+    orig_gate, orig_call = cmt.gate_action, cmt.call
+    cmt.gate_action, cmt.call = _boom, _fake_call
+    try:
+        with _servers(_server(tool_modes={"restart_device": "always"})):
+            out = _call(tool="restart_device", is_background=True)
+    finally:
+        cmt.gate_action, cmt.call = orig_gate, orig_call
+
+    assert out == "restarted"
+
+
+def test_the_discovery_response_is_bounded():
+    """A 300-tool server must not dump 300 schemas into one tool result."""
+    big = _server(tools=[
+        {"name": f"get_thing_{i}", "description": "d" * 200, "inputSchema": {}}
+        for i in range(300)
+    ])
+    with _servers(big):
+        out = json.loads(_list_tools("u1", False, False, None, server="netbox"))
+
+    assert out["returned"] == 25, "default limit should apply"
+    assert out["total_matches"] == 300, "the agent must know it saw a slice"
+    assert "hint" in out
+    with _servers(big):
+        capped = json.loads(_list_tools("u1", False, False, None, server="netbox", limit=10_000))
+    assert capped["returned"] <= 100, "limit must be clamped to MAX_LIST_LIMIT"
+
+
+def test_no_servers_means_no_dispatchers():
+    """Unregistered users must not carry two dead tools in their prompt."""
+    with _servers():
+        assert get_custom_mcp_tools("u1") == []
+
+
 def test_ask_mode_keeps_custom_mcp_reads_but_not_writes():
     """Ask mode blocks the whole ``mcp_`` prefix; reads must opt back in.
 
@@ -305,11 +547,31 @@ def test_ask_mode_keeps_custom_mcp_reads_but_not_writes():
     assert len(ModeAccessController.filter_tools("agent", [read, write])) == 2
 
 
-def test_custom_tools_carry_their_read_classification():
-    """The metadata tag is what survives into ``filter_tools``."""
-    source = (Path(__file__).parents[2] / "chat" / "backend" / "agent" / "tools"
-              / "custom_mcp_tools.py").read_text()
-    assert '"metadata": {"mcp_read_only": is_read_tool(tool_def)}' in source
+def test_the_agent_sees_two_tools_however_many_are_registered():
+    """The whole point: prompt cost is flat in servers and in tools per server.
+
+    Regression this guards: one StructuredTool per remote tool meant three
+    servers with 150 tools each put ~450 tool schemas in the prompt on every
+    turn (~160k tokens) before the user had typed anything.
+    """
+    big = _server(label="huge", tools=[
+        {"name": f"get_thing_{i}", "description": "d", "inputSchema": {}} for i in range(300)
+    ])
+    with _servers(_server(), big, _server(label="linear")):
+        tools = get_custom_mcp_tools("u1")
+    assert [t.name for t in tools] == ["mcp_list_tools", "mcp_call_tool"]
+
+
+def test_both_dispatchers_survive_ask_mode_filtering():
+    """``filter_tools`` blocks the whole ``mcp_`` prefix, so both must be tagged.
+
+    Untagged, Ask mode would drop them and custom MCP servers would be
+    completely invisible there -- the regression that hit Context7 before.
+    """
+    with _servers(_server()):
+        tools = get_custom_mcp_tools("u1", mode="ask")
+    kept = [t.name for t in ModeAccessController.filter_tools("ask", tools)]
+    assert kept == ["mcp_list_tools", "mcp_call_tool"]
 
 
 def test_fingerprint_changes_when_the_tool_list_would(fake_vault):
@@ -693,9 +955,14 @@ def test_pagination_stops_on_a_repeating_cursor(monkeypatch):
     assert [t["name"] for t in tools] == ["get_a"]
 
 
-def test_tool_cap_fits_real_servers():
-    """GitHub's MCP server exposes 49 tools; a cap below that silently drops them."""
-    assert MAX_TOOLS_PER_SERVER >= 49
+def test_tool_cap_is_a_storage_bound_not_a_prompt_bound():
+    """Now that the agent sees two dispatchers, the cap only bounds the Vault blob.
+
+    All of an org's servers share one secret, measured at ~1.5KB/tool against an
+    8MB ceiling on file storage, so this can be generous -- and must be, since
+    anything it drops is invisible to the user.
+    """
+    assert MAX_TOOLS_PER_SERVER >= 256
 
 
 # --------------------------------------------------------------------------- #
@@ -1038,16 +1305,19 @@ def test_skill_template_uses_single_braces():
     assert "{{mcp_servers_section}}" not in text
 
 
-def test_servers_section_renders_and_flags_writes(monkeypatch):
+def test_servers_section_lists_counts_not_tool_names(monkeypatch):
+    """Labels and counts only. Tool names here would defeat the indirection.
+
+    Ten servers with 150 tools each would otherwise put 1500 names into the
+    system prompt on every turn -- the exact cost mcp_list_tools avoids.
+    """
     monkeypatch.setattr(store, "list_servers", lambda uid: [_server()])
     section = store.mcp_servers_section("u1")
-    assert "mcp_netbox_list_devices" in section
-    assert "mcp_netbox_restart_device" in section
-    # Only the write tool carries the confirmation marker.
-    write_line = next(ln for ln in section.splitlines() if "restart_device" in ln)
-    read_line = next(ln for ln in section.splitlines() if "list_devices" in ln)
-    assert "needs confirmation" in write_line
-    assert "needs confirmation" not in read_line
+    assert "netbox" in section and "2 tools" in section
+    assert "list_devices" not in section
+    assert "restart_device" not in section
+    # The write count is still surfaced, so the agent knows approvals exist.
+    assert "1 need confirmation" in section
     assert "secret-value" not in section
 
 
