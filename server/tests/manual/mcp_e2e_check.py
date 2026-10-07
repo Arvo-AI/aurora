@@ -76,7 +76,7 @@ def main() -> int:
 
     saved = {
         "label": "netbox", "url": URL, "transport": transport, "auth": AUTH,
-        "read_only": False, "allow_in_background": [], "tools": tools,
+        "allow_in_background": [], "tools": tools,
     }
     # Patch the name as custom_mcp_tools imported it, not store's own binding.
     cmt.list_servers = lambda uid: [saved]  # noqa: E731

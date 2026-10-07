@@ -196,7 +196,6 @@ def _server(**overrides):
         "url": "https://mcp.example.com/mcp",
         "transport": "streamable_http",
         "auth": {"type": "bearer", "token": "secret-value"},
-        "read_only": False,
         "allow_in_background": [],
         "tools": [
             {"name": "list_devices", "description": "List devices", "inputSchema": {}},
@@ -225,15 +224,17 @@ def test_allow_in_background_readmits_a_named_write():
     assert _tool_allowed(srv, WRITE, is_background=True, is_pr_review=False)
 
 
-def test_read_only_server_withholds_writes_even_in_chat():
-    """read_only is enforced at build time now that registration keeps every tool.
+def test_a_stale_read_only_flag_is_ignored():
+    """The server-wide read-only switch is gone; per-tool modes replaced it.
 
-    Without this the switch would be decorative: the tools are stored, so
-    nothing else would stop the agent from calling them.
+    Servers registered while it existed still carry the field, and it must not
+    resurrect as a hidden filter -- the tool's own mode is the only authority.
     """
     srv = _server(read_only=True)
     assert _tool_allowed(srv, READ, is_background=False, is_pr_review=False)
-    assert not _tool_allowed(srv, WRITE, is_background=False, is_pr_review=False)
+    assert _tool_allowed(srv, WRITE, is_background=False, is_pr_review=False)
+    # A write is still withheld from background, where nobody can approve it.
+    assert not _tool_allowed(srv, WRITE, is_background=True, is_pr_review=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -241,8 +242,8 @@ def test_read_only_server_withholds_writes_even_in_chat():
 # --------------------------------------------------------------------------- #
 
 def test_always_beats_every_other_restriction():
-    """The user said always, so read_only and RCA must not override them."""
-    srv = _server(read_only=True, tool_modes={"restart_device": "always"})
+    """The user said always, so RCA and PR review must not override them."""
+    srv = _server(tool_modes={"restart_device": "always"})
     assert _tool_allowed(srv, WRITE, is_background=True, is_pr_review=False)
     assert _tool_allowed(srv, WRITE, is_background=False, is_pr_review=True)
 

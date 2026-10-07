@@ -88,7 +88,7 @@ def _build_db_url() -> str:
     db_password = urllib.parse.quote_plus(os.getenv("POSTGRES_PASSWORD", ""))
     db_host = os.environ["POSTGRES_HOST"]
     db_port = os.environ["POSTGRES_PORT"]
-    url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+    url = f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
     query_params = {}
     pg_sslmode = os.getenv("POSTGRES_SSLMODE", "prefer")
     if pg_sslmode:

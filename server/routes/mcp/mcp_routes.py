@@ -125,7 +125,6 @@ def _register(user_id: str, data: Dict[str, Any], label: str) -> Tuple[Any, int]
         if auth_error:
             return jsonify({"error": auth_error}), 400
 
-    read_only = data.get("readOnly", data.get("read_only", True))
     allow_in_background = [
         str(t) for t in (data.get("allowInBackground") or data.get("allow_in_background") or [])
     ]
@@ -155,16 +154,6 @@ def _register(user_id: str, data: Dict[str, Any], label: str) -> Tuple[Any, int]
         logger.exception("[MCP] Unexpected probe failure for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to connect to the MCP server"}), 502
 
-    # Every tool is stored regardless of read_only, which is applied as a filter
-    # at agent-build time instead. Dropping tools here made the switch
-    # destructive: flipping it later required re-registering the server, and the
-    # cached list no longer described what the server actually offers.
-    if bool(read_only) and not any(is_read_tool(t) for t in tools):
-        return jsonify({
-            "error": "This server exposes no read-only tools. Uncheck read-only to "
-                     "register its write tools (they will require confirmation)."
-        }), 400
-
     truncated = len(tools) > MAX_TOOLS_PER_SERVER
     if truncated:
         # Keep reads first so a cap can never strand the tools the agent is
@@ -176,7 +165,6 @@ def _register(user_id: str, data: Dict[str, Any], label: str) -> Tuple[Any, int]
         "url": url,
         "transport": transport_used,
         "auth": final_auth,
-        "read_only": bool(read_only),
         "allow_in_background": allow_in_background,
         "tool_modes": tool_modes,
         "tools": tools,
@@ -295,7 +283,6 @@ def oauth_start(user_id):
         _OAUTH_ENDPOINT,
         project_id=json.dumps({
             "label": label, "url": url, "transport": transport,
-            "read_only": bool(data.get("readOnly", data.get("read_only", True))),
             "client_id": client_id, "client_secret": client_secret,
             "token_endpoint": auth_server.token_endpoint,
         }),
@@ -355,7 +342,6 @@ def oauth_complete(user_id):
     return _register(user_id, {
         "url": url,
         "transport": meta.get("transport", "streamable_http"),
-        "readOnly": meta.get("read_only", True),
         "_auth": auth,
     }, label)
 
@@ -397,7 +383,6 @@ def refresh_server(user_id, label):
     return _register(user_id, {
         "url": existing.get("url"),
         "transport": existing.get("transport"),
-        "readOnly": existing.get("read_only", True),
         "allowInBackground": existing.get("allow_in_background") or [],
         "toolModes": existing.get("tool_modes") or {},
         # Reuse the stored credentials verbatim rather than re-deriving them:

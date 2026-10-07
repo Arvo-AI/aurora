@@ -138,7 +138,6 @@ def server_summary(server: Dict[str, Any]) -> Dict[str, Any]:
         "url": server.get("url", ""),
         "transport": server.get("transport", "streamable_http"),
         "authType": auth.get("type", "none"),
-        "readOnly": bool(server.get("read_only", True)),
         "toolCount": len(tools),
         "tools": [
             {

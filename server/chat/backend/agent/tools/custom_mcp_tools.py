@@ -45,16 +45,13 @@ def _tool_allowed(
 ) -> bool:
     """Whether this tool may be offered to the agent in the current context.
 
-    The user's per-tool override wins over everything -- ``never`` hides a tool
-    the classifier called safe, and ``always`` means always, including during
-    RCA and PR review where nothing else can offer a write.
+    The user's per-tool override wins -- ``never`` hides a tool the classifier
+    called safe, and ``always`` means always, including during RCA and PR review
+    where nothing else can offer a write.
 
     Otherwise: reads are always offered; writes only in foreground chat, where
     ``gate_action`` can ask a human. In background there is nobody to approve,
     so a write is withheld rather than offered and then denied mid-investigation.
-
-    ``read_only`` is enforced here rather than at registration, so flipping it
-    takes effect on the next turn without re-probing the server.
     """
     mode = tool_mode(server, tool.get("name", ""))
     if mode == "never":
@@ -63,8 +60,6 @@ def _tool_allowed(
         return True
     if is_read_tool(tool):
         return True
-    if server.get("read_only", True):
-        return False
     return not (is_background or is_pr_review)
 
 

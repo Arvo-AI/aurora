@@ -17,7 +17,6 @@ export interface McpServerSummary {
   url: string;
   transport: 'streamable_http' | 'sse';
   authType: 'bearer' | 'header' | 'oauth' | 'none';
-  readOnly: boolean;
   toolCount: number;
   tools: McpToolSummary[];
   allowInBackground: string[];
@@ -38,7 +37,6 @@ export interface McpRegisterPayload {
   authType: 'bearer' | 'header' | 'oauth' | 'none';
   token?: string;
   headerName?: string;
-  readOnly: boolean;
   clientId?: string;
   clientSecret?: string;
 }

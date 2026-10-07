@@ -6,7 +6,6 @@ import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -24,7 +23,6 @@ const EMPTY_FORM: McpRegisterPayload = {
   authType: "bearer",
   token: "",
   headerName: "",
-  readOnly: true,
 };
 
 /** Give up if the user abandons the consent screen, so the form unlocks. */
@@ -405,23 +403,12 @@ export default function McpAuthPage() {
               </button>
             )}
 
-            <div className="flex items-start gap-3 rounded-md border p-3">
-              <Checkbox
-                id="mcp-readonly"
-                checked={form.readOnly}
-                onCheckedChange={(checked) => setForm({ ...form, readOnly: checked === true })}
-              />
-              <div className="space-y-1">
-                <Label htmlFor="mcp-readonly" className="font-medium">
-                  Register read-only tools only
-                </Label>
-                <p className="text-xs text-muted-foreground">
-                  Recommended. Aurora cannot tell what a third-party tool changes, so any
-                  tool that is not clearly a read is treated as a write: it needs your
-                  confirmation in chat and is unavailable during automated investigations.
-                </p>
-              </div>
-            </div>
+            <p className="rounded-md border p-3 text-xs text-muted-foreground">
+              Aurora cannot tell what a third-party tool changes, so any tool that is not
+              clearly a read is treated as a write: it needs your confirmation in chat and
+              is unavailable during automated investigations. You can change this per tool
+              once the server is connected.
+            </p>
 
             {atCapacity && (
               <p className="text-sm text-destructive">
@@ -469,7 +456,6 @@ export default function McpAuthPage() {
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{server.label}</span>
                           <Badge variant="secondary">{server.toolCount} tools</Badge>
-                          {server.readOnly && <Badge variant="outline">read-only</Badge>}
                         </div>
                         <p className="mt-1 truncate text-xs text-muted-foreground">
                           {server.url}
