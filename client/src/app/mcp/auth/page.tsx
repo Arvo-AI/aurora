@@ -309,7 +309,7 @@ export default function McpAuthPage() {
                 onChange={(e) => setForm({ ...form, label: e.target.value })}
               />
               <p className="text-xs text-muted-foreground">
-                Used to prefix the server&apos;s tools so Aurora can tell them apart.
+                How you and the agent refer to this server when picking a tool.
               </p>
             </div>
 

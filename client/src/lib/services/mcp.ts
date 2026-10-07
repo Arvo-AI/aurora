@@ -26,7 +26,6 @@ export interface McpServerSummary {
 export interface McpServerList {
   servers: McpServerSummary[];
   maxServers: number;
-  maxToolsPerServer: number;
 }
 
 export interface McpRegisterPayload {
@@ -70,7 +69,6 @@ export const mcpService = {
     return {
       servers,
       maxServers: data?.maxServers ?? 10,
-      maxToolsPerServer: data?.maxToolsPerServer ?? 25,
     };
   },
 

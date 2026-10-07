@@ -354,7 +354,6 @@ def get_servers(user_id):
     return jsonify({
         "servers": [server_summary(s) for s in servers],
         "maxServers": MAX_SERVERS,
-        "maxToolsPerServer": MAX_TOOLS_PER_SERVER,
     })
 
 
