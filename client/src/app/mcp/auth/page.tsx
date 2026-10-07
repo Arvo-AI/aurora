@@ -143,19 +143,18 @@ export default function McpAuthPage() {
    * the user consents in the popup, and the callback page posts the code back.
    * The code is exchanged server-side, where the PKCE verifier lives.
    *
-   * *prepared* is a window already opened by the click handler; see the note
-   * there on why it cannot be opened here when detection ran first.
+   * The popup is opened after startOAuth returns, which is not synchronous
+   * with the click. Chrome allows that; Safari may block it, and the thrown
+   * message below is what the user gets if it does. Opening it up front
+   * instead means showing a blank window for the several seconds that
+   * discovery and client registration take, which is worse for every server.
    */
-  const handleOAuth = async (prepared?: Window | null) => {
+  const handleOAuth = async () => {
     setPhase("signin");
-    let popup: Window | null = prepared ?? null;
+    let popup: Window | null = null;
     try {
       const { authorizeUrl, state } = await mcpService.startOAuth(form);
-      if (popup) {
-        popup.location.href = authorizeUrl;
-      } else {
-        popup = window.open(authorizeUrl, "mcp-oauth", "width=600,height=760");
-      }
+      popup = window.open(authorizeUrl, "mcp-oauth", "width=600,height=760");
       if (!popup) {
         throw new Error("Allow pop-ups for this site to authorize the server.");
       }
@@ -278,11 +277,6 @@ export default function McpAuthPage() {
       return isOAuth ? handleOAuth() : handleRegister();
     }
 
-    // Opened before any await: a window.open that is not synchronous with the
-    // click is blocked by default in Chrome and Safari. Used only if detection
-    // comes back "oauth" -- otherwise closed immediately below.
-    const popup = window.open("", "mcp-oauth", "width=600,height=760");
-
     setPhase("checking");
     try {
       const { authType } = await mcpService.detect(form.url.trim());
@@ -290,10 +284,9 @@ export default function McpAuthPage() {
 
       if (authType === "oauth") {
         setForm((f) => ({ ...f, authType: "oauth" }));
-        return await handleOAuth(popup);
+        return await handleOAuth();
       }
 
-      popup?.close();
       if (authType === "none") {
         // Nothing to collect, so saving is the obvious next step. The form
         // state update is async, hence passing the payload explicitly.
@@ -305,7 +298,6 @@ export default function McpAuthPage() {
       // correct, and the field appearing makes that visible.
       setForm((f) => ({ ...f, authType: "bearer" }));
     } catch (error: unknown) {
-      popup?.close();
       toast({
         title: "Could not reach the server",
         description: getUserFriendlyError(error),
