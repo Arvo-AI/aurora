@@ -2,7 +2,10 @@
 
 Each webhook contains an ``alerts[]`` array of individual alert instances. We process
 each alert separately by fingerprint (hash of rule + labels):
-- Firing alerts: create an incident and trigger RCA.
+- Firing alerts: create an incident and trigger RCA the first time that fingerprint
+  is seen. A later firing of the same alert stays on that incident and does not
+  start another investigation, unless the incident had resolved or the alert's
+  identity (title, service, severity, labels) changed.
 - Resolved alerts: match to the original incident by fingerprint, skip RCA.
 
 This module implements the edge-case handling and matching logic directly.
@@ -21,6 +24,7 @@ from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import apply_correlation_outcome
+from .refire import _stable_alert_signature, refire_needs_new_rca
 
 logger = logging.getLogger(__name__)
 
@@ -413,7 +417,41 @@ def process_grafana_alert(
                                     cursor.execute("ROLLBACK TO SAVEPOINT sp_handle_correlated")
                                     logger.warning("[GRAFANA] apply_correlation_outcome failed: %s", exc)
 
-                            # No correlation found — create a new incident.
+                            # No correlation found — create a new incident, or refresh the one
+                            # this fingerprint already owns. Read the current row first: the
+                            # upsert overwrites alert_metadata, and we need the old identity
+                            # to decide whether this firing is a duplicate.
+                            previous_incident = None
+                            if per_alert_source_id is not None:
+                                cursor.execute(
+                                    """SELECT status, severity, alert_service, alert_title, alert_metadata,
+                                              aurora_chat_session_id, rca_celery_task_id
+                                       FROM incidents
+                                       WHERE org_id = %s AND source_type = 'grafana'
+                                         AND source_alert_id = %s AND user_id = %s""",
+                                    (org_id, per_alert_source_id, user_id),
+                                )
+                                previous_incident = cursor.fetchone()
+                            reopen_for_rca = False
+                            if previous_incident is not None:
+                                (
+                                    prev_status, prev_severity, prev_service, prev_title, prev_metadata,
+                                    prev_session_id, prev_task_id,
+                                ) = previous_incident
+                                # Investigate again only if it resolved or the problem identity changed.
+                                identity_changed = refire_needs_new_rca(
+                                    prev_status,
+                                    _stable_alert_signature(prev_title, prev_service, prev_severity, prev_metadata),
+                                    _stable_alert_signature(per_alert_title, service, severity, alert_metadata),
+                                )
+                                # Insert committed, then the process died before RCA was enqueued.
+                                never_started = (
+                                    not prev_session_id
+                                    and not prev_task_id
+                                    and (prev_status or "").lower() == "investigating"
+                                )
+                                reopen_for_rca = identity_changed or never_started
+
                             # `xmax = 0` is true only for freshly inserted rows (not ON CONFLICT
                             # updates), so we use it to gate the lifecycle 'created' write.
                             cursor.execute(
@@ -464,31 +502,81 @@ def process_grafana_alert(
                                         incident_id, exc,
                                     )
 
-                            # Record as the primary alert for this incident
-                            try:
-                                cursor.execute("SAVEPOINT sp_incident_alerts")
-                                cursor.execute(
-                                    """INSERT INTO incident_alerts
-                                       (user_id, org_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
-                                        alert_severity, correlation_strategy, correlation_score, alert_metadata)
-                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                                    (user_id, org_id, incident_id, "grafana", per_alert_source_id, per_alert_title,
-                                     service, severity, "primary", 1.0, json.dumps(alert_metadata)),
-                                )
-                                cursor.execute(
-                                    "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
-                                    (service, incident_id),
-                                )
-                                cursor.execute("RELEASE SAVEPOINT sp_incident_alerts")
-                                conn.commit()
-                            except Exception as exc:
-                                cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_alerts")
-                                logger.warning("[GRAFANA] Failed to record primary alert: %s", exc)
+                            # Clear the previous task id so the new RCA can claim the chat this incident shows.
+                            if incident_id and reopen_for_rca and not incident_was_inserted:
+                                try:
+                                    cursor.execute("SAVEPOINT sp_reopen_incident")
+                                    cursor.execute(
+                                        """UPDATE incidents
+                                           SET status = 'investigating',
+                                               analyzed_at = NULL,
+                                               aurora_status = 'idle',
+                                               rca_celery_task_id = NULL,
+                                               severity = %s,
+                                               alert_title = %s,
+                                               alert_service = %s,
+                                               started_at = %s,
+                                               updated_at = CURRENT_TIMESTAMP
+                                           WHERE id = %s""",
+                                        (severity, per_alert_title, service, received_at, incident_id),
+                                    )
+                                    # Already investigating — don't add a no-op timeline row.
+                                    if (previous_incident[0] or "").lower() != "investigating":
+                                        cursor.execute(
+                                            """INSERT INTO incident_lifecycle_events
+                                               (incident_id, user_id, org_id, event_type, previous_value, new_value)
+                                               VALUES (%s, %s, %s, %s, %s, %s)""",
+                                            (incident_id, user_id, org_id, 'status_changed', previous_incident[0], 'investigating'),
+                                        )
+                                    cursor.execute("RELEASE SAVEPOINT sp_reopen_incident")
+                                    conn.commit()
+                                except Exception as exc:
+                                    try:
+                                        cursor.execute("ROLLBACK TO SAVEPOINT sp_reopen_incident")
+                                    except Exception as rb_exc:
+                                        logger.debug(
+                                            "[GRAFANA][ALERT] Rollback to sp_reopen_incident failed for incident %s: %s",
+                                            incident_id, rb_exc,
+                                        )
+                                    logger.warning(
+                                        "[GRAFANA][ALERT] Failed to reopen incident %s: %s",
+                                        incident_id, exc,
+                                    )
+
+                            # Another row per firing would flood the incident with copies of
+                            # the same alert. Record the alert only when we are actually
+                            # starting an investigation.
+                            if incident_was_inserted or reopen_for_rca:
+                                try:
+                                    cursor.execute("SAVEPOINT sp_incident_alerts")
+                                    cursor.execute(
+                                        """INSERT INTO incident_alerts
+                                           (user_id, org_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                            alert_severity, correlation_strategy, correlation_score, alert_metadata)
+                                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                        (user_id, org_id, incident_id, "grafana", per_alert_source_id, per_alert_title,
+                                         service, severity, "primary", 1.0, json.dumps(alert_metadata)),
+                                    )
+                                    cursor.execute(
+                                        "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
+                                        (service, incident_id),
+                                    )
+                                    cursor.execute("RELEASE SAVEPOINT sp_incident_alerts")
+                                    conn.commit()
+                                except Exception as exc:
+                                    cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_alerts")
+                                    logger.warning("[GRAFANA] Failed to record primary alert: %s", exc)
 
                             if not incident_id:
                                 continue
 
-                            logger.info("[GRAFANA][ALERT] Created incident %s for alert %s (fp=%s)", incident_id, per_alert_source_id, fingerprint)
+                            # Unchanged re-fire keeps the open investigation; everything else gets one.
+                            if incident_was_inserted:
+                                logger.info("[GRAFANA][ALERT] Created incident %s for alert %s (fp=%s)", incident_id, per_alert_source_id, fingerprint)
+                            elif reopen_for_rca:
+                                logger.info("[GRAFANA][ALERT] Reopening incident %s for a new RCA (fp=%s)", incident_id, fingerprint)
+                            else:
+                                logger.info("[GRAFANA][ALERT] Repeat firing of incident %s (fp=%s); keeping the existing RCA", incident_id, fingerprint)
 
                             # Push real-time update to frontend
                             try:
@@ -500,7 +588,11 @@ def process_grafana_alert(
                             except Exception as e:
                                 logger.warning("[GRAFANA][ALERT] Failed to notify SSE: %s", e)
 
-                            # Generate a quick summary (fast, always runs)
+                            # Unchanged re-fire: the incident already has its investigation.
+                            if not incident_was_inserted and not reopen_for_rca:
+                                continue
+
+                            # Short summary before the full investigation.
                             try:
                                 from chat.background.summarization import generate_incident_summary
                                 generate_incident_summary.delay(
