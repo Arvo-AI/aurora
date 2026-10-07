@@ -111,9 +111,12 @@ def _register(user_id: str, data: Dict[str, Any], label: str) -> Tuple[Any, int]
     if not url or len(url) > MAX_URL_CHARS:
         return jsonify({"error": "url is required"}), 400
 
-    transport = str(data.get("transport") or "streamable_http").lower()
+    # Absent or unrecognised means "detect it": the probe tries streamable HTTP
+    # then SSE and returns whichever worked. Only an explicit stored value is
+    # honoured, so a refresh skips re-detection.
+    transport = str(data.get("transport") or "auto").lower()
     if transport not in TRANSPORTS:
-        return jsonify({"error": f"transport must be one of: {', '.join(TRANSPORTS)}"}), 400
+        transport = "auto"
 
     # ``_auth`` is set by the OAuth flow, which has already built the blob.
     auth = data.get("_auth")
@@ -196,6 +199,47 @@ def _register(user_id: str, data: Dict[str, Any], label: str) -> Tuple[Any, int]
     }), 200
 
 
+@mcp_bp.route("/servers/detect", methods=["POST"])
+@require_permission("connectors", "write")
+def detect(user_id):
+    """Report what a URL needs to connect, so the user does not have to know.
+
+    Nothing is persisted. Returns one of:
+      ``none``   -- handshake succeeded unauthenticated
+      ``oauth``  -- rejected us, and advertises an authorization server
+      ``token``  -- rejected us, with no OAuth metadata: needs an API key
+
+    Transport is detected by the same probe, so neither field has to be asked.
+    A server that answers 403 rather than 401 is indistinguishable from one that
+    is merely forbidden, which is why the form keeps a manual override.
+    """
+    url = str((request.get_json(silent=True) or {}).get("url") or "").strip()
+    if not url or len(url) > MAX_URL_CHARS:
+        return jsonify({"error": "url is required"}), 400
+
+    try:
+        _, transport_used = _probe_sync(url, {"type": "none"}, "auto")
+        return jsonify({"authType": "none", "transport": transport_used})
+    except ValueError as exc:  # SSRF / malformed URL -- message is user-facing
+        return jsonify({"error": str(exc)}), 400
+    except MCPAuthError:
+        pass  # Needs credentials; which kind is decided below.
+    except MCPConnectionError as exc:
+        logger.warning("[MCP] Detect failed for user %s: %s", sanitize(user_id), sanitize(exc))
+        return jsonify({"error": f"Could not reach the MCP server: {exc}"}), 502
+    except Exception:
+        logger.exception("[MCP] Unexpected detect failure for user %s", sanitize(user_id))
+        return jsonify({"error": "Failed to connect to the MCP server"}), 502
+
+    try:
+        auth_server = asyncio.run(discover(url))
+    except Exception:
+        # No OAuth metadata is a normal outcome, not an error: it means the
+        # server wants a plain API token.
+        return jsonify({"authType": "token"})
+    return jsonify({"authType": "oauth", "supportsDcr": auth_server.supports_dcr})
+
+
 @mcp_bp.route("/servers/oauth/start", methods=["POST"])
 @require_permission("connectors", "write")
 def oauth_start(user_id):
@@ -215,9 +259,12 @@ def oauth_start(user_id):
     if not url or len(url) > MAX_URL_CHARS:
         return jsonify({"error": "url is required"}), 400
 
-    transport = str(data.get("transport") or "streamable_http").lower()
+    # Absent or unrecognised means "detect it": the probe tries streamable HTTP
+    # then SSE and returns whichever worked. Only an explicit stored value is
+    # honoured, so a refresh skips re-detection.
+    transport = str(data.get("transport") or "auto").lower()
     if transport not in TRANSPORTS:
-        return jsonify({"error": f"transport must be one of: {', '.join(TRANSPORTS)}"}), 400
+        transport = "auto"
 
     try:
         auth_server = asyncio.run(discover(url))

@@ -344,6 +344,72 @@ def test_fingerprint_is_stable_and_fails_soft(monkeypatch):
     assert store.fingerprint("u1") == ""
 
 
+def _transports_tried(monkeypatch, outcomes):
+    """Drive _run() in detect mode, recording which transports were attempted."""
+    from connectors.mcp_connector import client as mcp_client
+
+    tried = []
+
+    async def fake_attempt(url, auth, chosen, op):
+        tried.append(chosen)
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(mcp_client, "_attempt", fake_attempt)
+    monkeypatch.setattr(mcp_client, "assert_allowed_target", lambda url: None)
+    result = asyncio.run(
+        mcp_client._run("https://mcp.example.com/mcp", {"type": "none"}, "auto",
+                        lambda s: None, None)
+    )
+    return result, tried
+
+
+def test_transport_is_detected_streamable_first(monkeypatch):
+    """Users cannot know which transport a URL speaks, so it is not asked."""
+    (result, used), tried = _transports_tried(monkeypatch, ["ok"])
+    assert result == "ok" and used == "streamable_http"
+    assert tried == ["streamable_http"], "a working server must not be probed twice"
+
+
+def test_transport_falls_back_to_sse(monkeypatch):
+    from connectors.mcp_connector import client as mcp_client
+
+    (result, used), tried = _transports_tried(
+        monkeypatch, [mcp_client.MCPConnectionError("404"), "ok"]
+    )
+    assert result == "ok" and used == "sse", "the surviving transport is returned to be stored"
+    assert tried == ["streamable_http", "sse"]
+
+
+def test_transport_does_not_fall_back_on_auth_failure(monkeypatch):
+    """A 401 means the transport worked and the token did not.
+
+    Retrying as SSE would bury "check the token" behind a transport error.
+    """
+    from connectors.mcp_connector import client as mcp_client
+
+    with pytest.raises(mcp_client.MCPAuthError):
+        _transports_tried(monkeypatch, [mcp_client.MCPAuthError("401")])
+
+
+def test_explicit_transport_skips_detection(monkeypatch):
+    """A stored transport is honoured, so refreshes cost one attempt."""
+    from connectors.mcp_connector import client as mcp_client
+
+    tried = []
+
+    async def fake_attempt(url, auth, chosen, op):
+        tried.append(chosen)
+        return "ok"
+
+    monkeypatch.setattr(mcp_client, "_attempt", fake_attempt)
+    monkeypatch.setattr(mcp_client, "assert_allowed_target", lambda url: None)
+    asyncio.run(mcp_client._run("https://x/mcp", None, "sse", lambda s: None, None))
+    assert tried == ["sse"]
+
+
 def test_refresh_preserves_tool_modes():
     """A refresh re-probes the server; it must not reset the user's choices.
 

@@ -33,13 +33,21 @@ export interface McpServerList {
 export interface McpRegisterPayload {
   label: string;
   url: string;
-  transport: 'streamable_http' | 'sse';
+  /** Omitted means "detect it" -- the backend tries streamable HTTP then SSE. */
+  transport?: 'streamable_http' | 'sse';
   authType: 'bearer' | 'header' | 'oauth' | 'none';
   token?: string;
   headerName?: string;
   readOnly: boolean;
   clientId?: string;
   clientSecret?: string;
+}
+
+/** What a URL needs to connect, probed before the user is asked anything. */
+export interface McpDetectResult {
+  authType: 'none' | 'oauth' | 'token';
+  transport?: 'streamable_http' | 'sse';
+  supportsDcr?: boolean;
 }
 
 const API_BASE = '/api/mcp/servers';
@@ -85,6 +93,16 @@ export const mcpService = {
       { ...REGISTER_OPTIONS, method: 'POST', cache: 'no-store' },
     );
     return { server: data.server, warning: data.warning };
+  },
+
+  /** Probe a URL to learn whether it needs OAuth, a token, or nothing. */
+  async detect(url: string): Promise<McpDetectResult> {
+    return apiRequest<McpDetectResult>(`${API_BASE}/detect`, {
+      ...REGISTER_OPTIONS,
+      method: 'POST',
+      body: JSON.stringify({ url }),
+      cache: 'no-store',
+    });
   },
 
   async setToolMode(label: string, toolName: string, mode: McpToolMode): Promise<void> {

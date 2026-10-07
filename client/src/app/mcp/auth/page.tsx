@@ -15,13 +15,12 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { getUserFriendlyError } from "@/lib/utils";
 import {
-  mcpService, McpRegisterPayload, McpServerSummary, McpToolMode,
+  mcpService, McpDetectResult, McpRegisterPayload, McpServerSummary, McpToolMode,
 } from "@/lib/services/mcp";
 
 const EMPTY_FORM: McpRegisterPayload = {
   label: "",
   url: "",
-  transport: "streamable_http",
   authType: "bearer",
   token: "",
   headerName: "",
@@ -86,6 +85,9 @@ export default function McpAuthPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
+  // What the probe found this URL needs; null until it runs or the URL changes.
+  const [detected, setDetected] = useState<McpDetectResult["authType"] | null>(null);
+  const [manual, setManual] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -116,6 +118,8 @@ export default function McpAuthPage() {
           : `Aurora discovered ${server.toolCount} tool${server.toolCount === 1 ? "" : "s"}.`,
       });
       setForm(EMPTY_FORM);
+      setDetected(null);
+      setManual(false);
       await load();
     } catch (error: unknown) {
       // The backend only stores a server after a successful handshake, so this
@@ -156,6 +160,8 @@ export default function McpAuthPage() {
           : `Aurora discovered ${server.toolCount} tool${server.toolCount === 1 ? "" : "s"}.`,
       });
       setForm(EMPTY_FORM);
+      setDetected(null);
+      setManual(false);
       await load();
     } catch (error: unknown) {
       toast({
@@ -228,9 +234,12 @@ export default function McpAuthPage() {
   };
 
   const isOAuth = form.authType === "oauth";
-  // OAuth collects its credential in the popup, not the form.
-  const needsToken = form.authType !== "none" && !isOAuth;
+  // OAuth collects its credential in the popup, not the form. Before detection
+  // has run there is nothing to ask for yet, so the field stays hidden.
+  const needsToken = (manual || detected === "token") && form.authType !== "none" && !isOAuth;
   const atCapacity = servers.length >= maxServers;
+  // Before detection runs there is nothing to validate beyond name and URL:
+  // which credential fields matter is not known yet.
   const canSubmit =
     Boolean(form.label.trim()) &&
     Boolean(form.url.trim()) &&
@@ -238,6 +247,39 @@ export default function McpAuthPage() {
     (form.authType !== "header" || Boolean(form.headerName?.trim())) &&
     !submitting &&
     !atCapacity;
+
+  /**
+   * Detect what the URL needs, then connect.
+   *
+   * Users cannot be expected to know whether a URL is OAuth, an API key, or
+   * open, so the first click probes and the second connects. Once detection has
+   * run (or the user set auth manually) this goes straight through.
+   */
+  const handleSubmit = async () => {
+    if (manual || detected) {
+      return isOAuth ? handleOAuth() : handleRegister();
+    }
+    setSubmitting(true);
+    try {
+      const { authType } = await mcpService.detect(form.url.trim());
+      setDetected(authType);
+      if (authType === "oauth") {
+        setForm((f) => ({ ...f, authType: "oauth" }));
+        return;
+      }
+      // "token" needs a value we do not have yet; "none" is shown for
+      // confirmation rather than saved silently, so neither connects here.
+      setForm((f) => ({ ...f, authType: authType === "none" ? "none" : "bearer" }));
+    } catch (error: unknown) {
+      toast({
+        title: "Could not reach the server",
+        description: getUserFriendlyError(error),
+        variant: "destructive",
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <ConnectorAuthGuard connectorName="Custom MCP Servers">
@@ -260,36 +302,17 @@ export default function McpAuthPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="mcp-label">Name</Label>
-                <Input
-                  id="mcp-label"
-                  placeholder="netbox"
-                  value={form.label}
-                  onChange={(e) => setForm({ ...form, label: e.target.value })}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Used to prefix the server&apos;s tools so Aurora can tell them apart.
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="mcp-transport">Transport</Label>
-                <Select
-                  value={form.transport}
-                  onValueChange={(v) =>
-                    setForm({ ...form, transport: v as McpRegisterPayload["transport"] })
-                  }
-                >
-                  <SelectTrigger id="mcp-transport">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="streamable_http">Streamable HTTP</SelectItem>
-                    <SelectItem value="sse">HTTP + SSE (legacy)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="space-y-2">
+              <Label htmlFor="mcp-label">Name</Label>
+              <Input
+                id="mcp-label"
+                placeholder="netbox"
+                value={form.label}
+                onChange={(e) => setForm({ ...form, label: e.target.value })}
+              />
+              <p className="text-xs text-muted-foreground">
+                Used to prefix the server&apos;s tools so Aurora can tell them apart.
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -298,48 +321,24 @@ export default function McpAuthPage() {
                 id="mcp-url"
                 placeholder="https://mcp.example.com/mcp"
                 value={form.url}
-                onChange={(e) => setForm({ ...form, url: e.target.value })}
+                onChange={(e) => { setForm({ ...form, url: e.target.value }); setDetected(null); }}
               />
+              <p className="text-xs text-muted-foreground">
+                Aurora works out the transport and what credentials the server needs.
+              </p>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="mcp-auth">Authentication</Label>
-                <Select
-                  value={form.authType}
-                  onValueChange={(v) =>
-                    setForm({ ...form, authType: v as McpRegisterPayload["authType"] })
-                  }
-                >
-                  <SelectTrigger id="mcp-auth">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="oauth">OAuth (sign in)</SelectItem>
-                    <SelectItem value="bearer">Bearer token</SelectItem>
-                    <SelectItem value="header">Custom header</SelectItem>
-                    <SelectItem value="none">None</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              {form.authType === "header" && (
-                <div className="space-y-2">
-                  <Label htmlFor="mcp-header">Header name</Label>
-                  <Input
-                    id="mcp-header"
-                    placeholder="X-Api-Key"
-                    value={form.headerName}
-                    onChange={(e) => setForm({ ...form, headerName: e.target.value })}
-                  />
-                </div>
-              )}
-            </div>
+            {detected === "none" && (
+              <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                This server accepted the connection without credentials. Connect again
+                to save it, or enter credentials below if it should be authenticated.
+              </p>
+            )}
 
             {isOAuth && (
               <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-                Aurora will open the server&apos;s sign-in page in a pop-up and register
-                itself automatically. No token to paste. Works with servers that support
-                OAuth dynamic client registration.
+                This server uses OAuth. Aurora will open its sign-in page in a pop-up and
+                register itself automatically &mdash; no token to paste.
               </p>
             )}
 
@@ -358,6 +357,52 @@ export default function McpAuthPage() {
                   Stored encrypted in Vault and sent only to this server.
                 </p>
               </div>
+            )}
+
+            {/* Escape hatch: detection cannot tell "needs auth" from "forbidden"
+                when a server answers 403, and a server with broken dynamic client
+                registration needs a hand-entered client ID. */}
+            {manual ? (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="mcp-auth">Authentication</Label>
+                  <Select
+                    value={form.authType}
+                    onValueChange={(v) =>
+                      setForm({ ...form, authType: v as McpRegisterPayload["authType"] })
+                    }
+                  >
+                    <SelectTrigger id="mcp-auth">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="oauth">OAuth (sign in)</SelectItem>
+                      <SelectItem value="bearer">Bearer token</SelectItem>
+                      <SelectItem value="header">Custom header</SelectItem>
+                      <SelectItem value="none">None</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {form.authType === "header" && (
+                  <div className="space-y-2">
+                    <Label htmlFor="mcp-header">Header name</Label>
+                    <Input
+                      id="mcp-header"
+                      placeholder="X-Api-Key"
+                      value={form.headerName}
+                      onChange={(e) => setForm({ ...form, headerName: e.target.value })}
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="text-xs text-muted-foreground underline"
+                onClick={() => setManual(true)}
+              >
+                Set authentication manually
+              </button>
             )}
 
             <div className="flex items-start gap-3 rounded-md border p-3">
@@ -384,7 +429,7 @@ export default function McpAuthPage() {
               </p>
             )}
 
-            <Button onClick={isOAuth ? handleOAuth : handleRegister} disabled={!canSubmit}>
+            <Button onClick={handleSubmit} disabled={!canSubmit}>
               {submitting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

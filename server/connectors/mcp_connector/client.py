@@ -1,7 +1,8 @@
 """MCP protocol client for customer-registered remote MCP servers.
 
 Remote transports only: Streamable HTTP, or HTTP+SSE for servers that predate
-it. The transport is chosen per server at registration, not guessed. stdio is
+it. The transport is detected at registration (streamable HTTP, then SSE) and
+stored, so later calls go straight to the one that worked. stdio is
 deliberately unsupported -- spawning a customer-supplied command inside the
 Aurora container would be remote code execution.
 
@@ -127,7 +128,13 @@ async def _run(
     Upgrade path: cache the session per (user, server) behind a short TTL.
     """
     assert_allowed_target(url)
-    chosen = transport if transport in TRANSPORTS else "streamable_http"
+
+    # "auto" (the default for a new registration) tries streamable HTTP and
+    # falls back to SSE, the order the MCP spec recommends. Users cannot be
+    # expected to know which one a URL speaks, so it is detected rather than
+    # asked; ``probe`` returns whichever worked and the caller stores it, so
+    # only the first connection ever pays for two attempts.
+    chosen = transport if transport in TRANSPORTS else "auto"
 
     # Refresh up front when the token is already known to be expired: the
     # request would fail anyway, and this saves a guaranteed-404 round-trip to
@@ -138,7 +145,7 @@ async def _run(
             on_refresh(auth)
 
     try:
-        return await _attempt(url, auth, chosen, op), chosen
+        return await _attempt_transports(url, auth, chosen, op)
     except MCPAuthError:
         # Retried exactly once, and only when a refresh could plausibly help. A
         # second failure means the grant was revoked; looping would hammer the
@@ -148,7 +155,30 @@ async def _run(
         refreshed = await _refresh(auth)
         if on_refresh:
             on_refresh(refreshed)
-        return await _attempt(url, refreshed, chosen, op), chosen
+        return await _attempt_transports(url, refreshed, chosen, op)
+
+
+async def _attempt_transports(
+    url: str,
+    auth: Optional[Dict[str, Any]],
+    chosen: str,
+    op: "Callable[[ClientSession], Awaitable[_T]]",
+) -> Tuple[_T, str]:
+    """Run ``op``, detecting the transport when it is not already known.
+
+    Only ``MCPConnectionError`` triggers the fallback. An ``MCPAuthError`` means
+    the transport worked and the credentials did not -- retrying as SSE would
+    bury a clear "check the token" behind a confusing transport failure. It is
+    re-raised explicitly because it *subclasses* ``MCPConnectionError``.
+    """
+    if chosen != "auto":
+        return await _attempt(url, auth, chosen, op), chosen
+    try:
+        return await _attempt(url, auth, "streamable_http", op), "streamable_http"
+    except MCPAuthError:
+        raise
+    except MCPConnectionError:
+        return await _attempt(url, auth, "sse", op), "sse"
 
 
 def _can_refresh(auth: Optional[Dict[str, Any]]) -> bool:
@@ -247,10 +277,13 @@ def _clean_tool(tool: Any) -> Optional[Dict[str, Any]]:
 async def probe(
     url: str,
     auth: Optional[Dict[str, Any]] = None,
-    transport: str = "streamable_http",
+    transport: str = "auto",
     on_refresh: "Optional[Callable[[Dict[str, Any]], None]]" = None,
 ) -> Tuple[List[Dict[str, Any]], str]:
     """Handshake and list every tool. Returns (tools, transport_used).
+
+    ``transport`` defaults to "auto", which tries streamable HTTP then SSE. Pass
+    a stored value to skip detection.
 
     Raises ``ValueError`` for a rejected URL, ``MCPAuthError`` for bad
     credentials, ``MCPConnectionError`` for anything else.
