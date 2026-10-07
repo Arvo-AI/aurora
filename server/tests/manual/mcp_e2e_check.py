@@ -85,21 +85,51 @@ def main() -> int:
     rca_tools = {t.name for t in get_custom_mcp_tools("u1", is_background=True)}
     print(f"chat tools: {sorted(chat_tools)}")
     print(f"rca tools:  {sorted(rca_tools)}")
-    assert chat_tools == {"mcp_netbox_list_devices", "mcp_netbox_restart_device"}
-    assert rca_tools == {"mcp_netbox_list_devices"}, "RCA must not expose the write"
+    # Two dispatchers regardless of how many tools the server has -- that is the
+    # whole point of the indirection, so assert the count does not track tools.
+    assert chat_tools == {"mcp_list_tools", "mcp_call_tool"}, chat_tools
+    assert rca_tools == chat_tools, "dispatchers are always present"
 
-    # Invoke the generated read tool exactly as the agent would.
-    read_tool = next(t for t in get_custom_mcp_tools("u1") if "list_devices" in t.name)
-    result = read_tool.invoke({"site": "sfo"})
+    def dispatcher(user_id: str, name: str, is_background: bool = False):
+        return next(
+            t for t in get_custom_mcp_tools(user_id, is_background=is_background)
+            if t.name == name
+        )
+
+    # Discovery lists the write tool, but flags that it needs confirmation.
+    listing = dispatcher("u1", "mcp_list_tools").invoke({"server": "netbox"})
+    print(f"list: {listing[:120]}")
+    assert "list_devices" in listing and "restart_device" in listing, listing
+    assert "confirm" in listing.lower(), f"write not marked confirm: {listing}"
+
+    # Single-tool lookup returns the full schema the compact listing omits.
+    detail = dispatcher("u1", "mcp_list_tools").invoke(
+        {"server": "netbox", "tool": "list_devices"}
+    )
+    assert "site" in detail, detail
+
+    # Invoke the read tool exactly as the agent would.
+    result = dispatcher("u1", "mcp_call_tool").invoke(
+        {"server": "netbox", "tool": "list_devices", "arguments": {"site": "sfo"}}
+    )
     print(f"invoke: {result}")
     assert "sfo" in result, result
+
+    # The write is a "confirm" tool: reachable in chat, withheld in background
+    # where nobody can approve it. This is the invariant the modes exist for.
+    bg = dispatcher("u1", "mcp_call_tool", is_background=True).invoke(
+        {"server": "netbox", "tool": "restart_device", "arguments": {"name": "router-01"}}
+    )
+    print(f"background write: {bg[:90]}")
+    assert "needs_confirmation_unavailable" in bg, bg
 
     # A bad URL must surface as a clean, explanatory error -- not a traceback and
     # not the SDK's opaque "unhandled errors in a TaskGroup".
     broken = dict(saved, url="http://127.0.0.1:1/mcp")
     cmt.list_servers = lambda uid: [broken]  # noqa: E731
-    err_tool = next(t for t in get_custom_mcp_tools("u1") if "list_devices" in t.name)
-    err = err_tool.invoke({"site": "x"})
+    err = dispatcher("u1", "mcp_call_tool").invoke(
+        {"server": "netbox", "tool": "list_devices", "arguments": {"site": "x"}}
+    )
     print(f"unreachable: {err[:90]}")
     assert "error" in err.lower(), err
     assert "TaskGroup" not in err, f"opaque SDK error leaked to the user: {err}"
