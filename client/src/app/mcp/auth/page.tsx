@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Plug, RefreshCw, Trash2 } from "lucide-react";
+import { ChevronRight, Loader2, Plug, RefreshCw, Trash2 } from "lucide-react";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -455,7 +456,11 @@ export default function McpAuthPage() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{server.label}</span>
-                          <Badge variant="secondary">{server.toolCount} tools</Badge>
+                          {/* Tool count lives on the expander below, which is
+                              where it is actionable. */}
+                          <Badge variant="outline" className="text-xs font-normal">
+                            {server.authType === "none" ? "no auth" : server.authType}
+                          </Badge>
                         </div>
                         <p className="mt-1 truncate text-xs text-muted-foreground">
                           {server.url}
@@ -486,43 +491,58 @@ export default function McpAuthPage() {
                       </div>
                     </div>
                     {server.tools.length > 0 && (
-                      <div className="mt-3 space-y-1.5">
-                        {server.tools.map((tool) => (
-                          <div key={tool.name} className="flex items-center gap-2">
-                            <Badge
-                              variant={tool.write ? "destructive" : "secondary"}
-                              className="font-mono text-xs font-normal"
-                              title={
-                                `${tool.write ? "Write tool" : "Read-only tool"} — ` +
-                                `${tool.declared ? "declared by the server" : "inferred from its name"}`
-                              }
-                            >
-                              {tool.name}
-                            </Badge>
-                            <Select
-                              value={tool.mode}
-                              onValueChange={(mode) =>
-                                handleToolMode(server.label, tool.name, mode as McpToolMode)
-                              }
-                            >
-                              <SelectTrigger className="h-7 w-[150px] text-xs">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="allow">Allow</SelectItem>
-                                <SelectItem value="confirm">Confirm</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        ))}
-                        <p className="pt-1 text-xs text-muted-foreground">
-                          <span className="font-medium">Allow</span> runs without asking,
-                          including during automated investigations.{" "}
-                          <span className="font-medium">Confirm</span> asks you first, so it
-                          is skipped when no one is there to answer. Writes default to
-                          Confirm, reads to Allow.
-                        </p>
-                      </div>
+                      <Collapsible className="mt-3">
+                        <CollapsibleTrigger className="group flex w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+                          <ChevronRight className="h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-90" />
+                          {/* Collapsed by default: a 76-tool server made the card
+                              unscrollable, and the per-tool selects are a rare edit.
+                              The counts are the part worth seeing at a glance. */}
+                          <span>
+                            {server.tools.length} tools
+                            {(() => {
+                              const confirm = server.tools.filter((t) => t.mode === "confirm").length;
+                              return confirm ? ` · ${confirm} need confirmation` : "";
+                            })()}
+                          </span>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="mt-2 space-y-1.5">
+                          {server.tools.map((tool) => (
+                            <div key={tool.name} className="flex items-center gap-2">
+                              <Badge
+                                variant={tool.write ? "destructive" : "secondary"}
+                                className="font-mono text-xs font-normal"
+                                title={
+                                  `${tool.write ? "Write tool" : "Read-only tool"} — ` +
+                                  `${tool.declared ? "declared by the server" : "inferred from its name"}`
+                                }
+                              >
+                                {tool.name}
+                              </Badge>
+                              <Select
+                                value={tool.mode}
+                                onValueChange={(mode) =>
+                                  handleToolMode(server.label, tool.name, mode as McpToolMode)
+                                }
+                              >
+                                <SelectTrigger className="h-7 w-[150px] text-xs">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="allow">Allow</SelectItem>
+                                  <SelectItem value="confirm">Confirm</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          ))}
+                          <p className="pt-1 text-xs text-muted-foreground">
+                            <span className="font-medium">Allow</span> runs without asking,
+                            including during automated investigations.{" "}
+                            <span className="font-medium">Confirm</span> asks you first, so it
+                            is skipped when no one is there to answer. Writes default to
+                            Confirm, reads to Allow.
+                          </p>
+                        </CollapsibleContent>
+                      </Collapsible>
                     )}
                   </li>
                 ))}
