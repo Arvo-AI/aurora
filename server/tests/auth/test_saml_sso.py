@@ -253,3 +253,25 @@ class TestDomainNormalization:
     ])
     def test_normalize(self, raw, expected):
         assert sso.normalize_domain(raw) == expected
+
+
+class TestPublicBackendUrl:
+    def test_localhost_uses_ngrok(self, monkeypatch):
+        monkeypatch.setenv("NGROK_URL", "https://tunnel.example.dev/")
+        monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "http://localhost:5080")
+        assert sso.public_backend_url() == "https://tunnel.example.dev"
+        urls = sso.sp_urls("org-1")
+        assert urls["acsUrl"] == "https://tunnel.example.dev/api/auth/saml/acs/org-1"
+        assert urls["entityId"] == "https://tunnel.example.dev/api/auth/saml/metadata/org-1"
+        assert urls["metadataUrl"] == urls["entityId"]
+        assert urls["loginUrl"] == "https://tunnel.example.dev/api/auth/saml/login/org-1"
+
+    def test_deployed_backend_ignores_ngrok(self, monkeypatch):
+        monkeypatch.setenv("NGROK_URL", "https://tunnel.example.dev")
+        monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "https://api.example.com")
+        assert sso.public_backend_url() == "https://api.example.com"
+
+    def test_localhost_without_ngrok_stays_local(self, monkeypatch):
+        monkeypatch.delenv("NGROK_URL", raising=False)
+        monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "http://localhost:5080")
+        assert sso.public_backend_url() == "http://localhost:5080"

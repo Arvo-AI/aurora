@@ -12,6 +12,7 @@ from connectors.atlassian_auth.auth import refresh_access_token
 from connectors.jira_connector.client import JiraClient
 from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
 from utils.auth.rbac_decorators import require_permission
+from utils.web.public_url import external_backend_url
 from utils.auth.stateless_auth import get_user_preference, store_user_preference
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.log_sanitizer import sanitize
@@ -417,16 +418,13 @@ def webhook(user_id: str):
 def get_webhook_url(user_id):
     """Return the Jira webhook URL for the authenticated user."""
     import os
-    # NEXT_PUBLIC_BACKEND_URL can be a cluster-internal address (e.g.
-    # http://aurora-server:5080) that Jira can't reach. Prefer NGROK_URL in
-    # local dev, then a public URL, matching the PagerDuty handler.
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
+    # NEXT_PUBLIC_BACKEND_URL can be a cluster-internal address that Jira
+    # can't reach. Prefer the ngrok tunnel in local dev, then a public URL.
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "http://localhost:5080").rstrip("/")
     public_url = os.getenv("PUBLIC_API_URL", "").rstrip("/")
-    if ngrok_url and backend_url.startswith("http://localhost"):
-        base_url = ngrok_url
-    else:
-        base_url = public_url or backend_url
+    tunneled = external_backend_url(backend_url)
+    # Ngrok replaces localhost; otherwise prefer an explicit public API URL.
+    base_url = tunneled if tunneled != backend_url else (public_url or backend_url)
     url = f"{base_url}/jira/webhook/{user_id}"
     # These are the recommended Jira events to subscribe the webhook to — not a
     # server-enforced allowlist. The handler filters by issue type, not event name.

@@ -20,7 +20,6 @@ type IdpGuide = {
   consoleLabel: string;
   avoid?: string;
   steps: string[];
-  fieldMap: { aurora: string; idp: string }[];
   metadataHint: string;
 };
 
@@ -39,11 +38,6 @@ const IDP_GUIDES: IdpGuide[] = [
       "Attributes & Claims: confirm an email claim is present (often user.mail or emailaddress).",
       "Users and groups → assign who may sign in.",
     ],
-    fieldMap: [
-      { aurora: "Identifier (Entity ID)", idp: "Identifier (Entity ID)" },
-      { aurora: "Reply URL (ACS)", idp: "Reply URL (Assertion Consumer Service URL)" },
-      { aurora: "Sign on URL", idp: "Sign on URL (optional; Entra My Apps / IdP-initiated tile)" },
-    ],
     metadataHint: "Same SAML blade → SAML Certificates → Federation Metadata XML (download or copy) → Aurora step 3.",
   },
   {
@@ -57,10 +51,6 @@ const IDP_GUIDES: IdpGuide[] = [
       "App name (e.g. Aurora) → Next → Configure SAML: paste Aurora Audience URI and Single sign-on URL → Next → Finish.",
       "Sign On tab → Edit → Name ID format: EmailAddress (recommended).",
       "Assignments → assign users or groups.",
-    ],
-    fieldMap: [
-      { aurora: "Identifier (Entity ID)", idp: "Audience URI (SP Entity ID)" },
-      { aurora: "Reply URL (ACS)", idp: "Single sign-on URL (Okta’s label for the SP ACS URL)" },
     ],
     metadataHint: "Sign On tab → Metadata URL, or Identity Provider metadata download → paste XML into Aurora step 3.",
   },
@@ -76,11 +66,6 @@ const IDP_GUIDES: IdpGuide[] = [
       "Service provider details → Entity ID = Aurora Identifier; ACS URL = Aurora Reply URL. Start URL optional (Aurora Sign on URL). Name ID format: EMAIL.",
       "Attribute mapping → Continue → Turn ON for your organizational unit → User access → assign groups.",
     ],
-    fieldMap: [
-      { aurora: "Identifier (Entity ID)", idp: "Service provider details → Entity ID" },
-      { aurora: "Reply URL (ACS)", idp: "Service provider details → ACS URL" },
-      { aurora: "Sign on URL", idp: "Service provider details → Start URL (optional)" },
-    ],
     metadataHint: "Google IdP details page → Download metadata, or copy SSO URL + Entity ID + certificate → Aurora step 3.",
   },
   {
@@ -95,10 +80,6 @@ const IDP_GUIDES: IdpGuide[] = [
       "Client type SAML → Client ID = Aurora Identifier (Entity ID) → Next → Save.",
       "Client settings → Valid redirect URIs = Aurora Reply URL (ACS). Save.",
       "Use the realm’s default SAML mappers so email is in the assertion (or add an email mapper on the client).",
-    ],
-    fieldMap: [
-      { aurora: "Identifier (Entity ID)", idp: "Client ID" },
-      { aurora: "Reply URL (ACS)", idp: "Valid redirect URIs (SAML POST ACS)" },
     ],
     metadataHint: "Realm → Realm settings → General → Endpoints → SAML 2.0 Identity Provider Metadata (URL or download) → Aurora step 3.",
   },
@@ -129,22 +110,14 @@ function GuideBody({ guide }: Readonly<{ guide: IdpGuide }>) {
           {guide.avoid}
         </p>
       )}
-      <ol className="list-decimal space-y-1.5 pl-4 text-muted-foreground">
-        {guide.steps.map((step) => (
-          <li key={step}>{step}</li>
+      <ol className="space-y-1.5 text-muted-foreground">
+        {guide.steps.map((step, index) => (
+          <li key={step} className="flex gap-2">
+            <span className="shrink-0 tabular-nums">{index + 1}.</span>
+            <span>{step}</span>
+          </li>
         ))}
       </ol>
-      <div>
-        <p className="text-xs font-medium text-foreground mb-2">Map Aurora → your IdP</p>
-        <div className="rounded-md border divide-y text-xs">
-          {guide.fieldMap.map((row) => (
-            <div key={row.aurora} className="grid grid-cols-1 sm:grid-cols-2 gap-1 px-3 py-2">
-              <span className="font-mono text-muted-foreground">{row.aurora}</span>
-              <span>{row.idp}</span>
-            </div>
-          ))}
-        </div>
-      </div>
       <p className="text-xs text-muted-foreground">
         <span className="text-foreground font-medium">Bring back to Aurora:</span> {guide.metadataHint}
       </p>

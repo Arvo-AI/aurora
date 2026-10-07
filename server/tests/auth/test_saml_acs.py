@@ -219,6 +219,8 @@ class TestMetadataAndConfigParsing:
     def test_http_backend_only_accepts_same_host_idp(self, saml_app, monkeypatch, idp_url, allowed):
         # A cross-site IdP's POST would drop the SameSite=Lax request cookie.
         _, mod, _ = saml_app
+        # A configured tunnel would make the public URL https and flip this rule.
+        monkeypatch.delenv("NGROK_URL", raising=False)
         monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "http://localhost:5080")
         assert mod._sso_url_allowed(idp_url) is allowed
 

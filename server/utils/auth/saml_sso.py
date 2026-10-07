@@ -17,6 +17,7 @@ import bcrypt
 import psycopg2.errors
 
 from utils.auth import VALID_ROLES, normalize_email
+from utils.web.public_url import external_backend_url
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ class SsoError(Exception):
 
 
 def public_backend_url() -> str:
-    return (os.getenv("NEXT_PUBLIC_BACKEND_URL") or "").rstrip("/")
+    return external_backend_url()
 
 
 def backend_is_https() -> bool:
