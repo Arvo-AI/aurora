@@ -4,15 +4,24 @@ Pure functions only -- no network, no DB, no fixtures. The storage helpers are
 exercised against a fake in-memory Vault blob.
 """
 
+import asyncio
+import base64
+import hashlib
 import os
 import sys
+import time
+from dataclasses import replace
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
+
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from connectors.mcp_connector import store  # noqa: E402
+from connectors.mcp_connector import oauth, store  # noqa: E402
 from connectors.mcp_connector.client import (  # noqa: E402
     MAX_DESCRIPTION_CHARS,
+    MAX_TOOLS_PER_SERVER,
     _describe,
     _is_auth_failure,
     assert_allowed_target,
@@ -246,19 +255,48 @@ def test_header_building():
 
 
 # --------------------------------------------------------------------------- #
-# Auth-vs-transport discrimination (controls the SSE retry)
+# Auth-vs-transport discrimination (gates the OAuth refresh retry)
 # --------------------------------------------------------------------------- #
 
-def test_auth_failures_are_detected():
+def _http_error(status):
     class Resp:
-        status_code = 401
+        status_code = status
 
     class Err(Exception):
         response = Resp()
 
-    assert _is_auth_failure(Err())
-    assert _is_auth_failure(Exception("HTTP 403 Forbidden"))
-    assert not _is_auth_failure(Exception("Connection refused"))
+    return Err()
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_auth_failures_are_detected(status):
+    assert _is_auth_failure(_http_error(status))
+
+
+def test_auth_failure_found_through_exception_group_and_cause():
+    """The SDK buries the real HTTPStatusError inside an ExceptionGroup."""
+    assert _is_auth_failure(BaseExceptionGroup("tg", [_http_error(401)]))
+
+    wrapper = RuntimeError("request failed")
+    wrapper.__cause__ = _http_error(403)
+    assert _is_auth_failure(wrapper)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        Exception("Connection refused"),
+        # Status code only. A message mentioning 401 is not a 401: a tool result
+        # or proxy body can say it, and treating that as an auth failure both
+        # misdirects the user and triggers a pointless token refresh.
+        Exception("HTTP 403 Forbidden"),
+        Exception("Unauthorized"),
+        _http_error(500),
+        _http_error(200),
+    ],
+)
+def test_non_auth_failures_are_not_misread(exc):
+    assert not _is_auth_failure(exc)
 
 
 # --------------------------------------------------------------------------- #
@@ -337,6 +375,383 @@ def test_probe_does_not_truncate_before_read_filtering():
 
 def test_description_cap_is_sane():
     assert MAX_DESCRIPTION_CHARS <= 2000
+
+
+# --------------------------------------------------------------------------- #
+# tools/list pagination
+# --------------------------------------------------------------------------- #
+
+class _Page:
+    def __init__(self, names, next_cursor=None):
+        self.tools = [
+            SimpleNamespace(name=n, description="d", inputSchema={"type": "object"})
+            for n in names
+        ]
+        self.nextCursor = next_cursor
+
+
+class _PagingSession:
+    """Minimal ClientSession stand-in that serves a fixed list of pages."""
+
+    def __init__(self, pages):
+        self.pages = pages
+        self.cursors = []
+
+    async def list_tools(self, cursor=None):
+        self.cursors.append(cursor)
+        return self.pages[len(self.cursors) - 1]
+
+
+def _probe_with(session, monkeypatch):
+    """Run probe() against a fake session, bypassing the network."""
+    from connectors.mcp_connector import client as mcp_client
+
+    async def fake_attempt(url, auth, chosen, op):
+        return await op(session)
+
+    monkeypatch.setattr(mcp_client, "_attempt", fake_attempt)
+    monkeypatch.setattr(mcp_client, "assert_allowed_target", lambda url: None)
+    return asyncio.run(mcp_client.probe("https://example.com/mcp"))
+
+
+def test_probe_follows_the_pagination_cursor(monkeypatch):
+    """A server that pages its tools must not be registered half-discovered.
+
+    The SDK does not follow nextCursor for us, so without the loop a paginated
+    server silently loses every tool after the first page.
+    """
+    session = _PagingSession([
+        _Page(["get_a", "get_b"], next_cursor="p2"),
+        _Page(["get_c"], next_cursor=None),
+    ])
+    tools, _ = _probe_with(session, monkeypatch)
+
+    assert [t["name"] for t in tools] == ["get_a", "get_b", "get_c"]
+    assert session.cursors == [None, "p2"]
+
+
+def test_pagination_stops_on_a_repeating_cursor(monkeypatch):
+    """A server returning a constant cursor must not loop forever."""
+    from connectors.mcp_connector import client as mcp_client
+
+    session = _PagingSession([_Page(["get_a"], next_cursor="same")] * 50)
+    tools, _ = _probe_with(session, monkeypatch)
+
+    assert len(session.cursors) == mcp_client.MAX_TOOL_PAGES
+    # Same tool on every page: deduped by name, not listed once per page.
+    assert [t["name"] for t in tools] == ["get_a"]
+
+
+def test_tool_cap_fits_real_servers():
+    """GitHub's MCP server exposes 49 tools; a cap below that silently drops them."""
+    assert MAX_TOOLS_PER_SERVER >= 49
+
+
+# --------------------------------------------------------------------------- #
+# OAuth 2.1: PKCE, resource binding, refresh
+# --------------------------------------------------------------------------- #
+
+AUTH_SERVER = oauth.AuthServer(
+    issuer="https://mcp.example.com",
+    authorization_endpoint="https://mcp.example.com/authorize",
+    token_endpoint="https://mcp.example.com/token",
+    registration_endpoint="https://mcp.example.com/register",
+    scopes_supported=("read", "write"),
+)
+
+
+def test_authorize_url_carries_pkce_and_resource():
+    url, verifier = oauth.build_authorize_url(
+        AUTH_SERVER, "client-123", "https://aurora.test/mcp/callback",
+        "state-abc", "https://mcp.example.com/mcp",
+    )
+    params = parse_qs(urlparse(url).query)
+
+    assert params["code_challenge_method"] == ["S256"]
+    assert params["state"] == ["state-abc"]
+    # RFC 8707: without this the token is not bound to one MCP server and can
+    # be replayed against another resource behind the same provider.
+    assert params["resource"] == ["https://mcp.example.com/mcp"]
+    # The challenge is the hash; the verifier must never appear in the URL.
+    assert verifier not in url
+    expected = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()
+    ).decode().rstrip("=")
+    assert params["code_challenge"] == [expected]
+
+
+def test_authorize_url_preserves_an_existing_query_string():
+    server = replace(
+        AUTH_SERVER, authorization_endpoint="https://mcp.example.com/authorize?tenant=acme"
+    )
+    url, _ = oauth.build_authorize_url(
+        server, "c", "https://aurora.test/cb", "s", "https://mcp.example.com/mcp"
+    )
+    params = parse_qs(urlparse(url).query)
+    assert params["tenant"] == ["acme"]
+    assert params["client_id"] == ["c"]
+
+
+def test_each_flow_gets_a_fresh_verifier():
+    _, first = oauth.build_authorize_url(AUTH_SERVER, "c", "r", "s", "res")
+    _, second = oauth.build_authorize_url(AUTH_SERVER, "c", "r", "s", "res")
+    assert first != second
+
+
+def test_refresh_keeps_the_old_token_when_the_server_does_not_rotate(monkeypatch):
+    """Servers that do not rotate send refresh_token only on the first grant.
+
+    Dropping it here would disconnect the server at the next expiry.
+    """
+    async def fake_token_request(endpoint, form):
+        assert form["grant_type"] == "refresh_token"
+        return {"access_token": "new-access", "expires_in": 3600}
+
+    monkeypatch.setattr(oauth, "_token_request", fake_token_request)
+    result = asyncio.run(oauth.refresh_token({
+        "type": "oauth", "refresh_token": "keep-me",
+        "token_endpoint": "https://mcp.example.com/token", "client_id": "c",
+    }))
+
+    assert result["access_token"] == "new-access"
+    assert result["refresh_token"] == "keep-me"
+    assert result["expires_at"] > time.time()
+
+
+def test_refresh_adopts_a_rotated_token(monkeypatch):
+    async def fake_token_request(endpoint, form):
+        return {"access_token": "a2", "refresh_token": "r2"}
+
+    monkeypatch.setattr(oauth, "_token_request", fake_token_request)
+    result = asyncio.run(oauth.refresh_token({
+        "type": "oauth", "refresh_token": "r1",
+        "token_endpoint": "https://mcp.example.com/token", "client_id": "c",
+    }))
+    assert result["refresh_token"] == "r2"
+    # No expires_in: nothing to pre-empt, so a 401 drives the next refresh.
+    assert result["expires_at"] is None
+
+
+def test_refresh_without_a_grant_tells_the_user_to_reconnect():
+    with pytest.raises(oauth.OAuthDiscoveryError):
+        asyncio.run(oauth.refresh_token({"type": "oauth", "client_id": "c"}))
+
+
+def test_expiry_uses_a_skew_and_tolerates_a_missing_expiry():
+    assert oauth.is_expired({"type": "oauth", "expires_at": time.time() - 1})
+    # Inside the skew window: refresh now rather than mid-call.
+    assert oauth.is_expired({"type": "oauth", "expires_at": time.time() + 5})
+    assert not oauth.is_expired({"type": "oauth", "expires_at": time.time() + 3600})
+    assert not oauth.is_expired({"type": "oauth"})
+    assert not oauth.is_expired({"type": "bearer", "expires_at": 0})
+    assert not oauth.is_expired(None)
+
+
+def test_oauth_tokens_are_sent_as_bearer():
+    assert build_headers({"type": "oauth", "access_token": "tok"}) == {
+        "Authorization": "Bearer tok"
+    }
+    assert build_headers({"type": "oauth"}) == {}
+
+
+def test_cross_origin_authorization_server_is_rejected(monkeypatch):
+    """A server must not redirect consent to a host it does not own.
+
+    Honouring an arbitrary issuer would let a malicious MCP server phish the
+    user's credentials for an unrelated provider.
+    """
+    async def fake_get_json(client, url):
+        if "oauth-protected-resource" in url:
+            return {"authorization_servers": ["https://evil.example.net"]}
+        return None
+
+    monkeypatch.setattr(oauth, "_get_json", fake_get_json)
+    monkeypatch.setattr(oauth, "assert_allowed_target", lambda url: None)
+    with pytest.raises(oauth.OAuthDiscoveryError, match="different origin"):
+        asyncio.run(oauth.discover("https://mcp.example.com/mcp"))
+
+
+def test_registration_without_an_endpoint_asks_for_a_client_id():
+    server = replace(AUTH_SERVER, registration_endpoint=None)
+    assert not server.supports_dcr
+    with pytest.raises(oauth.OAuthRegistrationUnsupported):
+        asyncio.run(oauth.register_client(server, "https://aurora.test/cb"))
+
+
+def test_oauth_cannot_be_registered_through_the_plain_form():
+    """OAuth needs the browser flow; the token field cannot stand in for it."""
+    from routes.mcp.mcp_routes import _parse_auth
+
+    _, error = _parse_auth({"authType": "oauth", "token": "pasted"})
+    assert "OAuth flow" in error
+
+
+def test_oauth_endpoints_are_also_ssrf_checked():
+    """Discovery, registration, and token calls all follow customer-supplied URLs.
+
+    A server pointing its token endpoint at the metadata service would be a
+    clean bypass if only the MCP connection were guarded.
+    """
+    import inspect
+
+    for fn in (oauth._get_json, oauth.register_client, oauth._token_request):
+        assert "assert_allowed_target" in inspect.getsource(fn), fn.__name__
+
+
+# --------------------------------------------------------------------------- #
+# Refresh-on-401 (the whole point of storing a refresh token)
+# --------------------------------------------------------------------------- #
+
+OAUTH_AUTH = {
+    "type": "oauth",
+    "access_token": "stale",
+    "refresh_token": "r1",
+    "token_endpoint": "https://mcp.example.com/token",
+    "client_id": "c",
+}
+
+
+def _run_with_attempts(monkeypatch, attempts, auth, on_refresh=None):
+    """Drive _run() with a scripted sequence of attempt outcomes."""
+    from connectors.mcp_connector import client as mcp_client
+
+    seen = []
+
+    async def fake_attempt(url, attempt_auth, chosen, op):
+        seen.append(attempt_auth)
+        outcome = attempts.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(mcp_client, "_attempt", fake_attempt)
+    monkeypatch.setattr(mcp_client, "assert_allowed_target", lambda url: None)
+    result = asyncio.run(
+        mcp_client._run("https://mcp.example.com/mcp", auth, "streamable_http",
+                        lambda s: None, on_refresh)
+    )
+    return result, seen
+
+
+def test_a_401_refreshes_the_token_and_retries_once(monkeypatch):
+    from connectors.mcp_connector import client as mcp_client
+
+    async def fake_refresh(auth):
+        return {**auth, "access_token": "fresh", "refresh_token": "r2"}
+
+    monkeypatch.setattr(mcp_client, "refresh_token", fake_refresh)
+    stored = []
+    (result, _), seen = _run_with_attempts(
+        monkeypatch,
+        [mcp_client.MCPAuthError("401"), "ok"],
+        OAUTH_AUTH,
+        on_refresh=stored.append,
+    )
+
+    assert result == "ok"
+    assert [a["access_token"] for a in seen] == ["stale", "fresh"]
+    # The rotated refresh token must be persisted, or the next expiry fails.
+    assert stored == [{**OAUTH_AUTH, "access_token": "fresh", "refresh_token": "r2"}]
+
+
+def test_an_already_expired_token_is_refreshed_before_the_call(monkeypatch):
+    """Skip the doomed request when the token is known to be expired.
+
+    Without this every call after expiry pays a guaranteed 401 round-trip to
+    the customer's server before refreshing.
+    """
+    from connectors.mcp_connector import client as mcp_client
+
+    async def fake_refresh(auth):
+        return {**auth, "access_token": "fresh"}
+
+    monkeypatch.setattr(mcp_client, "refresh_token", fake_refresh)
+    expired = {**OAUTH_AUTH, "expires_at": time.time() - 10}
+    (result, _), seen = _run_with_attempts(monkeypatch, ["ok"], expired)
+
+    assert result == "ok"
+    # One attempt only, and it already carried the new token.
+    assert [a["access_token"] for a in seen] == ["fresh"]
+
+
+def test_a_valid_token_is_not_refreshed_preemptively(monkeypatch):
+    from connectors.mcp_connector import client as mcp_client
+
+    async def explode(_auth):
+        raise AssertionError("refreshed a token that had not expired")
+
+    monkeypatch.setattr(mcp_client, "refresh_token", explode)
+    valid = {**OAUTH_AUTH, "expires_at": time.time() + 3600}
+    (result, _), seen = _run_with_attempts(monkeypatch, ["ok"], valid)
+    assert result == "ok"
+    assert [a["access_token"] for a in seen] == ["stale"]
+
+
+def test_a_second_401_is_not_retried_again(monkeypatch):
+    """One retry only: looping would hammer the provider's token endpoint."""
+    from connectors.mcp_connector import client as mcp_client
+
+    async def fake_refresh(auth):
+        return {**auth, "access_token": "fresh"}
+
+    monkeypatch.setattr(mcp_client, "refresh_token", fake_refresh)
+    with pytest.raises(mcp_client.MCPAuthError):
+        _run_with_attempts(
+            monkeypatch,
+            [mcp_client.MCPAuthError("401"), mcp_client.MCPAuthError("401")],
+            OAUTH_AUTH,
+        )
+
+
+@pytest.mark.parametrize("auth", [
+    {"type": "bearer", "token": "t"},
+    {"type": "none"},
+    None,
+    # OAuth but no refresh grant: nothing to retry with.
+    {"type": "oauth", "access_token": "a", "token_endpoint": "https://x/token"},
+])
+def test_non_refreshable_auth_fails_straight_through(monkeypatch, auth):
+    """A bad static token must surface immediately, not after a bogus refresh."""
+    from connectors.mcp_connector import client as mcp_client
+
+    async def explode(_auth):
+        raise AssertionError("refresh attempted for non-refreshable auth")
+
+    monkeypatch.setattr(mcp_client, "refresh_token", explode)
+    with pytest.raises(mcp_client.MCPAuthError):
+        _run_with_attempts(monkeypatch, [mcp_client.MCPAuthError("401")], auth)
+
+
+def test_a_failed_refresh_tells_the_user_to_reconnect(monkeypatch):
+    from connectors.mcp_connector import client as mcp_client
+
+    async def fake_refresh(auth):
+        raise oauth.OAuthDiscoveryError("grant revoked")
+
+    monkeypatch.setattr(mcp_client, "refresh_token", fake_refresh)
+    with pytest.raises(mcp_client.MCPAuthError, match="[Rr]econnect"):
+        _run_with_attempts(monkeypatch, [mcp_client.MCPAuthError("401")], OAUTH_AUTH)
+
+
+def test_update_auth_leaves_other_servers_untouched(fake_vault):
+    """A refresh must not drop a sibling server from the stored list."""
+    store.upsert_server("u1", {"label": "alpha", "url": "https://a/mcp",
+                               "auth": {"type": "oauth", "access_token": "old"}, "tools": []})
+    store.upsert_server("u1", {"label": "beta", "url": "https://b/mcp",
+                               "auth": {"type": "bearer", "token": "t"}, "tools": []})
+
+    store.update_auth("u1", "alpha", {"type": "oauth", "access_token": "new"})
+
+    servers = {s["label"]: s for s in store.list_servers("u1")}
+    assert servers["alpha"]["auth"]["access_token"] == "new"
+    assert servers["beta"]["auth"]["token"] == "t"
+    assert servers["alpha"]["url"] == "https://a/mcp"
+
+
+def test_update_auth_on_an_unknown_label_is_a_no_op(fake_vault):
+    store.upsert_server("u1", {"label": "alpha", "url": "https://a/mcp", "tools": []})
+    store.update_auth("u1", "ghost", {"type": "oauth", "access_token": "x"})
+    assert len(store.list_servers("u1")) == 1
 
 
 # --------------------------------------------------------------------------- #

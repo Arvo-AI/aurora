@@ -11,7 +11,7 @@ export interface McpServerSummary {
   label: string;
   url: string;
   transport: 'streamable_http' | 'sse';
-  authType: 'bearer' | 'header' | 'none';
+  authType: 'bearer' | 'header' | 'oauth' | 'none';
   readOnly: boolean;
   toolCount: number;
   tools: McpToolSummary[];
@@ -29,10 +29,12 @@ export interface McpRegisterPayload {
   label: string;
   url: string;
   transport: 'streamable_http' | 'sse';
-  authType: 'bearer' | 'header' | 'none';
+  authType: 'bearer' | 'header' | 'oauth' | 'none';
   token?: string;
   headerName?: string;
   readOnly: boolean;
+  clientId?: string;
+  clientSecret?: string;
 }
 
 const API_BASE = '/api/mcp/servers';
@@ -86,5 +88,32 @@ export const mcpService = {
       { method: 'DELETE', retries: 0, cache: 'no-store' },
     );
     setConnectedFlag((data?.remaining ?? 0) > 0);
+  },
+
+  /**
+   * Begin the OAuth flow. Returns the provider's consent URL plus the state
+   * that `completeOAuth` must echo back.
+   */
+  async startOAuth(payload: McpRegisterPayload): Promise<{ authorizeUrl: string; state: string }> {
+    return apiRequest<{ authorizeUrl: string; state: string }>(`${API_BASE}/oauth/start`, {
+      ...REGISTER_OPTIONS,
+      method: 'POST',
+      body: JSON.stringify(payload),
+      cache: 'no-store',
+    });
+  },
+
+  async completeOAuth(code: string, state: string): Promise<{ server: McpServerSummary; warning?: string }> {
+    const data = await apiRequest<{ server: McpServerSummary; warning?: string }>(
+      `${API_BASE}/oauth/complete`,
+      {
+        ...REGISTER_OPTIONS,
+        method: 'POST',
+        body: JSON.stringify({ code, state }),
+        cache: 'no-store',
+      },
+    );
+    setConnectedFlag(true);
+    return { server: data.server, warning: data.warning };
   },
 };

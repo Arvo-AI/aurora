@@ -70,11 +70,12 @@ def qualified_tool_name(label: str, tool_name: str) -> str:
 def server_summary(server: Dict[str, Any]) -> Dict[str, Any]:
     """Credential-free view of a server, safe for API responses and the agent."""
     tools = server.get("tools") or []
+    auth = server.get("auth") or {}
     return {
         "label": server.get("label", ""),
         "url": server.get("url", ""),
         "transport": server.get("transport", "streamable_http"),
-        "authType": (server.get("auth") or {}).get("type", "none"),
+        "authType": auth.get("type", "none"),
         "readOnly": bool(server.get("read_only", True)),
         "toolCount": len(tools),
         "tools": [
@@ -144,6 +145,30 @@ def remove_server(user_id: str, label: str) -> bool:
         return False
     save_servers(user_id, remaining)
     return True
+
+
+def update_auth(user_id: str, label: str, auth: Dict[str, Any]) -> None:
+    """Replace one server's stored credentials, leaving everything else intact.
+
+    Used after an OAuth refresh. Re-reads the server list rather than taking a
+    caller-held copy so a concurrent edit to a *different* server is not lost.
+
+    ponytail: still a read-modify-write, so two parallel refreshes of the SAME
+    server can clobber each other -- the loser's rotated refresh token is lost
+    and that server needs reconnecting. Accepted: the window is one HTTP
+    round-trip and the damage is recoverable from the UI. Upgrade path is a
+    short Redis lock keyed on (org_id, label) around refresh-and-store.
+    """
+    target = slugify_label(label)
+    servers = list_servers(user_id)
+    found = False
+    for server in servers:
+        if server.get("label") == target:
+            server["auth"] = auth
+            found = True
+            break
+    if found:
+        save_servers(user_id, servers)
 
 
 def mcp_servers_section(user_id: str) -> str:

@@ -25,6 +25,7 @@ from connectors.mcp_connector.store import (
     is_read_tool,
     list_servers,
     qualified_tool_name,
+    update_auth,
 )
 from utils.auth.command_gate import gate_action
 from utils.cloud.cloud_utils import get_user_context
@@ -73,6 +74,7 @@ def _make_wrapper(
     tool_name: str,
     public_name: str,
     needs_gate: bool,
+    user_id: str,
     send_tool_start: Optional[Callable] = None,
     send_tool_completion: Optional[Callable] = None,
     send_tool_error: Optional[Callable] = None,
@@ -82,10 +84,23 @@ def _make_wrapper(
     label = server["label"]
     url, auth, transport = server["url"], server.get("auth"), server.get("transport", "streamable_http")
 
+    def _persist_refresh(new_auth: Dict[str, Any]) -> None:
+        """Store a rotated OAuth token so the next call does not refresh again.
+
+        Best-effort: the tool call already succeeded with the new token, so a
+        storage failure must not fail the call. It only costs another refresh.
+        """
+        try:
+            update_auth(user_id, label, new_auth)
+        except Exception as exc:
+            logger.warning(
+                "[MCP] Could not persist refreshed token for '%s': %s",
+                sanitize(label), sanitize(exc),
+            )
+
     def wrapper(**kwargs: Any) -> str:
         signature = f"{public_name}_{json.dumps(kwargs, sort_keys=True, default=str)}"
         tool_call_id = f"{public_name}_{hashlib.sha256(signature.encode()).hexdigest()[:16]}"
-
         if send_tool_start:
             try:
                 send_tool_start(public_name, kwargs, tool_call_id)
@@ -111,7 +126,7 @@ def _make_wrapper(
 
         args = {k: v for k, v in kwargs.items() if v is not None}
         try:
-            coro = call(url, auth, transport, tool_name, args)
+            coro = call(url, auth, transport, tool_name, args, on_refresh=_persist_refresh)
             result = (
                 run_async_in_thread(coro) if run_async_in_thread else asyncio.run(coro)
             )
@@ -184,6 +199,7 @@ def get_custom_mcp_tools(
                 tool_name,
                 public_name,
                 needs_gate=not is_read_tool(tool_name),
+                user_id=user_id,
                 send_tool_start=send_tool_start,
                 send_tool_completion=send_tool_completion,
                 send_tool_error=send_tool_error,

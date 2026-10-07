@@ -28,6 +28,56 @@ const EMPTY_FORM: McpRegisterPayload = {
   readOnly: true,
 };
 
+/** Give up if the user abandons the consent screen, so the form unlocks. */
+const OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Resolve with the authorization code the callback page posts back.
+ *
+ * Rejects on provider error, a closed popup, or timeout -- otherwise an
+ * abandoned flow would leave the submit button spinning forever.
+ */
+function waitForOAuthCode(popup: Window, expectedState: string): Promise<{ code: string }> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      window.removeEventListener("message", onMessage);
+      window.clearInterval(closedTimer);
+      window.clearTimeout(timeout);
+    };
+
+    const onMessage = (event: MessageEvent) => {
+      // Only trust our own callback page; the popup visits the provider's
+      // origin too and anything could be loaded in between.
+      if (event.origin !== window.location.origin) return;
+      const data = event.data as { type?: string; code?: string; state?: string; error?: string; errorDescription?: string };
+      if (data?.type === "mcp-auth-error") {
+        cleanup();
+        reject(new Error(data.errorDescription || data.error || "Authorization was denied."));
+        return;
+      }
+      if (data?.type !== "mcp-auth-success" || !data.code) return;
+      // State must match the value we started with, or this is a different flow.
+      if (data.state !== expectedState) return;
+      cleanup();
+      resolve({ code: data.code });
+    };
+
+    const closedTimer = window.setInterval(() => {
+      if (popup.closed) {
+        cleanup();
+        reject(new Error("The authorization window was closed before finishing."));
+      }
+    }, 500);
+
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("Authorization timed out. Please try again."));
+    }, OAUTH_TIMEOUT_MS);
+
+    window.addEventListener("message", onMessage);
+  });
+}
+
 export default function McpAuthPage() {
   const { toast } = useToast();
   const [servers, setServers] = useState<McpServerSummary[]>([]);
@@ -80,6 +130,45 @@ export default function McpAuthPage() {
     }
   };
 
+  /**
+   * Run the OAuth flow in a popup.
+   *
+   * Aurora registers itself with the provider (Dynamic Client Registration),
+   * the user consents in the popup, and the callback page posts the code back.
+   * The code is exchanged server-side, where the PKCE verifier lives.
+   */
+  const handleOAuth = async () => {
+    setSubmitting(true);
+    let popup: Window | null = null;
+    try {
+      const { authorizeUrl, state } = await mcpService.startOAuth(form);
+      popup = window.open(authorizeUrl, "mcp-oauth", "width=600,height=760");
+      if (!popup) {
+        throw new Error("Allow pop-ups for this site to authorize the server.");
+      }
+
+      const { code } = await waitForOAuthCode(popup, state);
+      const { server, warning } = await mcpService.completeOAuth(code, state);
+      toast({
+        title: `Connected to ${server.label}`,
+        description: warning
+          ? `${warning} ${server.toolCount} available.`
+          : `Aurora discovered ${server.toolCount} tool${server.toolCount === 1 ? "" : "s"}.`,
+      });
+      setForm(EMPTY_FORM);
+      await load();
+    } catch (error: unknown) {
+      toast({
+        title: "Could not connect",
+        description: getUserFriendlyError(error),
+        variant: "destructive",
+      });
+    } finally {
+      popup?.close();
+      setSubmitting(false);
+    }
+  };
+
   const handleRefresh = async (label: string) => {
     setBusyLabel(label);
     try {
@@ -117,7 +206,9 @@ export default function McpAuthPage() {
     }
   };
 
-  const needsToken = form.authType !== "none";
+  const isOAuth = form.authType === "oauth";
+  // OAuth collects its credential in the popup, not the form.
+  const needsToken = form.authType !== "none" && !isOAuth;
   const atCapacity = servers.length >= maxServers;
   const canSubmit =
     Boolean(form.label.trim()) &&
@@ -203,6 +294,7 @@ export default function McpAuthPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="oauth">OAuth (sign in)</SelectItem>
                     <SelectItem value="bearer">Bearer token</SelectItem>
                     <SelectItem value="header">Custom header</SelectItem>
                     <SelectItem value="none">None</SelectItem>
@@ -221,6 +313,14 @@ export default function McpAuthPage() {
                 </div>
               )}
             </div>
+
+            {isOAuth && (
+              <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                Aurora will open the server&apos;s sign-in page in a pop-up and register
+                itself automatically. No token to paste. Works with servers that support
+                OAuth dynamic client registration.
+              </p>
+            )}
 
             {needsToken && (
               <div className="space-y-2">
@@ -263,16 +363,16 @@ export default function McpAuthPage() {
               </p>
             )}
 
-            <Button onClick={handleRegister} disabled={!canSubmit}>
+            <Button onClick={isOAuth ? handleOAuth : handleRegister} disabled={!canSubmit}>
               {submitting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Connecting&hellip;
+                  {isOAuth ? "Waiting for sign-in\u2026" : "Connecting\u2026"}
                 </>
               ) : (
                 <>
                   <Plug className="mr-2 h-4 w-4" />
-                  Connect
+                  {isOAuth ? "Sign in and connect" : "Connect"}
                 </>
               )}
             </Button>
