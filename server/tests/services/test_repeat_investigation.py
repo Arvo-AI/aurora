@@ -123,7 +123,9 @@ class TestRepeatNeedsInvestigation:
         ) is True
 
     def test_each_retry_gets_its_own_claim(self):
-        assert enqueue_claim() != enqueue_claim()
+        first = enqueue_claim()
+        second = enqueue_claim()
+        assert first != second
 
 
 class TestWorkerOwnsInvestigation:
