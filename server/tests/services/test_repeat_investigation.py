@@ -160,3 +160,34 @@ class TestShouldStartInvestigation:
         assert should_start_investigation(
             False, existing, title="HighCPU", service="api", severity="critical",
         ) is False
+
+
+class TestFiringEpisodes:
+    """The same alert key fires for years. Only startsAt tells one episode from the next."""
+
+    def _analyzed(self, starts_at="2026-01-01T10:00:00Z"):
+        metadata = {"labels": {"alertname": "HighCPU", "service": "api"}, "startsAt": starts_at}
+        return _existing(status="analyzed", metadata=metadata)
+
+    def _decide(self, existing, occurrence):
+        return should_start_investigation(
+            False, existing, title="HighCPU", service="api", severity="critical",
+            labels={"alertname": "HighCPU", "service": "api"}, occurrence=occurrence,
+        )
+
+    def test_resend_of_the_same_episode_is_muted(self):
+        assert self._decide(self._analyzed(), "2026-01-01T10:00:00Z") is False
+
+    def test_new_episode_without_a_resolve_still_investigates(self):
+        assert self._decide(self._analyzed(), "2026-01-03T08:00:00Z") is True
+
+    def test_row_from_before_episodes_were_stored_keeps_the_old_rule(self):
+        existing = _existing(status="analyzed")
+        assert self._decide(existing, "2026-01-03T08:00:00Z") is False
+
+    def test_payload_without_starts_at_keeps_the_old_rule(self):
+        assert self._decide(self._analyzed(), None) is False
+
+    def test_resolved_incident_still_investigates_on_the_same_episode(self):
+        existing = self._analyzed()._replace(status="resolved")
+        assert self._decide(existing, "2026-01-01T10:00:00Z") is True

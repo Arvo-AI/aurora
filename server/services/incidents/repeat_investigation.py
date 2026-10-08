@@ -43,6 +43,18 @@ def metadata_labels(metadata) -> dict:
     return labels if isinstance(labels, dict) else {}
 
 
+def metadata_occurrence(metadata) -> Optional[str]:
+    """When the stored firing episode started, if the source reports it."""
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    if not isinstance(metadata, dict):
+        return None
+    return metadata.get("startsAt") or None
+
+
 def alert_signature(title, service, severity, labels=None) -> tuple:
     """Stable problem identity for one alert."""
     if not isinstance(labels, dict):
@@ -123,10 +135,14 @@ def repeat_needs_investigation(
     session_id=None,
     task_id=None,
     now=None,
+    new_occurrence=False,
 ) -> bool:
     """Whether this firing of an existing incident should start another RCA."""
     # Resolved incident firing again is a regression, not a duplicate delivery.
     if (previous_status or "").lower() == "resolved":
+        return True
+    # The source says the alert stopped and fired again, even if no resolve reached us.
+    if new_occurrence:
         return True
     # Title, service, severity, or labels changed under the same alert id.
     if previous_signature != new_signature:
@@ -143,8 +159,8 @@ def repeat_needs_investigation(
     return False
 
 
-def should_start_investigation(was_inserted, existing: Optional[ExistingIncident], *, title, service, severity, labels=None) -> bool:
-    """True for a new incident, a regression, a changed alert, or a lost enqueue."""
+def should_start_investigation(was_inserted, existing: Optional[ExistingIncident], *, title, service, severity, labels=None, occurrence=None) -> bool:
+    """True for a new incident, a new firing episode, a regression, a changed alert, or a lost enqueue."""
     if was_inserted:
         return True
     if existing is None:
@@ -152,12 +168,16 @@ def should_start_investigation(was_inserted, existing: Optional[ExistingIncident
     # Callers that don't pass labels compare title, service, and severity only.
     previous_labels = metadata_labels(existing.metadata) if labels is not None else {}
     compared_labels = labels if labels is not None else {}
+    # Rows stored before episodes were recorded have nothing to compare against.
+    previous_occurrence = metadata_occurrence(existing.metadata)
+    new_occurrence = bool(occurrence and previous_occurrence and occurrence != previous_occurrence)
     return repeat_needs_investigation(
         existing.status,
         alert_signature(existing.title, existing.service, existing.severity, previous_labels),
         alert_signature(title, service, severity, compared_labels),
         session_id=existing.session_id,
         task_id=existing.task_id,
+        new_occurrence=new_occurrence,
     )
 
 

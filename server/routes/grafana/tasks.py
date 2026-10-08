@@ -3,9 +3,9 @@
 Each webhook contains an ``alerts[]`` array of individual alert instances. We process
 each alert separately by fingerprint (hash of rule + labels):
 - Firing alerts: create an incident and trigger RCA the first time that fingerprint
-  is seen. A later firing of the same alert stays on that incident and does not
-  start another investigation, unless the incident had resolved or the alert's
-  identity (title, service, severity, labels) changed.
+  is seen. A re-send of the same firing episode (same ``startsAt``) stays on that
+  incident without another investigation. A new episode, a resolved incident, or a
+  changed identity (title, service, severity, labels) gets a new RCA.
 - Resolved alerts: match to the original incident by fingerprint, skip RCA.
 
 This module implements the edge-case handling and matching logic directly.
@@ -417,6 +417,10 @@ def process_grafana_alert(
                                 alert_metadata["silenceUrl"] = alert_payload["silenceURL"]
                             if fingerprint:
                                 alert_metadata["fingerprint"] = fingerprint
+                            # Same for every re-send of one firing episode, new each time it fires again.
+                            per_alert_occurrence = single_alert.get("startsAt")
+                            if per_alert_occurrence:
+                                alert_metadata["startsAt"] = per_alert_occurrence
                             per_alert_rule_uid = single_alert.get("ruleUID") or single_alert.get("ruleUid")
                             if per_alert_rule_uid:
                                 alert_metadata["ruleUID"] = per_alert_rule_uid
@@ -490,6 +494,7 @@ def process_grafana_alert(
                                 incident_was_inserted, existing,
                                 title=per_alert_title, service=service, severity=severity,
                                 labels=metadata_labels(alert_metadata),
+                                occurrence=per_alert_occurrence,
                             )
                             # A repeat that needs a new RCA has to reset the row first.
                             reopen_for_rca = start_rca and not incident_was_inserted
