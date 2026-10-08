@@ -16,6 +16,7 @@ from services.incidents.repeat_investigation import (
     claim_enqueue,
     lock_existing_incident,
     repeat_needs_investigation,
+    replace_claim_with_task,
     should_start_investigation,
     try_reopen_incident,
 )
@@ -254,6 +255,7 @@ def trigger_delayed_rca(
     incident_title: str,
     incident_number: int,
     incident_urgency: str,
+    rca_claim: Optional[str] = None,
 ) -> None:
     """
     Delayed RCA trigger task.
@@ -289,7 +291,7 @@ def trigger_delayed_rca(
 
                 cursor.execute(
                     """
-                    SELECT aurora_chat_session_id FROM incidents
+                    SELECT aurora_chat_session_id, rca_celery_task_id FROM incidents
                     WHERE id = %s AND user_id = %s
                     """,
                     (incident_db_id, user_id),
@@ -299,6 +301,14 @@ def trigger_delayed_rca(
                 if not row:
                     logger.warning(
                         "[PAGERDUTY][RCA-DELAYED] Incident %s not found, skipping",
+                        incident_db_id,
+                    )
+                    return
+
+                # A newer firing replaced this claim. Don't start the RCA it queued.
+                if rca_claim and row[1] != rca_claim:
+                    logger.info(
+                        "[PAGERDUTY][RCA-DELAYED] Incident %s claim was replaced; skipping",
                         incident_db_id,
                     )
                     return
@@ -416,13 +426,17 @@ def trigger_delayed_rca(
                     },
                     incident_id=incident_db_id,
                     rail_text=rail_text,
+                    rca_claim=rca_claim,
                 )
                 
-                # Store Celery task ID immediately for cancellation support
-                cursor.execute(
-                    "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                    (task.id, incident_db_id)
-                )
+                # A claim fences this task. Tasks queued before claims existed write the id directly.
+                if rca_claim:
+                    replace_claim_with_task(cursor, incident_db_id, task.id, rca_claim)
+                else:
+                    cursor.execute(
+                        "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                        (task.id, incident_db_id),
+                    )
                 conn.commit()
                 
                 logger.info(
@@ -705,17 +719,19 @@ def process_pagerduty_event(
                     incident_was_inserted, existing,
                     title=incident_title, service=service_name, severity=severity,
                 )
+                rca_claim = None
                 if incident_db_id and start_rca and not incident_was_inserted:
-                    if not try_reopen_incident(
+                    rca_claim = try_reopen_incident(
                         cursor, log_prefix="[PAGERDUTY]",
                         incident_id=incident_db_id, user_id=user_id, org_id=org_id,
                         severity=severity, title=incident_title, service=service_name,
                         started_at=received_at, previous_status=previous_status,
                         record_lifecycle=False,
-                    ):
+                    )
+                    if not rca_claim:
                         start_rca = False
                 if incident_db_id and incident_was_inserted and start_rca:
-                    claim_enqueue(cursor, incident_db_id)
+                    rca_claim = claim_enqueue(cursor, incident_db_id)
                 conn.commit()
 
                 if start_rca:
@@ -854,6 +870,7 @@ def process_pagerduty_event(
                                     "incident_title": incident_title,
                                     "incident_number": incident_number,
                                     "incident_urgency": incident_urgency,
+                                    "rca_claim": rca_claim,
                                 },
                                 countdown=RUNBOOK_WAIT_DELAY,
                             )

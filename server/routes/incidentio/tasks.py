@@ -14,6 +14,7 @@ from services.correlation import apply_correlation_outcome
 from services.incidents.repeat_investigation import (
     claim_enqueue,
     lock_existing_incident,
+    replace_claim_with_task,
     should_start_investigation,
     try_reopen_incident,
 )
@@ -780,20 +781,22 @@ def _create_and_link_incident(cursor, conn, *, user_id, org_id, alert_db_id,
         was_inserted, existing,
         title=fields["incident_name"], service=service, severity=normalized_severity,
     )
+    rca_claim = None
     if incident_id and start_rca and not was_inserted:
-        if not try_reopen_incident(
+        rca_claim = try_reopen_incident(
             cursor, log_prefix="[INCIDENTIO]",
             incident_id=incident_id, user_id=user_id, org_id=org_id,
             severity=normalized_severity, title=fields["incident_name"], service=service,
             started_at=received_at, previous_status=existing.status if existing else None,
-        ):
+        )
+        if not rca_claim:
             start_rca = False
     if incident_id and was_inserted and start_rca:
-        claim_enqueue(cursor, incident_id)
+        rca_claim = claim_enqueue(cursor, incident_id)
     conn.commit()
 
     if not incident_id:
-        return None, False
+        return None, False, None
 
     # Another row per replay would flood the incident with copies of the same alert.
     if start_rca:
@@ -819,7 +822,7 @@ def _create_and_link_incident(cursor, conn, *, user_id, org_id, alert_db_id,
             conn.rollback()
             logger.warning("[INCIDENTIO] Failed to link alert: %s", e)
 
-    return str(incident_id), start_rca
+    return str(incident_id), start_rca, rca_claim
 
 
 @celery_app.task(
@@ -860,6 +863,7 @@ def _store_and_process_event(user_id: str, event_type: str,
 
     incident_id = None
     start_rca = False
+    rca_claim = None
     service = ""
     normalized_severity = ""
     alert_metadata: Dict[str, Any] = {}
@@ -942,7 +946,7 @@ def _store_and_process_event(user_id: str, event_type: str,
                     )
                     return
 
-            incident_id, start_rca = _create_and_link_incident(
+            incident_id, start_rca, rca_claim = _create_and_link_incident(
                 cursor, conn, user_id=user_id, org_id=org_id,
                 alert_db_id=alert_db_id, fields=fields, service=service,
                 normalized_severity=normalized_severity,
@@ -954,6 +958,7 @@ def _store_and_process_event(user_id: str, event_type: str,
             user_id=user_id, incident_id=incident_id, fields=fields,
             payload=payload, alert_metadata=alert_metadata,
             service=service, severity=normalized_severity,
+            rca_claim=rca_claim,
         )
     elif incident_id:
         logger.info("[INCIDENTIO] Repeat event for incident %s; keeping the existing RCA", incident_id)
@@ -1032,6 +1037,7 @@ def _trigger_rca_pipeline(
     alert_metadata: Dict[str, Any],
     service: str,
     severity: str,
+    rca_claim: Optional[str] = None,
 ) -> None:
     """Trigger summary generation and background RCA for an incident."""
     from chat.background.summarization import generate_incident_summary
@@ -1092,6 +1098,7 @@ def _trigger_rca_pipeline(
             },
             incident_id=str(incident_id),
             rail_text=rail_text,
+            rca_claim=rca_claim,
         )
 
         # Store task ID for cancellation support
@@ -1099,10 +1106,7 @@ def _trigger_rca_pipeline(
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute(
-                        "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                        (task.id, str(incident_id)),
-                    )
+                    replace_claim_with_task(cursor, incident_id, task.id, rca_claim)
                     conn.commit()
         except Exception as exc:
             logger.warning("[INCIDENTIO] Failed to store RCA task ID for incident %s: %s", incident_id, exc)

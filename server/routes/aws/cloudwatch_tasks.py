@@ -22,6 +22,7 @@ from services.correlation import apply_correlation_outcome
 from services.incidents.repeat_investigation import (
     claim_enqueue,
     lock_existing_incident,
+    replace_claim_with_task,
     should_start_investigation,
     try_reopen_incident,
 )
@@ -326,21 +327,23 @@ def _create_incident_record(
         incident_was_inserted, existing,
         title=alarm_name, service=service, severity=severity,
     )
+    rca_claim = None
     if incident_id and start_rca and not incident_was_inserted:
-        if not try_reopen_incident(
+        rca_claim = try_reopen_incident(
             cursor, log_prefix="[CLOUDWATCH][ALARM]",
             incident_id=incident_id, user_id=user_id, org_id=org_id,
             severity=severity, title=alarm_name, service=service,
             started_at=received_at, previous_status=existing.status if existing else None,
-        ):
+        )
+        if not rca_claim:
             start_rca = False
     if incident_id and incident_was_inserted and start_rca:
-        claim_enqueue(cursor, incident_id)
+        rca_claim = claim_enqueue(cursor, incident_id)
     conn.commit()
 
     if not incident_id:
         logger.error("[CLOUDWATCH][ALARM] Failed to create incident for alarm %s", alarm_name)
-        return None, False
+        return None, False, None
 
     if incident_was_inserted:
         try:
@@ -385,14 +388,14 @@ def _create_incident_record(
             cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_alerts")
             logger.warning("[CLOUDWATCH][ALARM] Failed to record primary alert: %s", exc)
 
-    return incident_id, start_rca
+    return incident_id, start_rca, rca_claim
 
 
 def _post_incident_actions(
     user_id: str, org_id: str, incident_id, alarm_name: str,
     service: str, severity: str, state_value: str,
     alert_metadata: Dict[str, Any], payload: Dict[str, Any],
-    skip_rca: bool, cursor, conn,
+    skip_rca: bool, cursor, conn, rca_claim=None,
 ) -> None:
     """SSE broadcast, summary generation, and RCA trigger."""
     try:
@@ -457,11 +460,9 @@ def _post_incident_actions(
             },
             incident_id=str(incident_id),
             rail_text=rail_text,
+            rca_claim=rca_claim,
         )
-        cursor.execute(
-            "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-            (task.id, str(incident_id)),
-        )
+        replace_claim_with_task(cursor, incident_id, task.id, rca_claim)
         conn.commit()
         logger.info(
             "[CLOUDWATCH][ALARM] Triggered RCA for session %s (task=%s)",
@@ -540,7 +541,7 @@ def _process_alarm_in_db(
             ):
                 return
 
-            incident_id, start_rca = _create_incident_record(
+            incident_id, start_rca, rca_claim = _create_incident_record(
                 cursor, conn, user_id, org_id, alarm_db_id,
                 fields.alarm_name, service, severity, alert_metadata, received_at,
             )
@@ -571,7 +572,7 @@ def _process_alarm_in_db(
             _post_incident_actions(
                 user_id, org_id, incident_id, fields.alarm_name,
                 service, severity, fields.state_value, alert_metadata,
-                payload, skip_rca, cursor, conn,
+                payload, skip_rca, cursor, conn, rca_claim,
             )
 
 

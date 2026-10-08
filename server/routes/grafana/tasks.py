@@ -28,6 +28,7 @@ from services.incidents.repeat_investigation import (
     claim_enqueue,
     lock_existing_incident,
     metadata_labels,
+    replace_claim_with_task,
     should_start_investigation,
     try_reopen_incident,
 )
@@ -520,21 +521,23 @@ def process_grafana_alert(
                                         incident_id, exc,
                                     )
 
+                            rca_claim = None
                             if incident_id and reopen_for_rca:
-                                if not try_reopen_incident(
+                                rca_claim = try_reopen_incident(
                                     cursor, log_prefix="[GRAFANA][ALERT]",
                                     incident_id=incident_id, user_id=user_id, org_id=org_id,
                                     severity=severity, title=per_alert_title, service=service,
                                     started_at=received_at,
                                     previous_status=existing.status if existing else None,
-                                ):
-                                    # The row was not reset. Don't investigate until a later firing can retry.
+                                )
+                                # The row was not reset. Don't investigate until a later firing can retry.
+                                if not rca_claim:
                                     reopen_for_rca = False
                                     start_rca = False
 
                             # Claim before commit so a second delivery during enqueue cannot start another RCA.
                             if incident_id and incident_was_inserted and start_rca:
-                                claim_enqueue(cursor, incident_id)
+                                rca_claim = claim_enqueue(cursor, incident_id)
 
                             # Release the row lock now that the refire decision is stored.
                             conn.commit()
@@ -620,12 +623,9 @@ def process_grafana_alert(
                                                               "alert_title": per_alert_title, "alert_state": alert_state},
                                             incident_id=str(incident_id) if incident_id else None,
                                             rail_text=rail_text,
+                                            rca_claim=rca_claim,
                                         )
-                                        if incident_id:
-                                            cursor.execute(
-                                                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                                                (task.id, str(incident_id)),
-                                            )
+                                        if incident_id and replace_claim_with_task(cursor, incident_id, task.id, rca_claim):
                                             conn.commit()
                                         logger.info("[GRAFANA][ALERT] Triggered background RCA for session %s (task_id=%s)", session_id, task.id)
                                 except Exception as chat_exc:

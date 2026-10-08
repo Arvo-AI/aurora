@@ -14,6 +14,7 @@ from services.incidents.repeat_investigation import (
     metadata_labels,
     repeat_needs_investigation,
     should_start_investigation,
+    worker_owns_investigation,
 )
 
 
@@ -110,6 +111,39 @@ class TestRepeatNeedsInvestigation:
             "investigating", signature, signature,
             session_id=None, task_id="pending",
         ) is True
+
+    def test_older_claim_format_still_ages_by_its_timestamp(self):
+        signature = _sig()
+        now = datetime.now(timezone.utc)
+        claimed_at = now - timedelta(minutes=3)
+        task_id = f"pending:{claimed_at.isoformat()}"
+        assert repeat_needs_investigation(
+            "investigating", signature, signature,
+            session_id=None, task_id=task_id, now=now,
+        ) is True
+
+    def test_each_retry_gets_its_own_claim(self):
+        assert enqueue_claim() != enqueue_claim()
+
+
+class TestWorkerOwnsInvestigation:
+    def test_this_retry_owns_its_claim(self):
+        claim = enqueue_claim()
+        assert worker_owns_investigation(claim, "task-2", claim) is True
+
+    def test_a_newer_claim_is_not_adopted(self):
+        older = enqueue_claim()
+        newer = enqueue_claim()
+        assert worker_owns_investigation(newer, "task-1", older) is False
+
+    def test_the_worker_that_already_wrote_its_task_id_still_owns_it(self):
+        assert worker_owns_investigation("task-1", "task-1", enqueue_claim()) is True
+
+    def test_an_empty_task_id_is_unowned(self):
+        assert worker_owns_investigation(None, "task-1", None) is True
+
+    def test_a_worker_without_a_claim_does_not_take_one(self):
+        assert worker_owns_investigation(enqueue_claim(), "task-1", None) is False
 
 
 class TestShouldStartInvestigation:

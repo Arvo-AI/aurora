@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, NamedTuple, Optional
 
@@ -58,11 +59,15 @@ def alert_signature(title, service, severity, labels=None) -> tuple:
 
 
 def enqueue_claim(now=None) -> str:
-    """Claim value whose age survives later updates to the incident row."""
+    """Claim value whose age survives later updates to the incident row.
+
+    The token changes on every retry, so a worker started for an older claim
+    cannot adopt the new one.
+    """
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
-    return f"{RCA_ENQUEUE_CLAIM}:{current.isoformat()}"
+    return f"{RCA_ENQUEUE_CLAIM}:{uuid.uuid4().hex}:{current.isoformat()}"
 
 
 def is_enqueue_claim(task_id) -> bool:
@@ -72,11 +77,23 @@ def is_enqueue_claim(task_id) -> bool:
     )
 
 
+def _claim_timestamp(task_id):
+    """ISO timestamp stored after the claim prefix and optional generation token."""
+    body = task_id[len(RCA_ENQUEUE_CLAIM):]
+    if not body.startswith(":"):
+        return None
+    body = body[1:]
+    # pending:<32 hex>:<timestamp>. A timestamp alone is the older format.
+    if len(body) >= 33 and body[32] == ":" and all(c in "0123456789abcdef" for c in body[:32]):
+        body = body[33:]
+    return body or None
+
+
 def _claim_time(task_id, now):
     """When the claim was taken. A claim with no timestamp is already expired."""
-    _, sep, raw = task_id.partition(":")
+    raw = _claim_timestamp(task_id)
     # "pending" alone has no clock, so a crashed writer must not hold the incident forever.
-    if not sep:
+    if not raw:
         return now - _CLAIM_TTL - timedelta(seconds=1)
     try:
         claimed_at = datetime.fromisoformat(raw)
@@ -85,6 +102,17 @@ def _claim_time(task_id, now):
     if claimed_at.tzinfo is None:
         claimed_at = claimed_at.replace(tzinfo=timezone.utc)
     return claimed_at
+
+
+def worker_owns_investigation(existing_task_id, request_id, claim) -> bool:
+    """Whether this worker may link the incident and keep running.
+
+    A retry writes a new claim. The worker started for the previous claim must stop.
+    """
+    if not existing_task_id or existing_task_id == request_id:
+        return True
+    # A different claim belongs to a newer investigation.
+    return bool(claim) and existing_task_id == claim
 
 
 def repeat_needs_investigation(
@@ -157,11 +185,13 @@ def lock_existing_incident(cursor, *, org_id, source_type, source_alert_id, user
     return ExistingIncident(*row)
 
 
-def reopen_incident(cursor, *, incident_id, user_id, org_id, severity, title, service, started_at, previous_status, record_lifecycle=True) -> None:
+def reopen_incident(cursor, *, incident_id, user_id, org_id, severity, title, service, started_at, previous_status, record_lifecycle=True) -> str:
     """Hand the incident's chat to a new RCA and claim the enqueue.
 
     The caller replaces rca_celery_task_id with the Celery id after delay().
+    Returns the claim this retry owns.
     """
+    claim = enqueue_claim()
     cursor.execute(
         """
         UPDATE incidents
@@ -177,7 +207,7 @@ def reopen_incident(cursor, *, incident_id, user_id, org_id, severity, title, se
                updated_at = CURRENT_TIMESTAMP
          WHERE id = %s
         """,
-        (enqueue_claim(), severity, title, service, started_at, incident_id),
+        (claim, severity, title, service, started_at, incident_id),
     )
     # Already investigating — don't add a no-op timeline row.
     if record_lifecycle and (previous_status or "").lower() != "investigating":
@@ -189,27 +219,42 @@ def reopen_incident(cursor, *, incident_id, user_id, org_id, severity, title, se
             """,
             (incident_id, user_id, org_id, "status_changed", previous_status, "investigating"),
         )
+    return claim
 
 
-def claim_enqueue(cursor, incident_id) -> None:
+def claim_enqueue(cursor, incident_id) -> str:
     """Claim a brand-new incident before its insert commits.
 
     The Celery id is written later, after summary and session setup. Without
     this, a second delivery in that window sees no task id and starts another RCA.
     """
+    claim = enqueue_claim()
     cursor.execute(
         "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-        (enqueue_claim(), incident_id),
+        (claim, incident_id),
     )
+    return claim
 
 
-def try_reopen_incident(cursor, *, log_prefix: str, **kwargs) -> bool:
-    """Reopen inside a savepoint. False means the row was not reset."""
+def replace_claim_with_task(cursor, incident_id, task_id, claim) -> bool:
+    """Store the Celery id only if this claim is still the current one."""
+    if not claim:
+        return False
+    cursor.execute(
+        """UPDATE incidents SET rca_celery_task_id = %s
+           WHERE id = %s AND rca_celery_task_id = %s""",
+        (task_id, incident_id, claim),
+    )
+    return cursor.rowcount > 0
+
+
+def try_reopen_incident(cursor, *, log_prefix: str, **kwargs) -> Optional[str]:
+    """Reopen inside a savepoint. None means the row was not reset."""
     try:
         cursor.execute("SAVEPOINT sp_reopen_incident")
-        reopen_incident(cursor, **kwargs)
+        claim = reopen_incident(cursor, **kwargs)
         cursor.execute("RELEASE SAVEPOINT sp_reopen_incident")
-        return True
+        return claim
     except Exception as exc:
         # Leave the incident as it was and let the next firing retry the reopen.
         try:
@@ -217,4 +262,4 @@ def try_reopen_incident(cursor, *, log_prefix: str, **kwargs) -> bool:
         except Exception as rb_exc:
             logger.debug("%s Rollback to sp_reopen_incident failed: %s", log_prefix, rb_exc)
         logger.warning("%s Failed to reopen incident %s: %s", log_prefix, kwargs.get("incident_id"), exc)
-        return False
+        return None

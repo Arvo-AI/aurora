@@ -14,6 +14,7 @@ from services.correlation import apply_correlation_outcome
 from services.incidents.repeat_investigation import (
     claim_enqueue,
     lock_existing_incident,
+    replace_claim_with_task,
     should_start_investigation,
     try_reopen_incident,
 )
@@ -355,17 +356,19 @@ def process_newrelic_event(
                     incident_was_inserted, existing,
                     title=event_title, service=service, severity=severity,
                 )
+                rca_claim = None
                 if incident_id and start_rca and not incident_was_inserted:
-                    if not try_reopen_incident(
+                    rca_claim = try_reopen_incident(
                         cursor, log_prefix="[NEWRELIC]",
                         incident_id=incident_id, user_id=user_id, org_id=org_id,
                         severity=severity, title=event_title, service=service,
                         started_at=received_at,
                         previous_status=existing.status if existing else None,
-                    ):
+                    )
+                    if not rca_claim:
                         start_rca = False
                 if incident_id and incident_was_inserted and start_rca:
-                    claim_enqueue(cursor, incident_id)
+                    rca_claim = claim_enqueue(cursor, incident_id)
                 conn.commit()
 
                 if start_rca:
@@ -470,12 +473,10 @@ def process_newrelic_event(
                                 },
                                 incident_id=str(incident_id),
                                 rail_text=rail_text,
+                                rca_claim=rca_claim,
                             )
 
-                            cursor.execute(
-                                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                                (task.id, str(incident_id)),
-                            )
+                            replace_claim_with_task(cursor, incident_id, task.id, rca_claim)
                             conn.commit()
 
                             logger.info(
