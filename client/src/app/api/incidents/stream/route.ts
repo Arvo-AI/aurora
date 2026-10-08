@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
+import { relayServerSentEvents } from '@/lib/sse-relay';
 
 const API_BASE_URL = process.env.BACKEND_URL;
 
@@ -22,50 +23,7 @@ export async function GET(request: NextRequest) {
     const backendBody = response.body;
     if (!backendBody) return new Response('No stream body', { status: 502 });
 
-    const encoder = new TextEncoder();
-    const heartbeat = encoder.encode(':heartbeat\n\n');
-
-    const stream = new ReadableStream({
-      async start(ctrl) {
-        const interval = setInterval(() => {
-          try { ctrl.enqueue(heartbeat); } catch { clearInterval(interval); }
-        }, 30_000);
-
-        const reader = backendBody.getReader();
-
-        request.signal.addEventListener('abort', () => {
-          clearInterval(interval);
-          reader.cancel().catch(() => {});
-          try { ctrl.close(); } catch (_) {}
-        });
-
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            ctrl.enqueue(value);
-          }
-          ctrl.close();
-        } catch (err) {
-          if (!request.signal.aborted) ctrl.error(err);
-        } finally {
-          clearInterval(interval);
-          reader.releaseLock();
-        }
-      },
-      cancel() {
-        backendBody.cancel();
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      },
-    });
+    return relayServerSentEvents(backendBody, request.signal);
   } catch (error) {
     console.error('[api/incidents/stream] Error:', error);
     return new Response('Failed to connect to incident stream', { status: 500 });
