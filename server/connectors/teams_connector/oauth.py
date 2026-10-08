@@ -20,7 +20,7 @@ TOKEN_URL = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
 # Delegated scopes for teammate behaviour (list channels, read/post messages).
 TEAMS_SCOPES = (
     "Team.ReadBasic.All Channel.ReadBasic.All ChannelMessage.Read.All "
-    "ChannelMessage.Send Chat.Read ChatMessage.Send offline_access openid profile"
+    "Chat.Read offline_access openid profile"
 )
 
 
