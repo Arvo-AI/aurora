@@ -616,7 +616,7 @@ Controls Aurora connecting **out** to MCP servers you register, which is the opp
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MCP_ALLOW_PRIVATE_TARGETS` | `false` | Allow registering MCP servers on private, loopback or link-local addresses. Needed for self-hosted installs whose MCP servers run inside their own network. Leave `false` on multi-tenant deployments: with it on, anyone holding `connectors:write` can aim Aurora at any address it can reach, including cloud metadata endpoints. |
+| `MCP_ALLOW_PRIVATE_TARGETS` | `true` (Compose, Helm, and when unset) | Allow registering MCP servers on private, loopback or link-local addresses. Default is on for self-hosted OSS. Set `false` on multi-tenant SaaS: with it on, anyone holding `connectors:write` can aim Aurora at any address it can reach, including cloud metadata endpoints. |
 
 The redirect URI Aurora presents to OAuth providers is derived from `FRONTEND_URL` as `<FRONTEND_URL>/mcp/callback`. Credentials go to the configured secrets backend, so there is no env var for them.
 

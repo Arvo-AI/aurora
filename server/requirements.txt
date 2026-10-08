@@ -116,10 +116,9 @@ responses>=0.24
 cryptography>=46.0.7  # CWE-787 / CVE-2026-39892 OOB write fixed in 46.0.7
 
 # MCP Server (Model Context Protocol)
-# Pinned <2: mcp 2.x renames FastMCP -> MCPServer and streamablehttp_client ->
-# streamable_http_client, and swaps httpx for httpx2. Both server/mcp_server.py
-# and connectors/mcp_connector/client.py import the 1.x names.
-mcp[cli]>=1.27.0,<2
+# Stay on 1.x until server/mcp_server.py and connectors/mcp_connector/client.py
+# migrate for mcp 2.x (renamed APIs and httpx2).
+mcp[cli]==1.30.0
 
 # GitHub App authentication (JWT mint + installation tokens)
 PyGithub>=2.5  # advisories on <2.5

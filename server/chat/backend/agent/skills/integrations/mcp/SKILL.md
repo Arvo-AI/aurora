@@ -48,16 +48,5 @@ them through two tools: `mcp_list_tools` to discover, then `mcp_call_tool` to in
 6. **A failure is information.** If a tool returns a connection error, say so plainly and move
    on to another source. Do not retry the same call repeatedly — the server may be
    unreachable from Aurora's network, which is a real finding worth reporting.
-
-## Tools marked `"needs_confirmation": true`
-
-Each tool is either **allow** (runs without asking) or **confirm** (asks the user first).
-Tools that look like reads default to allow; everything else defaults to confirm, and the
-user can override either per tool.
-
-- In interactive chat, calling a confirm tool prompts the user before it runs.
-- During RCA and other background work confirm tools are **not listed and cannot be called** —
-  no human is present to approve them. Do not plan around them; investigate with allow tools.
-
-Aurora cannot determine what a third-party tool actually changes, so the default is based on
-naming. If a tool that ran without asking appears to have modified something, report it.
+7. **Background RCA is allow-only.** Confirm tools are omitted from discovery and cannot be
+   called when no user is present to approve them — plan around allow tools only.

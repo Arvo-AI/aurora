@@ -17,11 +17,12 @@ from urllib.parse import urlparse
 def allow_private_targets() -> bool:
     """Whether private/internal addresses are valid MCP targets.
 
-    False on Aurora SaaS: a tenant must not be able to aim Aurora at Arvo's
-    internal network. True for self-hosted installs, where the customer's MCP
-    servers legitimately live on private addresses inside their own cluster.
+    Defaults true so self-hosted OSS (Compose or Helm) can register MCP servers
+    on private cluster addresses without extra config. Multi-tenant SaaS must
+    set MCP_ALLOW_PRIVATE_TARGETS=false so a tenant cannot aim Aurora at internal
+    services.
     """
-    return os.getenv("MCP_ALLOW_PRIVATE_TARGETS", "false").strip().lower() == "true"
+    return os.getenv("MCP_ALLOW_PRIVATE_TARGETS", "true").strip().lower() == "true"
 
 
 def assert_allowed_target(url: str) -> None:

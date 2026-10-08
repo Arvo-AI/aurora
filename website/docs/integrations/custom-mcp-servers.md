@@ -14,7 +14,7 @@ This page is about Aurora **calling out** to your MCP servers. If you want to dr
 
 - **Remote HTTP servers only.** Aurora connects over streamable HTTP or SSE. `stdio` servers (the kind that run as a local subprocess) are not supported, because Aurora runs in a container with no access to your machine.
 - The URL must be reachable from the Aurora server, not just from your laptop.
-- By default Aurora refuses private, loopback and link-local addresses. Self-hosted installs whose MCP servers live inside their own network must set `MCP_ALLOW_PRIVATE_TARGETS=true` — see [Private network targets](#private-network-targets).
+- Private, loopback and link-local MCP URLs are allowed by default (Compose, Helm, and unset env). Multi-tenant SaaS should set `MCP_ALLOW_PRIVATE_TARGETS=false` — see [Private network targets](#private-network-targets).
 - Servers are shared **across your whole organization** — see [Scope](#scope-and-permissions).
 
 ## Connect a server
@@ -118,13 +118,9 @@ Credentials — bearer tokens, custom header values, OAuth access and refresh to
 
 Aurora resolves every MCP URL and rejects it if **any** resolved address is private, loopback or link-local. This blocks the classic SSRF path — pointing Aurora at `169.254.169.254` to read cloud instance metadata — and a hostname with both a public and a loopback A record cannot slip past it.
 
-For a self-hosted install, your MCP servers may legitimately live on private addresses inside your own cluster. Allow them with:
+Private MCP URLs are **allowed by default** (`MCP_ALLOW_PRIVATE_TARGETS=true` in Compose, Helm, and when the variable is unset). That matches most self-hosted installs, where MCP servers live on cluster-internal addresses.
 
-```bash
-MCP_ALLOW_PRIVATE_TARGETS=true
-```
-
-Leave this `false` on any deployment where you do not fully trust everyone with `connectors:write`: with it on, they can aim Aurora at anything your network can reach, including cloud metadata endpoints.
+Set `MCP_ALLOW_PRIVATE_TARGETS=false` on **multi-tenant SaaS** (or anywhere you do not fully trust everyone with `connectors:write`): with private targets allowed, they can aim Aurora at anything your network can reach, including cloud metadata endpoints.
 
 The guard also covers OAuth metadata, registration and token endpoints, not just the MCP connection itself — otherwise a hostile server could redirect Aurora's token request to an internal address.
 
@@ -134,7 +130,7 @@ The guard also covers OAuth metadata, registration and token endpoints, not just
 |---|---|
 | "Could not reach the MCP server" | The URL must be reachable from the Aurora server. Check it is not `localhost`-only or behind a network Aurora cannot route to, and that it speaks streamable HTTP or SSE. |
 | "Allow pop-ups for this site to authorize the server" | The OAuth window was blocked. Allow pop-ups for your Aurora hostname and connect again. |
-| The URL is rejected before any request is made | Aurora refuses private, loopback and link-local addresses by default. Set `MCP_ALLOW_PRIVATE_TARGETS=true` if the server is inside your own network. |
+| The URL is rejected before any request is made | Private targets are disabled (`MCP_ALLOW_PRIVATE_TARGETS=false`). Set it to `true` if the server is on a private or loopback address inside your network. |
 | Detection says the server needs a token, but it does not | The server answered `403`. Use **Set authentication manually** and pick **None**. |
 | "Dynamic client registration is not supported" | The OAuth provider will not self-register clients. Register Aurora manually with the redirect URI above, then supply the client ID in manual mode. |
 | A tool the agent should use is never called | Check its mode. A **confirm** tool is withheld from background investigations by design — set it to **Allow** if it is safe to run unattended. |

@@ -395,48 +395,55 @@ export default function McpAuthPage() {
             {/* Escape hatch: detection cannot tell "needs auth" from "forbidden"
                 when a server answers 403, and a server with broken dynamic client
                 registration needs a hand-entered client ID. */}
-            {manual ? (
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="mcp-auth">Authentication</Label>
-                  <Select
-                    value={form.authType}
-                    onValueChange={(v) =>
-                      setForm({ ...form, authType: v as McpRegisterPayload["authType"] })
-                    }
-                  >
-                    <SelectTrigger id="mcp-auth">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="oauth">OAuth (sign in)</SelectItem>
-                      <SelectItem value="bearer">Bearer token</SelectItem>
-                      <SelectItem value="header">Custom header</SelectItem>
-                      <SelectItem value="none">None</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                {form.authType === "header" && (
+            <Collapsible open={manual} onOpenChange={setManual}>
+              <CollapsibleTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full justify-between font-normal"
+                >
+                  Override authentication method
+                  <ChevronRight
+                    className={`h-4 w-4 shrink-0 transition-transform ${manual ? "rotate-90" : ""}`}
+                  />
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="pt-3">
+                <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="mcp-header">Header name</Label>
-                    <Input
-                      id="mcp-header"
-                      placeholder="X-Api-Key"
-                      value={form.headerName}
-                      onChange={(e) => setForm({ ...form, headerName: e.target.value })}
-                    />
+                    <Label htmlFor="mcp-auth">Authentication</Label>
+                    <Select
+                      value={form.authType}
+                      onValueChange={(v) =>
+                        setForm({ ...form, authType: v as McpRegisterPayload["authType"] })
+                      }
+                    >
+                      <SelectTrigger id="mcp-auth">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="oauth">OAuth (sign in)</SelectItem>
+                        <SelectItem value="bearer">Bearer token</SelectItem>
+                        <SelectItem value="header">Custom header</SelectItem>
+                        <SelectItem value="none">None</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
-                )}
-              </div>
-            ) : (
-              <button
-                type="button"
-                className="text-xs text-muted-foreground underline"
-                onClick={() => setManual(true)}
-              >
-                Set authentication manually
-              </button>
-            )}
+                  {form.authType === "header" && (
+                    <div className="space-y-2">
+                      <Label htmlFor="mcp-header">Header name</Label>
+                      <Input
+                        id="mcp-header"
+                        placeholder="X-Api-Key"
+                        value={form.headerName}
+                        onChange={(e) => setForm({ ...form, headerName: e.target.value })}
+                      />
+                    </div>
+                  )}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
 
             <p className="rounded-md border p-3 text-xs text-muted-foreground">
               Aurora cannot tell what a third-party tool changes, so tools that do not look
@@ -544,6 +551,17 @@ export default function McpAuthPage() {
                           </span>
                         </CollapsibleTrigger>
                         <CollapsibleContent className="mt-2 space-y-1.5">
+                          <div className="space-y-1 pb-2 text-xs text-muted-foreground">
+                            <p>
+                              <span className="font-medium text-foreground">Allow</span>
+                              {" — runs without asking, including during automated investigations."}
+                            </p>
+                            <p>
+                              <span className="font-medium text-foreground">Confirm</span>
+                              {" — asks you first; skipped when no one is there to answer."}
+                            </p>
+                            <p>Writes default to Confirm, reads to Allow.</p>
+                          </div>
                           {server.tools.map((tool) => (
                             <div key={tool.name} className="flex items-center gap-2">
                               <Badge
@@ -572,13 +590,6 @@ export default function McpAuthPage() {
                               </Select>
                             </div>
                           ))}
-                          <p className="pt-1 text-xs text-muted-foreground">
-                            <span className="font-medium">Allow</span> runs without asking,
-                            including during automated investigations.{" "}
-                            <span className="font-medium">Confirm</span> asks you first, so it
-                            is skipped when no one is there to answer. Writes default to
-                            Confirm, reads to Allow.
-                          </p>
                         </CollapsibleContent>
                       </Collapsible>
                     )}
