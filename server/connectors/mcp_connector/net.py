@@ -56,22 +56,19 @@ def assert_allowed_target(url: str) -> None:
             ip = ipaddress.ip_address(info[4][0])
         except ValueError:
             continue
-        # RFC1918 stays allowed when MCP_ALLOW_PRIVATE_TARGETS is on. Loopback,
-        # link-local (169.254.169.254) and the rest stay blocked either way.
-        if ip.is_private and private_ok:
-            continue
+        # Python's is_private includes loopback and link-local (169.254.169.254),
+        # so those have to be rejected before the private-address allow.
         if (
-            ip.is_private
-            or ip.is_loopback
+            ip.is_loopback
             or ip.is_link_local
             or ip.is_reserved
             or ip.is_multicast
             or ip.is_unspecified
         ):
-            if ip.is_private:
-                raise ValueError(
-                    f"{host} resolves to the non-public address {ip}. Aurora refuses "
-                    "internal targets; set MCP_ALLOW_PRIVATE_TARGETS=true on a "
-                    "self-hosted deployment to allow them."
-                )
             raise ValueError(f"{host} resolves to {ip}, which Aurora refuses.")
+        if ip.is_private and not private_ok:
+            raise ValueError(
+                f"{host} resolves to the non-public address {ip}. Aurora refuses "
+                "internal targets; set MCP_ALLOW_PRIVATE_TARGETS=true on a "
+                "self-hosted deployment to allow them."
+            )
