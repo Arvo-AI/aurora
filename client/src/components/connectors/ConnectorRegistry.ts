@@ -300,7 +300,7 @@ class ConnectorRegistry {
         id: "teams",
         name: "Microsoft Teams",
         description:
-          "Receive alerts and act as a teammate in Microsoft Teams. Connect your tenant to get @mention replies, channel routing, and incident updates.",
+          "Install the Aurora Teams app in each team, then connect your Microsoft tenant in Aurora for @mentions, routing, and incident updates.",
         iconPath: "/microsoft-teams.svg",
         iconBgColor: "bg-muted",
         category: "Communication",

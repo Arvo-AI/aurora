@@ -83,7 +83,6 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const {
     isConnecting: isConnectingOAuthHandler,
     handleSlackOAuth,
-    handleTeamsOAuth,
   } = useConnectorOAuth(connector, userId);
 
   const isConnecting = isConnectingOAuth || isConnectingOAuthHandler;
@@ -143,7 +142,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
 
     if (connector.id === "teams") {
       if (!isConnected) {
-        await handleTeamsOAuth();
+        router.push("/teams/setup");
       } else {
         router.push("/teams/manage");
       }

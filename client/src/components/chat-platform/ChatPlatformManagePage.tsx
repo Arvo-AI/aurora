@@ -21,6 +21,7 @@ import type {
   ChatPlatformStatus,
   NotificationPreferenceKey,
 } from "@/lib/chat-platform/manage-config";
+import { TEAMS_CUSTOMER_SETUP, TEAMS_SETUP_DOCS_URL } from "@/lib/chat-platform/teams-setup";
 
 type PreferenceKey = NotificationPreferenceKey;
 
@@ -560,6 +561,40 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
           </div>
         </div>
 
+        {config.id === "teams" && (
+          <Card className="mb-6 border-primary/40">
+            <CardHeader>
+              <CardTitle className="text-lg">{TEAMS_CUSTOMER_SETUP.headline}</CardTitle>
+              <CardDescription>{TEAMS_CUSTOMER_SETUP.summary}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-muted-foreground">
+              <p>
+                <span className="font-medium text-foreground">Teams app:</span>{" "}
+                {TEAMS_CUSTOMER_SETUP.installWhy}
+              </p>
+              <p>
+                <span className="font-medium text-foreground">Connect (OAuth):</span>{" "}
+                {TEAMS_CUSTOMER_SETUP.oauthWhy}
+              </p>
+              <p className="text-xs">
+                {config.copy.activateHint}{" "}
+                <a href="/teams/setup" className="text-primary hover:underline">
+                  Full setup steps
+                </a>
+                {" · "}
+                <a
+                  href={TEAMS_SETUP_DOCS_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary hover:underline"
+                >
+                  Operator docs
+                </a>
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Connection Info */}
         <Card className="mb-6">
           <CardHeader>
@@ -752,10 +787,7 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
               <>
                 {/* Active channels: description + inline edit, generate, dismiss */}
                 {activeChannels.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    {config.copy.emptyActive}
-                    below.
-                  </p>
+                  <p className="text-xs text-muted-foreground">{config.copy.emptyActive}</p>
                 ) : (
                   <div className="space-y-3">
                     <div className="flex items-center gap-2">
