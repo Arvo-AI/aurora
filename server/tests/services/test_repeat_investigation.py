@@ -9,8 +9,8 @@ from datetime import datetime, timedelta, timezone
 
 from services.incidents.repeat_investigation import (
     ExistingIncident,
-    RCA_ENQUEUE_CLAIM,
     alert_signature,
+    enqueue_claim,
     metadata_labels,
     repeat_needs_investigation,
     should_start_investigation,
@@ -37,7 +37,6 @@ def _existing(**overrides):
         metadata={"labels": {"alertname": "HighCPU", "service": "api"}, "values": {"B": 1}},
         session_id="session-1",
         task_id="celery-1",
-        updated_at=datetime.now(timezone.utc),
     )
     fields.update(overrides)
     return ExistingIncident(**fields)
@@ -93,7 +92,7 @@ class TestRepeatNeedsInvestigation:
         now = datetime.now(timezone.utc)
         assert repeat_needs_investigation(
             "investigating", signature, signature,
-            session_id=None, task_id=RCA_ENQUEUE_CLAIM, updated_at=now, now=now,
+            session_id=None, task_id=enqueue_claim(now), now=now,
         ) is False
 
     def test_stale_enqueue_claim_is_retried(self):
@@ -102,7 +101,14 @@ class TestRepeatNeedsInvestigation:
         claimed_at = now - timedelta(minutes=3)
         assert repeat_needs_investigation(
             "investigating", signature, signature,
-            session_id=None, task_id=RCA_ENQUEUE_CLAIM, updated_at=claimed_at, now=now,
+            session_id=None, task_id=enqueue_claim(claimed_at), now=now,
+        ) is True
+
+    def test_claim_without_a_timestamp_does_not_stick(self):
+        signature = _sig()
+        assert repeat_needs_investigation(
+            "investigating", signature, signature,
+            session_id=None, task_id="pending",
         ) is True
 
 

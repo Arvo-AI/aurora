@@ -567,18 +567,20 @@ def run_background_chat(
                             row = cursor.fetchone()
                             existing_task_id = row[0] if row and row[0] else None
 
-                            if existing_task_id and existing_task_id != self.request.id:
+                            from services.incidents.repeat_investigation import is_enqueue_claim
+
+                            if existing_task_id and existing_task_id != self.request.id and not is_enqueue_claim(existing_task_id):
                                 logger.warning(
                                     f"[BackgroundChat] Incident {incident_id} already has task ID {existing_task_id}, "
                                     f"but this task is {self.request.id}. This may indicate a race condition or duplicate RCA start."
                                 )
 
-                            # Only update aurora_chat_session_id when this task owns the RCA
-                            if not existing_task_id or existing_task_id == self.request.id:
+                            # An enqueue claim is not a running task. This worker replaces it.
+                            if not existing_task_id or existing_task_id == self.request.id or is_enqueue_claim(existing_task_id):
                                 cursor.execute(
                                     """UPDATE incidents 
                                        SET aurora_chat_session_id = %s, 
-                                           rca_celery_task_id = COALESCE(rca_celery_task_id, %s)
+                                           rca_celery_task_id = %s
                                        WHERE id = %s""",
                                     (session_id, self.request.id, incident_id)
                                 )

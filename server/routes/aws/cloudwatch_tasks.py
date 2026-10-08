@@ -20,6 +20,7 @@ from celery_config import celery_app
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import apply_correlation_outcome
 from services.incidents.repeat_investigation import (
+    claim_enqueue,
     lock_existing_incident,
     should_start_investigation,
     try_reopen_incident,
@@ -333,6 +334,8 @@ def _create_incident_record(
             started_at=received_at, previous_status=existing.status if existing else None,
         ):
             start_rca = False
+    if incident_id and incident_was_inserted and start_rca:
+        claim_enqueue(cursor, incident_id)
     conn.commit()
 
     if not incident_id:

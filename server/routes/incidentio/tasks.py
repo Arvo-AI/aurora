@@ -12,6 +12,7 @@ from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import apply_correlation_outcome
 from services.incidents.repeat_investigation import (
+    claim_enqueue,
     lock_existing_incident,
     should_start_investigation,
     try_reopen_incident,
@@ -787,6 +788,8 @@ def _create_and_link_incident(cursor, conn, *, user_id, org_id, alert_db_id,
             started_at=received_at, previous_status=existing.status if existing else None,
         ):
             start_rca = False
+    if incident_id and was_inserted and start_rca:
+        claim_enqueue(cursor, incident_id)
     conn.commit()
 
     if not incident_id:

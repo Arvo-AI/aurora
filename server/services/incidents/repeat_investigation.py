@@ -12,9 +12,9 @@ from typing import Any, NamedTuple, Optional
 
 logger = logging.getLogger(__name__)
 
-# Written into rca_celery_task_id while a request is enqueueing, so a second
-# delivery of the same alert cannot start a parallel investigation. Replaced
-# with the real Celery id once delay() returns.
+# Prefix written into rca_celery_task_id while a request is enqueueing.
+# The value is "pending:<utc timestamp>" so a later upsert, which always
+# touches updated_at, cannot keep a dead claim looking fresh.
 RCA_ENQUEUE_CLAIM = "pending"
 _CLAIM_TTL = timedelta(minutes=2)
 
@@ -27,7 +27,6 @@ class ExistingIncident(NamedTuple):
     metadata: Any
     session_id: Any
     task_id: Any
-    updated_at: Any
 
 
 def metadata_labels(metadata) -> dict:
@@ -58,6 +57,36 @@ def alert_signature(title, service, severity, labels=None) -> tuple:
     )
 
 
+def enqueue_claim(now=None) -> str:
+    """Claim value whose age survives later updates to the incident row."""
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return f"{RCA_ENQUEUE_CLAIM}:{current.isoformat()}"
+
+
+def is_enqueue_claim(task_id) -> bool:
+    """True when this task id is a claim, not a Celery id."""
+    return isinstance(task_id, str) and (
+        task_id == RCA_ENQUEUE_CLAIM or task_id.startswith(f"{RCA_ENQUEUE_CLAIM}:")
+    )
+
+
+def _claim_time(task_id, now):
+    """When the claim was taken. A claim with no timestamp is already expired."""
+    _, sep, raw = task_id.partition(":")
+    # "pending" alone has no clock, so a crashed writer must not hold the incident forever.
+    if not sep:
+        return now - _CLAIM_TTL - timedelta(seconds=1)
+    try:
+        claimed_at = datetime.fromisoformat(raw)
+    except ValueError:
+        return now - _CLAIM_TTL - timedelta(seconds=1)
+    if claimed_at.tzinfo is None:
+        claimed_at = claimed_at.replace(tzinfo=timezone.utc)
+    return claimed_at
+
+
 def repeat_needs_investigation(
     previous_status,
     previous_signature,
@@ -65,7 +94,6 @@ def repeat_needs_investigation(
     *,
     session_id=None,
     task_id=None,
-    updated_at=None,
     now=None,
 ) -> bool:
     """Whether this firing of an existing incident should start another RCA."""
@@ -81,14 +109,9 @@ def repeat_needs_investigation(
     if not task_id:
         return True
     # Another request holds the enqueue claim. Retry only after it goes stale.
-    if task_id == RCA_ENQUEUE_CLAIM:
-        if updated_at is None:
-            return False
+    if is_enqueue_claim(task_id):
         current = now or datetime.now(timezone.utc)
-        claimed_at = updated_at
-        if claimed_at.tzinfo is None:
-            claimed_at = claimed_at.replace(tzinfo=timezone.utc)
-        return current - claimed_at > _CLAIM_TTL
+        return current - _claim_time(task_id, current) > _CLAIM_TTL
     return False
 
 
@@ -107,7 +130,6 @@ def should_start_investigation(was_inserted, existing: Optional[ExistingIncident
         alert_signature(title, service, severity, compared_labels),
         session_id=existing.session_id,
         task_id=existing.task_id,
-        updated_at=existing.updated_at,
     )
 
 
@@ -121,7 +143,7 @@ def lock_existing_incident(cursor, *, org_id, source_type, source_alert_id, user
     cursor.execute(
         """
         SELECT status, alert_title, alert_service, severity, alert_metadata,
-               aurora_chat_session_id, rca_celery_task_id, updated_at
+               aurora_chat_session_id, rca_celery_task_id
         FROM incidents
         WHERE org_id = %s AND source_type = %s
           AND source_alert_id = %s AND user_id = %s
@@ -146,6 +168,7 @@ def reopen_incident(cursor, *, incident_id, user_id, org_id, severity, title, se
            SET status = 'investigating',
                analyzed_at = NULL,
                aurora_status = 'idle',
+               aurora_chat_session_id = NULL,
                rca_celery_task_id = %s,
                severity = %s,
                alert_title = %s,
@@ -154,7 +177,7 @@ def reopen_incident(cursor, *, incident_id, user_id, org_id, severity, title, se
                updated_at = CURRENT_TIMESTAMP
          WHERE id = %s
         """,
-        (RCA_ENQUEUE_CLAIM, severity, title, service, started_at, incident_id),
+        (enqueue_claim(), severity, title, service, started_at, incident_id),
     )
     # Already investigating — don't add a no-op timeline row.
     if record_lifecycle and (previous_status or "").lower() != "investigating":
@@ -166,6 +189,18 @@ def reopen_incident(cursor, *, incident_id, user_id, org_id, severity, title, se
             """,
             (incident_id, user_id, org_id, "status_changed", previous_status, "investigating"),
         )
+
+
+def claim_enqueue(cursor, incident_id) -> None:
+    """Claim a brand-new incident before its insert commits.
+
+    The Celery id is written later, after summary and session setup. Without
+    this, a second delivery in that window sees no task id and starts another RCA.
+    """
+    cursor.execute(
+        "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+        (enqueue_claim(), incident_id),
+    )
 
 
 def try_reopen_incident(cursor, *, log_prefix: str, **kwargs) -> bool:

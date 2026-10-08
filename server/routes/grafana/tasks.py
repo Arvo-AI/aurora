@@ -25,6 +25,7 @@ from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import apply_correlation_outcome
 from services.incidents.repeat_investigation import (
+    claim_enqueue,
     lock_existing_incident,
     metadata_labels,
     should_start_investigation,
@@ -272,10 +273,11 @@ def process_grafana_alert(
                             # If resolved webhook, find the original incident by fingerprint and attach this alert to it as a correlated event and skip RCA.
                             if _is_resolved_alert(alert_payload):
                                 original_incident_id = None
+                                matched_status = None
 
                                 if fingerprint:
                                     cursor.execute(
-                                        """SELECT id FROM incidents
+                                        """SELECT id, status FROM incidents
                                            WHERE user_id = %s AND source_type = 'grafana'
                                              AND alert_metadata::jsonb ->> 'fingerprint' = %s
                                            ORDER BY started_at DESC LIMIT 1""",
@@ -284,6 +286,7 @@ def process_grafana_alert(
                                     row = cursor.fetchone()
                                     if row:
                                         original_incident_id = row[0]
+                                        matched_status = row[1]
 
                                     # Fallback: if the firing alert was correlated to an existing
                                     # incident (via AlertCorrelator), its fingerprint lives in
@@ -317,6 +320,39 @@ def process_grafana_alert(
                                             json.dumps({"resolved_webhook": True, "fingerprint": fingerprint}),
                                         ),
                                     )
+                                    # A later firing only starts a new RCA when the incident
+                                    # is actually resolved. The correlated-alert fallback
+                                    # must not close the parent incident.
+                                    if matched_status is not None and (matched_status or "").lower() not in ("resolved", "closed"):
+                                        cursor.execute(
+                                            """UPDATE incidents
+                                               SET status = 'resolved',
+                                                   resolved_at = CURRENT_TIMESTAMP,
+                                                   updated_at = CURRENT_TIMESTAMP
+                                               WHERE id = %s""",
+                                            (original_incident_id,),
+                                        )
+                                        try:
+                                            cursor.execute("SAVEPOINT sp_resolved_lifecycle")
+                                            cursor.execute(
+                                                """INSERT INTO incident_lifecycle_events
+                                                   (incident_id, user_id, org_id, event_type, previous_value, new_value)
+                                                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                                                (original_incident_id, user_id, org_id, "resolved", matched_status, "resolved"),
+                                            )
+                                            cursor.execute("RELEASE SAVEPOINT sp_resolved_lifecycle")
+                                        except Exception as exc:
+                                            try:
+                                                cursor.execute("ROLLBACK TO SAVEPOINT sp_resolved_lifecycle")
+                                            except Exception as rb_exc:
+                                                logger.debug(
+                                                    "[GRAFANA][ALERT] Rollback to sp_resolved_lifecycle failed for incident %s: %s",
+                                                    original_incident_id, rb_exc,
+                                                )
+                                            logger.warning(
+                                                "[GRAFANA][ALERT] Failed to record resolved lifecycle for incident %s: %s",
+                                                original_incident_id, exc,
+                                            )
                                     conn.commit()
                                     logger.info(
                                         "[GRAFANA][ALERT] Correlated resolved alert (fp=%s) to incident %s",
@@ -495,6 +531,10 @@ def process_grafana_alert(
                                     # The row was not reset. Don't investigate until a later firing can retry.
                                     reopen_for_rca = False
                                     start_rca = False
+
+                            # Claim before commit so a second delivery during enqueue cannot start another RCA.
+                            if incident_id and incident_was_inserted and start_rca:
+                                claim_enqueue(cursor, incident_id)
 
                             # Release the row lock now that the refire decision is stored.
                             conn.commit()

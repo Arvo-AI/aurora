@@ -13,6 +13,7 @@ from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import apply_correlation_outcome
 from services.incidents.repeat_investigation import (
     alert_signature,
+    claim_enqueue,
     lock_existing_incident,
     repeat_needs_investigation,
     should_start_investigation,
@@ -658,7 +659,6 @@ def process_pagerduty_event(
                         alert_signature(incident_title, service_name, severity),
                         session_id=existing.session_id,
                         task_id=existing.task_id,
-                        updated_at=existing.updated_at,
                     )
                 )
                 cursor.execute(
@@ -714,6 +714,8 @@ def process_pagerduty_event(
                         record_lifecycle=False,
                     ):
                         start_rca = False
+                if incident_db_id and incident_was_inserted and start_rca:
+                    claim_enqueue(cursor, incident_db_id)
                 conn.commit()
 
                 if start_rca:
