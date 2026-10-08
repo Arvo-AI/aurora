@@ -37,6 +37,7 @@ def teams_status(user_id):
             "team_name": creds.get("team_name"),
             "user_name": me.get("displayName"),
             "connected_at": creds.get("connected_at"),
+            "incidents_channel_name": creds.get("incidents_channel_name"),
         })
     except Exception:
         logger.exception("Error checking Teams status")
@@ -99,10 +100,10 @@ def teams_callback():
             logger.warning("Failed to seed Teams memory (non-fatal)", exc_info=True)
 
         try:
-            from routes.teams.teams_channels import auto_register_channels
-            auto_register_channels(user_id)
+            from routes.teams.teams_channel_metadata import auto_register_channels_task
+            auto_register_channels_task.delay(user_id)
         except Exception:
-            logger.warning("Failed to auto-register Teams channels (non-fatal)", exc_info=True)
+            logger.warning("Failed to enqueue Teams channel registration (non-fatal)", exc_info=True)
 
         return redirect(f"{FRONTEND_URL}/teams/manage?teams_auth=success")
     except Exception:

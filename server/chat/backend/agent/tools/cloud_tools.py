@@ -1459,11 +1459,15 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         from .teams_tool import (
             get_teams_channel_history,
             get_connected_teams_channels,
+            list_teams_channels,
+            get_teams_thread_replies,
             post_teams_message,
             is_teams_connected,
         )
         if _safe_connected(is_teams_connected, "Microsoft Teams"):
             tool_functions.append((get_teams_channel_history, "get_teams_channel_history"))
+            tool_functions.append((list_teams_channels, "list_teams_channels"))
+            tool_functions.append((get_teams_thread_replies, "get_teams_thread_replies"))
             tool_functions.append((get_connected_teams_channels, "get_connected_teams_channels"))
             tool_functions.append((post_teams_message, "post_teams_message"))
             logging.info(f"Added Microsoft Teams tools for user {user_id}")
@@ -1841,6 +1845,22 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 name=name,
                 description="Fetch recent messages from a Microsoft Teams channel.",
                 args_schema=GetTeamsChannelHistoryArgs,
+            )
+        elif name == 'list_teams_channels':
+            from .teams_tool import GetConnectedTeamsChannelsArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description="Live list of Teams channels Aurora can see (names and descriptions, no LLM routing text).",
+                args_schema=GetConnectedTeamsChannelsArgs,
+            )
+        elif name == 'get_teams_thread_replies':
+            from .teams_tool import GetTeamsThreadRepliesArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description="Fetch replies under a Microsoft Teams channel message.",
+                args_schema=GetTeamsThreadRepliesArgs,
             )
         elif name == 'get_connected_teams_channels':
             from .teams_tool import GetConnectedTeamsChannelsArgs

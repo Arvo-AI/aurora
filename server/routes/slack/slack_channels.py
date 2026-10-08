@@ -808,21 +808,8 @@ def card_channel(user_id):
 
 
 def _get_card_channel_id(user_id: str) -> str | None:
-    """Resolve the current incident card channel (creds-first, org-pref fallback),
-    mirroring the notification service's resolver. Best-effort; None on error."""
-    try:
-        from utils.auth.stateless_auth import (
-            get_credentials_from_db, get_org_id_for_user, get_org_preference,
-        )
-        creds = get_credentials_from_db(user_id, "slack") or {}
-        if creds.get("incidents_channel_id"):
-            return creds["incidents_channel_id"]
-        org_id = get_org_id_for_user(user_id)
-        if org_id:
-            return get_org_preference(org_id, 'slack_incidents_channel_id') or None
-    except Exception:
-        logger.debug("Could not resolve card channel id", exc_info=True)
-    return None
+    from services.channels import prefs as channel_prefs
+    return channel_prefs.get_incidents_channel_id(user_id, "slack")
 
 
 def _is_active_channel(user_id: str, channel_id: str) -> bool:
@@ -851,61 +838,13 @@ def _is_active_channel(user_id: str, channel_id: str) -> bool:
 
 
 def _set_card_channel(user_id: str, channel_id: str) -> None:
-    """Persist the card channel to both the org preference and stored creds so
-    the notification resolver (which reads creds first) honors the UI choice."""
-    from utils.auth.stateless_auth import get_org_id_for_user, store_org_preference
-    from utils.auth.token_management import store_tokens_in_db
-    from utils.auth.stateless_auth import get_credentials_from_db
-
-    # Look up the channel name for a friendlier stored label (best-effort).
-    channel_name = ""
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[slack_channels:cardname]")
-                cur.execute(
-                    """SELECT channel_name FROM slack_channels
-                        WHERE provider = 'slack' AND channel_id = %s LIMIT 1""",
-                    (channel_id,),
-                )
-                row = cur.fetchone()
-                channel_name = (row[0] if row else "") or ""
-    except Exception:
-        logger.debug("Could not read channel name for card channel", exc_info=True)
-
-    org_id = get_org_id_for_user(user_id)
-    if org_id:
-        store_org_preference(org_id, 'slack_incidents_channel_id', channel_id)
-        store_org_preference(org_id, 'slack_incidents_channel_name', channel_name)
-
-    # Update the creds copy too — the resolver checks creds before the org pref,
-    # so leaving a stale creds value would silently override the new choice.
-    creds = get_credentials_from_db(user_id, "slack") or {}
-    creds["incidents_channel_id"] = channel_id
-    creds["incidents_channel_name"] = channel_name
-    store_tokens_in_db(user_id, creds, "slack")
+    from services.channels import prefs as channel_prefs
+    channel_prefs.set_incidents_channel(user_id, "slack", channel_id)
 
 
 def _clear_card_channel(user_id: str) -> None:
-    """Unset the incident card channel in both the org preference and creds.
-
-    Called when the card channel is deactivated: the card then has no
-    destination (the notification resolver returns None and the card is skipped)
-    until the user picks a new one. Clears both stores so the creds-first
-    resolver doesn't keep serving a stale value."""
-    from utils.auth.stateless_auth import get_org_id_for_user, store_org_preference, get_credentials_from_db
-    from utils.auth.token_management import store_tokens_in_db
-
-    org_id = get_org_id_for_user(user_id)
-    if org_id:
-        store_org_preference(org_id, 'slack_incidents_channel_id', "")
-        store_org_preference(org_id, 'slack_incidents_channel_name', "")
-
-    creds = get_credentials_from_db(user_id, "slack") or {}
-    if creds:
-        creds.pop("incidents_channel_id", None)
-        creds.pop("incidents_channel_name", None)
-        store_tokens_in_db(user_id, creds, "slack")
+    from services.channels import prefs as channel_prefs
+    channel_prefs.clear_incidents_channel(user_id, "slack")
 
 
 @slack_channels_bp.route("/channels/metadata/generate", methods=["POST"])

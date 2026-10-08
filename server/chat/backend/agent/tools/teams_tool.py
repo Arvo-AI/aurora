@@ -152,6 +152,83 @@ def post_teams_message(
     })
 
 
+def list_teams_channels(user_id: str | None = None, **kwargs) -> str:
+    if not user_id:
+        return json.dumps({"error": _ERR_NO_USER})
+    client = get_teams_client_for_user(user_id)
+    if not client:
+        return json.dumps({"error": _ERR_NOT_CONNECTED})
+    try:
+        from services.channels import prefs as channel_prefs
+
+        hidden = channel_prefs.get_hidden_channel_ids(user_id, _PROVIDER)
+        result = []
+        for team in client.list_joined_teams():
+            team_id = team.get("id")
+            team_name = team.get("displayName") or "team"
+            if not team_id:
+                continue
+            for ch in client.list_team_channels(team_id):
+                cid = ch.get("id")
+                if not cid or cid in hidden:
+                    continue
+                result.append({
+                    "id": cid,
+                    "team_id": team_id,
+                    "name": ch.get("displayName"),
+                    "description": ch.get("description") or "",
+                    "team_name": team_name,
+                    "is_private": ch.get("membershipType") == "private",
+                })
+                if len(result) >= 100:
+                    break
+            if len(result) >= 100:
+                break
+        return json.dumps({"status": "ok", "channels": result, "total": len(result)})
+    except TeamsAPIError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        return json.dumps({"error": f"Failed to list Teams channels: {e}"})
+
+
+class GetTeamsThreadRepliesArgs(BaseModel):
+    team_id: str = Field(description="Microsoft Teams team ID (GUID)")
+    channel_id: str = Field(description="Teams channel ID")
+    message_id: str = Field(description="Parent message ID")
+    limit: int = Field(default=50, description="Maximum replies (1-50)")
+
+
+def get_teams_thread_replies(
+    team_id: str,
+    channel_id: str,
+    message_id: str,
+    limit: int = 50,
+    user_id: str | None = None,
+    **kwargs,
+) -> str:
+    if not user_id:
+        return json.dumps({"error": _ERR_NO_USER})
+    client = get_teams_client_for_user(user_id)
+    if not client:
+        return json.dumps({"error": _ERR_NOT_CONNECTED})
+    limit = max(1, min(limit, 50))
+    try:
+        replies = client.list_message_replies(team_id, channel_id, message_id, limit=limit)
+        formatted = [_format_message(m) for m in replies]
+        return json.dumps({
+            "status": "ok",
+            "team_id": team_id,
+            "channel_id": channel_id,
+            "message_id": message_id,
+            "replies": formatted,
+            "count": len(formatted),
+        })
+    except TeamsAPIError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        return json.dumps({"error": f"Failed to fetch thread replies: {e}"})
+
+
 def get_connected_teams_channels(user_id: str | None = None, **kwargs) -> str:
     if not user_id:
         return json.dumps({"error": _ERR_NO_USER})

@@ -9,7 +9,9 @@ connection_check:
   function: is_teams_connected
 tools:
   - get_connected_teams_channels
+  - list_teams_channels
   - get_teams_channel_history
+  - get_teams_thread_replies
   - post_teams_message
 rca_priority: 45
 ---
@@ -23,7 +25,9 @@ channels, read history, and post conclusions when the org's **Microsoft Teams** 
 ## Tools
 
 - `get_connected_teams_channels` — channels Aurora may post to (with descriptions)
+- `list_teams_channels` — live channel list (names/descriptions, no routing text)
 - `get_teams_channel_history` — recent messages in a channel (requires `team_id`, `channel_id`)
+- `get_teams_thread_replies` — replies under a message
 - `post_teams_message` — post or thread a reply (`reply_to_id` for follow-ups)
 
 ## RCA workflow (read-only)

@@ -426,6 +426,17 @@ def notify_investigation_started(user_id: str, incident_id: str) -> None:
             except Exception:
                 logger.exception("[Dispatcher] Google Chat started notification failed")
 
+        # --- Microsoft Teams ---
+        teams_enabled = bool(get_org_preference(org_id, 'teams_investigation_start_notifications', default=True))
+        if teams_enabled and _has_teams_connected(user_id):
+            try:
+                from utils.notifications.teams_notification_service import (
+                    send_teams_investigation_started_notification,
+                )
+                send_teams_investigation_started_notification(user_id, incident_data)
+            except Exception:
+                logger.exception("[Dispatcher] Teams started notification failed")
+
     except Exception:
         logger.exception("[Dispatcher] Error in notify_investigation_started")
 
@@ -474,6 +485,19 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
                 )
             except Exception:
                 logger.exception("[Dispatcher] Slack completed notification failed")
+
+        # --- Microsoft Teams ---
+        teams_card_enabled = bool(get_org_preference(org_id, 'teams_investigation_complete_notifications', default=True))
+        if not refresh_only and _has_teams_connected(user_id):
+            try:
+                from utils.notifications.teams_notification_service import (
+                    send_teams_investigation_completed_notification,
+                )
+                send_teams_investigation_completed_notification(
+                    user_id, incident_data, post_primary_card=teams_card_enabled,
+                )
+            except Exception:
+                logger.exception("[Dispatcher] Teams completed notification failed")
 
         # --- Google Chat --- (edited in place: a refresh needs an existing card)
         google_chat_enabled = bool(get_org_preference(org_id, 'google_chat_investigation_notifications', default=True))
@@ -547,6 +571,16 @@ def notify_investigation_failed(user_id: str, incident_id: str, error_message: O
             except Exception:
                 logger.exception("[Dispatcher] Slack failed notification failed")
 
+        teams_enabled = bool(get_org_preference(org_id, 'teams_investigation_complete_notifications', default=True))
+        if teams_enabled and _has_teams_connected(user_id):
+            try:
+                from utils.notifications.teams_notification_service import (
+                    send_teams_investigation_failed_notification,
+                )
+                send_teams_investigation_failed_notification(user_id, incident_data, error_message=error_message)
+            except Exception:
+                logger.exception("[Dispatcher] Teams failed notification failed")
+
     except Exception:
         logger.exception("[Dispatcher] Error in notify_investigation_failed")
 
@@ -578,6 +612,16 @@ def notify_action_started(user_id: str, trigger_metadata: Dict[str, Any], sessio
                     _store_start_message_info(trigger_metadata['run_id'], msg_info, user_id)
             except Exception:
                 logger.exception("[Dispatcher] Slack action started notification failed")
+
+        teams_enabled = bool(get_org_preference(org_id, 'teams_action_start_notifications', default=True))
+        if teams_enabled and _has_teams_connected(user_id):
+            try:
+                from utils.notifications.teams_notification_service import (
+                    send_teams_action_started_notification,
+                )
+                send_teams_action_started_notification(user_id, action_data)
+            except Exception:
+                logger.exception("[Dispatcher] Teams action started notification failed")
 
     except Exception:
         logger.exception("[Dispatcher] Error in notify_action_started")
@@ -616,6 +660,16 @@ def notify_action_completed(user_id: str, trigger_metadata: Dict[str, Any], sess
                 send_slack_action_completed_notification(user_id, action_data)
             except Exception:
                 logger.exception("[Dispatcher] Slack action completed notification failed")
+
+        teams_enabled = bool(get_org_preference(org_id, 'teams_action_complete_notifications', default=True))
+        if teams_enabled and _has_teams_connected(user_id):
+            try:
+                from utils.notifications.teams_notification_service import (
+                    send_teams_action_completed_notification,
+                )
+                send_teams_action_completed_notification(user_id, action_data)
+            except Exception:
+                logger.exception("[Dispatcher] Teams action completed notification failed")
 
     except Exception:
         logger.exception("[Dispatcher] Error in notify_action_completed")

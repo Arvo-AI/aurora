@@ -203,6 +203,10 @@ celery_app.conf.update(
             'task': 'routes.slack.slack_channel_metadata.backfill_channel_descriptions',
             'schedule': BACKFILL_INTERVAL_SECONDS,  # Every 15 minutes
         },
+        'backfill-teams-channel-descriptions': {
+            'task': 'routes.teams.teams_channel_metadata.backfill_channel_descriptions',
+            'schedule': BACKFILL_INTERVAL_SECONDS,
+        },
     },
     beat_schedule_filename='celerybeat-schedule',
     worker_hijack_root_logger=False

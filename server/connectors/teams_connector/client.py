@@ -55,6 +55,23 @@ class TeamsClient:
         data = self._request("GET", f"/teams/{team_id}/channels")
         return data.get("value") or []
 
+    def get_channel(self, team_id: str, channel_id: str) -> Dict[str, Any]:
+        return self._request("GET", f"/teams/{team_id}/channels/{channel_id}")
+
+    def list_message_replies(
+        self,
+        team_id: str,
+        channel_id: str,
+        message_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        data = self._request(
+            "GET",
+            f"/teams/{team_id}/channels/{channel_id}/messages/{message_id}/replies",
+            params={"$top": max(1, min(limit, 50))},
+        )
+        return data.get("value") or []
+
     def list_channel_messages(self, team_id: str, channel_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         data = self._request(
             "GET",
@@ -69,8 +86,11 @@ class TeamsClient:
         channel_id: str,
         text: str,
         reply_to_id: Optional[str] = None,
+        *,
+        content_type: str = "text",
     ) -> Dict[str, Any]:
-        body: Dict[str, Any] = {"body": {"contentType": "text", "content": text}}
+        ctype = "html" if content_type == "html" else "text"
+        body: Dict[str, Any] = {"body": {"contentType": ctype, "content": text}}
         if reply_to_id:
             return self._request(
                 "POST",
