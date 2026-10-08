@@ -29,7 +29,6 @@ as the connecting user.
    - `ChannelMessage.Read.All`
    - `Chat.Read`
    - `openid`, `profile`, `offline_access`
-   - Do **not** add `ChannelMessage.Send` or `ChatMessage.Send` — outbound messages use the **bot** (step 2), not delegated Graph send.
 5. **Grant admin consent** for the organization (recommended so connect is one sign-in, not a long consent screen every time).
 
 Copy **Application (client) ID** and the **client secret**.
