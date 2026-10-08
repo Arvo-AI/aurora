@@ -582,6 +582,10 @@ def _provision_and_handoff(identity: dict, install_data: dict):
         except Exception:
             logger.warning("[GITHUB-SIGNUP] audit event failed", exc_info=True)
 
+        from utils.hooks import get_hook
+
+        get_hook("after_user_created")(user_id, org_id, identity["email"], "github", True)
+
     if org_id:
         try:
             from utils.auth.tool_registry import seed_org_tool_permissions

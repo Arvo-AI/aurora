@@ -209,6 +209,7 @@ def create_user(user_id):
 
         # Assign the new user's role in Casbin (RBAC policy engine)
         new_user_id = row[0]
+        get_hook("after_user_created")(new_user_id, org_id, email, "admin", False)
         try:
             from utils.auth.enforcer import assign_role_to_user
             if org_id:

@@ -46,6 +46,11 @@ def _default_report_usage(org_id: Optional[str], usage_usd: float, metadata: dic
     pass
 
 
+def _default_after_user_created(user_id: str, org_id: Optional[str], email: str, method: str, new_org: bool) -> None:
+    """Called once a new user row is committed. method is 'password', 'github' or 'admin'."""
+    pass
+
+
 def _default_verify_entitlement(org_id: Optional[str]) -> Tuple[bool, Optional[str]]:
     """Verify the org has a valid marketplace entitlement. Return (False, message) to block."""
     return True, None
@@ -58,6 +63,7 @@ _HOOK_REGISTRY = {
     "before_add_member": _default_before_add_member,
     "report_usage": _default_report_usage,
     "verify_entitlement": _default_verify_entitlement,
+    "after_user_created": _default_after_user_created,
 }
 
 
