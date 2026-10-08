@@ -26,8 +26,10 @@ from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import apply_correlation_outcome
 from services.incidents.repeat_investigation import (
     claim_enqueue,
+    latest_occurrence,
     lock_existing_incident,
     metadata_labels,
+    metadata_occurrence,
     replace_claim_with_task,
     should_start_investigation,
     try_reopen_incident,
@@ -418,7 +420,7 @@ def process_grafana_alert(
                             if fingerprint:
                                 alert_metadata["fingerprint"] = fingerprint
                             # Same for every re-send of one firing episode, new each time it fires again.
-                            per_alert_occurrence = single_alert.get("startsAt")
+                            per_alert_occurrence = starts_at
                             if per_alert_occurrence:
                                 alert_metadata["startsAt"] = per_alert_occurrence
                             per_alert_rule_uid = single_alert.get("ruleUID") or single_alert.get("ruleUid")
@@ -469,6 +471,13 @@ def process_grafana_alert(
                                 cursor, org_id=org_id, source_type="grafana",
                                 source_alert_id=per_alert_source_id, user_id=user_id,
                             )
+                            # A delayed re-send of an older episode must not overwrite the newer one.
+                            if existing:
+                                stored_occurrence = latest_occurrence(
+                                    metadata_occurrence(existing.metadata), per_alert_occurrence,
+                                )
+                                if stored_occurrence:
+                                    alert_metadata["startsAt"] = stored_occurrence
 
                             # `xmax = 0` is true only for freshly inserted rows (not ON CONFLICT
                             # updates), so we use it to gate the lifecycle 'created' write.

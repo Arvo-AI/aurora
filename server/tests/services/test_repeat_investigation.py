@@ -11,6 +11,8 @@ from services.incidents.repeat_investigation import (
     ExistingIncident,
     alert_signature,
     enqueue_claim,
+    is_later_occurrence,
+    latest_occurrence,
     metadata_labels,
     repeat_needs_investigation,
     should_start_investigation,
@@ -191,3 +193,18 @@ class TestFiringEpisodes:
     def test_resolved_incident_still_investigates_on_the_same_episode(self):
         existing = self._analyzed()._replace(status="resolved")
         assert self._decide(existing, "2026-01-01T10:00:00Z") is True
+
+    def test_delayed_resend_of_an_older_episode_is_muted_and_not_stored(self):
+        episode_a, episode_b = "2026-01-01T10:00:00Z", "2026-01-01T11:00:00Z"
+        stored_b = self._analyzed(starts_at=episode_b)
+        assert self._decide(stored_b, episode_a) is False
+        kept = latest_occurrence(episode_b, episode_a)
+        assert kept == episode_b
+        assert self._decide(self._analyzed(starts_at=kept), episode_b) is False
+
+    def test_offsets_are_compared_as_times_not_text(self):
+        assert is_later_occurrence("2026-01-01T06:00:00-05:00", "2026-01-01T10:59:00Z") is True
+        assert is_later_occurrence("2026-01-01T11:00:00+00:00", "2026-01-01T11:00:00Z") is False
+
+    def test_unreadable_times_that_differ_are_not_muted(self):
+        assert is_later_occurrence("not-a-time", "also-not-a-time") is True

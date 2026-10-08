@@ -55,6 +55,32 @@ def metadata_occurrence(metadata) -> Optional[str]:
     return metadata.get("startsAt") or None
 
 
+def _parse_occurrence(value) -> Optional[datetime]:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def is_later_occurrence(incoming, previous) -> bool:
+    """Whether incoming is a newer firing episode than previous."""
+    if not incoming or not previous:
+        return False
+    incoming_at, previous_at = _parse_occurrence(incoming), _parse_occurrence(previous)
+    # Unreadable times can't be ordered. Treat a different value as new rather than mute it.
+    if incoming_at is None or previous_at is None:
+        return incoming != previous
+    return incoming_at > previous_at
+
+
+def latest_occurrence(previous, incoming) -> Optional[str]:
+    """The episode to store. A delayed re-send of an older episode must not replace a newer one."""
+    if not previous:
+        return incoming
+    return incoming if is_later_occurrence(incoming, previous) else previous
+
+
 def alert_signature(title, service, severity, labels=None) -> tuple:
     """Stable problem identity for one alert."""
     if not isinstance(labels, dict):
@@ -169,8 +195,7 @@ def should_start_investigation(was_inserted, existing: Optional[ExistingIncident
     previous_labels = metadata_labels(existing.metadata) if labels is not None else {}
     compared_labels = labels if labels is not None else {}
     # Rows stored before episodes were recorded have nothing to compare against.
-    previous_occurrence = metadata_occurrence(existing.metadata)
-    new_occurrence = bool(occurrence and previous_occurrence and occurrence != previous_occurrence)
+    new_occurrence = is_later_occurrence(occurrence, metadata_occurrence(existing.metadata))
     return repeat_needs_investigation(
         existing.status,
         alert_signature(existing.title, existing.service, existing.severity, previous_labels),
