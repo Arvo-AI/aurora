@@ -124,8 +124,10 @@ export const teamsManageConfig: ChatPlatformManageConfig = {
   MemoryCard: TeamsMemoryCard,
   service: teamsService,
   copy: {
-    activateHint: "Add the Aurora app to team channels, or activate channels below.",
-    emptyActive: "No active channels yet. Add Aurora to channels in Teams, or activate channels from the list below.",
+    activateHint:
+      "Install the Aurora Teams app in your team, @mention the bot in channels, then activate channels below.",
+    emptyActive:
+      "No active channels yet. Install the Teams app, @mention Aurora in a channel, or activate channels from the list below.",
     routingNote: "that routing is always on and tuned in the Teams memory",
     disconnectBlurb: "Disconnect Microsoft Teams from Aurora. You will stop receiving all Teams notifications.",
   },

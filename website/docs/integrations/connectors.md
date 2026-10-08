@@ -812,6 +812,63 @@ SLACK_APP_TOKEN=          # xapp-... app-level token
 
 ---
 
+### Microsoft Teams {#microsoft-teams}
+
+Hybrid authentication (similar to [Google Chat](#google-chat)): **Entra OAuth**
+connects Aurora for Graph channel discovery and history. **Bot Framework** handles
+@mentions and **all outbound messages** as the Teams app ("Aurora"), not as the
+user who clicked Connect.
+
+#### 1. Register an Entra application
+
+1. [Azure Portal](https://portal.azure.com) → **Microsoft Entra ID** → **App registrations** → **New registration** (name e.g. `Aurora`).
+2. **Authentication** → **Web** redirect URI:
+   - Production: `https://your-api.example.com/teams/callback`
+   - Local dev: use an HTTPS tunnel (`NGROK_URL` in `.env`, same idea as Slack) — Entra will not accept bare `localhost`.
+3. **Certificates & secrets** → client secret.
+4. **API permissions** → **Microsoft Graph** → **Delegated** — match `TEAMS_SCOPES` in `server/connectors/teams_connector/oauth.py` (`Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `Chat.Read`, `openid`, `profile`, `offline_access`, etc.).
+5. **Grant admin consent** for the tenant (recommended).
+
+#### 2. Azure Bot + Teams channel
+
+1. Create an **Azure Bot** linked to the same app registration.
+2. **Messaging endpoint**: `https://your-api.example.com/teams/messages` (public HTTPS; Microsoft must reach it).
+3. Enable the **Microsoft Teams** channel on the bot.
+
+#### 3. Teams app install
+
+Publish or sideload a Teams app manifest for this bot and **install it in teams** (and channels) where Aurora should post. Users **@mention the bot** by its manifest display name (e.g. `@Aurora`), like Slack. Channel conversations require an @mention; direct chat to the bot does not.
+
+#### 4. Configure environment
+
+```bash
+TEAMS_CLIENT_ID=your-entra-client-id
+TEAMS_CLIENT_SECRET=your-client-secret
+TEAMS_APP_ID=your-bot-app-id          # usually same as client id
+TEAMS_TENANT_ID=common                # or a specific tenant id
+
+# Local OAuth redirect via tunnel (optional)
+NGROK_URL=https://your-tunnel.example.com
+```
+
+Operator setup (Entra, Azure Bot, manifest, troubleshooting): `server/connectors/teams_connector/README.md` in the Aurora repo.
+
+#### 5. Use Aurora
+
+1. **Connectors** → **Microsoft Teams** → Connect (Entra sign-in).
+2. **Teams → Manage** — refresh/activate channels, set the **incident card** channel, configure **Teams memory** and notification toggles.
+
+#### Troubleshooting
+
+| Issue | What to check |
+|-------|----------------|
+| OAuth redirect error | Entra redirect URI must match `{backend}/teams/callback`; use `NGROK_URL` for local dev |
+| No reply to @mention | Messaging endpoint reachable, `TEAMS_APP_ID` + secret match bot, Teams app installed |
+| Incident/routing posts fail | Bot installed in target team/channel; not fixable by OAuth alone |
+| Unknown tenant on mention | An admin must Connect Teams in Aurora for that tenant first |
+
+---
+
 ### Google Chat
 
 Hybrid authentication for Google Chat spaces. User OAuth is used during setup
