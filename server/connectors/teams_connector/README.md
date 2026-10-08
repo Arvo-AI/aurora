@@ -16,7 +16,8 @@
    - Redirect URI (local with tunnel): `https://your-tunnel.example.com/teams/callback`
    - Redirect URI (direct backend): `https://your-api.example.com/teams/callback`
    - Microsoft does not allow bare `localhost` for production; use a tunnel for local dev ([ngrok](https://ngrok.com), etc.) and set `NGROK_URL` in `.env` (same pattern as Slack).
-3. **Overview** (same app registration) → copy **Application (client) ID** → set `TEAMS_CLIENT_ID` in `.env`.
+3. **Overview** (same app registration) → copy **Application (client) ID** → set `TEAMS_CLIENT_ID` in `.env`.  
+   Also copy **Directory (tenant) ID** from **Microsoft Entra ID** → **Overview** → **Tenant ID** (you need it when creating the Azure Bot in step 2).
 4. **Certificates & secrets** → **New client secret** → copy the **Value** column **immediately** (Azure shows it only once) → set `TEAMS_CLIENT_SECRET` in `.env`.
 5. **API permissions** → **Microsoft Graph** → **Delegated permissions** — add scopes that match `TEAMS_SCOPES` in `oauth.py`:
    - `Team.ReadBasic.All`
@@ -45,6 +46,8 @@ This is a **separate Azure resource** from the Entra app in step 1. If you only 
    - **Microsoft App ID** — choose **Single tenant** (or match how you registered the app in step 1).
    - **Creation type** — **Use existing app registration**.
    - **App ID** — paste the **Application (client) ID** from step 1 (same value as `TEAMS_CLIENT_ID`).
+   - **App tenant ID** — paste your org’s **Tenant ID** GUID from **Microsoft Entra ID** → **Overview** → **Tenant ID** (Directory ID). This is the Entra directory where the app registration lives — **not** the literal word `common`.  
+     Do **not** confuse this with `TEAMS_TENANT_ID` in `.env`: the Azure form always wants your real tenant GUID; `TEAMS_TENANT_ID=common` is a separate OAuth sign-in setting (see §3).
 3. **Review + create** → wait until deployment finishes → **Go to resource**.
 
 You should now be on the **Azure Bot** blade (resource type “Azure Bot” / “Bot Services”), not the Entra **App registrations** screen.
@@ -94,7 +97,7 @@ TEAMS_APP_ID=
 TEAMS_TENANT_ID=common
 ```
 
-**`TEAMS_TENANT_ID`** controls which Microsoft sign-in endpoint Aurora uses when someone clicks **Connect** in the UI. It does **not** replace the tenant stored on the connection after OAuth — that comes from whoever signed in.
+**`TEAMS_TENANT_ID`** (in `.env` only) controls which Microsoft **sign-in** endpoint Aurora uses when someone clicks **Connect**. It is **not** the **App tenant ID** field on the Azure Bot create form (that form always uses your Entra **Tenant ID** GUID). It also does **not** replace the tenant stored on the connection after OAuth — that comes from whoever signed in.
 
 | Value | What it means | Typical use |
 |-------|----------------|-------------|

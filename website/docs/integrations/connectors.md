@@ -834,7 +834,7 @@ user who clicked Connect.
 
 #### 2. Azure Bot + Teams channel
 
-Create a separate **Azure Bot** resource (not the Entra app alone): **Create a resource** → **Azure Bot** → **Creation type: Use existing app registration** → paste the step‑1 **Application (client) ID** → create → **Go to resource**.
+Create a separate **Azure Bot** resource (not the Entra app alone): **Create a resource** → **Azure Bot** → **Creation type: Use existing app registration** → **App ID** = step‑1 **Application (client) ID** → **App tenant ID** = **Microsoft Entra ID** → **Overview** → **Tenant ID** (Directory GUID, not `common`) → create → **Go to resource**.
 
 On that **Azure Bot** resource (search the bot name if needed):
 
