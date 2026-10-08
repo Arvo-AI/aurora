@@ -395,7 +395,20 @@ export default function McpAuthPage() {
             {/* Escape hatch: detection cannot tell "needs auth" from "forbidden"
                 when a server answers 403, and a server with broken dynamic client
                 registration needs a hand-entered client ID. */}
-            <Collapsible open={manual} onOpenChange={setManual}>
+            <Collapsible
+              open={manual}
+              onOpenChange={(open) => {
+                setManual(open);
+                if (!open) {
+                  setForm((current) => ({
+                    ...current,
+                    headerName: "",
+                    authType:
+                      detected === "oauth" ? "oauth" : detected === "token" ? "bearer" : "none",
+                  }));
+                }
+              }}
+            >
               <CollapsibleTrigger asChild>
                 <Button
                   type="button"

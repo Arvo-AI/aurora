@@ -116,11 +116,11 @@ Credentials — bearer tokens, custom header values, OAuth access and refresh to
 
 ## Private network targets
 
-Aurora resolves every MCP URL and rejects it if **any** resolved address is private, loopback or link-local. This blocks the classic SSRF path — pointing Aurora at `169.254.169.254` to read cloud instance metadata — and a hostname with both a public and a loopback A record cannot slip past it.
+Aurora resolves every MCP URL. Private addresses are rejected only when `MCP_ALLOW_PRIVATE_TARGETS` is `false`. Loopback and link-local addresses, including `169.254.169.254`, are rejected either way, so a hostname that also has a loopback record cannot slip through.
 
 Private MCP URLs are **allowed by default** (`MCP_ALLOW_PRIVATE_TARGETS=true` in Compose, Helm, and when the variable is unset). That matches most self-hosted installs, where MCP servers live on cluster-internal addresses.
 
-Set `MCP_ALLOW_PRIVATE_TARGETS=false` on **multi-tenant SaaS** (or anywhere you do not fully trust everyone with `connectors:write`): with private targets allowed, they can aim Aurora at anything your network can reach, including cloud metadata endpoints.
+Set `MCP_ALLOW_PRIVATE_TARGETS=false` on **multi-tenant SaaS** (or anywhere you do not fully trust everyone with `connectors:write`): with private targets allowed, they can aim Aurora at private addresses your network can reach. Loopback and link-local stay blocked.
 
 The guard also covers OAuth metadata, registration and token endpoints, not just the MCP connection itself — otherwise a hostile server could redirect Aurora's token request to an internal address.
 
@@ -130,7 +130,7 @@ The guard also covers OAuth metadata, registration and token endpoints, not just
 |---|---|
 | "Could not reach the MCP server" | The URL must be reachable from the Aurora server. Check it is not `localhost`-only or behind a network Aurora cannot route to, and that it speaks streamable HTTP or SSE. |
 | "Allow pop-ups for this site to authorize the server" | The OAuth window was blocked. Allow pop-ups for your Aurora hostname and connect again. |
-| The URL is rejected before any request is made | Private targets are disabled (`MCP_ALLOW_PRIVATE_TARGETS=false`). Set it to `true` if the server is on a private or loopback address inside your network. |
+| The URL is rejected as a private address | `MCP_ALLOW_PRIVATE_TARGETS` is `false`. Set it to `true` for a server on a private network address. A non-http URL, a missing hostname, a DNS failure, or a loopback/link-local address is a different error, and this setting does not fix those. |
 | Detection says the server needs a token, but it does not | The server answered `403`. Use **Set authentication manually** and pick **None**. |
 | "Dynamic client registration is not supported" | The OAuth provider will not self-register clients. Register Aurora manually with the redirect URI above, then supply the client ID in manual mode. |
 | A tool the agent should use is never called | Check its mode. A **confirm** tool is withheld from background investigations by design — set it to **Allow** if it is safe to run unattended. |

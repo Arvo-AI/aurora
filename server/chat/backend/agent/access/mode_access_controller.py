@@ -154,6 +154,11 @@ class ModeAccessController:
         if name in cls.SAFE_GITHUB_MCP_TOOLS:
             return True
 
+        # Customer MCP is two dispatchers. Per-tool writes are refused in
+        # custom_mcp_tools._visible, which has the tool metadata this check does not.
+        if name in ("mcp_list_tools", "mcp_call_tool"):
+            return True
+
         if any(name.startswith(prefix) for prefix in cls._POLICY.blocked_tool_prefixes):
             return False
 

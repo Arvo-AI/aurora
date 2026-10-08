@@ -90,7 +90,7 @@ async def discover(server_url: str) -> AuthServer:
     origin = f"{parsed.scheme}://{parsed.netloc}"
     path = parsed.path.rstrip("/")
 
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, follow_redirects=False) as client:
         # Resource metadata is published per-resource (…/oauth-protected-resource/mcp)
         # and also bare, depending on the server.
         issuer = origin
@@ -120,13 +120,21 @@ async def discover(server_url: str) -> AuthServer:
         ):
             meta = await _get_json(client, candidate)
             if meta and meta.get("authorization_endpoint") and meta.get("token_endpoint"):
-                return AuthServer(
+                auth_server = AuthServer(
                     issuer=meta.get("issuer") or issuer,
                     authorization_endpoint=meta["authorization_endpoint"],
                     token_endpoint=meta["token_endpoint"],
                     registration_endpoint=meta.get("registration_endpoint"),
                     scopes_supported=tuple(meta.get("scopes_supported") or ()),
                 )
+                for endpoint in (
+                    auth_server.authorization_endpoint,
+                    auth_server.token_endpoint,
+                    auth_server.registration_endpoint,
+                ):
+                    if endpoint:
+                        assert_allowed_target(endpoint)
+                return auth_server
 
     raise OAuthDiscoveryError(
         "This server did not advertise OAuth metadata. If it needs a token, "
@@ -160,7 +168,10 @@ async def register_client(auth_server: AuthServer, redirect_uri: str) -> Dict[st
         raise OAuthDiscoveryError(
             f"Client registration was rejected (HTTP {response.status_code})."
         )
-    body = response.json()
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise OAuthDiscoveryError("Client registration returned a non-JSON body.") from exc
     client_id = body.get("client_id")
     if not client_id:
         raise OAuthDiscoveryError("Client registration returned no client_id.")
@@ -222,7 +233,10 @@ async def _token_request(token_endpoint: str, form: Dict[str, str]) -> Dict[str,
         raise OAuthDiscoveryError(
             f"Token endpoint returned HTTP {response.status_code}."
         )
-    body = response.json()
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise OAuthDiscoveryError("Token endpoint returned a non-JSON body.") from exc
     if not body.get("access_token"):
         raise OAuthDiscoveryError("Token endpoint returned no access_token.")
     return body

@@ -43,6 +43,7 @@ from connectors.mcp_connector.store import (
     set_tool_mode,
     slugify_label,
     upsert_server,
+    TOOL_MODES,
 )
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
 from utils.auth.rbac_decorators import require_permission
@@ -142,7 +143,8 @@ def _register(user_id: str, data: Dict[str, Any], label: str) -> Tuple[Any, int]
     if transport not in TRANSPORTS:
         transport = "auto"
 
-    # ``_auth`` is set by the OAuth flow, which has already built the blob.
+    # ``_auth`` is set only by oauth_complete and refresh, which pass a dict they
+    # built. create_server strips it so a client cannot inject a token blob.
     auth = data.get("_auth")
     if not auth:
         auth, auth_error = _parse_auth(data)
@@ -151,7 +153,12 @@ def _register(user_id: str, data: Dict[str, Any], label: str) -> Tuple[Any, int]
 
     # Carried through rather than rebuilt: a refresh re-probes the server, and
     # dropping these would silently reset every per-tool override the user set.
-    tool_modes = data.get("toolModes") or data.get("tool_modes") or {}
+    raw_modes = data.get("toolModes") or data.get("tool_modes") or {}
+    tool_modes = (
+        {k: v for k, v in raw_modes.items() if isinstance(k, str) and v in TOOL_MODES}
+        if isinstance(raw_modes, dict)
+        else {}
+    )
 
     # The probe can refresh an OAuth token; keep whichever blob we end up with
     # so the stored credentials are the ones that actually worked.
@@ -384,6 +391,7 @@ def create_server(user_id):
         return jsonify({"error": "label is required (letters, digits and dashes)"}), 400
     if find_server(user_id, label):
         return jsonify({"error": f"A server labelled '{label}' already exists"}), 409
+    data.pop("_auth", None)
     return _register(user_id, data, label)
 
 

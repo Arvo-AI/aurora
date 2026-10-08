@@ -45,9 +45,7 @@ def assert_allowed_target(url: str) -> None:
     if not host:
         raise ValueError("URL has no hostname")
 
-    if allow_private_targets():
-        return
-
+    private_ok = allow_private_targets()
     try:
         infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80))
     except socket.gaierror as exc:
@@ -58,6 +56,10 @@ def assert_allowed_target(url: str) -> None:
             ip = ipaddress.ip_address(info[4][0])
         except ValueError:
             continue
+        # RFC1918 stays allowed when MCP_ALLOW_PRIVATE_TARGETS is on. Loopback,
+        # link-local (169.254.169.254) and the rest stay blocked either way.
+        if ip.is_private and private_ok:
+            continue
         if (
             ip.is_private
             or ip.is_loopback
@@ -66,8 +68,10 @@ def assert_allowed_target(url: str) -> None:
             or ip.is_multicast
             or ip.is_unspecified
         ):
-            raise ValueError(
-                f"{host} resolves to the non-public address {ip}. Aurora refuses "
-                "internal targets; set MCP_ALLOW_PRIVATE_TARGETS=true on a "
-                "self-hosted deployment to allow them."
-            )
+            if ip.is_private:
+                raise ValueError(
+                    f"{host} resolves to the non-public address {ip}. Aurora refuses "
+                    "internal targets; set MCP_ALLOW_PRIVATE_TARGETS=true on a "
+                    "self-hosted deployment to allow them."
+                )
+            raise ValueError(f"{host} resolves to {ip}, which Aurora refuses.")

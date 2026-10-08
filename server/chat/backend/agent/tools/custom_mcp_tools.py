@@ -239,18 +239,21 @@ def _call_tool(
             found = next((t for t in s.get("tools") or [] if t.get("name") == tool), None)
             if found is None:
                 continue
-            if ModeAccessController.is_read_only_mode(mode):
+            # Same order as _visible: background/PR drops confirm tools first,
+            # then Ask mode drops writes.
+            if not _tool_allowed(s, found, is_background, is_pr_review):
+                return json.dumps({
+                    "error": "needs_confirmation_unavailable",
+                    "detail": (
+                        f"'{tool}' requires user confirmation and nobody can approve it "
+                        "during an automated investigation. Report the intended action instead."
+                    ),
+                })
+            if ModeAccessController.is_read_only_mode(mode) and not is_read_tool(found):
                 return json.dumps({
                     "error": "read_only_mode",
                     "detail": f"'{tool}' writes, and Ask mode is read-only. Switch to Agent mode.",
                 })
-            return json.dumps({
-                "error": "needs_confirmation_unavailable",
-                "detail": (
-                    f"'{tool}' requires user confirmation and nobody can approve it "
-                    "during an automated investigation. Report the intended action instead."
-                ),
-            })
         known = sorted({s["label"] for s, _ in pairs})
         return json.dumps({
             "error": "unknown_tool",
@@ -265,7 +268,9 @@ def _call_tool(
     # The per-tool args_schema that LangChain used to validate against is gone,
     # so catch a missing required key here. Cheaper and clearer than letting the
     # remote server answer 400 with its own wording.
-    required = (tool_def.get("inputSchema") or {}).get("required") or []
+    required = (tool_def.get("inputSchema") or {}).get("required")
+    if not isinstance(required, list) or not all(isinstance(k, str) for k in required):
+        required = []
     missing = [k for k in required if k not in args]
     if missing:
         return json.dumps({
