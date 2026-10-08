@@ -4,7 +4,6 @@ import base64
 import hashlib
 import hmac
 import logging
-import os
 import re
 from typing import Any, Dict, Optional
 
@@ -24,6 +23,7 @@ from routes.incidentio.tasks import (
     _get_org_severity_ranks,
 )
 from utils.db.connection_pool import db_pool
+from utils.web.public_url import external_backend_url
 from utils.auth.stateless_auth import (
     get_user_preference,
     set_rls_context,
@@ -241,9 +241,7 @@ def get_alerts(user_id):
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Return the webhook URL for this user's incident.io configuration."""
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-    base_url = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
+    base_url = external_backend_url()
     if not base_url:
         base_url = request.host_url.rstrip("/")
 

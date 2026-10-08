@@ -51,6 +51,8 @@ proto-plus==1.25.0
 protobuf==5.29.6
 psycopg2-binary
 bcrypt>=4.0.0
+python3-saml==1.16.0  # SAML SSO; xmlsec/lxml ship self-contained wheels, no apt deps
+dnspython==2.8.0  # SSO domain ownership checks (DNS TXT)
 pyasn1==0.6.4
 pyasn1_modules==0.4.1
 pydantic>=2.9.0  # Flexible for langchain compatibility
@@ -116,7 +118,9 @@ responses>=0.24
 cryptography>=46.0.7  # CWE-787 / CVE-2026-39892 OOB write fixed in 46.0.7
 
 # MCP Server (Model Context Protocol)
-mcp[cli]>=1.27.0
+# Stay on 1.x until server/mcp_server.py and connectors/mcp_connector/client.py
+# migrate for mcp 2.x (renamed APIs and httpx2).
+mcp[cli]==1.30.0
 
 # GitHub App authentication (JWT mint + installation tokens)
 PyGithub>=2.5  # advisories on <2.5

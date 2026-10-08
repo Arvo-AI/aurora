@@ -11,6 +11,7 @@ import urllib.parse
 from flask import Blueprint, jsonify, request, redirect
 
 from utils.flags.feature_flags import is_pagerduty_oauth_enabled
+from utils.web.public_url import external_backend_url
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.enforcer import enforce_with_reload
@@ -361,15 +362,7 @@ def enable_incident_notes(user_id):
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Get the webhook URL that should be configured in PagerDuty."""
-    # Use ngrok URL for development if available, otherwise use backend URL
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-
-    # For development, prefer ngrok URL if available
-    if ngrok_url and backend_url.startswith("http://localhost"):
-        base_url = ngrok_url
-    else:
-        base_url = backend_url
+    base_url = external_backend_url()
 
     webhook_url = f"{base_url}/pagerduty/webhook/{user_id}"
     

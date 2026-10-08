@@ -1,0 +1,74 @@
+"""Outbound-target safety for the MCP connector.
+
+Separate module so ``client.py`` and ``oauth.py`` can both guard their requests
+without importing each other -- the OAuth flow needs the MCP transport's refresh
+helper, and the transport needs the OAuth refresh, which would otherwise be a
+circular import.
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import os
+import socket
+from urllib.parse import urlparse
+
+
+def allow_private_targets() -> bool:
+    """Whether private/internal addresses are valid MCP targets.
+
+    Defaults true so self-hosted OSS (Compose or Helm) can register MCP servers
+    on private cluster addresses without extra config. Multi-tenant SaaS must
+    set MCP_ALLOW_PRIVATE_TARGETS=false so a tenant cannot aim Aurora at internal
+    services.
+    """
+    return os.getenv("MCP_ALLOW_PRIVATE_TARGETS", "true").strip().lower() == "true"
+
+
+def assert_allowed_target(url: str) -> None:
+    """Validate an outbound URL, rejecting non-public hosts unless allowed.
+
+    Raises ``ValueError`` with a user-facing message. Mirrors the SSRF guard in
+    ``chat/backend/agent/tools/notion/workspace.py``: every resolved address
+    must pass, so a hostname with both a public and a loopback A record cannot
+    slip through. Applied to OAuth metadata, registration, and token endpoints
+    too, not just the MCP connection.
+
+    ponytail: resolve-then-connect leaves a TOCTOU window (DNS can change
+    between this check and the request). Accepted, same as the Notion path.
+    Closing it needs a custom resolver pinning the validated IP.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("URL must start with http:// or https://")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL has no hostname")
+
+    private_ok = allow_private_targets()
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80))
+    except socket.gaierror as exc:
+        raise ValueError(f"DNS lookup failed for {host}: {exc}") from exc
+
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+        # Python's is_private includes loopback and link-local (169.254.169.254),
+        # so those have to be rejected before the private-address allow.
+        if (
+            ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            raise ValueError(f"{host} resolves to {ip}, which Aurora refuses.")
+        if ip.is_private and not private_ok:
+            raise ValueError(
+                f"{host} resolves to the non-public address {ip}. Aurora refuses "
+                "internal targets; set MCP_ALLOW_PRIVATE_TARGETS=true on a "
+                "self-hosted deployment to allow them."
+            )

@@ -1,5 +1,4 @@
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
@@ -8,6 +7,7 @@ from flask import Blueprint, jsonify, request
 
 from routes.datadog.tasks import process_datadog_event
 from utils.db.connection_pool import db_pool
+from utils.web.public_url import external_backend_url
 from utils.log_sanitizer import sanitize, hash_for_log
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -860,15 +860,7 @@ def webhook(user_id: str):
 @datadog_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def webhook_url(user_id):
-    # Use ngrok URL for development if available, otherwise use backend URL
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-
-    # For development, prefer ngrok URL if available
-    if ngrok_url and backend_url.startswith("http://localhost"):
-        base_url = ngrok_url
-    else:
-        base_url = backend_url
+    base_url = external_backend_url()
 
     url = f"{base_url}/datadog/webhook/{user_id}"
 

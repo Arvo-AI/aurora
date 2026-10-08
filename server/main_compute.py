@@ -114,6 +114,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                           "Authorization", "X-Provider-Preference"],
                         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
+        r"/mcp/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                    "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                      "Authorization", "X-Provider-Preference"],
+                    "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/incidentio/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                            "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                              "Authorization", "X-Provider-Preference"],
@@ -211,6 +215,11 @@ _OPEN_PREFIXES = (
     # callback is verified via signed state + GitHub-verified installation.
     "/github/app/signup/start",
     "/github/app/signup/callback",
+    # SAML SSO — browser/IdP hit these directly. /acs is verified by the IdP's
+    # signature plus a request ID bound to this browser; /discover is not open.
+    "/api/auth/saml/login/",
+    "/api/auth/saml/acs/",
+    "/api/auth/saml/metadata/",
     "/github/webhook",
     # OAuth callback — registered only when GITHUB_AUTH_MODE allows OAuth, but
     # listed here unconditionally so the gate applies even if OAuth flips on
@@ -358,6 +367,17 @@ app.register_blueprint(admin_bp)  # RBAC admin routes
 from routes.org_routes import org_bp
 app.register_blueprint(org_bp)
 
+# --- SAML SSO Routes ---
+# /login and /acs are hit by the browser directly and /login writes a request
+# row per hit, so they get a tighter per-IP budget than the global default.
+from routes.sso_routes import saml_bp, saml_discover_bp, org_sso_bp
+from utils.web.limiter_ext import get_public_auth_rate_limit_key
+limiter.limit("30 per minute;300 per hour")(saml_bp)
+limiter.limit("10 per minute;60 per hour", key_func=get_public_auth_rate_limit_key)(saml_discover_bp)
+app.register_blueprint(saml_bp)
+app.register_blueprint(saml_discover_bp)
+app.register_blueprint(org_sso_bp)
+
 # --- Command Policy Routes ---
 from routes.command_policies import command_policies_bp
 app.register_blueprint(command_policies_bp)
@@ -458,6 +478,10 @@ app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
 from routes.elastic import bp as elastic_bp, search_bp as elastic_search_bp
 app.register_blueprint(elastic_bp, url_prefix="/elastic")
 app.register_blueprint(elastic_search_bp, url_prefix="/elastic")
+
+# --- Custom MCP server connector routes (Aurora as MCP client) ---
+from routes.mcp import bp as mcp_servers_bp
+app.register_blueprint(mcp_servers_bp, url_prefix="/mcp")
 
 # --- incident.io Integration Routes ---
 from routes.incidentio import bp as incidentio_bp  # noqa: F401

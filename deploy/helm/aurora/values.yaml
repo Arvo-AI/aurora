@@ -393,6 +393,10 @@ config:
   SPLUNK_SSL_VERIFY: "false" # "false" (default), "true", or path to a private CA bundle
   ELASTIC_SSL_VERIFY: "true" # "true" (default), "false", or path to a private CA bundle
   AURORA_VERIFY_CLI_IDENTITY: "false"
+  # Custom MCP servers: allow private/loopback MCP URLs (default for OSS Helm).
+  # Set "false" on multi-tenant SaaS so a tenant cannot SSRF Aurora toward
+  # internal services (metadata endpoints, Vault, the database, etc.).
+  MCP_ALLOW_PRIVATE_TARGETS: "true"
   
   # --- Optional Features (enable as needed) ---
   ENABLE_POD_ISOLATION: "false"               # Isolate terminal commands in separate pods
@@ -404,6 +408,7 @@ config:
   NEXT_PUBLIC_ENABLE_SPINNAKER: "false"      # Spinnaker integration
   NEXT_PUBLIC_ENABLE_VISUALIZATION: "false"  # Incident infra visualization UI (pairs with VISUALIZATION_ENABLED)
   HOSTED_SIGNUP_ENABLED: "false"             # One-click GitHub App signup from website (requires GITHUB_APP_CLIENT_SECRET)
+  SSO_ENFORCE_DOMAIN_VERIFICATION: "false"   # SAML SSO: require DNS proof of email-domain ownership (set true when multi-tenant)
   
   # --- Pod Isolation Settings ---
   # When enabled, the chart automatically creates:

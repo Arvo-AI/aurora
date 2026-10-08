@@ -72,6 +72,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "incidentio",  # incident.io connector tokens
     "flyio",    # Fly.io connector tokens
     "kubeconfig", # Kubernetes kubeconfig uploads
+    "mcp",      # Customer-registered MCP servers (list of servers in one blob)
 }
 
 

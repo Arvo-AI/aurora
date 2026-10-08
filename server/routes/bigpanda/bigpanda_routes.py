@@ -6,13 +6,13 @@ Handles API-key connection, webhook ingestion, status, and disconnect.
 import hashlib
 import hmac
 import logging
-import os
 import secrets
 
 from flask import Blueprint, jsonify, request
 
 from connectors.bigpanda_connector.api_client import BigPandaClient, BigPandaAPIError
 from utils.db.connection_pool import db_pool
+from utils.web.public_url import external_backend_url
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
@@ -166,9 +166,7 @@ def webhook(user_id: str):
 @bigpanda_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-    base_url = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
+    base_url = external_backend_url()
     if not base_url:
         base_url = request.host_url.rstrip("/")
 

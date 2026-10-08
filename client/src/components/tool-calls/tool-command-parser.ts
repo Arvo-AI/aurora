@@ -98,12 +98,34 @@ export function parseCloudExecCommand(
   return { command: inputCommand ?? defaultCommand, phase: 'input' }
 }
 
-export function parseGitHubToolCommand(toolName: string, toolInput: string): string {
+/**
+ * Render a one-line summary for any `mcp_*` tool call.
+ *
+ * Named GitHub cases are recognised explicitly; anything else is a
+ * customer-registered MCP server (`mcp_<label>_<tool>`) and must NOT be
+ * attributed to GitHub, which is what the old catch-all default did -- a
+ * Context7 lookup rendered as "GitHub: context7 query docs".
+ */
+export function parseMcpToolCommand(toolName: string, toolInput: string): string {
+  const generic = () => `MCP: ${toolName.replace(/^mcp_/, "").replace(/_/g, " ")}`
   try {
     // Replace single quotes with double quotes to handle Python's str() output
     const parsableCommand = toolInput.replace(/'/g, '"')
     const parsed = JSON.parse(parsableCommand)
     const args = parsed?.kwargs || parsed || {}
+
+    // Customer MCP servers are reached through two dispatcher tools, so the
+    // LangChain name is always the same -- the server and tool the user cares
+    // about are in the arguments. Handled before the GitHub switch because
+    // "call_tool"/"list_tools" are not GitHub tool names.
+    if (toolName === "mcp_call_tool") {
+      return args.server && args.tool ? `${args.server}: ${args.tool}` : "MCP: call tool"
+    }
+    if (toolName === "mcp_list_tools") {
+      if (args.query) return `MCP: search tools "${args.query}"`
+      if (args.server) return `MCP: list ${args.server} tools`
+      return "MCP: list servers"
+    }
 
     const githubTool = toolName.replace("mcp_", "")
 
@@ -166,11 +188,10 @@ export function parseGitHubToolCommand(toolName: string, toolInput: string): str
       case "context7_get_library_docs":
         return `Context7: get-library-docs ${args.topic ? `"${args.topic}"` : args.context7CompatibleLibraryID || ""}`
       default:
-        return `GitHub: ${githubTool.replace(/_/g, " ")}`
+        return generic()
     }
   } catch (error) {
-    const cleanName = toolName.replace("mcp_", "")
-    return `GitHub: ${cleanName.replace(/_/g, " ")}`
+    return generic()
   }
 }
 

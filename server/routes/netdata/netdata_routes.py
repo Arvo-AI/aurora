@@ -1,13 +1,13 @@
 """Netdata integration routes."""
 
 import logging
-import os
 from typing import Any, Dict, Optional
 
 from flask import Blueprint, jsonify, request
 
 from routes.netdata.tasks import process_netdata_alert
 from utils.db.connection_pool import db_pool
+from utils.web.public_url import external_backend_url
 from utils.log_sanitizer import sanitize
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -264,15 +264,7 @@ def get_alerts(user_id):
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Get the webhook URL and verification token for Netdata configuration."""
-    # Use ngrok URL for development if available, otherwise use backend URL
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-
-    # For development, prefer ngrok URL if available
-    if ngrok_url and backend_url.startswith("http://localhost"):
-        base_url = ngrok_url
-    else:
-        base_url = backend_url
+    base_url = external_backend_url()
 
     webhook_url = f"{base_url}/netdata/alerts/webhook/{user_id}"
     

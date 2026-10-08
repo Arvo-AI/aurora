@@ -35,6 +35,11 @@ x-common-env: &common-env
   # Terraform
   TF_CLI_CONFIG_FILE: /etc/terraform.rc
 
+  # Custom MCP server connector: allow registering MCP servers on private or
+  # loopback addresses. Defaults true here for self-hosted OSS; set false for
+  # multi-tenant SaaS (a tenant could otherwise point Aurora at internal services).
+  MCP_ALLOW_PRIVATE_TARGETS: ${MCP_ALLOW_PRIVATE_TARGETS:-true}
+
   # SSL/TLS for external services
   POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-prefer}
   POSTGRES_SSLROOTCERT: ${POSTGRES_SSLROOTCERT:-}
@@ -244,6 +249,9 @@ services:
       # the signup callback is the sole consumer of the OAuth code exchange.
       HOSTED_SIGNUP_ENABLED: ${HOSTED_SIGNUP_ENABLED:-false}
       GITHUB_APP_CLIENT_SECRET: ${GITHUB_APP_CLIENT_SECRET}
+
+      # SAML SSO: require DNS proof of email-domain ownership (enable on multi-tenant installs)
+      SSO_ENFORCE_DOMAIN_VERIFICATION: ${SSO_ENFORCE_DOMAIN_VERIFICATION:-false}
 
       # Bitbucket OAuth (optional)
       BB_OAUTH_CLIENT_ID: ${BB_OAUTH_CLIENT_ID}

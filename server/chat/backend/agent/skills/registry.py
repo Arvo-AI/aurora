@@ -30,6 +30,17 @@ from utils.flags import feature_flags
 
 logger = logging.getLogger(__name__)
 
+
+def _render_mcp_servers(user_id: str) -> str:
+    """Registered MCP servers and their tools, for the ``mcp`` skill template."""
+    try:
+        from connectors.mcp_connector.store import mcp_servers_section
+
+        return mcp_servers_section(user_id)
+    except Exception as exc:
+        logger.warning(f"Failed to render MCP servers section: {exc}")
+        return "(server list unavailable)"
+
 INTEGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "integrations")
 RCA_DIR = os.path.join(os.path.dirname(__file__), "rca")
 
@@ -392,6 +403,10 @@ class SkillRegistry:
 
         if extra_context:
             context = {**context, **extra_context}
+        if skill_id == "mcp":
+            # Per-user tool list cannot live in static frontmatter; render it here
+            # so both the chat and RCA load paths get it.
+            context = {**context, "mcp_servers_section": _render_mcp_servers(user_id)}
         rendered = resolve_template(body, context)
         return SkillLoadResult(
             skill_id=skill_id,

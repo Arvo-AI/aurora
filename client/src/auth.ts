@@ -1,5 +1,10 @@
-import NextAuth from "next-auth"
+import NextAuth, { CredentialsSignin } from "next-auth"
 import Credentials from "next-auth/providers/credentials"
+
+// Surfaces as `result.code` from signIn(), so the form can point to SSO.
+class SsoRequiredError extends CredentialsSignin {
+  code = "sso_required"
+}
 
 const ROLE_REVALIDATE_SECONDS = 60 // re-check role/org every 60 seconds
 
@@ -100,7 +105,13 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           signal: loginController.signal,
         })
         clearTimeout(loginTimeout)
-        
+
+        // Org requires SSO for this account; password was right but isn't enough
+        if (response.status === 403) {
+          const body = await response.json().catch(() => ({}))
+          if (body?.error === "sso_required") throw new SsoRequiredError()
+        }
+
         if (!response.ok) {
           console.error("Login failed:", response.status)
           return null

@@ -25,6 +25,7 @@ const sidebars: SidebarsConfig = {
         'configuration/vault',
         'configuration/storage',
         'configuration/command-safety',
+        'configuration/sso',
         {
           type: 'category',
           label: 'Data Access',
@@ -66,6 +67,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'integrations/connectors',
         'integrations/mcp',
+        'integrations/custom-mcp-servers',
         'integrations/spinnaker',
         'integrations/llm-providers',
       ],

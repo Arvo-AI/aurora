@@ -12,7 +12,7 @@ import { ForgotPasswordPanel, ResetPasswordPanel } from "./PasswordResetPanels"
 
 const AuroraShader = dynamic(() => import('@/app/components/AuroraShader'), { ssr: false })
 
-type AuthMode = "signin" | "signup" | "verify-email" | "change-password" | "forgot-password" | "reset-password"
+type AuthMode = "signin" | "signup" | "verify-email" | "change-password" | "forgot-password" | "reset-password" | "sso"
 
 const taglines: Record<AuthMode, { line1: string; line2: string; desc: string }> = {
   "signin": {
@@ -45,6 +45,35 @@ const taglines: Record<AuthMode, { line1: string; line2: string; desc: string }>
     line2: "From getting back in.",
     desc: "Enter the code we emailed you and choose a new password.",
   },
+  "sso": {
+    line1: "One identity,",
+    line2: "Every door.",
+    desc: "Sign in with your company's identity provider.",
+  },
+}
+
+// Set by the backend SAML callback as ?error=sso_<code>. Fixed strings only —
+// the query param picks a message, it is never rendered itself.
+const SSO_ERRORS: Record<string, string> = {
+  sso_not_configured: "Single sign-on isn't set up for this organization.",
+  sso_expired: "Your sign-in attempt expired. Please try again.",
+  sso_invalid_response: "Your identity provider's response couldn't be verified. Contact your administrator.",
+  sso_domain_not_allowed: "Your email domain isn't allowed for this organization's single sign-on.",
+  sso_account_in_other_org: "This email already belongs to a different Aurora organization. Contact support to move it.",
+  sso_identity_mismatch: "This Aurora account is linked to a different identity. Contact your administrator.",
+  sso_missing_email: "Your identity provider didn't send an email address. Contact your administrator.",
+  sso_missing_subject: "Your identity provider didn't send a user identifier. Contact your administrator.",
+  sso_internal: "Something went wrong during single sign-on. Please try again.",
+}
+
+const QUERY_ERRORS: Record<string, string> = {
+  // GitHub email already has an (unlinked) Aurora account — sign in normally instead
+  account_exists: "An account with your GitHub email already exists. Sign in below, then finish connecting GitHub from the Connectors page.",
+  ...SSO_ERRORS,
+}
+
+function errorFromQuery(code: string | null): string | null {
+  return code && Object.hasOwn(QUERY_ERRORS, code) ? QUERY_ERRORS[code] : null
 }
 
 // Shown wherever we tell the user a code is on its way. Transactional code
@@ -52,7 +81,7 @@ const taglines: Record<AuthMode, { line1: string; line2: string; desc: string }>
 // it as a broken product rather than a misplaced email.
 const SPAM_FOLDER_HINT = "Don't see it? Check your spam or junk folder."
 
-const AUTH_MODES = ["signup", "verify-email", "change-password", "forgot-password", "reset-password"] as const
+const AUTH_MODES = ["signup", "verify-email", "change-password", "forgot-password", "reset-password", "sso"] as const
 
 function getInitialMode(searchParams: URLSearchParams): AuthMode {
   const mode = searchParams.get("mode")
@@ -60,15 +89,16 @@ function getInitialMode(searchParams: URLSearchParams): AuthMode {
   return AUTH_MODES.find((m) => m === mode) ?? "signin"
 }
 
+// Same-origin paths only — "//host" is protocol-relative and would leave the app.
+function safeCallbackUrl(raw: string | null): string {
+  return raw?.startsWith("/") && !raw.startsWith("//") ? raw : "/"
+}
+
 function AuthPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { data: session, update } = useSession()
-  const rawCallbackUrl = searchParams.get("callbackUrl") || "/"
-  const callbackUrl =
-    rawCallbackUrl.startsWith("/") && !rawCallbackUrl.startsWith("//")
-      ? rawCallbackUrl
-      : "/"
+  const callbackUrl = safeCallbackUrl(searchParams.get("callbackUrl"))
 
   const [mode, setMode] = useState<AuthMode>(() => getInitialMode(searchParams))
   const [formVisible, setFormVisible] = useState(true)
@@ -144,8 +174,10 @@ function AuthPage() {
   // login form to someone who just installed the App reads as "log in
   // again". The panel stays up through the redirect; only a failure
   // reveals the form (with the reason).
+  // SSO logins reuse the same handoff; they land on the app, not GitHub setup.
   const handoffAttempted = useRef(false)
   const [handoffInFlight, setHandoffInFlight] = useState(false)
+  const isSsoHandoff = searchParams.get("via") === "sso"
   useEffect(() => {
     const handoffToken = searchParams.get("handoff")
     if (!handoffToken || handoffAttempted.current) return
@@ -156,7 +188,7 @@ function AuthPage() {
       try {
         const result = await signIn("handoff", { token: handoffToken, redirect: false })
         if (result?.ok) {
-          globalThis.location.href = "/connectors?installed=github"
+          globalThis.location.href = isSsoHandoff ? "/" : "/connectors?installed=github"
         } else {
           setHandoffInFlight(false)
           setError("This sign-in link has expired. Please sign in below.")
@@ -167,6 +199,7 @@ function AuthPage() {
       } finally {
         const url = new URL(globalThis.location.href)
         url.searchParams.delete("handoff")
+        url.searchParams.delete("via")
         globalThis.history.replaceState(null, "", url.toString())
         setIsLoading(false)
       }
@@ -174,12 +207,10 @@ function AuthPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
-  // Set by the signup callback when the GitHub email already has an
-  // (unlinked) Aurora account — sign in normally instead.
+  // ?error=<code> from the GitHub signup or SAML callbacks.
   useEffect(() => {
-    if (searchParams.get("error") === "account_exists") {
-      setError("An account with your GitHub email already exists. Sign in below, then finish connecting GitHub from the Connectors page.")
-    }
+    const message = errorFromQuery(searchParams.get("error"))
+    if (message) setError(message)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
@@ -222,7 +253,11 @@ function AuthPage() {
       // exact-case tie-break can only order legacy duplicates correctly if the
       // original capitalization survives the round trip.
       const result = await signIn("credentials", { email, password, redirect: false })
-      if (result?.error) {
+      // Right password, but the org only allows SSO — send them there
+      if (result?.code === "sso_required") {
+        switchMode("sso")
+        setError("Your organization requires single sign-on. Continue with SSO below.")
+      } else if (result?.error) {
         setError("Invalid email or password")
       } else if (result?.ok) {
         router.push(callbackUrl)
@@ -231,6 +266,30 @@ function AuthPage() {
     } catch {
       setError("An error occurred. Please try again.")
     } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleSso = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError("")
+    setIsLoading(true)
+    try {
+      const res = await fetch("/api/auth/sso-discover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && typeof data.loginUrl === "string") {
+        // Full navigation: the IdP round trip happens outside this app
+        globalThis.location.href = data.loginUrl
+        return
+      }
+      setError(res.status === 404 ? "Single sign-on isn't set up for this email domain." : "Couldn't start single sign-on. Please try again.")
+      setIsLoading(false)
+    } catch {
+      setError("An error occurred. Please try again.")
       setIsLoading(false)
     }
   }
@@ -440,8 +499,8 @@ function AuthPage() {
           {handoffInFlight && (
             <div className="space-y-8" aria-live="polite">
               <div>
-                <h2 className="text-2xl font-semibold text-white">Setting up your account</h2>
-                <p className="mt-2 text-[#888] text-sm">GitHub is connected. Creating your workspace and enrolling the repositories you selected.</p>
+                <h2 className="text-2xl font-semibold text-white">{isSsoHandoff ? "Signing you in" : "Setting up your account"}</h2>
+                <p className="mt-2 text-[#888] text-sm">{isSsoHandoff ? "Your identity provider confirmed who you are." : "GitHub is connected. Creating your workspace and enrolling the repositories you selected."}</p>
               </div>
               <div className="flex items-center gap-3 text-white/70 text-sm">
                 <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>
@@ -477,10 +536,38 @@ function AuthPage() {
                     {isLoading ? <span className="flex items-center justify-center gap-2"><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>Signing in...</span> : "Sign in"}
                   </button>
                 </form>
+                <button type="button" onClick={() => switchMode('sso')} disabled={isLoading} className="w-full py-2.5 px-4 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm font-medium hover:bg-white/[0.06] focus:outline-none focus:ring-2 focus:ring-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
+                  Sign in with SSO
+                </button>
                 <p className="text-center text-sm text-[#555]">Don&apos;t have an account?{" "}<button onClick={() => switchMode('signup')} className="text-white/80 hover:text-white transition-colors">Sign up</button></p>
                 <div className="pt-6 border-t border-white/[0.06]">
                   <p className="text-center text-xs text-[#444]">By signing in, you agree to our{" "}<Link href="/terms" className="text-[#666] hover:text-white/60 transition-colors">Terms</Link>{" "}and{" "}<Link href="/terms" className="text-[#666] hover:text-white/60 transition-colors">Privacy Policy</Link></p>
                 </div>
+              </div>
+            )}
+
+            {mode === 'sso' && (
+              <div className="space-y-8">
+                <div>
+                  <h2 className="text-2xl font-semibold text-white">Sign in with SSO</h2>
+                  <p className="mt-2 text-[#888] text-sm">Enter your work email and we&apos;ll send you to your company&apos;s sign-in page.</p>
+                </div>
+                <form className="space-y-4" onSubmit={handleSso}>
+                  <div>
+                    <label htmlFor="sso-email" className="block text-xs font-medium text-[#888] mb-1.5">Work email</label>
+                    <input id="sso-email" type="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="you@company.com" disabled={isLoading} />
+                  </div>
+                  {error && <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3"><p className="text-sm text-red-400">{error}</p></div>}
+                  <button type="submit" disabled={isLoading} className="w-full py-2.5 px-4 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#0a0a0a] disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
+                    {isLoading ? "Redirecting..." : "Continue"}
+                  </button>
+                </form>
+                <p className="text-center text-sm text-[#555]">
+                  <button onClick={() => switchMode('signin')} className="text-white/80 hover:text-white transition-colors inline-flex items-center gap-1.5">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+                    Back to password sign-in
+                  </button>
+                </p>
               </div>
             )}
 
