@@ -39,13 +39,48 @@ as the connecting user.
 
 ## 2. Create an Azure Bot
 
-1. Azure Portal → **Create a resource** → **Azure Bot**
-2. Link it to the **same app registration** from step 1 (or create a single app used for both OAuth and bot).
-3. **Configuration** → **Messaging endpoint** (must be HTTPS and reachable from Microsoft):
-   - `https://your-api.example.com/teams/messages`
-4. Enable the **Microsoft Teams** channel for the bot.
+This is a **separate Azure resource** from the Entra app in step 1. If you only registered an app and never created **Azure Bot**, you will not see a messaging endpoint or Teams channel settings — go back and create the bot resource below.
 
-On the bot **Configuration** page, copy **Microsoft App ID** → set `TEAMS_APP_ID` in `.env` (usually the same UUID as `TEAMS_CLIENT_ID` when the bot uses the same app registration).
+### 2a. Create the bot resource
+
+1. [Azure Portal](https://portal.azure.com) → **Create a resource** → search **Azure Bot** → **Create**.
+2. On the create form:
+   - **Bot handle** — any name (e.g. `aurora-teams`).
+   - **Subscription** / **Resource group** — your usual choices.
+   - **Pricing tier** — F0 is fine for dev.
+   - **Microsoft App ID** — choose **Single tenant** (or match how you registered the app in step 1).
+   - **Creation type** — **Use existing app registration**.
+   - **App ID** — paste the **Application (client) ID** from step 1 (same value as `TEAMS_CLIENT_ID`).
+3. **Review + create** → wait until deployment finishes → **Go to resource**.
+
+You should now be on the **Azure Bot** blade (resource type “Azure Bot” / “Bot Services”), not the Entra **App registrations** screen.
+
+### 2b. Messaging endpoint
+
+Microsoft sends @mentions and channel traffic to this URL. It must be **public HTTPS** (use `NGROK_URL` + `/teams/messages` for local dev, same idea as OAuth).
+
+1. On the **Azure Bot** resource, open the left menu → **Settings** → **Configuration**  
+   (Some portal layouts label this blade **Configuration** directly under the bot name.)
+2. Set **Messaging endpoint** to:
+   - Production: `https://your-api.example.com/teams/messages`
+   - Local + tunnel: `https://your-tunnel.example.com/teams/messages`
+3. **Apply** / **Save**.
+
+On the same **Configuration** page you will see **Microsoft App ID** — it should match the app registration ID from step 1.
+
+### 2c. Enable Teams
+
+1. Left menu → **Channels** (under **Settings** on some layouts).
+2. Click **Microsoft Teams** → **Apply** / save so the channel shows as enabled.
+
+### 2d. Map to `.env`
+
+| If you used… | Set in `.env` |
+|--------------|----------------|
+| **Use existing app registration** (recommended) | `TEAMS_APP_ID` = same UUID as `TEAMS_CLIENT_ID` (no second ID to copy). |
+| A **new** app created only for the bot | Copy **Microsoft App ID** from **Settings → Configuration** → `TEAMS_APP_ID`. |
+
+`TEAMS_CLIENT_SECRET` remains the **client secret Value** from the Entra app in step 1 (Bot Framework uses it as the app password).
 
 ## 3. Configure `.env`
 
@@ -96,7 +131,9 @@ Delegated OAuth identifies the tenant and powers Graph **reads**. **Posts** (rep
 
 **Redirect URI mismatch** — Redirect in Entra must match exactly what Aurora sends (`{backend}/teams/callback`). With local dev, set `NGROK_URL` and use the tunnel URL in Entra.
 
-**@mention gets no reply** — Confirm the messaging endpoint URL is public HTTPS, `/teams/messages` is allowed through your proxy, and the Teams app is installed. Check server logs for Bot Framework JWT verification (`TEAMS_APP_ID` / secret must match the bot registration).
+**No “Configuration” or “Channels” in the portal** — Open the **Azure Bot** resource (portal search → your bot handle → type Azure Bot). Those blades are not on the Entra **App registration** page.
+
+**@mention gets no reply** — Confirm **Settings → Configuration → Messaging endpoint** is public HTTPS and ends with `/teams/messages`, the Teams **channel** is enabled, and the Teams app is installed. Check server logs for Bot Framework JWT verification (`TEAMS_APP_ID` / secret must match the bot registration).
 
 **Bot posts fail (cards / routing)** — The Teams app must be **installed in the team/channel**. Proactive messages use Bot Framework; Graph delegated tokens are not used for outbound chat.
 

@@ -834,9 +834,14 @@ user who clicked Connect.
 
 #### 2. Azure Bot + Teams channel
 
-1. Create an **Azure Bot** linked to the same app registration.
-2. **Messaging endpoint**: `https://your-api.example.com/teams/messages` (public HTTPS; Microsoft must reach it).
-3. Enable the **Microsoft Teams** channel on the bot.
+Create a separate **Azure Bot** resource (not the Entra app alone): **Create a resource** → **Azure Bot** → **Creation type: Use existing app registration** → paste the step‑1 **Application (client) ID** → create → **Go to resource**.
+
+On that **Azure Bot** resource (search the bot name if needed):
+
+1. **Settings → Configuration** — **Messaging endpoint** `https://your-api.example.com/teams/messages` (or tunnel URL + `/teams/messages` locally). Save.
+2. **Channels** — enable **Microsoft Teams**.
+
+If you linked the existing app registration, `TEAMS_APP_ID` = `TEAMS_CLIENT_ID`. See `server/connectors/teams_connector/README.md` §2 for full portal steps and troubleshooting when **Configuration** is missing.
 
 #### 3. Teams app install
 
