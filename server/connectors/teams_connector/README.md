@@ -117,20 +117,29 @@ Pick a value that matches your app registration under **Supported account types*
 
 Restart `aurora-server` after changes.
 
-## 4. Install the app in Teams
+## 4. Install the app in Microsoft Teams (per Team)
 
-1. Publish or sideload your **Teams app manifest** that references this bot (Teams Developer Portal or zip upload).
-2. Install the app into the **teams** where Aurora should work.
-3. In each **channel**, ensure the app is available (team install + channel scope as required by your manifest).
+**This is not Aurora OAuth.** **Connect** in Aurora (step 5) links your org’s Entra tenant and Graph access in Aurora. It does **not** add the bot to any Microsoft Team or channel. Teams only delivers @mentions and bot messages after the **Teams client app** (manifest) is installed where people work — like installing Aurora’s Slack app into a workspace, separate from clicking Connect in Aurora.
 
-Users **@mention the bot** by its **display name** in the manifest (e.g. `@Aurora`) — same idea as `@Aurora` in Slack. In channels, only @mentions start a chat; DMs to the bot work without a mention.
+| Who | What |
+|-----|------|
+| **Platform operator** (you) | Create/publish a **Teams app package** (manifest) for your Azure Bot — once per Aurora deployment ([Teams Developer Portal](https://dev.teams.microsoft.com/) or zip sideload). Aurora does not ship this package; it must reference *your* bot. |
+| **Teams admin / team owner** | **Install** that app into each **Microsoft Team** where Aurora should appear — once per Team, not every Aurora user. |
+| **Org admin in Aurora** | Step 5 **Connect** + **Teams → Manage**. |
+| **End users** | `@mention` the bot or DM it — no install, no OAuth. |
+
+1. Publish or sideload a manifest whose bot ID matches your Entra / Azure Bot app.
+2. In Teams: open a team → **Apps** → install your app for that team (or org catalog if published tenant-wide).
+3. Confirm the app is available in channels where you @mention or receive incident cards.
+
+Users **@mention** the bot by its manifest **display name** (e.g. `@Aurora`). In channels, @mention is required; DMs are not.
 
 ## 5. Connect in Aurora
 
-1. **Connectors** → **Microsoft Teams** → **Connect** (admin completes Entra sign-in).
-2. **Teams → Manage**: refresh channels, **activate** channels Aurora should route to, set the **incident card** channel, edit **Teams memory** (tone / which channels to use).
+1. **Connectors** → **Microsoft Teams** → **Connect** (org admin, Entra sign-in once per Aurora org).
+2. **Teams → Manage**: refresh channels, **activate** channels, set **incident card** channel, edit **Teams memory**.
 
-Delegated OAuth identifies the tenant and powers Graph **reads**. **Posts** (replies, routing, incident cards) go through the **bot**.
+OAuth powers Graph **reads** in Aurora. **Posts** (@mention replies, cards, routing) use the **bot** and still require step 4 in each Team.
 
 ## Troubleshooting
 
