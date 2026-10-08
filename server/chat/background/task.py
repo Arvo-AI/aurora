@@ -864,6 +864,15 @@ def run_background_chat(
                 ))
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
+
+        if trigger_metadata and trigger_metadata.get('source') == 'teams':
+            try:
+                teams_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
+                _chat_reply_sent = bool(_send_response_to_teams(
+                    user_id, session_id, trigger_metadata, fallback_text=teams_fallback,
+                ))
+            except Exception as e:
+                logger.error(f"[BackgroundChat] Failed to send response to Teams: {e}", exc_info=True)
         
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             if not result.get("action_notification_sent"):
@@ -2210,6 +2219,55 @@ def _send_response_to_slack(
     except Exception as e:
         logger.error(f"[BackgroundChat] Error sending response to Slack: {e}", exc_info=True)
         raise
+
+
+def _send_response_to_teams(
+    user_id: str,
+    session_id: str,
+    trigger_metadata: Dict[str, Any],
+    fallback_text: Optional[str] = None,
+) -> bool:
+    """Post Aurora's reply back to the Teams channel that triggered the session."""
+    try:
+        from connectors.teams_connector.client import get_teams_client_for_user
+
+        team_id = trigger_metadata.get("team_id")
+        channel_id = trigger_metadata.get("channel_id")
+        reply_to_id = trigger_metadata.get("reply_to_id")
+        if not team_id or not channel_id:
+            logger.warning("[BackgroundChat] Missing Teams team_id/channel_id for session %s", session_id)
+            return False
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:TeamsResponse]")
+                cursor.execute("SELECT messages FROM chat_sessions WHERE id = %s", (session_id,))
+                row = cursor.fetchone()
+                last_assistant_message = None
+                if row and row[0]:
+                    messages = row[0]
+                    if isinstance(messages, str):
+                        messages = json.loads(messages)
+                    for msg in reversed(messages):
+                        if isinstance(msg, dict) and msg.get("sender") in ("bot", "assistant"):
+                            last_assistant_message = msg.get("text") or msg.get("content")
+                            break
+                if not last_assistant_message:
+                    if fallback_text:
+                        last_assistant_message = fallback_text
+                    else:
+                        return False
+
+        client = get_teams_client_for_user(user_id)
+        if not client:
+            return False
+        client.send_channel_message(
+            team_id, channel_id, last_assistant_message.strip(), reply_to_id=reply_to_id,
+        )
+        return True
+    except Exception as e:
+        logger.error("[BackgroundChat] Error sending response to Teams: %s", e, exc_info=True)
+        return False
 
 
 def _send_response_to_google_chat(

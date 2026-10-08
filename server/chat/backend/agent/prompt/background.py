@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # gets the general one. Add a platform by adding one entry.
 _SOURCE_SEGMENTS: Dict[str, str] = {
     "slack": "background_source_slack",
+    "teams": "background_source_teams",
     "google_chat": "background_source_google_chat",
 }
 

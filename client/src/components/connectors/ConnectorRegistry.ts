@@ -297,6 +297,18 @@ class ConnectorRegistry {
       });
 
     this.register({
+        id: "teams",
+        name: "Microsoft Teams",
+        description:
+          "Receive alerts and act as a teammate in Microsoft Teams. Connect your tenant to get @mention replies, channel routing, and incident updates.",
+        iconPath: "/azure.ico",
+        iconBgColor: "bg-muted",
+        category: "Communication",
+        storageKey: "isTeamsConnected",
+        useCustomConnection: true,
+      });
+
+    this.register({
         id: "google_chat",
         name: "Google Chat",
         description: "Receive alerts and notifications directly in Google Chat. Connect your Google Workspace to get real-time updates and interact with Aurora.",

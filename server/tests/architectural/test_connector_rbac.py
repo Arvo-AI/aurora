@@ -28,6 +28,8 @@ EXEMPT_FILES: Set[str] = {
     "slack_events_helpers.py",
     "google_chat_events.py",
     "google_chat_events_helpers.py",
+    "teams_events.py",
+    "teams_events_helpers.py",
     "tasks.py",
     "config.py",
     "helpers.py",
@@ -61,6 +63,8 @@ EXEMPT_FUNCTIONS: Set[str] = {
     "github_app_signup_callback",
     "bitbucket_callback",
     "slack_callback",
+    "teams_callback",
+    "teams_messages",
     "google_chat_callback",
     # Webhooks (external service push — HMAC/secret validates sender)
     "webhook",

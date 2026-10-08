@@ -62,6 +62,18 @@ SPECS: Dict[str, PlatformRoutingSpec] = {
         mapping_example="\"<service> -> #<channel>\"",
         connected_check=("chat.backend.agent.tools.slack_tool", "is_slack_connected"),
     ),
+    "teams": PlatformRoutingSpec(
+        platform="teams",
+        display_name="Microsoft Teams",
+        surface_noun="Microsoft Teams channel",
+        list_channels_tool="get_connected_teams_channels",
+        history_tool="get_teams_channel_history",
+        post_tool="post_teams_message",
+        thread_param="reply_to_id",
+        scope_examples="'in Team Checkout only', 'frontend incidents only'",
+        mapping_example="\"<service> -> <channel name>\"",
+        connected_check=("chat.backend.agent.tools.teams_tool", "is_teams_connected"),
+    ),
 }
 
 

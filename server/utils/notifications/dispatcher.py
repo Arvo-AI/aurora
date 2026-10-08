@@ -61,6 +61,14 @@ def _has_slack_connected(user_id: str) -> bool:
         return False
 
 
+def _has_teams_connected(user_id: str) -> bool:
+    try:
+        from chat.backend.agent.tools.teams_tool import is_teams_connected
+        return is_teams_connected(user_id)
+    except Exception:
+        return False
+
+
 def _has_google_chat_connected(user_id: str) -> bool:
     """Check if user's org has Google Chat connected with a service account."""
     try:
@@ -503,6 +511,14 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
                 send_incidentio_incident_update(user_id, incident_data)
             except Exception:
                 logger.exception("[Dispatcher] incident.io update failed")
+
+        # --- Team-channel routing (once per incident, any connected chat platform) ---
+        if not refresh_only and (_has_slack_connected(user_id) or _has_teams_connected(user_id)):
+            try:
+                from utils.notifications.team_routing import trigger_team_routing_agent
+                trigger_team_routing_agent(user_id, incident_data)
+            except Exception:
+                logger.exception("[Dispatcher] Team routing dispatch failed")
 
     except Exception:
         logger.exception("[Dispatcher] Error in notify_investigation_completed")

@@ -3,6 +3,7 @@ import { useToast } from "@/hooks/use-toast";
 import { BitbucketIntegrationService } from "@/components/bitbucket-provider-integration";
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { slackService } from "@/lib/services/slack";
+import { teamsService } from "@/lib/services/teams";
 import { ProjectCache } from "@/components/cloud-provider/projects/projectUtils";
 
 export function useConnectorOAuth(connector: ConnectorConfig, userId: string | null) {
@@ -85,6 +86,20 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
     );
   };
 
+  const handleTeamsOAuth = async () => {
+    await withOAuthHandler(
+      async () => {
+        const response = await teamsService.connect();
+        if (response.oauth_url) {
+          window.location.href = response.oauth_url;
+        } else {
+          throw new Error("No OAuth URL received");
+        }
+      },
+      "Failed to connect to Microsoft Teams"
+    );
+  };
+
   const handleGCPOAuth = async () => {
     await withOAuthHandler(
       async () => {
@@ -115,6 +130,7 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
     isConnecting,
     handleBitbucketOAuth,
     handleSlackOAuth,
+    handleTeamsOAuth,
     handleGCPOAuth,
   };
 }

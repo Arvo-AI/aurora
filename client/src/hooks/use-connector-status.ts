@@ -5,6 +5,7 @@ import { BitbucketIntegrationService } from "@/components/bitbucket-provider-int
 import { isOvhEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { slackService } from "@/lib/services/slack";
+import { teamsService } from "@/lib/services/teams";
 import { googleChatService } from "@/lib/services/google-chat";
 import {
   getConnectedAccounts,
@@ -14,7 +15,7 @@ import { fetchR } from '@/lib/query';
 
 const pagerdutyService = require("@/lib/services/pagerduty").pagerdutyService;
 
-const SPECIAL_CONNECTORS = new Set(["github", "gitlab", "bitbucket", "onprem", "slack", "google_chat", "pagerduty"]);
+const SPECIAL_CONNECTORS = new Set(["github", "gitlab", "bitbucket", "onprem", "slack", "teams", "google_chat", "pagerduty"]);
 
 /**
  * Connection status for a single connector card.
@@ -61,6 +62,7 @@ export function useConnectorStatus(
       else if (connector.id === "gitlab") checkGitLabStatus();
       else if (connector.id === "bitbucket") checkBitbucketStatus();
       else if (connector.id === "slack") checkSlackStatus();
+      else if (connector.id === "teams") checkTeamsStatus();
       else if (connector.id === "google_chat") checkGoogleChatStatus();
       else if (connector.id === "pagerduty") checkPagerDutyStatus();
       else if (connector.id === "onprem") checkVmConfigStatus();
@@ -102,6 +104,7 @@ export function useConnectorStatus(
   useEffect(() => {
     if (!connectedOverride) return;
     if (connector.id === "slack") checkSlackStatus();
+    else if (connector.id === "teams") checkTeamsStatus();
     else if (connector.id === "google_chat") checkGoogleChatStatus();
   }, [connector.id, connectedOverride]);
 
@@ -149,6 +152,19 @@ export function useConnectorStatus(
     } catch {
       setIsConnected(false);
       setSlackStatus(null);
+    } finally {
+      setIsLoadingDetails(false);
+      setIsCheckingConnection(false);
+    }
+  };
+
+  const checkTeamsStatus = async () => {
+    setIsLoadingDetails(true);
+    try {
+      const data = await teamsService.getStatus();
+      setIsConnected(data?.connected || false);
+    } catch {
+      setIsConnected(false);
     } finally {
       setIsLoadingDetails(false);
       setIsCheckingConnection(false);
