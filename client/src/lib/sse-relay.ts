@@ -7,84 +7,45 @@ export function relayServerSentEvents(
   backendBody: ReadableStream<Uint8Array>,
   signal: AbortSignal,
 ): Response {
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let interval: ReturnType<typeof setInterval> | undefined;
-  let stopped = false;
-
-  const stopUpstream = () => {
-    // Abort, cancel, and a failed enqueue can all fire for one disconnect.
-    if (stopped) return;
-    stopped = true;
-    if (interval) clearInterval(interval);
-    // A live reader locks the body; cancelling the body itself throws.
-    if (reader) {
-      reader.cancel().catch(() => {});
-      return;
-    }
-    backendBody.cancel().catch(() => {});
-  };
+  const relay = createRelay(backendBody);
 
   const stream = new ReadableStream<Uint8Array>({
     async start(ctrl) {
-      // Already aborted, or the consumer cancelled before the loop started.
       // addEventListener does not replay an abort that already happened.
-      if (stopped || signal.aborted) {
-        stopUpstream();
-        try { ctrl.close(); } catch { /* already closed */ }
+      if (relay.stopped || signal.aborted) {
+        relay.stop();
+        closeQuietly(ctrl);
         return;
       }
 
-      reader = backendBody.getReader();
+      const reader = backendBody.getReader();
+      relay.attach(reader);
       const heartbeat = new TextEncoder().encode(':heartbeat\n\n');
-
-      interval = setInterval(() => {
+      const interval = setInterval(() => {
         try {
           ctrl.enqueue(heartbeat);
         } catch {
           // Client left. Signal abort is not guaranteed on older Bun.
-          stopUpstream();
+          relay.stop();
         }
       }, 30_000);
 
       const onAbort = () => {
-        stopUpstream();
-        try { ctrl.close(); } catch { /* already closed or errored */ }
+        relay.stop();
+        closeQuietly(ctrl);
       };
       signal.addEventListener('abort', onAbort);
 
       try {
-        while (!stopped) {
-          const { done, value } = await reader.read();
-          // Upstream ended, or a disconnect cancelled this read.
-          if (done || stopped) break;
-          try {
-            ctrl.enqueue(value);
-          } catch {
-            // Consumer stopped pulling. Drop the backend socket too.
-            stopUpstream();
-            break;
-          }
-        }
-        if (!stopped) {
-          try { ctrl.close(); } catch { /* consumer already gone */ }
-        }
-      } catch (err) {
-        stopUpstream();
-        // Abort already closed the controller; don't surface that as an error.
-        if (!signal.aborted) {
-          try { ctrl.error(err); } catch { /* already closed */ }
-        }
+        await copyUpstream(reader, ctrl, signal, relay);
       } finally {
         signal.removeEventListener('abort', onAbort);
-        if (interval) clearInterval(interval);
-        // cancel() already released the lock; release only on a clean end.
-        if (!stopped && reader) {
-          try { reader.releaseLock(); } catch { /* already released */ }
-        }
+        clearInterval(interval);
+        relay.releaseIfRunning();
       }
     },
     cancel() {
-      stopUpstream();
+      relay.stop();
     },
   });
 
@@ -96,4 +57,76 @@ export function relayServerSentEvents(
       'X-Accel-Buffering': 'no',
     },
   });
+}
+
+interface Relay {
+  stopped: boolean;
+  stop: () => void;
+  attach: (reader: ReadableStreamDefaultReader<Uint8Array>) => void;
+  releaseIfRunning: () => void;
+}
+
+function createRelay(backendBody: ReadableStream<Uint8Array>): Relay {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let stopped = false;
+
+  return {
+    get stopped() {
+      return stopped;
+    },
+    attach(next) {
+      reader = next;
+    },
+    stop() {
+      // Abort, cancel, and a failed enqueue can all fire for one disconnect.
+      if (stopped) return;
+      stopped = true;
+      // A live reader locks the body; cancelling the body itself throws.
+      if (reader) {
+        reader.cancel().catch(() => {});
+        return;
+      }
+      backendBody.cancel().catch(() => {});
+    },
+    releaseIfRunning() {
+      // cancel() already released the lock; release only on a clean end.
+      if (stopped || !reader) return;
+      try { reader.releaseLock(); } catch { /* already released */ }
+    },
+  };
+}
+
+async function copyUpstream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  ctrl: ReadableStreamDefaultController<Uint8Array>,
+  signal: AbortSignal,
+  relay: Relay,
+) {
+  try {
+    while (!relay.stopped) {
+      const { done, value } = await reader.read();
+      // Upstream ended, or a disconnect cancelled this read.
+      if (done || relay.stopped) break;
+      try {
+        ctrl.enqueue(value);
+      } catch {
+        // Consumer stopped pulling. Drop the backend socket too.
+        relay.stop();
+        break;
+      }
+    }
+    if (!relay.stopped) closeQuietly(ctrl);
+  } catch (err) {
+    relay.stop();
+    // Abort already closed the controller; don't surface that as an error.
+    if (!signal.aborted) errorQuietly(ctrl, err);
+  }
+}
+
+function closeQuietly(ctrl: ReadableStreamDefaultController<Uint8Array>) {
+  try { ctrl.close(); } catch { /* already closed or errored */ }
+}
+
+function errorQuietly(ctrl: ReadableStreamDefaultController<Uint8Array>, err: unknown) {
+  try { ctrl.error(err); } catch { /* already closed */ }
 }
