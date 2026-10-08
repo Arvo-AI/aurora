@@ -27,7 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cloudflare: firewall and rate limiting rules are read through the Rulesets
   API, since Cloudflare retired the old endpoints (`410 Gone`). Adds managed,
   redirect, cache, config, origin, and transform rules, covers every account
-  the token can see, and reports totals when a list is truncated.
+  the token can see, and reports totals when a list is truncated. Firewall
+  rule output renames `filter_expression` to `expression`.
 
 ### Security
 - Next.js 15.5.27 (cache poisoning and metadata route disclosure advisories).
