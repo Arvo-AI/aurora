@@ -7,14 +7,14 @@ import logging
 
 from flask import Blueprint, jsonify, request
 
-from connectors.teams_connector.client import get_teams_client_for_user
+from connectors.teams_connector.client import TeamsClient, get_teams_client_for_user
 from routes.slack.slack_backfill_config import BACKFILL_STALE_MINUTES
 from services.channels import prefs as channel_prefs
 from services.channels import registry
 from services.channels.classify import classify_channel
 from services.channels.update_row import update_one_channel
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import set_rls_context
+from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context, store_org_preference
 from utils.cache.redis_client import get_redis_client
 from utils.db.connection_pool import db_pool
 from utils.db.org_scope import org_read_predicate, resolve_org
@@ -28,6 +28,19 @@ MAX_AUTO_CHANNELS = 50
 MAX_ACTIVATE_DESCRIBE = 50
 AVAILABLE_CHANNELS_CACHE_TTL = 300
 LIST_CHANNELS_CAP = 2000
+
+
+def purge_teams_connector_data(user_id: str) -> None:
+    """Drop Teams channel rows and org prefs after OAuth disconnect."""
+    org_id = get_org_id_for_user(user_id)
+    if org_id:
+        store_org_preference(org_id, channel_prefs.incidents_channel_pref_key(_PROVIDER), "")
+        store_org_preference(org_id, channel_prefs.incidents_channel_name_pref_key(_PROVIDER), "")
+        store_org_preference(org_id, channel_prefs.hidden_channels_pref_key(_PROVIDER), "[]")
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        set_rls_context(cur, conn, user_id, log_prefix="[TeamsChannels:purge]")
+        cur.execute("DELETE FROM slack_channels WHERE provider = %s", (_PROVIDER,))
+        conn.commit()
 
 
 def _classify_channel(name: str, description: str) -> tuple[str, str | None]:
@@ -140,9 +153,10 @@ def _backdate_for_backfill(cur, channel_id: str) -> None:
     )
 
 
-def _enumerate_member_channels(user_id: str) -> list[dict]:
+def _enumerate_member_channels(user_id: str, client: TeamsClient | None = None) -> list[dict]:
     """All channels in joined teams minus org-hidden ids."""
-    client = get_teams_client_for_user(user_id)
+    if client is None:
+        client = get_teams_client_for_user(user_id)
     if not client:
         return []
     hidden = channel_prefs.get_hidden_channel_ids(user_id, _PROVIDER)
@@ -175,7 +189,14 @@ def _enumerate_member_channels(user_id: str) -> list[dict]:
 
 def auto_register_channels(user_id: str, team_id: str | None = None, *,
                            describe_limit: int = MAX_AUTO_CHANNELS) -> int:
-    member_channels = _enumerate_member_channels(user_id)
+    client = get_teams_client_for_user(user_id)
+    if not client:
+        logger.warning(
+            "[TeamsChannels] skip sync — no Graph client for user %s",
+            sanitize(user_id),
+        )
+        return 0
+    member_channels = _enumerate_member_channels(user_id, client)
     member_ids = {c["channel_id"] for c in member_channels}
 
     org_id = resolve_org(user_id)

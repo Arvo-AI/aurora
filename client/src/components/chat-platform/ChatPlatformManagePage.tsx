@@ -571,7 +571,7 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
               <>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-muted-foreground font-medium w-32">Workspace:</span>
-                  {platformStatus.team_url ? (
+                  {"team_url" in platformStatus && platformStatus.team_url ? (
                     <a
                       href={platformStatus.team_url}
                       target="_blank"
@@ -584,10 +584,16 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
                     <span className="text-sm font-semibold">{platformStatus.team_name || config.displayName}</span>
                   )}
                 </div>
-                {platformStatus.team_id && (
+                {"team_id" in platformStatus && platformStatus.team_id && (
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-muted-foreground font-medium w-32">Team ID:</span>
                     <span className="text-sm text-muted-foreground">{platformStatus.team_id}</span>
+                  </div>
+                )}
+                {"tenant_id" in platformStatus && platformStatus.tenant_id && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground font-medium w-32">Tenant ID:</span>
+                    <span className="text-sm text-muted-foreground">{platformStatus.tenant_id}</span>
                   </div>
                 )}
                 {platformStatus.incidents_channel_name && (

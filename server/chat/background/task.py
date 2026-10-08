@@ -293,7 +293,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'elastic', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'jira', 'action'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'elastic', 'slack', 'teams', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'jira', 'action'}
 
 _GUARDRAIL_BLOCKED_MSG = 'Action blocked by safety guardrails'
 _GUARDRAIL_USER_MSG = (
@@ -1417,7 +1417,7 @@ async def _execute_background_chat(
         # Slack/Google Chat messages are user-authored and should NOT be hidden.
         # Action prompts should also be visible to the user in the chat UI.
         source = trigger_metadata.get("source", "") if trigger_metadata else ""
-        is_scaffold = source in _RCA_SOURCES and source not in ('slack', 'google_chat', 'chat', 'action')
+        is_scaffold = source in _RCA_SOURCES and source not in ('slack', 'teams', 'google_chat', 'chat', 'action')
         human_message = HumanMessage(
             content=initial_message,
             additional_kwargs={"is_rca_scaffold": is_scaffold},

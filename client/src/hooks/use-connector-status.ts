@@ -250,6 +250,7 @@ export function useConnectorStatus(
     else if (connector.id === "bitbucket") checkBitbucketStatus();
     else if (connector.id === "onprem") checkVmConfigStatus();
     else if (connector.id === "slack") checkSlackStatus();
+    else if (connector.id === "teams") void checkTeamsStatus();
     else if (connector.id === "google_chat") checkGoogleChatStatus();
     else if (connector.id === "pagerduty") checkPagerDutyStatus();
     else {

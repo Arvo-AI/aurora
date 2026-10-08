@@ -2,14 +2,16 @@
 
 import logging
 import os
+import secrets
 import time
-from urllib.parse import quote
 
 import requests
 from flask import Blueprint, jsonify, redirect, request
 
 from connectors.teams_connector.client import get_teams_client_for_user
 from connectors.teams_connector.oauth import exchange_code_for_token, get_auth_url
+from routes.teams.teams_channels import purge_teams_connector_data
+from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_credentials_from_db
 from utils.auth.token_management import store_tokens_in_db
@@ -48,7 +50,9 @@ def teams_status(user_id):
 @require_permission("connectors", "write")
 def teams_connect(user_id):
     try:
-        return jsonify({"oauth_url": get_auth_url(state=user_id), "message": "Redirect to Microsoft for authentication"})
+        state = secrets.token_urlsafe(32)
+        store_oauth2_state(state, user_id, "teams")
+        return jsonify({"oauth_url": get_auth_url(state=state), "message": "Redirect to Microsoft for authentication"})
     except ValueError as exc:
         # Missing env vars or invalid connect params — safe to show the operator-facing text.
         logger.warning("Teams OAuth connect refused: %s", exc)
@@ -63,6 +67,10 @@ def teams_connect(user_id):
 def teams_disconnect(user_id):
     try:
         if delete_user_secret(user_id, "teams"):
+            try:
+                purge_teams_connector_data(user_id)
+            except Exception:
+                logger.warning("Teams disconnect: failed to purge local channel data", exc_info=True)
             return jsonify({"success": True, "message": "Microsoft Teams disconnected"})
         return jsonify({"error": "Failed to disconnect Microsoft Teams"}), 500
     except Exception:
@@ -77,7 +85,12 @@ def teams_callback():
         state = request.args.get("state")
         if not code or not state:
             return redirect(f"{FRONTEND_URL}?teams_auth=failed&error=no_code_or_state")
-        user_id = state
+        state_data = retrieve_oauth2_state(state)
+        if not state_data:
+            return redirect(f"{FRONTEND_URL}?teams_auth=failed&error=invalid_state")
+        user_id = state_data.get("user_id")
+        if not user_id:
+            return redirect(f"{FRONTEND_URL}?teams_auth=failed&error=invalid_state")
         token_data = exchange_code_for_token(code)
         access_token = token_data.get("access_token")
         if not access_token:

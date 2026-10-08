@@ -94,3 +94,21 @@ def exchange_code_for_token(code: str) -> Dict[str, Any]:
         logger.error("Teams OAuth token exchange failed: status=%s", response.status_code)
     response.raise_for_status()
     return response.json()
+
+
+def refresh_access_token(refresh_token: str) -> Dict[str, Any]:
+    if not refresh_token:
+        raise ValueError("refresh_token is required")
+    cfg = _validate()
+    payload = {
+        "grant_type": "refresh_token",
+        "client_id": cfg["client_id"],
+        "client_secret": cfg["client_secret"],
+        "refresh_token": refresh_token,
+        "scope": cfg["scopes"],
+    }
+    response = requests.post(TOKEN_URL.format(tenant=cfg["tenant_id"]), data=payload, timeout=30)
+    if not response.ok:
+        logger.error("Teams OAuth token refresh failed: status=%s", response.status_code)
+    response.raise_for_status()
+    return response.json()

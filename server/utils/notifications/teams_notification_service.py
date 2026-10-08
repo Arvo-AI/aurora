@@ -7,6 +7,7 @@ import logging
 import os
 import re
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import quote
 
 from connectors.teams_connector.bot_client import (
     TeamsBotError,
@@ -31,8 +32,14 @@ def _strip_html(text: str) -> str:
     return re.sub(r"<[^>]+>", "", text or "").strip()
 
 
+def _frontend_base() -> str:
+    return (FRONTEND_URL or "").rstrip("/")
+
+
 def _incident_url(incident_id: str) -> str:
-    return f"{FRONTEND_URL}/incidents/{incident_id}"
+    base = _frontend_base()
+    path = f"/incidents/{quote(str(incident_id), safe='')}"
+    return f"{base}{path}" if base else path
 
 
 def _resolve_card_target(user_id: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
@@ -113,7 +120,10 @@ def send_teams_investigation_completed_notification(
         return False
     incident_id = incident_data.get("incident_id", "unknown")
     title = incident_data.get("alert_title") or "Investigation complete"
-    summary = _strip_html(incident_data.get("summary") or "")[:1500]
+    from routes.slack.slack_events_helpers import extract_summary_section
+
+    aurora_summary = incident_data.get("aurora_summary") or ""
+    summary = _strip_html(extract_summary_section(aurora_summary) or incident_data.get("summary") or "")[:1500]
     url = _incident_url(incident_id)
     body = f"<p><strong>{_escape(title)}</strong></p>"
     if summary:
@@ -176,6 +186,8 @@ def send_teams_action_completed_notification(user_id: str, action_data: Dict[str
     if err:
         body += f"<p>{_escape(str(err)[:300])}</p>"
     session_id = action_data.get("session_id")
-    if session_id:
-        body += f'<p><a href="{_escape(FRONTEND_URL)}/chat?sessionId={_escape(session_id)}">View session</a></p>'
+    base = _frontend_base()
+    if session_id and base:
+        session_url = f"{base}/chat?sessionId={quote(str(session_id), safe='')}"
+        body += f'<p><a href="{_escape(session_url)}">View session</a></p>'
     return _post_html(tenant_id, team_id, channel_id, "Action Complete", body)

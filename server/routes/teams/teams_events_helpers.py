@@ -16,6 +16,22 @@ logger = logging.getLogger(__name__)
 TITLE_MAX_LENGTH = 50
 
 _OPENID_CONFIG: Dict[str, Any] | None = None
+_BOTFRAMEWORK_JWKS_CLIENT: jwt.PyJWKClient | None = None
+_BOTFRAMEWORK_ISSUER = "https://api.botframework.com"
+
+
+def _botframework_jwks_client() -> jwt.PyJWKClient:
+    global _OPENID_CONFIG, _BOTFRAMEWORK_JWKS_CLIENT
+    if _OPENID_CONFIG is None:
+        resp = requests.get(
+            "https://login.botframework.com/v1/.well-known/openidconfiguration",
+            timeout=15,
+        )
+        resp.raise_for_status()
+        _OPENID_CONFIG = resp.json()
+    if _BOTFRAMEWORK_JWKS_CLIENT is None:
+        _BOTFRAMEWORK_JWKS_CLIENT = jwt.PyJWKClient(_OPENID_CONFIG["jwks_uri"])
+    return _BOTFRAMEWORK_JWKS_CLIENT
 
 
 def verify_teams_request() -> bool:
@@ -29,21 +45,14 @@ def verify_teams_request() -> bool:
         return False
     token = auth_header[7:]
     try:
-        global _OPENID_CONFIG
-        if _OPENID_CONFIG is None:
-            resp = requests.get(
-                "https://login.botframework.com/v1/.well-known/openidconfiguration",
-                timeout=15,
-            )
-            resp.raise_for_status()
-            _OPENID_CONFIG = resp.json()
-        jwks_client = jwt.PyJWKClient(_OPENID_CONFIG["jwks_uri"])
+        jwks_client = _botframework_jwks_client()
         signing_key = jwks_client.get_signing_key_from_jwt(token)
         jwt.decode(
             token,
             signing_key.key,
             algorithms=["RS256"],
             audience=app_id,
+            issuer=_BOTFRAMEWORK_ISSUER,
         )
         return True
     except Exception as e:

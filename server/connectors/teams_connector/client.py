@@ -7,7 +7,7 @@ import posixpath
 import re
 import time
 from typing import Any, Dict, List, Optional
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import requests
 
@@ -49,6 +49,15 @@ class TeamsClient:
             raise TeamsAPIError("Invalid Graph path: non-canonical segments")
 
     @staticmethod
+    def _graph_url(path: str) -> str:
+        TeamsClient._validate_graph_path(path)
+        url = urljoin(f"{GRAPH_BASE.rstrip('/')}/", path.lstrip("/"))
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or parsed.netloc != "graph.microsoft.com":
+            raise TeamsAPIError("Invalid Graph URL")
+        return url
+
+    @staticmethod
     def _safe_segment(value: str, *, label: str) -> str:
         if not value or len(value) > 512:
             raise TeamsAPIError(f"Invalid Graph {label}")
@@ -57,14 +66,16 @@ class TeamsClient:
         return value
 
     def _request(self, method: str, path: str, *, params=None, json_body=None, timeout=30) -> Dict[str, Any]:
-        self._validate_graph_path(path)
-        url = f"{GRAPH_BASE}{path}"
+        url = self._graph_url(path)
         for attempt in range(3):
             response = requests.request(
                 method, url, headers=self.headers, params=params, json=json_body, timeout=timeout,
             )
             if response.status_code == 429 and attempt < 2:
-                retry = int(response.headers.get("Retry-After", 2 * (attempt + 1)))
+                try:
+                    retry = int(response.headers.get("Retry-After", 2 * (attempt + 1)))
+                except (TypeError, ValueError):
+                    retry = 2 * (attempt + 1)
                 time.sleep(min(retry, 30))
                 continue
             if not response.ok:
@@ -149,14 +160,45 @@ class TeamsClient:
         return self._request("GET", "/me")
 
 
+def _access_token_expired(creds: Dict[str, Any]) -> bool:
+    expires_in = creds.get("expires_in")
+    connected_at = creds.get("connected_at")
+    if not expires_in or not connected_at:
+        return False
+    try:
+        expiry = int(connected_at) + int(expires_in) - 300
+    except (TypeError, ValueError):
+        return False
+    return time.time() >= expiry
+
+
 def get_teams_client_for_user(user_id: str) -> Optional[TeamsClient]:
     try:
+        from connectors.teams_connector.oauth import refresh_access_token
         from utils.auth.stateless_auth import get_credentials_from_db
+        from utils.auth.token_management import store_tokens_in_db
 
         creds = get_credentials_from_db(user_id, "teams")
         if not creds or not creds.get("access_token"):
             return None
-        return TeamsClient(creds["access_token"])
+        access_token = creds["access_token"]
+        if _access_token_expired(creds):
+            refresh = creds.get("refresh_token")
+            if not refresh:
+                logger.warning("Teams access token expired and no refresh token for user")
+                return None
+            token_data = refresh_access_token(refresh)
+            access_token = token_data.get("access_token")
+            if not access_token:
+                return None
+            creds["access_token"] = access_token
+            if token_data.get("refresh_token"):
+                creds["refresh_token"] = token_data["refresh_token"]
+            if token_data.get("expires_in") is not None:
+                creds["expires_in"] = token_data["expires_in"]
+            creds["connected_at"] = int(time.time())
+            store_tokens_in_db(user_id, creds, "teams")
+        return TeamsClient(access_token)
     except Exception:
         logger.exception("Failed to get Teams client")
         return None

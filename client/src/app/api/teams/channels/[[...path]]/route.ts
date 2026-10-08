@@ -1,6 +1,9 @@
 import { NextRequest } from "next/server";
 import { forwardRequest } from "@/lib/backend-proxy";
 
+// Proxies /api/teams/channels/** to the Flask backend /teams/channels/**.
+// Kept separate from /api/teams (connect/status/disconnect) so channel-management
+// endpoints reach the backend through the required proxy boundary.
 async function handler(
   request: NextRequest,
   { params }: { params: Promise<{ path?: string[] }> },

@@ -66,6 +66,7 @@ def _has_teams_connected(user_id: str) -> bool:
         from chat.backend.agent.tools.teams_tool import is_teams_connected
         return is_teams_connected(user_id)
     except Exception:
+        logger.debug("[Dispatcher] Teams connection check failed", exc_info=True)
         return False
 
 
