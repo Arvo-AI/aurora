@@ -45,11 +45,20 @@ def _config() -> Dict[str, str]:
 
 def _validate() -> Dict[str, str]:
     cfg = _config()
-    missing = [k for k in ("client_id", "client_secret") if not cfg[k]]
+    missing_env: list[str] = []
+    if not cfg["client_id"]:
+        missing_env.append("TEAMS_CLIENT_ID")
+    if not cfg["client_secret"]:
+        missing_env.append("TEAMS_CLIENT_SECRET")
     if not _redirect_base():
-        missing.append("NEXT_PUBLIC_BACKEND_URL or NGROK_URL")
-    if missing:
-        raise ValueError(f"Teams OAuth configuration missing: {', '.join(missing)}")
+        missing_env.append("NEXT_PUBLIC_BACKEND_URL (or NGROK_URL for local dev)")
+    if missing_env:
+        raise ValueError(
+            "Microsoft Teams OAuth is not configured on this Aurora instance. Set "
+            + ", ".join(missing_env)
+            + " in .env and restart the server. Setup guide: "
+            "https://arvo-ai.github.io/aurora/docs/integrations/connectors#microsoft-teams"
+        )
     return cfg
 
 

@@ -49,6 +49,10 @@ def teams_status(user_id):
 def teams_connect(user_id):
     try:
         return jsonify({"oauth_url": get_auth_url(state=user_id), "message": "Redirect to Microsoft for authentication"})
+    except ValueError as exc:
+        # Missing env vars or invalid connect params — safe to show the operator-facing text.
+        logger.warning("Teams OAuth connect refused: %s", exc)
+        return jsonify({"error": str(exc), "error_code": "TEAMS_OAUTH_NOT_CONFIGURED"}), 503
     except Exception:
         logger.exception("Error initiating Teams OAuth")
         return jsonify({"error": "Failed to initiate Teams OAuth"}), 500
