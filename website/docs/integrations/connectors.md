@@ -836,7 +836,7 @@ user who clicked Connect.
 
 Create a separate **Azure Bot** resource (not the Entra app alone): **Create a resource** → **Azure Bot** → **Creation type: Use existing app registration** → **App ID** = step‑1 **Application (client) ID** → **App tenant ID** = **Microsoft Entra ID** → **Overview** → **Tenant ID** (Directory GUID, not `common`) → create → **Go to resource**.
 
-On that **Azure Bot** resource (search the bot name if needed):
+After create, if the sidebar only shows **Inputs / Outputs / Template**, you are on the **Deployment** page — click **Go to resource** (or search the bot handle and open **Azure Bot**). Then:
 
 1. **Settings → Configuration** — **Messaging endpoint** `https://your-api.example.com/teams/messages` (or tunnel URL + `/teams/messages` locally). Save.
 2. **Channels** — enable **Microsoft Teams**.

@@ -48,16 +48,22 @@ This is a **separate Azure resource** from the Entra app in step 1. If you only 
    - **App ID** — paste the **Application (client) ID** from step 1 (same value as `TEAMS_CLIENT_ID`).
    - **App tenant ID** — paste your org’s **Tenant ID** GUID from **Microsoft Entra ID** → **Overview** → **Tenant ID** (Directory ID). This is the Entra directory where the app registration lives — **not** the literal word `common`.  
      Do **not** confuse this with `TEAMS_TENANT_ID` in `.env`: the Azure form always wants your real tenant GUID; `TEAMS_TENANT_ID=common` is a separate OAuth sign-in setting (see §3).
-3. **Review + create** → wait until deployment finishes → **Go to resource**.
+3. **Review + create** → wait for **Your deployment is complete**.
 
-You should now be on the **Azure Bot** blade (resource type “Azure Bot” / “Bot Services”), not the Entra **App registrations** screen.
+### 2a (continued). Open the bot resource (not the deployment page)
+
+Azure often lands you on a **Deployment** screen first (`Microsoft.AzureBot-… | Overview` with left menu **Overview / Inputs / Outputs / Template** only). That page has **no** Configuration or Channels — it is not the bot.
+
+1. Click the blue **Go to resource** button on that page (under **Next steps**), **or**
+2. Portal top search → type your **bot handle** → open the result whose type is **Azure Bot** (not “Deployment”).
+
+You should now see a left menu that includes **Settings** (expand it) → **Configuration** and **Channels**. The page title is your bot name, not `Microsoft.AzureBot-… | Deployment`.
 
 ### 2b. Messaging endpoint
 
 Microsoft sends @mentions and channel traffic to this URL. It must be **public HTTPS** (use `NGROK_URL` + `/teams/messages` for local dev, same idea as OAuth).
 
-1. On the **Azure Bot** resource, open the left menu → **Settings** → **Configuration**  
-   (Some portal layouts label this blade **Configuration** directly under the bot name.)
+1. On the **Azure Bot** resource → **Settings** → **Configuration**
 2. Set **Messaging endpoint** to:
    - Production: `https://your-api.example.com/teams/messages`
    - Local + tunnel: `https://your-tunnel.example.com/teams/messages`
@@ -130,7 +136,7 @@ Delegated OAuth identifies the tenant and powers Graph **reads**. **Posts** (rep
 
 **Redirect URI mismatch** — Redirect in Entra must match exactly what Aurora sends (`{backend}/teams/callback`). With local dev, set `NGROK_URL` and use the tunnel URL in Entra.
 
-**No “Configuration” or “Channels” in the portal** — Open the **Azure Bot** resource (portal search → your bot handle → type Azure Bot). Those blades are not on the Entra **App registration** page.
+**No “Configuration” or “Channels”** — You are probably on (a) the **Deployment** page (`Inputs` / `Outputs` / `Template` in the sidebar) → click **Go to resource**, or (b) the Entra **App registration** → search for the **Azure Bot** resource instead. Configuration is only on the bot resource under **Settings**.
 
 **@mention gets no reply** — Confirm **Settings → Configuration → Messaging endpoint** is public HTTPS and ends with `/teams/messages`, the Teams **channel** is enabled, and the Teams app is installed. Check server logs for Bot Framework JWT verification (`TEAMS_APP_ID` / secret must match the bot registration).
 
