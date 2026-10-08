@@ -854,11 +854,13 @@ TEAMS_CLIENT_SECRET=
 # Azure Bot → Configuration → Microsoft App ID (usually same as TEAMS_CLIENT_ID)
 TEAMS_APP_ID=
 
-TEAMS_TENANT_ID=common                # or a specific tenant id
+TEAMS_TENANT_ID=common
 
 # Local OAuth redirect via tunnel (optional)
 NGROK_URL=https://your-tunnel.example.com
 ```
+
+**`TEAMS_TENANT_ID`** — Microsoft login endpoint for **Connect**: `common` (any work/school org, default), `organizations` (no personal Microsoft accounts), or your Entra **Tenant ID** GUID (single directory only). Must align with the app registration’s account types. The connected tenant after OAuth is taken from the user who signed in, not from this variable.
 
 Operator setup (Entra, Azure Bot, manifest, troubleshooting): `server/connectors/teams_connector/README.md` in the Aurora repo.
 

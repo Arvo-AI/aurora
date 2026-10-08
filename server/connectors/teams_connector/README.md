@@ -62,8 +62,18 @@ TEAMS_CLIENT_SECRET=
 # Azure Bot → Configuration → Microsoft App ID (often same as TEAMS_CLIENT_ID)
 TEAMS_APP_ID=
 
-TEAMS_TENANT_ID=common                   # or your tenant GUID for single-tenant
+TEAMS_TENANT_ID=common
 ```
+
+**`TEAMS_TENANT_ID`** controls which Microsoft sign-in endpoint Aurora uses when someone clicks **Connect** in the UI. It does **not** replace the tenant stored on the connection after OAuth — that comes from whoever signed in.
+
+| Value | What it means | Typical use |
+|-------|----------------|-------------|
+| `common` | Any work or school (Entra) account from any organization may sign in. | Multitenant Aurora deployments; default for most setups. |
+| `organizations` | Work/school accounts only; personal Microsoft accounts (`@outlook.com`, etc.) are blocked. | B2B product, no consumer logins. |
+| `{tenant GUID}` | Only users in that one Entra directory (e.g. `a1b2c3d4-…`). Copy **Tenant ID** from **Microsoft Entra ID** → **Overview**. | Single-tenant app registration, or Aurora instance dedicated to one customer org. |
+
+Pick a value that matches your app registration under **Supported account types** (multitenant vs single tenant). Wrong combinations produce login errors at Connect time, not in channel sync.
 
 Restart `aurora-server` after changes.
 
