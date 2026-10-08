@@ -29,7 +29,12 @@ as the connecting user.
    - `ChannelMessage.Read.All`
    - `Chat.Read`
    - `openid`, `profile`, `offline_access`
-5. **Grant admin consent** for the organization (recommended so connect is one sign-in, not a long consent screen every time).
+5. **Grant admin consent** (Entra admin only — e.g. Global Administrator):
+   - Stay on **API permissions** for this app.
+   - Click **Grant admin consent for [tenant name]** at the top of the permissions table.
+   - Confirm in the dialog.
+   - Each permission should show **Granted for [tenant name]** with a green status. If the button is missing or fails, your account lacks consent rights — ask a tenant admin.
+   - Without this step, each user sees a full consent prompt on **Connect** in Aurora.
 
 Copy **Application (client) ID** and the **client secret**.
 

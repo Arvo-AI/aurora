@@ -71,11 +71,14 @@ export const teamsService = {
   },
 
   async dismissChannel(channelId: string): Promise<void> {
-    await apiRequest(`${CHANNELS_BASE}/${channelId}/dismiss`, { method: "POST", cache: "no-store" });
+    await apiRequest(`${CHANNELS_BASE}/${encodeURIComponent(channelId)}/dismiss`, {
+      method: "POST",
+      cache: "no-store",
+    });
   },
 
   async restoreChannel(channelId: string, teamId?: string): Promise<void> {
-    await apiRequest(`${CHANNELS_BASE}/${channelId}/restore`, {
+    await apiRequest(`${CHANNELS_BASE}/${encodeURIComponent(channelId)}/restore`, {
       method: "POST",
       body: JSON.stringify(teamId ? { team_id: teamId } : {}),
       cache: "no-store",
@@ -83,7 +86,7 @@ export const teamsService = {
   },
 
   async updateChannelDescription(channelId: string, summary: string): Promise<void> {
-    await apiRequest(`${CHANNELS_BASE}/${channelId}/metadata`, {
+    await apiRequest(`${CHANNELS_BASE}/${encodeURIComponent(channelId)}/metadata`, {
       method: "PUT",
       body: JSON.stringify({ metadata_summary: summary }),
       cache: "no-store",

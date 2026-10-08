@@ -827,7 +827,9 @@ user who clicked Connect.
    - Local dev: use an HTTPS tunnel (`NGROK_URL` in `.env`, same idea as Slack) — Entra will not accept bare `localhost`.
 3. **Certificates & secrets** → client secret.
 4. **API permissions** → **Microsoft Graph** → **Delegated** — match `TEAMS_SCOPES` in `server/connectors/teams_connector/oauth.py` (`Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `Chat.Read`, `openid`, `profile`, `offline_access`, etc.).
-5. **Grant admin consent** for the tenant (recommended).
+5. **Grant admin consent** (Entra admin only — e.g. Global Administrator):
+   - On **API permissions**, click **Grant admin consent for [tenant name]** and confirm.
+   - Permissions should show **Granted for [tenant name]**. Without this, every user gets a long consent screen on Connect.
 
 #### 2. Azure Bot + Teams channel
 

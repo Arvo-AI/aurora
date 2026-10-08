@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { forwardRequest } from "@/lib/backend-proxy";
 
 // Proxies /api/teams/channels/** to the Flask backend /teams/channels/**.
@@ -9,7 +9,10 @@ async function handler(
   { params }: { params: Promise<{ path?: string[] }> },
 ) {
   const { path } = await params;
-  const suffix = path && path.length ? "/" + path.join("/") : "";
+  if (path?.some((segment) => segment === "." || segment === ".." || segment.includes("/"))) {
+    return NextResponse.json({ error: "Invalid Teams channel path" }, { status: 400 });
+  }
+  const suffix = path?.length ? "/" + path.map(encodeURIComponent).join("/") : "";
   const backendPath = "/teams/channels" + suffix;
   return forwardRequest(request, request.method, backendPath, "teams");
 }
