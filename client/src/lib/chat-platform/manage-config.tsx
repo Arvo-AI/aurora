@@ -96,7 +96,7 @@ export const teamsManageConfig: ChatPlatformManageConfig = {
   id: "teams",
   displayName: "Microsoft Teams",
   connectorName: "Microsoft Teams",
-  logoSrc: "/azure.ico",
+  logoSrc: "/microsoft-teams.svg",
   connectedStorageKey: "isTeamsConnected",
   channelIcon: MessagesSquare,
   notificationGroups: [

@@ -301,7 +301,7 @@ class ConnectorRegistry {
         name: "Microsoft Teams",
         description:
           "Receive alerts and act as a teammate in Microsoft Teams. Connect your tenant to get @mention replies, channel routing, and incident updates.",
-        iconPath: "/azure.ico",
+        iconPath: "/microsoft-teams.svg",
         iconBgColor: "bg-muted",
         category: "Communication",
         storageKey: "isTeamsConnected",
