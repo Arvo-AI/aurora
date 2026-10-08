@@ -62,7 +62,7 @@ export function useConnectorStatus(
       else if (connector.id === "gitlab") checkGitLabStatus();
       else if (connector.id === "bitbucket") checkBitbucketStatus();
       else if (connector.id === "slack") checkSlackStatus();
-      else if (connector.id === "teams") checkTeamsStatus();
+      else if (connector.id === "teams") void checkTeamsStatus();
       else if (connector.id === "google_chat") checkGoogleChatStatus();
       else if (connector.id === "pagerduty") checkPagerDutyStatus();
       else if (connector.id === "onprem") checkVmConfigStatus();
@@ -104,7 +104,7 @@ export function useConnectorStatus(
   useEffect(() => {
     if (!connectedOverride) return;
     if (connector.id === "slack") checkSlackStatus();
-    else if (connector.id === "teams") checkTeamsStatus();
+    else if (connector.id === "teams") void checkTeamsStatus();
     else if (connector.id === "google_chat") checkGoogleChatStatus();
   }, [connector.id, connectedOverride]);
 
