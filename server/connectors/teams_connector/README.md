@@ -1,10 +1,4 @@
 # Microsoft Teams Connector
-
-Hybrid setup like Google Chat: **Entra OAuth** lets an org admin connect Aurora
-(for Graph channel list/history and the manage UI). **Bot Framework** delivers
-@mentions and carries every **outbound** message as the Teams app ("Aurora"), not
-as the connecting user.
-
 ## Setup overview
 
 | Piece | Purpose |
