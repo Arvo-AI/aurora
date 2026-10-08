@@ -841,7 +841,7 @@ On that **Azure Bot** resource (search the bot name if needed):
 1. **Settings → Configuration** — **Messaging endpoint** `https://your-api.example.com/teams/messages` (or tunnel URL + `/teams/messages` locally). Save.
 2. **Channels** — enable **Microsoft Teams**.
 
-If you linked the existing app registration, `TEAMS_APP_ID` = `TEAMS_CLIENT_ID`. See `server/connectors/teams_connector/README.md` §2 for full portal steps and troubleshooting when **Configuration** is missing.
+If the bot uses the same app registration as OAuth, set only `TEAMS_CLIENT_ID` (leave `TEAMS_APP_ID` unset). See `server/connectors/teams_connector/README.md` §2.
 
 #### 3. Teams app install
 
@@ -856,8 +856,7 @@ TEAMS_CLIENT_ID=
 # Entra → Certificates & secrets → client secret Value (copy when created)
 TEAMS_CLIENT_SECRET=
 
-# Azure Bot → Configuration → Microsoft App ID (usually same as TEAMS_CLIENT_ID)
-TEAMS_APP_ID=
+# TEAMS_APP_ID=   # optional; only if bot uses a different Entra app than OAuth
 
 TEAMS_TENANT_ID=common
 

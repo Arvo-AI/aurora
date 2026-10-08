@@ -74,10 +74,12 @@ On the same **Configuration** page you will see **Microsoft App ID** — it shou
 
 | If you used… | Set in `.env` |
 |--------------|----------------|
-| **Use existing app registration** (recommended) | `TEAMS_APP_ID` = same UUID as `TEAMS_CLIENT_ID` (no second ID to copy). |
-| A **new** app created only for the bot | Copy **Microsoft App ID** from **Settings → Configuration** → `TEAMS_APP_ID`. |
+| **Use existing app registration** (recommended) | `TEAMS_CLIENT_ID` only — leave `TEAMS_APP_ID` empty. Aurora uses the client ID for the bot too. |
+| OAuth app **and** bot on **different** Entra apps | `TEAMS_CLIENT_ID` = OAuth app; `TEAMS_APP_ID` = bot’s **Microsoft App ID** from **Settings → Configuration**. |
 
-`TEAMS_CLIENT_SECRET` remains the **client secret Value** from the Entra app in step 1 (Bot Framework uses it as the app password).
+`TEAMS_CLIENT_SECRET` remains the **client secret Value** from the Entra app that owns the bot (step 1 when you use one app for both).
+
+**Why two env vars?** OAuth and Bot Framework are two APIs; some enterprises split them across two app registrations. One app for both (this guide) needs only `TEAMS_CLIENT_ID` — `TEAMS_APP_ID` is an optional override when the bot’s Microsoft App ID differs.
 
 ## 3. Configure `.env`
 
@@ -91,8 +93,8 @@ TEAMS_CLIENT_ID=
 # Entra → Certificates & secrets → client secret Value (save when you create it)
 TEAMS_CLIENT_SECRET=
 
-# Azure Bot → Configuration → Microsoft App ID (often same as TEAMS_CLIENT_ID)
-TEAMS_APP_ID=
+# Optional: only if the Azure Bot uses a *different* Entra app than OAuth (else leave blank)
+# TEAMS_APP_ID=
 
 TEAMS_TENANT_ID=common
 ```
