@@ -72,7 +72,7 @@ All remediation uses one tool: `cloudflare_action(action_type='...', zone_id='..
 2. Check `zone_settings` for current security level, dev mode, caching config.
 3. Check `analytics` for traffic spikes, elevated error rates (5xx), or threat surges.
 4. Check `firewall_events` if traffic is being blocked unexpectedly.
-5. Check `firewall_rules`, `rate_limits` and `managed_rules` if legitimate traffic appears blocked or throttled. Rules under `account_level` apply too even though they are not on the zone.
+5. Check `firewall_rules`, `rate_limits` and `managed_rules` if legitimate traffic appears blocked or throttled. `account_level` holds what the zone's own account deploys from the account level; an `execute` rule there applies to this zone only when its `expression` matches the zone.
 6. Check `dns_records` if a domain resolution issue is suspected.
 7. Check `ssl` if TLS handshake errors are reported.
 8. Check `healthchecks` and `load_balancers` if origin availability is degraded.

@@ -29,7 +29,8 @@ The Cloudflare connector allows Aurora to read DNS zones, analyze permissions, a
 1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/) > **My Profile** > **API Tokens**
 2. Click **Create Token**
 3. Use the **"Read all resources"** template as a starting point
-4. Add the **Account — API Tokens — Read** permission (required for Aurora to audit token permissions) and **Zone — Zone WAF — Read** (WAF custom rules, rate limiting rules, managed rules and the rules that replaced Page Rules are all read through the Rulesets API). On an Enterprise plan add **Account — Account WAF — Read** so rules deployed from the account level show up too.
+4. Check that the token carries **Account — API Tokens — Read** (Aurora audits the token's permissions through it) and **Zone — Zone WAF — Read** (WAF custom rules, rate-limiting rules and managed rules); add either with **+ Add more** if it is missing. On an Enterprise plan add **Account — Account WAF — Read** so rules deployed from the account level show up too.
+   The products that replaced Page Rules each have their own read permission (**Single Redirect**, **Cache Rules**, **Config Rules**, **Origin Rules**, **Transform Rules**); the "Read all resources" template is the simplest way to cover them, and a token built by hand needs them added one by one.
 5. Optionally add write permissions depending on your needs:
 
 | Permission | Purpose |

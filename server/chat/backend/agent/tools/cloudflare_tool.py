@@ -291,22 +291,44 @@ def _rule_summary(rule: Dict[str, Any], phase: Optional[str] = None) -> Dict[str
     return out
 
 
-def _account_phase_rules(client, creds: Dict[str, Any], phase: str,
+def _zone_account(client, zone_id: str) -> Optional[Dict[str, Any]]:
+    """The account that owns ``zone_id`` as ``{"id", "name"}``, or None when
+    the zone cannot be read (the caller then falls back to every account)."""
+    try:
+        zone = client.get_zone(zone_id) or {}
+    except Exception as exc:
+        logger.info("[CLOUDFLARE-TOOL] owner of zone %s unknown: %s", zone_id, exc)
+        return None
+    acct = zone.get("account") or {}
+    if not acct.get("id"):
+        return None
+    return {"id": acct["id"], "name": acct.get("name")}
+
+
+def _account_phase_rules(client, creds: Dict[str, Any], zone_id: str, phase: str,
                          expand_custom: bool) -> List[Dict[str, Any]]:
-    """Rules deployed from the account level (Enterprise), one entry per account.
+    """Rules deployed from the account level (Enterprise) by the account
+    that owns ``zone_id``, one entry per account read.
 
     Account entry points hold ``execute`` rules that deploy a ruleset to the
     zones matched by ``expression``.  Custom rulesets are expanded so the
     actual rules show; managed ones are listed by id with their overrides.
+    Only the zone's own account is read: a rule in another account cannot
+    match this zone.  When the owner cannot be resolved, every stored
+    account is read and each entry is flagged ``owner_unverified``.
     A missing permission or plan becomes a note, never a failure.
     """
+    owner = _zone_account(client, zone_id)
+    accounts = [owner] if owner else _get_accounts(creds)
     out: List[Dict[str, Any]] = []
-    for acct in _get_accounts(creds):
+    for acct in accounts:
         entry: Dict[str, Any] = {
             "account_id": acct["id"],
             "account_name": acct.get("name"),
             "rules": [],
         }
+        if owner is None:
+            entry["owner_unverified"] = True  # may not be the account that owns the zone
         try:
             for rule in client.list_phase_rules("accounts", acct["id"], phase):
                 summary = _rule_summary(rule)
@@ -519,7 +541,7 @@ def _query_firewall_rules(creds: Dict, zone_id: str, limit: int = 50, **_kw) -> 
         limit,
     )
     result["account_level"] = _account_phase_rules(
-        client, creds, PHASE_FIREWALL_CUSTOM, expand_custom=True)
+        client, creds, zone_id, PHASE_FIREWALL_CUSTOM, expand_custom=True)
     return result
 
 
@@ -540,7 +562,7 @@ def _query_rate_limits(creds: Dict, zone_id: str, limit: int = 50, **_kw) -> Dic
         limit,
     )
     result["account_level"] = _account_phase_rules(
-        client, creds, PHASE_RATELIMIT, expand_custom=True)
+        client, creds, zone_id, PHASE_RATELIMIT, expand_custom=True)
     return result
 
 
@@ -580,7 +602,7 @@ def _query_managed_rules(creds: Dict, zone_id: str, limit: int = 50, **_kw) -> D
         result["note"] = ("Nothing is deployed in this phase's entry point. "
                           "'available_managed_rulesets' lists the managed rulesets Cloudflare offers this zone.")
     result["account_level"] = _account_phase_rules(
-        client, creds, PHASE_FIREWALL_MANAGED, expand_custom=False)
+        client, creds, zone_id, PHASE_FIREWALL_MANAGED, expand_custom=False)
     return result
 
 

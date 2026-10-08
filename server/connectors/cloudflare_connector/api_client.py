@@ -176,6 +176,11 @@ class CloudflareClient:
 
         return all_zones
 
+    def get_zone(self, zone_id: str) -> Dict:
+        """One zone with its owning account (``result.account.id`` / ``.name``)."""
+        data = self._request("GET", f"/zones/{zone_id}")
+        return data.get("result", {})
+
     # -----------------------------------------------------------------
     # DNS records
     # -----------------------------------------------------------------

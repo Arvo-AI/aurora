@@ -500,7 +500,7 @@ export default function CloudflareAuthPage() {
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">4.</span>
-                      <p>Under <strong>Permissions</strong>, click <strong>&quot;+ Add more&quot;</strong> and add <strong>Account — API Tokens — Read</strong>, then <strong>Zone — Zone WAF — Read</strong> (WAF custom rules and rate limiting rules). On an Enterprise plan also add <strong>Account — Account WAF — Read</strong> so rules deployed from the account show up.</p>
+                      <p>Under <strong>Permissions</strong>, check that <strong>Account — API Tokens — Read</strong> and <strong>Zone — Zone WAF — Read</strong> (WAF custom rules, rate limiting rules, managed rules) are listed; click <strong>&quot;+ Add more&quot;</strong> for any that are missing. On an Enterprise plan also add <strong>Account — Account WAF — Read</strong> so rules deployed from the account show up.</p>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">5.</span>

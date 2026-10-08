@@ -28,7 +28,9 @@ def _http_error(status: int) -> requests.exceptions.HTTPError:
 
 class FakeClient:
     def __init__(self, zone_phases=None, account_phases=None, rulesets=None,
-                 workers=None, zones=None, dns=None, page_rules=None, toggle=None):
+                 workers=None, zones=None, dns=None, page_rules=None, toggle=None,
+                 zone_owner=None):
+        self.zone_owner = zone_owner or {}          # zone_id -> account dict | Exception
         self.zone_phases = zone_phases or {}        # (zone_id, phase) -> ruleset | Exception
         self.account_phases = account_phases or {}  # (account_id, phase) -> ruleset | Exception
         self.rulesets = rulesets or {}              # (scope_id, ruleset_id) -> ruleset
@@ -38,6 +40,13 @@ class FakeClient:
         self.page_rules = page_rules or []
         self.toggle = toggle
         self.calls = []
+
+    def get_zone(self, zone_id):
+        self.calls.append(("zone", zone_id))
+        value = self.zone_owner.get(zone_id)
+        if isinstance(value, Exception):
+            raise value
+        return {"id": zone_id, "account": value} if value else {"id": zone_id}
 
     def get_phase_entrypoint(self, scope, scope_id, phase):
         self.calls.append(("entrypoint", scope, scope_id, phase))
@@ -95,6 +104,7 @@ def _action(client, **kwargs):
 
 def test_firewall_rules_zone_custom_rules_plus_account_level():
     client = FakeClient(
+        zone_owner={"z1": {"id": "a1", "name": "Acme"}},
         zone_phases={("z1", PHASE_FIREWALL_CUSTOM): {"id": "rs-z", "rules": [
             {"id": "r1", "action": "block", "expression": "ip.src eq 1.1.1.1",
              "description": "bad ip", "enabled": False, "last_updated": "2026-01-01"},
@@ -117,12 +127,40 @@ def test_firewall_rules_zone_custom_rules_plus_account_level():
     rule = out["results"][0]
     assert rule["id"] == "r1" and rule["expression"] == "ip.src eq 1.1.1.1"
     assert rule["enabled"] is False and rule["paused"] is True
-    a1, a2 = out["account_level"]
-    assert a1["account_id"] == "a1"
+    (a1,) = out["account_level"]  # only the account that owns z1
+    assert a1["account_id"] == "a1" and "owner_unverified" not in a1
     assert a1["rules"][0]["ruleset_id"] == "custom-1"
     assert a1["rules"][0]["ruleset_name"] == "Org-wide blocks"
     assert a1["rules"][0]["rules"][0]["id"] == "c1"
-    assert a2["rules"] == [] and "Account WAF Read" in a2["note"]
+    assert ("entrypoint", "accounts", "a2", PHASE_FIREWALL_CUSTOM) not in client.calls
+
+
+def test_account_level_denied_on_the_owning_account_is_a_note():
+    client = FakeClient(
+        zone_owner={"z1": {"id": "a2", "name": "Acme EU"}},
+        zone_phases={("z1", PHASE_FIREWALL_CUSTOM): None},
+        account_phases={("a2", PHASE_FIREWALL_CUSTOM): _http_error(403)},
+    )
+    out = _query(client, resource_type="firewall_rules", zone_id="z1")
+    assert out["success"] is True and out["results"] == []
+    (a2,) = out["account_level"]
+    assert a2["account_id"] == "a2" and a2["rules"] == []
+    assert "Account WAF Read" in a2["note"]
+
+
+def test_unknown_zone_owner_falls_back_to_every_account_and_says_so():
+    client = FakeClient(
+        zone_owner={"z1": _http_error(403)},
+        zone_phases={("z1", PHASE_FIREWALL_CUSTOM): None},
+        account_phases={("a1", PHASE_FIREWALL_CUSTOM): {"id": "rs-a", "rules": [
+            {"id": "x1", "action": "execute", "expression": "true",
+             "enabled": True, "action_parameters": {"id": "custom-1"}}]}},
+        rulesets={("a1", "custom-1"): {"id": "custom-1", "name": "Org-wide", "rules": []}},
+    )
+    out = _query(client, resource_type="firewall_rules", zone_id="z1")
+    assert [a["account_id"] for a in out["account_level"]] == ["a1", "a2"]
+    assert all(a["owner_unverified"] is True for a in out["account_level"])
+    assert out["account_level"][0]["rules"][0]["ruleset_id"] == "custom-1"
 
 
 def test_rate_limits_expose_the_ratelimit_block():

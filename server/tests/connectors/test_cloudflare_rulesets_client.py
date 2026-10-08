@@ -38,6 +38,13 @@ def test_list_accounts_paginates_instead_of_first_only():
     assert first.kwargs["params"] == {"per_page": 50, "page": 1}
 
 
+def test_get_zone_returns_the_zone_with_its_account():
+    client = _client(return_value={"result": {"id": "z1", "account": {"id": "a1", "name": "Acme"}}})
+    zone = client.get_zone("z1")
+    assert zone["account"] == {"id": "a1", "name": "Acme"}
+    assert client._request.call_args.args[:2] == ("GET", "/zones/z1")
+
+
 def test_firewall_rules_come_from_custom_rules_phase_entrypoint():
     client = _client(return_value={
         "result": {"id": "rs1", "rules": [{"id": "r1", "enabled": False, "expression": "ip.src eq 1.1.1.1"}]},
