@@ -25,6 +25,7 @@ const sidebars: SidebarsConfig = {
         'configuration/vault',
         'configuration/storage',
         'configuration/command-safety',
+        'configuration/sso',
         {
           type: 'category',
           label: 'Data Access',

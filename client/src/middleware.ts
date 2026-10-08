@@ -20,6 +20,7 @@ const publicRoutes = [
   "/api/auth/forgot-password", // Reset-code request (caller is locked out)
   "/api/auth/reset-password", // Reset completion (emailed code is the proof)
   "/api/auth/password-reset-available", // Whether SMTP is configured (no account data)
+  "/api/auth/sso-discover", // Email domain -> SSO login URL (caller isn't signed in yet)
   "/google-chat/events",  // Google Chat event POSTs (rewritten to backend)
   "/api/ping",            // Connection health check
 ]

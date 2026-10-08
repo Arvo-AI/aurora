@@ -263,6 +263,9 @@ services:
       HOSTED_SIGNUP_ENABLED: ${HOSTED_SIGNUP_ENABLED:-false}
       GITHUB_APP_CLIENT_SECRET: ${GITHUB_APP_CLIENT_SECRET}
 
+      # SAML SSO: require DNS proof of email-domain ownership (enable on multi-tenant installs)
+      SSO_ENFORCE_DOMAIN_VERIFICATION: ${SSO_ENFORCE_DOMAIN_VERIFICATION:-false}
+
       # Bitbucket OAuth
       BB_OAUTH_CLIENT_ID: ${BB_OAUTH_CLIENT_ID}
       BB_OAUTH_CLIENT_SECRET: ${BB_OAUTH_CLIENT_SECRET}

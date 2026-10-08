@@ -408,6 +408,7 @@ config:
   NEXT_PUBLIC_ENABLE_SPINNAKER: "false"      # Spinnaker integration
   NEXT_PUBLIC_ENABLE_VISUALIZATION: "false"  # Incident infra visualization UI (pairs with VISUALIZATION_ENABLED)
   HOSTED_SIGNUP_ENABLED: "false"             # One-click GitHub App signup from website (requires GITHUB_APP_CLIENT_SECRET)
+  SSO_ENFORCE_DOMAIN_VERIFICATION: "false"   # SAML SSO: require DNS proof of email-domain ownership (set true when multi-tenant)
   
   # --- Pod Isolation Settings ---
   # When enabled, the chart automatically creates:

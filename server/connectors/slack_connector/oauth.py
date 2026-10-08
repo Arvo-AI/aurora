@@ -4,6 +4,8 @@ import requests
 from typing import Dict, Any
 from dotenv import load_dotenv
 
+from utils.web.public_url import external_backend_url
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -12,15 +14,7 @@ logger = logging.getLogger(__name__)
 CLIENT_ID = os.getenv("SLACK_CLIENT_ID")
 CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET")
 
-# Use ngrok URL for development if available, otherwise use backend URL
-ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-
-# For development, prefer ngrok URL if available
-if ngrok_url and backend_url.startswith("http://localhost"):
-    base_url = ngrok_url
-else:
-    base_url = backend_url
+base_url = external_backend_url()
 
 REDIRECT_URI = f"{base_url}/slack/callback"
 

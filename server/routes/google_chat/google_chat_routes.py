@@ -23,6 +23,7 @@ from connectors.google_chat_connector.oauth import (
     exchange_code_for_token,
 )
 from utils.auth.token_management import store_tokens_in_db
+from utils.web.public_url import external_backend_url
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.oauth2_state_cache import store_oauth2_state, retrieve_oauth2_state
 from utils.secrets.secret_ref_utils import delete_user_secret
@@ -42,9 +43,7 @@ def google_chat_env_check(_user_id):
     has_client_secret = bool(os.getenv("GOOGLE_CHAT_CLIENT_SECRET"))
     has_service_account = bool(os.getenv("GOOGLE_CHAT_SERVICE_ACCOUNT_KEY"))
 
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-    base_url = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
+    base_url = external_backend_url()
 
     return jsonify({
         "configured": bool(has_client_id and has_client_secret and has_service_account),
