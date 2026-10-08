@@ -799,6 +799,26 @@ def _check_sentry(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_mcp(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Local read of the registered MCP server list -- no network calls.
+
+    Validating would mean handshaking into customer networks on every status
+    poll. Registration already proved each server reachable, and ``refresh``
+    re-validates on demand.
+    """
+    servers = [
+        s for s in (creds.get("servers") or [])
+        if isinstance(s, dict) and s.get("label") and s.get("url")
+    ]
+    if not servers:
+        return {"connected": False}
+    return {
+        "connected": True,
+        "serverCount": len(servers),
+        "toolCount": sum(len(s.get("tools") or []) for s in servers),
+    }
+
+
 def _check_gitlab(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Mirrors /gitlab/status — validates via GitLab user API."""
     access_token = creds.get("access_token")
@@ -853,6 +873,7 @@ PROVIDER_CHECKERS = {
     # Credential-existence checks (no live API endpoint to validate against)
     "netdata": _check_netdata,
     "newrelic": _check_newrelic,
+    "mcp": _check_mcp,
     "gcp": _check_gcp_credentials,
     "aws": _check_credentials_only,
     "azure": _check_credentials_only,

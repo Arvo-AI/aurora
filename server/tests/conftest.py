@@ -50,6 +50,11 @@ _OPTIONAL_PACKAGES = (
     "hvac", "redis", "celery", "flask_socketio",
     "flask_cors", "langchain", "langgraph", "requests", "tiktoken",
     "dotenv", "flask",
+    # The MCP SDK, used by connectors/mcp_connector/client.py. CI does not
+    # install it, so it is stubbed here. httpx comes in with the SDK, so it is
+    # absent from CI for the same reason.
+    "mcp", "mcp.client", "mcp.client.sse", "mcp.client.streamable_http",
+    "mcp.client.auth", "httpx",
     # routes/memory/routes.py imports PdfReader at module scope for upload
     # text-extraction, so the blueprint is unimportable without it — even for
     # tests that never touch the upload route.

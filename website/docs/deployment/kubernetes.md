@@ -134,7 +134,7 @@ The script prompts for: container registry, storage bucket, LLM provider/key, an
 
 **After deployment**, open the frontend URL. The first user to register becomes the org admin.
 
-You're done. Skip to [Post-Deploy: DNS & TLS](#dns--tls) if you need to configure a real domain or HTTPS.
+You're done. Skip to [Post-Deploy: DNS](#dns) if you need to configure a real domain or HTTPS.
 
 ---
 

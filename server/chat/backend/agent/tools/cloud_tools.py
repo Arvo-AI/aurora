@@ -997,6 +997,7 @@ from .mcp_tools import (
     _langchain_tools_cache_expiry,
     LANGCHAIN_TOOLS_CACHE_DURATION
 )
+from connectors.mcp_connector.store import fingerprint as mcp_fingerprint
 
 
 # Bitbucket tool actions that mutate state. Read-only sessions (PR change-
@@ -1072,7 +1073,11 @@ def get_cloud_tools():
     # hpa_vpa is part of the key for the same reason postmortem is: it changes
     # which tools are returned, so sharing a cache entry across contexts would
     # leak the card tool into an ordinary chat (or withhold it from the action).
-    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}"
+    # The MCP fingerprint is in the key so connecting a server takes effect on
+    # the next turn: without it the agent ran on a stale tool list for up to
+    # LANGCHAIN_TOOLS_CACHE_DURATION after registration and insisted the tools
+    # did not exist.
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}"
     
     current_time = time.time()
     if (
@@ -3052,7 +3057,30 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         import traceback
         logging.error(f"Traceback: {traceback.format_exc()}")
         # Continue with native tools even if MCP fails
-    
+
+    # Add customer-registered MCP servers (DEV-1604). Two dispatcher tools
+    # (mcp_list_tools / mcp_call_tool) regardless of how many servers or tools
+    # are registered — N tools in the prompt did not survive multiple servers
+    # with hundreds of tools each. Reads cached schemas from Vault; writes are
+    # withheld in background/PR-review where no human can approve them.
+    try:
+        from .custom_mcp_tools import get_custom_mcp_tools
+
+        tools.extend(get_custom_mcp_tools(
+            user_id,
+            is_background=is_background,
+            is_pr_review=is_pr_review,
+            mode=mode,
+            tool_capture=tool_capture,
+            send_tool_start=send_tool_start,
+            send_tool_completion=send_tool_completion,
+            send_tool_error=send_tool_error,
+            run_async_in_thread=run_async_in_thread,
+            wrap_func_with_capture=wrap_func_with_capture,
+        ))
+    except Exception as e:
+        logging.warning(f"Failed to add custom MCP tools (treating as not connected): {e}")
+
     # Add web_search tool with explicit args_schema so LLM sees full parameter schema
     # Apply context and notification wrappers similar to other tools
     context_wrapped_ws = with_user_context(web_search)

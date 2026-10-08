@@ -114,6 +114,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                           "Authorization", "X-Provider-Preference"],
                         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
+        r"/mcp/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                    "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                      "Authorization", "X-Provider-Preference"],
+                    "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/incidentio/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                            "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                              "Authorization", "X-Provider-Preference"],
@@ -458,6 +462,10 @@ app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
 from routes.elastic import bp as elastic_bp, search_bp as elastic_search_bp
 app.register_blueprint(elastic_bp, url_prefix="/elastic")
 app.register_blueprint(elastic_search_bp, url_prefix="/elastic")
+
+# --- Custom MCP server connector routes (Aurora as MCP client) ---
+from routes.mcp import bp as mcp_servers_bp
+app.register_blueprint(mcp_servers_bp, url_prefix="/mcp")
 
 # --- incident.io Integration Routes ---
 from routes.incidentio import bp as incidentio_bp  # noqa: F401

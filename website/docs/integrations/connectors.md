@@ -1810,8 +1810,13 @@ Only **posting** (review comments) uses the bot; investigation reads always use 
 
 ---
 
-## Credential Storage
+## Anything Else: Custom MCP Servers
 
+If a system you need has no connector above, you can register your own [MCP](https://modelcontextprotocol.io/) server and Aurora will discover and use its tools. See [Custom MCP Servers](./custom-mcp-servers.md).
+
+---
+
+## Credential Storage
 All connector credentials are stored securely in HashiCorp Vault:
 
 - Credentials are encrypted at rest
