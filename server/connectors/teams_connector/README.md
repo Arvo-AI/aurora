@@ -22,21 +22,20 @@ as the connecting user.
    - Redirect URI (local with tunnel): `https://your-tunnel.example.com/teams/callback`
    - Redirect URI (direct backend): `https://your-api.example.com/teams/callback`
    - Microsoft does not allow bare `localhost` for production; use a tunnel for local dev ([ngrok](https://ngrok.com), etc.) and set `NGROK_URL` in `.env` (same pattern as Slack).
-3. **Certificates & secrets** → create a **Client secret**
-4. **API permissions** → **Microsoft Graph** → **Delegated permissions** — add scopes that match `TEAMS_SCOPES` in `oauth.py`:
+3. **Overview** (same app registration) → copy **Application (client) ID** → set `TEAMS_CLIENT_ID` in `.env`.
+4. **Certificates & secrets** → **New client secret** → copy the **Value** column **immediately** (Azure shows it only once) → set `TEAMS_CLIENT_SECRET` in `.env`. The same secret is the Bot Framework **app password** for outbound bot messages.
+5. **API permissions** → **Microsoft Graph** → **Delegated permissions** — add scopes that match `TEAMS_SCOPES` in `oauth.py`:
    - `Team.ReadBasic.All`
    - `Channel.ReadBasic.All`
    - `ChannelMessage.Read.All`
    - `Chat.Read`
    - `openid`, `profile`, `offline_access`
-5. **Grant admin consent** (Entra admin only — e.g. Global Administrator):
+6. **Grant admin consent** (Entra admin only — e.g. Global Administrator):
    - Stay on **API permissions** for this app.
    - Click **Grant admin consent for [tenant name]** at the top of the permissions table.
    - Confirm in the dialog.
    - Each permission should show **Granted for [tenant name]** with a green status. If the button is missing or fails, your account lacks consent rights — ask a tenant admin.
    - Without this step, each user sees a full consent prompt on **Connect** in Aurora.
-
-Copy **Application (client) ID** and the **client secret**.
 
 ## 2. Create an Azure Bot
 
@@ -46,7 +45,7 @@ Copy **Application (client) ID** and the **client secret**.
    - `https://your-api.example.com/teams/messages`
 4. Enable the **Microsoft Teams** channel for the bot.
 
-Copy the bot **Microsoft App ID** (usually the same as the Entra **Client ID**). Set `TEAMS_APP_ID` to that value if you use a separate env var.
+On the bot **Configuration** page, copy **Microsoft App ID** → set `TEAMS_APP_ID` in `.env` (usually the same UUID as `TEAMS_CLIENT_ID` when the bot uses the same app registration).
 
 ## 3. Configure `.env`
 
@@ -54,9 +53,15 @@ Copy the bot **Microsoft App ID** (usually the same as the Entra **Client ID**).
 # Tunnel for local OAuth redirect (optional; same as Slack)
 NGROK_URL=https://your-tunnel.example.com
 
-TEAMS_CLIENT_ID=your-entra-application-client-id
-TEAMS_CLIENT_SECRET=your-client-secret
-TEAMS_APP_ID=your-bot-microsoft-app-id   # often same as TEAMS_CLIENT_ID
+# Entra → App registration → Overview → Application (client) ID
+TEAMS_CLIENT_ID=
+
+# Entra → Certificates & secrets → client secret Value (save when you create it)
+TEAMS_CLIENT_SECRET=
+
+# Azure Bot → Configuration → Microsoft App ID (often same as TEAMS_CLIENT_ID)
+TEAMS_APP_ID=
+
 TEAMS_TENANT_ID=common                   # or your tenant GUID for single-tenant
 ```
 

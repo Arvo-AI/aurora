@@ -825,9 +825,10 @@ user who clicked Connect.
 2. **Authentication** → **Web** redirect URI:
    - Production: `https://your-api.example.com/teams/callback`
    - Local dev: use an HTTPS tunnel (`NGROK_URL` in `.env`, same idea as Slack) — Entra will not accept bare `localhost`.
-3. **Certificates & secrets** → client secret.
-4. **API permissions** → **Microsoft Graph** → **Delegated** — match `TEAMS_SCOPES` in `server/connectors/teams_connector/oauth.py` (`Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `Chat.Read`, `openid`, `profile`, `offline_access`, etc.).
-5. **Grant admin consent** (Entra admin only — e.g. Global Administrator):
+3. **Overview** → **Application (client) ID** → `TEAMS_CLIENT_ID` in `.env`.
+4. **Certificates & secrets** → **New client secret** → copy **Value** when created (shown once) → `TEAMS_CLIENT_SECRET` in `.env` (also the Bot Framework app password).
+5. **API permissions** → **Microsoft Graph** → **Delegated** — match `TEAMS_SCOPES` in `server/connectors/teams_connector/oauth.py` (`Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `Chat.Read`, `openid`, `profile`, `offline_access`, etc.).
+6. **Grant admin consent** (Entra admin only — e.g. Global Administrator):
    - On **API permissions**, click **Grant admin consent for [tenant name]** and confirm.
    - Permissions should show **Granted for [tenant name]**. Without this, every user gets a long consent screen on Connect.
 
@@ -844,9 +845,15 @@ Publish or sideload a Teams app manifest for this bot and **install it in teams*
 #### 4. Configure environment
 
 ```bash
-TEAMS_CLIENT_ID=your-entra-client-id
-TEAMS_CLIENT_SECRET=your-client-secret
-TEAMS_APP_ID=your-bot-app-id          # usually same as client id
+# Entra app registration → Overview → Application (client) ID
+TEAMS_CLIENT_ID=
+
+# Entra → Certificates & secrets → client secret Value (copy when created)
+TEAMS_CLIENT_SECRET=
+
+# Azure Bot → Configuration → Microsoft App ID (usually same as TEAMS_CLIENT_ID)
+TEAMS_APP_ID=
+
 TEAMS_TENANT_ID=common                # or a specific tenant id
 
 # Local OAuth redirect via tunnel (optional)
