@@ -500,7 +500,7 @@ export default function CloudflareAuthPage() {
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">4.</span>
-                      <p>Under <strong>Permissions</strong>, check that <strong>Account — API Tokens — Read</strong></p>
+                      <p>Under <strong>Permissions</strong>, double-check that <strong>Account — API Tokens — Read has been selected.</strong></p>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">5.</span>
