@@ -13,6 +13,15 @@ from chat.backend.agent.skills.loader import (
 logger = logging.getLogger(__name__)
 
 
+# Trigger sources that speak on a chat platform get a platform-specific
+# "critical requirements" segment (reply format, threading); every other source
+# gets the general one. Add a platform by adding one entry.
+_SOURCE_SEGMENTS: Dict[str, str] = {
+    "slack": "background_source_slack",
+    "google_chat": "background_source_google_chat",
+}
+
+
 def _append_segment(
     parts: List[str],
     segment_name: str,
@@ -116,10 +125,9 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
     )
 
     # Critical requirements - MUST complete all before stopping
-    if source == 'slack':
-        _append_segment(parts, "background_source_slack", leading_blank=True)
-    elif source == 'google_chat':
-        _append_segment(parts, "background_source_google_chat", leading_blank=True)
+    _source_segment = _SOURCE_SEGMENTS.get(source)
+    if _source_segment:
+        _append_segment(parts, _source_segment, leading_blank=True)
     else:
         _append_segment(
             parts,

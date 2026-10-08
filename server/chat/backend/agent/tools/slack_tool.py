@@ -401,36 +401,11 @@ def _is_member_channel(user_id: str, channel_id: str) -> Optional[bool]:
     row with ``is_member``), False if not, None if the lookup itself failed.
 
     Same bar as ``routes.slack.slack_channels._is_active_channel``: membership
-    is the permission to post. The description (``metadata_status``) is only a
-    hint for *choosing* a channel and is deliberately not required here — a
-    member channel whose description hasn't generated yet is still a legitimate
-    destination (e.g. a thread reply, or a routing-map entry). On a DB error
-    returns None so the caller can fail closed without claiming the channel is
-    inactive: dropping one teammate message is better than posting into a
-    channel the user asked Aurora to stay out of, and a transient error must not
-    look like a stale mapping.
+    is the permission to post. See ``registry.channel_membership`` for why a DB
+    error yields None (fail closed, but don't claim the channel is inactive).
     """
-    try:
-        from utils.db.connection_pool import db_pool
-        from utils.auth.stateless_auth import set_rls_context
-        from utils.db.org_scope import resolve_org, org_read_predicate
-
-        org_id = resolve_org(user_id)
-        predicate, pred_params = org_read_predicate(user_id, org_id)
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[SlackTool:active]")
-                cur.execute(
-                    f"""SELECT 1 FROM slack_channels
-                         WHERE provider = 'slack' AND channel_id = %s AND {predicate}
-                           AND is_member
-                         LIMIT 1""",
-                    (channel_id, *pred_params),
-                )
-                return cur.fetchone() is not None
-    except Exception:
-        logger.exception("[SlackTool] Could not verify membership of channel %s; refusing post", channel_id)
-        return None
+    from services.channels import registry
+    return registry.channel_membership(user_id, "slack", channel_id)
 
 
 class GetConnectedSlackChannelsArgs(BaseModel):
@@ -452,45 +427,8 @@ def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
         return json.dumps({"error": _ERR_NO_USER})
 
     try:
-        from utils.db.connection_pool import db_pool
-        from utils.auth.stateless_auth import set_rls_context
-        from utils.db.org_scope import resolve_org, org_read_predicate
-
-        org_id = resolve_org(user_id)
-        predicate, pred_params = org_read_predicate(user_id, org_id)
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[SlackTool:connected]")
-                # Active = described member channels: a channel being active IS
-                # the permission to post teammate messages here (the structured
-                # incident card is separate — it goes only to the single
-                # configured incidents channel). Membership is the source of
-                # truth, so there's no separate "dismissed" flag to filter on.
-                cur.execute(
-                    f"""SELECT DISTINCT ON (channel_id)
-                              channel_id, channel_name, channel_type,
-                              detected_platform, metadata_summary, is_member
-                         FROM slack_channels
-                        WHERE provider = 'slack'
-                          AND is_member
-                          AND metadata_status = 'ready'
-                          AND {predicate}
-                        ORDER BY channel_id, updated_at DESC""",
-                    pred_params,
-                )
-                rows = cur.fetchall()
-
-        channels = [
-            {
-                "channel_id": r[0],
-                "channel_name": r[1],
-                "channel_type": r[2],
-                "detected_platform": r[3],
-                "description": r[4] or "(no description)",
-                "is_member": r[5],
-            }
-            for r in rows
-        ]
+        from services.channels import registry
+        channels = registry.get_connected_channels(user_id, "slack")
 
         if not channels:
             return json.dumps({

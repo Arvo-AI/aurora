@@ -44,16 +44,22 @@ export interface MemoryEntry {
   // Null for agent edits or pre-migration entries — fall back to last_edited_by.
   last_edited_by_name?: string | null;
   updated_at: string | null;
+  // Set by the backend for identity-locked entries (PROTECTED_ENTRIES in
+  // server/services/memory/__init__.py). Absent from responses of an older
+  // backend, in which case isProtectedEntry falls back to the local mirror.
+  is_protected?: boolean;
 }
 
-// Mirrors PROTECTED_ENTRIES in server/services/memory/__init__.py. These entries
-// live in user-writable categories and their content is freely editable, but a
-// feature pins to their (category, title) pair — so renaming, recategorizing, or
-// deleting one would silently detach it. The backend rejects those with 403; the
-// UI hides the affordances so it never comes up.
+// Fallback mirror of PROTECTED_ENTRIES for responses that predate the
+// `is_protected` flag. These entries live in user-writable categories and their
+// content is freely editable, but a feature pins to their (category, title)
+// pair — so renaming, recategorizing, or deleting one would silently detach it.
+// The backend rejects those with 403; the UI hides the affordances so it never
+// comes up.
 const PROTECTED_ENTRIES: ReadonlySet<string> = new Set(["context/Slack"]);
 
-export function isProtectedEntry(entry: Pick<MemoryEntry, "category" | "title">): boolean {
+export function isProtectedEntry(entry: Pick<MemoryEntry, "category" | "title" | "is_protected">): boolean {
+  if (typeof entry.is_protected === "boolean") return entry.is_protected;
   return PROTECTED_ENTRIES.has(`${entry.category}/${entry.title}`);
 }
 
