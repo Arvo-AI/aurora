@@ -11,6 +11,15 @@ from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import apply_correlation_outcome
+from services.incidents.repeat_investigation import (
+    alert_signature,
+    claim_enqueue,
+    lock_existing_incident,
+    repeat_needs_investigation,
+    replace_claim_with_task,
+    should_start_investigation,
+    try_reopen_incident,
+)
 from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
@@ -246,6 +255,7 @@ def trigger_delayed_rca(
     incident_title: str,
     incident_number: int,
     incident_urgency: str,
+    rca_claim: Optional[str] = None,
 ) -> None:
     """
     Delayed RCA trigger task.
@@ -281,7 +291,7 @@ def trigger_delayed_rca(
 
                 cursor.execute(
                     """
-                    SELECT aurora_chat_session_id FROM incidents
+                    SELECT aurora_chat_session_id, rca_celery_task_id FROM incidents
                     WHERE id = %s AND user_id = %s
                     """,
                     (incident_db_id, user_id),
@@ -291,6 +301,14 @@ def trigger_delayed_rca(
                 if not row:
                     logger.warning(
                         "[PAGERDUTY][RCA-DELAYED] Incident %s not found, skipping",
+                        incident_db_id,
+                    )
+                    return
+
+                # A newer firing replaced this claim. Don't start the RCA it queued.
+                if rca_claim and row[1] != rca_claim:
+                    logger.info(
+                        "[PAGERDUTY][RCA-DELAYED] Incident %s claim was replaced; skipping",
                         incident_db_id,
                     )
                     return
@@ -408,13 +426,17 @@ def trigger_delayed_rca(
                     },
                     incident_id=incident_db_id,
                     rail_text=rail_text,
+                    rca_claim=rca_claim,
                 )
                 
-                # Store Celery task ID immediately for cancellation support
-                cursor.execute(
-                    "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                    (task.id, incident_db_id)
-                )
+                # A claim fences this task. Tasks queued before claims existed write the id directly.
+                if rca_claim:
+                    replace_claim_with_task(cursor, incident_db_id, task.id, rca_claim)
+                else:
+                    cursor.execute(
+                        "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                        (task.id, incident_db_id),
+                    )
                 conn.commit()
                 
                 logger.info(
@@ -635,24 +657,33 @@ def process_pagerduty_event(
                             corr_exc,
                         )
 
-                # Insert or update incident.
-                # `xmax = 0` is true only for freshly inserted rows; combined with the
-                # previous-status returned via OLD-style trick below it lets us decide
-                # whether the lifecycle timeline should grow.
+                # Lock the incident this incident number already owns so two
+                # triggered deliveries cannot both start an investigation.
+                existing = lock_existing_incident(
+                    cursor, org_id=org_id, source_type="pagerduty",
+                    source_alert_id=incident_number, user_id=user_id,
+                )
+                # A duplicate trigger must not move an analyzed incident back to investigating.
+                apply_incoming_status = (
+                    event_type != "incident.triggered"
+                    or existing is None
+                    or repeat_needs_investigation(
+                        existing.status,
+                        alert_signature(existing.title, existing.service, existing.severity),
+                        alert_signature(incident_title, service_name, severity),
+                        session_id=existing.session_id,
+                        task_id=existing.task_id,
+                    )
+                )
                 cursor.execute(
                     """
-                    WITH prev AS (
-                        SELECT status FROM incidents
-                        WHERE org_id = %s AND source_type = 'pagerduty'
-                          AND source_alert_id = %s AND user_id = %s
-                    )
                     INSERT INTO incidents
                     (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
                      severity, status, started_at, alert_metadata, alert_fired_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                     SET updated_at = CURRENT_TIMESTAMP,
-                        status = EXCLUDED.status,
+                        status = CASE WHEN %s THEN EXCLUDED.status ELSE incidents.status END,
                         severity = EXCLUDED.severity,
                         started_at = CASE
                             WHEN incidents.status = 'resolved' AND EXCLUDED.status != 'resolved'
@@ -661,12 +692,9 @@ def process_pagerduty_event(
                         END,
                         alert_metadata = EXCLUDED.alert_metadata,
                         alert_fired_at = COALESCE(EXCLUDED.alert_fired_at, incidents.alert_fired_at)
-                    RETURNING id, (xmax = 0) AS inserted, (SELECT status FROM prev) AS previous_status
+                    RETURNING id, (xmax = 0) AS inserted
                     """,
                     (
-                        org_id,
-                        incident_number,
-                        user_id,
                         user_id,
                         org_id,
                         "pagerduty",
@@ -678,15 +706,35 @@ def process_pagerduty_event(
                         received_at,
                         json.dumps(alert_metadata),
                         alert_fired_at,
+                        apply_incoming_status,
                     ),
                 )
                 incident_row = cursor.fetchone()
                 incident_db_id = incident_row[0] if incident_row else None
                 incident_was_inserted = bool(incident_row[1]) if incident_row else False
-                previous_status = incident_row[2] if incident_row else None
+                previous_status = existing.status if existing else None
+                # Retrigger of the same incident number is a duplicate unless it
+                # resolved, the problem changed, or the first enqueue never landed.
+                start_rca = event_type == "incident.triggered" and should_start_investigation(
+                    incident_was_inserted, existing,
+                    title=incident_title, service=service_name, severity=severity,
+                )
+                rca_claim = None
+                if incident_db_id and start_rca and not incident_was_inserted:
+                    rca_claim = try_reopen_incident(
+                        cursor, log_prefix="[PAGERDUTY]",
+                        incident_id=incident_db_id, user_id=user_id, org_id=org_id,
+                        severity=severity, title=incident_title, service=service_name,
+                        started_at=received_at, previous_status=previous_status,
+                        record_lifecycle=False,
+                    )
+                    if not rca_claim:
+                        start_rca = False
+                if incident_db_id and incident_was_inserted and start_rca:
+                    rca_claim = claim_enqueue(cursor, incident_db_id)
                 conn.commit()
 
-                if event_type == "incident.triggered":
+                if start_rca:
                     try:
                         cursor.execute(
                             """INSERT INTO incident_alerts
@@ -726,7 +774,7 @@ def process_pagerduty_event(
                     lifecycle_writes = []
                     if incident_was_inserted and event_type == "incident.triggered":
                         lifecycle_writes.append(("created", None, "investigating"))
-                    elif previous_status is not None and previous_status != aurora_status:
+                    elif apply_incoming_status and previous_status is not None and previous_status != aurora_status:
                         ev_name = "resolved" if aurora_status == "resolved" else "status_changed"
                         lifecycle_writes.append((ev_name, previous_status, aurora_status))
 
@@ -789,9 +837,8 @@ def process_pagerduty_event(
                             f"[PAGERDUTY][WEBHOOK] Failed to notify SSE: {e}"
                         )
 
-                    # Only trigger summary generation and RCA for new incidents (incident.triggered)
-                    # For acknowledged/resolved events, we just update the status without regenerating summaries
-                    if event_type == "incident.triggered":
+                    # Summary and RCA only when this trigger is a new investigation.
+                    if start_rca:
                         # Trigger summary generation only for new incidents
                         from chat.background.summarization import (
                             generate_incident_summary,
@@ -823,14 +870,22 @@ def process_pagerduty_event(
                                     "incident_title": incident_title,
                                     "incident_number": incident_number,
                                     "incident_urgency": incident_urgency,
+                                    "rca_claim": rca_claim,
                                 },
                                 countdown=RUNBOOK_WAIT_DELAY,
                             )
                     else:
-                        logger.debug(
-                            "[PAGERDUTY][WEBHOOK] Skipping summary generation and RCA for event type %s (only triggered events create new incidents)",
-                            event_type,
-                        )
+                        # Same incident number fired again with the same problem.
+                        if event_type == "incident.triggered":
+                            logger.info(
+                                "[PAGERDUTY][WEBHOOK] Repeat trigger for incident %s; keeping the existing RCA",
+                                incident_db_id,
+                            )
+                        else:
+                            logger.debug(
+                                "[PAGERDUTY][WEBHOOK] Skipping summary generation and RCA for event type %s (only triggered events create new incidents)",
+                                event_type,
+                            )
 
     except Exception as exc:
         raise self.retry(exc=exc)
