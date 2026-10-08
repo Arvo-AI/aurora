@@ -7,6 +7,7 @@ from flask import Blueprint, jsonify, request
 
 from routes.teams.teams_events_helpers import (
     get_user_id_from_teams_tenant,
+    is_bot_mentioned,
     send_message_to_aurora,
     verify_teams_request,
 )
@@ -26,12 +27,16 @@ def teams_messages():
     if activity.get("type") != "message":
         return jsonify({}), 200
 
+    conversation = activity.get("conversation") or {}
+    # Channel bots only respond when @mentioned (Slack parity); DMs always count.
+    if conversation.get("conversationType") == "channel" and not is_bot_mentioned(activity):
+        return jsonify({}), 200
+
     text = (activity.get("text") or "").strip()
     text = _MENTION_RE.sub("", text).strip()
     if not text:
         return jsonify({}), 200
 
-    conversation = activity.get("conversation") or {}
     tenant_id = conversation.get("tenantId") or (activity.get("channelData") or {}).get("tenant", {}).get("id")
     user_id = get_user_id_from_teams_tenant(tenant_id)
     if not user_id:
@@ -42,6 +47,7 @@ def teams_messages():
     team_id = channel_data.get("team", {}).get("id") or channel_data.get("teamsTeamId")
     channel_id = conversation.get("id") or activity.get("channelId")
     reply_to_id = activity.get("id")
+    service_url = activity.get("serviceUrl")
 
     if not team_id or not channel_id:
         logger.warning("Teams message missing team_id or channel_id")
@@ -49,7 +55,13 @@ def teams_messages():
 
     try:
         send_message_to_aurora(
-            user_id, text, team_id=team_id, channel_id=channel_id, reply_to_id=reply_to_id,
+            user_id,
+            text,
+            team_id=team_id,
+            channel_id=channel_id,
+            reply_to_id=reply_to_id,
+            service_url=service_url,
+            conversation_id=conversation.get("id"),
         )
     except Exception:
         logger.exception("Failed to dispatch Teams message to Aurora")

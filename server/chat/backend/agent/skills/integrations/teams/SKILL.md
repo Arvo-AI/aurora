@@ -18,8 +18,10 @@ rca_priority: 45
 
 # Microsoft Teams
 
-Aurora acts as a teammate in connected Microsoft Teams channels. Use Teams tools to list
-channels, read history, and post conclusions when the org's **Microsoft Teams** memory
+Aurora acts as a teammate in connected Microsoft Teams channels. In a channel, users
+@mention the **Aurora Teams app** (same as @mentioning the Slack bot). Aurora replies
+as that app, not as the person who connected OAuth. Use Teams tools to list channels,
+read history, and post conclusions when the org's **Microsoft Teams** memory
 (`context/Microsoft Teams`) says to speak.
 
 ## Tools

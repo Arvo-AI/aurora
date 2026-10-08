@@ -130,12 +130,25 @@ def post_teams_message(
             "code": "channel_not_active",
         })
 
-    client = get_teams_client_for_user(user_id)
-    if not client:
-        return json.dumps({"error": _ERR_NOT_CONNECTED})
-
     try:
-        response = client.send_channel_message(team_id, channel_id, text, reply_to_id=reply_to_id or None)
+        from connectors.teams_connector.bot_client import (
+            TeamsBotError,
+            send_message_to_team_channel,
+            tenant_id_for_aurora_user,
+        )
+
+        tenant_id = tenant_id_for_aurora_user(user_id)
+        if not tenant_id:
+            return json.dumps({"error": _ERR_NOT_CONNECTED})
+        response = send_message_to_team_channel(
+            tenant_id=tenant_id,
+            team_id=team_id,
+            channel_id=channel_id,
+            text=text,
+            reply_to_id=reply_to_id or None,
+        )
+    except TeamsBotError as e:
+        return json.dumps({"error": str(e)})
     except TeamsAPIError as e:
         return json.dumps({"error": str(e)})
     except Exception as e:

@@ -1,4 +1,4 @@
-"""Microsoft Teams incident and action notifications (incidents channel card)."""
+"""Microsoft Teams incident and action notifications (posted as the Aurora bot)."""
 
 from __future__ import annotations
 
@@ -6,10 +6,13 @@ import html
 import logging
 import os
 import re
-from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
-from connectors.teams_connector.client import TeamsAPIError, get_teams_client_for_user
+from connectors.teams_connector.bot_client import (
+    TeamsBotError,
+    send_message_to_team_channel,
+    tenant_id_for_aurora_user,
+)
 from services.channels import prefs as channel_prefs
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
@@ -32,16 +35,16 @@ def _incident_url(incident_id: str) -> str:
     return f"{FRONTEND_URL}/incidents/{incident_id}"
 
 
-def _resolve_card_target(user_id: str) -> Tuple[Optional[Any], Optional[str], Optional[str]]:
-    client = get_teams_client_for_user(user_id)
-    if not client:
+def _resolve_card_target(user_id: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    tenant_id = tenant_id_for_aurora_user(user_id)
+    if not tenant_id:
         return None, None, None
     channel_id = channel_prefs.get_incidents_channel_id(user_id, _PROVIDER)
     if not channel_id:
         logger.error("[TeamsNotification] No incidents channel for user %s", sanitize(user_id))
-        return client, None, None
+        return tenant_id, None, None
     team_id = _team_id_for_channel(user_id, channel_id)
-    return client, team_id, channel_id
+    return tenant_id, team_id, channel_id
 
 
 def _team_id_for_channel(user_id: str, channel_id: str) -> Optional[str]:
@@ -60,19 +63,25 @@ def _team_id_for_channel(user_id: str, channel_id: str) -> Optional[str]:
         return None
 
 
-def _post_html(client, team_id: str, channel_id: str, title: str, body_html: str) -> bool:
+def _post_html(tenant_id: str, team_id: str, channel_id: str, title: str, body_html: str) -> bool:
     content = f"<h3>{_escape(title)}</h3>{body_html}"
     try:
-        client.send_channel_message(team_id, channel_id, content, content_type="html")
+        send_message_to_team_channel(
+            tenant_id=tenant_id,
+            team_id=team_id,
+            channel_id=channel_id,
+            text=content,
+            text_format="html",
+        )
         return True
-    except TeamsAPIError:
-        logger.exception("[TeamsNotification] Graph post failed for channel %s", sanitize(channel_id))
+    except TeamsBotError:
+        logger.exception("[TeamsNotification] bot post failed for channel %s", sanitize(channel_id))
         return False
 
 
 def send_teams_investigation_started_notification(user_id: str, incident_data: Dict[str, Any]) -> bool:
-    client, team_id, channel_id = _resolve_card_target(user_id)
-    if not client or not team_id or not channel_id:
+    tenant_id, team_id, channel_id = _resolve_card_target(user_id)
+    if not tenant_id or not team_id or not channel_id:
         return False
     incident_id = incident_data.get("incident_id", "unknown")
     title = incident_data.get("alert_title") or "Investigation"
@@ -88,7 +97,7 @@ def send_teams_investigation_started_notification(user_id: str, incident_data: D
         f"Aurora is analyzing this incident from {_escape(source)}.</p>"
         f'<p><a href="{_escape(url)}">View investigation</a></p>'
     )
-    return _post_html(client, team_id, channel_id, "Investigation Started", body)
+    return _post_html(tenant_id, team_id, channel_id, "Investigation Started", body)
 
 
 def send_teams_investigation_completed_notification(
@@ -99,8 +108,8 @@ def send_teams_investigation_completed_notification(
 ) -> bool:
     if not post_primary_card:
         return True
-    client, team_id, channel_id = _resolve_card_target(user_id)
-    if not client or not team_id or not channel_id:
+    tenant_id, team_id, channel_id = _resolve_card_target(user_id)
+    if not tenant_id or not team_id or not channel_id:
         return False
     incident_id = incident_data.get("incident_id", "unknown")
     title = incident_data.get("alert_title") or "Investigation complete"
@@ -110,7 +119,7 @@ def send_teams_investigation_completed_notification(
     if summary:
         body += f"<p>{_escape(summary)}</p>"
     body += f'<p><a href="{_escape(url)}">View full report</a></p>'
-    return _post_html(client, team_id, channel_id, "Analysis Complete", body)
+    return _post_html(tenant_id, team_id, channel_id, "Analysis Complete", body)
 
 
 def send_teams_investigation_failed_notification(
@@ -118,8 +127,8 @@ def send_teams_investigation_failed_notification(
     incident_data: Dict[str, Any],
     error_message: Optional[str] = None,
 ) -> bool:
-    client, team_id, channel_id = _resolve_card_target(user_id)
-    if not client or not team_id or not channel_id:
+    tenant_id, team_id, channel_id = _resolve_card_target(user_id)
+    if not tenant_id or not team_id or not channel_id:
         return False
     incident_id = incident_data.get("incident_id", "unknown")
     title = incident_data.get("alert_title") or "Investigation failed"
@@ -130,30 +139,34 @@ def send_teams_investigation_failed_notification(
         f"<p><strong>Error:</strong> {_escape(err)}</p>"
         f'<p><a href="{_escape(url)}">View incident</a></p>'
     )
-    return _post_html(client, team_id, channel_id, "Investigation Failed", body)
+    return _post_html(tenant_id, team_id, channel_id, "Investigation Failed", body)
 
 
 def send_teams_action_started_notification(user_id: str, action_data: Dict[str, Any]) -> Optional[dict]:
-    client, team_id, channel_id = _resolve_card_target(user_id)
-    if not client or not team_id or not channel_id:
+    tenant_id, team_id, channel_id = _resolve_card_target(user_id)
+    if not tenant_id or not team_id or not channel_id:
         return None
     name = action_data.get("action_name") or "Action"
     body = f"<p>Action <strong>{_escape(name)}</strong> is running.</p>"
     try:
-        result = client.send_channel_message(
-            team_id, channel_id, f"<h3>Action Started</h3>{body}", content_type="html",
+        result = send_message_to_team_channel(
+            tenant_id=tenant_id,
+            team_id=team_id,
+            channel_id=channel_id,
+            text=f"<h3>Action Started</h3>{body}",
+            text_format="html",
         )
         msg_id = result.get("id")
         if msg_id:
             return {"id": msg_id, "channel_id": channel_id, "team_id": team_id}
-    except TeamsAPIError:
+    except TeamsBotError:
         logger.exception("[TeamsNotification] action started post failed")
     return None
 
 
 def send_teams_action_completed_notification(user_id: str, action_data: Dict[str, Any]) -> bool:
-    client, team_id, channel_id = _resolve_card_target(user_id)
-    if not client or not team_id or not channel_id:
+    tenant_id, team_id, channel_id = _resolve_card_target(user_id)
+    if not tenant_id or not team_id or not channel_id:
         return False
     name = action_data.get("action_name") or "Action"
     status = action_data.get("status") or "unknown"
@@ -165,4 +178,4 @@ def send_teams_action_completed_notification(user_id: str, action_data: Dict[str
     session_id = action_data.get("session_id")
     if session_id:
         body += f'<p><a href="{_escape(FRONTEND_URL)}/chat?sessionId={_escape(session_id)}">View session</a></p>'
-    return _post_html(client, team_id, channel_id, "Action Complete", body)
+    return _post_html(tenant_id, team_id, channel_id, "Action Complete", body)

@@ -51,6 +51,23 @@ def verify_teams_request() -> bool:
         return False
 
 
+def is_bot_mentioned(activity: Dict[str, Any]) -> bool:
+    """True when the Teams activity @mentions this bot (Slack-style trigger)."""
+    app_id = os.getenv("TEAMS_APP_ID") or os.getenv("TEAMS_CLIENT_ID") or ""
+    if not app_id:
+        return False
+    bot_id = (activity.get("recipient") or {}).get("id") or ""
+    bot_id_alt = f"28:{app_id}" if not app_id.startswith("28:") else app_id
+    for ent in activity.get("entities") or []:
+        if ent.get("type") != "mention":
+            continue
+        mentioned = ent.get("mentioned") or {}
+        mid = mentioned.get("id") or ""
+        if mid == bot_id or mid == bot_id_alt or app_id in mid:
+            return True
+    return False
+
+
 def get_user_id_from_teams_tenant(tenant_id: str) -> Optional[str]:
     if not tenant_id:
         return None
@@ -75,6 +92,8 @@ def send_message_to_aurora(
     team_id: str,
     channel_id: str,
     reply_to_id: str | None = None,
+    service_url: str | None = None,
+    conversation_id: str | None = None,
     session_id: str | None = None,
 ):
     from chat.background.task import create_background_chat_session, run_background_chat
@@ -90,6 +109,8 @@ def send_message_to_aurora(
             "team_id": team_id,
             "channel_id": channel_id,
             "reply_to_id": reply_to_id,
+            "service_url": service_url,
+            "conversation_id": conversation_id,
         }
         session_id = create_background_chat_session(
             user_id=user_id,
@@ -107,6 +128,8 @@ def send_message_to_aurora(
             "team_id": team_id,
             "channel_id": channel_id,
             "reply_to_id": reply_to_id,
+            "service_url": service_url,
+            "conversation_id": conversation_id,
         },
         send_notifications=False,
         mode="ask",

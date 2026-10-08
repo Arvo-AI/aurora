@@ -127,6 +127,7 @@ class TeamsClient:
         *,
         content_type: str = "text",
     ) -> Dict[str, Any]:
+        """Graph delegated send — do not use for user-visible Aurora messages; use bot_client."""
         tid = self._safe_segment(team_id, label="team_id")
         cid = self._safe_segment(channel_id, label="channel_id")
         ctype = "html" if content_type == "html" else "text"

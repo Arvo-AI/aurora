@@ -2258,12 +2258,35 @@ def _send_response_to_teams(
                     else:
                         return False
 
-        client = get_teams_client_for_user(user_id)
-        if not client:
-            return False
-        client.send_channel_message(
-            team_id, channel_id, last_assistant_message.strip(), reply_to_id=reply_to_id,
+        from connectors.teams_connector.bot_client import (
+            send_message_to_team_channel,
+            send_reply_in_conversation,
+            tenant_id_for_aurora_user,
         )
+
+        tenant_id = tenant_id_for_aurora_user(user_id)
+        if not tenant_id:
+            return False
+        text = last_assistant_message.strip()
+        service_url = trigger_metadata.get("service_url")
+        conversation_id = trigger_metadata.get("conversation_id")
+        # Prefer in-thread reply on the same Bot Framework conversation (@mention path).
+        if service_url and conversation_id:
+            send_reply_in_conversation(
+                service_url=service_url,
+                conversation_id=conversation_id,
+                text=text,
+                reply_to_id=reply_to_id,
+            )
+        else:
+            send_message_to_team_channel(
+                tenant_id=tenant_id,
+                team_id=team_id,
+                channel_id=channel_id,
+                text=text,
+                reply_to_id=reply_to_id,
+                service_url=service_url,
+            )
         return True
     except Exception as e:
         logger.error("[BackgroundChat] Error sending response to Teams: %s", e, exc_info=True)
