@@ -115,6 +115,27 @@ Do this in **[Teams Developer Portal](https://dev.teams.microsoft.com/)**, not i
 
 After approval, users find the app under **Teams → Apps → Built for your org** (name from step 2), not under Azure Portal.
 
+### Validate the app package (debug upload / parsing failures)
+
+Teams often shows **Manifest parsing error message unavailable** with no detail. Use Microsoft’s validator first:
+
+1. **[App package validation](https://dev.teams.microsoft.com/tools/store-validation)** → upload the same `.zip` from **Distribute → Download** (or your sideload package).
+2. Fix **errors** before uploading in Teams; warnings are worth fixing too.
+
+**Package shape** — at the **root** of the zip (no subfolder): `manifest.json`, `color.png` (192×192), `outline.png` (32×32). Do **not** upload a manifest from **Entra** or re-zip on macOS with an extra parent folder.
+
+**Developer Portal (Basic)** — set **Full name** as well as short name; missing `name.full` in the exported manifest can fail upload even when the portal saves.
+
+**Common validator findings (Aurora bot, Team scope):**
+
+| Finding | Fix |
+|--------|-----|
+| **`supportsChannelFeatures` required** (manifest **1.25+** and `team` scope) | Add at the root of `manifest.json`: `"supportsChannelFeatures": "tier1"`. Save in the portal **Advanced** manifest editor if available; if the property disappears after reload, edit the downloaded `manifest.json`, re-zip (three files at top level), validate again. |
+| **`webApplicationInfo` / missing `resource`** | Aurora does **not** need bot SSO for @mentions. **Remove** the whole `webApplicationInfo` block, **or** set `"resource": "api://botid-{bot-microsoft-app-id}"` with the same GUID as `bots[].botId` / `TEAMS_CLIENT_ID`. |
+| Full description repeats short description | Use a longer **full** description on **Basic** (or in the manifest). |
+
+Prefer **Distribute → Publish to your org** when policy allows; use the validator + sideload only when you must.
+
 ## 4. Configure `.env`
 
 ```bash
@@ -179,6 +200,8 @@ OAuth powers Graph **reads** in Aurora. **Posts** (@mention replies, cards, rout
 ## Troubleshooting
 
 **I configured Azure Bot / enabled Teams channel but don’t see the app in Teams → Apps** — Azure is not where Teams apps are listed. Complete **§3** in [Teams Developer Portal](https://dev.teams.microsoft.com/) and **Distribute → Publish to your org** (or sideload). Enabling **Channels → Microsoft Teams** on the Azure Bot resource is necessary but not sufficient.
+
+**Manifest parsing error / upload rejected** — See **§3 → Validate the app package**. Run [app package validation](https://dev.teams.microsoft.com/tools/store-validation) on your zip; typical fixes are `supportsChannelFeatures: tier1`, **Full name** in Basic, and removing or completing `webApplicationInfo`.
 
 **Redirect URI mismatch** — Redirect in Entra must match exactly what Aurora sends (`{backend}/teams/callback`). With local dev, set `NGROK_URL` and use the tunnel URL in Entra.
 

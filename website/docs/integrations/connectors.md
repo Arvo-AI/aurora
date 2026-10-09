@@ -852,6 +852,7 @@ If the bot uses the same app registration as OAuth, set only `TEAMS_CLIENT_ID` (
 3. **What can your bot do?** — leave **all unchecked** for Aurora: do **not** enable **Only send notification** (blocks @mentions); file upload and audio/video are unused.
 4. Scopes: **Team** (required); **Personal** / **Group chat** optional → **Save**.
 5. **Distribute** → **Publish to your org** (admin), or **Preview in Teams** / **Download** zip and **Upload a custom app** in Teams if tenant policy allows.
+6. Before sideloading: run **[app package validation](https://dev.teams.microsoft.com/tools/store-validation)** on the zip. If Teams shows *Manifest parsing error message unavailable*, the validator usually reports the real issue (e.g. add `"supportsChannelFeatures": "tier1"` for **Team** scope on manifest 1.25+, set **Full name** in Basic, remove or complete `webApplicationInfo`). Details: `server/connectors/teams_connector/README.md` §3 (Validate the app package).
 
 Users then find the app in **Teams → Apps → Built for your org**. Full steps: `server/connectors/teams_connector/README.md` §3.
 
