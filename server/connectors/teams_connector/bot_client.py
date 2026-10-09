@@ -15,9 +15,11 @@ logger = logging.getLogger(__name__)
 
 # Default Teams Bot Framework endpoint when no inbound activity supplied one.
 _DEFAULT_SERVICE_URL = "https://smba.trafficmanager.net/teams/"
-_TOKEN_URL = "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token"
+# Multi-tenant (legacy) bots use the botframework.com tenant; single-tenant bots must use
+# their Entra directory — see Bot Connector authentication docs.
+_TOKEN_URL_MULTITENANT = "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token"
 _TOKEN_SCOPE = "https://api.botframework.com/.default"
-_TOKEN_CACHE: Dict[str, Any] = {"token": None, "expires_at": 0.0}
+_TOKEN_CACHE: Dict[str, Any] = {"url": None, "token": None, "expires_at": 0.0}
 
 
 class TeamsBotError(TeamsAPIError):
@@ -38,6 +40,13 @@ def _app_password() -> str:
     return secret
 
 
+def _bot_token_url() -> str:
+    tenant = (os.getenv("TEAMS_TENANT_ID") or "").strip()
+    if tenant.lower() in ("", "common", "organizations", "consumers"):
+        return _TOKEN_URL_MULTITENANT
+    return f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+
+
 def _bot_recipient_id(app_id: str) -> str:
     # Teams channel activities use the 28:{appId} recipient form.
     if app_id.startswith("28:"):
@@ -47,12 +56,17 @@ def _bot_recipient_id(app_id: str) -> str:
 
 def get_bot_access_token() -> str:
     now = time.time()
+    token_url = _bot_token_url()
     cached = _TOKEN_CACHE.get("token")
-    if cached and now < float(_TOKEN_CACHE.get("expires_at") or 0) - 60:
+    if (
+        cached
+        and _TOKEN_CACHE.get("url") == token_url
+        and now < float(_TOKEN_CACHE.get("expires_at") or 0) - 60
+    ):
         return cached
 
     resp = requests.post(
-        _TOKEN_URL,
+        token_url,
         data={
             "grant_type": "client_credentials",
             "client_id": _app_id(),
@@ -70,6 +84,7 @@ def get_bot_access_token() -> str:
     token = data.get("access_token")
     if not token:
         raise TeamsBotError("Bot Framework token response missing access_token")
+    _TOKEN_CACHE["url"] = token_url
     _TOKEN_CACHE["token"] = token
     _TOKEN_CACHE["expires_at"] = now + int(data.get("expires_in") or 3600)
     return token
@@ -80,6 +95,29 @@ def _normalized_service_url(service_url: Optional[str]) -> str:
     if not url.endswith("/"):
         url += "/"
     return url
+
+
+def _put_activity(
+    service_url: str,
+    path: str,
+    body: Dict[str, Any],
+) -> Dict[str, Any]:
+    token = get_bot_access_token()
+    url = f"{_normalized_service_url(service_url)}{path.lstrip('/')}"
+    resp = requests.put(
+        url,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json=body,
+        timeout=30,
+    )
+    if not resp.ok:
+        raise TeamsBotError(
+            f"Bot Framework PUT failed ({resp.status_code}) on {path}",
+            status_code=resp.status_code,
+        )
+    if resp.status_code == 204 or not resp.content:
+        return {}
+    return resp.json()
 
 
 def _post_activity(
@@ -126,6 +164,30 @@ def send_reply_in_conversation(
     return _post_activity(
         service_url,
         f"v3/conversations/{conversation_id}/activities",
+        activity,
+    )
+
+
+def update_activity_in_conversation(
+    *,
+    service_url: str,
+    conversation_id: str,
+    activity_id: str,
+    text: str,
+    text_format: str = "plain",
+) -> Dict[str, Any]:
+    """Replace an existing bot message (e.g. swap 'Thinking…' for the final reply)."""
+    app_id = _app_id()
+    activity: Dict[str, Any] = {
+        "type": "message",
+        "id": activity_id,
+        "from": {"id": _bot_recipient_id(app_id), "name": "Aurora"},
+        "text": text,
+        "textFormat": "html" if text_format == "html" else "plain",
+    }
+    return _put_activity(
+        service_url,
+        f"v3/conversations/{conversation_id}/activities/{activity_id}",
         activity,
     )
 

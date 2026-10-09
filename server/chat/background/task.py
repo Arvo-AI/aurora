@@ -978,6 +978,16 @@ def run_background_chat(
                     user_id, session_id, trigger_metadata,
                     fallback_text=_CHAT_ERROR_FALLBACK,
                 )
+            elif src == "teams" and not _chat_reply_sent:
+                logger.warning(
+                    "[BackgroundChat] Reply not sent on happy path for session %s; "
+                    "sending fallback so Teams isn't stuck on 'Thinking…'",
+                    session_id,
+                )
+                _send_response_to_teams(
+                    user_id, session_id, trigger_metadata,
+                    fallback_text=_CHAT_ERROR_FALLBACK,
+                )
         except Exception as _final_reply_err:
             logger.error("[BackgroundChat] Fallback chat reply failed for session %s: %s",
                          session_id, _final_reply_err, exc_info=True)
@@ -2262,6 +2272,7 @@ def _send_response_to_teams(
             send_message_to_team_channel,
             send_reply_in_conversation,
             tenant_id_for_aurora_user,
+            update_activity_in_conversation,
         )
 
         tenant_id = tenant_id_for_aurora_user(user_id)
@@ -2270,6 +2281,22 @@ def _send_response_to_teams(
         text = last_assistant_message.strip()
         service_url = trigger_metadata.get("service_url")
         conversation_id = trigger_metadata.get("conversation_id")
+        thinking_activity_id = trigger_metadata.get("thinking_activity_id")
+        # Replace the "Thinking…" placeholder when we have its activity id.
+        if service_url and conversation_id and thinking_activity_id:
+            try:
+                update_activity_in_conversation(
+                    service_url=service_url,
+                    conversation_id=conversation_id,
+                    activity_id=thinking_activity_id,
+                    text=text,
+                )
+                return True
+            except Exception:
+                logger.warning(
+                    "[BackgroundChat] Teams activity update failed; posting new message",
+                    exc_info=True,
+                )
         # Prefer in-thread reply on the same Bot Framework conversation (@mention path).
         if service_url and conversation_id:
             send_reply_in_conversation(

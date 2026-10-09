@@ -90,6 +90,8 @@ This only tells Microsoft’s bot service that Teams *may* talk to your endpoint
 
 `TEAMS_CLIENT_SECRET` remains the **client secret Value** from the Entra app that owns the bot (step 1 when you use one app for both).
 
+Set **`TEAMS_TENANT_ID`** to the same **Tenant ID** GUID as **App tenant ID** on the Azure Bot form when you use **Single tenant** (§4). Aurora uses it for **Connect** sign-in and for **outbound** Bot Framework tokens when posting replies to Teams; single-tenant bots cannot use the legacy `botframework.com` token endpoint.
+
 **Why two env vars?** OAuth and Bot Framework are two APIs; some enterprises split them across two app registrations. One app for both (this guide) needs only `TEAMS_CLIENT_ID` — `TEAMS_APP_ID` is an optional override when the bot’s Microsoft App ID differs.
 
 ## 3. Create the Teams app (Developer Portal — required to see the bot in Teams)
@@ -154,7 +156,12 @@ TEAMS_CLIENT_SECRET=
 TEAMS_TENANT_ID=<your Entra tenant GUID>
 ```
 
-**`TEAMS_TENANT_ID`** (in `.env` only) controls which Microsoft **sign-in** endpoint Aurora uses when someone clicks **Connect** (`login.microsoftonline.com/{TEAMS_TENANT_ID}/...`). It is **not** the **App tenant ID** field on the Azure Bot create form (that form always uses your Entra **Tenant ID** GUID). It also does **not** replace the tenant stored on the connection after OAuth — that comes from whoever signed in.
+**`TEAMS_TENANT_ID`** (in `.env` only) must match how the Entra app and Azure Bot are registered:
+
+- **Connect (OAuth)** — `login.microsoftonline.com/{TEAMS_TENANT_ID}/...` when users sign in.
+- **Replies to Teams** — Bot Framework access tokens for `@mention` responses. If the bot is **single-tenant** (this guide), set a **Tenant ID** GUID here; leaving `common` or omitting the variable breaks outbound posts even when chats appear in Aurora.
+
+It is the same GUID as **App tenant ID** on the Azure Bot create form and **Tenant ID** in Entra **Overview**. It does **not** replace the tenant stored on the connection after OAuth — that still comes from whoever signed in.
 
 | App registration **Supported account types** | Set `TEAMS_TENANT_ID` to |
 |---------------------------------------------|---------------------------|
@@ -167,9 +174,9 @@ TEAMS_TENANT_ID=<your Entra tenant GUID>
 | `organizations` | Work/school accounts only; personal Microsoft accounts (`@outlook.com`, etc.) are blocked. | B2B product, no consumer logins. |
 | `{tenant GUID}` | Only users in that one Entra directory (e.g. `a1b2c3d4-…`). Copy **Tenant ID** from **Microsoft Entra ID** → **Overview**. | Single-tenant app registration, or Aurora instance dedicated to one customer org. |
 
-Pick a value that matches your app registration under **Supported account types** (multitenant vs single tenant). Wrong combinations produce login errors at Connect time, not in channel sync.
+Pick a value that matches your app registration under **Supported account types** (multitenant vs single tenant). Wrong values break **Connect** and/or **Teams replies**.
 
-Restart `aurora-server` after changes.
+Restart **`aurora-server`** and **`celery_worker`** after `.env` changes.
 
 ## 5. Install the app in Microsoft Teams (per team — end users / team owners)
 
@@ -210,6 +217,10 @@ OAuth powers Graph **reads** in Aurora. **Posts** (@mention replies, cards, rout
 **No “Configuration” or “Channels”** — You are probably on (a) the **Deployment** page (`Inputs` / `Outputs` / `Template` in the sidebar) → click **Go to resource**, or (b) the Entra **App registration** → search for the **Azure Bot** resource instead. Configuration is only on the bot resource under **Settings**.
 
 **@mention gets no reply** — Confirm **Settings → Configuration → Messaging endpoint** is public HTTPS and ends with `/teams/messages`, the Teams **channel** is enabled, and the Teams app is installed. Check server logs for Bot Framework JWT verification (`TEAMS_APP_ID` / secret must match the bot registration).
+
+**Chats appear in Aurora but nothing posts back to Teams** — Celery logs may show `Bot Framework token request failed (400)`. **Single-tenant** bots must set `TEAMS_TENANT_ID` to your Entra **Tenant ID** GUID (same as Azure Bot app tenant); Aurora requests outbound tokens from `login.microsoftonline.com/{tenant}/...`, not `botframework.com`. Restart **aurora-server** and **celery_worker** after `.env` changes.
+
+**@mention UX** — Aurora posts **Thinking…** in the channel (same thread as the @mention), then **updates** that message with the final answer via the Bot Framework activity update API (Slack/Google Chat parity). If update fails, Aurora posts a new reply instead.
 
 **Bot posts fail (cards / routing)** — The Teams app must be **installed in the team/channel**. Proactive messages use Bot Framework; Graph delegated tokens are not used for outbound chat.
 

@@ -877,7 +877,7 @@ TEAMS_TENANT_ID=<your Entra tenant GUID>
 NGROK_URL=https://your-tunnel.example.com
 ```
 
-**`TEAMS_TENANT_ID`** — Microsoft login endpoint for **Connect** (`login.microsoftonline.com/{value}/...`). **Single-tenant** app registrations (typical self-hosted) must use your Entra **Tenant ID** GUID — not `common`. Multitenant apps may use `common` or `organizations`. Must match **Supported account types** on the app registration. The connected tenant after OAuth is taken from the user who signed in, not from this variable.
+**`TEAMS_TENANT_ID`** — Entra **Tenant ID** GUID for **Connect** (`login.microsoftonline.com/{value}/...`) and for **single-tenant** Bot Framework outbound tokens when Aurora posts replies to Teams. **Single-tenant** setups (typical self-hosted) must use your tenant GUID — not `common`. Same value as **App tenant ID** on the Azure Bot resource. Restart **aurora-server** and **celery_worker** after changes.
 
 Operator setup (Entra, Azure Bot, manifest, troubleshooting): `server/connectors/teams_connector/README.md` in the Aurora repo.
 

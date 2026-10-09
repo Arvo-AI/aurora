@@ -95,6 +95,29 @@ def get_user_id_from_teams_tenant(tenant_id: str) -> Optional[str]:
         return None
 
 
+def _post_teams_thinking_placeholder(
+    *,
+    service_url: str | None,
+    conversation_id: str | None,
+    reply_to_id: str | None,
+) -> str | None:
+    if not service_url or not conversation_id:
+        return None
+    try:
+        from connectors.teams_connector.bot_client import send_reply_in_conversation
+
+        result = send_reply_in_conversation(
+            service_url=service_url,
+            conversation_id=conversation_id,
+            text="Thinking…",
+            reply_to_id=reply_to_id,
+        )
+        return result.get("id") if isinstance(result, dict) else None
+    except Exception:
+        logger.warning("Failed to post Teams thinking placeholder", exc_info=True)
+        return None
+
+
 def send_message_to_aurora(
     user_id: str,
     message_text: str,
@@ -106,6 +129,12 @@ def send_message_to_aurora(
     session_id: str | None = None,
 ):
     from chat.background.task import create_background_chat_session, run_background_chat
+
+    thinking_activity_id = _post_teams_thinking_placeholder(
+        service_url=service_url,
+        conversation_id=conversation_id,
+        reply_to_id=reply_to_id,
+    )
 
     if not session_id:
         title = "Teams: " + (
@@ -120,6 +149,7 @@ def send_message_to_aurora(
             "reply_to_id": reply_to_id,
             "service_url": service_url,
             "conversation_id": conversation_id,
+            "thinking_activity_id": thinking_activity_id,
         }
         session_id = create_background_chat_session(
             user_id=user_id,
@@ -139,6 +169,7 @@ def send_message_to_aurora(
             "reply_to_id": reply_to_id,
             "service_url": service_url,
             "conversation_id": conversation_id,
+            "thinking_activity_id": thinking_activity_id,
         },
         send_notifications=False,
         mode="ask",
