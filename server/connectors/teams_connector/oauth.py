@@ -62,6 +62,11 @@ def _validate() -> Dict[str, str]:
     return cfg
 
 
+def get_redirect_uri() -> str:
+    """Public redirect URI sent to Microsoft (must match Entra app registration)."""
+    return _validate()["redirect_uri"]
+
+
 def get_auth_url(state: str) -> str:
     if not state:
         raise ValueError("State parameter is required for Teams OAuth.")

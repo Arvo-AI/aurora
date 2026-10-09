@@ -1,12 +1,27 @@
 import { apiRequest } from "@/lib/services/api-client";
 
+export interface TeamsPendingSetupStep {
+  id: string;
+  title: string;
+  detail: string;
+}
+
 export interface TeamsStatus {
   connected: boolean;
+  /** Entra OAuth + Graph token valid. */
+  oauth_connected?: boolean;
+  /** Recent bot @mention received (Teams app + messaging endpoint). */
+  bot_verified?: boolean;
+  /** OAuth and bot path verified — same as GitHub “repos connected”. */
+  setup_complete?: boolean;
+  pending_setup?: TeamsPendingSetupStep[];
   tenant_id?: string;
   team_name?: string;
   user_name?: string;
   connected_at?: number;
   incidents_channel_name?: string;
+  /** Unix seconds — last channel message Aurora received from the Teams bot. */
+  last_bot_message_at?: number | null;
   error?: string;
 }
 
@@ -37,13 +52,20 @@ export const teamsService = {
   async getStatus(): Promise<TeamsStatus | null> {
     try {
       const data = await apiRequest<Record<string, unknown>>(API_BASE, { cache: "no-store" });
+      const connected = Boolean(data?.connected);
+      const setupComplete = data?.setup_complete as boolean | undefined;
       return {
-        connected: Boolean(data?.connected),
+        connected,
+        oauth_connected: (data?.oauth_connected as boolean | undefined) ?? connected,
+        bot_verified: Boolean(data?.bot_verified),
+        setup_complete: setupComplete ?? (connected ? Boolean(data?.bot_verified) : false),
+        pending_setup: (data?.pending_setup as TeamsPendingSetupStep[] | undefined) ?? [],
         tenant_id: data?.tenant_id as string | undefined,
         team_name: data?.team_name as string | undefined,
         user_name: data?.user_name as string | undefined,
         connected_at: data?.connected_at as number | undefined,
         incidents_channel_name: data?.incidents_channel_name as string | undefined,
+        last_bot_message_at: (data?.last_bot_message_at as number | null | undefined) ?? null,
         error: data?.error as string | undefined,
       };
     } catch (error) {
@@ -52,7 +74,7 @@ export const teamsService = {
     }
   },
 
-  async connect(): Promise<{ oauth_url: string; message: string }> {
+  async connect(): Promise<{ oauth_url: string; message: string; redirect_uri?: string }> {
     return apiRequest(`${API_BASE}`, { method: "POST", cache: "no-store" });
   },
 

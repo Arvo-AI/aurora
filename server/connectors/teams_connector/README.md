@@ -1,11 +1,14 @@
 # Microsoft Teams Connector
 ## Setup overview
 
-| Piece | Purpose |
-|-------|---------|
-| Entra app registration | OAuth connect in Aurora; delegated Graph read (channels, history) |
-| Azure Bot + Teams channel | `@mention` handling; all posts as the bot |
-| Teams app install | Bot must be in teams/channels where Aurora should speak |
+| Piece | Where you do it | Purpose |
+|-------|-----------------|--------|
+| Entra app registration | **Azure Portal** | OAuth **Connect** in Aurora; Graph read (channels, history) |
+| Azure Bot + **Channels → Microsoft Teams** | **Azure Portal** | Messaging endpoint; Bot Framework receives @mentions |
+| **Teams client app** (manifest) | **[Teams Developer Portal](https://dev.teams.microsoft.com/)** — **not Azure Portal** | What users see under **Teams → Apps** and add to a team |
+| Install app per team | **Teams client** (desktop/web) | Microsoft only delivers @mentions where this app is installed |
+
+> **Common mistake:** Finishing **Azure Bot** (including **Channels → Microsoft Teams → Apply**) does **not** put an app in **Teams → Apps**. Azure wires the *backend*; you still need step **3** in the [Teams Developer Portal](https://dev.teams.microsoft.com/) so people can install the bot in a team.
 
 ## 1. Register an Entra application
 
@@ -71,10 +74,12 @@ Microsoft sends @mentions and channel traffic to this URL. It must be **public H
 
 On the same **Configuration** page you will see **Microsoft App ID** — it should match the app registration ID from step 1.
 
-### 2c. Enable Teams
+### 2c. Enable Teams (Azure — not the same as “install in a team”)
 
 1. Left menu → **Channels** (under **Settings** on some layouts).
 2. Click **Microsoft Teams** → **Apply** / save so the channel shows as enabled.
+
+This only tells Microsoft’s bot service that Teams *may* talk to your endpoint. It does **not** create an entry in the **Teams → Apps** store/catalog. Go to **§3** next.
 
 ### 2d. Map to `.env`
 
@@ -87,7 +92,21 @@ On the same **Configuration** page you will see **Microsoft App ID** — it shou
 
 **Why two env vars?** OAuth and Bot Framework are two APIs; some enterprises split them across two app registrations. One app for both (this guide) needs only `TEAMS_CLIENT_ID` — `TEAMS_APP_ID` is an optional override when the bot’s Microsoft App ID differs.
 
-## 3. Configure `.env`
+## 3. Create the Teams app (Developer Portal — required to see the bot in Teams)
+
+Do this in **[Teams Developer Portal](https://dev.teams.microsoft.com/)**, not in Azure Portal. Until this step is done, **Teams → Apps** will not list your bot for users to add to a team.
+
+1. Sign in → **Apps** → **+ New app**.
+2. **App name** and **Package name** (e.g. Aurora) → **Create**.
+3. **Configure** (left) → **App features** → **Bot** → **Set up** (or **Existing bot**).
+4. **Select an existing bot registration** → paste the same **Microsoft App ID** as step 1 / Azure Bot **Configuration** (`TEAMS_CLIENT_ID`).
+5. Under **Scope**, enable **Team** (required for channels). Enable **Personal** only if you want DMs.
+6. **Save** (top).
+7. **Publish** (left) → **Publish to your org** (needs Teams admin approval), **or** use **Preview in Teams** / **Download** zip and **Upload a custom app** in Teams if tenant policy allows.
+
+After approval, users find the app under **Teams → Apps → Built for your org** (name from step 2), not under Azure Portal.
+
+## 4. Configure `.env`
 
 ```bash
 # Tunnel for local OAuth redirect (optional; same as Slack)
@@ -102,14 +121,19 @@ TEAMS_CLIENT_SECRET=
 # Optional: only if the Azure Bot uses a *different* Entra app than OAuth (else leave blank)
 # TEAMS_APP_ID=
 
-TEAMS_TENANT_ID=common
+TEAMS_TENANT_ID=<your Entra tenant GUID>
 ```
 
-**`TEAMS_TENANT_ID`** (in `.env` only) controls which Microsoft **sign-in** endpoint Aurora uses when someone clicks **Connect**. It is **not** the **App tenant ID** field on the Azure Bot create form (that form always uses your Entra **Tenant ID** GUID). It also does **not** replace the tenant stored on the connection after OAuth — that comes from whoever signed in.
+**`TEAMS_TENANT_ID`** (in `.env` only) controls which Microsoft **sign-in** endpoint Aurora uses when someone clicks **Connect** (`login.microsoftonline.com/{TEAMS_TENANT_ID}/...`). It is **not** the **App tenant ID** field on the Azure Bot create form (that form always uses your Entra **Tenant ID** GUID). It also does **not** replace the tenant stored on the connection after OAuth — that comes from whoever signed in.
+
+| App registration **Supported account types** | Set `TEAMS_TENANT_ID` to |
+|---------------------------------------------|---------------------------|
+| **Single tenant** (most self-hosted Aurora) | Your **Tenant ID** GUID — **do not use `common`** (Microsoft returns `invalid_request` / AADSTS about `/common` not supported) |
+| **Multitenant** | `common`, `organizations`, or a specific tenant GUID |
 
 | Value | What it means | Typical use |
 |-------|----------------|-------------|
-| `common` | Any work or school (Entra) account from any organization may sign in. | Multitenant Aurora deployments; default for most setups. |
+| `common` | Any work or school (Entra) account from any organization may sign in. | **Multitenant app registration only** — not valid with single-tenant apps. |
 | `organizations` | Work/school accounts only; personal Microsoft accounts (`@outlook.com`, etc.) are blocked. | B2B product, no consumer logins. |
 | `{tenant GUID}` | Only users in that one Entra directory (e.g. `a1b2c3d4-…`). Copy **Tenant ID** from **Microsoft Entra ID** → **Overview**. | Single-tenant app registration, or Aurora instance dedicated to one customer org. |
 
@@ -117,33 +141,39 @@ Pick a value that matches your app registration under **Supported account types*
 
 Restart `aurora-server` after changes.
 
-## 4. Install the app in Microsoft Teams (per Team)
+## 5. Install the app in Microsoft Teams (per team — end users / team owners)
 
-**This is not Aurora OAuth.** **Connect** in Aurora (step 5) links your org’s Entra tenant and Graph access in Aurora. It does **not** add the bot to any Microsoft Team or channel. Teams only delivers @mentions and bot messages after the **Teams client app** (manifest) is installed where people work — like installing Aurora’s Slack app into a workspace, separate from clicking Connect in Aurora.
+**This is not Aurora OAuth.** **Connect** in Aurora (§6) must happen **before** a useful @mention test — until then Aurora logs “unknown tenant” and ignores the bot. Connect links your Entra tenant; it does **not** install the bot into any Microsoft Team. Teams only delivers @mentions after the **Teams client app** (manifest) is installed where people work — like Slack’s workspace app install, separate from Connect in Aurora.
 
 | Who | What |
 |-----|------|
-| **Platform operator** (you) | Create/publish a **Teams app package** (manifest) for your Azure Bot — once per Aurora deployment ([Teams Developer Portal](https://dev.teams.microsoft.com/) or zip sideload). Aurora does not ship this package; it must reference *your* bot. |
-| **Teams admin / team owner** | **Install** that app into each **Microsoft Team** where Aurora should appear — once per Team, not every Aurora user. |
-| **Org admin in Aurora** | Step 5 **Connect** + **Teams → Manage**. |
-| **End users** | `@mention` the bot or DM it — no install, no OAuth. |
+| **Platform operator** | §1–§4 (Entra, Azure Bot, Developer Portal, `.env`). |
+| **Team owner** | Install the app from **Teams → Apps** into each team (below). |
+| **Org admin in Aurora** | §6 **Connect** + **Teams → Manage**. |
+| **End users** | `@mention` the bot — no OAuth. |
 
-1. Publish or sideload a manifest whose bot ID matches your Entra / Azure Bot app.
-2. In Teams: open a team → **Apps** → install your app for that team (or org catalog if published tenant-wide).
-3. Confirm the app is available in channels where you @mention or receive incident cards.
+1. In Teams: open a team → **···** → **Manage team** → **Apps** (or channel **+** → **Add an app**).
+2. Search for the app name from §3, or **Apps** → **Built for your org**.
+3. In a channel where the app is installed, **@mention** the bot once (e.g. `@Aurora hello`) to confirm Teams → Azure Bot → Aurora is wired. On **Teams → Manage**, **Check bot connection** should show recent activity (Aurora records the last delivered @mention/DM).
 
 Users **@mention** the bot by its manifest **display name** (e.g. `@Aurora`). In channels, @mention is required; DMs are not.
 
-## 5. Connect in Aurora
+## 6. Connect in Aurora
+
+Recommended order: **§6 Connect** → **§5 install per team** → @mention verify → **Teams → Manage**.
 
 1. **Connectors** → **Microsoft Teams** → **Connect** (org admin, Entra sign-in once per Aurora org).
-2. **Teams → Manage**: refresh channels, **activate** channels, set **incident card** channel, edit **Teams memory**.
+2. **Teams → Manage**: refresh channels, **activate** channels, set **incident card** channel, edit **Teams memory**, use **Check bot connection** after an @mention.
 
-OAuth powers Graph **reads** in Aurora. **Posts** (@mention replies, cards, routing) use the **bot** and still require step 4 in each Team.
+OAuth powers Graph **reads** in Aurora. **Posts** (@mention replies, cards, routing) use the **bot** and still require §5 in each team.
 
 ## Troubleshooting
 
+**I configured Azure Bot / enabled Teams channel but don’t see the app in Teams → Apps** — Azure is not where Teams apps are listed. Complete **§3** in [Teams Developer Portal](https://dev.teams.microsoft.com/) and **Publish to your org** (or sideload). Enabling **Channels → Microsoft Teams** on the Azure Bot resource is necessary but not sufficient.
+
 **Redirect URI mismatch** — Redirect in Entra must match exactly what Aurora sends (`{backend}/teams/callback`). With local dev, set `NGROK_URL` and use the tunnel URL in Entra.
+
+**`invalid_request` / “not configured as a multi-tenant application” / `/common` endpoint** — The app registration is **single tenant** but `.env` has `TEAMS_TENANT_ID=common`. Set `TEAMS_TENANT_ID` to your **Tenant ID** GUID (Entra → Overview) and restart `aurora-server`, or change the app to multitenant in **Supported account types**.
 
 **No “Configuration” or “Channels”** — You are probably on (a) the **Deployment** page (`Inputs` / `Outputs` / `Template` in the sidebar) → click **Go to resource**, or (b) the Entra **App registration** → search for the **Azure Bot** resource instead. Configuration is only on the bot resource under **Settings**.
 

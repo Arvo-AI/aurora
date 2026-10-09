@@ -2,6 +2,7 @@
 
 import logging
 import re
+import time
 
 from flask import Blueprint, jsonify, request
 
@@ -52,6 +53,15 @@ def teams_messages():
     if not team_id or not channel_id:
         logger.warning("Teams message missing team_id or channel_id")
         return jsonify({}), 200
+
+    try:
+        from utils.auth.stateless_auth import get_org_id_for_user, store_org_preference
+
+        org_id = get_org_id_for_user(user_id)
+        if org_id:
+            store_org_preference(org_id, "teams_last_bot_message_at", str(int(time.time())))
+    except Exception:
+        logger.debug("Failed to record Teams bot activity timestamp", exc_info=True)
 
     try:
         send_message_to_aurora(

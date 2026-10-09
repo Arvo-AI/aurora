@@ -5,7 +5,7 @@ import { BitbucketIntegrationService } from "@/components/bitbucket-provider-int
 import { isOvhEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { slackService } from "@/lib/services/slack";
-import { teamsService } from "@/lib/services/teams";
+import { teamsService, type TeamsStatus } from "@/lib/services/teams";
 import { googleChatService } from "@/lib/services/google-chat";
 import {
   getConnectedAccounts,
@@ -34,6 +34,7 @@ export function useConnectorStatus(
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [slackStatus, setSlackStatus] = useState<any>(null);
   const [googleChatStatus, setGoogleChatStatus] = useState<any>(null);
+  const [teamsStatus, setTeamsStatus] = useState<TeamsStatus | null>(null);
 
   const hasOverride = connectedOverride !== undefined;
   const isSpecial = SPECIAL_CONNECTORS.has(connector.id);
@@ -162,8 +163,10 @@ export function useConnectorStatus(
     setIsLoadingDetails(true);
     try {
       const data = await teamsService.getStatus();
+      setTeamsStatus(data);
       setIsConnected(data?.connected || false);
     } catch {
+      setTeamsStatus(null);
       setIsConnected(false);
     } finally {
       setIsLoadingDetails(false);
@@ -265,6 +268,7 @@ export function useConnectorStatus(
     isCheckingConnection,
     isLoadingDetails,
     slackStatus,
+    teamsStatus,
     googleChatStatus,
     checkGitHubStatus,
     checkGitLabStatus,

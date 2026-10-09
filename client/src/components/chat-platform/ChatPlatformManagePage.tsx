@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, Loader2, LogOut, Bell, RefreshCw, X, Pencil, ChevronDown, ChevronRight, Search, Plus, ChevronsUpDown, Check } from "lucide-react";
+import { ArrowLeft, AlertCircle, Loader2, LogOut, Bell, RefreshCw, X, Pencil, ChevronDown, ChevronRight, Search, Plus, ChevronsUpDown, Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite as checkCanWrite } from "@/lib/roles";
@@ -21,7 +21,13 @@ import type {
   ChatPlatformStatus,
   NotificationPreferenceKey,
 } from "@/lib/chat-platform/manage-config";
-import { TEAMS_CUSTOMER_SETUP, TEAMS_SETUP_DOCS_URL } from "@/lib/chat-platform/teams-setup";
+import {
+  TEAMS_BOT_VERIFY_WINDOW_SEC,
+  TEAMS_CUSTOMER_SETUP,
+  TEAMS_SETUP_DOCS_URL,
+} from "@/lib/chat-platform/teams-setup";
+import { TeamsSetupIncompleteBanner } from "@/components/chat-platform/TeamsSetupIncompleteBanner";
+import type { TeamsStatus } from "@/lib/services/teams";
 
 type PreferenceKey = NotificationPreferenceKey;
 
@@ -59,6 +65,8 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
 
   const [platformStatus, setPlatformStatus] = useState<ChatPlatformStatus | null>(null);
   const [isLoadingStatus, setIsLoadingStatus] = useState(true);
+  const [statusLoadError, setStatusLoadError] = useState<string | null>(null);
+  const [isCheckingTeamsBot, setIsCheckingTeamsBot] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
 
@@ -191,18 +199,56 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
   }, []);
 
   const loadStatus = useCallback(async () => {
+    setStatusLoadError(null);
     try {
       const status = await config.service.getStatus();
       setPlatformStatus(status);
-      if (!status?.connected) {
-        router.push("/connectors");
-      }
-    } catch {
-      router.push("/connectors");
+    } catch (error: unknown) {
+      setPlatformStatus({ connected: false });
+      setStatusLoadError(apiErrorMessage(error, `Failed to load ${config.displayName} status`));
     } finally {
       setIsLoadingStatus(false);
     }
-  }, [router]);
+  }, [config.displayName, config.service]);
+
+  const handleCheckTeamsBot = useCallback(async () => {
+    setIsCheckingTeamsBot(true);
+    try {
+      const status = await config.service.getStatus();
+      setPlatformStatus(status);
+      const lastAt =
+        status && "last_bot_message_at" in status ? status.last_bot_message_at : null;
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (lastAt != null && nowSec - lastAt <= TEAMS_BOT_VERIFY_WINDOW_SEC) {
+        toast({
+          title: "Bot connection OK",
+          description: "Aurora recently received a message from the Teams bot.",
+        });
+        return;
+      }
+      if (lastAt != null) {
+        toast({
+          title: "No recent @mention",
+          description: `@mention Aurora in a channel, then check again. Last activity: ${new Date(lastAt * 1000).toLocaleString()}.`,
+        });
+        return;
+      }
+      toast({
+        title: "No bot activity yet",
+        description:
+          "Connect OAuth, install the Aurora app in the team, then @mention Aurora in a channel.",
+        variant: "destructive",
+      });
+    } catch (error: unknown) {
+      toast({
+        title: "Could not check bot",
+        description: apiErrorMessage(error, "Failed to refresh Teams status"),
+        variant: "destructive",
+      });
+    } finally {
+      setIsCheckingTeamsBot(false);
+    }
+  }, [config.service, toast]);
 
   const loadPreferences = useCallback(async () => {
     try {
@@ -234,6 +280,14 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
 
   useEffect(() => {
     loadStatus();
+  }, [loadStatus]);
+
+  useEffect(() => {
+    if (!platformStatus?.connected) {
+      setIsLoadingPrefs(false);
+      setIsLoadingChannels(false);
+      return;
+    }
     loadPreferences();
     loadChannels();
     // Just connected: channel auto-registration runs on the worker now, so the
@@ -244,7 +298,7 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
         new URLSearchParams(globalThis.window.location.search).get(authParam) === "success") {
       pollChannelsUntilSettled(0, true);
     }
-  }, [config.id, loadStatus, loadPreferences, loadChannels, pollChannelsUntilSettled]);
+  }, [platformStatus?.connected, config.id, loadPreferences, loadChannels, pollChannelsUntilSettled]);
 
   const handleDismissChannel = async (channelId: string) => {
     const isCard = channelId === cardChannelId;
@@ -492,6 +546,57 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
     );
   }
 
+  if (!platformStatus?.connected) {
+    const setupLabel =
+      config.id === "teams" ? "Continue Teams setup" : `Connect ${config.displayName}`;
+    return (
+      <div className="min-h-screen bg-black text-white p-8">
+        <div className="max-w-lg mx-auto space-y-6">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => router.push("/connectors")}
+            className="text-zinc-400 hover:text-white -ml-2"
+          >
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back to Connectors
+          </Button>
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-white">
+              <img src={config.logoSrc} alt={config.displayName} className="h-8 w-8" />
+            </div>
+            <h1 className="text-2xl font-bold">{config.displayName} not connected</h1>
+          </div>
+          <Card className="border-amber-500/40 bg-zinc-950">
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <AlertCircle className="h-5 w-5 text-amber-500" />
+                Connect before managing
+              </CardTitle>
+              <CardDescription>
+                {config.id === "teams"
+                  ? "Finish step 1 (Connect in Aurora) on the setup page. Manage opens channel settings, notifications, and the bot check after OAuth."
+                  : `Connect ${config.displayName} from the connectors page first. Manage is available after the connection succeeds.`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {statusLoadError && (
+                <p className="text-sm text-destructive">{statusLoadError}</p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={() => router.push(config.setupPath)}>{setupLabel}</Button>
+                <Button variant="outline" onClick={() => void loadStatus()}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Check again
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   // Split the active set (described / being described — the channels Aurora
   // actually engages) from the aware-only index ('skipped'). The main list shows
   // only the active set; indexed channels live under "Activate more channels".
@@ -561,6 +666,10 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
           </div>
         </div>
 
+        {config.id === "teams" && platformStatus?.connected && (
+          <TeamsSetupIncompleteBanner status={platformStatus as TeamsStatus} />
+        )}
+
         {config.id === "teams" && (
           <Card className="mb-6 border-primary/40">
             <CardHeader>
@@ -568,14 +677,12 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
               <CardDescription>{TEAMS_CUSTOMER_SETUP.summary}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-muted-foreground">
-              <p>
-                <span className="font-medium text-foreground">Teams app:</span>{" "}
-                {TEAMS_CUSTOMER_SETUP.installWhy}
-              </p>
-              <p>
-                <span className="font-medium text-foreground">Connect (OAuth):</span>{" "}
-                {TEAMS_CUSTOMER_SETUP.oauthWhy}
-              </p>
+              <p className="text-xs text-amber-600 dark:text-amber-500/90">{TEAMS_CUSTOMER_SETUP.orderNote}</p>
+              <ol className="list-decimal list-inside space-y-1 text-sm">
+                <li>{TEAMS_CUSTOMER_SETUP.oauthTitle.replace(/^\d+\.\s*/, "")}</li>
+                <li>{TEAMS_CUSTOMER_SETUP.installTitle.replace(/^\d+\.\s*/, "")}</li>
+                <li>{TEAMS_CUSTOMER_SETUP.verifyTitle.replace(/^\d+\.\s*/, "")}</li>
+              </ol>
               <p className="text-xs">
                 {config.copy.activateHint}{" "}
                 <a href="/teams/setup" className="text-primary hover:underline">
@@ -635,6 +742,49 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-muted-foreground font-medium w-32">Channel:</span>
                     <span className="text-sm font-semibold">#{platformStatus.incidents_channel_name}</span>
+                  </div>
+                )}
+                {config.id === "teams" && (
+                  <div className="pt-3 border-t border-border space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm text-muted-foreground font-medium">Bot check:</span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={isCheckingTeamsBot || !canWrite}
+                        onClick={() => void handleCheckTeamsBot()}
+                      >
+                        {isCheckingTeamsBot ? (
+                          <>
+                            <Loader2 className="h-3 w-3 mr-2 animate-spin" />
+                            Checking…
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="h-3 w-3 mr-2" />
+                            Check bot connection
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {(() => {
+                        const lastAt =
+                          "last_bot_message_at" in platformStatus
+                            ? platformStatus.last_bot_message_at
+                            : null;
+                        if (lastAt == null) {
+                          return "No messages received yet. @mention Aurora in an installed channel, then check again.";
+                        }
+                        const ageSec = Math.floor(Date.now() / 1000) - lastAt;
+                        const when = new Date(lastAt * 1000).toLocaleString();
+                        if (ageSec <= TEAMS_BOT_VERIFY_WINDOW_SEC) {
+                          return `Recent bot activity (${when}). Install and messaging endpoint look wired.`;
+                        }
+                        return `Last bot activity: ${when}. @mention Aurora again for a fresh test.`;
+                      })()}
+                    </p>
                   </div>
                 )}
               </>

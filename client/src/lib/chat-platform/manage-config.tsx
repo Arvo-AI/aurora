@@ -51,6 +51,8 @@ export interface ChatPlatformManageConfig {
     routingNote: string;
     disconnectBlurb: string;
   };
+  /** Where to send users who open Manage before OAuth / Connect is done. */
+  setupPath: string;
 }
 
 export const slackManageConfig: ChatPlatformManageConfig = {
@@ -90,6 +92,7 @@ export const slackManageConfig: ChatPlatformManageConfig = {
     routingNote: "that routing is always on and tuned in the Slack memory",
     disconnectBlurb: "Disconnect Slack from Aurora. You will stop receiving all Slack notifications.",
   },
+  setupPath: "/connectors",
 };
 
 export const teamsManageConfig: ChatPlatformManageConfig = {
@@ -125,10 +128,11 @@ export const teamsManageConfig: ChatPlatformManageConfig = {
   service: teamsService,
   copy: {
     activateHint:
-      "Install the Aurora Teams app in your team, @mention the bot in channels, then activate channels below.",
+      "After Connect: add Aurora to each team in the Teams client, @mention the bot, then activate channels below.",
     emptyActive:
-      "No active channels yet. Install the Teams app, @mention Aurora in a channel, or activate channels from the list below.",
+      "No active channels yet. Connect, add the app per team in Teams, @mention the bot, or activate channels below.",
     routingNote: "that routing is always on and tuned in the Teams memory",
     disconnectBlurb: "Disconnect Microsoft Teams from Aurora. You will stop receiving all Teams notifications.",
   },
+  setupPath: "/teams/setup",
 };
