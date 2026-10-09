@@ -53,6 +53,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "tailscale", # Tailscale VPN
     "cloudflare", # Cloudflare (DNS, Workers, WAF, analytics)
     "slack",    # Slack connector tokens
+    "teams",    # Microsoft Teams connector tokens
     "confluence", # Confluence connector tokens
     "jira",       # Jira connector tokens
     "sharepoint", # SharePoint connector tokens

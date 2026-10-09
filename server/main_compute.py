@@ -94,6 +94,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
                        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
+         r"/teams/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                       "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                         "Authorization", "X-Provider-Preference"],
+                       "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
          r"/google-chat/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                              "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                                "Authorization", "X-Provider-Preference"],
@@ -223,6 +227,8 @@ _OPEN_PREFIXES = (
     "/slack/callback",
     "/slack/events",
     "/slack/interactions",
+    "/teams/callback",
+    "/teams/messages",
     "/pagerduty/oauth/callback",
     "/google-chat/callback",
     "/google-chat/events",
@@ -409,6 +415,14 @@ from routes.slack.slack_channels import slack_channels_bp
 app.register_blueprint(slack_bp, url_prefix="/slack")
 app.register_blueprint(slack_events_bp, url_prefix="/slack")
 app.register_blueprint(slack_channels_bp, url_prefix="/slack")
+
+# --- Microsoft Teams Integration Routes ---
+from routes.teams.teams_routes import teams_bp
+from routes.teams.teams_events import teams_events_bp
+from routes.teams.teams_channels import teams_channels_bp
+app.register_blueprint(teams_bp, url_prefix="/teams")
+app.register_blueprint(teams_events_bp, url_prefix="/teams")
+app.register_blueprint(teams_channels_bp, url_prefix="/teams")
 
 # --- Google Chat Integration Routes ---
 from routes.google_chat.google_chat_routes import google_chat_bp

@@ -24,7 +24,7 @@ from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
-PROVIDERS = ("slack",)
+PROVIDERS = ("slack", "teams")
 
 
 def _check_provider(provider: str) -> str:
@@ -117,7 +117,7 @@ def get_connected_channels(user_id: str, provider: str) -> List[Dict[str, Any]]:
         cur.execute(
             f"""SELECT DISTINCT ON (channel_id)
                       channel_id, channel_name, channel_type,
-                      detected_platform, metadata_summary, is_member
+                      detected_platform, metadata_summary, is_member, team_id
                  FROM slack_channels
                 WHERE provider = %s
                   AND is_member
@@ -136,6 +136,7 @@ def get_connected_channels(user_id: str, provider: str) -> List[Dict[str, Any]]:
             "detected_platform": r[3],
             "description": r[4] or "(no description)",
             "is_member": r[5],
+            **({"team_id": r[6]} if r[6] else {}),
         }
         for r in rows
     ]

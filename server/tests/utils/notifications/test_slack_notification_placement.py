@@ -459,73 +459,42 @@ class TestNotInChannelRecovery:
 
 
 class TestCardToggleVsRouting:
-    """The "Investigation Complete" card toggle (post_primary_card) governs only
-    the incidents-channel card. Team-channel routing (now the background agent)
-    always runs regardless."""
+    """post_primary_card governs only the incidents-channel card; routing is dispatched from the central notifier."""
 
-    def test_card_off_skips_incidents_card_but_still_routes(self, monkeypatch, make_client, patched_db,
-                                                             standalone, slack_helpers_stub):
+    def test_card_off_skips_incidents_card(self, monkeypatch, make_client, patched_db,
+                                           standalone, slack_helpers_stub):
         client = make_client()
         monkeypatch.setattr(svc, "get_slack_client_for_user", lambda user_id: client)
         monkeypatch.setattr(svc, "_get_incidents_channel_id", lambda user_id, c: CHAN)
-        # The team-routing agent is dispatched (fire-and-forget) instead of the
-        # old deterministic compose+send loop.
-        calls = []
-        monkeypatch.setattr(
-            slack_team_routing, "trigger_team_routing_agent",
-            lambda user_id, data: calls.append((user_id, data.get("incident_id"))) or True,
-        )
 
         ok = svc.send_slack_investigation_completed_notification(
             "u1", standalone(), post_primary_card=False,
         )
-        assert ok is True
-        # No incidents-channel card: no update in place, and nothing posted to CHAN.
+        assert ok is False
         assert client.updated == []
         assert all(m["channel"] != CHAN for m in client.sent), client.sent
-        # Routing was still dispatched to the agent.
-        assert len(calls) == 1
 
-    def test_card_on_posts_incidents_card_and_routes(self, monkeypatch, make_client, patched_db,
-                                                      standalone, slack_helpers_stub):
+    def test_card_on_posts_incidents_card(self, monkeypatch, make_client, patched_db,
+                                          standalone, slack_helpers_stub):
         client = make_client()
         monkeypatch.setattr(svc, "get_slack_client_for_user", lambda user_id: client)
         monkeypatch.setattr(svc, "_get_incidents_channel_id", lambda user_id, c: CHAN)
-        calls = []
-        monkeypatch.setattr(
-            slack_team_routing, "trigger_team_routing_agent",
-            lambda user_id, data: calls.append(user_id) or True,
-        )
 
         ok = svc.send_slack_investigation_completed_notification(
             "u1", standalone(), post_primary_card=True,
         )
         assert ok is True
-        # Card updated the incidents-channel Started message in place …
         assert len(client.updated) == 1 and client.updated[0]["ts"] == ANCHOR_TS
-        # … and the routing agent was still dispatched.
-        assert len(calls) == 1
 
-    def test_card_off_folded_child_skips_reply_but_routes(self, monkeypatch, make_client, patched_db,
-                                                           folded, slack_helpers_stub):
-        # A folded recurrence with cards off must NOT post the "Still firing"
-        # reply (that's a card) but must still dispatch team routing.
+    def test_card_off_folded_child_skips_reply(self, monkeypatch, make_client, patched_db,
+                                                 folded, slack_helpers_stub):
         client = make_client()
         monkeypatch.setattr(svc, "get_slack_client_for_user", lambda user_id: client)
         monkeypatch.setattr(svc, "_get_incidents_channel_id", lambda user_id, c: CHAN)
-        calls = []
-        monkeypatch.setattr(
-            slack_team_routing, "trigger_team_routing_agent",
-            lambda user_id, data: calls.append(user_id) or True,
-        )
 
         ok = svc.send_slack_investigation_completed_notification(
             "u1", folded(), post_primary_card=False,
         )
-        assert ok is True
-        # No compact reply into the incidents channel, and the child's Started
-        # message is NOT retired (that retirement is part of card placement).
+        assert ok is False
         assert all(m["channel"] != CHAN for m in client.sent), client.sent
         assert client.deleted == []
-        # Routing still dispatched.
-        assert len(calls) == 1

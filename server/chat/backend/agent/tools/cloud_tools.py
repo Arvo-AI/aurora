@@ -1455,6 +1455,25 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to add Slack tools: {e}")
 
+    try:
+        from .teams_tool import (
+            get_teams_channel_history,
+            get_connected_teams_channels,
+            list_teams_channels,
+            get_teams_thread_replies,
+            post_teams_message,
+            is_teams_connected,
+        )
+        if _safe_connected(is_teams_connected, "Microsoft Teams"):
+            tool_functions.append((get_teams_channel_history, "get_teams_channel_history"))
+            tool_functions.append((list_teams_channels, "list_teams_channels"))
+            tool_functions.append((get_teams_thread_replies, "get_teams_thread_replies"))
+            tool_functions.append((get_connected_teams_channels, "get_connected_teams_channels"))
+            tool_functions.append((post_teams_message, "post_teams_message"))
+            logging.info(f"Added Microsoft Teams tools for user {user_id}")
+    except Exception as e:
+        logging.warning(f"Failed to add Microsoft Teams tools: {e}")
+
     if _safe_connected(is_jenkins_connected, "Jenkins"):
         tool_functions.append((jenkins_rca, "jenkins_rca"))
         logging.info(f"Added Jenkins RCA tool for user {user_id}")
@@ -1818,6 +1837,52 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "silent otherwise."
                 ),
                 args_schema=PostSlackMessageArgs,
+            )
+        elif name == 'get_teams_channel_history':
+            from .teams_tool import GetTeamsChannelHistoryArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description="Fetch recent messages from a Microsoft Teams channel.",
+                args_schema=GetTeamsChannelHistoryArgs,
+            )
+        elif name == 'list_teams_channels':
+            from .teams_tool import GetConnectedTeamsChannelsArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description="Live list of Teams channels Aurora can see (names and descriptions, no LLM routing text).",
+                args_schema=GetConnectedTeamsChannelsArgs,
+            )
+        elif name == 'get_teams_thread_replies':
+            from .teams_tool import GetTeamsThreadRepliesArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description="Fetch replies under a Microsoft Teams channel message.",
+                args_schema=GetTeamsThreadRepliesArgs,
+            )
+        elif name == 'get_connected_teams_channels':
+            from .teams_tool import GetConnectedTeamsChannelsArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List Microsoft Teams channels Aurora may post to, with descriptions. "
+                    "Combine with the Microsoft Teams memory (context/Microsoft Teams)."
+                ),
+                args_schema=GetConnectedTeamsChannelsArgs,
+            )
+        elif name == 'post_teams_message':
+            from .teams_tool import PostTeamsMessageArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Post a message to a Microsoft Teams channel. Set reply_to_id to reply in "
+                    "an existing thread. Requires team_id and channel_id."
+                ),
+                args_schema=PostTeamsMessageArgs,
             )
         else:
             tool = StructuredTool.from_function(final_func)

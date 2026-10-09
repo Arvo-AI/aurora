@@ -812,6 +812,95 @@ SLACK_APP_TOKEN=          # xapp-... app-level token
 
 ---
 
+### Microsoft Teams {#microsoft-teams}
+
+Hybrid authentication (similar to [Google Chat](#google-chat)): **Entra OAuth**
+connects Aurora for Graph channel discovery and history. **Bot Framework** handles
+@mentions and **all outbound messages** as the Teams app ("Aurora"), not as the
+user who clicked Connect.
+
+#### 1. Register an Entra application
+
+1. [Azure Portal](https://portal.azure.com) → **Microsoft Entra ID** → **App registrations** → **New registration** (name e.g. `Aurora`).
+2. **Authentication** → **Web** redirect URI:
+   - Production: `https://your-api.example.com/teams/callback`
+   - Local dev: use an HTTPS tunnel (`NGROK_URL` in `.env`, same idea as Slack) — Entra will not accept bare `localhost`.
+3. **Overview** → **Application (client) ID** → `TEAMS_CLIENT_ID` in `.env`.
+4. **Certificates & secrets** → **New client secret** → copy **Value** when created (shown once) → `TEAMS_CLIENT_SECRET` in `.env` (also the Bot Framework app password).
+5. **API permissions** → **Microsoft Graph** → **Delegated** — match `TEAMS_SCOPES` in `server/connectors/teams_connector/oauth.py` (`Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `Chat.Read`, `openid`, `profile`, `offline_access`, etc.).
+6. **Grant admin consent** (Entra admin only — e.g. Global Administrator):
+   - On **API permissions**, click **Grant admin consent for [tenant name]** and confirm.
+   - Permissions should show **Granted for [tenant name]**. Without this, every user gets a long consent screen on Connect.
+
+#### 2. Azure Bot + Teams channel (Azure Portal — backend only)
+
+Create a separate **Azure Bot** resource (not the Entra app alone): **Create a resource** → **Azure Bot** → **Creation type: Use existing app registration** → **App ID** = step‑1 **Application (client) ID** → **App tenant ID** = **Microsoft Entra ID** → **Overview** → **Tenant ID** (Directory GUID, not `common`) → create → **Go to resource**.
+
+After create, if the sidebar only shows **Inputs / Outputs / Template**, you are on the **Deployment** page — click **Go to resource** (or search the bot handle and open **Azure Bot**). Then:
+
+1. **Settings → Configuration** — **Messaging endpoint** `https://your-api.example.com/teams/messages` (or tunnel URL + `/teams/messages` locally). Save.
+2. **Channels** — enable **Microsoft Teams** → **Apply**.
+
+Enabling the Teams **channel** on the Azure Bot does **not** add an app under **Teams → Apps**. That requires step 3 in the Developer Portal.
+
+If the bot uses the same app registration as OAuth, set only `TEAMS_CLIENT_ID` (leave `TEAMS_APP_ID` unset). See `server/connectors/teams_connector/README.md` §2.
+
+#### 3. Teams client app ([Developer Portal](https://dev.teams.microsoft.com/) — not Azure)
+
+1. **Apps** → **+ New app** → name it (e.g. Aurora).
+2. **App features** → **Bot** → paste the **Microsoft App ID** manually if needed (same as `TEAMS_CLIENT_ID` / Azure Bot — not the **Basic** tab app ID).
+3. **What can your bot do?** — leave **all unchecked** for Aurora: do **not** enable **Only send notification** (blocks @mentions); file upload and audio/video are unused.
+4. Scopes: **Team** (required); **Personal** / **Group chat** optional → **Save**.
+5. **Distribute** → **Publish to your org** (admin), or **Preview in Teams** / **Download** zip and **Upload a custom app** in Teams if tenant policy allows.
+6. Before sideloading: run **[app package validation](https://dev.teams.microsoft.com/tools/store-validation)** on the zip. If Teams shows *Manifest parsing error message unavailable*, the validator usually reports the real issue (e.g. add `"supportsChannelFeatures": "tier1"` for **Team** scope on manifest 1.25+, set **Full name** in Basic, remove or complete `webApplicationInfo`). Details: `server/connectors/teams_connector/README.md` §3 (Validate the app package).
+
+Users then find the app in **Teams → Apps → Built for your org**. Full steps: `server/connectors/teams_connector/README.md` §3.
+
+#### 4. Install in each team (Teams client)
+
+Team **···** → **Manage team** → **Apps** → add your org’s Aurora app → **Install**. Users **@mention** the bot by its display name (e.g. `@Aurora`). Channel chats require an @mention.
+
+#### 5. Configure environment
+
+```bash
+# Entra app registration → Overview → Application (client) ID
+TEAMS_CLIENT_ID=
+
+# Entra → Certificates & secrets → client secret Value (copy when created)
+TEAMS_CLIENT_SECRET=
+
+# TEAMS_APP_ID=   # optional; only if bot uses a different Entra app than OAuth
+
+TEAMS_TENANT_ID=<your Entra tenant GUID>
+
+# Local OAuth redirect via tunnel (optional)
+NGROK_URL=https://your-tunnel.example.com
+```
+
+**`TEAMS_TENANT_ID`** — Entra **Tenant ID** GUID for **Connect** (`login.microsoftonline.com/{value}/...`) and for **single-tenant** Bot Framework outbound tokens when Aurora posts replies to Teams. **Single-tenant** setups (typical self-hosted) must use your tenant GUID — not `common`. Same value as **App tenant ID** on the Azure Bot resource. Restart **aurora-server** and **celery_worker** after changes.
+
+Operator setup (Entra, Azure Bot, manifest, troubleshooting): `server/connectors/teams_connector/README.md` in the Aurora repo.
+
+#### 6. Use Aurora
+
+1. **Connectors** → **Microsoft Teams** → Connect (Entra sign-in) — do this before @mention tests.
+2. Install the Aurora Teams app in each Microsoft Team where the bot should work.
+3. @mention Aurora in a channel (e.g. `@Aurora hello`) — getting-started steps on **Teams → Manage** clear once Aurora receives it.
+4. **Teams → Manage** — refresh/activate channels, set the **incident card** channel, configure **Teams memory** and notification toggles.
+
+#### Troubleshooting
+
+| Issue | What to check |
+|-------|----------------|
+| OAuth redirect error | Entra redirect URI must match `{backend}/teams/callback`; use `NGROK_URL` for local dev |
+| `invalid_request` / `/common` not supported | Single-tenant app: set `TEAMS_TENANT_ID` to your Tenant ID GUID, not `common`; restart server |
+| No reply to @mention | Messaging endpoint reachable, `TEAMS_APP_ID` + secret match bot, Teams app installed |
+| Incident/routing posts fail | Bot installed in target team/channel; not fixable by OAuth alone |
+| Unknown tenant on mention | An admin must Connect Teams in Aurora for that tenant first |
+| Azure Bot done but no app in Teams → Apps | Azure ≠ Teams catalog — create & publish the app in [Developer Portal](https://dev.teams.microsoft.com/) (step 3), not only Azure **Channels** |
+
+---
+
 ### Google Chat
 
 Hybrid authentication for Google Chat spaces. User OAuth is used during setup

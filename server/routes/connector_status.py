@@ -323,6 +323,21 @@ def _check_slack(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_teams(creds: Dict[str, Any]) -> Dict[str, Any]:
+    access_token = creds.get("access_token")
+    if not access_token:
+        return {"connected": False}
+    try:
+        r = requests.get(
+            "https://graph.microsoft.com/v1.0/me",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=HTTP_TIMEOUT,
+        )
+        return {"connected": r.ok}
+    except Exception:
+        return {"connected": False}
+
+
 def _check_google_chat(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Validates Google Chat connection via service account."""
     from connectors.google_chat_connector.client import get_chat_app_client
@@ -834,6 +849,7 @@ PROVIDER_CHECKERS = {
     "confluence": _check_confluence,
     "jira": _check_jira,
     "slack": _check_slack,
+    "teams": _check_teams,
     "google_chat": _check_google_chat,
     "github": _check_github,
     "gitlab": _check_gitlab,

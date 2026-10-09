@@ -126,6 +126,7 @@ celery_app.conf.update(
         # generate_channel_metadata jobs in the default queue (observed: an
         # activation sat at position 289/453, ~85 min behind).
         "routes.slack.slack_channel_metadata.bulk_activate_channels_task": {"queue": "high"},
+        "routes.teams.teams_channel_metadata.bulk_activate_channels_task": {"queue": "high"},
     },
     # Explicitly include task modules from their new locations
     include=[
@@ -162,6 +163,7 @@ celery_app.conf.update(
         'routes.bitbucket.bitbucket_selection',
         'routes.github.github_repo_metadata',
         'routes.slack.slack_channel_metadata',
+        'routes.teams.teams_channel_metadata',
         'utils.repo_metadata',
         'services.actions.scheduler',
     ],
@@ -202,6 +204,10 @@ celery_app.conf.update(
         'backfill-slack-channel-descriptions': {
             'task': 'routes.slack.slack_channel_metadata.backfill_channel_descriptions',
             'schedule': BACKFILL_INTERVAL_SECONDS,  # Every 15 minutes
+        },
+        'backfill-teams-channel-descriptions': {
+            'task': 'routes.teams.teams_channel_metadata.backfill_channel_descriptions',
+            'schedule': BACKFILL_INTERVAL_SECONDS,
         },
     },
     beat_schedule_filename='celerybeat-schedule',

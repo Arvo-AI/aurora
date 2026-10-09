@@ -293,7 +293,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'elastic', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'jira', 'action'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'elastic', 'slack', 'teams', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'jira', 'action'}
 
 _GUARDRAIL_BLOCKED_MSG = 'Action blocked by safety guardrails'
 _GUARDRAIL_USER_MSG = (
@@ -864,6 +864,15 @@ def run_background_chat(
                 ))
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
+
+        if trigger_metadata and trigger_metadata.get('source') == 'teams':
+            try:
+                teams_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
+                _chat_reply_sent = bool(_send_response_to_teams(
+                    user_id, session_id, trigger_metadata, fallback_text=teams_fallback,
+                ))
+            except Exception as e:
+                logger.error(f"[BackgroundChat] Failed to send response to Teams: {e}", exc_info=True)
         
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             if not result.get("action_notification_sent"):
@@ -966,6 +975,16 @@ def run_background_chat(
                 logger.warning("[BackgroundChat] Reply not sent on happy path for session %s; "
                                "sending fallback so Google Chat isn't stuck on 'Thinking…'", session_id)
                 _send_response_to_google_chat(
+                    user_id, session_id, trigger_metadata,
+                    fallback_text=_CHAT_ERROR_FALLBACK,
+                )
+            elif src == "teams" and not _chat_reply_sent:
+                logger.warning(
+                    "[BackgroundChat] Reply not sent on happy path for session %s; "
+                    "sending fallback so Teams isn't stuck on 'Thinking…'",
+                    session_id,
+                )
+                _send_response_to_teams(
                     user_id, session_id, trigger_metadata,
                     fallback_text=_CHAT_ERROR_FALLBACK,
                 )
@@ -1408,7 +1427,7 @@ async def _execute_background_chat(
         # Slack/Google Chat messages are user-authored and should NOT be hidden.
         # Action prompts should also be visible to the user in the chat UI.
         source = trigger_metadata.get("source", "") if trigger_metadata else ""
-        is_scaffold = source in _RCA_SOURCES and source not in ('slack', 'google_chat', 'chat', 'action')
+        is_scaffold = source in _RCA_SOURCES and source not in ('slack', 'teams', 'google_chat', 'chat', 'action')
         human_message = HumanMessage(
             content=initial_message,
             additional_kwargs={"is_rca_scaffold": is_scaffold},
@@ -2210,6 +2229,110 @@ def _send_response_to_slack(
     except Exception as e:
         logger.error(f"[BackgroundChat] Error sending response to Slack: {e}", exc_info=True)
         raise
+
+
+def _send_response_to_teams(
+    user_id: str,
+    session_id: str,
+    trigger_metadata: Dict[str, Any],
+    fallback_text: Optional[str] = None,
+) -> bool:
+    """Post Aurora's reply back to the Teams channel that triggered the session."""
+    try:
+        from connectors.teams_connector.client import get_teams_client_for_user
+
+        team_id = trigger_metadata.get("team_id")
+        channel_id = trigger_metadata.get("channel_id")
+        reply_to_id = trigger_metadata.get("reply_to_id")
+        if not team_id or not channel_id:
+            logger.warning("[BackgroundChat] Missing Teams team_id/channel_id for session %s", session_id)
+            return False
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:TeamsResponse]")
+                cursor.execute("SELECT messages FROM chat_sessions WHERE id = %s", (session_id,))
+                row = cursor.fetchone()
+                last_assistant_message = None
+                if row and row[0]:
+                    messages = row[0]
+                    if isinstance(messages, str):
+                        messages = json.loads(messages)
+                    for msg in reversed(messages):
+                        if isinstance(msg, dict) and msg.get("sender") in ("bot", "assistant"):
+                            last_assistant_message = msg.get("text") or msg.get("content")
+                            break
+                if not last_assistant_message:
+                    if fallback_text:
+                        last_assistant_message = fallback_text
+                    else:
+                        return False
+
+        from connectors.teams_connector.bot_client import (
+            send_message_to_team_channel,
+            send_reply_in_conversation,
+            tenant_id_for_aurora_user,
+            update_activity_in_conversation,
+        )
+
+        tenant_id = tenant_id_for_aurora_user(user_id)
+        if not tenant_id:
+            return False
+        from routes.teams.teams_events_helpers import format_response_for_teams
+
+        text = format_response_for_teams(last_assistant_message)
+        if not text:
+            return False
+        service_url = trigger_metadata.get("service_url")
+        conversation_id = trigger_metadata.get("conversation_id")
+        thinking_activity_id = trigger_metadata.get("thinking_activity_id")
+        # Replace the "Thinking…" placeholder when we have its activity id.
+        if service_url and conversation_id and thinking_activity_id:
+            try:
+                update_activity_in_conversation(
+                    service_url=service_url,
+                    conversation_id=conversation_id,
+                    activity_id=thinking_activity_id,
+                    text=text,
+                )
+                _record_teams_reply_delivered(user_id)
+                return True
+            except Exception:
+                logger.warning(
+                    "[BackgroundChat] Teams activity update failed; posting new message",
+                    exc_info=True,
+                )
+        # Prefer in-thread reply on the same Bot Framework conversation (@mention path).
+        if service_url and conversation_id:
+            send_reply_in_conversation(
+                service_url=service_url,
+                conversation_id=conversation_id,
+                text=text,
+                reply_to_id=reply_to_id,
+            )
+        else:
+            send_message_to_team_channel(
+                tenant_id=tenant_id,
+                team_id=team_id,
+                channel_id=channel_id,
+                text=text,
+                reply_to_id=reply_to_id,
+                service_url=service_url,
+            )
+        _record_teams_reply_delivered(user_id)
+        return True
+    except Exception as e:
+        logger.error("[BackgroundChat] Error sending response to Teams: %s", e, exc_info=True)
+        return False
+
+
+def _record_teams_reply_delivered(user_id: str) -> None:
+    try:
+        from routes.teams.teams_routes import record_teams_bot_reply_delivered
+
+        record_teams_bot_reply_delivered(user_id)
+    except Exception:
+        logger.warning("Failed to record Teams bot reply timestamp", exc_info=True)
 
 
 def _send_response_to_google_chat(

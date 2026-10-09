@@ -18,6 +18,7 @@ Backend configuration guides for Aurora connectors.
 |-----------|-----------|-------|
 | **GitHub** | OAuth App | [Setup](./github_connector/README.md) |
 | **Slack** | OAuth 2.0 | [Setup](./slack_connector/README.md) |
+| **Microsoft Teams** | Entra OAuth + Bot Framework | [Setup](./teams_connector/README.md) |
 
 ## Monitoring & Observability
 
