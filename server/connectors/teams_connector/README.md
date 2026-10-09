@@ -191,7 +191,7 @@ Restart **`aurora-server`** and **`celery_worker`** after `.env` changes.
 
 1. In Teams: open a team → **···** → **Manage team** → **Apps** (or channel **+** → **Add an app**).
 2. Search for the app name from §3, or **Apps** → **Built for your org**.
-3. In a channel where the app is installed, **@mention** the bot once (e.g. `@Aurora hello`) to confirm Teams → Azure Bot → Aurora is wired. On **Teams → Manage**, **Check bot connection** should show recent activity (Aurora records the last delivered @mention/DM).
+3. In a channel where the app is installed, **@mention** the bot once (e.g. `@Aurora hello`) to confirm Teams → Azure Bot → Aurora is wired. When Aurora receives it, the getting-started steps on **Teams → Manage** clear automatically.
 
 Users **@mention** the bot by its manifest **display name** (e.g. `@Aurora`). In channels, @mention is required; DMs are not.
 
@@ -200,7 +200,7 @@ Users **@mention** the bot by its manifest **display name** (e.g. `@Aurora`). In
 Recommended order: **§6 Connect** → **§5 install per team** → @mention verify → **Teams → Manage**.
 
 1. **Connectors** → **Microsoft Teams** → **Connect** (org admin, Entra sign-in once per Aurora org).
-2. **Teams → Manage**: refresh channels, **activate** channels, set **incident card** channel, edit **Teams memory**, use **Check bot connection** after an @mention.
+2. **Teams → Manage**: refresh channels, **activate** channels, set **incident card** channel, edit **Teams memory**.
 
 OAuth powers Graph **reads** in Aurora. **Posts** (@mention replies, cards, routing) use the **bot** and still require §5 in each team.
 

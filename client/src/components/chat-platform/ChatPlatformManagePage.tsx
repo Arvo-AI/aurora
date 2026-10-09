@@ -21,11 +21,7 @@ import type {
   ChatPlatformStatus,
   NotificationPreferenceKey,
 } from "@/lib/chat-platform/manage-config";
-import {
-  TEAMS_BOT_VERIFY_WINDOW_SEC,
-  TEAMS_CUSTOMER_SETUP,
-  TEAMS_SETUP_DOCS_URL,
-} from "@/lib/chat-platform/teams-setup";
+import { TEAMS_CUSTOMER_SETUP, TEAMS_SETUP_DOCS_URL } from "@/lib/chat-platform/teams-setup";
 import { TeamsSetupIncompleteBanner } from "@/components/chat-platform/TeamsSetupIncompleteBanner";
 import type { TeamsStatus } from "@/lib/services/teams";
 
@@ -66,7 +62,6 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
   const [platformStatus, setPlatformStatus] = useState<ChatPlatformStatus | null>(null);
   const [isLoadingStatus, setIsLoadingStatus] = useState(true);
   const [statusLoadError, setStatusLoadError] = useState<string | null>(null);
-  const [isCheckingTeamsBot, setIsCheckingTeamsBot] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
 
@@ -210,45 +205,6 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
       setIsLoadingStatus(false);
     }
   }, [config.displayName, config.service]);
-
-  const handleCheckTeamsBot = useCallback(async () => {
-    setIsCheckingTeamsBot(true);
-    try {
-      const status = await config.service.getStatus();
-      setPlatformStatus(status);
-      const lastAt =
-        status && "last_bot_message_at" in status ? status.last_bot_message_at : null;
-      const nowSec = Math.floor(Date.now() / 1000);
-      if (lastAt != null && nowSec - lastAt <= TEAMS_BOT_VERIFY_WINDOW_SEC) {
-        toast({
-          title: "Bot connection OK",
-          description: "Aurora recently received a message from the Teams bot.",
-        });
-        return;
-      }
-      if (lastAt != null) {
-        toast({
-          title: "No recent @mention",
-          description: `@mention Aurora in a channel, then check again. Last activity: ${new Date(lastAt * 1000).toLocaleString()}.`,
-        });
-        return;
-      }
-      toast({
-        title: "No bot activity yet",
-        description:
-          "Connect OAuth, install the Aurora app in the team, then @mention Aurora in a channel.",
-        variant: "destructive",
-      });
-    } catch (error: unknown) {
-      toast({
-        title: "Could not check bot",
-        description: apiErrorMessage(error, "Failed to refresh Teams status"),
-        variant: "destructive",
-      });
-    } finally {
-      setIsCheckingTeamsBot(false);
-    }
-  }, [config.service, toast]);
 
   const loadPreferences = useCallback(async () => {
     try {
@@ -744,49 +700,6 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-muted-foreground font-medium w-32">Channel:</span>
                     <span className="text-sm font-semibold">#{platformStatus.incidents_channel_name}</span>
-                  </div>
-                )}
-                {config.id === "teams" && (
-                  <div className="pt-3 border-t border-border space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm text-muted-foreground font-medium">Bot check:</span>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={isCheckingTeamsBot || !canWrite}
-                        onClick={() => void handleCheckTeamsBot()}
-                      >
-                        {isCheckingTeamsBot ? (
-                          <>
-                            <Loader2 className="h-3 w-3 mr-2 animate-spin" />
-                            Checking…
-                          </>
-                        ) : (
-                          <>
-                            <RefreshCw className="h-3 w-3 mr-2" />
-                            Check bot connection
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {(() => {
-                        const lastAt =
-                          "last_bot_message_at" in platformStatus
-                            ? platformStatus.last_bot_message_at
-                            : null;
-                        if (lastAt == null) {
-                          return "No messages received yet. @mention Aurora in an installed channel, then check again.";
-                        }
-                        const ageSec = Math.floor(Date.now() / 1000) - lastAt;
-                        const when = new Date(lastAt * 1000).toLocaleString();
-                        if (ageSec <= TEAMS_BOT_VERIFY_WINDOW_SEC) {
-                          return `Recent bot activity (${when}). Install and messaging endpoint look wired.`;
-                        }
-                        return `Last bot activity: ${when}. @mention Aurora again for a fresh test.`;
-                      })()}
-                    </p>
                   </div>
                 )}
               </>

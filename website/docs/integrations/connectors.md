@@ -885,7 +885,7 @@ Operator setup (Entra, Azure Bot, manifest, troubleshooting): `server/connectors
 
 1. **Connectors** → **Microsoft Teams** → Connect (Entra sign-in) — do this before @mention tests.
 2. Install the Aurora Teams app in each Microsoft Team where the bot should work.
-3. @mention Aurora in a channel (e.g. `@Aurora hello`), then on **Teams → Manage** click **Check bot connection**.
+3. @mention Aurora in a channel (e.g. `@Aurora hello`) — getting-started steps on **Teams → Manage** clear once Aurora receives it.
 4. **Teams → Manage** — refresh/activate channels, set the **incident card** channel, configure **Teams memory** and notification toggles.
 
 #### Troubleshooting

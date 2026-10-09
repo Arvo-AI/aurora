@@ -28,14 +28,11 @@ export const TEAMS_CUSTOMER_SETUP = {
   verifyTitle: "3. Confirm with an @mention",
   verifySteps: [
     "In a channel where the app is installed, send a message that @mentions Aurora (use the app’s display name, e.g. “@Aurora hello”).",
-    "On Teams → Manage, click “Check bot connection”. A recent @mention means install and Connect are working.",
+    "When Aurora receives the @mention, the getting-started steps on Teams → Manage disappear and you can activate channels below.",
   ],
   verifyWhy:
     "Aurora records when the bot receives a channel message. That confirms Teams is delivering traffic to your organization’s Aurora instance.",
 } as const;
-
-/** Treat bot activity within this window as a successful verification ping. */
-export const TEAMS_BOT_VERIFY_WINDOW_SEC = 15 * 60;
 
 export function teamsOAuthFailureMessage(
   errorCode: string,
