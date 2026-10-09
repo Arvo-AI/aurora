@@ -98,11 +98,20 @@ Do this in **[Teams Developer Portal](https://dev.teams.microsoft.com/)**, not i
 
 1. Sign in → **Apps** → **+ New app**.
 2. **App name** and **Package name** (e.g. Aurora) → **Create**.
-3. **Configure** (left) → **App features** → **Bot** → **Set up** (or **Existing bot**).
-4. **Select an existing bot registration** → paste the same **Microsoft App ID** as step 1 / Azure Bot **Configuration** (`TEAMS_CLIENT_ID`).
-5. Under **Scope**, enable **Team** (required for channels). Enable **Personal** only if you want DMs.
-6. **Save** (top).
-7. **Publish** (left) → **Publish to your org** (needs Teams admin approval), **or** use **Preview in Teams** / **Download** zip and **Upload a custom app** in Teams if tenant policy allows.
+3. Left nav → **App features** → **Bot** → **Set up** (or **Existing bot** / enter bot ID manually).
+4. Link the bot: paste the **Microsoft App ID** manually if the dropdown is empty (normal for Azure Bot resources). Use the same GUID as Entra step 1 / Azure Bot **Configuration** (`TEAMS_CLIENT_ID`) — **not** the Teams app’s **App ID** on the **Basic** tab.
+5. **What can your bot do?** (leave all of these **unchecked** for Aurora):
+
+   | Option | Aurora |
+   |--------|--------|
+   | Upload and download files | Off — not used today |
+   | Only send notification | **Off** — if enabled, users cannot @mention the bot and Aurora cannot handle channel messages |
+   | Supports audio calls | Off |
+   | Supports video calls | Off |
+
+6. **Select the scopes where people can use your bot:** enable **Team** (required for channel @mentions and incident cards). Enable **Personal** only if you want DMs; **Group chat** is optional.
+7. **Save** (top).
+8. **Publish** (left) → **Publish to your org** (needs Teams admin approval), **or** use **Preview in Teams** / **Download** zip and **Upload a custom app** in Teams if tenant policy allows.
 
 After approval, users find the app under **Teams → Apps → Built for your org** (name from step 2), not under Azure Portal.
 
