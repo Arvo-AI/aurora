@@ -14,6 +14,17 @@ from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
 TITLE_MAX_LENGTH = 50
+# Bot Framework channel messages allow ~28k; keep a sane cap for readability.
+TEAMS_MAX_MESSAGE_LENGTH = 28_000
+
+
+def format_response_for_teams(text: str, max_length: int = TEAMS_MAX_MESSAGE_LENGTH) -> str:
+    """Plain text for Teams (no Slack mrkdwn). Reuses RCA note markdown stripping."""
+    from utils.notifications.rca_note import to_plain_text
+
+    if not text:
+        return ""
+    return to_plain_text(text, max_chars=max_length)
 
 _OPENID_CONFIG: Dict[str, Any] | None = None
 _BOTFRAMEWORK_JWKS_CLIENT: jwt.PyJWKClient | None = None

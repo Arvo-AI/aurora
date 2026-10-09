@@ -2278,7 +2278,11 @@ def _send_response_to_teams(
         tenant_id = tenant_id_for_aurora_user(user_id)
         if not tenant_id:
             return False
-        text = last_assistant_message.strip()
+        from routes.teams.teams_events_helpers import format_response_for_teams
+
+        text = format_response_for_teams(last_assistant_message)
+        if not text:
+            return False
         service_url = trigger_metadata.get("service_url")
         conversation_id = trigger_metadata.get("conversation_id")
         thinking_activity_id = trigger_metadata.get("thinking_activity_id")
