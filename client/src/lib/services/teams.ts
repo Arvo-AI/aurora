@@ -12,7 +12,7 @@ export interface TeamsStatus {
   oauth_connected?: boolean;
   /** Recent bot @mention received (Teams app + messaging endpoint). */
   bot_verified?: boolean;
-  /** OAuth plus at least one successful @mention reply posted back to Teams. */
+  /** OAuth plus at least one bot @mention received (Teams app + endpoint verified). */
   setup_complete?: boolean;
   pending_setup?: TeamsPendingSetupStep[];
   tenant_id?: string;

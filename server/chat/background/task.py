@@ -2332,7 +2332,7 @@ def _record_teams_reply_delivered(user_id: str) -> None:
 
         record_teams_bot_reply_delivered(user_id)
     except Exception:
-        logger.debug("Failed to record Teams bot reply timestamp", exc_info=True)
+        logger.warning("Failed to record Teams bot reply timestamp", exc_info=True)
 
 
 def _send_response_to_google_chat(

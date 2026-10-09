@@ -53,8 +53,8 @@ export function TeamsSetupIncompleteBanner({
           Teams setup incomplete
         </CardTitle>
         <CardDescription>
-          Microsoft sign-in (OAuth) succeeded. Aurora still needs the Teams app installed where you
-          want @mentions and bot messages — OAuth cannot do that step.
+          Microsoft sign-in (OAuth) succeeded. Install the Aurora Teams app in each team and
+          @mention the bot once so Aurora can receive channel messages.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">

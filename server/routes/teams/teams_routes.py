@@ -167,29 +167,20 @@ def teams_callback():
 
 
 def _teams_setup_state(user_id: str, last_bot_message_at: int | None) -> dict:
-    # Inbound @mention proves Teams → Aurora; first successful reply proves Aurora → Teams.
+    # Inbound @mention proves the Teams app, messaging endpoint, and Connect are wired.
     bot_verified = last_bot_message_at is not None
-    setup_complete = _last_bot_reply_at(user_id) is not None
+    reply_delivered = _last_bot_reply_at(user_id) is not None
+    setup_complete = bot_verified or reply_delivered
     pending: list[dict[str, str]] = []
-    if not setup_complete:
-        if not bot_verified:
-            pending.append({
-                "id": "install_teams_app",
-                "title": "Add Aurora to each Microsoft Team",
-                "detail": (
-                    "In Teams: open the team → Manage team → Apps (or + → Add an app), "
-                    "install your organization’s Aurora app, then @mention the bot in a channel."
-                ),
-            })
-        else:
-            pending.append({
-                "id": "await_bot_reply",
-                "title": "Wait for Aurora’s reply in Teams",
-                "detail": (
-                    "Aurora received your @mention. If the channel has no reply yet, "
-                    "check celery_worker logs and messaging endpoint configuration."
-                ),
-            })
+    if not bot_verified:
+        pending.append({
+            "id": "install_teams_app",
+            "title": "Add Aurora to each Microsoft Team",
+            "detail": (
+                "In Teams: open the team → Manage team → Apps (or + → Add an app), "
+                "install your organization’s Aurora app, then @mention the bot in a channel."
+            ),
+        })
     return {
         "oauth_connected": True,
         "bot_verified": bot_verified,
