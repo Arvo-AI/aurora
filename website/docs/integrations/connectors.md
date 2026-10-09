@@ -851,7 +851,7 @@ If the bot uses the same app registration as OAuth, set only `TEAMS_CLIENT_ID` (
 2. **App features** → **Bot** → paste the **Microsoft App ID** manually if needed (same as `TEAMS_CLIENT_ID` / Azure Bot — not the **Basic** tab app ID).
 3. **What can your bot do?** — leave **all unchecked** for Aurora: do **not** enable **Only send notification** (blocks @mentions); file upload and audio/video are unused.
 4. Scopes: **Team** (required); **Personal** / **Group chat** optional → **Save**.
-5. **Publish** → **Publish to your org** (admin), or preview / upload custom app per tenant policy.
+5. **Distribute** → **Publish to your org** (admin), or **Preview in Teams** / **Download** zip and **Upload a custom app** in Teams if tenant policy allows.
 
 Users then find the app in **Teams → Apps → Built for your org**. Full steps: `server/connectors/teams_connector/README.md` §3.
 

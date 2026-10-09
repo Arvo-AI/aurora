@@ -111,7 +111,7 @@ Do this in **[Teams Developer Portal](https://dev.teams.microsoft.com/)**, not i
 
 6. **Select the scopes where people can use your bot:** enable **Team** (required for channel @mentions and incident cards). Enable **Personal** only if you want DMs; **Group chat** is optional.
 7. **Save** (top).
-8. **Publish** (left) → **Publish to your org** (needs Teams admin approval), **or** use **Preview in Teams** / **Download** zip and **Upload a custom app** in Teams if tenant policy allows.
+8. **Distribute** (left) → **Publish to your org** (needs Teams admin approval), **or** use **Preview in Teams** / **Download** zip and **Upload a custom app** in Teams if tenant policy allows.
 
 After approval, users find the app under **Teams → Apps → Built for your org** (name from step 2), not under Azure Portal.
 
@@ -178,7 +178,7 @@ OAuth powers Graph **reads** in Aurora. **Posts** (@mention replies, cards, rout
 
 ## Troubleshooting
 
-**I configured Azure Bot / enabled Teams channel but don’t see the app in Teams → Apps** — Azure is not where Teams apps are listed. Complete **§3** in [Teams Developer Portal](https://dev.teams.microsoft.com/) and **Publish to your org** (or sideload). Enabling **Channels → Microsoft Teams** on the Azure Bot resource is necessary but not sufficient.
+**I configured Azure Bot / enabled Teams channel but don’t see the app in Teams → Apps** — Azure is not where Teams apps are listed. Complete **§3** in [Teams Developer Portal](https://dev.teams.microsoft.com/) and **Distribute → Publish to your org** (or sideload). Enabling **Channels → Microsoft Teams** on the Azure Bot resource is necessary but not sufficient.
 
 **Redirect URI mismatch** — Redirect in Entra must match exactly what Aurora sends (`{backend}/teams/callback`). With local dev, set `NGROK_URL` and use the tunnel URL in Entra.
 
