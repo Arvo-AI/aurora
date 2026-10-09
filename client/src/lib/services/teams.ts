@@ -12,7 +12,7 @@ export interface TeamsStatus {
   oauth_connected?: boolean;
   /** Recent bot @mention received (Teams app + messaging endpoint). */
   bot_verified?: boolean;
-  /** OAuth and bot path verified — same as GitHub “repos connected”. */
+  /** OAuth plus at least one successful @mention reply posted back to Teams. */
   setup_complete?: boolean;
   pending_setup?: TeamsPendingSetupStep[];
   tenant_id?: string;
@@ -58,7 +58,7 @@ export const teamsService = {
         connected,
         oauth_connected: (data?.oauth_connected as boolean | undefined) ?? connected,
         bot_verified: Boolean(data?.bot_verified),
-        setup_complete: setupComplete ?? (connected ? Boolean(data?.bot_verified) : false),
+        setup_complete: setupComplete ?? false,
         pending_setup: (data?.pending_setup as TeamsPendingSetupStep[] | undefined) ?? [],
         tenant_id: data?.tenant_id as string | undefined,
         team_name: data?.team_name as string | undefined,

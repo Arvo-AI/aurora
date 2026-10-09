@@ -2295,6 +2295,7 @@ def _send_response_to_teams(
                     activity_id=thinking_activity_id,
                     text=text,
                 )
+                _record_teams_reply_delivered(user_id)
                 return True
             except Exception:
                 logger.warning(
@@ -2318,10 +2319,20 @@ def _send_response_to_teams(
                 reply_to_id=reply_to_id,
                 service_url=service_url,
             )
+        _record_teams_reply_delivered(user_id)
         return True
     except Exception as e:
         logger.error("[BackgroundChat] Error sending response to Teams: %s", e, exc_info=True)
         return False
+
+
+def _record_teams_reply_delivered(user_id: str) -> None:
+    try:
+        from routes.teams.teams_routes import record_teams_bot_reply_delivered
+
+        record_teams_bot_reply_delivered(user_id)
+    except Exception:
+        logger.debug("Failed to record Teams bot reply timestamp", exc_info=True)
 
 
 def _send_response_to_google_chat(

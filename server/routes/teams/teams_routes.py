@@ -35,7 +35,7 @@ def teams_status(user_id):
             return jsonify({"connected": False, "error": "Invalid or expired token"})
         me = client.get_me()
         last_bot_message_at = _last_bot_message_at(user_id)
-        setup = _teams_setup_state(last_bot_message_at)
+        setup = _teams_setup_state(user_id, last_bot_message_at)
         return jsonify({
             "connected": True,
             "tenant_id": creds.get("tenant_id"),
@@ -166,25 +166,59 @@ def teams_callback():
         return redirect(_teams_oauth_failure_redirect("unexpected_error"))
 
 
-def _teams_setup_state(last_bot_message_at: int | None) -> dict:
-    # Any prior @mention/DM proves the Teams app + messaging endpoint worked.
+def _teams_setup_state(user_id: str, last_bot_message_at: int | None) -> dict:
+    # Inbound @mention proves Teams → Aurora; first successful reply proves Aurora → Teams.
     bot_verified = last_bot_message_at is not None
+    setup_complete = _last_bot_reply_at(user_id) is not None
     pending: list[dict[str, str]] = []
-    if not bot_verified:
-        pending.append({
-            "id": "install_teams_app",
-            "title": "Add Aurora to each Microsoft Team",
-            "detail": (
-                "In Teams: open the team → Manage team → Apps (or + → Add an app), "
-                "install your organization’s Aurora app, then @mention the bot in a channel."
-            ),
-        })
+    if not setup_complete:
+        if not bot_verified:
+            pending.append({
+                "id": "install_teams_app",
+                "title": "Add Aurora to each Microsoft Team",
+                "detail": (
+                    "In Teams: open the team → Manage team → Apps (or + → Add an app), "
+                    "install your organization’s Aurora app, then @mention the bot in a channel."
+                ),
+            })
+        else:
+            pending.append({
+                "id": "await_bot_reply",
+                "title": "Wait for Aurora’s reply in Teams",
+                "detail": (
+                    "Aurora received your @mention. If the channel has no reply yet, "
+                    "check celery_worker logs and messaging endpoint configuration."
+                ),
+            })
     return {
         "oauth_connected": True,
         "bot_verified": bot_verified,
-        "setup_complete": bot_verified,
+        "setup_complete": setup_complete,
         "pending_setup": pending,
     }
+
+
+def record_teams_bot_reply_delivered(user_id: str) -> None:
+    """Mark org setup complete after Aurora posts the first @mention response to Teams."""
+    from utils.auth.stateless_auth import store_org_preference
+
+    org_id = get_org_id_for_user(user_id)
+    if not org_id:
+        return
+    store_org_preference(org_id, "teams_last_bot_reply_at", str(int(time.time())))
+
+
+def _last_bot_reply_at(user_id: str) -> int | None:
+    org_id = get_org_id_for_user(user_id)
+    if not org_id:
+        return None
+    raw = get_org_preference(org_id, "teams_last_bot_reply_at")
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _last_bot_message_at(user_id: str) -> int | None:

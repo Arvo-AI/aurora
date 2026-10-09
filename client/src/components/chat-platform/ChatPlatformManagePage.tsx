@@ -666,11 +666,13 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
           </div>
         </div>
 
-        {config.id === "teams" && platformStatus?.connected && (
+        {config.id === "teams" &&
+          platformStatus?.connected &&
+          !(platformStatus as TeamsStatus).setup_complete && (
           <TeamsSetupIncompleteBanner status={platformStatus as TeamsStatus} />
         )}
 
-        {config.id === "teams" && (
+        {config.id === "teams" && !(platformStatus as TeamsStatus | null)?.setup_complete && (
           <Card className="mb-6 border-primary/40">
             <CardHeader>
               <CardTitle className="text-lg">{TEAMS_CUSTOMER_SETUP.headline}</CardTitle>
