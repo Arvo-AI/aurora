@@ -43,6 +43,7 @@ async def background_session_heartbeat(session_id: str, user_id: str):
     await asyncio.to_thread(_touch_session, session_id, user_id)
 
     async def pulse():
+        """Refresh session activity at a fixed interval until cancelled."""
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
             await asyncio.to_thread(_touch_session, session_id, user_id)

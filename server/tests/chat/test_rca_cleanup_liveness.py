@@ -30,6 +30,7 @@ USER_ID = "test-user"
 
 
 def load_functions(path, names, namespace):
+    """Load selected function bodies without importing the rest of the module."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     functions = [
         node for node in tree.body
@@ -43,6 +44,7 @@ class DatabaseDouble:
     """Stateful query responses: a real heartbeat changes the cleaner's read."""
 
     def __init__(self, clock):
+        """Start with a stale running session and mocked database connections."""
         self.clock = clock
         self.session_updated_at = NOW - timedelta(seconds=181)
         self.incident_updated_at = self.session_updated_at
@@ -64,10 +66,12 @@ class DatabaseDouble:
         self.pool.get_admin_connection.return_value.__enter__.return_value = self.conn
 
     def fetchall(self):
+        """Return the pending query rows and clear them."""
         rows, self.rows = self.rows, []
         return rows
 
     def execute(self, query, params=()):
+        """Apply heartbeat and cleanup queries to the in-memory session state."""
         sql = " ".join(query.split())
         self.queries.append(sql)
         self.rows = []
@@ -126,11 +130,13 @@ class DatabaseDouble:
 
 @pytest.fixture
 def harness(monkeypatch):
+    """Load real workflow and cleanup code with a controlled clock and database."""
     class Clock(datetime):
         current = NOW
 
         @classmethod
         def now(cls, tz=None):
+            """Return the time set by the test."""
             assert tz is None
             return cls.current
 
@@ -191,6 +197,7 @@ def harness(monkeypatch):
     ids=["recent-activity", "tool-currently-running", "subagent-currently-running"],
 )
 def test_existing_liveness_signals_are_accepted(harness, age_seconds, running_tool, running_subagent):
+    """Recent activity, running tools and running subagents each keep a task alive."""
     harness.db.running_tool = running_tool
     harness.db.running_subagent = running_subagent
     assert harness.code["_is_task_dead"](
@@ -205,13 +212,16 @@ def test_existing_liveness_signals_are_accepted(harness, age_seconds, running_to
     ids=["baseline-without-heartbeat", "silent-model-with-heartbeat", "short-stream-with-heartbeat"],
 )
 def test_real_workflow_and_cleanup_during_model_wait(harness, monkeypatch, enabled, stream_tokens):
+    """Heartbeats prevent cleanup from failing a workflow while the model waits."""
     if not enabled:
         @asynccontextmanager
         async def no_heartbeat(*args):
+            """Run the baseline without refreshing session activity."""
             yield
         monkeypatch.setattr(harness.heartbeat, "background_session_heartbeat", no_heartbeat)
 
     async def scenario():
+        """Compare cleanup outcomes after the model waits beyond the stale cutoff."""
         # Start both A/B arms from the same just-recorded activity, then advance
         # exactly 181 seconds without a tool call or a content-save-sized chunk.
         harness.db.session_updated_at = NOW
@@ -223,6 +233,7 @@ def test_real_workflow_and_cleanup_during_model_wait(harness, monkeypatch, enabl
 
         class WaitingModel:
             async def stream(self, state):
+                """Advance virtual time and run cleanup between optional short tokens."""
                 if stream_tokens:
                     # Too short to trigger either existing content-save threshold.
                     yield "token", "查"
@@ -263,10 +274,13 @@ def test_real_workflow_and_cleanup_during_model_wait(harness, monkeypatch, enabl
 
 @pytest.mark.parametrize("exit_mode", ["complete", "error", "cancel", "timeout"])
 def test_heartbeat_stops_when_workflow_exits(harness, exit_mode):
+    """Every workflow exit stops the heartbeat and further session updates."""
     async def scenario():
+        """Exercise the chosen exit and check that no heartbeat work remains."""
         entered = asyncio.Event()
 
         async def work():
+            """Enter the heartbeat context, then finish, fail or wait for cancellation."""
             async with harness.heartbeat.background_session_heartbeat(SESSION_ID, USER_ID):
                 entered.set()
                 if exit_mode == "error":
@@ -298,6 +312,7 @@ def test_heartbeat_stops_when_workflow_exits(harness, exit_mode):
 
 @pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
 def test_heartbeat_does_not_reopen_terminal_session(harness, status):
+    """A heartbeat leaves terminal session status and activity time unchanged."""
     harness.db.session_status = status
     previous = harness.db.session_updated_at
     harness.heartbeat._touch_session(SESSION_ID, USER_ID)
@@ -307,6 +322,7 @@ def test_heartbeat_does_not_reopen_terminal_session(harness, status):
 
 
 def test_stopped_worker_eventually_becomes_stale_again(harness):
+    """Cleanup fails a session once its last heartbeat becomes stale."""
     harness.heartbeat._touch_session(SESSION_ID, USER_ID)
     harness.clock.current += timedelta(seconds=181)
     result = harness.code["cleanup_stale_background_chats"]()
@@ -316,6 +332,7 @@ def test_stopped_worker_eventually_becomes_stale_again(harness):
 
 
 def test_heartbeat_requires_valid_org_context(harness):
+    """A missing organization context prevents heartbeat database writes."""
     harness.auth.set_rls_context.return_value = None
     harness.heartbeat._touch_session(SESSION_ID, USER_ID)
     assert harness.db.queries == []
@@ -323,6 +340,7 @@ def test_heartbeat_requires_valid_org_context(harness):
 
 
 def test_database_error_does_not_abort_workflow(harness, monkeypatch):
+    """A heartbeat database failure is logged without raising to the caller."""
     harness.db.pool.get_admin_connection.side_effect = RuntimeError("database unavailable")
     monkeypatch.setattr(harness.heartbeat.logger, "warning", MagicMock())
     harness.heartbeat._touch_session(SESSION_ID, USER_ID)

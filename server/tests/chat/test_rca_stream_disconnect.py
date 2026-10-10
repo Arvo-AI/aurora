@@ -23,19 +23,23 @@ from tests.chat.test_rca_cleanup_liveness import (
 
 @pytest.mark.parametrize("fault", ["read_timeout", "disconnect", "silent_until_workflow_timeout"])
 def test_network_failure_after_first_chunk_is_not_success(harness, monkeypatch, fault):
+    """A stalled or disconnected stream fails the session after its first token."""
     observed = {"first_chunks": 0, "network_error": None, "workflow_limit": None}
     websocket = SimpleNamespace(send=AsyncMock())
 
     class NetworkWorkflow:
         def __init__(self, agent, session_id):
+            """Keep the agent supplied by the background executor."""
             self.agent = agent
 
         async def stream(self, state):
+            """Read tokens from a local server that stalls or disconnects midstream."""
             first_chunk_received = asyncio.Event()
             connections = set()
             handlers = set()
 
             async def serve(reader, writer):
+                """Send one HTTP chunk, then trigger the selected network fault."""
                 handler = asyncio.current_task()
                 handlers.add(handler)
                 connections.add(writer)
@@ -90,9 +94,11 @@ def test_network_failure_after_first_chunk_is_not_success(harness, monkeypatch, 
 
     class TestAsyncio:
         def __getattr__(self, name):
+            """Forward unchanged operations to the real asyncio module."""
             return getattr(asyncio, name)
 
         async def wait_for(self, awaitable, timeout):
+            """Record the production workflow limit and shorten it for the test."""
             if timeout == 1800:
                 # Preserve and record the production limit, accelerate only this test.
                 observed["workflow_limit"] = timeout
@@ -100,6 +106,7 @@ def test_network_failure_after_first_chunk_is_not_success(harness, monkeypatch, 
             return await asyncio.wait_for(awaitable, timeout=timeout)
 
     async def observe_async_exit():
+        """Record whether the heartbeat has stopped before queue shutdown."""
         observed["heartbeat_stopped"] = not any(
             task.get_name() == "background-session-heartbeat"
             for task in asyncio.all_tasks()
@@ -195,14 +202,17 @@ def test_network_failure_after_first_chunk_is_not_success(harness, monkeypatch, 
 
 @pytest.mark.parametrize("background", [True, False], ids=["background", "foreground"])
 def test_error_propagation_preserves_reporting_and_cost_tracking(harness, background):
+    """Stream errors retain reporting and cost tracking, with background errors re-raised."""
     original_error = RuntimeError("model stream disconnected")
 
     class InterruptedWorkflow:
         async def stream(self, state):
+            """Yield one token before raising the original stream error."""
             yield "token", "查"
             raise original_error
 
     async def scenario():
+        """Check error handling and heartbeat cleanup in the chosen execution mode."""
         state = SimpleNamespace(session_id=SESSION_ID, is_background=background)
         websocket = SimpleNamespace(send=AsyncMock())
         if background:

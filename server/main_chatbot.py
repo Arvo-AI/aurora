@@ -329,6 +329,10 @@ def create_websocket_sender(websocket, user_id, session_id):
 
 
 async def process_workflow_async(wf, state, websocket, user_id, incident_id=None):
+    """Consume workflow events and report progress, errors, and usage.
+
+    Background errors are re-raised so the task can mark the session failed.
+    """
     curr_node = "START"
     sent_message_count = 0
     websocket_connected = True
@@ -829,6 +833,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                 raise
         
         async def process_background_stream():
+            """Keep the session heartbeat running while consuming background events."""
             from chat.background.heartbeat import background_session_heartbeat
 
             async with background_session_heartbeat(session_id, user_id):
