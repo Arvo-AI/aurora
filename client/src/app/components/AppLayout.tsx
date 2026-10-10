@@ -109,11 +109,18 @@ const SidebarStrip = ({
                   className="h-10 w-10 rounded-full p-0 shadow-md border border-border bg-card flex items-center justify-center overflow-hidden"
                   onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
                 >
+                  <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center overflow-hidden">
+                {user.imageUrl ? (
                   <img 
                     src={user.imageUrl} 
                     alt={user.fullName || "User"} 
                     className="w-full h-full object-cover"
                   />
+                ) : (<span className="text-sm font-medium">
+                  {(user.fullName || "U")[0].toUpperCase()}
+                  </span>
+                )}
+                </div>
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
