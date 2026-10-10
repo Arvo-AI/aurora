@@ -334,6 +334,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
     websocket_connected = True
     workflow_timeout = 1800  # 30 minutes max for any workflow
     session_id = getattr(state, 'session_id', 'unknown')
+    workflow_error = None
 
     # Helper to save incident thoughts for background chats
     accumulated_thought = []
@@ -827,8 +828,17 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                 logger.error(f"[STREAM ERROR] Error in process_stream for session {session_id}: {stream_error}", exc_info=True)
                 raise
         
-        # Execute workflow with timeout
-        await asyncio.wait_for(process_stream(), timeout=workflow_timeout)
+        async def process_background_stream():
+            from chat.background.heartbeat import background_session_heartbeat
+
+            async with background_session_heartbeat(session_id, user_id):
+                await process_stream()
+
+        # Worker liveness is independent of whether the model streams text.
+        # Keep the existing timeout outside the heartbeat's lifetime so timeout,
+        # cancellation and errors all stop the pulse as well as the workflow.
+        stream = process_background_stream() if is_background else process_stream()
+        await asyncio.wait_for(stream, timeout=workflow_timeout)
         
         # CRITICAL: Wait for any ongoing tool calls to complete before marking as done
         if hasattr(wf, '_wait_for_ongoing_tool_calls'):
@@ -844,7 +854,8 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         
         await send_end_status("completed")
         
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError as error:
+        workflow_error = error
         logger.error(f"Workflow timeout after {workflow_timeout}s for session {session_id}")
         finalize_streaming_chat_message(remove=True)
         if websocket_connected:
@@ -858,6 +869,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         await send_end_status("timeout")
         
     except Exception as e:
+        workflow_error = e
         logger.error(f"Error in workflow processing for session {session_id}: {e}", exc_info=True)
         finalize_streaming_chat_message(remove=True)
         if websocket_connected:
@@ -901,7 +913,12 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         except Exception as e:
             logger.error(f"Error tracking API costs: {e}")
     
-    # Workflow always completes here - messages are saved by the workflow.stream() method
+    # Preserve error reporting and cost tracking, then let the background task's
+    # existing failure handler finalize the session instead of marking it complete.
+    if is_background and workflow_error is not None:
+        raise workflow_error
+
+    # Messages are saved by the workflow.stream() method.
     logger.info(f"Background workflow processing completed for session {getattr(state, 'session_id', 'unknown')}")
 
 async def handle_connection(websocket) -> None:
