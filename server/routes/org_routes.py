@@ -466,10 +466,18 @@ def remove_member(user_id, target_user_id):
                     (target_user_id, org_id),
                 )
                 target_row = cursor.fetchone()
+                # Not in this org — don't delete another org's onboarding row
+                if not target_row:
+                    return jsonify({"error": "User not found in this org"}), 404
                 if target_row and target_row[0] == 'admin' and remaining_admins < 1:
                     return jsonify({"error": "Cannot remove the last admin"}), 400
 
-                # Clear FK references before deleting the user
+                # Clear FK references before deleting the user.
+                # No ON DELETE CASCADE, so a leftover onboarding row blocks the delete.
+                cursor.execute(
+                    "DELETE FROM onboarding_selections WHERE user_id = %s AND org_id = %s",
+                    (target_user_id, org_id),
+                )
                 cursor.execute(
                     "DELETE FROM org_invitations WHERE invited_by = %s", (target_user_id,)
                 )
