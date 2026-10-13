@@ -476,8 +476,12 @@ def _parse_preference_value(raw, default=None):
     except (json.JSONDecodeError, ValueError):
         return raw
 
-def get_user_preference(user_id: str, key: str, default=None):
-    """Get user preference from database."""
+def get_user_preference(user_id: str, key: str, default=None, *, strict: bool = False):
+    """Get user preference from database.
+
+    strict=True re-raises a read failure instead of returning default, so a
+    caller can retry rather than treat an outage as "no preference".
+    """
     conn = None
     cursor = None
     try:
@@ -495,6 +499,9 @@ def get_user_preference(user_id: str, key: str, default=None):
             return default
         return _parse_preference_value(result[0], default)
     except Exception:
+        # Callers that must not confuse an outage with a missing value retry instead.
+        if strict:
+            raise
         logger.exception("Error retrieving user preference")
         return default
     finally:

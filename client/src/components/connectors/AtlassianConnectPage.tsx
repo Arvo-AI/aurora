@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
+import { JiraAutomaticRca, JiraRcaRule } from "@/components/connectors/JiraAutomaticRca";
 
 interface ProductConfig {
   key: "jira" | "confluence";
@@ -50,6 +51,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const [isPatConnecting, setIsPatConnecting] = useState(false);
   const [jiraMode, setJiraMode] = useState<"full" | "comment_only">("comment_only");
   const [commentBack, setCommentBack] = useState(false);
+  const [rcaRules, setRcaRules] = useState<JiraRcaRule[]>([]);
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [oauthConfigError, setOauthConfigError] = useState(false);
@@ -80,6 +82,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
         const data = await res.json();
         if (data.jiraMode) setJiraMode(data.jiraMode);
         setCommentBack(data.commentBack === true);
+        setRcaRules(Array.isArray(data.rcaRules) ? data.rcaRules : []);
       }
     } catch { /* silent */ } finally { setIsLoadingSettings(false); }
     try {
@@ -139,6 +142,38 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
     } catch {
       setCommentBack(previous);
       toast({ title: "Failed to save settings", variant: "destructive" });
+    } finally { setIsSavingSettings(false); }
+  };
+
+  const saveRcaRules = async (rules: JiraRcaRule[]) => {
+    const previous = rcaRules;
+    setRcaRules(rules);
+    setIsSavingSettings(true);
+    try {
+      const res = await fetch("/api/jira/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ rcaRules: rules }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.rcaRules)) setRcaRules(data.rcaRules);
+        toast({
+          title: "Settings saved",
+          description: rules.length === 0
+            ? "Automatic Jira investigations are off"
+            : "Automatic investigations follow the projects and ticket types you saved",
+        });
+        return true;
+      }
+      setRcaRules(previous);
+      toast({ title: "Failed to save settings", variant: "destructive" });
+      return false;
+    } catch {
+      setRcaRules(previous);
+      toast({ title: "Failed to save settings", variant: "destructive" });
+      return false;
     } finally { setIsSavingSettings(false); }
   };
 
@@ -348,8 +383,8 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                   <CardTitle className="text-base">Incoming Webhook</CardTitle>
                 </div>
                 <CardDescription className="text-xs">
-                  Trigger Aurora RCA automatically when a bug is filed.
-                  In Jira: Settings &rarr; System &rarr; Advanced &rarr; WebHooks &rarr; paste this URL and select &quot;Issue created&quot;.
+                  Paste this URL in Jira under Settings &rarr; System &rarr; Advanced &rarr; WebHooks,
+                  and select &quot;Issue created&quot;. Aurora only investigates tickets that match a rule below.
                 </CardDescription>
               </CardHeader>
               <CardContent className="pt-0">
@@ -375,9 +410,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                     {webhookCopied ? <CheckCircle className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
                   </Button>
                 </div>
-                <p className="text-[11px] text-muted-foreground mt-2">
-                  Triggers on issue types: Bug, Incident, Problem, Defect, Production Issue. Other types are ignored.
-                </p>
+                <JiraAutomaticRca rules={rcaRules} saving={isSavingSettings} onSave={saveRcaRules} />
               </CardContent>
             </Card>
           )}

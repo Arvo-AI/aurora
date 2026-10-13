@@ -291,6 +291,27 @@ class JiraClient:
         result = self._request("GET", "/project/search", params={"maxResults": max_results})
         return result.get("values", [])
 
+    def list_projects(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """Page through accessible projects, capped so a large site stays bounded."""
+        collected: List[Dict[str, Any]] = []
+        start = 0
+        while len(collected) < limit:
+            page_size = min(50, limit - len(collected))
+            result = self._request(
+                "GET",
+                "/project/search",
+                params={"maxResults": page_size, "startAt": start},
+            )
+            # Older Jira Server returned a bare list instead of {values, isLast}.
+            if isinstance(result, list):
+                return result[:limit]
+            values = result.get("values") or []
+            collected.extend(values)
+            if result.get("isLast", True) or not values:
+                break
+            start += len(values)
+        return collected[:limit]
+
     def get_issue_types(self, project_key: str) -> List[Dict[str, Any]]:
         """List issue types for a project."""
         result = self._request("GET", f"/project/{project_key}")

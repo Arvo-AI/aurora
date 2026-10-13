@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Blueprint, jsonify, request
 
@@ -267,7 +268,98 @@ def link_issues(user_id):
 
 JIRA_MODE_KEY = "jira_mode"
 JIRA_COMMENT_BACK_KEY = "jira_comment_back"
+JIRA_RCA_RULES_KEY = "jira_rca_rules"
 VALID_MODES = ("full", "comment_only")
+# Jira project keys are a letter plus letters, digits, or underscores.
+_PROJECT_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,31}$")
+_MAX_RCA_RULES = 50
+_MAX_ISSUE_TYPES = 30
+
+
+def normalize_rca_rules(raw: Any) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+    """Validate project × ticket-type rules. Empty list means nothing auto-triggers."""
+    if not isinstance(raw, list):
+        return None, "rcaRules must be a list"
+    if len(raw) > _MAX_RCA_RULES:
+        return None, f"At most {_MAX_RCA_RULES} projects can be configured"
+
+    by_key: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            return None, "Each rule needs a projectKey and issueTypes"
+        project_key = str(item.get("projectKey") or "").strip().upper()
+        # Reject anything that is not a project key so a payload cannot widen the match.
+        if not _PROJECT_KEY_RE.fullmatch(project_key):
+            return None, "projectKey must look like a Jira project key"
+        types_raw = item.get("issueTypes")
+        if not isinstance(types_raw, list) or not types_raw:
+            return None, "issueTypes must list at least one ticket type"
+
+        seen: Dict[str, str] = {}
+        existing = by_key.get(project_key)
+        # A repeated project in one payload merges into the earlier row.
+        if existing:
+            for name in existing["issueTypes"]:
+                seen[name.casefold()] = name
+        else:
+            order.append(project_key)
+
+        for type_name in types_raw:
+            if not isinstance(type_name, str):
+                return None, "issueTypes must be ticket type names"
+            cleaned = " ".join(type_name.split())
+            if not cleaned or len(cleaned) > 80:
+                return None, "Each issue type name must be 1–80 characters"
+            folded = cleaned.casefold()
+            if folded not in seen:
+                seen[folded] = cleaned
+        if len(seen) > _MAX_ISSUE_TYPES:
+            return None, f"At most {_MAX_ISSUE_TYPES} ticket types per project"
+        by_key[project_key] = {"projectKey": project_key, "issueTypes": list(seen.values())}
+
+    return [by_key[key] for key in order], None
+
+
+def get_jira_rca_rules(user_id: str, *, strict: bool = False) -> List[Dict[str, Any]]:
+    """Stored automatic-RCA rules. A missing or corrupt value triggers nothing."""
+    stored = get_user_preference(user_id, JIRA_RCA_RULES_KEY, default=[], strict=strict)
+    if not isinstance(stored, list):
+        return []
+    return stored
+
+
+def extract_webhook_scope(issue: Dict[str, Any]) -> Tuple[str, str]:
+    """Project key and ticket type from a Jira webhook issue."""
+    fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else {}
+    project = fields.get("project") if isinstance(fields.get("project"), dict) else {}
+    project_key = str(project.get("key") or "").strip()
+    # Some automation bodies send only the issue key (PROJ-123).
+    if not project_key:
+        issue_key = str(issue.get("key") or "")
+        head, sep, tail = issue_key.rpartition("-")
+        if sep and head and tail.isdigit():
+            project_key = head
+    issuetype = fields.get("issuetype") if isinstance(fields.get("issuetype"), dict) else {}
+    return project_key, str(issuetype.get("name") or "").strip()
+
+
+def rca_rule_matches(project_key: str, issue_type: str, rules: Any) -> bool:
+    """True when this project and ticket type were explicitly opted in."""
+    if not project_key or not issue_type or not isinstance(rules, list):
+        return False
+    project_folded = project_key.strip().casefold()
+    type_folded = issue_type.strip().casefold()
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        rule_key = str(rule.get("projectKey") or "").strip().casefold()
+        if rule_key != project_folded:
+            continue
+        types = rule.get("issueTypes") or []
+        if any(str(name).strip().casefold() == type_folded for name in types if isinstance(name, str)):
+            return True
+    return False
 
 
 def jira_comment_back_enabled(user_id: str) -> bool:
@@ -281,9 +373,10 @@ def _store_jira_settings(
     *,
     mode: Optional[str],
     comment_back: Optional[bool],
+    rca_rules: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
     """Write all supplied Jira prefs in one transaction."""
-    if mode is None and comment_back is None:
+    if mode is None and comment_back is None and rca_rules is None:
         return True
 
     conn = None
@@ -295,9 +388,16 @@ def _store_jira_settings(
         if not org_id:
             return False
 
-        for key, value in ((JIRA_MODE_KEY, mode), (JIRA_COMMENT_BACK_KEY, comment_back)):
-            if value is None:
-                continue
+        updates: List[Tuple[str, Any]] = []
+        if mode is not None:
+            updates.append((JIRA_MODE_KEY, mode))
+        if comment_back is not None:
+            updates.append((JIRA_COMMENT_BACK_KEY, comment_back))
+        # An empty list is a real value: it turns automatic RCA off.
+        if rca_rules is not None:
+            updates.append((JIRA_RCA_RULES_KEY, rca_rules))
+
+        for key, value in updates:
             cursor.execute(
                 "DELETE FROM user_preferences WHERE org_id = %s AND preference_key = %s",
                 (org_id, key),
@@ -325,7 +425,11 @@ def _store_jira_settings(
 
 def _settings_payload(user_id: str) -> Dict[str, Any]:
     mode = get_user_preference(user_id, JIRA_MODE_KEY, default="comment_only")
-    return {"jiraMode": mode, "commentBack": jira_comment_back_enabled(user_id)}
+    return {
+        "jiraMode": mode,
+        "commentBack": jira_comment_back_enabled(user_id),
+        "rcaRules": get_jira_rca_rules(user_id),
+    }
 
 
 @jira_bp.route("/settings", methods=["GET"])
@@ -344,18 +448,26 @@ def update_settings(user_id):
     data = request.get_json(force=True, silent=True) or {}
     mode = data.get("jiraMode")
     comment_back = data.get("commentBack")
+    has_rules = "rcaRules" in data
 
-    # Either field can be saved on its own — the mode picker and the
-    # comment-back switch are separate controls.
-    if mode is None and comment_back is None:
-        return jsonify({"error": "jiraMode or commentBack is required"}), 400
+    # Each control saves on its own — mode, comment-back, and RCA rules.
+    if mode is None and comment_back is None and not has_rules:
+        return jsonify({"error": "jiraMode, commentBack, or rcaRules is required"}), 400
 
     if mode is not None and mode not in VALID_MODES:
         return jsonify({"error": f"jiraMode must be one of: {', '.join(VALID_MODES)}"}), 400
     if comment_back is not None and not isinstance(comment_back, bool):
         return jsonify({"error": "commentBack must be a boolean"}), 400
 
-    if not _store_jira_settings(user_id, mode=mode, comment_back=comment_back):
+    rca_rules = None
+    if has_rules:
+        rca_rules, rules_error = normalize_rca_rules(data.get("rcaRules"))
+        if rules_error:
+            return jsonify({"error": rules_error}), 400
+
+    if not _store_jira_settings(
+        user_id, mode=mode, comment_back=comment_back, rca_rules=rca_rules,
+    ):
         return jsonify({"error": "Failed to store Jira settings"}), 500
 
     # Jira prefs are org-scoped — invalidate every member's cached tool list.
@@ -371,10 +483,11 @@ def update_settings(user_id):
         clear_credentials_cache(user_id)
 
     logger.info(
-        "[JIRA] Updated settings for user %s: jiraMode=%s commentBack=%s",
+        "[JIRA] Updated settings for user %s: jiraMode=%s commentBack=%s rcaRules=%s",
         sanitize(user_id),
         sanitize(mode),
         sanitize(comment_back),
+        sanitize(len(rca_rules) if rca_rules is not None else None),
     )
 
     payload = _settings_payload(user_id)
@@ -449,6 +562,70 @@ def disconnect(user_id):
 
 
 # ------------------------------------------------------------------
+# GET /jira/projects — projects the connected account can see
+# ------------------------------------------------------------------
+
+@jira_bp.route("/projects", methods=["GET"])
+@require_permission("connectors", "read")
+def list_jira_projects(user_id):
+    """Project keys for the automatic-RCA picker."""
+    client, creds, error = _get_jira_client(user_id)
+    if error:
+        return jsonify({"error": error}), 404 if not creds else 400
+
+    try:
+        projects = _with_refresh(user_id, creds, client, lambda c: c.list_projects())
+    except Exception as exc:
+        logger.error("[JIRA] List projects failed for user %s: %s", sanitize(user_id), exc)
+        return jsonify({"error": "Failed to list Jira projects"}), 502
+
+    slim = []
+    for project in projects or []:
+        key = str(project.get("key") or "").strip()
+        # A project without a key cannot be selected or matched later.
+        if not key:
+            continue
+        slim.append({"key": key, "name": project.get("name") or key})
+    return jsonify({"projects": slim})
+
+
+# ------------------------------------------------------------------
+# GET /jira/projects/<project_key>/issue-types
+# ------------------------------------------------------------------
+
+@jira_bp.route("/projects/<project_key>/issue-types", methods=["GET"])
+@require_permission("connectors", "read")
+def list_project_issue_types(user_id, project_key):
+    """Ticket types in one project, for the automatic-RCA picker."""
+    if not _PROJECT_KEY_RE.fullmatch(project_key or ""):
+        return jsonify({"error": "projectKey must look like a Jira project key"}), 400
+
+    client, creds, error = _get_jira_client(user_id)
+    if error:
+        return jsonify({"error": error}), 404 if not creds else 400
+
+    try:
+        types = _with_refresh(
+            user_id, creds, client, lambda c: c.get_issue_types(project_key),
+        )
+    except Exception as exc:
+        logger.error("[JIRA] List issue types failed for user %s: %s", sanitize(user_id), exc)
+        return jsonify({"error": "Failed to list Jira issue types"}), 502
+
+    names = []
+    seen = set()
+    for issue_type in types or []:
+        name = str((issue_type or {}).get("name") or "").strip()
+        folded = name.casefold()
+        # Blank or repeated names are not distinct ticket types to opt into.
+        if not name or folded in seen:
+            continue
+        seen.add(folded)
+        names.append(name)
+    return jsonify({"projectKey": project_key, "issueTypes": names})
+
+
+# ------------------------------------------------------------------
 # POST /jira/webhook/<user_id> — Jira automation webhook receiver
 # ------------------------------------------------------------------
 
@@ -480,10 +657,23 @@ def webhook(user_id: str):
     if not issue:
         return jsonify({"status": "ignored", "reason": "no issue in payload"}), 200
 
-    issue_type = (issue.get("fields", {}).get("issuetype") or {}).get("name", "").lower()
-    if issue_type not in ("bug", "incident", "problem", "defect", "production issue"):
-        logger.info("[JIRA][WEBHOOK] Ignored issue type '%s' (key=%s)", sanitize(issue_type), sanitize(issue.get("key", "?")))
-        return jsonify({"status": "ignored", "reason": "issue type not configured for RCA"}), 200
+    # Automatic RCA is opt-in. No saved project × type rule means ignore the webhook.
+    # Asking Aurora to investigate a named ticket does not go through this path.
+    project_key, issue_type = extract_webhook_scope(issue)
+    try:
+        rules = get_jira_rca_rules(user_id, strict=True)
+    except Exception:
+        # A failed read must not look like "no rules" — Jira will retry a 503.
+        logger.exception("[JIRA][WEBHOOK] Could not read RCA rules for user %s", sanitize(user_id))
+        return jsonify({"status": "error", "reason": "could not read RCA rules"}), 503
+    if not rca_rule_matches(project_key, issue_type, rules):
+        logger.info(
+            "[JIRA][WEBHOOK] Ignored %s (project=%s type=%s): not configured for automatic RCA",
+            sanitize(issue.get("key", "?")),
+            sanitize(project_key or "?"),
+            sanitize(issue_type or "?"),
+        )
+        return jsonify({"status": "ignored", "reason": "project and issue type not configured for RCA"}), 200
 
     from routes.jira.tasks import process_jira_webhook
     try:
@@ -516,5 +706,5 @@ def get_webhook_url(user_id):
     base_url = tunneled if tunneled != backend_url else (public_url or backend_url)
     url = f"{base_url}/jira/webhook/{user_id}"
     # These are the recommended Jira events to subscribe the webhook to — not a
-    # server-enforced allowlist. The handler filters by issue type, not event name.
+    # server-enforced allowlist. The handler filters by project and issue type.
     return jsonify({"webhook_url": url, "recommended_events": ["jira:issue_created", "jira:issue_updated"]})
