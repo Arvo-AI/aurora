@@ -1343,6 +1343,43 @@ def _is_azure_cli_command(command: str) -> bool:
     return first not in ('kubectl', 'helm', 'terraform')
 
 
+_CLI_PREFIX = {
+    "aws": "aws",
+    "gcp": "gcloud",
+    "azure": "az",
+    "scaleway": "scw",
+    "ovh": "ovhcloud",
+    "tailscale": "tailscale",
+    "flyio": "fly",
+}
+
+# Allow rules for these are anchored at the start of the command (`^kubectl`).
+# They are complete invocations, not `az`/`aws`/`gcloud` subcommands.
+_STANDALONE_POLICY_CLIS = frozenset({
+    "kubectl", "oc", "helm", "terraform", "tofu", "gsutil", "bq",
+})
+
+
+def _command_for_policy(provider: str, command: str) -> str:
+    """String the allowlist matches. Prefix provider subcommands only.
+
+    `ecs list-clusters` becomes `aws ecs list-clusters`. `kubectl logs`
+    stays bare: prefixing it to `az kubectl logs` misses `^kubectl`.
+    """
+    prefix = _CLI_PREFIX.get((provider or "").lower(), "")
+    stripped = command.strip()
+    if not prefix or stripped.startswith(prefix):
+        return command
+    try:
+        first = shlex.split(stripped)[0].lower() if stripped else ""
+    except ValueError:
+        first = ""
+    # Already a full CLI invocation, not an az/aws/gcloud subcommand.
+    if first in _STANDALONE_POLICY_CLIS:
+        return command
+    return f"{prefix} {command}"
+
+
 def _azure_can_fan_out(command: str) -> bool:
     """True when a command is safe to run across every subscription at once.
 
@@ -1680,13 +1717,9 @@ Security & Compliance
         provider = normalized_provider
 
         # Unified gate: signature + org policy + LLM judge + HITL (foreground).
-        # Prepend CLI prefix so patterns like ^aws\s+ match (cloud_exec receives
-        # the subcommand without the provider prefix, e.g. "ecs list-clusters").
-        _CLI_PREFIX = {"aws": "aws", "gcp": "gcloud", "azure": "az",
-                       "scaleway": "scw", "ovh": "ovhcloud", "tailscale": "tailscale",
-                       "flyio": "fly"}
-        prefix = _CLI_PREFIX.get(provider.lower(), "")
-        gated_cmd = f"{prefix} {command}" if prefix and not command.strip().startswith(prefix) else command
+        # Provider subcommands arrive without their CLI (`ecs list-clusters`);
+        # kubectl/helm already include it and must not be prefixed.
+        gated_cmd = _command_for_policy(provider, command)
         from utils.auth.command_gate import gate_command
         gate = gate_command(user_id=user_id, tool_name="cloud_exec", command=gated_cmd)
         if not gate.allowed:
@@ -1694,8 +1727,9 @@ Security & Compliance
                            user_id, gate.code, gate.block_reason[:200])
             error_msg = gate.block_reason
             if gate.code == "POLICY_DENIED" and "No matching allow rule" in error_msg:
+                cli = gated_cmd.strip().split(None, 1)[0] if gated_cmd.strip() else provider
                 error_msg += (
-                    f". To allow {prefix or provider} commands, go to Settings > Security > "
+                    f". To allow {cli} commands, go to Settings > Security > "
                     "Command Policies and re-apply a template or manually add an allow rule."
                 )
             return json.dumps({
