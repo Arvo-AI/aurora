@@ -594,7 +594,12 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
             account_identity = sa_email if sa_email else "aurora-discovery@local"
             fd = os.open(properties_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as _pf:
-                _pf.write(f"[core]\naccount = {account_identity}\n")
+                # project lets `bq` pick up a default via `gcloud config list`
+                # when the command itself has no --project_id.
+                lines = ["[core]", f"account = {account_identity}"]
+                if project_id:
+                    lines.append(f"project = {project_id}")
+                _pf.write("\n".join(lines) + "\n")
         except OSError as mkdir_err:
             logger.warning(
                 "GCP isolated env: could not write CLOUDSDK_CONFIG properties (error_type=%s)",
@@ -1577,6 +1582,54 @@ def _cloud_exec_azure_multi_subscription(
     })
 
 
+def _redact_oauth_access_token(argv: list) -> str:
+    """Join argv for logs. The access token never appears in the result."""
+    redacted = []
+    skip_value = False
+    for token in argv:
+        if skip_value:
+            redacted.append("[REDACTED]")
+            skip_value = False
+            continue
+        if token == "--oauth_access_token":
+            redacted.append(token)
+            skip_value = True
+            continue
+        if token.startswith("--oauth_access_token="):
+            redacted.append("--oauth_access_token=[REDACTED]")
+            continue
+        redacted.append(token)
+    return " ".join(shlex.quote(part) for part in redacted)
+
+
+def _argv_has_flag(argv: list, name: str) -> bool:
+    return any(token == name or token.startswith(name + "=") for token in argv)
+
+
+def prepare_bq_exec(
+    command: str,
+    access_token: Optional[str],
+    project_id: Optional[str],
+) -> Tuple[list, str]:
+    """Argv for `bq`, plus a log-safe rendering of that argv.
+
+    `bq` reads `--oauth_access_token` and does not read CLOUDSDK_AUTH_ACCESS_TOKEN.
+    The token is placed only on the argv. Callers must log the returned string,
+    not the argv. A project the command already sets is left alone.
+    """
+    argv = shlex.split(command)
+    if not argv or argv[0] != "bq":
+        return argv, _redact_oauth_access_token(argv)
+
+    insert_at = 1
+    if project_id and not _argv_has_flag(argv, "--project_id"):
+        argv.insert(insert_at, f"--project_id={project_id}")
+        insert_at += 1
+    if access_token and not _argv_has_flag(argv, "--oauth_access_token"):
+        argv.insert(insert_at, f"--oauth_access_token={access_token}")
+    return argv, _redact_oauth_access_token(argv)
+
+
 def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None, account_id: Optional[str] = None) -> str:
     """Run arbitrary command against *provider* (gcloud/kubectl/gsutil for GCP, aws/kubectl for AWS).
 
@@ -2229,7 +2282,19 @@ Security & Compliance
         else:
             # Use direct command for GCP and AWS
             exec_command = command_args
-        
+
+        if cli_tool == "bq":
+            token = None
+            bq_project = region_or_project
+            if isinstance(isolated_env, dict):
+                token = (
+                    isolated_env.get("CLOUDSDK_AUTH_ACCESS_TOKEN")
+                    or isolated_env.get("GOOGLE_OAUTH_ACCESS_TOKEN")
+                )
+                bq_project = isolated_env.get("GOOGLE_CLOUD_PROJECT") or bq_project
+            exec_command, bq_log = prepare_bq_exec(command, token, bq_project)
+            logger.info("bq invocation: %s", bq_log)
+
         # Execute the command
         exec_start = time.perf_counter()
         exec_started_at = time.time()

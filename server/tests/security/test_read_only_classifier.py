@@ -566,3 +566,23 @@ def test_reads_from_any_cli_stay_allowed(is_read_only, command):
 ])
 def test_investigation_reads_stay_allowed(is_read_only, command):
     assert is_read_only(command) is True, command
+
+
+# A quoted SELECT is one positional and stays a read. An unquoted DROP is a
+# write verb in the operation, so bq is not added to OPERAND_POSITIONAL_CLIS.
+@pytest.mark.parametrize("command", [
+    "bq query --nouse_legacy_sql 'SELECT 1'",
+    "bq ls",
+    "bq show --format=prettyjson dataset",
+])
+def test_bq_reads_stay_allowed(is_read_only, command):
+    assert is_read_only(command) is True, command
+
+
+@pytest.mark.parametrize("command", [
+    "bq rm -t ds.t",
+    "bq query DROP TABLE t",
+    "bq update ds.t",
+])
+def test_bq_writes_stay_blocked(is_read_only, command):
+    assert is_read_only(command) is False, command

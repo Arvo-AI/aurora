@@ -186,6 +186,11 @@ def terminal_run(
 
     # Redact known sensitive flags from the loggable command
     redacted_command = re.sub(r'(--password\s+)\S+', r'\1[REDACTED]', loggable_command)
+    redacted_command = re.sub(
+        r'(--oauth_access_token(?:=|\s+))\S+',
+        r'\1[REDACTED]',
+        redacted_command,
+    )
 
     # Execute command in terminal pod
     logger.info(f"Executing command in terminal pod for user {user_id}, session {session_id}: {redacted_command[:100]}")
