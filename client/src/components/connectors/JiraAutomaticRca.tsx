@@ -24,7 +24,7 @@ interface JiraAutomaticRcaProps {
   onSave: (rules: JiraRcaRule[]) => Promise<boolean>;
 }
 
-export function JiraAutomaticRca({ rules, saving, onSave }: JiraAutomaticRcaProps) {
+export function JiraAutomaticRca({ rules, saving, onSave }: Readonly<JiraAutomaticRcaProps>) {
   const [projects, setProjects] = useState<JiraProject[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [projectsError, setProjectsError] = useState(false);
@@ -40,7 +40,7 @@ export function JiraAutomaticRca({ rules, saving, onSave }: JiraAutomaticRcaProp
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    void (async () => {
       setLoadingProjects(true);
       try {
         const res = await fetch("/api/jira/projects", { credentials: "include" });
@@ -67,7 +67,7 @@ export function JiraAutomaticRca({ rules, saving, onSave }: JiraAutomaticRcaProp
       return;
     }
     let cancelled = false;
-    (async () => {
+    void (async () => {
       setLoadingTypes(true);
       setTypesError(false);
       try {
@@ -124,7 +124,48 @@ export function JiraAutomaticRca({ rules, saving, onSave }: JiraAutomaticRcaProp
   };
 
   const removeRule = (key: string) => {
-    onSave(rules.filter((rule) => rule.projectKey !== key));
+    void onSave(rules.filter((rule) => rule.projectKey !== key));
+  };
+
+  const renderProjectField = () => {
+    // Projects are still loading, so there is nothing to pick yet.
+    if (loadingProjects) {
+      return (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading projects
+        </div>
+      );
+    }
+    // The project list failed or came back empty, so they type a key.
+    if (typeProjectKey) {
+      return (
+        <div className="space-y-1.5">
+          <Label htmlFor="jira-rca-project" className="text-xs">Project key</Label>
+          <Input
+            id="jira-rca-project"
+            value={typedProject}
+            onChange={(event) => setTypedProject(event.target.value)}
+            placeholder="OPS"
+            className="h-8 text-sm"
+          />
+        </div>
+      );
+    }
+    return (
+      <Select value={projectKey || undefined} onValueChange={setProjectKey} disabled={saving}>
+        <SelectTrigger className="h-8 text-sm">
+          <SelectValue placeholder="Choose a project" />
+        </SelectTrigger>
+        <SelectContent>
+          {projects.map((project) => (
+            <SelectItem key={project.key} value={project.key}>
+              {project.key} — {project.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
   };
 
   return (
@@ -162,36 +203,7 @@ export function JiraAutomaticRca({ rules, saving, onSave }: JiraAutomaticRcaProp
         </ul>
       )}
 
-      {loadingProjects ? (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Loading projects
-        </div>
-      ) : typeProjectKey ? (
-        <div className="space-y-1.5">
-          <Label htmlFor="jira-rca-project" className="text-xs">Project key</Label>
-          <Input
-            id="jira-rca-project"
-            value={typedProject}
-            onChange={(event) => setTypedProject(event.target.value)}
-            placeholder="OPS"
-            className="h-8 text-sm"
-          />
-        </div>
-      ) : (
-        <Select value={projectKey || undefined} onValueChange={setProjectKey} disabled={saving || projects.length === 0}>
-          <SelectTrigger className="h-8 text-sm">
-            <SelectValue placeholder={projects.length === 0 ? "No projects found" : "Choose a project"} />
-          </SelectTrigger>
-          <SelectContent>
-            {projects.map((project) => (
-              <SelectItem key={project.key} value={project.key}>
-                {project.key} — {project.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
+      {renderProjectField()}
 
       {selectedKey && (
         <div className="space-y-2 rounded-md border p-2.5">

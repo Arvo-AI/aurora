@@ -276,6 +276,52 @@ _MAX_RCA_RULES = 50
 _MAX_ISSUE_TYPES = 30
 
 
+def _parse_rule_item(item: Any) -> Tuple[Optional[str], Optional[list], Optional[str]]:
+    """Pull a project key and type list out of one rule, or an error."""
+    if not isinstance(item, dict):
+        return None, None, "Each rule needs a projectKey and issueTypes"
+    project_key = str(item.get("projectKey") or "").strip().upper()
+    # Reject anything that is not a project key so a payload cannot widen the match.
+    if not _PROJECT_KEY_RE.fullmatch(project_key):
+        return None, None, "projectKey must look like a Jira project key"
+    types_raw = item.get("issueTypes")
+    if not isinstance(types_raw, list) or not types_raw:
+        return None, None, "issueTypes must list at least one ticket type"
+    return project_key, types_raw, None
+
+
+def _clean_issue_type_name(type_name: Any) -> Tuple[Optional[str], Optional[str]]:
+    if not isinstance(type_name, str):
+        return None, "issueTypes must be ticket type names"
+    # Collapse whitespace so "Bug" and " Bug " are the same type.
+    cleaned = " ".join(type_name.split())
+    if not cleaned or len(cleaned) > 80:
+        return None, "Each issue type name must be 1–80 characters"
+    return cleaned, None
+
+
+def _merge_issue_types(
+    existing: Optional[List[str]],
+    types_raw: list,
+) -> Tuple[Optional[List[str]], Optional[str]]:
+    seen: Dict[str, str] = {}
+    # A repeated project in one payload merges into the earlier row.
+    if existing:
+        for name in existing:
+            seen[name.casefold()] = name
+    for type_name in types_raw:
+        cleaned, error = _clean_issue_type_name(type_name)
+        if error or cleaned is None:
+            return None, error
+        folded = cleaned.casefold()
+        # Keep the first spelling when the same type is listed twice.
+        if folded not in seen:
+            seen[folded] = cleaned
+    if len(seen) > _MAX_ISSUE_TYPES:
+        return None, f"At most {_MAX_ISSUE_TYPES} ticket types per project"
+    return list(seen.values()), None
+
+
 def normalize_rca_rules(raw: Any) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
     """Validate project × ticket-type rules. Empty list means nothing auto-triggers."""
     if not isinstance(raw, list):
@@ -286,37 +332,19 @@ def normalize_rca_rules(raw: Any) -> Tuple[Optional[List[Dict[str, Any]]], Optio
     by_key: Dict[str, Dict[str, Any]] = {}
     order: List[str] = []
     for item in raw:
-        if not isinstance(item, dict):
-            return None, "Each rule needs a projectKey and issueTypes"
-        project_key = str(item.get("projectKey") or "").strip().upper()
-        # Reject anything that is not a project key so a payload cannot widen the match.
-        if not _PROJECT_KEY_RE.fullmatch(project_key):
-            return None, "projectKey must look like a Jira project key"
-        types_raw = item.get("issueTypes")
-        if not isinstance(types_raw, list) or not types_raw:
-            return None, "issueTypes must list at least one ticket type"
-
-        seen: Dict[str, str] = {}
-        existing = by_key.get(project_key)
-        # A repeated project in one payload merges into the earlier row.
-        if existing:
-            for name in existing["issueTypes"]:
-                seen[name.casefold()] = name
-        else:
+        project_key, types_raw, error = _parse_rule_item(item)
+        if error or project_key is None or types_raw is None:
+            return None, error
+        names, error = _merge_issue_types(
+            by_key[project_key]["issueTypes"] if project_key in by_key else None,
+            types_raw,
+        )
+        if error or names is None:
+            return None, error
+        # First time we see this project, keep the payload order.
+        if project_key not in by_key:
             order.append(project_key)
-
-        for type_name in types_raw:
-            if not isinstance(type_name, str):
-                return None, "issueTypes must be ticket type names"
-            cleaned = " ".join(type_name.split())
-            if not cleaned or len(cleaned) > 80:
-                return None, "Each issue type name must be 1–80 characters"
-            folded = cleaned.casefold()
-            if folded not in seen:
-                seen[folded] = cleaned
-        if len(seen) > _MAX_ISSUE_TYPES:
-            return None, f"At most {_MAX_ISSUE_TYPES} ticket types per project"
-        by_key[project_key] = {"projectKey": project_key, "issueTypes": list(seen.values())}
+        by_key[project_key] = {"projectKey": project_key, "issueTypes": names}
 
     return [by_key[key] for key in order], None
 
@@ -575,8 +603,8 @@ def list_jira_projects(user_id):
 
     try:
         projects = _with_refresh(user_id, creds, client, lambda c: c.list_projects())
-    except Exception as exc:
-        logger.error("[JIRA] List projects failed for user %s: %s", sanitize(user_id), exc)
+    except Exception:
+        logger.exception("[JIRA] List projects failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to list Jira projects"}), 502
 
     slim = []
@@ -608,8 +636,8 @@ def list_project_issue_types(user_id, project_key):
         types = _with_refresh(
             user_id, creds, client, lambda c: c.get_issue_types(project_key),
         )
-    except Exception as exc:
-        logger.error("[JIRA] List issue types failed for user %s: %s", sanitize(user_id), exc)
+    except Exception:
+        logger.exception("[JIRA] List issue types failed for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to list Jira issue types"}), 502
 
     names = []
