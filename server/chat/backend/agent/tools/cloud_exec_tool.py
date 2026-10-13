@@ -1353,29 +1353,18 @@ _CLI_PREFIX = {
     "flyio": "fly",
 }
 
-# Allow rules for these are anchored at the start of the command (`^kubectl`).
-# They are complete invocations, not `az`/`aws`/`gcloud` subcommands.
-_STANDALONE_POLICY_CLIS = frozenset({
-    "kubectl", "oc", "helm", "terraform", "tofu", "gsutil", "bq",
-})
-
 
 def _command_for_policy(provider: str, command: str) -> str:
-    """String the allowlist matches. Prefix provider subcommands only.
+    """Prefix az/aws/gcloud subcommands only.
 
-    `ecs list-clusters` becomes `aws ecs list-clusters`. `kubectl logs`
-    stays bare: prefixing it to `az kubectl logs` misses `^kubectl`.
+    `vm list` becomes `az vm list`. `kubectl logs` stays bare so the
+    allow rule anchored at `^kubectl` can match.
     """
     prefix = _CLI_PREFIX.get((provider or "").lower(), "")
     stripped = command.strip()
-    if not prefix or stripped.startswith(prefix):
-        return command
-    try:
-        first = shlex.split(stripped)[0].lower() if stripped else ""
-    except ValueError:
-        first = ""
-    # Already a full CLI invocation, not an az/aws/gcloud subcommand.
-    if first in _STANDALONE_POLICY_CLIS:
+    # kubectl/helm/terraform already name their CLI. Prepending `az`
+    # makes `^kubectl` miss, which is what blocked logs and top.
+    if not prefix or stripped.startswith(prefix) or not _is_azure_cli_command(command):
         return command
     return f"{prefix} {command}"
 

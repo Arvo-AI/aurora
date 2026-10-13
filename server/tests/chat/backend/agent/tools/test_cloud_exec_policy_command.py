@@ -45,7 +45,7 @@ def test_already_prefixed_command_is_not_doubled():
     assert _command_for_policy("aws", "aws sts get-caller-identity") == "aws sts get-caller-identity"
 
 
-def test_other_standalone_clis_are_not_prefixed():
+def test_helm_and_terraform_are_not_prefixed():
     assert _command_for_policy("azure", "helm list -A") == "helm list -A"
-    assert _command_for_policy("gcp", "gsutil ls gs://bucket") == "gsutil ls gs://bucket"
+    assert _command_for_policy("azure", "terraform plan") == "terraform plan"
     assert _command_for_policy("aws", "kubectl logs pod-a") == "kubectl logs pod-a"
