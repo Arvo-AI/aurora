@@ -111,9 +111,8 @@ def reassign_connectors_to_admin(
 ) -> int:
     """Point this user's connectors, and any already-orphaned ones, at another admin.
 
-    Returns how many rows moved. Zero when the org has no other admin; a later
-    scheduler pass retries. Rows that collide with a credential the admin
-    already has are dropped instead of moved.
+    Returns how many rows moved or dropped. The scheduler commits only when
+    this is nonzero. Zero when the org has no other admin; a later pass retries.
     """
     if not org_id:
         return 0
@@ -125,16 +124,22 @@ def reassign_connectors_to_admin(
     conns = cursor.fetchall()
     # Duplicates of a credential the admin already owns.
     cursor.execute(_DROP_TOKENS_SQL, params)
+    dropped = cursor.rowcount if cursor.rowcount > 0 else 0
     cursor.execute(_DROP_CONNS_SQL, params)
+    dropped += cursor.rowcount if cursor.rowcount > 0 else 0
 
     moved = len(tokens) + len(conns)
     # Another admin exists — the connectors now resolve as that account.
+    if dropped:
+        logger.info("[Connectors] Dropped %d duplicate connector row(s)", dropped)
     if moved:
         logger.info(
             "[Connectors] Reassigned %d connector row(s) to another admin",
             moved,
         )
-        return moved
+    # Include drops so a tick that only deletes duplicates still commits.
+    if moved or dropped:
+        return moved + dropped
 
     # Ownership predicate is applied twice, once per table.
     cursor.execute(_LEFTOVER_SQL, params[3:] + params[3:])
