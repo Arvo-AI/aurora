@@ -373,7 +373,9 @@ def delete_user(user_id, target_user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix=_LOG_PREFIX)
+            # Pin RLS to the request org. The header can differ from users.org_id,
+            # and reassignment filters on that same org_id.
+            set_rls_context(cur, conn, user_id, org_id=org_id, log_prefix=_LOG_PREFIX)
 
             cur.execute(
                 "SELECT id, email FROM users WHERE id = %s AND org_id IS NOT DISTINCT FROM %s",
