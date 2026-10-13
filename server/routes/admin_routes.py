@@ -13,6 +13,7 @@ from flask import Blueprint, request, jsonify
 import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
+from services.actions.ownership import reassign_actions_to_admin
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.enforcer import (
     assign_role_to_user,
@@ -383,6 +384,10 @@ def delete_user(user_id, target_user_id):
                 return jsonify({"error": "User not found in this organization"}), 404
 
             target_email = target[1]
+
+            # Scheduled actions run as created_by. Move them before the row disappears.
+            if org_id:
+                reassign_actions_to_admin(cur, org_id, target_user_id)
 
             # Clear FK references and user-scoped data
             cur.execute("DELETE FROM org_invitations WHERE invited_by = %s", (target_user_id,))

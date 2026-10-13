@@ -5,6 +5,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify
+from services.actions.ownership import reassign_actions_to_admin
 from utils.db.connection_pool import db_pool
 from utils.db.org_backfill import migrate_user_to_org, _USER_SCOPED_TABLES_SQL, _INCIDENT_CHILD_TABLES_SQL
 from utils.auth import VALID_ROLES, normalize_email
@@ -484,8 +485,11 @@ def remove_member(user_id, target_user_id):
                 cursor.execute(
                     "UPDATE organizations SET created_by = NULL WHERE created_by = %s", (target_user_id,)
                 )
-                # Clean up user-scoped data (RLS-protected tables)
-                set_rls_context(cursor, conn, target_user_id, log_prefix="[OrgRemoveMember]")
+                # Clean up user-scoped data (RLS-protected tables).
+                # Reassign while the user row still exists so RLS can see the org.
+                rls_org = set_rls_context(cursor, conn, target_user_id, log_prefix="[OrgRemoveMember]")
+                if rls_org:
+                    reassign_actions_to_admin(cursor, rls_org, target_user_id)
                 for tbl in (
                     "user_tokens", "user_connections", "user_manual_vms",
                     "user_preferences", "rca_notification_emails",

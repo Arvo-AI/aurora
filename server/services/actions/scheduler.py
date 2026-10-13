@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 
 from celery_config import celery_app
+from services.actions.ownership import reassign_actions_to_admin
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 
@@ -51,9 +52,13 @@ def run_scheduled_actions():
                     "ORDER BY org_id, id"
                 )
                 org_reps = cur.fetchall()
-                for user_id, _org_id in org_reps:
+                for user_id, org_id in org_reps:
                     if not set_rls_context(cur, conn, user_id, log_prefix="[ActionScheduler]"):
                         continue
+                    # Creator may already be gone (deleted outside this process).
+                    # Commit here: returning the connection rolls back uncommitted work.
+                    if reassign_actions_to_admin(cur, org_id):
+                        conn.commit()
                     cur.execute(_ACTIONS_QUERY)
                     rows.extend(cur.fetchall())
     except Exception:
