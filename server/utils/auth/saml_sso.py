@@ -211,7 +211,13 @@ def _first(sources: tuple, names: tuple) -> str:
 
 
 def _has_token(text: str, token: str) -> bool:
-    return token.casefold() in {part.casefold() for part in text.split()}
+    # Surnames can be several words ("van Dyke"); match that whole sequence.
+    parts = [part.casefold() for part in text.split()]
+    words = [word.casefold() for word in token.split()]
+    if not words or len(words) > len(parts):
+        return False
+    width = len(words)
+    return any(parts[i:i + width] == words for i in range(len(parts) - width + 1))
 
 
 def _fit_name(name: str) -> str:

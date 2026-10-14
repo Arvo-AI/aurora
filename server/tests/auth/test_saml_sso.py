@@ -130,6 +130,10 @@ class TestExtractIdentity:
         assert identity["name"] == "First Last"
         assert identity["email"] == "first.last@example.com"
 
+    def test_multiword_surname_already_in_display_name_is_not_repeated(self):
+        auth = _Auth({"displayName": ["Ada van Dyke"], "surname": ["van Dyke"]})
+        assert sso.extract_identity(auth)["name"] == "Ada van Dyke"
+
     def test_display_name_with_middle_name_is_kept(self):
         auth = _Auth({
             "displayName": ["First Q. Last"],
