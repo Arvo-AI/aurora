@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Gemini model name fragments that indicate thinking support (2.5+, 3+)
 _GEMINI_THINKING_INDICATORS = (
-    "gemini-3", "gemini-2.5",
+    "gemini-4", "gemini-3", "gemini-2.5",
     "2.5-pro", "2.5-flash",
     "3-pro", "3-flash",
 )

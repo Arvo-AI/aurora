@@ -68,6 +68,7 @@ class OpenRouterPricingService:
             "anthropic/claude-3.5-sonnet": {"input": 0.003, "output": 0.015},
             "anthropic/claude-3-haiku": {"input": 0.00025, "output": 0.00125},
             # Google AI / Vertex AI — verified against Google Cloud Billing Catalog API
+            "google/gemini-4-argon": {"input": 0.002, "output": 0.010},
             "google/gemini-3.8-flash": {"input": 0.00075, "output": 0.00375},
             "google/gemini-3.6-flash": {"input": 0.00075, "output": 0.00375},
             "google/gemini-3.5-flash-lite": {"input": 0.0003, "output": 0.0025},
@@ -78,6 +79,7 @@ class OpenRouterPricingService:
             "google/gemini-2.5-pro": {"input": 0.00125, "output": 0.01},
             "google/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025},
             "google/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004},
+            "vertex/gemini-4-argon": {"input": 0.002, "output": 0.010},
             "vertex/gemini-3.8-flash": {"input": 0.00075, "output": 0.00375},
             "vertex/gemini-3.6-flash": {"input": 0.00075, "output": 0.00375},
             "vertex/gemini-3.5-flash-lite": {"input": 0.0003, "output": 0.0025},

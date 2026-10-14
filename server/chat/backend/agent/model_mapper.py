@@ -13,6 +13,8 @@ from typing import Dict, Optional, Tuple
 # Ids that appear three or more times in MODEL_MAPPINGS below — once as the canonical
 # key and again as the OpenRouter alias target of their dotted/dashed/vertex variants.
 # Named here so the literal is defined in a single place.
+_OR_GEMINI_4_ARGON = "google/gemini-4-argon"
+_NATIVE_GEMINI_4_ARGON = "gemini-4-argon"
 _OR_GEMINI_3_8_FLASH = "google/gemini-3.8-flash"
 _NATIVE_GEMINI_3_8_FLASH = "gemini-3.8-flash"
 _OR_CLAUDE_OPUS_5_5 = "anthropic/claude-opus-5.5"
@@ -71,6 +73,17 @@ MODEL_MAPPINGS = {
         "openrouter": "anthropic/claude-opus-4.5",
         "anthropic": "claude-opus-4-5",
         "provider": "anthropic",
+    },
+    _OR_GEMINI_4_ARGON: {
+        "openrouter": _OR_GEMINI_4_ARGON,
+        "google": _NATIVE_GEMINI_4_ARGON,
+        "vertex": _NATIVE_GEMINI_4_ARGON,
+        "provider": "google",
+    },
+    "vertex/gemini-4-argon": {
+        "openrouter": _OR_GEMINI_4_ARGON,
+        "vertex": _NATIVE_GEMINI_4_ARGON,
+        "provider": "vertex",
     },
     "google/gemini-3.1-pro-preview": {
         "openrouter": "google/gemini-3.1-pro-preview",

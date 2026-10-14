@@ -72,7 +72,9 @@ class LLMUsageTracker:
         "anthropic/claude-haiku-4-5": {"input": 0.001, "output": 0.005, "cached_input": 0.0001},
         "anthropic/claude-3.5-sonnet": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
         "anthropic/claude-3-haiku": {"input": 0.00025, "output": 0.00125, "cached_input": 0.000025},
-        # Google AI / Vertex AI (cached input = 75% discount)
+        # Google AI / Vertex AI (cached input = 75% discount, except Argon at 95%)
+        # Argon intro rates through 2026-11-30; $4/$20 per 1M after that.
+        "google/gemini-4-argon": {"input": 0.002, "output": 0.010, "cached_input": 0.0001},
         "google/gemini-3.8-flash": {"input": 0.00075, "output": 0.00375, "cached_input": 0.000075},
         "google/gemini-3.6-flash": {"input": 0.00075, "output": 0.00375, "cached_input": 0.000075},
         "google/gemini-3.5-flash-lite": {"input": 0.0003, "output": 0.0025, "cached_input": 0.00003},
@@ -83,6 +85,7 @@ class LLMUsageTracker:
         "google/gemini-2.5-pro": {"input": 0.00125, "output": 0.01, "cached_input": 0.0003125},
         "google/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025, "cached_input": 0.000075},
         "google/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004, "cached_input": 0.000025},
+        "vertex/gemini-4-argon": {"input": 0.002, "output": 0.010, "cached_input": 0.0001},
         "vertex/gemini-3.8-flash": {"input": 0.00075, "output": 0.00375, "cached_input": 0.000075},
         "vertex/gemini-3.6-flash": {"input": 0.00075, "output": 0.00375, "cached_input": 0.000075},
         "vertex/gemini-3.5-flash-lite": {"input": 0.0003, "output": 0.0025, "cached_input": 0.00003},
