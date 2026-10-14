@@ -138,6 +138,7 @@ export function JiraAutomaticRca({
   const [jql, setJql] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [fetchedKey, setFetchedKey] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -162,7 +163,17 @@ export function JiraAutomaticRca({
   const selectedKey = (typeProjectKey ? typedProject : projectKey).trim().toUpperCase();
 
   useEffect(() => {
-    if (!selectedKey || projectsError) {
+    // A dropdown pick is one value. A typed key changes on every letter, so wait.
+    if (!typeProjectKey) {
+      setFetchedKey(selectedKey);
+      return;
+    }
+    const handle = setTimeout(() => setFetchedKey(selectedKey), 400);
+    return () => clearTimeout(handle);
+  }, [selectedKey, typeProjectKey]);
+
+  useEffect(() => {
+    if (!fetchedKey || projectsError) {
       setIssueTypes([]);
       setTypesError(false);
       return;
@@ -173,7 +184,7 @@ export function JiraAutomaticRca({
       setTypesError(false);
       try {
         const res = await fetch(
-          `/api/jira/projects/${encodeURIComponent(selectedKey)}/issue-types`,
+          `/api/jira/projects/${encodeURIComponent(fetchedKey)}/issue-types`,
           { credentials: "include" },
         );
         if (!res.ok) throw new Error("failed");
@@ -189,7 +200,7 @@ export function JiraAutomaticRca({
       }
     })();
     return () => { cancelled = true; };
-  }, [selectedKey, projectsError]);
+  }, [fetchedKey, projectsError]);
 
   // Auto mode is read-only, so a half-edited manual form should not linger.
   useEffect(() => {
