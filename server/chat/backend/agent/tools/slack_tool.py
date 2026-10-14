@@ -67,7 +67,13 @@ class GetThreadRepliesArgs(BaseModel):
 class PostSlackMessageArgs(BaseModel):
     """Arguments for posting a message to a Slack channel."""
     channel_id: str = Field(description="The Slack channel ID to post to (e.g. C01234ABCDE)")
-    text: str = Field(description="The message text (Slack mrkdwn). Keep it short and human.")
+    text: str = Field(
+        description=(
+            "The message text (Slack mrkdwn). To notify someone, include <@USERID> "
+            "copied from a message or the asker line. A plain @name does not notify. "
+            "Keep it short and human."
+        ),
+    )
     thread_ts: Optional[str] = Field(
         default=None,
         description=(

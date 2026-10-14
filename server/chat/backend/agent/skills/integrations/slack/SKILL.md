@@ -108,6 +108,8 @@ This is learned behaviour: the map starts empty and gets better every incident.
 ## Limitations
 - `post_slack_message` posts a plain mrkdwn message (or threaded reply); rich
   interactive cards are still posted by the notification service, not the agent
+- A notification mention is the `<@USERID>` token already in the asker line or a
+  message. Copy it; never invent one. `@name` is plain text and does not notify
 - Reading a PUBLIC channel auto-joins it on not_in_channel, so Aurora can read
   any public channel it can see even without an invite. PRIVATE channels still
   require a human to invite the bot
