@@ -71,8 +71,8 @@ def reassign_actions_to_admin(
 
     cursor.execute(_LEFTOVER_SQL, (org_id, departing_user_id))
     leftover = cursor.fetchone()[0]
-    # Nothing to move, or the only admin is the one leaving.
-    if leftover:
+    # The hourly-or-minute heal would repeat this for an org with no other admin.
+    if leftover and departing_user_id:
         logger.warning(
             "[Actions] %d action(s) still have no living owner; no other admin to assign",
             leftover,

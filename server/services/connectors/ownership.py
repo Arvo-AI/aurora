@@ -11,20 +11,30 @@ from utils.auth import ROLE_ADMIN
 
 logger = logging.getLogger(__name__)
 
-# departing_user_id is NULL when healing rows whose owner is already gone.
-# ``= NULL`` matches nothing, so only the NOT EXISTS branch applies.
+# A grant issued to the departing person. Moving the row would keep their
+# refresh token working as the admin, so these are deleted instead.
+PERSONAL_OAUTH_PROVIDERS = (
+    "bitbucket",
+    "bitbucket_workspace_selection",
+    "confluence",
+    "gcp",
+    "jira",
+    "notion",
+    "sharepoint",
+    "slack",
+    "teams",
+)
+
+# RLS hides org_id IS NULL, so a null-org row is never visible here.
 _ADMIN_SQL = """
-    SELECT id, org_id FROM users
+    SELECT id FROM users
     WHERE org_id = %s AND role = %s AND id IS DISTINCT FROM %s
     ORDER BY created_at
     LIMIT 1
 """
 
 _OWNED_SQL = """
-    (
-        {a}.org_id = %s
-        OR ({a}.org_id IS NULL AND {a}.user_id = %s)
-    )
+    {a}.org_id = %s
     AND (
         {a}.user_id = %s
         OR NOT EXISTS (
@@ -34,16 +44,7 @@ _OWNED_SQL = """
     )
 """
 
-# A second row for the same org credential would violate the unique key.
-_TOKEN_FREE_SQL = """
-    NOT EXISTS (
-        SELECT 1 FROM user_tokens other
-        WHERE other.id <> t.id
-          AND other.provider = t.provider
-          AND other.org_id IS NOT DISTINCT FROM COALESCE(t.org_id, admin.org_id)
-    )
-"""
-
+# user_connections is unique on (user_id, provider, account_id).
 _CONN_FREE_SQL = """
     NOT EXISTS (
         SELECT 1 FROM user_connections other
@@ -56,30 +57,26 @@ _CONN_FREE_SQL = """
 
 _REASSIGN_TOKENS_SQL = f"""
     UPDATE user_tokens t
-    SET user_id = admin.id,
-        org_id = COALESCE(t.org_id, admin.org_id)
+    SET user_id = admin.id
     FROM ({_ADMIN_SQL}) admin
     WHERE {_OWNED_SQL.format(a="t")}
-      AND {_TOKEN_FREE_SQL}
+      AND NOT (t.provider = ANY(%s))
     RETURNING t.id
+"""
+
+_DELETE_PERSONAL_SQL = f"""
+    DELETE FROM user_tokens t
+    WHERE {_OWNED_SQL.format(a="t")}
+      AND t.provider = ANY(%s)
 """
 
 _REASSIGN_CONNS_SQL = f"""
     UPDATE user_connections c
-    SET user_id = admin.id,
-        org_id = COALESCE(c.org_id, admin.org_id)
+    SET user_id = admin.id
     FROM ({_ADMIN_SQL}) admin
     WHERE {_OWNED_SQL.format(a="c")}
       AND {_CONN_FREE_SQL}
     RETURNING c.id
-"""
-
-# The copy that lost the unique-key race. The admin already has this credential.
-_DROP_TOKENS_SQL = f"""
-    DELETE FROM user_tokens t
-    USING ({_ADMIN_SQL}) admin
-    WHERE {_OWNED_SQL.format(a="t")}
-      AND NOT ({_TOKEN_FREE_SQL})
 """
 
 _DROP_CONNS_SQL = f"""
@@ -92,59 +89,67 @@ _DROP_CONNS_SQL = f"""
 _LEFTOVER_SQL = f"""
     SELECT
         (SELECT COUNT(*) FROM user_tokens t
-         WHERE {_OWNED_SQL.format(a="t")})
+         WHERE {_OWNED_SQL.format(a="t")}
+           AND NOT (t.provider = ANY(%s)))
       + (SELECT COUNT(*) FROM user_connections c
          WHERE {_OWNED_SQL.format(a="c")})
 """
 
 
-def _params(org_id: str, departing_user_id: Optional[str]) -> tuple:
-    # Admin pick, then the ownership predicate. Repeated per statement.
-    return (
-        org_id, ROLE_ADMIN, departing_user_id,
-        org_id, departing_user_id, departing_user_id,
-    )
+def _owned(org_id: str, departing_user_id: Optional[str]) -> tuple:
+    return (org_id, departing_user_id)
+
+
+def _admin(org_id: str, departing_user_id: Optional[str]) -> tuple:
+    return (org_id, ROLE_ADMIN, departing_user_id, *_owned(org_id, departing_user_id))
+
+
+def _changed(cursor) -> int:
+    return cursor.rowcount if cursor.rowcount > 0 else 0
 
 
 def reassign_connectors_to_admin(
     cursor, org_id: str, departing_user_id: Optional[str] = None
 ) -> int:
-    """Point this user's connectors, and any already-orphaned ones, at another admin.
+    """Point org credentials at another admin. Delete personal OAuth instead.
 
-    Returns how many rows moved or dropped. The scheduler commits only when
-    this is nonzero. Zero when the org has no other admin; a later pass retries.
+    Returns how many rows moved or deleted. The caller commits only when this
+    is nonzero. Zero when nothing changed.
     """
     if not org_id:
         return 0
 
-    params = _params(org_id, departing_user_id)
-    cursor.execute(_REASSIGN_TOKENS_SQL, params)
-    tokens = cursor.fetchall()
-    cursor.execute(_REASSIGN_CONNS_SQL, params)
-    conns = cursor.fetchall()
-    # Duplicates of a credential the admin already owns.
-    cursor.execute(_DROP_TOKENS_SQL, params)
-    dropped = cursor.rowcount if cursor.rowcount > 0 else 0
-    cursor.execute(_DROP_CONNS_SQL, params)
-    dropped += cursor.rowcount if cursor.rowcount > 0 else 0
+    personal = list(PERSONAL_OAUTH_PROVIDERS)
+    owned = _owned(org_id, departing_user_id)
+    admin = _admin(org_id, departing_user_id)
 
-    moved = len(tokens) + len(conns)
-    # Another admin exists — the connectors now resolve as that account.
+    cursor.execute(_REASSIGN_TOKENS_SQL, (*admin, personal))
+    moved = len(cursor.fetchall())
+    cursor.execute(_REASSIGN_CONNS_SQL, admin)
+    moved += len(cursor.fetchall())
+    # The admin already has this account. Drop the departing copy.
+    cursor.execute(_DROP_CONNS_SQL, admin)
+    dropped = _changed(cursor)
+    # Personal grants are not transferred.
+    cursor.execute(_DELETE_PERSONAL_SQL, (*owned, personal))
+    dropped += _changed(cursor)
+
     if dropped:
-        logger.info("[Connectors] Dropped %d duplicate connector row(s)", dropped)
+        logger.info("[Connectors] Dropped %d connector row(s)", dropped)
     if moved:
         logger.info(
             "[Connectors] Reassigned %d connector row(s) to another admin",
             moved,
         )
-    # Include drops so a tick that only deletes duplicates still commits.
     if moved or dropped:
         return moved + dropped
 
-    # Ownership predicate is applied twice, once per table.
-    cursor.execute(_LEFTOVER_SQL, params[3:] + params[3:])
+    # Only the removal path warns. The hourly heal would repeat it forever.
+    if not departing_user_id:
+        return 0
+
+    cursor.execute(_LEFTOVER_SQL, (*owned, personal, *owned))
     leftover = cursor.fetchone()[0]
-    # Nothing to move, or the only admin is the one leaving.
     if leftover:
         logger.warning(
             "[Connectors] %d connector row(s) still have no living owner; no other admin to assign",

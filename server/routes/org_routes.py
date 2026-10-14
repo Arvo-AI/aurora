@@ -488,7 +488,10 @@ def remove_member(user_id, target_user_id):
                 )
                 # Clean up user-scoped data (RLS-protected tables).
                 # Reassign while the user row still exists so RLS can see the org.
-                rls_org = set_rls_context(cursor, conn, target_user_id, log_prefix="[OrgRemoveMember]")
+                # Pin the org this request already checked, not a cached users.org_id.
+                rls_org = set_rls_context(
+                    cursor, conn, target_user_id, org_id=org_id, log_prefix="[OrgRemoveMember]"
+                )
                 if rls_org:
                     reassign_actions_to_admin(cursor, rls_org, target_user_id)
                     reassign_connectors_to_admin(cursor, rls_org, target_user_id)

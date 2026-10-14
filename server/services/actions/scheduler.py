@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 
 from celery_config import celery_app
 from services.actions.ownership import reassign_actions_to_admin
-from services.connectors.ownership import reassign_connectors_to_admin
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import sanitize
@@ -57,13 +56,11 @@ def run_scheduled_actions():
                 for user_id, org_id in org_reps:
                     if not set_rls_context(cur, conn, user_id, log_prefix="[ActionScheduler]"):
                         continue
-                    # Owner may already be gone (deleted outside this process).
+                    # Creator may already be gone (deleted outside this process).
                     # A failed UPDATE aborts the transaction; don't drop every org's dispatch.
                     try:
-                        moved = reassign_actions_to_admin(cur, org_id)
-                        moved += reassign_connectors_to_admin(cur, org_id)
                         # Returning the connection rolls back uncommitted work.
-                        if moved:
+                        if reassign_actions_to_admin(cur, org_id):
                             conn.commit()
                     except Exception:
                         logger.exception(

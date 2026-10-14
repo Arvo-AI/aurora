@@ -1,96 +1,112 @@
-"""Connectors whose owner is gone get moved to another admin."""
+"""Connector reassignment against Postgres: RLS-visible rows and unique keys."""
+
+import uuid
+
+import psycopg2.errors
+import pytest
 
 from services.connectors.ownership import reassign_connectors_to_admin
 
 
-class _Cursor:
-    def __init__(self, token_ids, conn_ids, leftover=0, dropped_tokens=0, dropped_conns=0):
-        self.token_ids = token_ids
-        self.conn_ids = conn_ids
-        self.leftover = leftover
-        self.dropped_tokens = dropped_tokens
-        self.dropped_conns = dropped_conns
-        self.calls = []
-        self._fetch = []
-        self.rowcount = 0
-
-    def execute(self, sql, params=None):
-        self.calls.append((sql, params))
-        # RETURNING updates are the only statements that fetch rows.
-        if "UPDATE user_tokens" in sql:
-            self._fetch = [(row_id,) for row_id in self.token_ids]
-            self.rowcount = len(self.token_ids)
-        elif "UPDATE user_connections" in sql:
-            self._fetch = [(row_id,) for row_id in self.conn_ids]
-            self.rowcount = len(self.conn_ids)
-        elif "DELETE FROM user_tokens" in sql:
-            self._fetch = []
-            self.rowcount = self.dropped_tokens
-        elif "DELETE FROM user_connections" in sql:
-            self._fetch = []
-            self.rowcount = self.dropped_conns
-        else:
-            self._fetch = []
-            self.rowcount = 0
-
-    def fetchall(self):
-        return self._fetch
-
-    def fetchone(self):
-        return (self.leftover,)
+def _ids():
+    return {
+        "org": str(uuid.uuid4()),
+        "admin": str(uuid.uuid4()),
+        "leaving": str(uuid.uuid4()),
+    }
 
 
-def test_reassign_moves_departing_user_connectors_to_another_admin():
-    cursor = _Cursor(token_ids=["token-1"], conn_ids=["conn-1"])
-
-    moved = reassign_connectors_to_admin(cursor, "org-1", "user-leaving")
-
-    assert moved == 2
-    token_sql, token_params = cursor.calls[0]
-    conn_sql, conn_params = cursor.calls[1]
-    assert "UPDATE user_tokens" in token_sql
-    assert "UPDATE user_connections" in conn_sql
-    assert "role = %s" in token_sql
-    assert "IS DISTINCT FROM" in token_sql
-    assert "NOT EXISTS" in token_sql
-    # org, admin role, excluded user, then ownership: org, user, user
-    expected = ("org-1", "admin", "user-leaving", "org-1", "user-leaving", "user-leaving")
-    assert token_params == expected
-    assert conn_params == expected
-    # Moved rows mean we don't need the leftover count. Drops still run.
-    assert len(cursor.calls) == 4
-    assert "DELETE FROM user_tokens" in cursor.calls[2][0]
-    assert "DELETE FROM user_connections" in cursor.calls[3][0]
+def _seed(cur, ids):
+    cur.execute(
+        "INSERT INTO organizations (id, name, slug) VALUES (%s, %s, %s)",
+        (ids["org"], "ownership-test", ids["org"]),
+    )
+    for user_id, email, created in (
+        (ids["admin"], f"admin-{ids['admin']}@example.com", "2000-01-01"),
+        (ids["leaving"], f"leaving-{ids['leaving']}@example.com", "2000-01-02"),
+    ):
+        cur.execute(
+            """INSERT INTO users (id, email, password_hash, name, org_id, role, created_at)
+               VALUES (%s, %s, %s, %s, %s, 'admin', %s)""",
+            (user_id, email, "x", "t", ids["org"], created),
+        )
 
 
-def test_reassign_counts_dropped_duplicates_so_the_scheduler_commits():
-    cursor = _Cursor(token_ids=[], conn_ids=[], dropped_tokens=1, dropped_conns=2)
+def test_reassign_moves_org_credentials_and_drops_personal_oauth(db_session):
+    ids = _ids()
+    with db_session.cursor() as cur:
+        _seed(cur, ids)
+        cur.execute("SET myapp.current_org_id = %s", (ids["org"],))
+        cur.execute(
+            """INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, is_active)
+               VALUES (%s, %s, %s, 'grafana', TRUE),
+                      (%s, %s, %s, 'slack', TRUE)""",
+            (
+                ids["leaving"], ids["org"], "vault:test/grafana",
+                ids["leaving"], ids["org"], "vault:test/slack",
+            ),
+        )
+        cur.execute(
+            """INSERT INTO user_connections (user_id, org_id, provider, account_id, status)
+               VALUES (%s, %s, 'aws', 'acct-shared', 'active'),
+                      (%s, %s, 'aws', 'acct-shared', 'active'),
+                      (%s, %s, 'ovh', 'proj-1', 'active')""",
+            (
+                ids["admin"], ids["org"],
+                ids["leaving"], ids["org"],
+                ids["leaving"], ids["org"],
+            ),
+        )
+        # Superusers bypass RLS, so only they can insert the null-org row the
+        # policy hides from the app role. The reassignment must still ignore it.
+        cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+        superuser = cur.fetchone()[0]
+        if superuser:
+            cur.execute(
+                """INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, is_active)
+                   VALUES (%s, NULL, %s, 'datadog', TRUE)""",
+                (ids["leaving"], "vault:test/datadog"),
+            )
 
-    assert reassign_connectors_to_admin(cursor, "org-1") == 3
-    # Drops are the change. No leftover count, which would hide the commit signal.
-    assert len(cursor.calls) == 4
+        moved = reassign_connectors_to_admin(cur, ids["org"], ids["leaving"])
+
+        cur.execute(
+            "SELECT user_id, provider FROM user_tokens WHERE org_id = %s ORDER BY provider",
+            (ids["org"],),
+        )
+        assert cur.fetchall() == [(ids["admin"], "grafana")]
+        if superuser:
+            cur.execute(
+                "SELECT user_id FROM user_tokens WHERE provider = 'datadog' AND secret_ref = %s",
+                ("vault:test/datadog",),
+            )
+            assert cur.fetchone()[0] == ids["leaving"]
+        cur.execute(
+            """SELECT user_id, provider, account_id FROM user_connections
+               WHERE org_id = %s ORDER BY provider, user_id""",
+            (ids["org"],),
+        )
+        assert cur.fetchall() == [
+            (ids["admin"], "aws", "acct-shared"),
+            (ids["admin"], "ovh", "proj-1"),
+        ]
+        # grafana moved, slack deleted, shared aws dropped, ovh moved.
+        assert moved == 4
 
 
-def test_reassign_noop_when_another_admin_owns_them():
-    cursor = _Cursor(token_ids=[], conn_ids=[], leftover=0)
-
-    assert reassign_connectors_to_admin(cursor, "org-1") == 0
-    # Two updates, two drops, then the leftover count.
-    assert len(cursor.calls) == 5
-    # Healing a missing owner passes NULL so only the orphan branch matches.
-    assert cursor.calls[0][1][2] is None
-    assert cursor.calls[0][1][5] is None
-
-
-def test_reassign_warns_when_no_other_admin():
-    cursor = _Cursor(token_ids=[], conn_ids=[], leftover=3)
-
-    assert reassign_connectors_to_admin(cursor, "org-1", "last-admin") == 0
-    assert "COUNT" in cursor.calls[4][0]
-
-
-def test_reassign_skips_blank_org():
-    cursor = _Cursor(token_ids=["token-1"], conn_ids=[])
-
-    assert reassign_connectors_to_admin(cursor, "", "user-leaving") == 0
-    assert cursor.calls == []
+def test_second_token_for_the_same_org_provider_is_rejected(db_session):
+    ids = _ids()
+    with db_session.cursor() as cur:
+        _seed(cur, ids)
+        cur.execute(
+            """INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, is_active)
+               VALUES (%s, %s, %s, 'grafana', TRUE)""",
+            (ids["leaving"], ids["org"], "vault:test/grafana"),
+        )
+        with pytest.raises(psycopg2.errors.UniqueViolation):
+            cur.execute(
+                """INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, is_active)
+                   VALUES (%s, %s, %s, 'grafana', TRUE)""",
+                (ids["admin"], ids["org"], "vault:test/grafana-2"),
+            )
+        db_session.rollback()
