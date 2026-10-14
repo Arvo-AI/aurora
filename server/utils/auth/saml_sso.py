@@ -182,19 +182,31 @@ def _attr_sources(auth) -> tuple:
     return tuple(sources)
 
 
+def _folded(attrs) -> dict:
+    if not isinstance(attrs, dict):
+        return {}
+    lowered = {}
+    for key, values in attrs.items():
+        if isinstance(key, str):
+            lowered.setdefault(key.casefold(), values)
+    return lowered
+
+
+def _first_value(values) -> str:
+    for value in values or []:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def _first(sources: tuple, names: tuple) -> str:
+    folded_names = tuple(name.casefold() for name in names)
     for attrs in sources:
-        if not isinstance(attrs, dict):
-            continue
-        lowered = {}
-        for key, values in attrs.items():
-            if isinstance(key, str):
-                lowered.setdefault(key.casefold(), values)
-        for name in names:
-            values = lowered.get(name.casefold()) or []
-            for value in values:
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
+        lowered = _folded(attrs)
+        for name in folded_names:
+            found = _first_value(lowered.get(name))
+            if found:
+                return found
     return ""
 
 
@@ -206,6 +218,22 @@ def _fit_name(name: str) -> str:
     return name[:_NAME_MAX].rstrip()
 
 
+def _join_name(given: str, surname: str, display: str) -> str:
+    # A display name that already includes the surname keeps middle names.
+    if surname and _has_token(display, surname):
+        return display
+    # givenName is sometimes already "First Last"; don't append the surname twice.
+    if surname and _has_token(given, surname):
+        return given
+    # Both parts are present — `name` is often only the given name.
+    if given and surname:
+        return f"{given} {surname}"
+    # Surname arrived separately from a single-word name/displayName.
+    if display and surname:
+        return f"{display} {surname}"
+    return display or given or surname
+
+
 def _person_name(sources: tuple) -> str | None:
     """First and last name when the IdP sent both; otherwise the display name."""
     given = _first(sources, _GIVEN_ATTRS)
@@ -214,24 +242,8 @@ def _person_name(sources: tuple) -> str | None:
     # Entra's `name` claim is the UPN, not a personal name.
     if "@" in display:
         display = ""
-
-    # givenName is sometimes already "First Last"; don't append the surname twice.
-    if given and surname and _has_token(given, surname):
-        return _fit_name(given)
-    # A display name that already includes the surname keeps middle names.
-    if given and surname and display and _has_token(display, surname):
-        return _fit_name(display)
-    # Both parts are present — `name` is often only the given name.
-    if given and surname:
-        return _fit_name(f"{given} {surname}")
-    # Surname arrived separately from a single-word name/displayName.
-    if display and surname and not _has_token(display, surname):
-        return _fit_name(f"{display} {surname}")
-    if display:
-        return _fit_name(display)
-    if given or surname:
-        return _fit_name(given or surname)
-    return None
+    name = _join_name(given, surname, display)
+    return _fit_name(name) if name else None
 
 
 def extract_identity(auth) -> dict:
