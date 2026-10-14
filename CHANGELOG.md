@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.7] - 2026-10-13
+
+### Fixed
+- Org: removing a member who had saved onboarding selections failed, because
+  `onboarding_selections` has no `ON DELETE CASCADE`. Those rows are deleted
+  with the other foreign-key cleanup before the user is removed.
+- Actions and connectors: deleting a user left scheduled actions pointing at a
+  missing owner, so later runs failed at session creation, and removed the
+  connectors they had connected, so the rest of the org lost them. Both are
+  reassigned to the oldest other admin before the user row is removed. A
+  connector that admin already has is dropped instead of duplicated. The
+  scheduler retries the same reassignment for owners who are already gone.
+- Azure: `cloud_exec` prefixed every command with `az` before the org
+  allowlist, so `kubectl logs` and `kubectl top` were checked as `az kubectl
+  ...` and rejected even when the Observability Only template allows them.
+  Standalone CLIs (`kubectl`, `oc`, `helm`, `terraform`, `gsutil`, `bq`) are
+  now gated as written. Provider subcommands are still prefixed.
+
 ## [1.5.6] - 2026-10-08
 
 ### Added
