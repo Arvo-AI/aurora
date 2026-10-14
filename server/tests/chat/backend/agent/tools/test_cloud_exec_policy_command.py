@@ -49,3 +49,25 @@ def test_helm_and_terraform_are_not_prefixed():
     assert _command_for_policy("azure", "helm list -A") == "helm list -A"
     assert _command_for_policy("azure", "terraform plan") == "terraform plan"
     assert _command_for_policy("aws", "kubectl logs pod-a") == "kubectl logs pod-a"
+
+
+def test_sibling_clis_stay_bare_so_their_allow_rules_match():
+    gsutil = "gsutil ls gs://bucket-a"
+    bq = "bq ls dataset_a"
+    assert _command_for_policy("gcp", gsutil) == gsutil
+    assert _command_for_policy("gcp", bq) == bq
+    assert _observability_allows(gsutil)
+    assert _observability_allows(bq)
+    # Prefixing is what made `^gsutil` miss.
+    assert not _observability_allows(f"gcloud {gsutil}")
+
+    for command in ("eksctl get cluster", "sam list endpoints", "cdk list"):
+        assert _command_for_policy("aws", command) == command
+    # The aws verb rule would have allowed the prefixed form.
+    assert _observability_allows("aws eksctl get cluster")
+    assert not _observability_allows("eksctl get cluster")
+
+
+def test_prefix_matches_the_first_token_not_a_substring():
+    assert _command_for_policy("azure", "azcopy list") == "az azcopy list"
+    assert _command_for_policy("aws", "awslogs get") == "aws awslogs get"
