@@ -42,8 +42,25 @@ _NAME_ATTRS = (
     "name",
     "urn:oid:2.16.840.1.113730.3.1.241",
 )
-_GIVEN_ATTRS = ("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname", "firstName", "givenName")
-_SURNAME_ATTRS = ("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname", "lastName", "sn")
+_GIVEN_ATTRS = (
+    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname",
+    "urn:oid:2.5.4.42",
+    "givenName",
+    "firstName",
+    "first_name",
+    "given_name",
+)
+_SURNAME_ATTRS = (
+    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname",
+    "urn:oid:2.5.4.4",
+    "surname",
+    "sn",
+    "lastName",
+    "last_name",
+    "familyName",
+    "family_name",
+)
+_NAME_MAX = 255  # users.name is VARCHAR(255)
 
 
 class SsoError(Exception):
@@ -156,34 +173,82 @@ def request_data(flask_request) -> dict:
     }
 
 
-def _first(attrs: dict, names: tuple) -> str:
-    for name in names:
-        values = attrs.get(name) or []
-        for value in values:
-            if isinstance(value, str) and value.strip():
-                return value.strip()
+def _attr_sources(auth) -> tuple:
+    # Name is the claim URI; FriendlyName is the short form some IdPs send alone.
+    sources = [auth.get_attributes() or {}]
+    friendly = getattr(auth, "get_friendlyname_attributes", None)
+    if callable(friendly):
+        sources.append(friendly() or {})
+    return tuple(sources)
+
+
+def _first(sources: tuple, names: tuple) -> str:
+    for attrs in sources:
+        if not isinstance(attrs, dict):
+            continue
+        lowered = {}
+        for key, values in attrs.items():
+            if isinstance(key, str):
+                lowered.setdefault(key.casefold(), values)
+        for name in names:
+            values = lowered.get(name.casefold()) or []
+            for value in values:
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
     return ""
+
+
+def _has_token(text: str, token: str) -> bool:
+    return token.casefold() in {part.casefold() for part in text.split()}
+
+
+def _fit_name(name: str) -> str:
+    return name[:_NAME_MAX].rstrip()
+
+
+def _person_name(sources: tuple) -> str | None:
+    """First and last name when the IdP sent both; otherwise the display name."""
+    given = _first(sources, _GIVEN_ATTRS)
+    surname = _first(sources, _SURNAME_ATTRS)
+    display = _first(sources, _NAME_ATTRS)
+    # Entra's `name` claim is the UPN, not a personal name.
+    if "@" in display:
+        display = ""
+
+    # givenName is sometimes already "First Last"; don't append the surname twice.
+    if given and surname and _has_token(given, surname):
+        return _fit_name(given)
+    # A display name that already includes the surname keeps middle names.
+    if given and surname and display and _has_token(display, surname):
+        return _fit_name(display)
+    # Both parts are present — `name` is often only the given name.
+    if given and surname:
+        return _fit_name(f"{given} {surname}")
+    # Surname arrived separately from a single-word name/displayName.
+    if display and surname and not _has_token(display, surname):
+        return _fit_name(f"{display} {surname}")
+    if display:
+        return _fit_name(display)
+    if given or surname:
+        return _fit_name(given or surname)
+    return None
 
 
 def extract_identity(auth) -> dict:
     """Pull subject/email/name out of a validated ``OneLogin_Saml2_Auth``."""
-    attrs = auth.get_attributes() or {}
+    sources = _attr_sources(auth)
     name_id = (auth.get_nameid() or "").strip()
 
     # Entra's NameID defaults to the UPN, which can be renamed; the object ID
     # attribute is immutable, so prefer it as the account key.
-    subject = _first(attrs, _SUBJECT_ATTRS) or name_id
+    subject = _first(sources, _SUBJECT_ATTRS) or name_id
 
-    email = normalize_email(_first(attrs, _EMAIL_ATTRS))
+    email = normalize_email(_first(sources, _EMAIL_ATTRS))
     # Many IdPs send the email only as the NameID.
     if not email and "@" in name_id:
         email = normalize_email(name_id)
 
-    name = _first(attrs, _NAME_ATTRS)
-    if not name:
-        name = " ".join(p for p in (_first(attrs, _GIVEN_ATTRS), _first(attrs, _SURNAME_ATTRS)) if p)
-
-    return {"subject": subject, "email": email, "name": name or None}
+    return {"subject": subject, "email": email, "name": _person_name(sources)}
 
 
 def normalize_domain(domain) -> str:
@@ -276,6 +341,21 @@ def burn_request_id(cur, request_id: str, org_id: str) -> bool:
     return cur.fetchone() is not None
 
 
+def _store_display_name(cur, user_id: str, name: str | None) -> None:
+    # An assertion with no name must not wipe the one already stored.
+    if not name:
+        return
+    cur.execute("SELECT name FROM users WHERE id = %s", (user_id,))
+    row = cur.fetchone()
+    current = row[0] if row and row[0] else ""
+    # A later login that only carries the given name must not erase a full name.
+    if " " in current and " " not in name:
+        return
+    if current == name:
+        return
+    cur.execute("UPDATE users SET name = %s WHERE id = %s", (name, user_id))
+
+
 def resolve_user(
     cur, org_id: str, identity: dict, default_role: str, _retried: bool = False,
 ) -> tuple[str, bool]:
@@ -306,6 +386,8 @@ def resolve_user(
     )
     row = cur.fetchone()
     if row:
+        # Later logins correct a name that was stored as only the given name.
+        _store_display_name(cur, row[0], identity.get("name"))
         return row[0], False
 
     cur.execute(
@@ -331,6 +413,7 @@ def resolve_user(
                 WHERE id = %s""",
             (subject, user_id),
         )
+        # Invited members already have a name; don't replace it with the IdP's.
         return user_id, False
 
     # Address belongs to another org's account; never move people across orgs.

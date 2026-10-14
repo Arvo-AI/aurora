@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- SSO: SAML login stores the member's first and last name. A `name` claim that
+  is only the given name no longer hides the surname, and a later login corrects
+  an account that was saved with just the first name.
+
 ## [1.5.7] - 2026-10-13
 
 ### Fixed
