@@ -366,6 +366,43 @@ def get_thread_messages(client, channel: str, thread_ts: str, limit: int = 10, m
         return []
 
 
+def _append_context_reply(context_parts: list, client, reply: dict, user_name_cache: dict,
+                          total_length: int, max_total_length: int):
+    """Append one thread reply. Returns the new length, and whether to stop."""
+    reply_user = reply.get('user')
+    reply_bot = reply.get('bot_id') is not None
+    reply_name = _resolve_user_display_name(client, reply_user, reply_bot, user_name_cache)
+    reply_speaker = format_slack_speaker(reply_user, reply_name, is_bot=reply_bot)
+    reply_text = reply.get('text', '').strip()
+    reply_time = _format_slack_timestamp(reply.get('ts', ''))
+
+    # Keep the channel summary short; the full text is still in the thread.
+    if len(reply_text) > COMMAND_DISPLAY_TRUNCATE_LENGTH:
+        reply_text = reply_text[:COMMAND_DISPLAY_TRUNCATE_LENGTH] + "..."
+
+    timestamp_prefix = f"[{reply_time}] " if reply_time else ""
+    reply_line = f"    • {timestamp_prefix}{reply_speaker}: {reply_text}"
+    # Budget spent — keep what we have and stop walking this thread.
+    if total_length + len(reply_line) > max_total_length:
+        logger.warning("Reached total context limit. Stopping at thread reply.")
+        return total_length, True
+    context_parts.append(reply_line)
+    return total_length + len(reply_line), False
+
+
+def _append_context_replies(context_parts: list, client, replies: list, user_name_cache: dict,
+                            total_length: int, max_total_length: int) -> int:
+    """Append replies until the context budget is spent. Returns the new length."""
+    for reply in replies:
+        total_length, stop = _append_context_reply(
+            context_parts, client, reply, user_name_cache, total_length, max_total_length,
+        )
+        # Later replies would only be older or past the cap.
+        if stop:
+            break
+    return total_length
+
+
 def get_channel_context_with_threads(client, channel: str, limit: int = 5, max_total_length: int = 50000):
     """
     Fetch recent channel messages and thread summaries for context.
@@ -444,56 +481,20 @@ def get_channel_context_with_threads(client, channel: str, limit: int = 5, max_t
                             context_parts.append(thread_header)
                             total_length += len(thread_header)
                             
-                            for reply in first_3:
-                                reply_user = reply.get('user')
-                                reply_bot = reply.get('bot_id') is not None
-                                reply_name = _resolve_user_display_name(client, reply_user, reply_bot, user_name_cache)
-                                reply_speaker = format_slack_speaker(reply_user, reply_name, is_bot=reply_bot)
-                                reply_ts = reply.get('ts', '')
-                                reply_text = reply.get('text', '').strip()
-                                reply_time = _format_slack_timestamp(reply_ts)
-                                timestamp_prefix = f"[{reply_time}] " if reply_time else ""
-
-                                # Truncate long messages
-                                if len(reply_text) > COMMAND_DISPLAY_TRUNCATE_LENGTH:
-                                    reply_text = reply_text[:COMMAND_DISPLAY_TRUNCATE_LENGTH] + "..."
-                                
-                                reply_line = f"    • {timestamp_prefix}{reply_speaker}: {reply_text}"
-                                if total_length + len(reply_line) > max_total_length:
-                                    logger.warning(f"Reached total context limit. Stopping at thread reply.")
-                                    break
-                                
-                                context_parts.append(reply_line)
-                                total_length += len(reply_line)
+                            total_length = _append_context_replies(
+                                context_parts, client, first_3, user_name_cache,
+                                total_length, max_total_length,
+                            )
                             
                             separator = f"    ... ({len(thread_replies) - 6} more messages) ..."
                             if total_length + len(separator) <= max_total_length:
                                 context_parts.append(separator)
                                 total_length += len(separator)
                             
-                            for reply in last_3:
-                                reply_user = reply.get('user')
-                                reply_bot = reply.get('bot_id') is not None
-                                reply_name = _resolve_user_display_name(client, reply_user, reply_bot, user_name_cache)
-                                reply_speaker = format_slack_speaker(reply_user, reply_name, is_bot=reply_bot)
-                                reply_ts = reply.get('ts', '')
-                                reply_text = reply.get('text', '').strip()
-                                reply_time = _format_slack_timestamp(reply_ts)
-
-                                if len(reply_text) > COMMAND_DISPLAY_TRUNCATE_LENGTH:
-                                    reply_text = reply_text[:COMMAND_DISPLAY_TRUNCATE_LENGTH] + "..."
-                                
-                                if reply_time:
-                                    reply_line = f"    • [{reply_time}] {reply_speaker}: {reply_text}"
-                                else:
-                                    reply_line = f"    • {reply_speaker}: {reply_text}"
-                                
-                                if total_length + len(reply_line) > max_total_length:
-                                    logger.warning(f"Reached total context limit. Stopping at thread reply.")
-                                    break
-                                
-                                context_parts.append(reply_line)
-                                total_length += len(reply_line)
+                            total_length = _append_context_replies(
+                                context_parts, client, last_3, user_name_cache,
+                                total_length, max_total_length,
+                            )
                         else:
                             # Fewer than 6 replies, show all
                             thread_header = f"  └─ Thread ({len(thread_replies)} replies):"
@@ -504,29 +505,10 @@ def get_channel_context_with_threads(client, channel: str, limit: int = 5, max_t
                             context_parts.append(thread_header)
                             total_length += len(thread_header)
                             
-                            for reply in thread_replies:
-                                reply_user = reply.get('user')
-                                reply_bot = reply.get('bot_id') is not None
-                                reply_name = _resolve_user_display_name(client, reply_user, reply_bot, user_name_cache)
-                                reply_speaker = format_slack_speaker(reply_user, reply_name, is_bot=reply_bot)
-                                reply_ts = reply.get('ts', '')
-                                reply_text = reply.get('text', '').strip()
-                                reply_time = _format_slack_timestamp(reply_ts)
-
-                                if len(reply_text) > COMMAND_DISPLAY_TRUNCATE_LENGTH:
-                                    reply_text = reply_text[:COMMAND_DISPLAY_TRUNCATE_LENGTH] + "..."
-                                
-                                if reply_time:
-                                    reply_line = f"    • [{reply_time}] {reply_speaker}: {reply_text}"
-                                else:
-                                    reply_line = f"    • {reply_speaker}: {reply_text}"
-                                
-                                if total_length + len(reply_line) > max_total_length:
-                                    logger.warning(f"Reached total context limit. Stopping at thread reply.")
-                                    break
-                                
-                                context_parts.append(reply_line)
-                                total_length += len(reply_line)
+                            total_length = _append_context_replies(
+                                context_parts, client, thread_replies, user_name_cache,
+                                total_length, max_total_length,
+                            )
                 
                 except Exception as e:
                     logger.debug(f"Could not fetch thread for message {ts}: {e}")
