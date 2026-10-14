@@ -4,22 +4,26 @@ sidebar_position: 5
 
 # Jira
 
-Aurora integrates with [Jira](https://www.atlassian.com/software/jira) to run root cause analysis on tickets you opt in. Automatic RCA starts only when an incoming webhook matches a **project and ticket type** you configured. You can still ask Aurora to investigate any specific ticket, and posting the result back as a Jira comment is a separate switch that stays off until you enable it.
+Aurora integrates with [Jira](https://www.atlassian.com/software/jira) to run root cause analysis on tickets that match a saved filter. A filter is a project and ticket type, plus any priority, label, component, status, or extra JQL you add. You can still ask Aurora to investigate any specific ticket, and posting the result back as a Jira comment is a separate switch that stays off until you enable it.
 
 ## What You Get
 
 | Capability | Description |
 |------------|-------------|
-| **Automatic RCA** | A webhook starts an investigation only for a saved project and ticket type |
+| **Automatic RCA** | A webhook starts an investigation only for a saved filter |
 | **Incident creation** | Each qualifying Jira issue becomes an Aurora incident with full tracking |
 | **Alert correlation** | Incoming issues are correlated with existing incidents by title, service, and time |
 | **RCA with full context** | The RCA agent uses the Jira issue details (summary, description, priority, components) plus all connected observability tools |
 
 ## Which tickets trigger an RCA
 
-On the Jira connector page, under **Incoming Webhook**, add one rule per project and choose the ticket types in that project. A Bug in one project can start an RCA while the same type in another project is ignored.
+On the Jira connector page, under **Incoming Webhook**, filters decide which new tickets start an RCA.
 
-Until at least one rule is saved, webhooks are accepted and ignored. That includes ticket types that used to start an RCA automatically (Bug, Incident, Problem, Defect, Production Issue).
+**Auto** is the default. Aurora reads new comments on Jira tickets and updates the filters from what people ask for ("only Bugs in OPS at High priority"). The match itself stays a saved filter. A comment does not start an investigation on its own.
+
+**Manual** is where you set each filter: project, ticket types, and any of priority, labels, components, status, or an extra JQL clause. Leave an optional field empty to allow any value. Comments do not change filters in this mode.
+
+Until at least one filter is saved, webhooks are accepted and ignored. That includes ticket types that used to start an RCA automatically (Bug, Incident, Problem, Defect, Production Issue).
 
 ## Prerequisites
 
@@ -46,14 +50,14 @@ https://<your-aurora-domain>/jira/webhook/<your-user-id>
 2. Click **Create a WebHook**
 3. Give it a name (e.g., "Aurora RCA")
 4. Paste the webhook URL from step 1
-5. Under **Issue related events**, check **Issue: created**
-6. Optionally set a JQL filter to limit which issues Jira sends. Aurora still only starts an RCA when the issue matches a saved project and ticket type
+5. Under **Issue related events**, check **Issue: created** and **Comment: created**. Comments are how Auto mode learns which tickets to investigate
+6. Optionally set a JQL filter to limit which issues Jira sends. Aurora still only starts an RCA when the issue matches a saved filter
 7. Leave **Exclude body** unchecked (Aurora needs the JSON payload)
 8. Click **Create**
 
 ### 3. Test
 
-Create a ticket whose project and type match a saved rule. Within a few seconds, you should see:
+Create a ticket that matches a saved filter. Within a few seconds, you should see:
 - A new incident appear in Aurora's incident list
 - The RCA status change to "running"
 - Investigation results populate within 1-3 minutes
@@ -69,7 +73,7 @@ Matching Jira ticket created
 Webhook POST to Aurora
     |
     v
-Filter: does this project and ticket type match a saved rule?
+Filter: does this ticket match a saved filter?
     |-- No  → ignored (200)
     |-- Yes → accepted (202)
            |
@@ -102,4 +106,4 @@ Instead of system webhooks, you can use Jira Automation for more control:
    - Body: `{{issue}}`
 5. Enable the rule
 
-Jira-side conditions can still narrow what is sent (for example only P1 bugs, or only certain components). Aurora starts an RCA only when the ticket also matches a saved project and ticket type.
+Jira-side conditions can still narrow what is sent (for example only P1 bugs, or only certain components). Aurora starts an RCA only when the ticket also matches a saved filter.

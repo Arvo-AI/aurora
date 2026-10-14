@@ -383,3 +383,16 @@ def _dispatch_rca(
                 conn.commit()
             except Exception:
                 logger.debug("[JIRA][WEBHOOK] Failed to mark RCA session failed", exc_info=True)
+
+
+@celery_app.task(
+    bind=True, max_retries=2, default_retry_delay=30, name="jira.manage_rca_filters",
+)
+def manage_jira_rca_filters(self, payload: Dict[str, Any], user_id: Optional[str] = None) -> None:
+    """In auto mode, turn a Jira comment into an update of the RCA filters."""
+    try:
+        from routes.jira.filter_agent import apply_comment_to_filters
+        apply_comment_to_filters(user_id, payload)
+    except Exception as exc:
+        logger.exception("[JIRA][FILTERS] Filter update failed for user %s", sanitize(user_id or ""))
+        raise self.retry(exc=exc)
