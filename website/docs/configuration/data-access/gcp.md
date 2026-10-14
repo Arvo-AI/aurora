@@ -34,6 +34,12 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 
 gcloud projects add-iam-policy-binding $PROJECT_ID \
   --member="serviceAccount:$SA" --role="roles/cloudsql.viewer"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/bigquery.dataViewer"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/bigquery.jobUser"
 ```
 
 | Role | What it provides |
@@ -43,6 +49,8 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 | `compute.viewer` | VM names, zones, machine types, status, IPs |
 | `cloudasset.viewer` | Full resource inventory and dependency mapping |
 | `cloudsql.viewer` | Database instance metadata, versions, connectivity config (no data access) |
+| `bigquery.dataViewer` | Read BigQuery table rows (metadata and `SELECT` results only) |
+| `bigquery.jobUser` | Run BigQuery query jobs (required for `bq query`; does not grant write access) |
 
 | Blocked by design | Why |
 |---|---|
@@ -51,6 +59,7 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 | Database connections | No `cloudsql.client` — metadata only |
 | Traces, error reports | No `cloudtrace.*` or `errorreporting.*` permissions |
 | Cloud Storage | No `storage.*` permissions |
+| BigQuery DML/DDL (`INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, …) | No `bigquery.dataEditor` / `bigquery.admin` — read queries only |
 
 This baseline configuration is sufficient if your primary logging is in an external observability platform (Datadog, Splunk, New Relic, Elastic) that handles PII filtering natively. Aurora connects to that platform separately for log-based investigation.
 
