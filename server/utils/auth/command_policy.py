@@ -147,6 +147,15 @@ def _get_cached(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListSt
     return allow, deny, states
 
 
+# First SQL token only. A script that starts with SELECT and then writes is not caught.
+_BQ_WRITE_RE = re.compile(
+    r"^bq\s+(rm|load|update|cp|insert|mk(?!\s+--dry_run))\b"
+    r"|^bq\s+(?:--\S+\s+)*query\b(?:\s+--\S+)*\s+['\"]?\s*(insert|update|delete|merge|create|drop|alter|truncate)\b",
+    re.I,
+)
+_BQ_READ_RE = re.compile(r"^bq\s+(?:--\S+\s+)*(ls|show|head|query)\b", re.I)
+
+
 def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
     """Core gate. Returns whether *command* is allowed for *org_id*.
 
@@ -164,6 +173,8 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
 
     if not states.denylist_enabled and not states.allowlist_enabled:
         return CommandVerdict(allowed=True, rule_description="Policy lists are disabled")
+
+    _bq_write = _BQ_WRITE_RE.search(command) if states.denylist_enabled else None
 
     deny_hit = next(
         (r for r in deny_rules if r.compiled.search(command)),
@@ -183,7 +194,14 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
             allowlist_exhausted=(states.allowlist_enabled and allow_hit is None),
         )
 
+    if _bq_write:
+        return CommandVerdict(allowed=False, rule_description="BigQuery write")
+
     if states.allowlist_enabled and allow_hit is None:
+        if _BQ_READ_RE.search(command) and any(
+            "bq\\s" in rule.pattern or "|bq)\\s" in rule.pattern for rule in allow_rules
+        ):
+            return CommandVerdict(allowed=True, rule_description="BigQuery read-only operations")
         return CommandVerdict(
             allowed=False,
             rule_description="No matching allow rule",
@@ -658,7 +676,7 @@ def get_policy_templates() -> List[dict]:
                  "description": "GCP logging, monitoring, asset inventory, and config"},
                 {"priority": 168, "pattern": r"^gsutil\s+(ls|cat|stat|du|cp\s+gs://|rsync\s+-n)\b",
                  "description": "GCP Storage read operations (ls, cat, stat, download)"},
-                {"priority": 167, "pattern": r"^bq\s+(ls|show|head|query\s+--dry_run|mk\s+--dry_run)\b",
+                {"priority": 167, "pattern": r"^bq\s+(ls|show|head|query|mk\s+--dry_run)\b",
                  "description": "BigQuery read-only operations"},
                 # Azure -- Reader role + Log Analytics Reader + Monitoring Reader
                 {"priority": 160, "pattern": r"^az\s+.+\b(list|show|get|describe|display|query|download)\b",

@@ -1630,6 +1630,22 @@ def prepare_bq_exec(
     return argv, _redact_oauth_access_token(argv)
 
 
+_GATE_PREFIX = {
+    "aws": "aws", "gcp": "gcloud", "azure": "az", "scaleway": "scw",
+    "ovh": "ovhcloud", "tailscale": "tailscale", "flyio": "fly",
+}
+
+
+def command_for_gate(provider: str, command: str) -> str:
+    """CLI name policy regexes are anchored on. `bq` is not a gcloud subcommand."""
+    prefix = _GATE_PREFIX.get((provider or "").lower(), "")
+    stripped = command.strip()
+    first = stripped.split(None, 1)[0] if stripped else ""
+    if not prefix or stripped.startswith(prefix) or (prefix == "gcloud" and first == "bq"):
+        return command
+    return f"{prefix} {command}"
+
+
 def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None, account_id: Optional[str] = None) -> str:
     """Run arbitrary command against *provider* (gcloud/kubectl/gsutil for GCP, aws/kubectl for AWS).
 
@@ -1735,11 +1751,8 @@ Security & Compliance
         # Unified gate: signature + org policy + LLM judge + HITL (foreground).
         # Prepend CLI prefix so patterns like ^aws\s+ match (cloud_exec receives
         # the subcommand without the provider prefix, e.g. "ecs list-clusters").
-        _CLI_PREFIX = {"aws": "aws", "gcp": "gcloud", "azure": "az",
-                       "scaleway": "scw", "ovh": "ovhcloud", "tailscale": "tailscale",
-                       "flyio": "fly"}
-        prefix = _CLI_PREFIX.get(provider.lower(), "")
-        gated_cmd = f"{prefix} {command}" if prefix and not command.strip().startswith(prefix) else command
+        prefix = _GATE_PREFIX.get(provider.lower(), "")
+        gated_cmd = command_for_gate(provider, command)
         from utils.auth.command_gate import gate_command
         gate = gate_command(user_id=user_id, tool_name="cloud_exec", command=gated_cmd)
         if not gate.allowed:

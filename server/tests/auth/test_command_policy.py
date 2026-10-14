@@ -184,6 +184,28 @@ class TestDenylist:
 # ---------------------------------------------------------------------------
 
 
+class TestBigQueryReads:
+    """A read query is allowed when the org already allows bq. Writes are not."""
+
+    def _on(self, policy, pattern):
+        policy["allow"] = [_rule(rule_id=1, mode="allow", pattern=pattern)]
+        policy["states"] = ListStates(allowlist_enabled=True, denylist_enabled=True)
+
+    def test_select_passes_the_old_dry_run_rule(self, policy):
+        self._on(policy, r"^bq\s+(ls|show|head|query\s+--dry_run|mk\s+--dry_run)\b")
+        verdict = evaluate_command("org-7", "bq query --nouse_legacy_sql 'SELECT 1'")
+        assert verdict.allowed is True
+
+    def test_write_sql_and_bq_rm_are_blocked(self, policy):
+        self._on(policy, r"^bq\s+(ls|show|head|query|mk\s+--dry_run)\b")
+        assert evaluate_command("org-7", "bq query 'DROP TABLE t'").allowed is False
+        assert evaluate_command("org-7", "bq rm -f -t ds.t").allowed is False
+
+    def test_select_stays_blocked_when_bq_is_not_allowed(self, policy):
+        self._on(policy, r"^ls\b")
+        assert evaluate_command("org-7", "bq query 'SELECT 1'").allowed is False
+
+
 class TestAllowlist:
     """Allowlist on + no match -> blocked. Allowlist on + match -> allowed."""
 
