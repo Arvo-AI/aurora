@@ -147,13 +147,99 @@ def _get_cached(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListSt
     return allow, deny, states
 
 
-# First SQL token only. A script that starts with SELECT and then writes is not caught.
-_BQ_WRITE_RE = re.compile(
-    r"^bq\s+(rm|load|update|cp|insert|mk(?!\s+--dry_run))\b"
-    r"|^bq\s+(?:--\S+\s+)*query\b(?:\s+--\S+)*\s+['\"]?\s*(insert|update|delete|merge|create|drop|alter|truncate)\b",
+_BQ_READ_VERBS = frozenset({"ls", "show", "head", "query"})
+_BQ_WRITE_VERBS = frozenset({"rm", "load", "update", "cp", "insert", "mk"})
+# A write verb in statement position: start, after ';', or after ')'.
+# `SELECT delete FROM t` does not match. `SELECT 1; DROP TABLE t` does.
+_BQ_STATEMENT_WRITE = re.compile(
+    r"(?:^|[;)])\s*(insert|update|delete|merge|create|drop|alter|truncate)\b",
     re.I,
 )
-_BQ_READ_RE = re.compile(r"^bq\s+(?:--\S+\s+)*(ls|show|head|query)\b", re.I)
+_BQ_RESULT_WRITE = re.compile(
+    r"--(?:destination_table|append_table)\b|(?<![\w-])--replace\b",
+    re.I,
+)
+
+
+def _bq_verb(command: str) -> str:
+    for token in command.split()[1:]:
+        if not token.startswith("-"):
+            return token.lower()
+    return ""
+
+
+def _last_quoted(command: str) -> Optional[str]:
+    last = None
+    i = 0
+    n = len(command)
+    while i < n:
+        if command[i] not in "'\"":
+            i += 1
+            continue
+        quote = command[i]
+        i += 1
+        start = i
+        while i < n and command[i] != quote:
+            i += 2 if command[i] == "\\" else 1
+        last = command[start:i]
+        i += 1
+    return last
+
+
+def _sql_without_literals(sql: str) -> str:
+    """Drop '--' comments and quoted strings so a word inside them is not a statement."""
+    out = []
+    i = 0
+    n = len(sql)
+    while i < n:
+        if sql.startswith("--", i):
+            nl = sql.find("\n", i)
+            i = n if nl < 0 else nl
+            continue
+        if sql[i] in "'\"":
+            quote = sql[i]
+            i += 1
+            while i < n and sql[i] != quote:
+                i += 2 if sql[i] == "\\" else 1
+            i += 1
+            out.append(" ")
+            continue
+        out.append(sql[i])
+        i += 1
+    return "".join(out)
+
+
+def _bq_sql(command: str) -> str:
+    quoted = _last_quoted(command)
+    if quoted is not None:
+        return quoted
+    tokens = command.split()
+    try:
+        start = next(n for n, token in enumerate(tokens) if token.lower() == "query")
+    except StopIteration:
+        return ""
+    return " ".join(token for token in tokens[start + 1:] if not token.startswith("-"))
+
+
+def _bq_is_write(command: str) -> bool:
+    head = command.strip().split(None, 1)
+    if not head or head[0].lower() != "bq":
+        return False
+    verb = _bq_verb(command)
+    if verb in _BQ_WRITE_VERBS:
+        dry = verb == "mk" and any(
+            token == "--dry_run" or token.startswith("--dry_run=") for token in command.split()
+        )
+        return not dry
+    if verb != "query":
+        return False
+    if _BQ_RESULT_WRITE.search(command):
+        return True
+    return _BQ_STATEMENT_WRITE.search(_sql_without_literals(_bq_sql(command))) is not None
+
+
+def _rule_allows_bq_query(pattern: str) -> bool:
+    return "query" in pattern and ("bq\\s" in pattern or "|bq)\\s" in pattern)
 
 
 def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
@@ -174,7 +260,7 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
     if not states.denylist_enabled and not states.allowlist_enabled:
         return CommandVerdict(allowed=True, rule_description="Policy lists are disabled")
 
-    _bq_write = _BQ_WRITE_RE.search(command) if states.denylist_enabled else None
+    bq_write = _bq_is_write(command)
 
     deny_hit = next(
         (r for r in deny_rules if r.compiled.search(command)),
@@ -194,12 +280,15 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
             allowlist_exhausted=(states.allowlist_enabled and allow_hit is None),
         )
 
-    if _bq_write:
+    if bq_write:
         return CommandVerdict(allowed=False, rule_description="BigQuery write")
 
     if states.allowlist_enabled and allow_hit is None:
-        if _BQ_READ_RE.search(command) and any(
-            "bq\\s" in rule.pattern or "|bq)\\s" in rule.pattern for rule in allow_rules
+        head = command.strip().split(None, 1)
+        if (
+            head and head[0].lower() == "bq"
+            and _bq_verb(command) in _BQ_READ_VERBS
+            and any(_rule_allows_bq_query(rule.pattern) for rule in allow_rules)
         ):
             return CommandVerdict(allowed=True, rule_description="BigQuery read-only operations")
         return CommandVerdict(

@@ -40,7 +40,6 @@ def _stub_celery(monkeypatch, app):
 
 
 def test_schedule_sends_task_when_revision_is_behind(monkeypatch):
-    sa._readonly_role_sync_scheduled.clear()
     monkeypatch.setattr(sa, "_readonly_roles_current", lambda user_id: False)
     sent = {}
 
@@ -57,11 +56,9 @@ def test_schedule_sends_task_when_revision_is_behind(monkeypatch):
         "name": sa.SYNC_GCP_READONLY_ROLES_TASK,
         "args": ["user-1"],
     }
-    sa._readonly_role_sync_scheduled.clear()
 
 
 def test_schedule_skips_when_revision_is_current(monkeypatch):
-    sa._readonly_role_sync_scheduled.clear()
     monkeypatch.setattr(sa, "_readonly_roles_current", lambda user_id: True)
 
     class _App:
@@ -71,4 +68,3 @@ def test_schedule_skips_when_revision_is_current(monkeypatch):
     _stub_celery(monkeypatch, _App())
 
     sa.maybe_schedule_readonly_role_sync("user-1")
-    sa._readonly_role_sync_scheduled.clear()

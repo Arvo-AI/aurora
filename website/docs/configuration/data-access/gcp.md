@@ -9,7 +9,7 @@ This page explains how to configure a GCP service account for Aurora that cannot
 
 ## Service account roles
 
-Every Aurora GCP service account receives the following infrastructure roles. These provide full investigation capability (pod status, metrics, deployments, events, resource inventory) without exposing logs, database contents, traces, or any other data that may contain PII.
+Every Aurora GCP service account receives the following infrastructure roles. These provide full investigation capability (pod status, metrics, deployments, events, resource inventory) without exposing logs, Cloud SQL contents, or traces. The BigQuery roles are the exception: they can read table rows, which may contain PII.
 
 ```bash
 export PROJECT_ID="your-project-id"

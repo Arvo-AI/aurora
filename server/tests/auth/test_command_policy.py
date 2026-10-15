@@ -199,7 +199,25 @@ class TestBigQueryReads:
     def test_write_sql_and_bq_rm_are_blocked(self, policy):
         self._on(policy, r"^bq\s+(ls|show|head|query|mk\s+--dry_run)\b")
         assert evaluate_command("org-7", "bq query 'DROP TABLE t'").allowed is False
+        assert evaluate_command("org-7", "bq query 'SELECT 1; DROP TABLE t'").allowed is False
+        assert evaluate_command("org-7", "bq query 'WITH x AS (SELECT 1) DELETE FROM t'").allowed is False
+        assert evaluate_command("org-7", "bq query --destination_table=ds.t 'SELECT 1'").allowed is False
         assert evaluate_command("org-7", "bq rm -f -t ds.t").allowed is False
+
+    def test_read_that_mentions_a_write_word_stays_allowed(self, policy):
+        self._on(policy, r"^bq\s+(ls|show|head|query|mk\s+--dry_run)\b")
+        assert evaluate_command("org-7", "bq query 'SELECT delete FROM t'").allowed is True
+        assert evaluate_command("org-7", "bq query 'SELECT drop_date FROM t'").allowed is True
+        assert evaluate_command("org-7", "bq query \"SELECT 'DROP TABLE t' AS x\"").allowed is True
+
+    def test_write_is_blocked_when_only_the_allowlist_is_on(self, policy):
+        policy["allow"] = [_rule(rule_id=1, mode="allow", pattern=r"^bq\s+query\b")]
+        policy["states"] = ListStates(allowlist_enabled=True, denylist_enabled=False)
+        assert evaluate_command("org-7", "bq query 'DROP TABLE t'").allowed is False
+
+    def test_ls_only_rule_does_not_allow_query(self, policy):
+        self._on(policy, r"^bq\s+ls\b")
+        assert evaluate_command("org-7", "bq query 'SELECT 1'").allowed is False
 
     def test_select_stays_blocked_when_bq_is_not_allowed(self, policy):
         self._on(policy, r"^ls\b")

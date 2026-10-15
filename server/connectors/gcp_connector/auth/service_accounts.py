@@ -82,8 +82,6 @@ GCP_READONLY_ROLES_REVISION_KEY = "gcp_readonly_roles_revision"
 SYNC_GCP_READONLY_ROLES_TASK = (
     "connectors.gcp_connector.gcp_post_auth_tasks.sync_gcp_readonly_roles"
 )
-# One enqueue per process. The task is idempotent if two workers both send it.
-_readonly_role_sync_scheduled: set[str] = set()
 
 
 def ensure_aurora_full_access(
@@ -512,22 +510,21 @@ def sync_read_only_roles(user_id: str) -> None:
 
 
 def maybe_schedule_readonly_role_sync(user_id: str) -> None:
-    """Enqueue one role sync when this OAuth user is behind GCP_READONLY_ROLES_REVISION.
+    """Enqueue a role sync when this OAuth user is behind GCP_READONLY_ROLES_REVISION.
 
+    The stored revision stops further enqueues after a successful sync. A failed
+    sync leaves the revision unset, so the next token generation tries again.
     celery_config imports the task module, which imports this module, so the
     Celery app is imported here rather than at module load.
     """
-    if not user_id or user_id in _readonly_role_sync_scheduled:
+    if not user_id:
         return
     try:
         if _readonly_roles_current(user_id):
-            _readonly_role_sync_scheduled.add(user_id)
             return
-        _readonly_role_sync_scheduled.add(user_id)
         from celery_config import celery_app
         celery_app.send_task(SYNC_GCP_READONLY_ROLES_TASK, args=[user_id])
     except Exception as err:
-        _readonly_role_sync_scheduled.discard(user_id)
         logger.warning(
             "Failed to schedule GCP read-only role sync (error_type=%s)",
             type(err).__name__,

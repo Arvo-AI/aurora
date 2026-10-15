@@ -33,5 +33,5 @@ When the question is whether data landed, a load job failed, or a table is empty
 
 - List datasets: `cloud_exec('gcp', 'bq ls')`
 - Dataset or table metadata: `cloud_exec('gcp', 'bq show --format=prettyjson DATASET')`
-- Read rows: `cloud_exec('gcp', "bq query --nouse_legacy_sql 'SELECT ...'")`. One quoted `SELECT` or `WITH`. Ask mode blocks DDL and DML.
+- Read rows: `cloud_exec('gcp', "bq query --nouse_legacy_sql 'SELECT ...'")`. One quoted `SELECT` or `WITH`. Ask mode blocks write tokens it can see; it does not parse SQL inside the quotes.
 - A 403 means the connected identity cannot read BigQuery (`roles/bigquery.dataViewer` and `roles/bigquery.jobUser`). Say that. Do not treat it as proof the data is missing.
