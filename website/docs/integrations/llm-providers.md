@@ -76,11 +76,13 @@ A clean pick like **Claude Opus 4.7** is then translated to that provider's nati
 | | `anthropic/claude-haiku-4.5` | Fast, affordable |
 | | `anthropic/claude-3.5-sonnet` | Widely used, reliable |
 | | `anthropic/claude-3-haiku` | Cheapest (default RCA model) |
-| **Google Gemini** | `google/gemini-3.5-flash` | Fast, cost-effective with thinking |
-| | `google/gemini-3.1-pro-preview` | Latest flagship with thinking |
+| **Google Gemini** | `google/gemini-4-argon` | Frontier model for hard coding and agent tasks |
+| | `google/gemini-3.5-flash` | Fast, cost-effective with thinking |
+| | `google/gemini-3.1-pro-preview` | Previous flagship with thinking |
 | | `google/gemini-2.5-pro` | Strong for complex tasks |
 | | `google/gemini-2.5-flash` | Cost-effective |
-| **Vertex AI** | `vertex/gemini-3.6-flash` | Latest Flash — agentic workflows, coding, multimodal (thinking) |
+| **Vertex AI** | `vertex/gemini-4-argon` | Frontier model for hard coding and agent tasks |
+| | `vertex/gemini-3.6-flash` | Latest Flash — agentic workflows, coding, multimodal (thinking) |
 | | `vertex/gemini-3.5-flash-lite` | Fastest, lowest-cost — high-throughput workloads |
 | | `vertex/gemini-3.5-flash` | Previous Flash generation (still supported in env vars) |
 | | `vertex/gemini-3.1-pro-preview` | Strong reasoning with thinking |

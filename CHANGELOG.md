@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Models: Gemini 4 Argon (`gemini-4-argon`) in the Google and Vertex pickers.
+  Introductory price is $2/$10 per 1M tokens through November 30, 2026.
+
 ### Fixed
 - SSO: SAML login stores the member's first and last name. A `name` claim that
   is only the given name no longer hides the surname. A later login fills in a

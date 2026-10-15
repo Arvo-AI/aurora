@@ -8,6 +8,15 @@ def test_flash_lite_skips_thinking():
     assert config == {}
 
 
+def test_argon_gets_thoughts_without_forcing_a_level(monkeypatch):
+    # Argon's API default is medium; only preview ids get an explicit level.
+    monkeypatch.delenv("GEMINI_DISABLE_THINKING", raising=False)
+    config: dict = {}
+    apply_gemini_thinking_config(config, "gemini-4-argon")
+    assert config.get("include_thoughts") is True
+    assert "thinking_level" not in config
+
+
 def test_flash_gets_thinking_when_enabled(monkeypatch):
     monkeypatch.delenv("GEMINI_DISABLE_THINKING", raising=False)
     config: dict = {}
