@@ -437,6 +437,7 @@ def run_background_chat(
     send_notifications: bool = True,
     mode: str = "ask",
     rail_text: Optional[str] = None,
+    rca_claim: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run a chat session in the background without WebSocket.
 
@@ -567,21 +568,46 @@ def run_background_chat(
                             row = cursor.fetchone()
                             existing_task_id = row[0] if row and row[0] else None
 
-                            if existing_task_id and existing_task_id != self.request.id:
-                                logger.warning(
-                                    f"[BackgroundChat] Incident {incident_id} already has task ID {existing_task_id}, "
-                                    f"but this task is {self.request.id}. This may indicate a race condition or duplicate RCA start."
-                                )
+                            from services.incidents.repeat_investigation import worker_owns_investigation
 
-                            # Only update aurora_chat_session_id when this task owns the RCA
-                            if not existing_task_id or existing_task_id == self.request.id:
+                            # A retry carries the claim it wrote. A newer claim means this
+                            # attempt must stop. Chats that are not an RCA retry keep running.
+                            if rca_claim:
+                                owns_investigation = worker_owns_investigation(
+                                    existing_task_id, self.request.id, rca_claim,
+                                )
+                                if owns_investigation:
+                                    cursor.execute(
+                                        """UPDATE incidents 
+                                           SET aurora_chat_session_id = %s, 
+                                               rca_celery_task_id = %s
+                                           WHERE id = %s
+                                             AND rca_celery_task_id IS NOT DISTINCT FROM %s""",
+                                        (session_id, self.request.id, incident_id, existing_task_id),
+                                    )
+                                    # The claim changed after we read it.
+                                    if cursor.rowcount == 0:
+                                        owns_investigation = False
+                                if not owns_investigation:
+                                    logger.info(
+                                        "[BackgroundChat] Incident %s is owned by a newer investigation; stopping task %s",
+                                        incident_id, self.request.id,
+                                    )
+                                    conn.commit()
+                                    return {
+                                        "session_id": session_id,
+                                        "status": "superseded",
+                                    }
+                            # Nothing else owns the row, or this worker already wrote its id.
+                            elif not existing_task_id or existing_task_id == self.request.id:
                                 cursor.execute(
                                     """UPDATE incidents 
                                        SET aurora_chat_session_id = %s, 
-                                           rca_celery_task_id = COALESCE(rca_celery_task_id, %s)
+                                           rca_celery_task_id = %s
                                        WHERE id = %s""",
                                     (session_id, self.request.id, incident_id)
                                 )
+                            # A follow-up chat must not steal the incident from the RCA already running.
                             else:
                                 logger.warning(
                                     "[BackgroundChat] Skipping aurora_chat_session_id overwrite for incident %s; RCA task %s already owns it",
@@ -716,6 +742,7 @@ def run_background_chat(
                 mode=mode,
                 rail_text=rail_text,
                 send_notifications=send_notifications,
+                owned_task_id=self.request.id,
             ))
         except Exception as e:
             logger.error(f"[BackgroundChat] Exception in asyncio.run(_execute_background_chat): {e}", exc_info=True)
@@ -730,20 +757,8 @@ def run_background_chat(
         # Update incident status to analyzed if incident_id provided
         # (may already be done inside _execute_background_chat as crash protection)
         if incident_id and not is_action_source:
-            # Clear the Celery task ID since we're done
-            try:
-                with db_pool.get_admin_connection() as conn:
-                    with conn.cursor() as cursor:
-                        set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:ClearTaskID]")
-                        cursor.execute(
-                            "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s AND rca_celery_task_id IS NOT NULL",
-                            (incident_id,)
-                        )
-                        conn.commit()
-            except Exception as e:
-                logger.warning(f"[BackgroundChat] Failed to clear task ID for incident {incident_id}: {e}")
-            
-            # Only update if still in 'running' (not already advanced by inner function)
+            # Only update if still in 'running' and this task still owns the incident.
+            # A resolve that arrived during the RCA must stay resolved.
             try:
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
@@ -751,7 +766,10 @@ def run_background_chat(
                         cursor.execute("SELECT aurora_status FROM incidents WHERE id = %s", (incident_id,))
                         row = cursor.fetchone()
                         if row and row[0] == 'running':
-                            _update_incident_status_and_aurora(incident_id, "analyzed", "summarizing", user_id=user_id)
+                            _update_incident_status_and_aurora(
+                                incident_id, "analyzed", "summarizing", user_id=user_id,
+                                owned_task_id=self.request.id,
+                            )
             except Exception as e:
                 logger.warning(f"[BackgroundChat] Failed to check/update incident status: {e}")
 
@@ -1377,6 +1395,7 @@ async def _execute_background_chat(
     mode: str = "ask",
     rail_text: Optional[str] = None,
     send_notifications: bool = True,
+    owned_task_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute the background chat workflow asynchronously.
 
@@ -1587,19 +1606,10 @@ async def _execute_background_chat(
         # Also finalize the incident and enqueue post-RCA tasks here (inside the
         # async function) because asyncio.run() may never return to the caller.
         if incident_id and not is_action_source:
-            try:
-                with db_pool.get_admin_connection() as conn:
-                    with conn.cursor() as cursor:
-                        set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Finalize]")
-                        cursor.execute(
-                            "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
-                            (incident_id,)
-                        )
-                        conn.commit()
-            except Exception as e:
-                logger.warning(f"[BackgroundChat] Failed to clear task ID: {e}")
-
-            _update_incident_status_and_aurora(incident_id, "analyzed", "summarizing", user_id=user_id)
+            _update_incident_status_and_aurora(
+                incident_id, "analyzed", "summarizing", user_id=user_id,
+                owned_task_id=owned_task_id,
+            )
 
             try:
                 from chat.background.summarization import generate_incident_summary_from_chat
@@ -1892,23 +1902,46 @@ def _mark_inflight_findings_failed(incident_id: str, user_id: str, reason: str) 
 
 
 def _update_incident_status_and_aurora(
-    incident_id: str, status: str, aurora_status: str, user_id: str
+    incident_id: str, status: str, aurora_status: str, user_id: str,
+    owned_task_id: Optional[str] = None,
 ) -> None:
-    """Atomically update both incident status and aurora_status in one transaction."""
+    """Atomically update both incident status and aurora_status in one transaction.
+
+    A resolved incident stays resolved. When owned_task_id is set, a newer
+    investigation's task id is left alone.
+    """
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:StatusAndAurora]"):
                     return
                 now = datetime.now()
+                # A resolve that landed while this RCA ran must stay resolved.
                 cursor.execute(
                     """UPDATE incidents
-                       SET status = %s,
+                       SET status = CASE
+                               WHEN status IN ('resolved', 'closed') THEN status
+                               ELSE %s
+                           END,
                            aurora_status = %s,
-                           analyzed_at = CASE WHEN %s = 'analyzed' THEN COALESCE(analyzed_at, %s) ELSE analyzed_at END,
-                           updated_at = %s
-                       WHERE id = %s AND status != 'merged'""",
-                    (status, aurora_status, status, now, now, incident_id),
+                           analyzed_at = CASE
+                               WHEN %s = 'analyzed' AND status NOT IN ('resolved', 'closed')
+                               THEN COALESCE(analyzed_at, %s)
+                               ELSE analyzed_at
+                           END,
+                           updated_at = %s,
+                           rca_celery_task_id = CASE
+                               WHEN %s IS NOT NULL AND rca_celery_task_id = %s THEN NULL
+                               ELSE rca_celery_task_id
+                           END
+                       WHERE id = %s
+                         AND status != 'merged'
+                         AND (%s IS NULL OR rca_celery_task_id = %s)""",
+                    (
+                        status, aurora_status, status, now, now,
+                        owned_task_id, owned_task_id,
+                        incident_id, owned_task_id, owned_task_id,
+                    ),
                 )
             conn.commit()
             logger.info(f"[BackgroundChat] Set incident {incident_id} status='{status}' aurora_status='{aurora_status}'")
@@ -2492,7 +2525,7 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
                             UPDATE incidents SET aurora_status = 'error', status = 'analyzed',
                                    analyzed_at = COALESCE(analyzed_at, NOW()),
                                    rca_celery_task_id = NULL, updated_at = NOW()
-                            WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id
+                            WHERE id = %s AND aurora_status = 'running' AND status NOT IN ('merged', 'resolved') RETURNING id
                         """, (inc_id,))
                         if cursor.fetchone():
                             _record_rca_error(cursor, str(inc_id), uid)
@@ -2554,7 +2587,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         _propagate_suggestion_status(str(session_id), 'failed')
                         if incident_id:
                             cursor.execute(
-                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged'",
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status NOT IN ('merged', 'resolved')",
                                 (incident_id,)
                             )
                             _record_rca_error(cursor, str(incident_id), uid)
@@ -2580,7 +2613,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                                              cursor=cursor, incident_id=inc_id):
                             continue
                         cursor.execute(
-                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id",
+                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' AND status NOT IN ('merged', 'resolved') RETURNING id",
                             (inc_id,)
                         )
                         if not cursor.fetchone():
@@ -2620,7 +2653,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                             )
                         else:
                             cursor.execute(
-                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged' RETURNING id",
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status NOT IN ('merged', 'resolved') RETURNING id",
                                 (inc_id,)
                             )
                         if cursor.fetchone():
