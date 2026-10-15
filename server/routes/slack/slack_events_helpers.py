@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 # Slack notifies only on this form. A typed @name is plain text.
 _SLACK_USER_ID = re.compile(r"[UW][A-Z0-9]{2,}")
-# <@U123|Ada> is the same mention as <@U123>. Slack sends both.
-_SLACK_MENTION = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]*)?>")
+# <@U123|Ada> is the same mention as <@U123>. Label stops at "<" so it can't swallow the next one.
+_SLACK_MENTION = re.compile(r"<@([A-Z0-9]+)(?:\|[^<>]*)?>")
 # Prefix format_asked_by writes. The title drops it so the question stays visible.
 _ASKED_BY_PREFIX = re.compile(
     r"^Asked by (?:<@[UW][A-Z0-9]+>(?: \([^)]*\))?|[^:]{1,80}): "
@@ -424,7 +424,7 @@ def _append_context_replies(context_parts: list, client, replies: list, user_nam
         total_length, stop = _append_context_reply(
             context_parts, client, reply, user_name_cache, total_length, max_total_length,
         )
-        # Later replies would only be older or past the cap.
+        # Cap is spent. A later line is the same size, and skipping one leaves a hole.
         if stop:
             break
     return total_length

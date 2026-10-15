@@ -53,6 +53,11 @@ def test_bare_labeled_mention_counts_as_no_question():
     assert strip_bot_mentions(f"<@{BOT}|Aurora>", [BOT]) == ""
 
 
+def test_unclosed_label_does_not_swallow_the_next_mention():
+    text = f"<@{BOT}|Ada ask <@{OTHER}>"
+    assert strip_bot_mentions(text, [BOT]) == text
+
+
 def test_labeled_mentions_dropped_when_the_bot_is_unknown():
     text = f"<@{BOT}|Aurora> ask <@{OTHER}|Ada>"
     assert strip_bot_mentions(text, []) == "ask"
