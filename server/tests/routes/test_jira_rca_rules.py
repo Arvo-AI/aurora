@@ -157,59 +157,20 @@ def test_jql_rule_is_not_a_structured_match():
     assert match_kind(scope, RULES) == "match"
 
 
-def test_comment_in_auto_updates_filters_and_does_not_start_rca():
+def test_a_comment_does_not_start_rca():
     payload = {
         "webhookEvent": "comment_created",
         "comment": {"body": "Only investigate Bugs in OPS"},
         "issue": _issue("OPS", "Bug"),
     }
-    assert decide_webhook(payload, "auto", RULES)["action"] == "filters"
-    assert decide_webhook(payload, "manual", RULES)["action"] == "ignore"
-
-
-def test_comment_on_a_project_with_no_rule_is_ignored_even_in_auto():
-    # Auto only edits a project's own filter — it cannot bootstrap a brand new project.
-    payload = {
-        "webhookEvent": "comment_created",
-        "comment": {"body": "Only investigate Bugs here"},
-        "issue": _issue("UNSEEN", "Bug"),
-    }
-    assert decide_webhook(payload, "auto", RULES)["action"] == "ignore"
-
-
-def test_aurora_own_writeup_comment_is_not_a_filter_instruction():
-    payload = {
-        "webhookEvent": "comment_created",
-        "comment": {"body": "## Aurora RCA — summary of the investigation and OPS findings"},
-        "issue": _issue("OPS", "Bug"),
-    }
-    assert decide_webhook(payload, "auto", RULES)["action"] == "ignore"
-
-
-def test_comment_from_the_connected_account_is_not_a_filter_instruction():
-    payload = {
-        "webhookEvent": "comment_created",
-        "comment": {"body": "Only investigate Bugs in OPS", "author": {"accountId": "aurora-bot"}},
-        "issue": _issue("OPS", "Bug"),
-    }
-    assert decide_webhook(payload, "auto", RULES, connected_account_id="aurora-bot")["action"] == "ignore"
-    assert decide_webhook(payload, "auto", RULES, connected_account_id="someone-else")["action"] == "filters"
-
-
-def test_empty_comment_does_not_start_rca():
-    payload = {
-        "webhookEvent": "comment_created",
-        "comment": {"body": "ok"},
-        "issue": _issue("OPS", "Bug"),
-    }
-    assert decide_webhook(payload, "auto", RULES)["action"] == "ignore"
+    assert decide_webhook(payload, RULES)["action"] == "ignore"
 
 
 def test_issue_created_still_uses_the_filter():
     payload = {"webhookEvent": "jira:issue_created", "issue": _issue("OPS", "Bug")}
-    assert decide_webhook(payload, "auto", RULES)["action"] == "rca"
+    assert decide_webhook(payload, RULES)["action"] == "rca"
     story = {"webhookEvent": "jira:issue_created", "issue": _issue("OPS", "Story")}
-    assert decide_webhook(story, "auto", RULES)["action"] == "ignore"
+    assert decide_webhook(story, RULES)["action"] == "ignore"
 
 
 class _Search:

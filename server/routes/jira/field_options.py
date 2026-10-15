@@ -1,4 +1,6 @@
-"""Turn Jira field catalogs into names the RCA filter picker can offer."""
+"""Jira returns these catalogs as strings or {name} objects, and repeats each
+status under every issue type. Collapse that to one name per value.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +11,7 @@ _MAX_NAME_LEN = 80
 
 
 def unique_names(items: Any) -> List[str]:
-    """Names from strings or {name} objects, case-insensitively deduped."""
+    """One name per value. Jira sends either a string or a {name} object."""
     if not isinstance(items, list):
         return []
     seen: dict[str, str] = {}
@@ -29,7 +31,7 @@ def unique_names(items: Any) -> List[str]:
 
 
 def status_names(payload: Any) -> List[str]:
-    """Status names across every issue type in a project's status catalog."""
+    """One status name. Jira lists the same status once per issue type."""
     if not isinstance(payload, list):
         return []
     flat: List[Any] = []

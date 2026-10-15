@@ -2,7 +2,7 @@
 
 A ticket matches when its project, type, and any extra fields hit a saved
 rule. JQL is an optional extra clause checked by the caller. Comments never
-start an RCA — in auto mode they are handed to the filter agent instead.
+start an RCA.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ _MAX_JQL = 500
 
 # Optional any-of fields. Empty means that dimension does not narrow the rule.
 FILTER_FIELDS = ("priorities", "labels", "components", "statuses")
-FILTER_MODES = ("auto", "manual")
 
 
 def _clean_name(value: Any, label: str) -> Tuple[Optional[str], Optional[str]]:
@@ -334,93 +333,23 @@ def jql_matches_issue(client: Any, issue_key: str, clauses: List[str]) -> bool:
 # Created and edited only. A delete payload still carries the old body.
 _COMMENT_WEBHOOK_EVENTS = frozenset({"comment_created", "comment_updated"})
 _COMMENT_ISSUE_EVENTS = frozenset({"issue_commented", "issue_comment_edited"})
-# The filing prompt asks the agent to start the Jira comment with this.
-AURORA_COMMENT_MARKER = "Aurora RCA"
 
 
 def is_comment_event(payload: Dict[str, Any]) -> bool:
-    """True for comment create/edit webhooks, which tune filters and never start an RCA."""
+    """True for comment create/edit webhooks. Those never start an RCA."""
     event = str(payload.get("webhookEvent") or "")
     event_name = str(payload.get("issue_event_type_name") or "")
     return event in _COMMENT_WEBHOOK_EVENTS or event_name in _COMMENT_ISSUE_EVENTS
 
 
-def comment_author_ids(payload: Dict[str, Any]) -> set:
-    """Ids Jira puts on a comment author. Cloud uses accountId; Data Center uses key or name."""
-    comment = payload.get("comment") if isinstance(payload, dict) else None
-    author = comment.get("author") if isinstance(comment, dict) else None
-    if not isinstance(author, dict):
-        return set()
-    ids = set()
-    for key in ("accountId", "key", "name"):
-        value = str(author.get(key) or "").strip()
-        if value:
-            ids.add(value)
-    return ids
-
-
-def project_has_rule(scope: Dict[str, Any], rules: Any) -> bool:
-    """True when some saved filter already covers this project."""
-    if not isinstance(scope, dict) or not isinstance(rules, list):
-        return False
-    project = _folded(scope.get("projectKey"))
-    if not project:
-        return False
-    return any(
-        isinstance(rule, dict) and _folded(rule.get("projectKey")) == project
-        for rule in rules
-    )
-
-
-def extract_comment_text(payload: Dict[str, Any]) -> str:
-    """Plain text of a comment event. Issue create/update returns empty."""
-    # An issue payload is an investigation candidate, not an instruction.
-    if not is_comment_event(payload):
-        return ""
-    comment = payload.get("comment")
-    if not isinstance(comment, dict):
-        return ""
-    body = comment.get("body")
-    if isinstance(body, str):
-        return body.strip()
-    if isinstance(body, dict):
-        from connectors.jira_connector.adf_converter import adf_to_plain_text
-        return adf_to_plain_text(body).strip()
-    return ""
-
-
-def _comment_is_usable(text: str) -> bool:
-    # "ok" and emoji are not a filter instruction, so don't spend an agent call.
-    return sum(char.isalnum() for char in text) >= 3
-
-
-def decide_webhook(
-    payload: Dict[str, Any],
-    mode: str,
-    rules: Any,
-    *,
-    connected_account_id: str = "",
-) -> Dict[str, Any]:
-    """What a webhook should do: update filters, start RCA, check JQL, or ignore."""
+def decide_webhook(payload: Dict[str, Any], rules: Any) -> Dict[str, Any]:
+    """What a webhook should do: start RCA, check JQL, or ignore."""
     issue = payload.get("issue") if isinstance(payload, dict) else None
     if not isinstance(issue, dict) or not issue:
         return {"action": "ignore", "reason": "no issue"}
 
-    # Comments edit the filters in auto mode. They never start an RCA.
+    # A comment is not a ticket arriving. It does not start an RCA.
     if is_comment_event(payload):
-        text = extract_comment_text(payload)
-        scope = extract_webhook_scope(issue)
-        # Aurora's own writeup, a short reply, or a project with no filter is not an instruction.
-        own_writeup = AURORA_COMMENT_MARKER in text
-        own_account = bool(connected_account_id) and connected_account_id in comment_author_ids(payload)
-        if (
-            mode == "auto"
-            and _comment_is_usable(text)
-            and not own_writeup
-            and not own_account
-            and project_has_rule(scope, rules)
-        ):
-            return {"action": "filters", "scope": scope}
         return {"action": "ignore", "reason": "comment"}
 
     scope = extract_webhook_scope(issue)

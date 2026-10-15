@@ -9,9 +9,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
@@ -392,10 +391,6 @@ def _dispatch_rca(
                 logger.debug("[JIRA][WEBHOOK] Failed to mark RCA session failed", exc_info=True)
 
 
-_FILTER_LOCK_TTL = 120
-_LOCK_BUSY = object()
-
-
 def _saved_jql_matches(user_id: str, issue_key: str, clauses: List[str]) -> bool:
     """True when a saved clause still selects this issue. Transient Jira errors propagate."""
     from routes.jira.jira_routes import _get_jira_client, _with_refresh
@@ -410,53 +405,3 @@ def _saved_jql_matches(user_id: str, issue_key: str, clauses: List[str]) -> bool
         client,
         lambda c: jql_matches_issue(c, issue_key, clauses),
     ))
-
-
-def _acquire_filter_lock(user_id: str) -> Any:
-    """Serialize filter edits per org. None means Redis is down; _LOCK_BUSY means another edit holds it."""
-    from utils.auth.stateless_auth import resolve_org_id
-    from utils.cache.redis_client import get_redis_client
-
-    client = get_redis_client()
-    if client is None:
-        return None
-    org_id = resolve_org_id(user_id) or user_id
-    key = f"jira:rca-filters:{org_id}"
-    token = uuid.uuid4().hex
-    if not client.set(key, token, nx=True, ex=_FILTER_LOCK_TTL):
-        return _LOCK_BUSY
-    return client, key, token
-
-
-def _release_filter_lock(lock: Optional[Tuple[Any, str, str]]) -> None:
-    if not lock:
-        return
-    client, key, token = lock
-    try:
-        # Only the holder deletes it, so a slow edit cannot drop someone else's lock.
-        if client.get(key) == token:
-            client.delete(key)
-    except Exception:
-        logger.debug("[JIRA][FILTERS] Failed to release the filter lock", exc_info=True)
-
-
-@celery_app.task(
-    bind=True, max_retries=5, default_retry_delay=15, name="jira.manage_rca_filters",
-)
-def manage_jira_rca_filters(self, payload: Dict[str, Any], user_id: Optional[str] = None) -> None:
-    """In auto mode, turn a Jira comment into an update of the RCA filters."""
-    if not user_id:
-        return
-    lock = _acquire_filter_lock(user_id)
-    # The holder can keep the lock for its whole TTL, past this task's five retries.
-    if lock is _LOCK_BUSY:
-        raise self.retry(countdown=15, max_retries=20)
-    try:
-        from routes.jira.filter_agent import apply_comment_to_filters
-        from routes.jira.jira_routes import connected_jira_account_id
-        apply_comment_to_filters(user_id, payload, load_account_id=connected_jira_account_id)
-    except Exception as exc:
-        logger.exception("[JIRA][FILTERS] Filter update failed for user %s", sanitize(user_id or ""))
-        raise self.retry(exc=exc)
-    finally:
-        _release_filter_lock(lock if isinstance(lock, tuple) else None)

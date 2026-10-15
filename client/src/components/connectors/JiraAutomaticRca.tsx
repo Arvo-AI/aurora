@@ -8,8 +8,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-export type JiraRcaFilterMode = "auto" | "manual";
-
 export interface JiraRcaRule {
   projectKey: string;
   issueTypes: string[];
@@ -26,10 +24,8 @@ interface JiraProject {
 }
 
 interface JiraAutomaticRcaProps {
-  mode: JiraRcaFilterMode;
   rules: JiraRcaRule[];
   saving: boolean;
-  onModeChange: (mode: JiraRcaFilterMode) => void;
   onSave: (rules: JiraRcaRule[]) => Promise<boolean>;
 }
 
@@ -208,10 +204,8 @@ function OptionChecks({
 }
 
 export function JiraAutomaticRca({
-  mode,
   rules,
   saving,
-  onModeChange,
   onSave,
 }: Readonly<JiraAutomaticRcaProps>) {
   const [projects, setProjects] = useState<JiraProject[]>([]);
@@ -236,7 +230,7 @@ export function JiraAutomaticRca({
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
   useEffect(() => {
-    // The form is the only place that lists projects, including in auto where it stays closed.
+    // The form is the only place that lists projects.
     if (!formOpen || projectsFetchStarted.current) return;
     projectsFetchStarted.current = true;
     setLoadingProjects(true);
@@ -327,14 +321,6 @@ export function JiraAutomaticRca({
     })();
     return () => { cancelled = true; };
   }, [projectKey]);
-
-  // Auto mode is read-only, so a half-edited manual form should not linger.
-  useEffect(() => {
-    if (mode !== "manual") {
-      setFormOpen(false);
-      setEditingIndex(null);
-    }
-  }, [mode]);
 
   const clearProjectChoices = () => {
     setChecked([]);
@@ -468,7 +454,6 @@ export function JiraAutomaticRca({
   const optionsFailed = Boolean(selectedKey) && optionsErrorKey === selectedKey;
   const fieldFailed = (name: string) => fieldOptions?.errors.includes(name) === true && loadedOptionsKey === selectedKey;
 
-  const manual = mode === "manual";
   const typeNames = loadingTypes || typesError || issueTypes.length === 0
     ? []
     : [
@@ -480,97 +465,52 @@ export function JiraAutomaticRca({
 
   return (
     <div className="space-y-3 mt-3">
-      <div className="grid grid-cols-2 gap-2">
-        {(["auto", "manual"] as const).map((value) => {
-          const selected = mode === value;
-          return (
-            <button
-              key={value}
-              type="button"
-              onClick={() => {
-                if (!selected) onModeChange(value);
-              }}
-              disabled={saving}
-              className={`rounded-lg border p-2.5 text-left transition-colors ${
-                selected ? "border-[#2684FF] bg-[#2684FF]/[0.04]" : "border-border hover:bg-muted/50"
-              }`}
-            >
-              <span className="text-sm font-medium">{value === "auto" ? "Auto" : "Manual"}</span>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {value === "auto"
-                  ? "Aurora updates existing filters from comments on those projects"
-                  : "You set every filter yourself"}
-              </p>
-            </button>
-          );
-        })}
-      </div>
-
-      {manual ? (
-        <div className="rounded-md border border-[#2684FF]/30 bg-[#2684FF]/[0.06] px-2.5 py-2">
-          <p className="text-sm font-medium">Matching tickets start an RCA</p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Without any filters, no ticket triggers an RCA. A ticket that matches a filter is investigated. A ticket that doesn&apos;t match is ignored.
-          </p>
-        </div>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          Comments on a project that already has a filter can update it. Switch to Manual to edit filters yourself.
+      <div className="rounded-md border border-[#2684FF]/30 bg-[#2684FF]/[0.06] px-2.5 py-2">
+        <p className="text-sm font-medium">Matching tickets start an RCA</p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          Without any filters, no ticket triggers an RCA. A ticket that matches a filter is investigated. A ticket that doesn&apos;t match is ignored.
         </p>
-      )}
+      </div>
 
       {rules.length > 0 ? (
         <ul className="space-y-1.5">
           {rules.map((rule, index) => (
             <li key={`${rule.projectKey}-${index}`} className="flex items-start justify-between gap-2 rounded-md border px-2.5 py-2">
-              {manual ? (
-                <button
-                  type="button"
-                  className="min-w-0 text-left"
-                  onClick={() => startEdit(index)}
-                  disabled={saving}
-                >
-                  <p className="text-sm font-medium">{rule.projectKey}</p>
-                  <p className="text-xs text-muted-foreground break-words">{summarize(rule)}</p>
-                </button>
-              ) : (
-                <div className="min-w-0 text-left">
-                  <p className="text-sm font-medium">{rule.projectKey}</p>
-                  <p className="text-xs text-muted-foreground break-words">{summarize(rule)}</p>
-                </div>
-              )}
-              {manual && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-muted-foreground"
-                  disabled={saving}
-                  onClick={() => removeRule(index)}
-                  aria-label={`Remove ${rule.projectKey}`}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              )}
+              <button
+                type="button"
+                className="min-w-0 text-left"
+                onClick={() => startEdit(index)}
+                disabled={saving}
+              >
+                <p className="text-sm font-medium">{rule.projectKey}</p>
+                <p className="text-xs text-muted-foreground break-words">{summarize(rule)}</p>
+              </button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-muted-foreground"
+                disabled={saving}
+                onClick={() => removeRule(index)}
+                aria-label={`Remove ${rule.projectKey}`}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
             </li>
           ))}
         </ul>
       ) : (
-        <p className="text-xs text-muted-foreground">
-          {manual
-            ? "No filters yet."
-            : "No filters yet, so no ticket triggers an RCA. Switch to Manual to add the first one."}
-        </p>
+        <p className="text-xs text-muted-foreground">No filters yet.</p>
       )}
 
-      {manual && !formOpen && (
+      {!formOpen && (
         <Button type="button" variant="outline" size="sm" className="h-8" onClick={startAdd} disabled={saving}>
           <Plus className="mr-1.5 h-3.5 w-3.5" />
           Add filter
         </Button>
       )}
 
-      {manual && formOpen && (
+      {formOpen && (
         <div className="space-y-3 rounded-md border p-2.5">
           {renderProjectField()}
 

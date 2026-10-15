@@ -14,7 +14,6 @@ from connectors.jira_connector.client import JiraClient
 from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
 from routes.jira.field_options import status_names, unique_names
 from routes.jira.rca_filters import (
-    FILTER_MODES,
     PROJECT_KEY_RE as _PROJECT_KEY_RE,
     decide_webhook,
     normalize_rca_rules,
@@ -275,7 +274,6 @@ def link_issues(user_id):
 JIRA_MODE_KEY = "jira_mode"
 JIRA_COMMENT_BACK_KEY = "jira_comment_back"
 JIRA_RCA_RULES_KEY = "jira_rca_rules"
-JIRA_RCA_FILTER_MODE_KEY = "jira_rca_filter_mode"
 VALID_MODES = ("full", "comment_only")
 
 
@@ -285,37 +283,6 @@ def get_jira_rca_rules(user_id: str, *, strict: bool = False) -> List[Dict[str, 
     if not isinstance(stored, list):
         return []
     return stored
-
-
-def get_jira_rca_filter_mode(user_id: str, *, strict: bool = False) -> str:
-    """Who edits the RCA filters. Unset stays manual, so comments cannot rewrite rules."""
-    stored = get_user_preference(user_id, JIRA_RCA_FILTER_MODE_KEY, default="manual", strict=strict)
-    if stored not in FILTER_MODES:
-        return "manual"
-    return stored
-
-
-def connected_jira_account_id(user_id: str) -> str:
-    """Account Aurora posts as. A missing id is filled from /myself once."""
-    from connectors.jira_connector.client import account_id_from_myself
-
-    creds = get_token_data(user_id, "jira") or {}
-    stored = str(creds.get("account_id") or "").strip()
-    if stored:
-        return stored
-    client, creds, error = _get_jira_client(user_id)
-    if error or client is None or not creds:
-        return ""
-    myself = _with_refresh(user_id, creds, client, lambda c: c.get_myself())
-    account_id = account_id_from_myself(myself)
-    if not account_id:
-        return ""
-    # Refresh may have stored a new token. Read again so this write does not put the old one back.
-    fresh = get_token_data(user_id, "jira") or creds
-    updated = dict(fresh)
-    updated["account_id"] = account_id
-    store_tokens_in_db(user_id, updated, "jira")
-    return account_id
 
 
 def jira_comment_back_enabled(user_id: str) -> bool:
@@ -330,10 +297,9 @@ def _store_jira_settings(
     mode: Optional[str],
     comment_back: Optional[bool],
     rca_rules: Optional[List[Dict[str, Any]]] = None,
-    filter_mode: Optional[str] = None,
 ) -> bool:
     """Write all supplied Jira prefs in one transaction."""
-    if mode is None and comment_back is None and rca_rules is None and filter_mode is None:
+    if mode is None and comment_back is None and rca_rules is None:
         return True
 
     conn = None
@@ -353,8 +319,6 @@ def _store_jira_settings(
         # An empty list is a real value: it turns automatic RCA off.
         if rca_rules is not None:
             updates.append((JIRA_RCA_RULES_KEY, rca_rules))
-        if filter_mode is not None:
-            updates.append((JIRA_RCA_FILTER_MODE_KEY, filter_mode))
 
         for key, value in updates:
             cursor.execute(
@@ -388,7 +352,6 @@ def _settings_payload(user_id: str) -> Dict[str, Any]:
         "jiraMode": mode,
         "commentBack": jira_comment_back_enabled(user_id),
         "rcaRules": get_jira_rca_rules(user_id),
-        "rcaFilterMode": get_jira_rca_filter_mode(user_id),
     }
 
 
@@ -409,26 +372,18 @@ def update_settings(user_id):
     mode = data.get("jiraMode")
     comment_back = data.get("commentBack")
     has_rules = "rcaRules" in data
-    has_filter_mode = "rcaFilterMode" in data
-    filter_mode = data.get("rcaFilterMode") if has_filter_mode else None
 
-    # Each control saves on its own — mode, comment-back, RCA rules, and who edits them.
-    if mode is None and comment_back is None and not has_rules and not has_filter_mode:
-        return jsonify({"error": "jiraMode, commentBack, rcaRules, or rcaFilterMode is required"}), 400
+    # Each control saves on its own — mode, comment-back, and RCA rules.
+    if mode is None and comment_back is None and not has_rules:
+        return jsonify({"error": "jiraMode, commentBack, or rcaRules is required"}), 400
 
     if mode is not None and mode not in VALID_MODES:
         return jsonify({"error": f"jiraMode must be one of: {', '.join(VALID_MODES)}"}), 400
     if comment_back is not None and not isinstance(comment_back, bool):
         return jsonify({"error": "commentBack must be a boolean"}), 400
-    if has_filter_mode and filter_mode not in FILTER_MODES:
-        return jsonify({"error": "rcaFilterMode must be auto or manual"}), 400
 
     rca_rules = None
     if has_rules:
-        # Auto mode belongs to the comment agent. A person edits filters in manual.
-        effective_mode = filter_mode or get_jira_rca_filter_mode(user_id)
-        if effective_mode != "manual":
-            return jsonify({"error": "Switch to manual to edit RCA filters"}), 400
         rca_rules, rules_error = normalize_rca_rules(data.get("rcaRules"))
         if rules_error:
             return jsonify({"error": rules_error}), 400
@@ -438,7 +393,6 @@ def update_settings(user_id):
         mode=mode,
         comment_back=comment_back,
         rca_rules=rca_rules,
-        filter_mode=filter_mode,
     ):
         return jsonify({"error": "Failed to store Jira settings"}), 500
 
@@ -455,12 +409,11 @@ def update_settings(user_id):
         clear_credentials_cache(user_id)
 
     logger.info(
-        "[JIRA] Updated settings for user %s: jiraMode=%s commentBack=%s rcaRules=%s rcaFilterMode=%s",
+        "[JIRA] Updated settings for user %s: jiraMode=%s commentBack=%s rcaRules=%s",
         sanitize(user_id),
         sanitize(mode),
         sanitize(comment_back),
         sanitize(len(rca_rules) if rca_rules is not None else None),
-        sanitize(filter_mode),
     )
 
     payload = _settings_payload(user_id)
@@ -654,7 +607,7 @@ def webhook(user_id: str):
 
     Configure in Jira under Settings > System > Webhooks, or via
     Jira Automation rules that POST to this URL on issue creation.
-    Accepts standard Jira webhook payloads (issue_created, comment_created).
+    Accepts standard Jira webhook payloads (issue_created, issue_updated).
     """
     if not user_id:
         return jsonify({"error": "user_id is required"}), 400
@@ -681,35 +634,16 @@ def webhook(user_id: str):
     # does not go through this path.
     try:
         rules = get_jira_rca_rules(user_id, strict=True)
-        filter_mode = get_jira_rca_filter_mode(user_id, strict=True)
     except Exception:
         # A failed read must not look like "no rules" — Jira will retry a 503.
         logger.exception("[JIRA][WEBHOOK] Could not read RCA filters for user %s", sanitize(user_id))
         return jsonify({"status": "error", "reason": "could not read RCA filters"}), 503
 
-    decision = decide_webhook(
-        payload,
-        filter_mode,
-        rules,
-        connected_account_id=str(creds.get("account_id") or ""),
-    )
+    decision = decide_webhook(payload, rules)
     action = decision["action"]
     scope = decision.get("scope") or {}
 
-    # A comment in auto mode updates the filters. It does not start an RCA.
-    if action == "filters":
-        from routes.jira.tasks import manage_jira_rca_filters
-        try:
-            manage_jira_rca_filters.delay(payload=payload, user_id=user_id)
-        except Exception:
-            logger.exception(
-                "[JIRA][WEBHOOK] Failed to enqueue filter update for user %s (issue=%s)",
-                sanitize(user_id), sanitize(issue.get("key", "?")),
-            )
-            return jsonify({"status": "error", "reason": "could not enqueue filter update"}), 503
-        return jsonify({"status": "accepted", "reason": "filter comment", "issue": issue.get("key", "unknown")}), 202
-
-    # A structured miss, a comment in manual mode, or a comment with nothing to say.
+    # A comment, or a ticket that misses every filter.
     if action == "ignore":
         logger.info(
             "[JIRA][WEBHOOK] Ignored %s (project=%s type=%s reason=%s)",
@@ -757,8 +691,8 @@ def get_webhook_url(user_id):
     # Ngrok replaces localhost; otherwise prefer an explicit public API URL.
     base_url = tunneled if tunneled != backend_url else (public_url or backend_url)
     url = f"{base_url}/jira/webhook/{user_id}"
-    # Recommended events, not an allowlist. Comments feed auto mode; creates start RCA.
+    # Recommended events, not an allowlist. Creates and updates start RCA when a filter matches.
     return jsonify({
         "webhook_url": url,
-        "recommended_events": ["jira:issue_created", "jira:issue_updated", "comment_created"],
+        "recommended_events": ["jira:issue_created", "jira:issue_updated"],
     })

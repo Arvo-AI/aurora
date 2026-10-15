@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
-import { JiraAutomaticRca, JiraRcaFilterMode, JiraRcaRule } from "@/components/connectors/JiraAutomaticRca";
+import { JiraAutomaticRca, JiraRcaRule } from "@/components/connectors/JiraAutomaticRca";
 
 interface ProductConfig {
   key: "jira" | "confluence";
@@ -52,7 +52,6 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const [jiraMode, setJiraMode] = useState<"full" | "comment_only">("comment_only");
   const [commentBack, setCommentBack] = useState(false);
   const [rcaRules, setRcaRules] = useState<JiraRcaRule[]>([]);
-  const [rcaFilterMode, setRcaFilterMode] = useState<JiraRcaFilterMode>("manual");
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [oauthConfigError, setOauthConfigError] = useState(false);
@@ -84,7 +83,6 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
         if (data.jiraMode) setJiraMode(data.jiraMode);
         setCommentBack(data.commentBack === true);
         setRcaRules(Array.isArray(data.rcaRules) ? data.rcaRules : []);
-        setRcaFilterMode(data.rcaFilterMode === "auto" ? "auto" : "manual");
       }
     } catch { /* silent */ } finally { setIsLoadingSettings(false); }
     try {
@@ -156,7 +154,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ rcaRules: rules, rcaFilterMode: "manual" }),
+        body: JSON.stringify({ rcaRules: rules }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -176,34 +174,6 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
       setRcaRules(previous);
       toast({ title: "Failed to save settings", variant: "destructive" });
       return false;
-    } finally { setIsSavingSettings(false); }
-  };
-
-  const saveRcaFilterMode = async (mode: JiraRcaFilterMode) => {
-    const previous = rcaFilterMode;
-    setRcaFilterMode(mode);
-    setIsSavingSettings(true);
-    try {
-      const res = await fetch("/api/jira/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ rcaFilterMode: mode }),
-      });
-      if (res.ok) {
-        toast({
-          title: "Settings saved",
-          description: mode === "auto"
-            ? "Aurora will update RCA filters from comments on projects that already have one"
-            : "You can edit the RCA filters yourself",
-        });
-      } else {
-        setRcaFilterMode(previous);
-        toast({ title: "Failed to save settings", variant: "destructive" });
-      }
-    } catch {
-      setRcaFilterMode(previous);
-      toast({ title: "Failed to save settings", variant: "destructive" });
     } finally { setIsSavingSettings(false); }
   };
 
@@ -414,7 +384,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                 </div>
                 <CardDescription className="text-xs">
                   Paste this URL in Jira under Settings &rarr; System &rarr; Advanced &rarr; WebHooks,
-                  and select &quot;Issue created&quot;, &quot;Issue updated&quot;, and &quot;Comment created&quot;.
+                  and select &quot;Issue created&quot; and &quot;Issue updated&quot;.
                   A status filter only matches after the ticket is updated. Aurora only investigates tickets that match a filter below.
                 </CardDescription>
               </CardHeader>
@@ -442,10 +412,8 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                   </Button>
                 </div>
                 <JiraAutomaticRca
-                  mode={rcaFilterMode}
                   rules={rcaRules}
                   saving={isSavingSettings}
-                  onModeChange={saveRcaFilterMode}
                   onSave={saveRcaRules}
                 />
               </CardContent>
