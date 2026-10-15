@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Models: Gemini 4 Argon (`gemini-4-argon`) in the Google and Vertex pickers.
+  Introductory price is $2/$10 per 1M tokens through November 30, 2026.
+
+## [1.5.7] - 2026-10-13
+
+### Fixed
+- Org: removing a member who had saved onboarding selections failed, because
+  `onboarding_selections` has no `ON DELETE CASCADE`. Those rows are deleted
+  with the other foreign-key cleanup before the user is removed.
+- Actions and connectors: deleting a user left scheduled actions pointing at a
+  missing owner, so later runs failed at session creation, and removed the
+  connectors they had connected, so the rest of the org lost them. Both are
+  reassigned to the oldest other admin before the user row is removed. A
+  connector that admin already has is dropped instead of duplicated. The
+  scheduler retries the same reassignment for owners who are already gone.
+- Azure: `cloud_exec` prefixed every command with `az` before the org
+  allowlist, so `kubectl logs` and `kubectl top` were checked as `az kubectl
+  ...` and rejected even when the Observability Only template allows them.
+  Standalone CLIs (`kubectl`, `oc`, `helm`, `terraform`, `gsutil`, `bq`) are
+  now gated as written. Provider subcommands are still prefixed.
+
+## [1.5.6] - 2026-10-08
+
+### Added
+- Auth: per-organization SAML 2.0 single sign-on (Entra ID, Okta, Google
+  Workspace, Keycloak, or any SAML IdP). Admins configure it under
+  Settings → Single Sign-On, verify their email domain with a DNS TXT record,
+  and can optionally require SSO for verified-domain members (admins exempt).
+  Domain verification is enforced only when `SSO_ENFORCE_DOMAIN_VERIFICATION`
+  is `true`.
+- Connectors: register a custom remote MCP server by name and URL. Auth
+  (none, OAuth, or token) and transport are detected, tools are exposed to the
+  agent, and tools not known to be read-only need confirmation in chat and are
+  withheld from background RCA. Per-tool overrides are available.
+- Hooks: `after_user_created` fires after password, GitHub, and admin signups
+  so deployments can track new users without patching routes. Fails open.
+
+### Fixed
+- Cloudflare: firewall and rate limiting rules are read through the Rulesets
+  API, since Cloudflare retired the old endpoints (`410 Gone`). Adds managed,
+  redirect, cache, config, origin, and transform rules, covers every account
+  the token can see, and reports totals when a list is truncated. Firewall
+  rule output renames `filter_expression` to `expression`.
+
+### Security
+- Next.js 15.5.27 (cache poisoning and metadata route disclosure advisories).
+
 ## [1.5.5] - 2026-10-07
 
 ### Added

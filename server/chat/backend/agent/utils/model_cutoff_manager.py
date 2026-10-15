@@ -142,6 +142,10 @@ class ModelCutoffManager:
         # is why cloud/API queries should stay grounded via search regardless — the
         # cloud-keyword boosts in should_auto_search() cover that.
         google_models = {
+            # Gemini 4 Argon card: "The knowledge cutoff for Gemini 4 is March 2026"
+            "google/gemini-4-argon": ModelInfo(
+                "gemini-4-argon", "google", cutoff_date(2026, 3, 1), True, True
+            ),
             # Gemini 3.8 Flash card: "knowledge cutoff date ... is March 2026"
             "google/gemini-3.8-flash": ModelInfo(
                 "gemini-3.8-flash", "google", cutoff_date(2026, 3, 1), True, True
@@ -168,6 +172,9 @@ class ModelCutoffManager:
             ),
             "google/gemini-2.5-flash": ModelInfo(
                 "gemini-2.5-flash", "google", cutoff_date(2025, 1, 1), True, True
+            ),
+            "vertex/gemini-4-argon": ModelInfo(
+                "gemini-4-argon", "vertex", cutoff_date(2026, 3, 1), True, True
             ),
             "vertex/gemini-3.8-flash": ModelInfo(
                 "gemini-3.8-flash", "vertex", cutoff_date(2026, 3, 1), True, True

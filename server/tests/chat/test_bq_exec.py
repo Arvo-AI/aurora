@@ -1,13 +1,6 @@
 """bq argv built by cloud_exec. The access token must not reach the log string."""
 
-from chat.backend.agent.tools.cloud_exec_tool import command_for_gate, prepare_bq_exec
-
-
-def test_bq_is_gated_as_bq_not_gcloud():
-    assert command_for_gate("gcp", "bq query --nouse_legacy_sql 'SELECT 1'") == (
-        "bq query --nouse_legacy_sql 'SELECT 1'"
-    )
-    assert command_for_gate("gcp", "compute instances list") == "gcloud compute instances list"
+from chat.backend.agent.tools.cloud_exec_tool import prepare_bq_exec
 
 
 def test_prepare_bq_exec_adds_token_and_project_and_redacts_the_log():

@@ -1348,6 +1348,47 @@ def _is_azure_cli_command(command: str) -> bool:
     return first not in ('kubectl', 'helm', 'terraform')
 
 
+# Default CLI plus every other binary this tool invokes without prefixing.
+# The policy gate and the exec path both read this so they judge the same string.
+_PROVIDER_CLIS = {
+    "gcp": ("gcloud", ("gcloud", "kubectl", "gsutil", "bq", "helm", "terraform")),
+    "gcloud": ("gcloud", ("gcloud", "kubectl", "gsutil", "bq", "helm", "terraform")),
+    "aws": ("aws", ("aws", "kubectl", "eksctl", "sam", "cdk", "helm", "terraform")),
+    "amazon": ("aws", ("aws", "kubectl", "eksctl", "sam", "cdk", "helm", "terraform")),
+    "azure": ("az", ("az", "kubectl", "helm", "terraform")),
+    "az": ("az", ("az", "kubectl", "helm", "terraform")),
+    "ovh": ("ovhcloud", ("ovhcloud", "kubectl", "helm", "terraform")),
+    "scaleway": ("scw", ("scw", "kubectl", "helm", "terraform")),
+    "flyio": ("fly", ("fly", "flyctl")),
+    "tailscale": ("tailscale", ("tailscale",)),
+}
+
+
+def _first_command_token(command: str) -> str:
+    try:
+        return shlex.split(command)[0].lower() if command.strip() else ""
+    except ValueError:
+        return ""
+
+
+def _command_for_policy(provider: str, command: str) -> str:
+    """String the allowlist and the exec path both use.
+
+    `vm list` becomes `az vm list`. Sibling CLIs exec runs bare
+    (`kubectl`, `gsutil`, `eksctl`) stay bare so `^kubectl` can match.
+    """
+    spec = _PROVIDER_CLIS.get((provider or "").lower())
+    if spec is None:
+        return command
+    default_cli, supported = spec
+    first = _first_command_token(command)
+    # First token is already a CLI this provider runs as-is. A substring
+    # check would treat `azcopy` as `az` and skip the prefix exec still adds.
+    if first in supported:
+        return command
+    return f"{default_cli} {command}"
+
+
 def _azure_can_fan_out(command: str) -> bool:
     """True when a command is safe to run across every subscription at once.
 
@@ -1630,22 +1671,6 @@ def prepare_bq_exec(
     return argv, _redact_oauth_access_token(argv)
 
 
-_GATE_PREFIX = {
-    "aws": "aws", "gcp": "gcloud", "azure": "az", "scaleway": "scw",
-    "ovh": "ovhcloud", "tailscale": "tailscale", "flyio": "fly",
-}
-
-
-def command_for_gate(provider: str, command: str) -> str:
-    """CLI name policy regexes are anchored on. `bq` is not a gcloud subcommand."""
-    prefix = _GATE_PREFIX.get((provider or "").lower(), "")
-    stripped = command.strip()
-    first = stripped.split(None, 1)[0] if stripped else ""
-    if not prefix or stripped.startswith(prefix) or (prefix == "gcloud" and first == "bq"):
-        return command
-    return f"{prefix} {command}"
-
-
 def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None, account_id: Optional[str] = None) -> str:
     """Run arbitrary command against *provider* (gcloud/kubectl/gsutil for GCP, aws/kubectl for AWS).
 
@@ -1749,10 +1774,9 @@ Security & Compliance
         provider = normalized_provider
 
         # Unified gate: signature + org policy + LLM judge + HITL (foreground).
-        # Prepend CLI prefix so patterns like ^aws\s+ match (cloud_exec receives
-        # the subcommand without the provider prefix, e.g. "ecs list-clusters").
-        prefix = _GATE_PREFIX.get(provider.lower(), "")
-        gated_cmd = command_for_gate(provider, command)
+        # Provider subcommands arrive without their CLI (`ecs list-clusters`);
+        # kubectl/helm/bq already include it and must not be prefixed.
+        gated_cmd = _command_for_policy(provider, command)
         from utils.auth.command_gate import gate_command
         gate = gate_command(user_id=user_id, tool_name="cloud_exec", command=gated_cmd)
         if not gate.allowed:
@@ -1760,8 +1784,9 @@ Security & Compliance
                            user_id, gate.code, gate.block_reason[:200])
             error_msg = gate.block_reason
             if gate.code == "POLICY_DENIED" and "No matching allow rule" in error_msg:
+                cli = gated_cmd.strip().split(None, 1)[0] if gated_cmd.strip() else provider
                 error_msg += (
-                    f". To allow {prefix or provider} commands, go to Settings > Security > "
+                    f". To allow {cli} commands, go to Settings > Security > "
                     "Command Policies and re-apply a template or manually add an allow rule."
                 )
             return json.dumps({
@@ -2059,47 +2084,23 @@ Security & Compliance
         except ValueError:
             _first_token = ''  # fall back gracefully if parsing fails here – will be handled later
 
-        # Define supported CLI tools for each provider
-        if provider.lower() in ['gcp', 'gcloud']:
-            supported_cli_tools = ['gcloud', 'kubectl', 'gsutil', 'bq', 'helm', 'terraform']
-            default_cli = 'gcloud'
-        elif provider.lower() in ['aws', 'amazon']:
-            supported_cli_tools = ['aws', 'kubectl', 'eksctl', 'sam', 'cdk', 'helm', 'terraform']
-            default_cli = 'aws'
-        elif provider.lower() in ['azure', 'az']:
-            supported_cli_tools = ['az', 'kubectl', 'helm', 'terraform']
-            default_cli = 'az'
-        elif provider.lower() == 'ovh':
-            supported_cli_tools = ['ovhcloud', 'kubectl', 'helm', 'terraform']
-            default_cli = 'ovhcloud'
-        elif provider.lower() == 'scaleway':
-            supported_cli_tools = ['scw', 'kubectl', 'helm', 'terraform']
-            default_cli = 'scw'
-        elif provider.lower() == 'flyio':
-            supported_cli_tools = ['fly', 'flyctl']
-            default_cli = 'fly'
+        # Same table the policy gate uses, so a sibling CLI is not prefixed
+        # on one path and left bare on the other.
+        spec = _PROVIDER_CLIS.get(provider.lower())
+        if spec is None:
+            default_cli, supported_cli_tools = "", ()
         else:
-            supported_cli_tools = []
-            default_cli = ''
+            default_cli, supported_cli_tools = spec
 
         cli_tool = _first_token if _first_token in supported_cli_tools else default_cli
 
         # Terraform should run without provider-specific prefixing
         terraform_invocation = cli_tool == 'terraform'
 
-        # If the command does not start with a recognised CLI tool, default to provider CLI
-        if provider.lower() in ['gcp', 'gcloud'] and cli_tool == 'gcloud' and not terraform_invocation and not command.strip().startswith('gcloud'):
-            command = f"gcloud {command}"
-        elif provider.lower() in ['aws', 'amazon'] and cli_tool == 'aws' and not terraform_invocation and not command.strip().startswith('aws'):
-            command = f"aws {command}"
-        elif provider.lower() in ['azure', 'az'] and cli_tool == 'az' and not terraform_invocation and not command.strip().startswith('az'):
-            command = f"az {command}"
-        elif provider.lower() == 'ovh' and cli_tool == 'ovhcloud' and not terraform_invocation and not command.strip().startswith('ovhcloud'):
-            command = f"ovhcloud {command}"
-        elif provider.lower() == 'scaleway' and cli_tool == 'scw' and not terraform_invocation and not command.strip().startswith('scw'):
-            command = f"scw {command}"
-        elif provider.lower() == 'flyio' and cli_tool == 'fly' and not command.strip().startswith(('fly ', 'flyctl ')):
-            command = f"fly {command}"
+        # Match the string already checked by the allowlist. First-token, not
+        # startswith, so `azcopy` is not mistaken for `az`.
+        if spec is not None and not terraform_invocation:
+            command = _command_for_policy(provider, command)
 
         # Apply provider-specific convenience flags
         if provider.lower() in ['gcp', 'gcloud'] and cli_tool == 'gcloud':

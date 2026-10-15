@@ -70,13 +70,15 @@ def cloudflare_connect(user_id):
 
         zones = client.list_zones()
 
-        account_name = None
-        account_id = token_info.get("account_id")
+        # Every account the token can see is stored so the agent can list
+        # zones and Workers across all of them.  ``account_id`` stays the
+        # primary one: the token's own account, else the first listed.
         accounts = client.list_accounts()
-        if accounts:
-            account_name = accounts[0].get("name")
-            if not account_id:
-                account_id = accounts[0].get("id")
+        account_id = token_info.get("account_id")
+        if not account_id and accounts:
+            account_id = accounts[0].get("id")
+        account_name = next(
+            (a.get("name") for a in accounts if a.get("id") == account_id), None)
 
         permissions = client.get_token_permissions(
             token_info.get("token_id", ""),
@@ -97,7 +99,10 @@ def cloudflare_connect(user_id):
             "email": email,
             "account_name": account_name,
             "account_id": account_id,
-            "accounts": [{"id": account_id, "name": account_name}],
+            "accounts": (
+                [{"id": a.get("id"), "name": a.get("name")} for a in accounts]
+                or [{"id": account_id, "name": account_name}]
+            ),
         }
 
         store_tokens_in_db(user_id, token_data, "cloudflare")
@@ -109,6 +114,7 @@ def cloudflare_connect(user_id):
             "success": True,
             "message": "Cloudflare connected successfully",
             "accountName": account_name,
+            "accountsCount": len(accounts),
             "email": email,
             "zonesCount": len(zones),
             "permissions": permissions,
