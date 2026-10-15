@@ -68,7 +68,8 @@ def test_describe_tool_shortens_command_and_escapes_backticks(bg):
 def test_slack_markup_is_escaped_in_thought_and_command(bg):
     assert bg.sp.latest_thought("Pods <api> & <web> are down.") == "Pods &lt;api&gt; &amp; &lt;web&gt; are down."
     desc = bg.sp.describe_tool("cloud_exec", {"command": "cat a > b"})
-    assert "&gt;" in desc and ">" not in desc.replace("&gt;", "")
+    assert "&gt;" in desc
+    assert ">" not in desc.replace("&gt;", "")
 
 
 def test_describe_tool_without_command_is_just_the_name(bg):
@@ -178,7 +179,8 @@ def test_run_edits_placeholder_until_stopped_and_never_after(bg):
         task = asyncio.create_task(r.run())
         await asyncio.sleep(0.06)
         r.stop()
-        await task
+        done, _ = await asyncio.wait({task}, timeout=1)
+        assert task in done, "stop() must make run() exit promptly"
         count = len(sent)
         await asyncio.sleep(0.03)
         return count
