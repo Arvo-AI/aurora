@@ -53,6 +53,8 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const [commentBack, setCommentBack] = useState(false);
   const [rcaRules, setRcaRules] = useState<JiraRcaRule[]>([]);
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [settingsFailed, setSettingsFailed] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [oauthConfigError, setOauthConfigError] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState("");
@@ -76,15 +78,19 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const loadJiraSettings = async () => {
     if (product.key !== "jira") return;
     setIsLoadingSettings(true);
+    setSettingsFailed(false);
     try {
       const res = await fetch("/api/jira/settings", { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.jiraMode) setJiraMode(data.jiraMode);
-        setCommentBack(data.commentBack === true);
-        setRcaRules(Array.isArray(data.rcaRules) ? data.rcaRules : []);
-      }
-    } catch { /* silent */ } finally { setIsLoadingSettings(false); }
+      // A failed read must not look like "no filters", or the next save would wipe them.
+      if (!res.ok) throw new Error("failed");
+      const data = await res.json();
+      if (data.jiraMode) setJiraMode(data.jiraMode);
+      setCommentBack(data.commentBack === true);
+      setRcaRules(Array.isArray(data.rcaRules) ? data.rcaRules : []);
+      setSettingsLoaded(true);
+    } catch {
+      setSettingsFailed(true);
+    } finally { setIsLoadingSettings(false); }
     try {
       const res = await fetch("/api/jira/webhook-url", { credentials: "include" });
       if (res.ok) {
@@ -411,11 +417,25 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                     {webhookCopied ? <CheckCircle className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
                   </Button>
                 </div>
-                <JiraAutomaticRca
-                  rules={rcaRules}
-                  saving={isSavingSettings}
-                  onSave={saveRcaRules}
-                />
+                {isLoadingSettings || (!settingsLoaded && !settingsFailed) ? (
+                  <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Loading filters
+                  </div>
+                ) : settingsFailed ? (
+                  <div className="mt-3 space-y-2">
+                    <p className="text-xs text-destructive">Couldn&apos;t load RCA filters.</p>
+                    <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => void loadJiraSettings()}>
+                      Retry
+                    </Button>
+                  </div>
+                ) : (
+                  <JiraAutomaticRca
+                    rules={rcaRules}
+                    saving={isSavingSettings}
+                    onSave={saveRcaRules}
+                  />
+                )}
               </CardContent>
             </Card>
           )}
