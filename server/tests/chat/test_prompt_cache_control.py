@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, Field
 
 from chat.backend.agent.providers.anthropic_provider import AnthropicProvider
 from chat.backend.agent.providers.base_provider import BaseLLMProvider
@@ -32,7 +33,9 @@ def _bedrock(base_url=None, region="us-east-1"):
 
 
 class _NoStyle(BaseLLMProvider):
-    def get_chat_model(self, model, temperature=0.4, **kw): ...
+    def get_chat_model(self, model, temperature=0.4, **kw):
+        raise NotImplementedError
+
     def is_available(self): return True
     def supports_model(self, model): return True
     def get_native_model_name(self, model): return model
@@ -156,7 +159,8 @@ def _converse_response(cache_read=0, cache_write=0):
 class TestCacheSafeConverse:
     @pytest.fixture()
     def model_cls(self):
-        pytest.importorskip("langchain_aws")
+        # CI stubs the top-level langchain_aws package, so probe a real submodule
+        pytest.importorskip("langchain_aws.chat_models.bedrock_converse")
         from langchain_aws import ChatBedrockConverse
 
         from chat.backend.agent.providers._cache_guard import make_cache_safe_cls
@@ -209,3 +213,84 @@ class TestCacheSafeConverse:
 
         norm = normalize_usage(msg.usage_metadata)
         assert (norm.input_tokens, norm.cache_read_tokens, norm.cache_write_tokens) == (1000, 800, 100)
+
+
+class _FakeChatModel(BaseModel):
+    """Stand-in for a chat client: records the messages each attempt received."""
+
+    attempts: list = Field(default_factory=list)
+    errors: list = Field(default_factory=list)  # popped front-first, one per attempt
+
+    def _generate(self, messages, *args, **kwargs):
+        self.attempts.append(messages)
+        if self.errors:
+            raise self.errors.pop(0)
+        return "ok"
+
+    def _stream(self, messages, *args, **kwargs):
+        self.attempts.append(messages)
+        if self.errors:
+            raise self.errors.pop(0)
+        yield "chunk"
+
+
+def _marked_messages():
+    system = SystemMessage(content=[{"type": "text", "text": "sys"}, {"cachePoint": {"type": "default"}}])
+    return [system, HumanMessage("hi")]
+
+
+def _has_marker(messages):
+    return any(isinstance(b, dict) and "cachePoint" in b for m in messages if isinstance(m.content, list) for b in m.content)
+
+
+class TestCacheGuardLogic:
+    """Retry behavior with a fake client, so it runs without langchain-aws."""
+
+    @pytest.fixture()
+    def model(self):
+        from chat.backend.agent.providers._cache_guard import make_cache_safe_cls
+
+        return make_cache_safe_cls(_FakeChatModel)()
+
+    def test_cache_rejection_retries_clean_then_stays_clean(self, model):
+        model.errors.append(Exception("ValidationException: cachePoint not supported"))
+        assert model._generate(_marked_messages()) == "ok"
+        assert _has_marker(model.attempts[0]) and not _has_marker(model.attempts[1])
+
+        # Later calls skip the doomed first attempt entirely
+        model._generate(_marked_messages())
+        assert len(model.attempts) == 3 and not _has_marker(model.attempts[2])
+
+    def test_unrelated_error_propagates_without_retry(self, model):
+        model.errors.append(Exception("ThrottlingException: slow down"))
+        with pytest.raises(Exception, match="Throttling"):
+            model._generate(_marked_messages())
+        assert len(model.attempts) == 1
+
+    def test_second_cache_error_is_not_retried_again(self, model):
+        model.errors.extend([Exception("cachePoint bad"), Exception("cachePoint still bad")])
+        with pytest.raises(Exception, match="still bad"):
+            model._generate(_marked_messages())
+        assert len(model.attempts) == 2
+
+    def test_stream_rejection_retries_clean(self, model):
+        model.errors.append(Exception("prompt caching is not supported"))
+        assert list(model._stream(_marked_messages())) == ["chunk"]
+        assert _has_marker(model.attempts[0]) and not _has_marker(model.attempts[1])
+
+    def test_stream_error_after_output_is_not_retried(self, model):
+        def boom_midstream(messages, *a, **k):
+            yield "partial"
+            raise Exception("cachePoint rejected late")
+
+        # Patch the base behavior: error surfaces only after a chunk was yielded
+        base = type(model).__mro__[1]
+        original = base._stream
+        base._stream = boom_midstream
+        try:
+            gen = model._stream(_marked_messages())
+            assert next(gen) == "partial"
+            with pytest.raises(Exception, match="rejected late"):
+                next(gen)
+        finally:
+            base._stream = original
