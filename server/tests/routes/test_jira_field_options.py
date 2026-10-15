@@ -108,16 +108,6 @@ def test_list_projects_other_http_errors_propagate(monkeypatch):
         client.list_projects()
 
 
-def test_account_id_from_myself_prefers_cloud_account_id():
-    from connectors.jira_connector.client import account_id_from_myself
-
-    assert account_id_from_myself({"accountId": "abc-123", "key": "ignored"}) == "abc-123"
-    assert account_id_from_myself({"key": "DC-KEY"}) == "DC-KEY"
-    assert account_id_from_myself({"name": "svc-aurora"}) == "svc-aurora"
-    assert account_id_from_myself({}) == ""
-    assert account_id_from_myself(None) == ""
-
-
 class _Response:
     def __init__(self, status_code: int):
         self.status_code = status_code

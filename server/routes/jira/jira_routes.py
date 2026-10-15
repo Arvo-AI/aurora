@@ -308,7 +308,18 @@ def _store_jira_settings(
     rca_mode: Optional[str] = None,
 ) -> bool:
     """Write all supplied Jira prefs in one transaction."""
-    if mode is None and comment_back is None and rca_rules is None and rca_mode is None:
+    # None means "not sent". An empty rule list is a real value: it turns automatic RCA off.
+    updates = [
+        (key, value)
+        for key, value in (
+            (JIRA_MODE_KEY, mode),
+            (JIRA_COMMENT_BACK_KEY, comment_back),
+            (JIRA_RCA_RULES_KEY, rca_rules),
+            (JIRA_RCA_MODE_KEY, rca_mode),
+        )
+        if value is not None
+    ]
+    if not updates:
         return True
 
     conn = None
@@ -319,17 +330,6 @@ def _store_jira_settings(
         org_id = set_rls_context(cursor, conn, user_id, log_prefix="[JIRA:Settings]")
         if not org_id:
             return False
-
-        updates: List[Tuple[str, Any]] = []
-        if mode is not None:
-            updates.append((JIRA_MODE_KEY, mode))
-        if comment_back is not None:
-            updates.append((JIRA_COMMENT_BACK_KEY, comment_back))
-        # An empty list is a real value: it turns automatic RCA off.
-        if rca_rules is not None:
-            updates.append((JIRA_RCA_RULES_KEY, rca_rules))
-        if rca_mode is not None:
-            updates.append((JIRA_RCA_MODE_KEY, rca_mode))
 
         for key, value in updates:
             cursor.execute(
@@ -414,16 +414,11 @@ def update_settings(user_id):
     settings, error = _parse_settings_update(data)
     if error:
         return jsonify({"error": error}), 400
-    mode = settings["mode"]
-    comment_back = settings["comment_back"]
-    rca_rules = settings["rca_rules"]
-    rca_mode = settings["rca_mode"]
-
     if not _store_jira_settings(user_id, **settings):
         return jsonify({"error": "Failed to store Jira settings"}), 500
 
     # Auto needs its policy memory; create it now so the card shows it right away.
-    if rca_mode == "auto":
+    if settings["rca_mode"] == "auto":
         from services.memory.jira_memory import seed_jira_memory
         seed_jira_memory(user_id)
 
@@ -442,10 +437,10 @@ def update_settings(user_id):
     logger.info(
         "[JIRA] Updated settings for user %s: jiraMode=%s commentBack=%s rcaRules=%s rcaMode=%s",
         sanitize(user_id),
-        sanitize(mode),
-        sanitize(comment_back),
-        sanitize(len(rca_rules) if rca_rules is not None else None),
-        sanitize(rca_mode),
+        sanitize(settings["mode"]),
+        sanitize(settings["comment_back"]),
+        sanitize(len(settings["rca_rules"]) if settings["rca_rules"] is not None else None),
+        sanitize(settings["rca_mode"]),
     )
 
     payload = _settings_payload(user_id)
@@ -548,46 +543,12 @@ def list_jira_projects(user_id):
 
 
 # ------------------------------------------------------------------
-# GET /jira/projects/<project_key>/issue-types
-# ------------------------------------------------------------------
-
-@jira_bp.route("/projects/<project_key>/issue-types", methods=["GET"])
-@require_permission("connectors", "read")
-def list_project_issue_types(user_id, project_key):
-    """Ticket types in one project, for the automatic-RCA picker."""
-    if not _PROJECT_KEY_RE.fullmatch(project_key or ""):
-        return jsonify({"error": "projectKey must look like a Jira project key"}), 400
-
-    client, creds, error = _get_jira_client(user_id)
-    if error:
-        return jsonify({"error": error}), 404 if not creds else 400
-
-    try:
-        types = _with_refresh(
-            user_id, creds, client, lambda c: c.get_issue_types(project_key),
-        )
-    except Exception:
-        logger.exception("[JIRA] List issue types failed for user %s", sanitize(user_id))
-        return jsonify({"error": "Failed to list Jira issue types"}), 502
-
-    names = []
-    seen = set()
-    for issue_type in types or []:
-        name = str((issue_type or {}).get("name") or "").strip()
-        folded = name.casefold()
-        # Blank or repeated names are not distinct ticket types to opt into.
-        if not name or folded in seen:
-            continue
-        seen.add(folded)
-        names.append(name)
-    return jsonify({"projectKey": project_key, "issueTypes": names})
-
-
-# ------------------------------------------------------------------
 # GET /jira/projects/<project_key>/field-options
 # ------------------------------------------------------------------
 
 _FIELD_OPTION_LOADERS = (
+    # Jira's own order, so the picker matches the project's issue type scheme.
+    ("issueTypes", lambda client, project_key: unique_names(client.get_issue_types(project_key), sort=False)),
     ("priorities", lambda client, project_key: unique_names(client.list_priorities(project_key))),
     ("components", lambda client, project_key: unique_names(client.list_components(project_key))),
     ("statuses", lambda client, project_key: status_names(client.list_statuses(project_key))),
@@ -597,7 +558,7 @@ _FIELD_OPTION_LOADERS = (
 @jira_bp.route("/projects/<project_key>/field-options", methods=["GET"])
 @require_permission("connectors", "read")
 def list_project_field_options(user_id, project_key):
-    """Priorities, labels, components, and statuses for one project's filter form."""
+    """Ticket types, priorities, labels, components, and statuses for one project's filter form."""
     if not _PROJECT_KEY_RE.fullmatch(project_key or ""):
         return jsonify({"error": "projectKey must look like a Jira project key"}), 400
 

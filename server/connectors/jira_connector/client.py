@@ -12,13 +12,6 @@ logger = logging.getLogger(__name__)
 JIRA_OAUTH_API_BASE = "https://api.atlassian.com/ex/jira"
 
 
-def account_id_from_myself(myself: Any) -> str:
-    """Stable id for the connected user. Cloud uses accountId; Data Center uses key."""
-    if not isinstance(myself, dict):
-        return ""
-    return str(myself.get("accountId") or myself.get("key") or myself.get("name") or "").strip()
-
-
 def _log_unknown_auth_type(auth_type: str) -> None:
     logger.warning("Unknown Jira auth_type=%s; defaulting to Bearer token.", auth_type)
 
@@ -301,37 +294,14 @@ class JiraClient:
     def list_projects(self, limit: int = 200) -> List[Dict[str, Any]]:
         """Page through accessible projects, capped so a large site stays bounded."""
         try:
-            return self._list_project_search(limit)
+            return self._collect_pages("/project/search", limit)[0]
         except requests.HTTPError as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
             # Data Center has no /project/search. /project returns the catalog.
             if status != 404:
                 raise
             logger.info("Jira /project/search unavailable (status=404), falling back to /project")
-            result = self._request("GET", "/project")
-            if isinstance(result, list):
-                return result[:limit]
-            return (result.get("values") or [])[:limit]
-
-    def _list_project_search(self, limit: int) -> List[Dict[str, Any]]:
-        collected: List[Dict[str, Any]] = []
-        start = 0
-        while len(collected) < limit:
-            page_size = min(50, limit - len(collected))
-            result = self._request(
-                "GET",
-                "/project/search",
-                params={"maxResults": page_size, "startAt": start},
-            )
-            # A 200 body that is a list is the whole catalog, not one page.
-            if isinstance(result, list):
-                return result[:limit]
-            values = result.get("values") or []
-            collected.extend(values)
-            if result.get("isLast", True) or not values:
-                break
-            start += len(values)
-        return collected[:limit]
+            return _page_values(self._request("GET", "/project"))[:limit]
 
     def get_issue_types(self, project_key: str) -> List[Dict[str, Any]]:
         """List issue types for a project."""
@@ -348,7 +318,7 @@ class JiraClient:
             if project_id:
                 extra["projectId"] = project_id
         try:
-            return self._collect_pages("/priority/search", limit, extra)
+            return self._collect_pages("/priority/search", limit, extra)[0]
         except Exception as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
             # Search is missing on Data Center and refused by classic OAuth scopes.
@@ -367,13 +337,16 @@ class JiraClient:
 
     def list_labels(self, limit: int = 100) -> Tuple[List[Any], bool]:
         """Labels already used on the site, and whether the cap hid more."""
+        return self._collect_pages("/label", limit)
+
+    def _collect_pages(
+        self, path: str, limit: int, extra: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[List[Any], bool]:
+        """Rows up to ``limit``, and whether the cap stopped before the last page."""
         collected: List[Any] = []
-        start = 0
         while len(collected) < limit:
-            page_size = min(50, limit - len(collected))
-            result = self._request(
-                "GET", "/label", params={"maxResults": page_size, "startAt": start},
-            )
+            params = {"maxResults": min(50, limit - len(collected)), "startAt": len(collected), **(extra or {})}
+            result = self._request("GET", path, params=params)
             # A bare list is the whole catalog, not a page.
             if isinstance(result, list):
                 return result[:limit], False
@@ -381,25 +354,7 @@ class JiraClient:
             collected.extend(values)
             if result.get("isLast", True) or not values:
                 return collected[:limit], False
-            start += len(values)
         return collected[:limit], True
-
-    def _collect_pages(self, path: str, limit: int, extra: Optional[Dict[str, Any]] = None) -> List[Any]:
-        collected: List[Any] = []
-        start = 0
-        while len(collected) < limit:
-            page_size = min(50, limit - len(collected))
-            params: Dict[str, Any] = {"maxResults": page_size, "startAt": start}
-            params.update(extra or {})
-            result = self._request("GET", path, params=params)
-            if isinstance(result, list):
-                return result[:limit]
-            values = result.get("values") or []
-            collected.extend(values)
-            if result.get("isLast", True) or not values:
-                break
-            start += len(values)
-        return collected[:limit]
 
 
 def _page_values(result: Any) -> List[Any]:

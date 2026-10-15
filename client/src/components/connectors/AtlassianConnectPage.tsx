@@ -109,115 +109,60 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
     } catch { /* silent */ }
   };
 
-  const saveJiraMode = async (mode: "full" | "comment_only") => {
-    const previousMode = jiraMode;
-    setJiraMode(mode);
+  // Applies one setting optimistically and rolls it back if the save fails. Returns the saved payload.
+  const saveSetting = async <T,>(
+    value: T,
+    previous: T,
+    apply: (next: T) => void,
+    body: Record<string, unknown>,
+    description: string,
+  ): Promise<Record<string, unknown> | null> => {
+    apply(value);
     setIsSavingSettings(true);
     try {
       const res = await fetch("/api/jira/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ jiraMode: mode }),
+        body: JSON.stringify(body),
       });
-      if (res.ok) {
-        toast({ title: "Settings saved", description: mode === "full" ? "Aurora can create issues and comment" : "Aurora will only comment on existing issues" });
-      } else {
-        setJiraMode(previousMode);
-        toast({ title: "Failed to save settings", variant: "destructive" });
-      }
+      if (!res.ok) throw new Error("failed");
+      toast({ title: "Settings saved", description });
+      return await res.json();
     } catch {
-      setJiraMode(previousMode);
+      apply(previous);
       toast({ title: "Failed to save settings", variant: "destructive" });
+      return null;
     } finally { setIsSavingSettings(false); }
   };
 
-  const saveCommentBack = async (enabled: boolean) => {
-    const previous = commentBack;
-    setCommentBack(enabled);
-    setIsSavingSettings(true);
-    try {
-      const res = await fetch("/api/jira/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ commentBack: enabled }),
-      });
-      if (res.ok) {
-        toast({
-          title: "Settings saved",
-          description: enabled
-            ? "Aurora will comment back on Jira tickets after an investigation"
-            : "Aurora will not comment on Jira tickets",
-        });
-      } else {
-        setCommentBack(previous);
-        toast({ title: "Failed to save settings", variant: "destructive" });
-      }
-    } catch {
-      setCommentBack(previous);
-      toast({ title: "Failed to save settings", variant: "destructive" });
-    } finally { setIsSavingSettings(false); }
-  };
+  const saveJiraMode = (mode: "full" | "comment_only") => saveSetting(
+    mode, jiraMode, setJiraMode, { jiraMode: mode },
+    mode === "full" ? "Aurora can create issues and comment" : "Aurora will only comment on existing issues",
+  );
+
+  const saveCommentBack = (enabled: boolean) => saveSetting(
+    enabled, commentBack, setCommentBack, { commentBack: enabled },
+    enabled
+      ? "Aurora will comment back on Jira tickets after an investigation"
+      : "Aurora will not comment on Jira tickets",
+  );
+
+  const saveRcaMode = (next: JiraRcaMode) => saveSetting(
+    next, rcaMode, setRcaMode, { rcaMode: next },
+    next === "auto" ? "Aurora decides which tickets to investigate" : "Automatic investigations follow your filters",
+  );
 
   const saveRcaRules = async (rules: JiraRcaRule[]) => {
-    const previous = rcaRules;
-    setRcaRules(rules);
-    setIsSavingSettings(true);
-    try {
-      const res = await fetch("/api/jira/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ rcaRules: rules }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.rcaRules)) setRcaRules(data.rcaRules);
-        toast({
-          title: "Settings saved",
-          description: rules.length === 0
-            ? "Automatic Jira investigations are off"
-            : "Automatic investigations follow the filters you saved",
-        });
-        return true;
-      }
-      setRcaRules(previous);
-      toast({ title: "Failed to save settings", variant: "destructive" });
-      return false;
-    } catch {
-      setRcaRules(previous);
-      toast({ title: "Failed to save settings", variant: "destructive" });
-      return false;
-    } finally { setIsSavingSettings(false); }
-  };
-
-  const saveRcaMode = async (next: JiraRcaMode) => {
-    const previous = rcaMode;
-    setRcaMode(next);
-    setIsSavingSettings(true);
-    try {
-      const res = await fetch("/api/jira/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ rcaMode: next }),
-      });
-      if (res.ok) {
-        toast({
-          title: "Settings saved",
-          description: next === "auto"
-            ? "Aurora decides which tickets to investigate"
-            : "Automatic investigations follow your filters",
-        });
-      } else {
-        setRcaMode(previous);
-        toast({ title: "Failed to save settings", variant: "destructive" });
-      }
-    } catch {
-      setRcaMode(previous);
-      toast({ title: "Failed to save settings", variant: "destructive" });
-    } finally { setIsSavingSettings(false); }
+    const data = await saveSetting(
+      rules, rcaRules, setRcaRules, { rcaRules: rules },
+      rules.length === 0
+        ? "Automatic Jira investigations are off"
+        : "Automatic investigations follow the filters you saved",
+    );
+    // The server merges duplicate filters, so show what it stored.
+    if (Array.isArray(data?.rcaRules)) setRcaRules(data.rcaRules as JiraRcaRule[]);
+    return data !== null;
   };
 
   useEffect(() => { if (connected && product.key === "jira") loadJiraSettings(); }, [connected]);

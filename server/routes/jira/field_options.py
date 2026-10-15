@@ -10,7 +10,7 @@ from typing import Any, List
 _MAX_NAME_LEN = 80
 
 
-def unique_names(items: Any) -> List[str]:
+def unique_names(items: Any, *, sort: bool = True) -> List[str]:
     """One name per value. Jira sends either a string or a {name} object."""
     if not isinstance(items, list):
         return []
@@ -27,7 +27,7 @@ def unique_names(items: Any) -> List[str]:
         if not name or len(name) > _MAX_NAME_LEN or folded in seen:
             continue
         seen[folded] = name
-    return sorted(seen.values(), key=str.casefold)
+    return sorted(seen.values(), key=str.casefold) if sort else list(seen.values())
 
 
 def status_names(payload: Any) -> List[str]:

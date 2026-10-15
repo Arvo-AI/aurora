@@ -11,6 +11,8 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from routes.jira.field_options import unique_names
+
 logger = logging.getLogger(__name__)
 
 # Jira project keys are a letter plus letters, digits, or underscores.
@@ -107,24 +109,26 @@ def _filter_signature(rule: Dict[str, Any]) -> Tuple[Any, ...]:
     return lists + (rule["jql"],)
 
 
-def _merge_issue_types(
-    existing: Optional[List[str]],
-    types_raw: list,
-) -> Tuple[Optional[List[str]], Optional[str]]:
-    seen: Dict[str, str] = {}
-    if existing:
-        for name in existing:
-            seen[name.casefold()] = name
-    for type_name in types_raw:
-        cleaned, error = _clean_name(type_name, "issue type")
-        if error or cleaned is None:
+def _clean_rule(item: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    if not isinstance(item, dict):
+        return None, "Each filter needs a projectKey and issueTypes"
+    project_key = str(item.get("projectKey") or "").strip().upper()
+    # Reject anything that is not a project key so a payload cannot widen the match.
+    if not PROJECT_KEY_RE.fullmatch(project_key):
+        return None, "projectKey must look like a Jira project key"
+    issue_types, error = _clean_name_list(item.get("issueTypes"), "ticket types")
+    if error or not issue_types:
+        return None, error or "issueTypes must list at least one ticket type"
+
+    rule: Dict[str, Any] = {"projectKey": project_key, "issueTypes": issue_types}
+    for field in FILTER_FIELDS:
+        rule[field], error = _clean_name_list(item.get(field), field)
+        if error:
             return None, error
-        folded = cleaned.casefold()
-        if folded not in seen:
-            seen[folded] = cleaned
-    if len(seen) > _MAX_VALUES:
-        return None, f"At most {_MAX_VALUES} ticket types per rule"
-    return list(seen.values()), None
+    rule["jql"], error = _clean_jql(item.get("jql"))
+    if error:
+        return None, error
+    return rule, None
 
 
 def normalize_rca_rules(raw: Any) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
@@ -134,64 +138,26 @@ def normalize_rca_rules(raw: Any) -> Tuple[Optional[List[Dict[str, Any]]], Optio
     if len(raw) > _MAX_RCA_RULES:
         return None, f"At most {_MAX_RCA_RULES} filters can be configured"
 
-    merged: List[Dict[str, Any]] = []
-    index_by_slot: Dict[Tuple[Any, ...], int] = {}
+    merged: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
     for item in raw:
-        if not isinstance(item, dict):
-            return None, "Each filter needs a projectKey and issueTypes"
-        project_key = str(item.get("projectKey") or "").strip().upper()
-        # Reject anything that is not a project key so a payload cannot widen the match.
-        if not PROJECT_KEY_RE.fullmatch(project_key):
-            return None, "projectKey must look like a Jira project key"
-        types_raw = item.get("issueTypes")
-        if not isinstance(types_raw, list) or not types_raw:
-            return None, "issueTypes must list at least one ticket type"
-
-        filters: Dict[str, Any] = {}
-        for field in FILTER_FIELDS:
-            names, error = _clean_name_list(item.get(field), field)
-            if error or names is None:
-                return None, error
-            filters[field] = names
-        jql, error = _clean_jql(item.get("jql"))
-        if error or jql is None:
+        rule, error = _clean_rule(item)
+        if error or rule is None:
             return None, error
-        filters["jql"] = jql
-
-        slot = (project_key,) + _filter_signature(filters)
-        # Same project and same extra clauses combine their ticket types.
-        existing_types = merged[index_by_slot[slot]]["issueTypes"] if slot in index_by_slot else None
-        issue_types, error = _merge_issue_types(existing_types, types_raw)
-        if error or issue_types is None:
+        slot = (rule["projectKey"],) + _filter_signature(rule)
+        # A new project, or the same project with different limits, is its own row.
+        if slot not in merged:
+            merged[slot] = rule
+            continue
+        # Same project and same limits combine their ticket types.
+        types, error = _clean_name_list(merged[slot]["issueTypes"] + rule["issueTypes"], "ticket types")
+        if error:
             return None, error
-        rule = {"projectKey": project_key, "issueTypes": issue_types, **filters}
-        if slot in index_by_slot:
-            merged[index_by_slot[slot]] = rule
-        else:
-            index_by_slot[slot] = len(merged)
-            merged.append(rule)
-    return merged, None
+        merged[slot]["issueTypes"] = types
+    return list(merged.values()), None
 
 
 def _folded(value: Any) -> str:
     return str(value or "").strip().casefold()
-
-
-def _field_names(value: Any) -> List[str]:
-    """Names from a Jira field that is either a string list or a list of objects."""
-    if not isinstance(value, list):
-        return []
-    names: List[str] = []
-    for item in value:
-        if isinstance(item, str):
-            name = item.strip()
-        elif isinstance(item, dict):
-            name = str(item.get("name") or "").strip()
-        else:
-            name = ""
-        if name:
-            names.append(name)
-    return names
 
 
 def extract_webhook_scope(issue: Dict[str, Any]) -> Dict[str, Any]:
@@ -213,8 +179,8 @@ def extract_webhook_scope(issue: Dict[str, Any]) -> Dict[str, Any]:
         "issueType": str(issuetype.get("name") or "").strip(),
         "priority": str(priority.get("name") or "").strip(),
         "status": str(status.get("name") or "").strip(),
-        "labels": _field_names(fields.get("labels")),
-        "components": _field_names(fields.get("components")),
+        "labels": unique_names(fields.get("labels"), sort=False),
+        "components": unique_names(fields.get("components"), sort=False),
         "issueKey": issue_key,
     }
 
@@ -253,16 +219,6 @@ def rule_matches_scope(scope: Dict[str, Any], rule: Dict[str, Any]) -> bool:
     if not _any_of(rule.get("statuses"), scope.get("status")):
         return False
     return True
-
-
-def rca_rule_matches(scope: Any, rules: Any) -> bool:
-    """True when a saved rule's structured fields match this ticket."""
-    if not isinstance(scope, dict) or not isinstance(rules, list):
-        return False
-    return any(
-        isinstance(rule, dict) and rule_matches_scope(scope, rule)
-        for rule in rules
-    )
 
 
 def match_kind(scope: Dict[str, Any], rules: Any) -> str:

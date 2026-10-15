@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Loader2, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,69 +29,41 @@ interface JiraAutomaticRcaProps {
   onSave: (rules: JiraRcaRule[]) => Promise<boolean>;
 }
 
-function list(values: string[] | undefined): string[] {
-  return values ?? [];
-}
+// Every picker on a rule. Ticket types are required; the rest only narrow the match.
+const PICKERS = [
+  { field: "issueTypes", label: "Ticket types", noun: "", empty: "No ticket types found in this project." },
+  { field: "priorities", label: "Priorities", noun: "priority", empty: "No priorities found in Jira." },
+  { field: "labels", label: "Labels", noun: "label", empty: "No labels yet." },
+  { field: "components", label: "Components", noun: "component", empty: "This project has no components." },
+  { field: "statuses", label: "Statuses", noun: "status", empty: "No statuses found in this project." },
+] as const;
 
-function toggleIn(current: string[], name: string, on: boolean): string[] {
-  const without = current.filter((item) => item.toLowerCase() !== name.toLowerCase());
-  return on ? [...without, name] : without;
-}
+type PickField = (typeof PICKERS)[number]["field"];
+type Picks = Record<PickField, string[]>;
 
-interface JiraFieldOptions {
-  priorities: string[];
-  labels: string[];
-  components: string[];
-  statuses: string[];
+interface FieldCatalog extends Picks {
   labelsTruncated: boolean;
   errors: string[];
 }
 
+const noPicks = (): Picks => ({ issueTypes: [], priorities: [], labels: [], components: [], statuses: [] });
+
+const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+const hasName = (names: string[], name: string) => names.some((item) => sameName(item, name));
+
+function toggleIn(current: string[], name: string, on: boolean): string[] {
+  const without = current.filter((item) => !sameName(item, name));
+  return on ? [...without, name] : without;
+}
+
 function summarize(rule: JiraRcaRule): string {
   const parts = [rule.issueTypes.join(", ")];
-  if (list(rule.priorities).length) parts.push(`priority ${list(rule.priorities).join(", ")}`);
-  if (list(rule.labels).length) parts.push(`label ${list(rule.labels).join(", ")}`);
-  if (list(rule.components).length) parts.push(`component ${list(rule.components).join(", ")}`);
-  if (list(rule.statuses).length) parts.push(`status ${list(rule.statuses).join(", ")}`);
+  for (const { field, noun } of PICKERS.slice(1)) {
+    const values = rule[field] ?? [];
+    if (values.length) parts.push(`${noun} ${values.join(", ")}`);
+  }
   if (rule.jql) parts.push(rule.jql);
   return parts.join(" · ");
-}
-
-function allSelected(names: string[], selected: string[]): boolean {
-  return names.length > 0 && names.every((name) =>
-    selected.some((item) => item.toLowerCase() === name.toLowerCase()),
-  );
-}
-
-function SectionHeading({
-  label,
-  names,
-  selected,
-  disabled,
-  onReplace,
-}: {
-  label: string;
-  names: string[];
-  selected: string[];
-  disabled: boolean;
-  onReplace: (names: string[]) => void;
-}) {
-  const everyOn = allSelected(names, selected);
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <p className="text-xs font-medium">{label}</p>
-      {names.length > 0 && (
-        <button
-          type="button"
-          className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
-          disabled={disabled}
-          onClick={() => onReplace(everyOn ? [] : names)}
-        >
-          {everyOn ? "Clear" : "Select all"}
-        </button>
-      )}
-    </div>
-  );
 }
 
 function OptionChecks({
@@ -99,8 +71,7 @@ function OptionChecks({
   label,
   options,
   selected,
-  onToggle,
-  onReplace,
+  onChange,
   disabled,
   loading,
   failed,
@@ -111,49 +82,23 @@ function OptionChecks({
   label: string;
   options: string[];
   selected: string[];
-  onToggle: (name: string, on: boolean) => void;
-  onReplace: (names: string[]) => void;
+  onChange: (names: string[]) => void;
   disabled: boolean;
   loading: boolean;
   failed: boolean;
   truncated: boolean;
   emptyLabel: string;
 }) {
-  const shown = [
-    ...options,
-    ...selected.filter((name) => !options.some((known) => known.toLowerCase() === name.toLowerCase())),
-  ];
-
   // A failed catalog is an error, not a free-text field. Keep values already on the rule.
-  if (failed) {
-    return (
-      <div className="space-y-1.5">
-        <p className="text-xs font-medium">{label}</p>
-        <p className="text-xs text-destructive">Couldn't load {label.toLowerCase()} from Jira.</p>
-        {selected.map((name) => {
-          const id = `${idPrefix}-${name}`;
-          return (
-            <label key={name} htmlFor={id} className="flex items-center gap-2 text-sm">
-              <Checkbox
-                id={id}
-                checked
-                onCheckedChange={(value) => onToggle(name, value === true)}
-                disabled={disabled}
-              />
-              {name}
-            </label>
-          );
-        })}
-      </div>
-    );
-  }
+  const shown = failed
+    ? selected
+    : [...options, ...selected.filter((name) => !hasName(options, name))];
+  const everyOn = shown.length > 0 && shown.every((name) => hasName(selected, name));
+  const pending = loading && !failed;
 
-  // A loaded catalog with nothing in it.
-  let choices = (
-    <p className="text-xs text-muted-foreground">{emptyLabel}</p>
-  );
+  let choices: ReactNode = null;
   // Catalog request is still in flight.
-  if (loading) {
+  if (pending) {
     choices = (
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -165,13 +110,12 @@ function OptionChecks({
       <div className="max-h-40 space-y-2 overflow-y-auto">
         {shown.map((name) => {
           const id = `${idPrefix}-${name}`;
-          const on = selected.some((item) => item.toLowerCase() === name.toLowerCase());
           return (
             <label key={name} htmlFor={id} className="flex items-center gap-2 text-sm">
               <Checkbox
                 id={id}
-                checked={on}
-                onCheckedChange={(value) => onToggle(name, value === true)}
+                checked={hasName(selected, name)}
+                onCheckedChange={(value) => onChange(toggleIn(selected, name, value === true))}
                 disabled={disabled}
               />
               {name}
@@ -180,23 +124,29 @@ function OptionChecks({
         })}
       </div>
     );
+  } else if (!failed) {
+    // A loaded catalog with nothing in it.
+    choices = <p className="text-xs text-muted-foreground">{emptyLabel}</p>;
   }
 
   return (
     <div className="space-y-1.5">
-      {loading || shown.length === 0 ? (
+      <div className="flex items-center justify-between gap-2">
         <p className="text-xs font-medium">{label}</p>
-      ) : (
-        <SectionHeading
-          label={label}
-          names={shown}
-          selected={selected}
-          disabled={disabled}
-          onReplace={onReplace}
-        />
-      )}
+        {!pending && !failed && shown.length > 0 && (
+          <button
+            type="button"
+            className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+            disabled={disabled}
+            onClick={() => onChange(everyOn ? [] : shown)}
+          >
+            {everyOn ? "Clear" : "Select all"}
+          </button>
+        )}
+      </div>
+      {failed && <p className="text-xs text-destructive">Couldn&apos;t load {label.toLowerCase()} from Jira.</p>}
       {choices}
-      {truncated && !loading && (
+      {truncated && !pending && (
         <p className="text-xs text-muted-foreground">Showing the first 100 labels.</p>
       )}
     </div>
@@ -214,17 +164,10 @@ export function JiraAutomaticRca({
   const [projectsError, setProjectsError] = useState(false);
   const projectsFetchStarted = useRef(false);
   const [projectKey, setProjectKey] = useState("");
-  const [issueTypes, setIssueTypes] = useState<string[]>([]);
-  const [loadingTypes, setLoadingTypes] = useState(false);
-  const [typesError, setTypesError] = useState(false);
-  const [checked, setChecked] = useState<string[]>([]);
-  const [priorities, setPriorities] = useState<string[]>([]);
-  const [labels, setLabels] = useState<string[]>([]);
-  const [components, setComponents] = useState<string[]>([]);
-  const [statuses, setStatuses] = useState<string[]>([]);
-  const [fieldOptions, setFieldOptions] = useState<JiraFieldOptions | null>(null);
-  const [loadedOptionsKey, setLoadedOptionsKey] = useState("");
-  const [optionsErrorKey, setOptionsErrorKey] = useState("");
+  const [picks, setPicks] = useState<Picks>(noPicks);
+  const [catalog, setCatalog] = useState<FieldCatalog | null>(null);
+  const [loadedKey, setLoadedKey] = useState("");
+  const [errorKey, setErrorKey] = useState("");
   const [jql, setJql] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -254,47 +197,15 @@ export function JiraAutomaticRca({
 
   useEffect(() => {
     const key = projectKey.trim();
+    setLoadedKey("");
+    setErrorKey("");
+    // No project chosen yet, so there is nothing to list.
     if (!key) {
-      setIssueTypes([]);
-      setTypesError(false);
+      setCatalog(null);
       return;
     }
     let cancelled = false;
     void (async () => {
-      setLoadingTypes(true);
-      setTypesError(false);
-      try {
-        const res = await fetch(
-          `/api/jira/projects/${encodeURIComponent(key)}/issue-types`,
-          { credentials: "include" },
-        );
-        if (!res.ok) throw new Error("failed");
-        const data = await res.json();
-        if (!cancelled) setIssueTypes(Array.isArray(data.issueTypes) ? data.issueTypes : []);
-      } catch {
-        if (!cancelled) {
-          setIssueTypes([]);
-          setTypesError(true);
-        }
-      } finally {
-        if (!cancelled) setLoadingTypes(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [projectKey]);
-
-  useEffect(() => {
-    const key = projectKey.trim();
-    if (!key) {
-      setFieldOptions(null);
-      setLoadedOptionsKey("");
-      setOptionsErrorKey("");
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      setLoadedOptionsKey("");
-      setOptionsErrorKey("");
       try {
         const res = await fetch(
           `/api/jira/projects/${encodeURIComponent(key)}/field-options`,
@@ -303,50 +214,33 @@ export function JiraAutomaticRca({
         if (!res.ok) throw new Error("failed");
         const data = await res.json();
         if (cancelled) return;
-        setFieldOptions({
-          priorities: Array.isArray(data.priorities) ? data.priorities : [],
-          labels: Array.isArray(data.labels) ? data.labels : [],
-          components: Array.isArray(data.components) ? data.components : [],
-          statuses: Array.isArray(data.statuses) ? data.statuses : [],
+        const names = (value: unknown) => (Array.isArray(value) ? value : []);
+        setCatalog({
+          issueTypes: names(data.issueTypes),
+          priorities: names(data.priorities),
+          labels: names(data.labels),
+          components: names(data.components),
+          statuses: names(data.statuses),
           labelsTruncated: data.labelsTruncated === true,
-          errors: Array.isArray(data.errors) ? data.errors : [],
+          errors: names(data.errors),
         });
-        setLoadedOptionsKey(key);
+        setLoadedKey(key);
       } catch {
         if (!cancelled) {
-          setFieldOptions(null);
-          setOptionsErrorKey(key);
+          setCatalog(null);
+          setErrorKey(key);
         }
       }
     })();
     return () => { cancelled = true; };
   }, [projectKey]);
 
-  const clearProjectChoices = () => {
-    setChecked([]);
-    setPriorities([]);
-    setLabels([]);
-    setComponents([]);
-    setStatuses([]);
-  };
-
   const resetForm = () => {
     setFormOpen(false);
     setEditingIndex(null);
     setProjectKey("");
-    setChecked([]);
-    setPriorities([]);
-    setLabels([]);
-    setComponents([]);
-    setStatuses([]);
+    setPicks(noPicks());
     setJql("");
-  };
-
-  const toggleType = (name: string, on: boolean) => {
-    setChecked((current) => {
-      const without = current.filter((item) => item.toLowerCase() !== name.toLowerCase());
-      return on ? [...without, name] : without;
-    });
   };
 
   const startAdd = () => {
@@ -359,26 +253,20 @@ export function JiraAutomaticRca({
     setEditingIndex(index);
     setFormOpen(true);
     setProjectKey(rule.projectKey);
-    setChecked(rule.issueTypes);
-    setPriorities(list(rule.priorities));
-    setLabels(list(rule.labels));
-    setComponents(list(rule.components));
-    setStatuses(list(rule.statuses));
+    setPicks({
+      issueTypes: rule.issueTypes,
+      priorities: rule.priorities ?? [],
+      labels: rule.labels ?? [],
+      components: rule.components ?? [],
+      statuses: rule.statuses ?? [],
+    });
     setJql(rule.jql ?? "");
   };
 
   const saveRule = async () => {
     const key = projectKey.trim();
-    if (!key || checked.length === 0) return;
-    const rule: JiraRcaRule = {
-      projectKey: key,
-      issueTypes: checked,
-      priorities,
-      labels,
-      components,
-      statuses,
-      jql: jql.trim(),
-    };
+    if (!key || picks.issueTypes.length === 0) return;
+    const rule: JiraRcaRule = { projectKey: key, ...picks, jql: jql.trim() };
     const next = [...rules];
     // Editing replaces that row. A new row can share a project with a different limit.
     if (editingIndex !== null) next[editingIndex] = rule;
@@ -430,7 +318,7 @@ export function JiraAutomaticRca({
           value={projectKey || undefined}
           onValueChange={(key) => {
             setProjectKey(key);
-            clearProjectChoices();
+            setPicks(noPicks());
           }}
           disabled={saving}
         >
@@ -450,18 +338,24 @@ export function JiraAutomaticRca({
   };
 
   const selectedKey = projectKey.trim();
-  const optionsLoading = Boolean(selectedKey) && loadedOptionsKey !== selectedKey && optionsErrorKey !== selectedKey;
-  const optionsFailed = Boolean(selectedKey) && optionsErrorKey === selectedKey;
-  const fieldFailed = (name: string) => fieldOptions?.errors.includes(name) === true && loadedOptionsKey === selectedKey;
+  const catalogLoading = Boolean(selectedKey) && loadedKey !== selectedKey && errorKey !== selectedKey;
+  const catalogFailed = Boolean(selectedKey) && errorKey === selectedKey;
 
-  const typeNames = loadingTypes || typesError || issueTypes.length === 0
-    ? []
-    : [
-      ...issueTypes,
-      ...checked.filter(
-        (name) => !issueTypes.some((known) => known.toLowerCase() === name.toLowerCase()),
-      ),
-    ];
+  const renderPicker = ({ field, label, empty }: (typeof PICKERS)[number]) => (
+    <OptionChecks
+      key={field}
+      idPrefix={`jira-rca-${field}-${selectedKey}`}
+      label={label}
+      options={catalog?.[field] ?? []}
+      selected={picks[field]}
+      onChange={(names) => setPicks((current) => ({ ...current, [field]: names }))}
+      disabled={saving}
+      loading={catalogLoading}
+      failed={catalogFailed || (loadedKey === selectedKey && catalog?.errors.includes(field) === true)}
+      truncated={field === "labels" && catalog?.labelsTruncated === true && !catalogLoading && !catalogFailed}
+      emptyLabel={empty}
+    />
+  );
 
   return (
     <div className="space-y-3">
@@ -516,115 +410,11 @@ export function JiraAutomaticRca({
 
           {selectedKey && (
             <div className="space-y-2">
-              {typeNames.length === 0 ? (
-                <p className="text-xs font-medium">Ticket types</p>
-              ) : (
-                <SectionHeading
-                  label="Ticket types"
-                  names={typeNames}
-                  selected={checked}
-                  disabled={saving}
-                  onReplace={setChecked}
-                />
-              )}
-              {loadingTypes ? (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Loading ticket types
-                </div>
-              ) : typesError ? (
-                <div className="space-y-2">
-                  <p className="text-xs text-destructive">Couldn't load ticket types from Jira.</p>
-                  {checked.map((name) => {
-                    const id = `jira-type-${projectKey}-${name}`;
-                    return (
-                      <label key={name} htmlFor={id} className="flex items-center gap-2 text-sm">
-                        <Checkbox
-                          id={id}
-                          checked
-                          onCheckedChange={(value) => toggleType(name, value === true)}
-                          disabled={saving}
-                        />
-                        {name}
-                      </label>
-                    );
-                  })}
-                </div>
-              ) : issueTypes.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No ticket types found in this project.</p>
-              ) : (
-                typeNames.map((name) => {
-                  const id = `jira-type-${projectKey}-${name}`;
-                  const on = checked.some((item) => item.toLowerCase() === name.toLowerCase());
-                  return (
-                    <label key={name} htmlFor={id} className="flex items-center gap-2 text-sm">
-                      <Checkbox
-                        id={id}
-                        checked={on}
-                        onCheckedChange={(value) => toggleType(name, value === true)}
-                        disabled={saving}
-                      />
-                      {name}
-                    </label>
-                  );
-                })
-              )}
-
+              {renderPicker(PICKERS[0])}
               <p className="text-xs text-muted-foreground pt-1">
                 Optional. A ticket matches if it has any listed value. Empty means any.
               </p>
-              <OptionChecks
-                idPrefix="jira-rca-priorities"
-                label="Priorities"
-                options={fieldOptions?.priorities ?? []}
-                selected={priorities}
-                onToggle={(name, on) => setPriorities((current) => toggleIn(current, name, on))}
-                onReplace={setPriorities}
-                disabled={saving}
-                loading={optionsLoading}
-                failed={optionsFailed || fieldFailed("priorities")}
-                truncated={false}
-                emptyLabel="No priorities found in Jira."
-              />
-              <OptionChecks
-                idPrefix="jira-rca-labels"
-                label="Labels"
-                options={fieldOptions?.labels ?? []}
-                selected={labels}
-                onToggle={(name, on) => setLabels((current) => toggleIn(current, name, on))}
-                onReplace={setLabels}
-                disabled={saving}
-                loading={optionsLoading}
-                failed={optionsFailed || fieldFailed("labels")}
-                truncated={fieldOptions?.labelsTruncated === true && !optionsLoading && !optionsFailed}
-                emptyLabel="No labels yet."
-              />
-              <OptionChecks
-                idPrefix="jira-rca-components"
-                label="Components"
-                options={fieldOptions?.components ?? []}
-                selected={components}
-                onToggle={(name, on) => setComponents((current) => toggleIn(current, name, on))}
-                onReplace={setComponents}
-                disabled={saving}
-                loading={optionsLoading}
-                failed={optionsFailed || fieldFailed("components")}
-                truncated={false}
-                emptyLabel="This project has no components."
-              />
-              <OptionChecks
-                idPrefix="jira-rca-statuses"
-                label="Statuses"
-                options={fieldOptions?.statuses ?? []}
-                selected={statuses}
-                onToggle={(name, on) => setStatuses((current) => toggleIn(current, name, on))}
-                onReplace={setStatuses}
-                disabled={saving}
-                loading={optionsLoading}
-                failed={optionsFailed || fieldFailed("statuses")}
-                truncated={false}
-                emptyLabel="No statuses found in this project."
-              />
+              {PICKERS.slice(1).map(renderPicker)}
               <div className="space-y-1.5">
                 <Label htmlFor="jira-rca-jql" className="text-xs">
                   Additional JQL <span className="font-normal text-muted-foreground">(optional)</span>
@@ -646,7 +436,7 @@ export function JiraAutomaticRca({
               type="button"
               size="sm"
               className="h-8"
-              disabled={saving || !projectKey.trim() || checked.length === 0}
+              disabled={saving || !selectedKey || picks.issueTypes.length === 0}
               onClick={saveRule}
             >
               {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Plus className="mr-1.5 h-3.5 w-3.5" />}

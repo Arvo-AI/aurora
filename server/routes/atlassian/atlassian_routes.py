@@ -26,7 +26,7 @@ from connectors.confluence_connector.client import (
     ConfluenceClient,
     normalize_confluence_base_url,
 )
-from connectors.jira_connector.client import JiraClient, account_id_from_myself
+from connectors.jira_connector.client import JiraClient
 import requests
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
 from utils.auth.rbac_decorators import require_permission
@@ -175,11 +175,6 @@ def connect(user_id):
                     "base_url": base_url.rstrip("/"),
                     "pat_token": pat_token,
                 }
-                # So later webhooks can ignore comments Aurora itself posts as this account.
-                if product == "jira":
-                    account_id = account_id_from_myself(user_payload)
-                    if account_id:
-                        token_payload["account_id"] = account_id
                 store_tokens_in_db(user_id, token_payload, product)
                 results[product] = {"connected": True, "authType": "pat", "baseUrl": base_url}
 
@@ -283,11 +278,6 @@ def connect(user_id):
                 "refresh_token": refresh_token,
                 "cloud_id": cloud_id,
             }
-            # So later webhooks can ignore comments Aurora itself posts as this account.
-            if product == "jira":
-                account_id = account_id_from_myself(user_payload)
-                if account_id:
-                    payload["account_id"] = account_id
             store_tokens_in_db(user_id, payload, product)
             results[product] = {"connected": True, "authType": "oauth", "baseUrl": base_url, "cloudId": cloud_id}
 

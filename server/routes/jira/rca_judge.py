@@ -117,47 +117,34 @@ def _redis():
     return get_redis_client()
 
 
+def _redis_or(default: Any, op: Callable[[Any], Any]) -> Any:
+    """Run ``op`` on Redis. Redis being down or failing never blocks judging."""
+    redis_client = _redis()
+    if redis_client is None:
+        return default
+    try:
+        return op(redis_client)
+    except Exception:
+        logger.warning("[JIRA][JUDGE] Redis call failed", exc_info=True)
+        return default
+
+
 def _judged_key(org_id: str, issue_key: str) -> str:
     return f"jira:rca-judge:{org_id}:{issue_key}"
 
 
-def _already_judged(org_id: str, issue_key: str, fingerprint: str) -> bool:
-    redis_client = _redis()
-    # Without Redis, re-judge: incident dedup still stops a second RCA.
-    if redis_client is None:
-        return False
-    try:
-        return redis_client.get(_judged_key(org_id, issue_key)) == fingerprint
-    except Exception:
-        logger.warning("[JIRA][JUDGE] Could not read judged fingerprint", exc_info=True)
-        return False
-
-
-def _remember_judged(org_id: str, issue_key: str, fingerprint: str) -> None:
-    redis_client = _redis()
-    if redis_client is None:
-        return
-    try:
-        redis_client.set(_judged_key(org_id, issue_key), fingerprint, ex=_JUDGED_TTL_SECONDS)
-    except Exception:
-        logger.warning("[JIRA][JUDGE] Could not store judged fingerprint", exc_info=True)
-
-
 def _judge_budget_left(org_id: str) -> bool:
     """Caps judge LLM calls per org, since anyone holding the webhook URL can post tickets."""
-    redis_client = _redis()
-    # No Redis means no counter; the RCA rate limit still bounds the expensive part.
-    if redis_client is None:
-        return True
     key = f"jira:rca-judge:count:{org_id}:{int(time.time() // 3600)}"
-    try:
+
+    def spend(redis_client) -> bool:
         count = redis_client.incr(key)
         if count == 1:
             redis_client.expire(key, 3600)
         return count <= _JUDGE_HOURLY_LIMIT
-    except Exception:
-        logger.warning("[JIRA][JUDGE] Could not read judge budget", exc_info=True)
-        return True
+
+    # No counter means no cap; the RCA rate limit still bounds the expensive part.
+    return _redis_or(True, spend)
 
 
 def _jira_policy(user_id: str) -> str:
@@ -188,8 +175,9 @@ def judge_and_route(
         return {"status": "no_org"}
 
     fingerprint = ticket_fingerprint(ticket)
-    # An edit that doesn't change what the ticket says keeps its verdict.
-    if _already_judged(org_id, issue_key, fingerprint):
+    judged_key = _judged_key(org_id, issue_key)
+    # An edit that doesn't change what the ticket says keeps its verdict. Without Redis, re-judge.
+    if _redis_or(False, lambda r: r.get(judged_key) == fingerprint):
         return {"status": "unchanged"}
 
     hook_allowed, hook_message = get_hook("before_llm_call")(org_id, user_id)
@@ -217,5 +205,5 @@ def judge_and_route(
     if verdict.investigate:
         start_rca()
     # Remembered only once the RCA is handed off, so a failed enqueue gets judged again.
-    _remember_judged(org_id, issue_key, fingerprint)
+    _redis_or(None, lambda r: r.set(judged_key, fingerprint, ex=_JUDGED_TTL_SECONDS))
     return {"status": "judged", "investigate": verdict.investigate}

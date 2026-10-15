@@ -6,7 +6,6 @@ from routes.jira.rca_filters import (
     jql_matches_issue,
     match_kind,
     normalize_rca_rules,
-    rca_rule_matches,
 )
 
 
@@ -35,40 +34,40 @@ def _issue(project: str, issue_type: str, key: str = "", **fields) -> dict:
 
 def test_matching_project_and_type_triggers():
     scope = extract_webhook_scope(_issue("OPS", "Bug"))
-    assert rca_rule_matches(scope, RULES) is True
+    assert match_kind(scope, RULES) == "match"
 
 
 def test_match_is_case_insensitive():
     scope = extract_webhook_scope(_issue("ops", "incident"))
-    assert rca_rule_matches(scope, RULES) is True
+    assert match_kind(scope, RULES) == "match"
 
 
 def test_same_project_wrong_type_does_not_trigger():
     scope = extract_webhook_scope(_issue("OPS", "Story"))
-    assert rca_rule_matches(scope, RULES) is False
+    assert match_kind(scope, RULES) == "miss"
 
 
 def test_other_project_does_not_trigger():
     scope = extract_webhook_scope(_issue("OTHER", "Bug"))
-    assert rca_rule_matches(scope, RULES) is False
+    assert match_kind(scope, RULES) == "miss"
 
 
 def test_no_rules_means_nothing_triggers():
     scope = extract_webhook_scope(_issue("OPS", "Bug"))
-    assert rca_rule_matches(scope, []) is False
-    assert rca_rule_matches(scope, None) is False
+    assert match_kind(scope, []) == "miss"
+    assert match_kind(scope, None) == "miss"
 
 
 def test_issue_key_supplies_project_when_field_is_missing():
     issue = {"key": "OPS-42", "fields": {"issuetype": {"name": "Bug"}}}
     scope = extract_webhook_scope(issue)
     assert (scope["projectKey"], scope["issueType"]) == ("OPS", "Bug")
-    assert rca_rule_matches(scope, RULES) is True
+    assert match_kind(scope, RULES) == "match"
 
 
 def test_missing_type_does_not_trigger():
     scope = extract_webhook_scope({"key": "OPS-1", "fields": {"project": {"key": "OPS"}}})
-    assert rca_rule_matches(scope, RULES) is False
+    assert match_kind(scope, RULES) == "miss"
 
 
 def test_priority_label_component_and_status_narrow_the_match():
@@ -94,13 +93,13 @@ def test_priority_label_component_and_status_narrow_the_match():
         components=[{"name": "api"}],
         status={"name": "In Progress"},
     ))
-    assert rca_rule_matches(hit, rules) is True
-    assert rca_rule_matches(miss, rules) is False
+    assert match_kind(hit, rules) == "match"
+    assert match_kind(miss, rules) == "miss"
 
 
 def test_empty_optional_fields_do_not_narrow():
     scope = extract_webhook_scope(_issue("OPS", "Bug", priority={"name": "Low"}))
-    assert rca_rule_matches(scope, RULES) is True
+    assert match_kind(scope, RULES) == "match"
 
 
 def test_normalize_uppercases_project_and_merges_duplicates():
