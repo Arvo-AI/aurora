@@ -224,7 +224,7 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
     }
   }
   // Slack tools parsing
-  else if (tool.tool_name === "list_slack_channels" || tool.tool_name === "get_channel_history" || tool.tool_name === "get_thread_replies") {
+  else if (tool.tool_name === "list_slack_channels" || tool.tool_name === "list_slack_users" || tool.tool_name === "get_channel_history" || tool.tool_name === "get_thread_replies") {
     command = parseSlackCommand(tool.tool_name, normalizedInput)
   }
   // Alert payload drill-down tool: show the json_path being queried

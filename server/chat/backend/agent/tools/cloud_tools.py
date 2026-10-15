@@ -1425,6 +1425,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     try:
         from .slack_tool import (
             list_slack_channels,
+            list_slack_users,
             get_channel_history,
             get_thread_replies,
             get_connected_slack_channels,
@@ -1433,6 +1434,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         )
         if _safe_connected(is_slack_connected, "Slack"):
             tool_functions.append((list_slack_channels, "list_slack_channels"))
+            tool_functions.append((list_slack_users, "list_slack_users"))
             tool_functions.append((get_channel_history, "get_channel_history"))
             tool_functions.append((get_thread_replies, "get_thread_replies"))
             tool_functions.append((get_connected_slack_channels, "get_connected_slack_channels"))
@@ -1752,6 +1754,20 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "before fetching message history."
                 ),
                 args_schema=ListSlackChannelsArgs,
+            )
+        elif name == 'list_slack_users':
+            from .slack_tool import ListSlackUsersArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Find Slack users whose first name, display name, or full name "
+                    "starts with a prefix, and return the <@USERID> token that "
+                    "notifies them. Pass name='a' for Ada and Alex. Use this when "
+                    "the person is not already mentioned in the thread. Copy the "
+                    "mention exactly; a plain @name does not notify."
+                ),
+                args_schema=ListSlackUsersArgs,
             )
         elif name == 'get_channel_history':
             from .slack_tool import GetChannelHistoryArgs
