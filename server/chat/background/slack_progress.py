@@ -56,6 +56,11 @@ def _one_line(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _slack_escape(text: str) -> str:
+    """Slack mrkdwn reads <...> as links and & as an entity; neutralise both."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _strip_markdown(text: str) -> str:
     """Flatten chat markdown into plain Slack-safe text for a one-line excerpt."""
     text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
@@ -89,7 +94,7 @@ def latest_thought(buffer: str, max_chars: int = _THOUGHT_MAX_CHARS) -> str:
     excerpt = " ".join(picked)
     if len(excerpt) > max_chars:
         excerpt = excerpt[: max_chars - 1].rstrip() + "…"
-    return excerpt
+    return _slack_escape(excerpt)
 
 
 def _shorten(text: str, max_chars: int) -> str:
@@ -101,7 +106,7 @@ def _shorten(text: str, max_chars: int) -> str:
 
 def describe_tool(tool_name: str, tool_input: Any) -> str:
     """One-line description of a running tool for the progress note."""
-    label = f"`{tool_name}`"
+    label = f"`{_slack_escape(tool_name)}`"
     command = None
     if isinstance(tool_input, dict):
         for key in ("command", "query", "cmd"):
@@ -111,7 +116,7 @@ def describe_tool(tool_name: str, tool_input: Any) -> str:
                 break
     if command:
         # Backticks inside the command would break the inline code span
-        label += " — `" + _shorten(command.replace("`", "'"), _COMMAND_MAX_CHARS) + "`"
+        label += " — `" + _slack_escape(_shorten(command.replace("`", "'"), _COMMAND_MAX_CHARS)) + "`"
     return label
 
 

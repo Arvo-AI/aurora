@@ -65,6 +65,12 @@ def test_describe_tool_shortens_command_and_escapes_backticks(bg):
     assert len(desc) < 130
 
 
+def test_slack_markup_is_escaped_in_thought_and_command(bg):
+    assert bg.sp.latest_thought("Pods <api> & <web> are down.") == "Pods &lt;api&gt; &amp; &lt;web&gt; are down."
+    desc = bg.sp.describe_tool("cloud_exec", {"command": "cat a > b"})
+    assert "&gt;" in desc and ">" not in desc.replace("&gt;", "")
+
+
 def test_describe_tool_without_command_is_just_the_name(bg):
     assert bg.sp.describe_tool("search_memory", {"query_vector": [1, 2]}) == "`search_memory`"
 
