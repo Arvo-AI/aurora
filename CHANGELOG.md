@@ -7,9 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.8] - 2026-10-15
+
 ### Added
 - Models: Gemini 4 Argon (`gemini-4-argon`) in the Google and Vertex pickers.
   Introductory price is $2/$10 per 1M tokens through November 30, 2026.
+- GCP: Ask-mode and agent investigations can query BigQuery. The read-only
+  identity gets `bigquery.dataViewer` and `bigquery.jobUser` (existing OAuth
+  connections are synced once), and `bq` receives the access token and project
+  at exec time.
+
+### Fixed
+- GCP: `bq query` SELECTs are no longer a false-positive HITL when the org
+  already allows `bq`. The command is gated as `bq`, not `gcloud bq`. Write
+  SQL and mutating `bq` subcommands stay denied, and a token on the command
+  is not logged.
 
 ## [1.5.7] - 2026-10-13
 
