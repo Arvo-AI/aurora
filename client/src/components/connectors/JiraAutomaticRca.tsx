@@ -77,7 +77,7 @@ function OptionChecks({
   failed,
   truncated,
   emptyLabel,
-}: {
+}: Readonly<{
   idPrefix: string;
   label: string;
   options: string[];
@@ -88,7 +88,7 @@ function OptionChecks({
   failed: boolean;
   truncated: boolean;
   emptyLabel: string;
-}) {
+}>) {
   // A failed catalog is an error, not a free-text field. Keep values already on the rule.
   const shown = failed
     ? selected

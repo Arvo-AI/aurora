@@ -16,8 +16,8 @@ from routes.jira.field_options import unique_names
 logger = logging.getLogger(__name__)
 
 # Jira project keys are a letter plus letters, digits, or underscores.
-PROJECT_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,31}$")
-_ISSUE_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]+-\d+$")
+PROJECT_KEY_RE = re.compile(r"^[A-Za-z]\w{0,31}$", re.ASCII)
+_ISSUE_KEY_RE = re.compile(r"^[A-Za-z]\w+-\d+$", re.ASCII)
 _MAX_RCA_RULES = 50
 _MAX_VALUES = 30
 _MAX_JQL = 500
@@ -60,10 +60,25 @@ def _clean_name_list(raw: Any, label: str) -> Tuple[Optional[List[str]], Optiona
 def _jql_is_contained(jql: str) -> bool:
     """True when parentheses stay inside the clause we AND onto the issue key."""
     depth = 0
+    for char in _unquoted_chars(jql):
+        # A quoted value never reaches here, so its parentheses are just text.
+        if char is None:
+            return False
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            # A leading close would end our wrapper and OR the rest onto every issue.
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def _unquoted_chars(jql: str):
+    """Characters outside quoted values; ``None`` last if a quote never closes."""
     quote = None
     escaped = False
     for char in jql:
-        # A parenthesis inside a quoted value is text, not a group we have to balance.
         if quote:
             if escaped:
                 escaped = False
@@ -71,18 +86,13 @@ def _jql_is_contained(jql: str) -> bool:
                 escaped = True
             elif char == quote:
                 quote = None
-            continue
-        if char in ("'", '"'):
+        elif char in ("'", '"'):
             quote = char
-        elif char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-            # A leading close would end our wrapper and OR the rest onto every issue.
-            if depth < 0:
-                return False
+        else:
+            yield char
     # An unclosed quote would let a later OR escape the issue-key wrapper.
-    return depth == 0 and quote is None
+    if quote:
+        yield None
 
 
 def _clean_jql(raw: Any) -> Tuple[Optional[str], Optional[str]]:
