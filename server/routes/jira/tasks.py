@@ -391,6 +391,23 @@ def _dispatch_rca(
                 logger.debug("[JIRA][WEBHOOK] Failed to mark RCA session failed", exc_info=True)
 
 
+@celery_app.task(
+    bind=True, max_retries=2, default_retry_delay=30, name="jira.judge_ticket"
+)
+def judge_jira_ticket(self, payload: Dict[str, Any], user_id: str) -> Optional[Dict[str, Any]]:
+    """Auto mode: let the judge decide whether this ticket gets an RCA."""
+    from routes.jira.rca_judge import JudgeUnavailable, judge_and_route
+
+    try:
+        return judge_and_route(
+            payload,
+            user_id,
+            start_rca=lambda: process_jira_webhook.delay(payload=payload, user_id=user_id),
+        )
+    except JudgeUnavailable as exc:
+        raise self.retry(exc=exc)
+
+
 def _saved_jql_matches(user_id: str, issue_key: str, clauses: List[str]) -> bool:
     """True when a saved clause still selects this issue. Transient Jira errors propagate."""
     from routes.jira.jira_routes import _get_jira_client, _with_refresh

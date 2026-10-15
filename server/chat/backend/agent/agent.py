@@ -364,12 +364,18 @@ class Agent:
                         _rca_ctx = getattr(state, "rca_context", None) or {}
                         _src = str(_rca_ctx.get("source") or getattr(state, "trigger_source", None) or "").lower()
                         from services.memory import (
+                            JIRA_MEMORY_CATEGORY,
+                            JIRA_MEMORY_TITLE,
+                            JIRA_POLICY_SOURCES,
                             SLACK_MEMORY_CATEGORY,
                             SLACK_MEMORY_TITLE,
                             SLACK_POLICY_SOURCES,
                         )
                         if _src in SLACK_POLICY_SOURCES:
                             _force_entries = [(SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE)]
+                        # Jira-triggered RCAs can learn the ticket wasn't worth investigating.
+                        elif _src in JIRA_POLICY_SOURCES:
+                            _force_entries = [(JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE)]
                         _memory_prefetch = MemoryPrefetch(
                             user_id=state.user_id,
                             session_id=state.session_id,

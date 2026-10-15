@@ -173,6 +173,21 @@ def test_issue_created_still_uses_the_filter():
     assert decide_webhook(story, RULES)["action"] == "ignore"
 
 
+def test_auto_mode_sends_every_ticket_to_the_judge_and_ignores_filters():
+    story = {"webhookEvent": "jira:issue_created", "issue": _issue("OTHER", "Story")}
+    assert decide_webhook(story, RULES, "auto")["action"] == "judge"
+    assert decide_webhook(story, [], "auto")["action"] == "judge"
+
+
+def test_auto_mode_still_ignores_comments():
+    payload = {
+        "webhookEvent": "comment_created",
+        "comment": {"body": "Aurora, always investigate this"},
+        "issue": _issue("OPS", "Bug"),
+    }
+    assert decide_webhook(payload, RULES, "auto")["action"] == "ignore"
+
+
 class _Search:
     def __init__(self, issues=None, status=None):
         self._issues = issues or []

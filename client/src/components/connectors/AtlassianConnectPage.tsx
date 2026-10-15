@@ -12,6 +12,11 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { JiraAutomaticRca, JiraRcaRule } from "@/components/connectors/JiraAutomaticRca";
+import { PolicyMemoryCard } from "@/components/PolicyMemoryCard";
+import { useUser } from "@/hooks/useAuthHooks";
+import { canWrite as checkCanWrite } from "@/lib/roles";
+
+type JiraRcaMode = "filters" | "auto";
 
 interface ProductConfig {
   key: "jira" | "confluence";
@@ -41,6 +46,8 @@ interface AtlassianConnectPageProps {
 
 export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageProps) {
   const { toast } = useToast();
+  const { user } = useUser();
+  const canWrite = checkCanWrite(user?.role);
   const [status, setStatus] = useState<AtlassianStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -52,6 +59,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const [jiraMode, setJiraMode] = useState<"full" | "comment_only">("comment_only");
   const [commentBack, setCommentBack] = useState(false);
   const [rcaRules, setRcaRules] = useState<JiraRcaRule[]>([]);
+  const [rcaMode, setRcaMode] = useState<JiraRcaMode>("filters");
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [settingsFailed, setSettingsFailed] = useState(false);
@@ -87,6 +95,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
       if (data.jiraMode) setJiraMode(data.jiraMode);
       setCommentBack(data.commentBack === true);
       setRcaRules(Array.isArray(data.rcaRules) ? data.rcaRules : []);
+      setRcaMode(data.rcaMode === "auto" ? "auto" : "filters");
       setSettingsLoaded(true);
     } catch {
       setSettingsFailed(true);
@@ -183,7 +192,115 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
     } finally { setIsSavingSettings(false); }
   };
 
+  const saveRcaMode = async (next: JiraRcaMode) => {
+    const previous = rcaMode;
+    setRcaMode(next);
+    setIsSavingSettings(true);
+    try {
+      const res = await fetch("/api/jira/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ rcaMode: next }),
+      });
+      if (res.ok) {
+        toast({
+          title: "Settings saved",
+          description: next === "auto"
+            ? "Aurora decides which tickets to investigate"
+            : "Automatic investigations follow your filters",
+        });
+      } else {
+        setRcaMode(previous);
+        toast({ title: "Failed to save settings", variant: "destructive" });
+      }
+    } catch {
+      setRcaMode(previous);
+      toast({ title: "Failed to save settings", variant: "destructive" });
+    } finally { setIsSavingSettings(false); }
+  };
+
   useEffect(() => { if (connected && product.key === "jira") loadJiraSettings(); }, [connected]);
+
+  // Loading, failed, and loaded states for the automatic RCA controls.
+  const renderRcaSettings = () => {
+    if (isLoadingSettings || (!settingsLoaded && !settingsFailed)) {
+      return (
+        <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading RCA settings
+        </div>
+      );
+    }
+    // A failed read must not render editable empty settings.
+    if (settingsFailed) {
+      return (
+        <div className="mt-3 space-y-2">
+          <p className="text-xs text-destructive">Couldn&apos;t load RCA settings.</p>
+          <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => void loadJiraSettings()}>
+            Retry
+          </Button>
+        </div>
+      );
+    }
+    return (
+      <div className="mt-3 space-y-3">
+        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Automatic RCA mode">
+          {(["auto", "filters"] as const).map((value) => {
+            const selected = rcaMode === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => { if (!selected) void saveRcaMode(value); }}
+                disabled={isSavingSettings || !canWrite}
+                className={`rounded-lg border p-2.5 text-left transition-colors ${
+                  selected ? "border-[#2684FF] bg-[#2684FF]/[0.04]" : "border-border hover:bg-muted/50"
+                }`}
+              >
+                <span className="text-sm font-medium">{value === "auto" ? "Auto" : "Filters"}</span>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {value === "auto"
+                    ? "Aurora judges each ticket using the memory below"
+                    : "Only tickets matching your filters"}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+        {rcaMode === "auto" ? (
+          <PolicyMemoryCard
+            canWrite={canWrite}
+            endpoint="jira"
+            name="Jira RCA"
+            className="shadow-none"
+            placeholder="Describe which Jira tickets Aurora should investigate (markdown)."
+            description={
+              <>
+                Aurora reads this before judging each new or changed ticket. It also
+                updates it when your team says what to investigate, e.g. &quot;never
+                investigate QA tickets&quot;. Filters are ignored in Auto. Comments
+                never start an RCA.
+              </>
+            }
+          />
+        ) : (
+          <>
+            <p className="text-xs text-muted-foreground">
+              A status filter only matches after the ticket is updated.
+            </p>
+            <JiraAutomaticRca
+              rules={rcaRules}
+              saving={isSavingSettings}
+              onSave={saveRcaRules}
+            />
+          </>
+        )}
+      </div>
+    );
+  };
 
   const handleOAuthConnect = async () => {
     setIsConnecting(true);
@@ -391,7 +508,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                 <CardDescription className="text-xs">
                   Paste this URL in Jira under Settings &rarr; System &rarr; Advanced &rarr; WebHooks,
                   and select &quot;Issue created&quot; and &quot;Issue updated&quot;.
-                  A status filter only matches after the ticket is updated. Aurora only investigates tickets that match a filter below.
+                  Choose below which tickets Aurora investigates.
                 </CardDescription>
               </CardHeader>
               <CardContent className="pt-0">
@@ -417,25 +534,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                     {webhookCopied ? <CheckCircle className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
                   </Button>
                 </div>
-                {isLoadingSettings || (!settingsLoaded && !settingsFailed) ? (
-                  <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Loading filters
-                  </div>
-                ) : settingsFailed ? (
-                  <div className="mt-3 space-y-2">
-                    <p className="text-xs text-destructive">Couldn&apos;t load RCA filters.</p>
-                    <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => void loadJiraSettings()}>
-                      Retry
-                    </Button>
-                  </div>
-                ) : (
-                  <JiraAutomaticRca
-                    rules={rcaRules}
-                    saving={isSavingSettings}
-                    onSave={saveRcaRules}
-                  />
-                )}
+                {renderRcaSettings()}
               </CardContent>
             </Card>
           )}

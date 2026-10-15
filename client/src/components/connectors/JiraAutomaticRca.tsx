@@ -464,7 +464,7 @@ export function JiraAutomaticRca({
     ];
 
   return (
-    <div className="space-y-3 mt-3">
+    <div className="space-y-3">
       <div className="rounded-md border border-[#2684FF]/30 bg-[#2684FF]/[0.06] px-2.5 py-2">
         <p className="text-sm font-medium">Matching tickets start an RCA</p>
         <p className="text-xs text-muted-foreground mt-0.5">
