@@ -152,7 +152,7 @@ _BQ_WRITE_VERBS = frozenset({"rm", "load", "update", "cp", "insert", "mk"})
 # A write verb in statement position: start, after ';', or after ')'.
 # `SELECT delete FROM t` does not match. `SELECT 1; DROP TABLE t` does.
 _BQ_STATEMENT_WRITE = re.compile(
-    r"(?:^|[;)])\s*(insert|update|delete|merge|create|drop|alter|truncate)\b",
+    r"(?:^|[;)])\s*(insert|update|delete|merge|create|drop|alter|truncate|export|load|grant|revoke|call|execute)\b",
     re.I,
 )
 _BQ_RESULT_WRITE = re.compile(

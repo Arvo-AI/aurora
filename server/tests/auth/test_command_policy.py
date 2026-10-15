@@ -203,12 +203,15 @@ class TestBigQueryReads:
         assert evaluate_command("org-7", "bq query 'WITH x AS (SELECT 1) DELETE FROM t'").allowed is False
         assert evaluate_command("org-7", "bq query --destination_table=ds.t 'SELECT 1'").allowed is False
         assert evaluate_command("org-7", "bq query 'DELETE FROM t' --label='x'").allowed is False
+        assert evaluate_command("org-7", "bq query 'EXECUTE IMMEDIATE \"DROP TABLE t\"'").allowed is False
+        assert evaluate_command("org-7", "bq query 'EXPORT DATA OPTIONS(uri=\"gs://b/*\") AS SELECT 1'").allowed is False
         assert evaluate_command("org-7", "bq rm -f -t ds.t").allowed is False
 
     def test_read_that_mentions_a_write_word_stays_allowed(self, policy):
         self._on(policy, r"^bq\s+(ls|show|head|query|mk\s+--dry_run)\b")
         assert evaluate_command("org-7", "bq query 'SELECT delete FROM t'").allowed is True
         assert evaluate_command("org-7", "bq query 'SELECT drop_date FROM t'").allowed is True
+        assert evaluate_command("org-7", "bq query 'SELECT export_date FROM t'").allowed is True
         assert evaluate_command("org-7", "bq query \"SELECT 'DROP TABLE t' AS x\"").allowed is True
 
     def test_write_is_blocked_when_only_the_allowlist_is_on(self, policy):
