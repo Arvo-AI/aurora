@@ -12,6 +12,7 @@ from flask import Blueprint, jsonify, request
 from connectors.atlassian_auth.auth import refresh_access_token
 from connectors.jira_connector.client import JiraClient
 from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
+from routes.jira.field_options import status_names, unique_names
 from routes.jira.rca_filters import (
     FILTER_MODES,
     PROJECT_KEY_RE as _PROJECT_KEY_RE,
@@ -573,6 +574,52 @@ def list_project_issue_types(user_id, project_key):
         seen.add(folded)
         names.append(name)
     return jsonify({"projectKey": project_key, "issueTypes": names})
+
+
+# ------------------------------------------------------------------
+# GET /jira/projects/<project_key>/field-options
+# ------------------------------------------------------------------
+
+_FIELD_OPTION_LOADERS = (
+    ("priorities", lambda client, project_key: unique_names(client.list_priorities(project_key))),
+    ("components", lambda client, project_key: unique_names(client.list_components(project_key))),
+    ("statuses", lambda client, project_key: status_names(client.list_statuses(project_key))),
+)
+
+
+@jira_bp.route("/projects/<project_key>/field-options", methods=["GET"])
+@require_permission("connectors", "read")
+def list_project_field_options(user_id, project_key):
+    """Priorities, labels, components, and statuses for one project's filter form."""
+    if not _PROJECT_KEY_RE.fullmatch(project_key or ""):
+        return jsonify({"error": "projectKey must look like a Jira project key"}), 400
+
+    client, creds, error = _get_jira_client(user_id)
+    if error:
+        return jsonify({"error": error}), 404 if not creds else 400
+
+    payload = {"projectKey": project_key, "labelsTruncated": False, "errors": []}
+    for name, load in _FIELD_OPTION_LOADERS:
+        try:
+            payload[name] = _with_refresh(
+                user_id, creds, client, lambda c, load=load: load(c, project_key),
+            )
+        except Exception:
+            # One catalog failing still leaves the other pickers usable.
+            logger.exception("[JIRA] List %s failed for user %s", name, sanitize(user_id))
+            payload[name] = []
+            payload["errors"].append(name)
+
+    try:
+        labels, truncated = _with_refresh(user_id, creds, client, lambda c: c.list_labels())
+        payload["labels"] = unique_names(labels)
+        payload["labelsTruncated"] = truncated
+    except Exception:
+        logger.exception("[JIRA] List labels failed for user %s", sanitize(user_id))
+        payload["labels"] = []
+        payload["errors"].append("labels")
+
+    return jsonify(payload)
 
 
 # ------------------------------------------------------------------
