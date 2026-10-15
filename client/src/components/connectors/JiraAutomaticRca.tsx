@@ -61,12 +61,50 @@ function summarize(rule: JiraRcaRule): string {
   return parts.join(" · ");
 }
 
+function allSelected(names: string[], selected: string[]): boolean {
+  return names.length > 0 && names.every((name) =>
+    selected.some((item) => item.toLowerCase() === name.toLowerCase()),
+  );
+}
+
+function SectionHeading({
+  label,
+  names,
+  selected,
+  disabled,
+  onReplace,
+}: {
+  label: string;
+  names: string[];
+  selected: string[];
+  disabled: boolean;
+  onReplace: (names: string[]) => void;
+}) {
+  const everyOn = allSelected(names, selected);
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <p className="text-xs font-medium">{label}</p>
+      {names.length > 0 && (
+        <button
+          type="button"
+          className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+          disabled={disabled}
+          onClick={() => onReplace(everyOn ? [] : names)}
+        >
+          {everyOn ? "Clear" : "Select all"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function OptionChecks({
   idPrefix,
   label,
   options,
   selected,
   onToggle,
+  onReplace,
   disabled,
   loading,
   failed,
@@ -78,6 +116,7 @@ function OptionChecks({
   options: string[];
   selected: string[];
   onToggle: (name: string, on: boolean) => void;
+  onReplace: (names: string[]) => void;
   disabled: boolean;
   loading: boolean;
   failed: boolean;
@@ -149,7 +188,17 @@ function OptionChecks({
 
   return (
     <div className="space-y-1.5">
-      <p className="text-xs font-medium">{label}</p>
+      {loading || shown.length === 0 ? (
+        <p className="text-xs font-medium">{label}</p>
+      ) : (
+        <SectionHeading
+          label={label}
+          names={shown}
+          selected={selected}
+          disabled={disabled}
+          onReplace={onReplace}
+        />
+      )}
       {choices}
       {truncated && !loading && (
         <p className="text-xs text-muted-foreground">Showing the first 100 labels.</p>
@@ -167,11 +216,10 @@ export function JiraAutomaticRca({
 }: Readonly<JiraAutomaticRcaProps>) {
   const [projects, setProjects] = useState<JiraProject[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(false);
+  const [projectsSettled, setProjectsSettled] = useState(false);
   const [projectsError, setProjectsError] = useState(false);
   const projectsFetchStarted = useRef(false);
   const [projectKey, setProjectKey] = useState("");
-  const [lookupKey, setLookupKey] = useState("");
-  const immediateLookup = useRef(false);
   const [issueTypes, setIssueTypes] = useState<string[]>([]);
   const [loadingTypes, setLoadingTypes] = useState(false);
   const [typesError, setTypesError] = useState(false);
@@ -192,6 +240,7 @@ export function JiraAutomaticRca({
     if (!formOpen || projectsFetchStarted.current) return;
     projectsFetchStarted.current = true;
     setLoadingProjects(true);
+    setProjectsError(false);
     void (async () => {
       try {
         const res = await fetch("/api/jira/projects", { credentials: "include" });
@@ -200,25 +249,18 @@ export function JiraAutomaticRca({
         setProjects(Array.isArray(data.projects) ? data.projects : []);
       } catch {
         setProjectsError(true);
+        // Closing and reopening the form should try the project list again.
+        projectsFetchStarted.current = false;
       } finally {
         setLoadingProjects(false);
+        setProjectsSettled(true);
       }
     })();
   }, [formOpen]);
 
   useEffect(() => {
-    // A dropdown pick already set the lookup key. Typing waits so O, OP, OPS are not three requests.
-    if (immediateLookup.current) {
-      immediateLookup.current = false;
-      setLookupKey(projectKey.trim());
-      return;
-    }
-    const handle = window.setTimeout(() => setLookupKey(projectKey.trim()), 400);
-    return () => window.clearTimeout(handle);
-  }, [projectKey]);
-
-  useEffect(() => {
-    if (!lookupKey) {
+    const key = projectKey.trim();
+    if (!key) {
       setIssueTypes([]);
       setTypesError(false);
       return;
@@ -229,7 +271,7 @@ export function JiraAutomaticRca({
       setTypesError(false);
       try {
         const res = await fetch(
-          `/api/jira/projects/${encodeURIComponent(lookupKey)}/issue-types`,
+          `/api/jira/projects/${encodeURIComponent(key)}/issue-types`,
           { credentials: "include" },
         );
         if (!res.ok) throw new Error("failed");
@@ -245,10 +287,11 @@ export function JiraAutomaticRca({
       }
     })();
     return () => { cancelled = true; };
-  }, [lookupKey]);
+  }, [projectKey]);
 
   useEffect(() => {
-    if (!lookupKey) {
+    const key = projectKey.trim();
+    if (!key) {
       setFieldOptions(null);
       setLoadedOptionsKey("");
       setOptionsErrorKey("");
@@ -260,7 +303,7 @@ export function JiraAutomaticRca({
       setOptionsErrorKey("");
       try {
         const res = await fetch(
-          `/api/jira/projects/${encodeURIComponent(lookupKey)}/field-options`,
+          `/api/jira/projects/${encodeURIComponent(key)}/field-options`,
           { credentials: "include" },
         );
         if (!res.ok) throw new Error("failed");
@@ -274,16 +317,16 @@ export function JiraAutomaticRca({
           labelsTruncated: data.labelsTruncated === true,
           errors: Array.isArray(data.errors) ? data.errors : [],
         });
-        setLoadedOptionsKey(lookupKey);
+        setLoadedOptionsKey(key);
       } catch {
         if (!cancelled) {
           setFieldOptions(null);
-          setOptionsErrorKey(lookupKey);
+          setOptionsErrorKey(key);
         }
       }
     })();
     return () => { cancelled = true; };
-  }, [lookupKey]);
+  }, [projectKey]);
 
   // Auto mode is read-only, so a half-edited manual form should not linger.
   useEffect(() => {
@@ -329,8 +372,6 @@ export function JiraAutomaticRca({
     const rule = rules[index];
     setEditingIndex(index);
     setFormOpen(true);
-    // Editing a saved project should load its types now, not after the typing delay.
-    immediateLookup.current = true;
     setProjectKey(rule.projectKey);
     setChecked(rule.issueTypes);
     setPriorities(list(rule.priorities));
@@ -366,61 +407,76 @@ export function JiraAutomaticRca({
   };
 
   const renderProjectField = () => {
-    const listed = projects.some((project) => project.key === projectKey);
-    return (
-      <div className="space-y-1.5">
-        <Label htmlFor="jira-rca-project" className="text-xs">Project key</Label>
-        <Input
-          id="jira-rca-project"
-          value={projectKey}
-          onChange={(event) => {
-            setProjectKey(event.target.value);
-            clearProjectChoices();
-          }}
-          placeholder="OPS"
-          className="h-8 text-sm"
-          disabled={saving}
-        />
-        {loadingProjects ? (
+    // Settled stays false until the request finishes, so an empty list is not a flash of "none found".
+    if (loadingProjects || !projectsSettled) {
+      return (
+        <div className="space-y-1.5">
+          <Label className="text-xs">Project</Label>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             Loading projects
           </div>
-        ) : projects.length > 0 ? (
-          <Select
-            value={listed ? projectKey : undefined}
-            onValueChange={(key) => {
-              immediateLookup.current = true;
-              setProjectKey(key);
-              clearProjectChoices();
-            }}
-            disabled={saving}
-          >
-            <SelectTrigger className="h-8 text-sm">
-              <SelectValue placeholder="Or choose a listed project" />
-            </SelectTrigger>
-            <SelectContent>
-              {projects.map((project) => (
-                <SelectItem key={project.key} value={project.key}>
-                  {project.key} — {project.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : projectsError ? (
-          <p className="text-xs text-muted-foreground">Couldn&apos;t load the project list. Type a project key.</p>
-        ) : (
-          <p className="text-xs text-muted-foreground">No Jira projects found. Type a project key.</p>
-        )}
+        </div>
+      );
+    }
+
+    // A failed or empty catalog is an error, not a free-text project key.
+    if (projectsError || projects.length === 0) {
+      return (
+        <div className="space-y-1.5">
+          <Label className="text-xs">Project</Label>
+          <p className="text-xs text-destructive">
+            {projectsError ? "Couldn't load projects from Jira." : "No Jira projects found."}
+          </p>
+          {projectKey && <p className="text-sm">{projectKey}</p>}
+        </div>
+      );
+    }
+
+    // Keep a saved key visible when Jira no longer lists that project.
+    const listed = projects.some((project) => project.key === projectKey);
+    const options = listed || !projectKey ? projects : [...projects, { key: projectKey, name: "" }];
+
+    return (
+      <div className="space-y-1.5">
+        <Label htmlFor="jira-rca-project" className="text-xs">Project</Label>
+        <Select
+          value={projectKey || undefined}
+          onValueChange={(key) => {
+            setProjectKey(key);
+            clearProjectChoices();
+          }}
+          disabled={saving}
+        >
+          <SelectTrigger id="jira-rca-project" className="h-8 text-sm">
+            <SelectValue placeholder="Choose a project" />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((project) => (
+              <SelectItem key={project.key} value={project.key}>
+                {project.name ? `${project.key} — ${project.name}` : project.key}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
     );
   };
 
-  const optionsLoading = Boolean(lookupKey) && loadedOptionsKey !== lookupKey && optionsErrorKey !== lookupKey;
-  const optionsFailed = Boolean(lookupKey) && optionsErrorKey === lookupKey;
-  const fieldFailed = (name: string) => fieldOptions?.errors.includes(name) === true && loadedOptionsKey === lookupKey;
+  const selectedKey = projectKey.trim();
+  const optionsLoading = Boolean(selectedKey) && loadedOptionsKey !== selectedKey && optionsErrorKey !== selectedKey;
+  const optionsFailed = Boolean(selectedKey) && optionsErrorKey === selectedKey;
+  const fieldFailed = (name: string) => fieldOptions?.errors.includes(name) === true && loadedOptionsKey === selectedKey;
 
   const manual = mode === "manual";
+  const typeNames = loadingTypes || typesError || issueTypes.length === 0
+    ? []
+    : [
+      ...issueTypes,
+      ...checked.filter(
+        (name) => !issueTypes.some((known) => known.toLowerCase() === name.toLowerCase()),
+      ),
+    ];
 
   return (
     <div className="space-y-3 mt-3">
@@ -450,11 +506,18 @@ export function JiraAutomaticRca({
         })}
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        {manual
-          ? "A ticket starts an RCA only when it matches a filter. Leave a limit empty to allow any value. Comments will not change these."
-          : "A ticket starts an RCA only when it matches a filter. Comments on a project that already has a filter can update it. Switch to Manual to edit filters yourself."}
-      </p>
+      {manual ? (
+        <div className="rounded-md border border-[#2684FF]/30 bg-[#2684FF]/[0.06] px-2.5 py-2">
+          <p className="text-sm font-medium">Matching tickets start an RCA</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Without any filters, no ticket triggers an RCA. A ticket that matches a filter is investigated. A ticket that doesn&apos;t match is ignored.
+          </p>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Comments on a project that already has a filter can update it. Switch to Manual to edit filters yourself.
+        </p>
+      )}
 
       {rules.length > 0 ? (
         <ul className="space-y-1.5">
@@ -495,8 +558,8 @@ export function JiraAutomaticRca({
       ) : (
         <p className="text-xs text-muted-foreground">
           {manual
-            ? "No filters yet. Add one, or new tickets are ignored."
-            : "No filters yet. Switch to Manual to add the first one. After that, comments on those projects can update it."}
+            ? "No filters yet."
+            : "No filters yet, so no ticket triggers an RCA. Switch to Manual to add the first one."}
         </p>
       )}
 
@@ -511,10 +574,20 @@ export function JiraAutomaticRca({
         <div className="space-y-3 rounded-md border p-2.5">
           {renderProjectField()}
 
-          {projectKey.trim() && (
+          {selectedKey && (
             <div className="space-y-2">
-              <p className="text-xs font-medium">Ticket types</p>
-              {loadingTypes || projectKey.trim() !== lookupKey ? (
+              {typeNames.length === 0 ? (
+                <p className="text-xs font-medium">Ticket types</p>
+              ) : (
+                <SectionHeading
+                  label="Ticket types"
+                  names={typeNames}
+                  selected={checked}
+                  disabled={saving}
+                  onReplace={setChecked}
+                />
+              )}
+              {loadingTypes ? (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   Loading ticket types
@@ -540,9 +613,7 @@ export function JiraAutomaticRca({
               ) : issueTypes.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No ticket types found in this project.</p>
               ) : (
-                [...issueTypes, ...checked.filter(
-                  (name) => !issueTypes.some((known) => known.toLowerCase() === name.toLowerCase()),
-                )].map((name) => {
+                typeNames.map((name) => {
                   const id = `jira-type-${projectKey}-${name}`;
                   const on = checked.some((item) => item.toLowerCase() === name.toLowerCase());
                   return (
@@ -568,6 +639,7 @@ export function JiraAutomaticRca({
                 options={fieldOptions?.priorities ?? []}
                 selected={priorities}
                 onToggle={(name, on) => setPriorities((current) => toggleIn(current, name, on))}
+                onReplace={setPriorities}
                 disabled={saving}
                 loading={optionsLoading}
                 failed={optionsFailed || fieldFailed("priorities")}
@@ -580,6 +652,7 @@ export function JiraAutomaticRca({
                 options={fieldOptions?.labels ?? []}
                 selected={labels}
                 onToggle={(name, on) => setLabels((current) => toggleIn(current, name, on))}
+                onReplace={setLabels}
                 disabled={saving}
                 loading={optionsLoading}
                 failed={optionsFailed || fieldFailed("labels")}
@@ -592,6 +665,7 @@ export function JiraAutomaticRca({
                 options={fieldOptions?.components ?? []}
                 selected={components}
                 onToggle={(name, on) => setComponents((current) => toggleIn(current, name, on))}
+                onReplace={setComponents}
                 disabled={saving}
                 loading={optionsLoading}
                 failed={optionsFailed || fieldFailed("components")}
@@ -604,6 +678,7 @@ export function JiraAutomaticRca({
                 options={fieldOptions?.statuses ?? []}
                 selected={statuses}
                 onToggle={(name, on) => setStatuses((current) => toggleIn(current, name, on))}
+                onReplace={setStatuses}
                 disabled={saving}
                 loading={optionsLoading}
                 failed={optionsFailed || fieldFailed("statuses")}

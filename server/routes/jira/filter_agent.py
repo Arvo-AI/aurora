@@ -164,7 +164,25 @@ def _accepted_update(
     if error or normalized is None:
         logger.info("[JIRA][FILTERS] Rejected an agent update for user %s", sanitize(user_id))
         return None
-    return normalized
+    project = str(scope.get("projectKey") or "").strip().casefold()
+    # A comment with no project could rewrite every saved rule.
+    if not project:
+        logger.info("[JIRA][FILTERS] Rejected an agent update for user %s", sanitize(user_id))
+        return None
+    preserved = [
+        rule for rule in rules
+        if isinstance(rule, dict)
+        and str(rule.get("projectKey") or "").strip().casefold() != project
+    ]
+    scoped = [
+        rule for rule in normalized
+        if str(rule.get("projectKey") or "").strip().casefold() == project
+    ]
+    merged, merge_error = normalize_rca_rules(preserved + scoped)
+    if merge_error or merged is None:
+        logger.info("[JIRA][FILTERS] Rejected an agent update for user %s", sanitize(user_id))
+        return None
+    return merged
 
 
 def _save_rules(user_id: str, rules: List[Dict[str, Any]]) -> bool:

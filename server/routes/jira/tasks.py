@@ -448,9 +448,9 @@ def manage_jira_rca_filters(self, payload: Dict[str, Any], user_id: Optional[str
     if not user_id:
         return
     lock = _acquire_filter_lock(user_id)
-    # Another comment is already editing this org's filters.
+    # The holder can keep the lock for its whole TTL, past this task's five retries.
     if lock is _LOCK_BUSY:
-        raise self.retry(countdown=15)
+        raise self.retry(countdown=15, max_retries=20)
     try:
         from routes.jira.filter_agent import apply_comment_to_filters
         from routes.jira.jira_routes import connected_jira_account_id

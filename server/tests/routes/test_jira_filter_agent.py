@@ -183,6 +183,29 @@ def test_a_concurrent_save_is_reconciled_by_re_running_against_the_latest_rules(
     assert saved["uid-1"][0]["issueTypes"] == ["Bug", "Incident"]
 
 
+def test_a_comment_cannot_rewrite_another_projects_rules():
+    saved = {}
+    existing = [
+        {"projectKey": "OPS", "issueTypes": ["Bug"]},
+        {"projectKey": "PLAT", "issueTypes": ["Incident"]},
+    ]
+    ok = apply_comment_to_filters(
+        "uid-1",
+        _payload(),
+        propose=lambda comment, rules, scope: _Update(True, [
+            {"projectKey": "OPS", "issueTypes": ["Bug", "Task"]},
+            {"projectKey": "PLAT", "issueTypes": ["Story"]},
+        ]),
+        load_rules=lambda uid: existing,
+        load_mode=lambda uid: "auto",
+        save_rules=lambda uid, rules: saved.update({uid: rules}) or True,
+    )
+    assert ok is True
+    by_project = {rule["projectKey"]: rule["issueTypes"] for rule in saved["uid-1"]}
+    assert by_project["OPS"] == ["Bug", "Task"]
+    assert by_project["PLAT"] == ["Incident"]
+
+
 def test_a_still_changing_concurrent_save_skips_rather_than_overwrites():
     # The rules keep moving even on the re-check — safest is to skip this update entirely.
     rules_sequence = iter([
