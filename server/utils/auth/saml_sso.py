@@ -175,21 +175,29 @@ def request_data(flask_request) -> dict:
 
 def _attr_sources(auth) -> tuple:
     # Name is the claim URI; FriendlyName is the short form some IdPs send alone.
-    sources = [auth.get_attributes() or {}]
+    raw = [auth.get_attributes() or {}]
     friendly = getattr(auth, "get_friendlyname_attributes", None)
     if callable(friendly):
-        sources.append(friendly() or {})
-    return tuple(sources)
+        raw.append(friendly() or {})
+    # Fold once per source. Group claims are large, and every lookup shares this.
+    return tuple(_index_attrs(source) for source in raw)
 
 
-def _folded(attrs) -> dict:
-    if not isinstance(attrs, dict):
-        return {}
-    lowered = {}
-    for key, values in attrs.items():
-        if isinstance(key, str):
-            lowered.setdefault(key.casefold(), values)
-    return lowered
+def _index_attrs(attrs) -> tuple[dict, dict]:
+    exact = attrs if isinstance(attrs, dict) else {}
+    folded: dict = {}
+    for key, values in exact.items():
+        # Claim names are strings; anything else isn't a key we look up.
+        if not isinstance(key, str):
+            continue
+        # Merge every casing so an empty first key cannot hide a later value.
+        bucket = folded.setdefault(key.casefold(), [])
+        if isinstance(values, list):
+            bucket.extend(values)
+        # A lone string must stay one value, not be split into characters.
+        elif values is not None:
+            bucket.append(values)
+    return exact, folded
 
 
 def _first_value(values) -> str:
@@ -200,11 +208,13 @@ def _first_value(values) -> str:
 
 
 def _first(sources: tuple, names: tuple) -> str:
-    folded_names = tuple(name.casefold() for name in names)
-    for attrs in sources:
-        lowered = _folded(attrs)
-        for name in folded_names:
-            found = _first_value(lowered.get(name))
+    for exact, folded in sources:
+        for name in names:
+            # The spelled key beats a case-only twin, in preference-list order.
+            found = _first_value(exact.get(name))
+            if found:
+                return found
+            found = _first_value(folded.get(name.casefold()))
             if found:
                 return found
     return ""
@@ -234,8 +244,12 @@ def _join_name(given: str, surname: str, display: str) -> str:
     # Both parts are present — `name` is often only the given name.
     if given and surname:
         return f"{given} {surname}"
-    # Surname arrived separately from a single-word name/displayName.
-    if display and surname:
+    # Only a one-word display is a bare first name. A longer one is already
+    # the full name; punctuation and accents make token matching unreliable.
+    if (
+        display and surname and len(display.split()) == 1
+        and display.casefold() != surname.casefold()
+    ):
         return f"{display} {surname}"
     return display or given or surname
 
@@ -363,15 +377,20 @@ def _store_display_name(cur, user_id: str, name: str | None) -> None:
     # An assertion with no name must not wipe the one already stored.
     if not name:
         return
-    cur.execute("SELECT name FROM users WHERE id = %s", (user_id,))
-    row = cur.fetchone()
-    current = row[0] if row and row[0] else ""
-    # A later login that only carries the given name must not erase a full name.
-    if " " in current and " " not in name:
-        return
-    if current == name:
-        return
-    cur.execute("UPDATE users SET name = %s WHERE id = %s", (name, user_id))
+    # One round-trip, and no read/write window. Fill a blank, or extend a
+    # given-name-only value ("Ada" -> "Ada Lovelace"). Any other stored name
+    # — an invite, a user edit — stays put.
+    cur.execute(
+        """UPDATE users
+              SET name = %s
+            WHERE id = %s
+              AND COALESCE(name, '') <> %s
+              AND (
+                    COALESCE(name, '') = ''
+                    OR starts_with(%s, COALESCE(name, '') || ' ')
+                  )""",
+        (name, user_id, name, name),
+    )
 
 
 def resolve_user(

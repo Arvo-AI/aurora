@@ -42,14 +42,15 @@ class FakeCursor:
             if "must_change_password = FALSE" in sql:
                 user["must_change_password"] = False
             self._result = []
-        elif sql.startswith("SELECT name FROM users WHERE id"):
-            (user_id,) = params
-            user = next(u for u in self.users if u["id"] == user_id)
-            self._result = [(user.get("name"),)]
         elif sql.startswith("UPDATE users SET name"):
-            name, user_id = params
+            # The guard has to live in the SQL: a SELECT-then-UPDATE would race.
+            if "starts_with" not in sql:
+                raise AssertionError(f"name update lost its guard: {sql}")
+            name, user_id, _unchanged, _extension = params
             user = next(u for u in self.users if u["id"] == user_id)
-            user["name"] = name
+            current = user.get("name") or ""
+            if current != name and (current == "" or name.startswith(current + " ")):
+                user["name"] = name
             self._result = []
         elif sql.startswith(("SAVEPOINT", "ROLLBACK TO SAVEPOINT")):
             self._result = []
@@ -134,6 +135,29 @@ class TestExtractIdentity:
         auth = _Auth({"displayName": ["Ada van Dyke"], "surname": ["van Dyke"]})
         assert sso.extract_identity(auth)["name"] == "Ada van Dyke"
 
+    @pytest.mark.parametrize("display,surname", [
+        ("Lovelace, Ada", "Lovelace"),
+        ("José García", "Garcia"),
+        ("Sean O\u2019Brien", "O'Brien"),
+        ("Lovelace", "Lovelace"),
+    ])
+    def test_punctuated_or_accented_display_name_is_not_extended(self, display, surname):
+        # Token matching misses commas, accents, and curly apostrophes.
+        auth = _Auth({"displayName": [display], "sn": [surname]})
+        assert sso.extract_identity(auth)["name"] == display
+
+    def test_exact_key_wins_over_an_earlier_different_casing(self):
+        auth = _Auth({
+            "GivenName": ["Wrong"],
+            "givenName": ["First"],
+            "sn": ["Last"],
+        })
+        assert sso.extract_identity(auth)["name"] == "First Last"
+
+    def test_empty_exact_key_falls_through_to_the_other_casing(self):
+        auth = _Auth({"givenName": [" "], "GivenName": ["First"], "sn": ["Last"]})
+        assert sso.extract_identity(auth)["name"] == "First Last"
+
     def test_display_name_with_middle_name_is_kept(self):
         auth = _Auth({
             "displayName": ["First Q. Last"],
@@ -216,6 +240,16 @@ class TestResolveUser:
             domains=[ACME_DOMAIN],
             users=[{"id": "uid-a", "email": "first.last@example.com", "name": "Invited Name",
                     "org_id": "org-acme", "sso_subject": None}],
+        )
+        assert sso.resolve_user(cur, "org-acme", _identity(name="First Last"), "viewer") == ("uid-a", False)
+        assert cur.users[0]["name"] == "Invited Name"
+
+    def test_second_login_keeps_a_stored_full_name(self):
+        # The link above is the first login. The next one matches sso_subject.
+        cur = FakeCursor(
+            domains=[ACME_DOMAIN],
+            users=[{"id": "uid-a", "email": "first.last@example.com", "name": "Invited Name",
+                    "org_id": "org-acme", "sso_subject": "sub-1"}],
         )
         assert sso.resolve_user(cur, "org-acme", _identity(name="First Last"), "viewer") == ("uid-a", False)
         assert cur.users[0]["name"] == "Invited Name"
