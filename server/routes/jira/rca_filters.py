@@ -1,8 +1,8 @@
-"""Programmatic filters for which Jira tickets start an RCA.
+"""Which Jira tickets start an RCA.
 
-A ticket matches when its project, type, and any extra fields hit a saved
-rule. JQL is an optional extra clause checked by the caller. Comments never
-start an RCA.
+In Filters mode a ticket matches when its project, type, and any extra fields
+hit a saved rule; JQL is an optional extra clause checked by the caller. In Auto
+mode the judge decides. Comments never start an RCA.
 """
 
 from __future__ import annotations
@@ -342,8 +342,8 @@ def is_comment_event(payload: Dict[str, Any]) -> bool:
     return event in _COMMENT_WEBHOOK_EVENTS or event_name in _COMMENT_ISSUE_EVENTS
 
 
-def decide_webhook(payload: Dict[str, Any], rules: Any) -> Dict[str, Any]:
-    """What a webhook should do: start RCA, check JQL, or ignore."""
+def decide_webhook(payload: Dict[str, Any], rules: Any, mode: str = "filters") -> Dict[str, Any]:
+    """What a webhook should do: start RCA, check JQL, ask the judge, or ignore."""
     issue = payload.get("issue") if isinstance(payload, dict) else None
     if not isinstance(issue, dict) or not issue:
         return {"action": "ignore", "reason": "no issue"}
@@ -353,6 +353,10 @@ def decide_webhook(payload: Dict[str, Any], rules: Any) -> Dict[str, Any]:
         return {"action": "ignore", "reason": "comment"}
 
     scope = extract_webhook_scope(issue)
+    # Auto replaces the filters: the judge alone decides.
+    if mode == "auto":
+        return {"action": "judge", "scope": scope}
+
     kind = match_kind(scope, rules)
     if kind == "match":
         return {"action": "rca", "scope": scope}

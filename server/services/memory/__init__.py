@@ -26,6 +26,14 @@ SLACK_MEMORY_TITLE = "Slack"
 # the post-RCA team-routing agent that picks which team channels to post to.
 SLACK_POLICY_SOURCES = frozenset({"slack", "team_routing"})
 
+# The Jira automatic-RCA policy (one per org): the judge reads it to decide which
+# tickets get an RCA, and users and the agent refine it like the Slack entry.
+JIRA_MEMORY_CATEGORY = "context"
+JIRA_MEMORY_TITLE = "Jira RCA"
+
+# Jira-triggered RCAs always see the policy, so they can refine it from what they find.
+JIRA_POLICY_SOURCES = frozenset({"jira"})
+
 # Well-known entries whose (category, title) pair IS their stable identity —
 # seeders, the agent's prompt injector, and route lookups all pin to it rather
 # than to an id. Users may freely edit their content and description, but renaming,
@@ -34,6 +42,7 @@ SLACK_POLICY_SOURCES = frozenset({"slack", "team_routing"})
 # memory routes reject those operations.
 PROTECTED_ENTRIES = frozenset({
     (SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE),
+    (JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE),
 })
 
 # All valid categories (used by memory_tool for validation)

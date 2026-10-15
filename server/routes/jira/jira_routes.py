@@ -274,7 +274,9 @@ def link_issues(user_id):
 JIRA_MODE_KEY = "jira_mode"
 JIRA_COMMENT_BACK_KEY = "jira_comment_back"
 JIRA_RCA_RULES_KEY = "jira_rca_rules"
+JIRA_RCA_MODE_KEY = "jira_rca_mode"
 VALID_MODES = ("full", "comment_only")
+RCA_MODES = ("filters", "auto")
 
 
 def get_jira_rca_rules(user_id: str, *, strict: bool = False) -> List[Dict[str, Any]]:
@@ -283,6 +285,12 @@ def get_jira_rca_rules(user_id: str, *, strict: bool = False) -> List[Dict[str, 
     if not isinstance(stored, list):
         return []
     return stored
+
+
+def get_jira_rca_mode(user_id: str, *, strict: bool = False) -> str:
+    """'auto' only when chosen. Unset or unknown values stay on the saved filters."""
+    stored = get_user_preference(user_id, JIRA_RCA_MODE_KEY, default="filters", strict=strict)
+    return "auto" if stored == "auto" else "filters"
 
 
 def jira_comment_back_enabled(user_id: str) -> bool:
@@ -297,9 +305,10 @@ def _store_jira_settings(
     mode: Optional[str],
     comment_back: Optional[bool],
     rca_rules: Optional[List[Dict[str, Any]]] = None,
+    rca_mode: Optional[str] = None,
 ) -> bool:
     """Write all supplied Jira prefs in one transaction."""
-    if mode is None and comment_back is None and rca_rules is None:
+    if mode is None and comment_back is None and rca_rules is None and rca_mode is None:
         return True
 
     conn = None
@@ -319,6 +328,8 @@ def _store_jira_settings(
         # An empty list is a real value: it turns automatic RCA off.
         if rca_rules is not None:
             updates.append((JIRA_RCA_RULES_KEY, rca_rules))
+        if rca_mode is not None:
+            updates.append((JIRA_RCA_MODE_KEY, rca_mode))
 
         for key, value in updates:
             cursor.execute(
@@ -352,6 +363,7 @@ def _settings_payload(user_id: str) -> Dict[str, Any]:
         "jiraMode": mode,
         "commentBack": jira_comment_back_enabled(user_id),
         "rcaRules": get_jira_rca_rules(user_id),
+        "rcaMode": get_jira_rca_mode(user_id),
     }
 
 
@@ -372,15 +384,18 @@ def update_settings(user_id):
     mode = data.get("jiraMode")
     comment_back = data.get("commentBack")
     has_rules = "rcaRules" in data
+    rca_mode = data.get("rcaMode")
 
-    # Each control saves on its own — mode, comment-back, and RCA rules.
-    if mode is None and comment_back is None and not has_rules:
-        return jsonify({"error": "jiraMode, commentBack, or rcaRules is required"}), 400
+    # Each control saves on its own — mode, comment-back, RCA rules, and RCA mode.
+    if mode is None and comment_back is None and not has_rules and rca_mode is None:
+        return jsonify({"error": "jiraMode, commentBack, rcaRules, or rcaMode is required"}), 400
 
     if mode is not None and mode not in VALID_MODES:
         return jsonify({"error": f"jiraMode must be one of: {', '.join(VALID_MODES)}"}), 400
     if comment_back is not None and not isinstance(comment_back, bool):
         return jsonify({"error": "commentBack must be a boolean"}), 400
+    if rca_mode is not None and rca_mode not in RCA_MODES:
+        return jsonify({"error": f"rcaMode must be one of: {', '.join(RCA_MODES)}"}), 400
 
     rca_rules = None
     if has_rules:
@@ -393,8 +408,14 @@ def update_settings(user_id):
         mode=mode,
         comment_back=comment_back,
         rca_rules=rca_rules,
+        rca_mode=rca_mode,
     ):
         return jsonify({"error": "Failed to store Jira settings"}), 500
+
+    # Auto needs its policy memory; create it now so the card shows it right away.
+    if rca_mode == "auto":
+        from services.memory.jira_memory import seed_jira_memory
+        seed_jira_memory(user_id)
 
     # Jira prefs are org-scoped — invalidate every member's cached tool list.
     from chat.backend.agent.tools.mcp_tools import (
@@ -409,11 +430,12 @@ def update_settings(user_id):
         clear_credentials_cache(user_id)
 
     logger.info(
-        "[JIRA] Updated settings for user %s: jiraMode=%s commentBack=%s rcaRules=%s",
+        "[JIRA] Updated settings for user %s: jiraMode=%s commentBack=%s rcaRules=%s rcaMode=%s",
         sanitize(user_id),
         sanitize(mode),
         sanitize(comment_back),
         sanitize(len(rca_rules) if rca_rules is not None else None),
+        sanitize(rca_mode),
     )
 
     payload = _settings_payload(user_id)
@@ -633,13 +655,15 @@ def webhook(user_id: str):
     # Automatic RCA is opt-in. Asking Aurora to investigate a named ticket
     # does not go through this path.
     try:
-        rules = get_jira_rca_rules(user_id, strict=True)
+        rca_mode = get_jira_rca_mode(user_id, strict=True)
+        # Auto ignores the filters, so it doesn't need them.
+        rules = [] if rca_mode == "auto" else get_jira_rca_rules(user_id, strict=True)
     except Exception:
         # A failed read must not look like "no rules" — Jira will retry a 503.
-        logger.exception("[JIRA][WEBHOOK] Could not read RCA filters for user %s", sanitize(user_id))
-        return jsonify({"status": "error", "reason": "could not read RCA filters"}), 503
+        logger.exception("[JIRA][WEBHOOK] Could not read RCA settings for user %s", sanitize(user_id))
+        return jsonify({"status": "error", "reason": "could not read RCA settings"}), 503
 
-    decision = decide_webhook(payload, rules)
+    decision = decide_webhook(payload, rules, rca_mode)
     action = decision["action"]
     scope = decision.get("scope") or {}
 
@@ -654,16 +678,20 @@ def webhook(user_id: str):
         )
         return jsonify({"status": "ignored", "reason": decision.get("reason") or "filters"}), 200
 
-    # Only a matched filter starts an investigation. Anything else was handled above.
-    if action not in ("rca", "jql"):
+    # Only a matched filter or the judge starts an investigation. Anything else was handled above.
+    if action not in ("rca", "jql", "judge"):
         return jsonify({"status": "ignored", "reason": decision.get("reason") or "filters"}), 200
 
     # JQL is confirmed in the task. A Jira round trip here would turn a slow search into a 503.
     jql_clauses = decision.get("jql") or [] if action == "jql" else None
 
-    from routes.jira.tasks import process_jira_webhook
+    from routes.jira.tasks import judge_jira_ticket, process_jira_webhook
     try:
-        process_jira_webhook.delay(payload=payload, user_id=user_id, jql_clauses=jql_clauses)
+        # The judge is an LLM call; run it off the request so Jira gets a fast answer.
+        if action == "judge":
+            judge_jira_ticket.delay(payload=payload, user_id=user_id)
+        else:
+            process_jira_webhook.delay(payload=payload, user_id=user_id, jql_clauses=jql_clauses)
     except Exception:
         # Broker/registration failure is on our side, not the sender's — return
         # 503 so Jira retries rather than treating it as a malformed webhook (500).
