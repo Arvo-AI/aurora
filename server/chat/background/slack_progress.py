@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -22,7 +23,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_INTERVAL_SECONDS = 30.0
 _MIN_INTERVAL_SECONDS = 10.0
 _THOUGHT_MAX_CHARS = 280
-_COMMAND_MAX_CHARS = 90
 _TEXT_BUFFER_MAX_CHARS = 4000
 # Give up on the placeholder after this many failed edits (deleted message, revoked token…).
 _MAX_CONSECUTIVE_FAILURES = 3
@@ -36,6 +36,9 @@ def progress_interval_seconds() -> float:
     try:
         value = float(raw) if raw else DEFAULT_INTERVAL_SECONDS
     except ValueError:
+        value = DEFAULT_INTERVAL_SECONDS
+    # float("nan") and "inf" don't raise, and max(nan, floor) stays nan
+    if not math.isfinite(value):
         value = DEFAULT_INTERVAL_SECONDS
     return max(value, _MIN_INTERVAL_SECONDS)
 
@@ -97,27 +100,9 @@ def latest_thought(buffer: str, max_chars: int = _THOUGHT_MAX_CHARS) -> str:
     return _slack_escape(excerpt)
 
 
-def _shorten(text: str, max_chars: int) -> str:
-    text = _one_line(text)
-    if len(text) > max_chars:
-        return text[: max_chars - 1].rstrip() + "…"
-    return text
-
-
-def describe_tool(tool_name: str, tool_input: Any) -> str:
-    """One-line description of a running tool for the progress note."""
-    label = f"`{_slack_escape(tool_name)}`"
-    command = None
-    if isinstance(tool_input, dict):
-        for key in ("command", "query", "cmd"):
-            value = tool_input.get(key)
-            if isinstance(value, str) and value.strip():
-                command = value
-                break
-    if command:
-        # Backticks inside the command would break the inline code span
-        label += " — `" + _slack_escape(_shorten(command.replace("`", "'"), _COMMAND_MAX_CHARS)) + "`"
-    return label
+def describe_tool(tool_name: str, _tool_input: Any) -> str:
+    """Tool name only. Command text can carry secrets that redact() fails open on."""
+    return f"`{_slack_escape(tool_name)}`"
 
 
 def render_progress_note(
@@ -198,9 +183,9 @@ class SlackProgressReporter:
         with self._lock:
             self._text_buffer = (self._text_buffer + text)[-_TEXT_BUFFER_MAX_CHARS:]
 
-    def _tool_capture(self):
-        agent = getattr(self.workflow, "agent", None)
-        return getattr(agent, "tool_capture_instance", None)
+    def _tool_capture(self) -> Any:
+        # Agent.tool_capture_instance is one slot per worker; a concurrent turn overwrites it
+        return getattr(self.workflow, "tool_capture", None)
 
     def _running_tool(self) -> Optional[str]:
         capture = self._tool_capture()

@@ -31,6 +31,10 @@ def bg():
 
         yield SimpleNamespace(task=task, sp=sp, BackgroundWebSocket=BackgroundWebSocket)
 
+    # The import above cached a Redis-stubbed module; drop it if it's still ours
+    if sys.modules.get("chat.background.task") is task:
+        sys.modules.pop("chat.background.task", None)
+
 
 # ---------------------------------------------------------------------------
 # Pure formatting
@@ -58,22 +62,16 @@ def test_latest_thought_caps_length_with_most_recent_sentences(bg):
     assert thought.endswith("Sentence number 39 is here.")
 
 
-def test_describe_tool_shortens_command_and_escapes_backticks(bg):
-    desc = bg.sp.describe_tool("cloud_exec", {"command": "kubectl logs `pod` -n ns " + "x" * 200})
-    assert desc.startswith("`cloud_exec` — `kubectl logs 'pod' -n ns")
-    assert desc.endswith("…`")
-    assert len(desc) < 130
-
-
-def test_slack_markup_is_escaped_in_thought_and_command(bg):
-    assert bg.sp.latest_thought("Pods <api> & <web> are down.") == "Pods &lt;api&gt; &amp; &lt;web&gt; are down."
-    desc = bg.sp.describe_tool("cloud_exec", {"command": "cat a > b"})
-    assert "&gt;" in desc
-    assert ">" not in desc.replace("&gt;", "")
-
-
-def test_describe_tool_without_command_is_just_the_name(bg):
+def test_describe_tool_is_name_only(bg):
+    secret = "AKIA" + "ABCDEFGHIJKLMNOP"
+    desc = bg.sp.describe_tool("cloud_exec", {"command": f"kubectl logs `pod` && echo {secret}"})
+    assert desc == "`cloud_exec`"
+    assert secret not in desc
     assert bg.sp.describe_tool("search_memory", {"query_vector": [1, 2]}) == "`search_memory`"
+
+
+def test_slack_markup_is_escaped_in_thought(bg):
+    assert bg.sp.latest_thought("Pods <api> & <web> are down.") == "Pods &lt;api&gt; &amp; &lt;web&gt; are down."
 
 
 def test_render_progress_note_is_labelled_as_not_the_answer(bg):
@@ -107,6 +105,10 @@ def test_progress_interval_env_and_floor(bg, monkeypatch):
     assert bg.sp.progress_interval_seconds() == 10.0
     monkeypatch.setenv("SLACK_PROGRESS_UPDATE_INTERVAL_SECONDS", "garbage")
     assert bg.sp.progress_interval_seconds() == bg.sp.DEFAULT_INTERVAL_SECONDS
+    monkeypatch.setenv("SLACK_PROGRESS_UPDATE_INTERVAL_SECONDS", "nan")
+    assert bg.sp.progress_interval_seconds() == bg.sp.DEFAULT_INTERVAL_SECONDS
+    monkeypatch.setenv("SLACK_PROGRESS_UPDATE_INTERVAL_SECONDS", "inf")
+    assert bg.sp.progress_interval_seconds() == bg.sp.DEFAULT_INTERVAL_SECONDS
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +128,7 @@ def _capture(running=(), completed=0):
 
 
 def _reporter(bg, capture=None, interval=0.01):
-    wf = SimpleNamespace(agent=SimpleNamespace(tool_capture_instance=capture))
+    wf = SimpleNamespace(tool_capture=capture)
     return bg.sp.SlackProgressReporter(
         user_id="uid-test", channel="C000", message_ts="1.0", workflow=wf, interval_seconds=interval
     )
@@ -148,7 +150,8 @@ def test_snapshot_reads_running_tool_and_history_from_capture(bg):
     r.observe({"type": "message", "data": {"text": "Pulling pod list now."}})
     note = r.snapshot()
     assert "4 tool calls so far" in note
-    assert "*Currently running:* `cloud_exec` — `kubectl get pods -A`" in note
+    assert "*Currently running:* `cloud_exec`" in note
+    assert "kubectl get pods" not in note
     assert "> Pulling pod list now." in note
 
 
