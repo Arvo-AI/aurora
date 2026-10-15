@@ -70,6 +70,14 @@ class BaseLLMProvider(ABC):
         """Initialize the provider."""
         self.provider_name = self.__class__.__name__.replace("Provider", "").lower()
 
+    def prompt_cache_style(self, model: str) -> Optional[str]:
+        """Marker style this provider needs to cache a prompt prefix for ``model``.
+
+        Returns a ``CACHE_STYLE_*`` constant from ``utils.cache_control``. Default None:
+        no markers sent (OpenAI/Gemini cache implicitly, others not at all).
+        """
+        return None
+
     @abstractmethod
     def get_chat_model(
         self, model: str, temperature: float = 0.4, **kwargs
