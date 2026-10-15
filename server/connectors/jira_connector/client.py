@@ -12,6 +12,13 @@ logger = logging.getLogger(__name__)
 JIRA_OAUTH_API_BASE = "https://api.atlassian.com/ex/jira"
 
 
+def account_id_from_myself(myself: Any) -> str:
+    """Stable id for the connected user. Cloud uses accountId; Data Center uses key."""
+    if not isinstance(myself, dict):
+        return ""
+    return str(myself.get("accountId") or myself.get("key") or myself.get("name") or "").strip()
+
+
 def _log_unknown_auth_type(auth_type: str) -> None:
     logger.warning("Unknown Jira auth_type=%s; defaulting to Bearer token.", auth_type)
 
@@ -293,6 +300,20 @@ class JiraClient:
 
     def list_projects(self, limit: int = 200) -> List[Dict[str, Any]]:
         """Page through accessible projects, capped so a large site stays bounded."""
+        try:
+            return self._list_project_search(limit)
+        except requests.HTTPError as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            # Data Center has no /project/search. /project returns the catalog.
+            if status != 404:
+                raise
+            logger.info("Jira /project/search unavailable (status=404), falling back to /project")
+            result = self._request("GET", "/project")
+            if isinstance(result, list):
+                return result[:limit]
+            return (result.get("values") or [])[:limit]
+
+    def _list_project_search(self, limit: int) -> List[Dict[str, Any]]:
         collected: List[Dict[str, Any]] = []
         start = 0
         while len(collected) < limit:
@@ -302,7 +323,7 @@ class JiraClient:
                 "/project/search",
                 params={"maxResults": page_size, "startAt": start},
             )
-            # Older Jira Server returned a bare list instead of {values, isLast}.
+            # A 200 body that is a list is the whole catalog, not one page.
             if isinstance(result, list):
                 return result[:limit]
             values = result.get("values") or []

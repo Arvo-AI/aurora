@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -166,9 +166,12 @@ export function JiraAutomaticRca({
   onSave,
 }: Readonly<JiraAutomaticRcaProps>) {
   const [projects, setProjects] = useState<JiraProject[]>([]);
-  const [loadingProjects, setLoadingProjects] = useState(true);
+  const [loadingProjects, setLoadingProjects] = useState(false);
   const [projectsError, setProjectsError] = useState(false);
+  const projectsFetchStarted = useRef(false);
   const [projectKey, setProjectKey] = useState("");
+  const [lookupKey, setLookupKey] = useState("");
+  const immediateLookup = useRef(false);
   const [issueTypes, setIssueTypes] = useState<string[]>([]);
   const [loadingTypes, setLoadingTypes] = useState(false);
   const [typesError, setTypesError] = useState(false);
@@ -185,25 +188,37 @@ export function JiraAutomaticRca({
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    // The form is the only place that lists projects, including in auto where it stays closed.
+    if (!formOpen || projectsFetchStarted.current) return;
+    projectsFetchStarted.current = true;
+    setLoadingProjects(true);
     void (async () => {
-      setLoadingProjects(true);
       try {
         const res = await fetch("/api/jira/projects", { credentials: "include" });
         if (!res.ok) throw new Error("failed");
         const data = await res.json();
-        if (!cancelled) setProjects(Array.isArray(data.projects) ? data.projects : []);
+        setProjects(Array.isArray(data.projects) ? data.projects : []);
       } catch {
-        if (!cancelled) setProjectsError(true);
+        setProjectsError(true);
       } finally {
-        if (!cancelled) setLoadingProjects(false);
+        setLoadingProjects(false);
       }
     })();
-    return () => { cancelled = true; };
-  }, []);
+  }, [formOpen]);
 
   useEffect(() => {
-    if (!projectKey || projectsError) {
+    // A dropdown pick already set the lookup key. Typing waits so O, OP, OPS are not three requests.
+    if (immediateLookup.current) {
+      immediateLookup.current = false;
+      setLookupKey(projectKey.trim());
+      return;
+    }
+    const handle = window.setTimeout(() => setLookupKey(projectKey.trim()), 400);
+    return () => window.clearTimeout(handle);
+  }, [projectKey]);
+
+  useEffect(() => {
+    if (!lookupKey) {
       setIssueTypes([]);
       setTypesError(false);
       return;
@@ -214,7 +229,7 @@ export function JiraAutomaticRca({
       setTypesError(false);
       try {
         const res = await fetch(
-          `/api/jira/projects/${encodeURIComponent(projectKey)}/issue-types`,
+          `/api/jira/projects/${encodeURIComponent(lookupKey)}/issue-types`,
           { credentials: "include" },
         );
         if (!res.ok) throw new Error("failed");
@@ -230,10 +245,10 @@ export function JiraAutomaticRca({
       }
     })();
     return () => { cancelled = true; };
-  }, [projectKey, projectsError]);
+  }, [lookupKey]);
 
   useEffect(() => {
-    if (!projectKey || projectsError) {
+    if (!lookupKey) {
       setFieldOptions(null);
       setLoadedOptionsKey("");
       setOptionsErrorKey("");
@@ -245,7 +260,7 @@ export function JiraAutomaticRca({
       setOptionsErrorKey("");
       try {
         const res = await fetch(
-          `/api/jira/projects/${encodeURIComponent(projectKey)}/field-options`,
+          `/api/jira/projects/${encodeURIComponent(lookupKey)}/field-options`,
           { credentials: "include" },
         );
         if (!res.ok) throw new Error("failed");
@@ -259,16 +274,16 @@ export function JiraAutomaticRca({
           labelsTruncated: data.labelsTruncated === true,
           errors: Array.isArray(data.errors) ? data.errors : [],
         });
-        setLoadedOptionsKey(projectKey);
+        setLoadedOptionsKey(lookupKey);
       } catch {
         if (!cancelled) {
           setFieldOptions(null);
-          setOptionsErrorKey(projectKey);
+          setOptionsErrorKey(lookupKey);
         }
       }
     })();
     return () => { cancelled = true; };
-  }, [projectKey, projectsError]);
+  }, [lookupKey]);
 
   // Auto mode is read-only, so a half-edited manual form should not linger.
   useEffect(() => {
@@ -277,6 +292,14 @@ export function JiraAutomaticRca({
       setEditingIndex(null);
     }
   }, [mode]);
+
+  const clearProjectChoices = () => {
+    setChecked([]);
+    setPriorities([]);
+    setLabels([]);
+    setComponents([]);
+    setStatuses([]);
+  };
 
   const resetForm = () => {
     setFormOpen(false);
@@ -306,6 +329,8 @@ export function JiraAutomaticRca({
     const rule = rules[index];
     setEditingIndex(index);
     setFormOpen(true);
+    // Editing a saved project should load its types now, not after the typing delay.
+    immediateLookup.current = true;
     setProjectKey(rule.projectKey);
     setChecked(rule.issueTypes);
     setPriorities(list(rule.priorities));
@@ -316,9 +341,10 @@ export function JiraAutomaticRca({
   };
 
   const saveRule = async () => {
-    if (!projectKey || checked.length === 0) return;
+    const key = projectKey.trim();
+    if (!key || checked.length === 0) return;
     const rule: JiraRcaRule = {
-      projectKey,
+      projectKey: key,
       issueTypes: checked,
       priorities,
       labels,
@@ -340,51 +366,59 @@ export function JiraAutomaticRca({
   };
 
   const renderProjectField = () => {
-    if (loadingProjects) {
-      return (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Loading projects
-        </div>
-      );
-    }
-    // A failed or empty project list has nothing to pick, so don't offer a typed key.
-    if (projectsError) {
-      return <p className="text-xs text-destructive">Couldn't load Jira projects.</p>;
-    }
-    if (projects.length === 0) {
-      return <p className="text-xs text-muted-foreground">No Jira projects found.</p>;
-    }
+    const listed = projects.some((project) => project.key === projectKey);
     return (
-      <Select
-        value={projectKey || undefined}
-        onValueChange={(key) => {
-          setProjectKey(key);
-          setChecked([]);
-          setPriorities([]);
-          setLabels([]);
-          setComponents([]);
-          setStatuses([]);
-        }}
-        disabled={saving}
-      >
-        <SelectTrigger className="h-8 text-sm">
-          <SelectValue placeholder="Choose a project" />
-        </SelectTrigger>
-        <SelectContent>
-          {projects.map((project) => (
-            <SelectItem key={project.key} value={project.key}>
-              {project.key} — {project.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <div className="space-y-1.5">
+        <Label htmlFor="jira-rca-project" className="text-xs">Project key</Label>
+        <Input
+          id="jira-rca-project"
+          value={projectKey}
+          onChange={(event) => {
+            setProjectKey(event.target.value);
+            clearProjectChoices();
+          }}
+          placeholder="OPS"
+          className="h-8 text-sm"
+          disabled={saving}
+        />
+        {loadingProjects ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Loading projects
+          </div>
+        ) : projects.length > 0 ? (
+          <Select
+            value={listed ? projectKey : undefined}
+            onValueChange={(key) => {
+              immediateLookup.current = true;
+              setProjectKey(key);
+              clearProjectChoices();
+            }}
+            disabled={saving}
+          >
+            <SelectTrigger className="h-8 text-sm">
+              <SelectValue placeholder="Or choose a listed project" />
+            </SelectTrigger>
+            <SelectContent>
+              {projects.map((project) => (
+                <SelectItem key={project.key} value={project.key}>
+                  {project.key} — {project.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : projectsError ? (
+          <p className="text-xs text-muted-foreground">Couldn&apos;t load the project list. Type a project key.</p>
+        ) : (
+          <p className="text-xs text-muted-foreground">No Jira projects found. Type a project key.</p>
+        )}
+      </div>
     );
   };
 
-  const optionsLoading = Boolean(projectKey) && loadedOptionsKey !== projectKey && optionsErrorKey !== projectKey;
-  const optionsFailed = Boolean(projectKey) && optionsErrorKey === projectKey;
-  const fieldFailed = (name: string) => fieldOptions?.errors.includes(name) === true && loadedOptionsKey === projectKey;
+  const optionsLoading = Boolean(lookupKey) && loadedOptionsKey !== lookupKey && optionsErrorKey !== lookupKey;
+  const optionsFailed = Boolean(lookupKey) && optionsErrorKey === lookupKey;
+  const fieldFailed = (name: string) => fieldOptions?.errors.includes(name) === true && loadedOptionsKey === lookupKey;
 
   const manual = mode === "manual";
 
@@ -408,7 +442,7 @@ export function JiraAutomaticRca({
               <span className="text-sm font-medium">{value === "auto" ? "Auto" : "Manual"}</span>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {value === "auto"
-                  ? "Aurora updates filters from comments on tickets"
+                  ? "Aurora updates existing filters from comments on those projects"
                   : "You set every filter yourself"}
               </p>
             </button>
@@ -419,7 +453,7 @@ export function JiraAutomaticRca({
       <p className="text-xs text-muted-foreground">
         {manual
           ? "A ticket starts an RCA only when it matches a filter. Leave a limit empty to allow any value. Comments will not change these."
-          : "A ticket starts an RCA only when it matches a filter. Aurora reads new comments on tickets and updates the filters. Switch to Manual to edit them yourself."}
+          : "A ticket starts an RCA only when it matches a filter. Comments on a project that already has a filter can update it. Switch to Manual to edit filters yourself."}
       </p>
 
       {rules.length > 0 ? (
@@ -462,7 +496,7 @@ export function JiraAutomaticRca({
         <p className="text-xs text-muted-foreground">
           {manual
             ? "No filters yet. Add one, or new tickets are ignored."
-            : "No filters yet. Comment on a Jira ticket, for example: only investigate Bugs in OPS at High priority."}
+            : "No filters yet. Switch to Manual to add the first one. After that, comments on those projects can update it."}
         </p>
       )}
 
@@ -477,10 +511,10 @@ export function JiraAutomaticRca({
         <div className="space-y-3 rounded-md border p-2.5">
           {renderProjectField()}
 
-          {projectKey && !projectsError && (
+          {projectKey.trim() && (
             <div className="space-y-2">
               <p className="text-xs font-medium">Ticket types</p>
-              {loadingTypes ? (
+              {loadingTypes || projectKey.trim() !== lookupKey ? (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   Loading ticket types
@@ -597,7 +631,7 @@ export function JiraAutomaticRca({
               type="button"
               size="sm"
               className="h-8"
-              disabled={saving || !projectKey || projectsError || checked.length === 0}
+              disabled={saving || !projectKey.trim() || checked.length === 0}
               onClick={saveRule}
             >
               {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Plus className="mr-1.5 h-3.5 w-3.5" />}

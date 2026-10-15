@@ -85,6 +85,39 @@ def test_list_priorities_falls_back_when_search_is_missing(monkeypatch):
     assert client.list_priorities() == [{"name": "High"}]
 
 
+def test_list_projects_falls_back_to_plain_project_on_data_center_404(monkeypatch):
+    client = JiraClient("https://jira.example.test", "token", auth_type="pat")
+
+    def request(method, path, params=None, json_body=None):
+        if path == "/project/search":
+            raise _http_error(404)
+        assert path == "/project"
+        return [{"key": "OPS", "name": "Ops"}]
+
+    monkeypatch.setattr(client, "_request", request)
+    assert client.list_projects() == [{"key": "OPS", "name": "Ops"}]
+
+
+def test_list_projects_other_http_errors_propagate(monkeypatch):
+    import pytest
+    import requests
+
+    client = JiraClient("https://jira.example.test", "token", auth_type="pat")
+    monkeypatch.setattr(client, "_request", lambda *args, **kwargs: (_ for _ in ()).throw(_http_error(500)))
+    with pytest.raises(requests.HTTPError):
+        client.list_projects()
+
+
+def test_account_id_from_myself_prefers_cloud_account_id():
+    from connectors.jira_connector.client import account_id_from_myself
+
+    assert account_id_from_myself({"accountId": "abc-123", "key": "ignored"}) == "abc-123"
+    assert account_id_from_myself({"key": "DC-KEY"}) == "DC-KEY"
+    assert account_id_from_myself({"name": "svc-aurora"}) == "svc-aurora"
+    assert account_id_from_myself({}) == ""
+    assert account_id_from_myself(None) == ""
+
+
 class _Response:
     def __init__(self, status_code: int):
         self.status_code = status_code

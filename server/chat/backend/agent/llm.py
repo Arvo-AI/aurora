@@ -73,6 +73,12 @@ class ModelConfig:
     # Root-cause recurrence detection agent — falls back to MAIN_MODEL
     RECURRENCE_AGENT_MODEL = os.getenv("RECURRENCE_AGENT_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
+    # Comment-driven Jira filter edits — a small structured rewrite of saved rules.
+    # No separate knob by default: reuses RCA_MODEL's already cost-aware choice
+    # (haiku when RCA_OPTIMIZE_COSTS=true, else the main model). Override only
+    # if this specific task needs to diverge from the rest of background RCA.
+    JIRA_FILTER_AGENT_MODEL = os.getenv("JIRA_FILTER_AGENT_MODEL") or RCA_MODEL
+
 
 class LLMManager:
     def __init__(

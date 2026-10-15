@@ -19,9 +19,9 @@ Aurora integrates with [Jira](https://www.atlassian.com/software/jira) to run ro
 
 On the Jira connector page, under **Incoming Webhook**, filters decide which new tickets start an RCA.
 
-**Auto** is the default. Aurora reads new comments on Jira tickets and updates the filters from what people ask for ("only Bugs in OPS at High priority"). The match itself stays a saved filter. A comment does not start an investigation on its own.
+**Manual** is the default. You set each filter: project, ticket types, and any of priority, labels, components, status, or an extra JQL clause. Leave an optional field empty to allow any value. Comments do not change filters in this mode.
 
-**Manual** is where you set each filter: project, ticket types, and any of priority, labels, components, status, or an extra JQL clause. Leave an optional field empty to allow any value. Comments do not change filters in this mode.
+**Auto** is opt-in. After a project already has a filter, Aurora reads new comments on that project and updates the filters from what people ask for ("only Bugs in OPS at High priority"). Comments on other projects are ignored, and so are comments Aurora itself posts. The match itself stays a saved filter. A comment does not start an investigation on its own. Switch to Manual to add the first filter.
 
 Until at least one filter is saved, webhooks are accepted and ignored. That includes ticket types that used to start an RCA automatically (Bug, Incident, Problem, Defect, Production Issue).
 
@@ -50,7 +50,7 @@ https://<your-aurora-domain>/jira/webhook/<your-user-id>
 2. Click **Create a WebHook**
 3. Give it a name (e.g., "Aurora RCA")
 4. Paste the webhook URL from step 1
-5. Under **Issue related events**, check **Issue: created** and **Comment: created**. Comments are how Auto mode learns which tickets to investigate
+5. Under **Issue related events**, check **Issue: created**, **Issue: updated**, and **Comment: created**. Issue updated is what lets a status filter match. Comments on a project that already has a filter are how Auto mode updates it
 6. Optionally set a JQL filter to limit which issues Jira sends. Aurora still only starts an RCA when the issue matches a saved filter
 7. Leave **Exclude body** unchecked (Aurora needs the JSON payload)
 8. Click **Create**

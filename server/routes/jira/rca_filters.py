@@ -59,15 +59,29 @@ def _clean_name_list(raw: Any, label: str) -> Tuple[Optional[List[str]], Optiona
 def _jql_is_contained(jql: str) -> bool:
     """True when parentheses stay inside the clause we AND onto the issue key."""
     depth = 0
+    quote = None
+    escaped = False
     for char in jql:
-        if char == "(":
+        # A parenthesis inside a quoted value is text, not a group we have to balance.
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ("'", '"'):
+            quote = char
+        elif char == "(":
             depth += 1
         elif char == ")":
             depth -= 1
             # A leading close would end our wrapper and OR the rest onto every issue.
             if depth < 0:
                 return False
-    return depth == 0
+    # An unclosed quote would let a later OR escape the issue-key wrapper.
+    return depth == 0 and quote is None
 
 
 def _clean_jql(raw: Any) -> Tuple[Optional[str], Optional[str]]:
@@ -307,16 +321,55 @@ def jql_matches_issue(client: Any, issue_key: str, clauses: List[str]) -> bool:
                 )
                 continue
             raise
-        if result.get("issues"):
+        issues = result.get("issues") or []
+        # Any hit is not enough: a clause that breaks out of the key wrapper can return a different issue.
+        if any(
+            isinstance(issue, dict) and str(issue.get("key") or "").casefold() == issue_key.casefold()
+            for issue in issues
+        ):
             return True
     return False
 
 
+# Created and edited only. A delete payload still carries the old body.
+_COMMENT_WEBHOOK_EVENTS = frozenset({"comment_created", "comment_updated"})
+_COMMENT_ISSUE_EVENTS = frozenset({"issue_commented", "issue_comment_edited"})
+# The filing prompt asks the agent to start the Jira comment with this.
+AURORA_COMMENT_MARKER = "Aurora RCA"
+
+
 def is_comment_event(payload: Dict[str, Any]) -> bool:
-    """True for comment webhooks, which tune filters and never start an RCA."""
+    """True for comment create/edit webhooks, which tune filters and never start an RCA."""
     event = str(payload.get("webhookEvent") or "")
     event_name = str(payload.get("issue_event_type_name") or "")
-    return "comment" in event.casefold() or "comment" in event_name.casefold()
+    return event in _COMMENT_WEBHOOK_EVENTS or event_name in _COMMENT_ISSUE_EVENTS
+
+
+def comment_author_ids(payload: Dict[str, Any]) -> set:
+    """Ids Jira puts on a comment author. Cloud uses accountId; Data Center uses key or name."""
+    comment = payload.get("comment") if isinstance(payload, dict) else None
+    author = comment.get("author") if isinstance(comment, dict) else None
+    if not isinstance(author, dict):
+        return set()
+    ids = set()
+    for key in ("accountId", "key", "name"):
+        value = str(author.get(key) or "").strip()
+        if value:
+            ids.add(value)
+    return ids
+
+
+def project_has_rule(scope: Dict[str, Any], rules: Any) -> bool:
+    """True when some saved filter already covers this project."""
+    if not isinstance(scope, dict) or not isinstance(rules, list):
+        return False
+    project = _folded(scope.get("projectKey"))
+    if not project:
+        return False
+    return any(
+        isinstance(rule, dict) and _folded(rule.get("projectKey")) == project
+        for rule in rules
+    )
 
 
 def extract_comment_text(payload: Dict[str, Any]) -> str:
@@ -341,7 +394,13 @@ def _comment_is_usable(text: str) -> bool:
     return sum(char.isalnum() for char in text) >= 3
 
 
-def decide_webhook(payload: Dict[str, Any], mode: str, rules: Any) -> Dict[str, Any]:
+def decide_webhook(
+    payload: Dict[str, Any],
+    mode: str,
+    rules: Any,
+    *,
+    connected_account_id: str = "",
+) -> Dict[str, Any]:
     """What a webhook should do: update filters, start RCA, check JQL, or ignore."""
     issue = payload.get("issue") if isinstance(payload, dict) else None
     if not isinstance(issue, dict) or not issue:
@@ -349,8 +408,19 @@ def decide_webhook(payload: Dict[str, Any], mode: str, rules: Any) -> Dict[str, 
 
     # Comments edit the filters in auto mode. They never start an RCA.
     if is_comment_event(payload):
-        if mode == "auto" and _comment_is_usable(extract_comment_text(payload)):
-            return {"action": "filters"}
+        text = extract_comment_text(payload)
+        scope = extract_webhook_scope(issue)
+        # Aurora's own writeup, a short reply, or a project with no filter is not an instruction.
+        own_writeup = AURORA_COMMENT_MARKER in text
+        own_account = bool(connected_account_id) and connected_account_id in comment_author_ids(payload)
+        if (
+            mode == "auto"
+            and _comment_is_usable(text)
+            and not own_writeup
+            and not own_account
+            and project_has_rule(scope, rules)
+        ):
+            return {"action": "filters", "scope": scope}
         return {"action": "ignore", "reason": "comment"}
 
     scope = extract_webhook_scope(issue)

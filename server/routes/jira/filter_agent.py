@@ -13,7 +13,9 @@ from typing import Any, Callable, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from routes.jira.rca_filters import (
+    AURORA_COMMENT_MARKER,
     _comment_is_usable,
+    comment_author_ids,
     extract_comment_text,
     extract_webhook_scope,
     normalize_rca_rules,
@@ -97,7 +99,9 @@ def propose_filter_update(
     from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
 
     prompt = build_filter_prompt(comment, rules, scope)
-    llm = create_chat_model(model=ModelConfig.RCA_MODEL, temperature=0, streaming=False)
+    # Defaults to RCA_MODEL (already cost-aware); JIRA_FILTER_AGENT_MODEL overrides it.
+    model = ModelConfig.JIRA_FILTER_AGENT_MODEL
+    llm = create_chat_model(model=model, temperature=0, streaming=False)
     structured = llm.with_structured_output(
         FilterUpdate, include_raw=True, method="function_calling",
     )
@@ -109,7 +113,7 @@ def propose_filter_update(
         LLMUsageTracker.track_llm_call(
             user_id=user_id,
             session_id=None,
-            model_name=ModelConfig.RCA_MODEL,
+            model_name=model,
             request_type="jira_rca_filter_update",
             prompt=prompt,
             response=raw or parsed,
@@ -136,6 +140,33 @@ def _rule_dicts(update: Any) -> Optional[List[Dict[str, Any]]]:
     return dumped
 
 
+def _comparable(rules: List[Dict[str, Any]]) -> Any:
+    """Normalized form when the list is valid, otherwise the raw list."""
+    normalized, error = normalize_rca_rules(rules)
+    if error or normalized is None:
+        return rules
+    return normalized
+
+
+def _accepted_update(
+    proposer: Callable[..., Any],
+    comment: str,
+    rules: List[Dict[str, Any]],
+    scope: Dict[str, Any],
+    user_id: str,
+) -> Optional[List[Dict[str, Any]]]:
+    update = proposer(comment, rules, scope)
+    raw_rules = _rule_dicts(update)
+    # changed=false, or a reply we couldn't read, leaves the saved filters alone.
+    if raw_rules is None:
+        return None
+    normalized, error = normalize_rca_rules(raw_rules)
+    if error or normalized is None:
+        logger.info("[JIRA][FILTERS] Rejected an agent update for user %s", sanitize(user_id))
+        return None
+    return normalized
+
+
 def _save_rules(user_id: str, rules: List[Dict[str, Any]]) -> bool:
     from routes.jira.jira_routes import _store_jira_settings
 
@@ -150,6 +181,7 @@ def apply_comment_to_filters(
     load_rules: Optional[Callable[[str], List[Dict[str, Any]]]] = None,
     load_mode: Optional[Callable[[str], str]] = None,
     save_rules: Optional[Callable[[str, List[Dict[str, Any]]], bool]] = None,
+    load_account_id: Optional[Callable[[str], str]] = None,
 ) -> bool:
     """Apply a comment's filter instruction. False means the rules were left as-is."""
     if not user_id or not isinstance(payload, dict):
@@ -157,6 +189,18 @@ def apply_comment_to_filters(
     comment = extract_comment_text(payload)
     if not _comment_is_usable(comment):
         return False
+    # The investigation comment is not a request to change the filters.
+    if AURORA_COMMENT_MARKER in comment:
+        return False
+    if load_account_id is not None:
+        try:
+            account_id = str(load_account_id(user_id) or "")
+        except Exception:
+            logger.info("[JIRA][FILTERS] Could not read the connected Jira account for user %s", sanitize(user_id))
+            account_id = ""
+        # Aurora posts as the connected account, so that author's comments are its own writeups.
+        if account_id and account_id in comment_author_ids(payload):
+            return False
 
     if load_mode is None or load_rules is None:
         from routes.jira.jira_routes import get_jira_rca_filter_mode, get_jira_rca_rules
@@ -176,18 +220,29 @@ def apply_comment_to_filters(
     proposer = propose or (
         lambda text, current, ticket: propose_filter_update(text, current, ticket, user_id=user_id)
     )
-    update = proposer(comment, rules, scope)
-    raw_rules = _rule_dicts(update)
-    # changed=false, or a reply we couldn't read, leaves the saved filters alone.
-    if raw_rules is None:
+    normalized = _accepted_update(proposer, comment, rules, scope, user_id)
+    if normalized is None or _comparable(rules) == normalized:
         return False
-    normalized, error = normalize_rca_rules(raw_rules)
-    if error or normalized is None:
-        logger.info("[JIRA][FILTERS] Rejected an agent update for user %s", sanitize(user_id))
-        return False
-    current, _ = normalize_rca_rules(rules)
-    if current == normalized:
-        return False
+
+    latest = load_rules(user_id)
+    if not isinstance(latest, list):
+        latest = []
+    # Another save landed while the model was running. Re-apply once against that list.
+    if _comparable(latest) != _comparable(rules):
+        normalized = _accepted_update(proposer, comment, latest, scope, user_id)
+        if normalized is None or _comparable(latest) == normalized:
+            return False
+        confirmed = load_rules(user_id)
+        if not isinstance(confirmed, list):
+            confirmed = []
+        # Still moving. Skipping beats overwriting the newer edit.
+        if _comparable(confirmed) != _comparable(latest):
+            logger.info(
+                "[JIRA][FILTERS] Skipped a filter update for user %s because the rules changed",
+                sanitize(user_id),
+            )
+            return False
+
     # They may have switched to manual while the model was running.
     if load_mode(user_id) != "auto":
         return False

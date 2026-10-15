@@ -17,7 +17,6 @@ from routes.jira.rca_filters import (
     FILTER_MODES,
     PROJECT_KEY_RE as _PROJECT_KEY_RE,
     decide_webhook,
-    jql_matches_issue,
     normalize_rca_rules,
 )
 from utils.auth.rbac_decorators import require_permission
@@ -289,11 +288,34 @@ def get_jira_rca_rules(user_id: str, *, strict: bool = False) -> List[Dict[str, 
 
 
 def get_jira_rca_filter_mode(user_id: str, *, strict: bool = False) -> str:
-    """Who edits the RCA filters. Unset stays on auto, so comments drive the rules."""
-    stored = get_user_preference(user_id, JIRA_RCA_FILTER_MODE_KEY, default="auto", strict=strict)
+    """Who edits the RCA filters. Unset stays manual, so comments cannot rewrite rules."""
+    stored = get_user_preference(user_id, JIRA_RCA_FILTER_MODE_KEY, default="manual", strict=strict)
     if stored not in FILTER_MODES:
-        return "auto"
+        return "manual"
     return stored
+
+
+def connected_jira_account_id(user_id: str) -> str:
+    """Account Aurora posts as. A missing id is filled from /myself once."""
+    from connectors.jira_connector.client import account_id_from_myself
+
+    creds = get_token_data(user_id, "jira") or {}
+    stored = str(creds.get("account_id") or "").strip()
+    if stored:
+        return stored
+    client, creds, error = _get_jira_client(user_id)
+    if error or client is None or not creds:
+        return ""
+    myself = _with_refresh(user_id, creds, client, lambda c: c.get_myself())
+    account_id = account_id_from_myself(myself)
+    if not account_id:
+        return ""
+    # Refresh may have stored a new token. Read again so this write does not put the old one back.
+    fresh = get_token_data(user_id, "jira") or creds
+    updated = dict(fresh)
+    updated["account_id"] = account_id
+    store_tokens_in_db(user_id, updated, "jira")
+    return account_id
 
 
 def jira_comment_back_enabled(user_id: str) -> bool:
@@ -641,7 +663,8 @@ def webhook(user_id: str):
     # Without this, any POST to /jira/webhook/<user_id> would enqueue Celery
     # work and dispatch an LLM-backed RCA for any (guessable) user_id — the
     # same connector-existence check the PagerDuty/OpsGenie handlers enforce.
-    if not get_token_data(user_id, "jira"):
+    creds = get_token_data(user_id, "jira")
+    if not creds:
         logger.warning("[JIRA][WEBHOOK] Webhook for user %s with no Jira connection", sanitize(user_id))
         return jsonify({"error": "Jira not connected for this user"}), 404
 
@@ -664,7 +687,12 @@ def webhook(user_id: str):
         logger.exception("[JIRA][WEBHOOK] Could not read RCA filters for user %s", sanitize(user_id))
         return jsonify({"status": "error", "reason": "could not read RCA filters"}), 503
 
-    decision = decide_webhook(payload, filter_mode, rules)
+    decision = decide_webhook(
+        payload,
+        filter_mode,
+        rules,
+        connected_account_id=str(creds.get("account_id") or ""),
+    )
     action = decision["action"]
     scope = decision.get("scope") or {}
 
@@ -692,34 +720,16 @@ def webhook(user_id: str):
         )
         return jsonify({"status": "ignored", "reason": decision.get("reason") or "filters"}), 200
 
-    # Structured fields hit, but the rule still has a JQL clause to confirm.
-    if action == "jql":
-        try:
-            client, creds, error = _get_jira_client(user_id)
-            if error or client is None:
-                raise RuntimeError(error or "Jira client unavailable")
-            confirmed = _with_refresh(
-                user_id,
-                creds,
-                client,
-                lambda c: jql_matches_issue(c, scope.get("issueKey") or "", decision.get("jql") or []),
-            )
-        except Exception:
-            logger.exception(
-                "[JIRA][WEBHOOK] Could not check RCA JQL for user %s (issue=%s)",
-                sanitize(user_id), sanitize(issue.get("key", "?")),
-            )
-            return jsonify({"status": "error", "reason": "could not check RCA JQL"}), 503
-        if not confirmed:
-            return jsonify({"status": "ignored", "reason": "jql"}), 200
-
     # Only a matched filter starts an investigation. Anything else was handled above.
     if action not in ("rca", "jql"):
         return jsonify({"status": "ignored", "reason": decision.get("reason") or "filters"}), 200
 
+    # JQL is confirmed in the task. A Jira round trip here would turn a slow search into a 503.
+    jql_clauses = decision.get("jql") or [] if action == "jql" else None
+
     from routes.jira.tasks import process_jira_webhook
     try:
-        process_jira_webhook.delay(payload=payload, user_id=user_id)
+        process_jira_webhook.delay(payload=payload, user_id=user_id, jql_clauses=jql_clauses)
     except Exception:
         # Broker/registration failure is on our side, not the sender's — return
         # 503 so Jira retries rather than treating it as a malformed webhook (500).

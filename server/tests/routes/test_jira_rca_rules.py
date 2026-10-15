@@ -167,6 +167,35 @@ def test_comment_in_auto_updates_filters_and_does_not_start_rca():
     assert decide_webhook(payload, "manual", RULES)["action"] == "ignore"
 
 
+def test_comment_on_a_project_with_no_rule_is_ignored_even_in_auto():
+    # Auto only edits a project's own filter — it cannot bootstrap a brand new project.
+    payload = {
+        "webhookEvent": "comment_created",
+        "comment": {"body": "Only investigate Bugs here"},
+        "issue": _issue("UNSEEN", "Bug"),
+    }
+    assert decide_webhook(payload, "auto", RULES)["action"] == "ignore"
+
+
+def test_aurora_own_writeup_comment_is_not_a_filter_instruction():
+    payload = {
+        "webhookEvent": "comment_created",
+        "comment": {"body": "## Aurora RCA — summary of the investigation and OPS findings"},
+        "issue": _issue("OPS", "Bug"),
+    }
+    assert decide_webhook(payload, "auto", RULES)["action"] == "ignore"
+
+
+def test_comment_from_the_connected_account_is_not_a_filter_instruction():
+    payload = {
+        "webhookEvent": "comment_created",
+        "comment": {"body": "Only investigate Bugs in OPS", "author": {"accountId": "aurora-bot"}},
+        "issue": _issue("OPS", "Bug"),
+    }
+    assert decide_webhook(payload, "auto", RULES, connected_account_id="aurora-bot")["action"] == "ignore"
+    assert decide_webhook(payload, "auto", RULES, connected_account_id="someone-else")["action"] == "filters"
+
+
 def test_empty_comment_does_not_start_rca():
     payload = {
         "webhookEvent": "comment_created",
@@ -202,6 +231,11 @@ def test_jql_match_confirms_the_issue():
     assert jql_matches_issue(_Search([]), "OPS-1", ['priority = "High"']) is False
 
 
+def test_jql_match_requires_the_returned_key_to_be_the_checked_issue():
+    # A clause that escapes the key wrapper might still return a different issue — that's not a confirmation.
+    assert jql_matches_issue(_Search([{"key": "OTHER-9"}]), "OPS-1", ['priority = "High"']) is False
+
+
 def test_rejected_jql_is_a_miss_and_other_errors_propagate():
     assert jql_matches_issue(_Search(status=400), "OPS-1", ["???("]) is False
     try:
@@ -210,3 +244,24 @@ def test_rejected_jql_is_a_miss_and_other_errors_propagate():
         assert getattr(exc.response, "status_code", None) == 503
     else:
         raise AssertionError("expected the Jira error to propagate")
+
+
+def test_normalize_rejects_a_paren_hidden_inside_a_quoted_value():
+    # Jira would group this as (summary ~ "()") OR (project is not EMPTY) — the OR escapes the key wrapper.
+    rules, error = normalize_rca_rules([{
+        "projectKey": "OPS",
+        "issueTypes": ["Bug"],
+        "jql": 'summary ~ "()" ) OR (project is not EMPTY',
+    }])
+    assert rules is None
+    assert error
+
+
+def test_normalize_accepts_balanced_parens_inside_a_quoted_value():
+    rules, error = normalize_rca_rules([{
+        "projectKey": "OPS",
+        "issueTypes": ["Bug"],
+        "jql": 'summary ~ "(prod)"',
+    }])
+    assert error is None
+    assert rules[0]["jql"] == 'summary ~ "(prod)"'

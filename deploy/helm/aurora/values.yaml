@@ -378,6 +378,8 @@ config:
   RECURRENCE_AGENT_TIMEOUT_SECONDS: "120"
   # Model for the recurrence agent. Empty = falls back to MAIN_MODEL.
   RECURRENCE_AGENT_MODEL: ""
+  # Model for comment-driven Jira RCA filter edits. Empty = follows RCA_MODEL.
+  JIRA_FILTER_AGENT_MODEL: ""
 
   # --- AWS Bedrock (non-secret config; credentials live in secrets.llm) ---
   # Gateway mode: set BEDROCK_BASE_URL to an OpenAI-compatible endpoint in front of

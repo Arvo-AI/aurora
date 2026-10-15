@@ -52,7 +52,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const [jiraMode, setJiraMode] = useState<"full" | "comment_only">("comment_only");
   const [commentBack, setCommentBack] = useState(false);
   const [rcaRules, setRcaRules] = useState<JiraRcaRule[]>([]);
-  const [rcaFilterMode, setRcaFilterMode] = useState<JiraRcaFilterMode>("auto");
+  const [rcaFilterMode, setRcaFilterMode] = useState<JiraRcaFilterMode>("manual");
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [oauthConfigError, setOauthConfigError] = useState(false);
@@ -84,7 +84,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
         if (data.jiraMode) setJiraMode(data.jiraMode);
         setCommentBack(data.commentBack === true);
         setRcaRules(Array.isArray(data.rcaRules) ? data.rcaRules : []);
-        setRcaFilterMode(data.rcaFilterMode === "manual" ? "manual" : "auto");
+        setRcaFilterMode(data.rcaFilterMode === "auto" ? "auto" : "manual");
       }
     } catch { /* silent */ } finally { setIsLoadingSettings(false); }
     try {
@@ -194,7 +194,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
         toast({
           title: "Settings saved",
           description: mode === "auto"
-            ? "Aurora will update RCA filters from comments on Jira tickets"
+            ? "Aurora will update RCA filters from comments on projects that already have one"
             : "You can edit the RCA filters yourself",
         });
       } else {
@@ -414,7 +414,8 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                 </div>
                 <CardDescription className="text-xs">
                   Paste this URL in Jira under Settings &rarr; System &rarr; Advanced &rarr; WebHooks,
-                  and select &quot;Issue created&quot; and &quot;Comment created&quot;. Aurora only investigates tickets that match a filter below.
+                  and select &quot;Issue created&quot;, &quot;Issue updated&quot;, and &quot;Comment created&quot;.
+                  A status filter only matches after the ticket is updated. Aurora only investigates tickets that match a filter below.
                 </CardDescription>
               </CardHeader>
               <CardContent className="pt-0">
