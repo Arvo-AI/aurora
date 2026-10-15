@@ -2333,7 +2333,9 @@ Security & Compliance
                         capture_output=True,
                         text=True,
                         timeout=effective_timeout,
-                        env=isolated_env
+                        env=isolated_env,
+                        # Same as the first run: this argv may carry the bq token.
+                        trusted=(cli_tool == "bq"),
                     )
             logger.info(f"TIME: cloud command execution took {time.perf_counter() - exec_start:.2f}s")
             # Entra-integrated AKS writes a kubeconfig whose exec plugin defaults to
