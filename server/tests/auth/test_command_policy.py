@@ -202,6 +202,7 @@ class TestBigQueryReads:
         assert evaluate_command("org-7", "bq query 'SELECT 1; DROP TABLE t'").allowed is False
         assert evaluate_command("org-7", "bq query 'WITH x AS (SELECT 1) DELETE FROM t'").allowed is False
         assert evaluate_command("org-7", "bq query --destination_table=ds.t 'SELECT 1'").allowed is False
+        assert evaluate_command("org-7", "bq query 'DELETE FROM t' --label='x'").allowed is False
         assert evaluate_command("org-7", "bq rm -f -t ds.t").allowed is False
 
     def test_read_that_mentions_a_write_word_stays_allowed(self, policy):

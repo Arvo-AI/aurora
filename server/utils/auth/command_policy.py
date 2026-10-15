@@ -168,12 +168,15 @@ def _bq_verb(command: str) -> str:
     return ""
 
 
-def _last_quoted(command: str) -> Optional[str]:
-    last = None
+def _split_quoted(command: str) -> Tuple[List[str], str]:
+    """Quoted spans, and the command with those spans removed."""
+    spans: List[str] = []
+    bare = []
     i = 0
     n = len(command)
     while i < n:
         if command[i] not in "'\"":
+            bare.append(command[i])
             i += 1
             continue
         quote = command[i]
@@ -181,9 +184,9 @@ def _last_quoted(command: str) -> Optional[str]:
         start = i
         while i < n and command[i] != quote:
             i += 2 if command[i] == "\\" else 1
-        last = command[start:i]
+        spans.append(command[start:i])
         i += 1
-    return last
+    return spans, "".join(bare)
 
 
 def _sql_without_literals(sql: str) -> str:
@@ -210,15 +213,16 @@ def _sql_without_literals(sql: str) -> str:
 
 
 def _bq_sql(command: str) -> str:
-    quoted = _last_quoted(command)
-    if quoted is not None:
-        return quoted
-    tokens = command.split()
+    """Every quoted span, then the unquoted tail. Each span is its own statement."""
+    spans, bare = _split_quoted(command)
+    tokens = bare.split()
     try:
         start = next(n for n, token in enumerate(tokens) if token.lower() == "query")
     except StopIteration:
-        return ""
-    return " ".join(token for token in tokens[start + 1:] if not token.startswith("-"))
+        tail = ""
+    else:
+        tail = " ".join(token for token in tokens[start + 1:] if not token.startswith("-"))
+    return " ; ".join(spans + ([tail] if tail else []))
 
 
 def _bq_is_write(command: str) -> bool:
