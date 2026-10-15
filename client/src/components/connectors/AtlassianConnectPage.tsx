@@ -222,6 +222,86 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
 
   useEffect(() => { if (connected && product.key === "jira") loadJiraSettings(); }, [connected]);
 
+  // Loading, failed, and loaded states for the automatic RCA controls.
+  const renderRcaSettings = () => {
+    if (isLoadingSettings || (!settingsLoaded && !settingsFailed)) {
+      return (
+        <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading RCA settings
+        </div>
+      );
+    }
+    // A failed read must not render editable empty settings.
+    if (settingsFailed) {
+      return (
+        <div className="mt-3 space-y-2">
+          <p className="text-xs text-destructive">Couldn&apos;t load RCA settings.</p>
+          <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => void loadJiraSettings()}>
+            Retry
+          </Button>
+        </div>
+      );
+    }
+    return (
+      <div className="mt-3 space-y-3">
+        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Automatic RCA mode">
+          {(["auto", "filters"] as const).map((value) => {
+            const selected = rcaMode === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => { if (!selected) void saveRcaMode(value); }}
+                disabled={isSavingSettings || !canWrite}
+                className={`rounded-lg border p-2.5 text-left transition-colors ${
+                  selected ? "border-[#2684FF] bg-[#2684FF]/[0.04]" : "border-border hover:bg-muted/50"
+                }`}
+              >
+                <span className="text-sm font-medium">{value === "auto" ? "Auto" : "Filters"}</span>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {value === "auto"
+                    ? "Aurora judges each ticket using the memory below"
+                    : "Only tickets matching your filters"}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+        {rcaMode === "auto" ? (
+          <PolicyMemoryCard
+            canWrite={canWrite}
+            endpoint="jira"
+            name="Jira RCA"
+            className="shadow-none"
+            placeholder="Describe which Jira tickets Aurora should investigate (markdown)."
+            description={
+              <>
+                Aurora reads this before judging each new or changed ticket. It also
+                updates it when your team says what to investigate, e.g. &quot;never
+                investigate QA tickets&quot;. Filters are ignored in Auto. Comments
+                never start an RCA.
+              </>
+            }
+          />
+        ) : (
+          <>
+            <p className="text-xs text-muted-foreground">
+              A status filter only matches after the ticket is updated.
+            </p>
+            <JiraAutomaticRca
+              rules={rcaRules}
+              saving={isSavingSettings}
+              onSave={saveRcaRules}
+            />
+          </>
+        )}
+      </div>
+    );
+  };
+
   const handleOAuthConnect = async () => {
     setIsConnecting(true);
     try {
@@ -454,75 +534,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                     {webhookCopied ? <CheckCircle className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
                   </Button>
                 </div>
-                {isLoadingSettings || (!settingsLoaded && !settingsFailed) ? (
-                  <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Loading RCA settings
-                  </div>
-                ) : settingsFailed ? (
-                  <div className="mt-3 space-y-2">
-                    <p className="text-xs text-destructive">Couldn&apos;t load RCA settings.</p>
-                    <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => void loadJiraSettings()}>
-                      Retry
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="mt-3 space-y-3">
-                    <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Automatic RCA mode">
-                      {(["auto", "filters"] as const).map((value) => {
-                        const selected = rcaMode === value;
-                        return (
-                          <button
-                            key={value}
-                            type="button"
-                            role="radio"
-                            aria-checked={selected}
-                            onClick={() => { if (!selected) void saveRcaMode(value); }}
-                            disabled={isSavingSettings || !canWrite}
-                            className={`rounded-lg border p-2.5 text-left transition-colors ${
-                              selected ? "border-[#2684FF] bg-[#2684FF]/[0.04]" : "border-border hover:bg-muted/50"
-                            }`}
-                          >
-                            <span className="text-sm font-medium">{value === "auto" ? "Auto" : "Filters"}</span>
-                            <p className="text-xs text-muted-foreground mt-0.5">
-                              {value === "auto"
-                                ? "Aurora judges each ticket using the memory below"
-                                : "Only tickets matching your filters"}
-                            </p>
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {rcaMode === "auto" ? (
-                      <PolicyMemoryCard
-                        canWrite={canWrite}
-                        endpoint="jira"
-                        name="Jira RCA"
-                        className="shadow-none"
-                        placeholder="Describe which Jira tickets Aurora should investigate (markdown)."
-                        description={
-                          <>
-                            Aurora reads this before judging each new or changed ticket. It also
-                            updates it when your team says what to investigate, e.g. &quot;never
-                            investigate QA tickets&quot;. Filters are ignored in Auto. Comments
-                            never start an RCA.
-                          </>
-                        }
-                      />
-                    ) : (
-                      <>
-                        <p className="text-xs text-muted-foreground">
-                          A status filter only matches after the ticket is updated.
-                        </p>
-                        <JiraAutomaticRca
-                          rules={rcaRules}
-                          saving={isSavingSettings}
-                          onSave={saveRcaRules}
-                        />
-                      </>
-                    )}
-                  </div>
-                )}
+                {renderRcaSettings()}
               </CardContent>
             </Card>
           )}

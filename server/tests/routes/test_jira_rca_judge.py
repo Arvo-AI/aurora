@@ -89,8 +89,9 @@ def test_an_edit_that_changes_nothing_is_not_judged_again(judge_env):
 def test_a_failed_rca_handoff_is_judged_again(judge_env):
     judge_env["judge"].return_value = JudgeVerdict(investigate=True, reason="customer bug")
     judge_env["start_rca"].side_effect = ConnectionError("broker down")
+    payload = _payload()
     with pytest.raises(ConnectionError):
-        judge_env["run"](_payload())
+        judge_env["run"](payload)
     judge_env["start_rca"].side_effect = None
     assert judge_env["run"](_payload())["status"] == "judged"
 
@@ -103,7 +104,8 @@ def test_hourly_limit_stops_the_judge(judge_env):
 
 def test_no_verdict_asks_for_a_retry_and_remembers_nothing(judge_env):
     judge_env["judge"].return_value = None
+    payload = _payload()
     with pytest.raises(JudgeUnavailable):
-        judge_env["run"](_payload())
+        judge_env["run"](payload)
     judge_env["start_rca"].assert_not_called()
     judge_env["redis"].set.assert_not_called()
