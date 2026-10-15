@@ -18,9 +18,11 @@ logger = logging.getLogger(__name__)
 
 # Slack notifies only on this form. A typed @name is plain text.
 _SLACK_USER_ID = re.compile(r"[UW][A-Z0-9]{2,}")
-SLACK_MENTION_HINT = (
-    "To notify someone, write their <@USERID> exactly as shown. "
-    "A plain @name does not notify."
+# <@U123|Ada> is the same mention as <@U123>. Slack sends both.
+_SLACK_MENTION = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]*)?>")
+# Prefix format_asked_by writes. The title drops it so the question stays visible.
+_ASKED_BY_PREFIX = re.compile(
+    r"^Asked by (?:<@[UW][A-Z0-9]+>(?: \([^)]*\))?|[^:]{1,80}): "
 )
 
 # Maximum length for chat session titles (in characters)
@@ -203,17 +205,42 @@ def format_asked_by(slack_user_id: Optional[str], display_name: Optional[str], m
     return f"Asked by {format_slack_speaker(slack_user_id, display_name)}: {message}"
 
 
+def slack_session_title(message_text: str) -> str:
+    """Title is the question. The Asked-by mention stays in the prompt only."""
+    question = _ASKED_BY_PREFIX.sub("", message_text, count=1)
+    body = question[:TITLE_MAX_LENGTH] + "..." if len(question) > TITLE_MAX_LENGTH else question
+    return f"Slack: {body}"
+
+
+def mention_bot_ids(authorizations, stored_bot_user_id: Optional[str] = None) -> list:
+    """Bot ids to strip. Event authorizations first, then the id saved at install."""
+    ids = [
+        auth.get("user_id")
+        for auth in (authorizations or [])
+        if isinstance(auth, dict) and auth.get("is_bot") and auth.get("user_id")
+    ]
+    # Payload omitted the bot. The install still recorded it, so don't strip people.
+    if not ids and stored_bot_user_id:
+        return [stored_bot_user_id]
+    return ids
+
+
 def strip_bot_mentions(text: str, bot_user_ids: list) -> str:
     """Remove Aurora's own mention and keep every other <@USERID>."""
     if not text:
         return ""
-    ids = [bid for bid in bot_user_ids if bid and _SLACK_USER_ID.fullmatch(str(bid))]
-    # Can't tell Aurora's mention from a person's — drop them all.
+    ids = {str(bid) for bid in bot_user_ids if bid and _SLACK_USER_ID.fullmatch(str(bid))}
+    # Still no bot id — can't tell Aurora from a person, so drop every mention.
     if not ids:
-        return re.sub(r"<@[A-Z0-9]+>", "", text).strip()
-    for bot_id in ids:
-        text = text.replace(f"<@{bot_id}>", "")
-    return text.strip()
+        return _SLACK_MENTION.sub("", text).strip()
+
+    def _keep_people(match):
+        # Aurora's mention, with or without a |label. Everyone else stays.
+        if match.group(1) in ids:
+            return ""
+        return match.group(0)
+
+    return _SLACK_MENTION.sub(_keep_people, text).strip()
 
 
 def _get_user_display_name(client, user_id: str) -> str:
@@ -755,8 +782,7 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
         rca_incident_id = incident_id if session_id else None
         # Create session if not exists
         if not session_id:
-            # Generate a title from the message (first TITLE_MAX_LENGTH chars)
-            title = 'Slack: ' + (message_text[:TITLE_MAX_LENGTH] + "..." if len(message_text) > TITLE_MAX_LENGTH else message_text)
+            title = slack_session_title(message_text)
             
             # Trigger metadata for tracking
             trigger_metadata = {
@@ -801,7 +827,8 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
         # so the agent can resolve references like "this channel" and scope any
         # directive it saves to the right channel (matches routing/descriptions).
         channel_label = _resolve_channel_label(user_id, channel)
-        channel_header = f"[Slack message from channel {channel_label}]\n{SLACK_MENTION_HINT}\n\n"
+        # Mention rules live in the Slack skill and system prompt, not this turn.
+        channel_header = f"[Slack message from channel {channel_label}]\n\n"
         full_message = f"{channel_header}{message_text}{context_str}"
         
         # Trigger metadata for tracking and response
