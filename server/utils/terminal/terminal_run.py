@@ -122,7 +122,7 @@ def terminal_run(
                 stderr=result.stderr if capture_output else ""
             )
         except subprocess.TimeoutExpired as e:
-            logger.error(f"Command timed out after {timeout}s: {clean_args}")
+            logger.error("Command timed out after %ss", timeout or 300)
             return CompletedProcess(
                 args=args,
                 returncode=124,  # Standard timeout exit code
