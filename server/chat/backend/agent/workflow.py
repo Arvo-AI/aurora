@@ -3,6 +3,7 @@ from langgraph.graph import StateGraph
 from langgraph.graph import START, END
 from chat.backend.agent.utils.safe_memory_saver import SafeMemorySaver
 from chat.backend.agent.utils.message_content import extract_text_from_content
+from chat.backend.agent.utils.usage_normalizer import normalize_usage
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.messages import AIMessageChunk, AIMessage, SystemMessage
 from chat.backend.agent.agent import Agent
@@ -1166,17 +1167,14 @@ class Workflow:
                         _aux_output = (event.get("data") or {}).get("output")
                         _aux_usage = getattr(_aux_output, "usage_metadata", None) if _aux_output else None
                         if _aux_usage:
-                            input_tokens = _aux_usage.get("input_tokens", 0)
-                            output_tokens = _aux_usage.get("output_tokens", 0)
-                            input_details = _aux_usage.get("input_token_details", {})
-                            cached_input_tokens = (
-                                input_details.get("cache_read", 0)
-                                if isinstance(input_details, dict) else 0
-                            )
+                            _aux_norm = normalize_usage(_aux_usage)
+                            input_tokens = _aux_norm.input_tokens
+                            output_tokens = _aux_norm.output_tokens
                             from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
                             estimated_cost = LLMUsageTracker.calculate_cost(
                                 input_tokens, output_tokens, input_state.model or "",
-                                cached_input_tokens=cached_input_tokens,
+                                cached_input_tokens=_aux_norm.cache_read_tokens,
+                                cache_write_tokens=_aux_norm.cache_write_tokens,
                             )
                             _session_usage["total_input_tokens"] += input_tokens
                             _session_usage["total_output_tokens"] += output_tokens
@@ -1220,12 +1218,12 @@ class Workflow:
                         # Extract provider-reported usage_metadata for accurate tracking
                         usage_meta = getattr(output, 'usage_metadata', None)
                         if usage_meta:
-                            input_tokens = usage_meta.get('input_tokens', 0)
-                            output_tokens = usage_meta.get('output_tokens', 0)
+                            _norm = normalize_usage(usage_meta)
+                            input_tokens = _norm.input_tokens
+                            output_tokens = _norm.output_tokens
                             total_tokens = usage_meta.get('total_tokens', 0)
                             output_details = usage_meta.get('output_token_details', {})
-                            input_details = usage_meta.get('input_token_details', {})
-                            cached_input_tokens = input_details.get('cache_read', 0) if isinstance(input_details, dict) else 0
+                            cached_input_tokens = _norm.cache_read_tokens
                             response_time_ms = int((_time.perf_counter() - _model_turn_start) * 1000) if _model_turn_start else 0
 
                             # Calculate cost from provider-reported counts
@@ -1233,6 +1231,7 @@ class Workflow:
                             estimated_cost = LLMUsageTracker.calculate_cost(
                                 input_tokens, output_tokens, input_state.model or "",
                                 cached_input_tokens=cached_input_tokens,
+                                cache_write_tokens=_norm.cache_write_tokens,
                             )
 
                             # Accumulate session totals
