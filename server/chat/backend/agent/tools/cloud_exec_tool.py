@@ -2297,16 +2297,17 @@ Security & Compliance
             # Use direct command for GCP and AWS
             exec_command = command_args
 
+        bq_token = None
         if cli_tool == "bq":
-            token = None
             bq_project = region_or_project
             if isinstance(isolated_env, dict):
-                token = (
+                bq_token = (
                     isolated_env.get("CLOUDSDK_AUTH_ACCESS_TOKEN")
                     or isolated_env.get("GOOGLE_OAUTH_ACCESS_TOKEN")
                 )
                 bq_project = isolated_env.get("GOOGLE_CLOUD_PROJECT") or bq_project
-            exec_command, _ = prepare_bq_exec(command, token, bq_project)
+            # Project only. The token is applied inside terminal_run, after the hash.
+            exec_command, _ = prepare_bq_exec(command, None, bq_project)
 
         # Execute the command
         exec_start = time.perf_counter()
@@ -2318,9 +2319,10 @@ Security & Compliance
                 text=True,
                 timeout=effective_timeout,
                 env=isolated_env,  # Use ISOLATED environment - NO global state!
-                # The gate already judged the user command. bq's argv now carries
-                # the access token, and a second judge treats that as theft.
+                # The gate already judged the user command. The token is added
+                # after that hash, and a second judge treats it as theft.
                 trusted=(cli_tool == "bq"),
+                oauth_access_token=bq_token,
             )
             # A cached login can be gone (swept, expired) or predate a newly
             # connected subscription. Log in again and retry exactly once.
@@ -2334,8 +2336,8 @@ Security & Compliance
                         text=True,
                         timeout=effective_timeout,
                         env=isolated_env,
-                        # Same as the first run: this argv may carry the bq token.
                         trusted=(cli_tool == "bq"),
+                        oauth_access_token=bq_token,
                     )
             logger.info(f"TIME: cloud command execution took {time.perf_counter() - exec_start:.2f}s")
             # Entra-integrated AKS writes a kubeconfig whose exec plugin defaults to
