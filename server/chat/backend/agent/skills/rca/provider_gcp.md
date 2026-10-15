@@ -4,7 +4,7 @@ name: GCP RCA Investigation
 category: rca_provider
 connection_check:
   method: provider_in_preference
-index: "GCP/GKE investigation commands"
+index: "GCP/GKE and BigQuery investigation commands"
 rca_priority: 5
 metadata:
   author: aurora
@@ -26,3 +26,12 @@ metadata:
 - Check services: `cloud_exec('gcp', 'kubectl get svc -n NAMESPACE')`
 - Check HPA: `cloud_exec('gcp', 'kubectl get hpa -n NAMESPACE')`
 - Check PVC status: `cloud_exec('gcp', 'kubectl get pvc -n NAMESPACE')`
+
+## BigQuery
+
+When the question is whether data landed, a load job failed, or a table is empty, query BigQuery. Do not stop at the orchestrator or job error.
+
+- List datasets: `cloud_exec('gcp', 'bq ls')`
+- Dataset or table metadata: `cloud_exec('gcp', 'bq show --format=prettyjson DATASET')`
+- Read rows: `cloud_exec('gcp', "bq query --nouse_legacy_sql 'SELECT ...'")`. One quoted `SELECT` or `WITH`. Ask mode blocks write tokens it can see; it does not parse SQL inside the quotes.
+- A 403 means the connected identity cannot read BigQuery (`roles/bigquery.dataViewer` and `roles/bigquery.jobUser`). Say that. Do not treat it as proof the data is missing.
