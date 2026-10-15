@@ -317,6 +317,13 @@ config:
   # Safety judge / input rail model (provider/model format). Empty = use MAIN_MODEL.
   GUARDRAILS_LLM_MODEL: ""
 
+  # --- Slack live progress ---
+  # Keep editing the "Thinking…" placeholder with elapsed time, the running tool
+  # and the agent's latest thought while a background investigation runs.
+  SLACK_PROGRESS_UPDATES_ENABLED: "true"
+  # Seconds between edits (min 10; one chat.update per interval per thread).
+  SLACK_PROGRESS_UPDATE_INTERVAL_SECONDS: "30"
+
   # --- Concurrency & Pool Sizing ---
   # Each of GUNICORN_WORKERS and CELERY_CONCURRENCY is a separate process with
   # its own DB_POOL_MAX-sized pool, and this config reaches every pod (server,

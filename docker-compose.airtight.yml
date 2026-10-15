@@ -132,6 +132,11 @@ x-common-env: &common-env
   GUARDRAILS_SIGMA_ENABLED: ${GUARDRAILS_SIGMA_ENABLED:-true}
   GUARDRAILS_LLM_MODEL: ${GUARDRAILS_LLM_MODEL:-}
 
+  # Slack: keep editing the "Thinking…" placeholder with live progress while a
+  # background investigation runs. Interval in seconds (min 10).
+  SLACK_PROGRESS_UPDATES_ENABLED: ${SLACK_PROGRESS_UPDATES_ENABLED:-true}
+  SLACK_PROGRESS_UPDATE_INTERVAL_SECONDS: ${SLACK_PROGRESS_UPDATE_INTERVAL_SECONDS:-30}
+
   # Vertex AI (Google Cloud)
   VERTEX_AI_PROJECT: ${VERTEX_AI_PROJECT}
   VERTEX_AI_LOCATION: ${VERTEX_AI_LOCATION}
