@@ -2195,12 +2195,7 @@ Security & Compliance
                 if 'delete' in command and '--quiet' not in command and '-q' not in command:
                     command += " --quiet"
 
-        logged_command = re.sub(
-            r"(--oauth_access_token(?:=|\s+))\S+",
-            r"\1[REDACTED]",
-            command,
-        )
-        logger.info("Executing command: %s", logged_command)
+        logger.info(f"Executing command: {command}")
 
         current_mode = get_mode_from_context()
         allowed, read_only_message = ModeAccessController.ensure_cloud_command_allowed(
