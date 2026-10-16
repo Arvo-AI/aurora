@@ -864,7 +864,17 @@ Users then find the app in **Teams → Apps → Built for your org**. Full steps
 
 #### 4. Install in each team (Teams client)
 
-Team **···** → **Manage team** → **Apps** → add your org’s Aurora app → **Install**. Users **@mention** the bot by its display name (e.g. `@Aurora`). Channel chats require an @mention.
+Until Microsoft finishes validating the app (or an admin publishes it to the org catalog), sideload the package:
+
+[Download the Aurora Teams app](pathname:///downloads/aurora-teams-app.zip)
+
+1. In Teams: **Apps** → **Manage your apps** → **Upload an app** → **Upload a custom app**.
+2. Select the zip. If upload is blocked, a Teams admin has to allow custom apps (Teams admin center → **Teams apps** → **Setup policies** → **Upload custom apps**).
+3. Add Aurora to the team: Team **···** → **Manage team** → **Apps** → **Install**.
+
+This package is built for Aurora's hosted bot. A self-hosted install has its own Entra app id, so it must build its own package in the [Developer Portal](https://dev.teams.microsoft.com/) (step 3) instead of using this zip.
+
+Once the app is in the org catalog, install it from **Teams → Apps → Built for your org** the same way. Users **@mention** the bot by its display name (e.g. `@Aurora`). Channel chats require an @mention.
 
 #### 5. Configure environment
 
