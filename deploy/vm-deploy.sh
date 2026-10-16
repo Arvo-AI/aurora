@@ -18,7 +18,7 @@ set -euo pipefail
 #   ./deploy/vm-deploy.sh --non-interactive     # use defaults for everything (requires --hostname and env vars)
 #
 # Required env vars for --non-interactive:
-#   LLM_API_KEY, LLM_PROVIDER (openrouter|openai|anthropic|google)
+#   LLM_API_KEY, LLM_PROVIDER (openrouter|requesty|openai|anthropic|google)
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -265,12 +265,14 @@ if [[ -n "${LLM_API_KEY:-}" ]]; then
   LLM_PROVIDER_INPUT="${LLM_PROVIDER:-openrouter}"
   ok "Using LLM config from environment"
 else
-  prompt LLM_PROVIDER_INPUT "Provider (openrouter, openai, anthropic, google)" "openrouter"
+  prompt LLM_PROVIDER_INPUT "Provider (openrouter, requesty, openai, anthropic, google)" "openrouter"
   prompt LLM_KEY "API key for $LLM_PROVIDER_INPUT"
 fi
 
 if [[ "$LLM_PROVIDER_INPUT" == "openrouter" ]]; then
   LLM_PROVIDER_MODE="openrouter"
+elif [[ "$LLM_PROVIDER_INPUT" == "requesty" ]]; then
+  LLM_PROVIDER_MODE="requesty"
 else
   LLM_PROVIDER_MODE="direct"
 fi
@@ -329,6 +331,7 @@ sed -i.bak "s|^NEXT_PUBLIC_WEBSOCKET_URL=.*|NEXT_PUBLIC_WEBSOCKET_URL=$WEBSOCKET
 sed -i.bak "s|^LLM_PROVIDER_MODE=.*|LLM_PROVIDER_MODE=$LLM_PROVIDER_MODE|" .env
 case "$LLM_PROVIDER_INPUT" in
   openrouter) sed -i.bak "s|^OPENROUTER_API_KEY=.*|OPENROUTER_API_KEY=$LLM_KEY|" .env ;;
+  requesty)   sed -i.bak "s|^REQUESTY_API_KEY=.*|REQUESTY_API_KEY=$LLM_KEY|" .env ;;
   openai)     sed -i.bak "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=$LLM_KEY|" .env ;;
   anthropic)  sed -i.bak "s|^ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=$LLM_KEY|" .env ;;
   google)     sed -i.bak "s|^GOOGLE_AI_API_KEY=.*|GOOGLE_AI_API_KEY=$LLM_KEY|" .env ;;
