@@ -1,5 +1,5 @@
-import { Server } from "lucide-react";
-import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled, isNotionEnabled, isCloudBeesEnabled } from "@/lib/feature-flags";
+import { Plug, Server } from "lucide-react";
+import { isOvhEnabled, isSharePointEnabled, isSpinnakerEnabled, isNotionEnabled, isCloudBeesEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -203,18 +203,16 @@ class ConnectorRegistry {
       storageKey: "isConfluenceConnected",
     });
 
-    if (isJiraEnabled()) {
-      this.register({
-        id: "jira",
-        name: "Jira",
-        description: "Search issues, track incidents, and export postmortem action items as tracked Jira work.",
-        iconPath: "/jira.svg",
-        iconBgColor: "bg-white dark:bg-white",
-        category: "Documentation",
-        path: "/jira/connect",
-        storageKey: "isJiraConnected",
-      });
-    }
+    this.register({
+      id: "jira",
+      name: "Jira",
+      description: "Search issues, track incidents, and export postmortem action items as tracked Jira work.",
+      iconPath: "/jira.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Documentation",
+      path: "/jira/connect",
+      storageKey: "isJiraConnected",
+    });
 
     if (isSharePointEnabled()) {
       this.register({
@@ -251,6 +249,18 @@ class ConnectorRegistry {
       category: "Infrastructure",
       path: "/kubectl/manage",
       storageKey: "isKubectlConnected",
+    });
+
+    this.register({
+      id: "mcp",
+      name: "Custom MCP Servers",
+      description: "Register your own MCP servers so Aurora can query systems it has no built-in connector for. Aurora discovers their tools and uses them during investigations.",
+      icon: Plug,
+      iconBgColor: "bg-muted",
+      category: "Infrastructure",
+      path: "/mcp/auth",
+      storageKey: "isMcpConnected",
+      useCustomConnection: true,
     });
 
     this.register({

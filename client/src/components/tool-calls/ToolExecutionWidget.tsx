@@ -15,7 +15,7 @@ import { GitHubCommitTool } from "@/components/GitHubCommitTool"
 import {
   extractIacAction,
   parseCloudExecCommand,
-  parseGitHubToolCommand,
+  parseMcpToolCommand,
   parseGitHubRcaCommand,
   parseJenkinsRcaCommand,
   parseCloudbeesRcaCommand,
@@ -141,9 +141,9 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
       ? tool.command
       : parsed.command
   }
-  // GitHub MCP tools parsing
+  // MCP tool parsing (built-in GitHub/AWS servers and customer-registered ones)
   else if (tool.tool_name.startsWith("mcp_") && typeof command === "string" && command.trim().startsWith("{")) {
-    command = parseGitHubToolCommand(tool.tool_name, command)
+    command = parseMcpToolCommand(tool.tool_name, command)
   }
   // GitHub RCA tool parsing
   else if (tool.tool_name === "github_rca" && typeof command === "string" && command.trim().startsWith("{")) {
@@ -224,7 +224,7 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
     }
   }
   // Slack tools parsing
-  else if (tool.tool_name === "list_slack_channels" || tool.tool_name === "get_channel_history" || tool.tool_name === "get_thread_replies") {
+  else if (tool.tool_name === "list_slack_channels" || tool.tool_name === "list_slack_users" || tool.tool_name === "get_channel_history" || tool.tool_name === "get_thread_replies") {
     command = parseSlackCommand(tool.tool_name, normalizedInput)
   }
   // Alert payload drill-down tool: show the json_path being queried

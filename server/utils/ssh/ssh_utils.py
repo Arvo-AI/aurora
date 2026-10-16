@@ -6,6 +6,7 @@ import requests
 from typing import Any, Optional, Tuple
 
 from utils.db.connection_pool import db_pool
+from utils.db.org_scope import resolve_org, org_read_predicate
 from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.auth.token_management import get_token_data
@@ -130,17 +131,21 @@ def load_user_private_key(user_id: str, ssh_key_id: int) -> str:
     Raises:
         ValueError: if the key does not exist for the user or no private key is stored.
     """
+    predicate, pred_params = org_read_predicate(user_id, resolve_org(user_id))
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             from utils.auth.stateless_auth import set_rls_context
             set_rls_context(cur, conn, user_id, log_prefix="[SSHUtils]")
+            # Org-shared, but only Aurora SSH rows — other connector secrets stay out
             cur.execute(
-                """
+                f"""
                 SELECT provider
                 FROM user_tokens
-                WHERE id = %s AND user_id = %s AND is_active = TRUE
+                WHERE id = %s AND {predicate}
+                  AND provider LIKE 'aurora_ssh%%'
+                  AND is_active = TRUE
                 """,
-                (ssh_key_id, user_id),
+                (ssh_key_id, *pred_params),
             )
             row = cur.fetchone()
             if not row:

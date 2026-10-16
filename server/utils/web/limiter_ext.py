@@ -1,5 +1,6 @@
 """Shared Flask-Limiter utilities."""
 
+import hashlib
 import logging
 import os
 from typing import Optional
@@ -37,6 +38,35 @@ def get_rate_limit_key() -> str:
     if user_id and user_id != "anonymous":
         return f"user:{user_id}"
     return f"ip:{_get_remote_ip()}"
+
+
+def get_public_auth_rate_limit_key() -> str:
+    """Key unauthenticated auth routes by the submitted email, not the caller IP.
+
+    Browser traffic reaches the backend only through the Next.js proxy, and these
+    routes deliberately carry no X-User-ID, so get_rate_limit_key() would bucket
+    every caller under the proxy's own address — one global allowance for the
+    whole deployment, cheap to exhaust, and one person's resets would 429
+    everyone else's.
+
+    Hashed so reset traffic doesn't write email addresses into Redis keys.
+    Rotating the address still escapes this bucket, which is why the
+    security-critical limits are per-account and enforced in the DB (the
+    reset-code cooldown and the attempt cap), not here.
+    """
+    email = ""
+    data = request.get_json(silent=True)
+    if isinstance(data, dict):
+        raw_email = data.get("email")
+        if isinstance(raw_email, str):
+            email = raw_email.strip().lower()
+
+    # No usable address (malformed body, or absurdly long) — fall back to the IP
+    # bucket rather than hashing junk into its own unlimited key.
+    if not email or len(email) > 254:
+        return f"ip:{_get_remote_ip()}"
+
+    return f"email:{hashlib.sha256(email.encode('utf-8')).hexdigest()}"
 
 
 def is_rate_limit_exempt() -> bool:
@@ -119,6 +149,7 @@ def register_rate_limit_handlers(app) -> None:
 
 
 __all__ = [
+    "get_public_auth_rate_limit_key",
     "get_rate_limit_key",
     "get_rate_limit_error_response",
     "is_rate_limit_exempt",

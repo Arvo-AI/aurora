@@ -59,6 +59,7 @@ export interface MemoryEntry {
 const PROTECTED_ENTRIES: ReadonlySet<string> = new Set([
   "context/Slack",
   "context/Microsoft Teams",
+  "context/Jira RCA",
 ]);
 
 export function isProtectedEntry(entry: Pick<MemoryEntry, "category" | "title" | "is_protected">): boolean {

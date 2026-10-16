@@ -35,6 +35,11 @@ x-common-env: &common-env
   # Terraform
   TF_CLI_CONFIG_FILE: /etc/terraform.rc
 
+  # Custom MCP server connector: allow registering MCP servers on private or
+  # loopback addresses. Defaults true here for self-hosted OSS; set false for
+  # multi-tenant SaaS (a tenant could otherwise point Aurora at internal services).
+  MCP_ALLOW_PRIVATE_TARGETS: ${MCP_ALLOW_PRIVATE_TARGETS:-true}
+
   # SSL/TLS for external services
   POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-prefer}
   POSTGRES_SSLROOTCERT: ${POSTGRES_SSLROOTCERT:-}
@@ -60,6 +65,7 @@ x-common-env: &common-env
   # Infrastructure visualization feature: gates periodic + final LLM extraction during RCA. Off by default for cost.
   VISUALIZATION_ENABLED: ${VISUALIZATION_ENABLED:-false}
   RCA_MODEL: ${RCA_MODEL}
+  JIRA_RCA_JUDGE_MODEL: ${JIRA_RCA_JUDGE_MODEL}
   MAIN_MODEL: ${MAIN_MODEL}
   RCA_ORCHESTRATOR_MODEL: ${RCA_ORCHESTRATOR_MODEL}
   RCA_SUBAGENT_MODEL: ${RCA_SUBAGENT_MODEL}
@@ -120,7 +126,6 @@ x-common-env: &common-env
   # Feature Flags (single NEXT_PUBLIC_ENABLE_* vars for both backend and frontend)
   NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
-  NEXT_PUBLIC_ENABLE_JIRA: ${NEXT_PUBLIC_ENABLE_JIRA}
   NEXT_PUBLIC_ENABLE_SHAREPOINT: ${NEXT_PUBLIC_ENABLE_SHAREPOINT}
   NEXT_PUBLIC_ENABLE_NOTION: ${NEXT_PUBLIC_ENABLE_NOTION}
   NEXT_PUBLIC_ENABLE_SPINNAKER: ${NEXT_PUBLIC_ENABLE_SPINNAKER}
@@ -263,6 +268,9 @@ services:
       # the signup callback is the sole consumer of the OAuth code exchange.
       HOSTED_SIGNUP_ENABLED: ${HOSTED_SIGNUP_ENABLED:-false}
       GITHUB_APP_CLIENT_SECRET: ${GITHUB_APP_CLIENT_SECRET}
+
+      # SAML SSO: require DNS proof of email-domain ownership (enable on multi-tenant installs)
+      SSO_ENFORCE_DOMAIN_VERIFICATION: ${SSO_ENFORCE_DOMAIN_VERIFICATION:-false}
 
       # Bitbucket OAuth
       BB_OAUTH_CLIENT_ID: ${BB_OAUTH_CLIENT_ID}
@@ -576,7 +584,6 @@ services:
       NEXT_PUBLIC_WEBSOCKET_URL: ${NEXT_PUBLIC_WEBSOCKET_URL}
       NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
       NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
-      NEXT_PUBLIC_ENABLE_JIRA: ${NEXT_PUBLIC_ENABLE_JIRA}
       NEXT_PUBLIC_ENABLE_SHAREPOINT: ${NEXT_PUBLIC_ENABLE_SHAREPOINT}
       NEXT_PUBLIC_ENABLE_NOTION: ${NEXT_PUBLIC_ENABLE_NOTION}
       NEXT_PUBLIC_ENABLE_SPINNAKER: ${NEXT_PUBLIC_ENABLE_SPINNAKER}

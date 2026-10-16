@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import re
 from typing import Any, Dict, Optional
 
@@ -9,6 +8,7 @@ from flask import Blueprint, jsonify, request
 
 from routes.splunk.tasks import process_splunk_alert
 from utils.db.connection_pool import db_pool
+from utils.web.public_url import external_backend_url
 from utils.auth.stateless_auth import (
     get_org_id_from_request,
     get_user_preference,
@@ -376,15 +376,7 @@ def get_alerts(user_id):
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Get the webhook URL that should be configured in Splunk."""
-    # Use ngrok URL for development if available, otherwise use backend URL
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-
-    # For development, prefer ngrok URL if available
-    if ngrok_url and backend_url.startswith("http://localhost"):
-        base_url = ngrok_url
-    else:
-        base_url = backend_url
+    base_url = external_backend_url()
 
     webhook_url = f"{base_url}/splunk/alerts/webhook/{user_id}"
 

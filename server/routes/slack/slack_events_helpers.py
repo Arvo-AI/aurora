@@ -16,6 +16,15 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# Slack notifies only on this form. A typed @name is plain text.
+_SLACK_USER_ID = re.compile(r"[UW][A-Z0-9]{2,}")
+# <@U123|Ada> is the same mention as <@U123>. Label stops at "<" so it can't swallow the next one.
+_SLACK_MENTION = re.compile(r"<@([A-Z0-9]+)(?:\|[^<>]*)?>")
+# Prefix format_asked_by writes. The title drops it so the question stays visible.
+_ASKED_BY_PREFIX = re.compile(
+    r"^Asked by (?:<@[UW][A-Z0-9]+>(?: \([^)]*\))?|[^:]{1,80}): "
+)
+
 # Maximum length for chat session titles (in characters)
 TITLE_MAX_LENGTH = 50
 
@@ -174,6 +183,66 @@ def get_user_id_from_slack_user(slack_user_id: str, team_id: str) -> Optional[st
         return None
 
 
+def format_slack_speaker(slack_user_id: Optional[str], display_name: Optional[str], *, is_bot: bool = False) -> str:
+    """Speaker label Slack can notify on. ``<@USERID>`` pings; a display name does not."""
+    name = (display_name or "").strip()
+    # Bots have no one to notify; keep the label as a name.
+    if is_bot:
+        return name or "Aurora"
+    uid = (slack_user_id or "").strip()
+    mention = f"<@{uid}>" if _SLACK_USER_ID.fullmatch(uid) else ""
+    # Name is just the id we already printed — don't repeat it.
+    if mention and name and name not in (uid, mention):
+        return f"{mention} ({name})"
+    return mention or name or "Unknown"
+
+
+def format_asked_by(slack_user_id: Optional[str], display_name: Optional[str], message: str) -> str:
+    """Prefix a Slack question with the asker's mention token."""
+    # No Slack id — nothing to mention, so the question goes through as typed.
+    if not slack_user_id:
+        return message
+    return f"Asked by {format_slack_speaker(slack_user_id, display_name)}: {message}"
+
+
+def slack_session_title(message_text: str) -> str:
+    """Title is the question. The Asked-by mention stays in the prompt only."""
+    question = _ASKED_BY_PREFIX.sub("", message_text, count=1)
+    body = question[:TITLE_MAX_LENGTH] + "..." if len(question) > TITLE_MAX_LENGTH else question
+    return f"Slack: {body}"
+
+
+def mention_bot_ids(authorizations, stored_bot_user_id: Optional[str] = None) -> list:
+    """Bot ids to strip. Event authorizations first, then the id saved at install."""
+    ids = [
+        auth.get("user_id")
+        for auth in (authorizations or [])
+        if isinstance(auth, dict) and auth.get("is_bot") and auth.get("user_id")
+    ]
+    # Payload omitted the bot. The install still recorded it, so don't strip people.
+    if not ids and stored_bot_user_id:
+        return [stored_bot_user_id]
+    return ids
+
+
+def strip_bot_mentions(text: str, bot_user_ids: list) -> str:
+    """Remove Aurora's own mention and keep every other <@USERID>."""
+    if not text:
+        return ""
+    ids = {str(bid) for bid in bot_user_ids if bid and _SLACK_USER_ID.fullmatch(str(bid))}
+    # Still no bot id — can't tell Aurora from a person, so drop every mention.
+    if not ids:
+        return _SLACK_MENTION.sub("", text).strip()
+
+    def _keep_people(match):
+        # Aurora's mention, with or without a |label. Everyone else stays.
+        if match.group(1) in ids:
+            return ""
+        return match.group(0)
+
+    return _SLACK_MENTION.sub(_keep_people, text).strip()
+
+
 def _get_user_display_name(client, user_id: str) -> str:
     """
     Get display name for a Slack user ID.
@@ -324,6 +393,43 @@ def get_thread_messages(client, channel: str, thread_ts: str, limit: int = 10, m
         return []
 
 
+def _append_context_reply(context_parts: list, client, reply: dict, user_name_cache: dict,
+                          total_length: int, max_total_length: int):
+    """Append one thread reply. Returns the new length, and whether to stop."""
+    reply_user = reply.get('user')
+    reply_bot = reply.get('bot_id') is not None
+    reply_name = _resolve_user_display_name(client, reply_user, reply_bot, user_name_cache)
+    reply_speaker = format_slack_speaker(reply_user, reply_name, is_bot=reply_bot)
+    reply_text = reply.get('text', '').strip()
+    reply_time = _format_slack_timestamp(reply.get('ts', ''))
+
+    # Keep the channel summary short; the full text is still in the thread.
+    if len(reply_text) > COMMAND_DISPLAY_TRUNCATE_LENGTH:
+        reply_text = reply_text[:COMMAND_DISPLAY_TRUNCATE_LENGTH] + "..."
+
+    timestamp_prefix = f"[{reply_time}] " if reply_time else ""
+    reply_line = f"    • {timestamp_prefix}{reply_speaker}: {reply_text}"
+    # Budget spent — keep what we have and stop walking this thread.
+    if total_length + len(reply_line) > max_total_length:
+        logger.warning("Reached total context limit. Stopping at thread reply.")
+        return total_length, True
+    context_parts.append(reply_line)
+    return total_length + len(reply_line), False
+
+
+def _append_context_replies(context_parts: list, client, replies: list, user_name_cache: dict,
+                            total_length: int, max_total_length: int) -> int:
+    """Append replies until the context budget is spent. Returns the new length."""
+    for reply in replies:
+        total_length, stop = _append_context_reply(
+            context_parts, client, reply, user_name_cache, total_length, max_total_length,
+        )
+        # Cap is spent. A later line is the same size, and skipping one leaves a hole.
+        if stop:
+            break
+    return total_length
+
+
 def get_channel_context_with_threads(client, channel: str, limit: int = 5, max_total_length: int = 50000):
     """
     Fetch recent channel messages and thread summaries for context.
@@ -362,11 +468,12 @@ def get_channel_context_with_threads(client, channel: str, limit: int = 5, max_t
             
             # Resolve user name and format timestamp
             display_name = _resolve_user_display_name(client, user_id, is_bot, user_name_cache)
+            speaker = format_slack_speaker(user_id, display_name, is_bot=is_bot)
             readable_time = _format_slack_timestamp(ts)
             timestamp_prefix = f"[{readable_time}] " if readable_time else ""
             
             # Add main message with timestamp
-            main_msg = f"• {timestamp_prefix}{display_name}: {text}"
+            main_msg = f"• {timestamp_prefix}{speaker}: {text}"
             
             # Check if adding this would exceed total limit
             if total_length + len(main_msg) > max_total_length:
@@ -401,54 +508,20 @@ def get_channel_context_with_threads(client, channel: str, limit: int = 5, max_t
                             context_parts.append(thread_header)
                             total_length += len(thread_header)
                             
-                            for reply in first_3:
-                                reply_user = reply.get('user')
-                                reply_bot = reply.get('bot_id') is not None
-                                reply_name = _resolve_user_display_name(client, reply_user, reply_bot, user_name_cache)
-                                reply_ts = reply.get('ts', '')
-                                reply_text = reply.get('text', '').strip()
-                                reply_time = _format_slack_timestamp(reply_ts)
-                                timestamp_prefix = f"[{reply_time}] " if reply_time else ""
-
-                                # Truncate long messages
-                                if len(reply_text) > COMMAND_DISPLAY_TRUNCATE_LENGTH:
-                                    reply_text = reply_text[:COMMAND_DISPLAY_TRUNCATE_LENGTH] + "..."
-                                
-                                reply_line = f"    • {timestamp_prefix}{reply_name}: {reply_text}"
-                                if total_length + len(reply_line) > max_total_length:
-                                    logger.warning(f"Reached total context limit. Stopping at thread reply.")
-                                    break
-                                
-                                context_parts.append(reply_line)
-                                total_length += len(reply_line)
+                            total_length = _append_context_replies(
+                                context_parts, client, first_3, user_name_cache,
+                                total_length, max_total_length,
+                            )
                             
                             separator = f"    ... ({len(thread_replies) - 6} more messages) ..."
                             if total_length + len(separator) <= max_total_length:
                                 context_parts.append(separator)
                                 total_length += len(separator)
                             
-                            for reply in last_3:
-                                reply_user = reply.get('user')
-                                reply_bot = reply.get('bot_id') is not None
-                                reply_name = _resolve_user_display_name(client, reply_user, reply_bot, user_name_cache)
-                                reply_ts = reply.get('ts', '')
-                                reply_text = reply.get('text', '').strip()
-                                reply_time = _format_slack_timestamp(reply_ts)
-
-                                if len(reply_text) > COMMAND_DISPLAY_TRUNCATE_LENGTH:
-                                    reply_text = reply_text[:COMMAND_DISPLAY_TRUNCATE_LENGTH] + "..."
-                                
-                                if reply_time:
-                                    reply_line = f"    • [{reply_time}] {reply_name}: {reply_text}"
-                                else:
-                                    reply_line = f"    • {reply_name}: {reply_text}"
-                                
-                                if total_length + len(reply_line) > max_total_length:
-                                    logger.warning(f"Reached total context limit. Stopping at thread reply.")
-                                    break
-                                
-                                context_parts.append(reply_line)
-                                total_length += len(reply_line)
+                            total_length = _append_context_replies(
+                                context_parts, client, last_3, user_name_cache,
+                                total_length, max_total_length,
+                            )
                         else:
                             # Fewer than 6 replies, show all
                             thread_header = f"  └─ Thread ({len(thread_replies)} replies):"
@@ -459,28 +532,10 @@ def get_channel_context_with_threads(client, channel: str, limit: int = 5, max_t
                             context_parts.append(thread_header)
                             total_length += len(thread_header)
                             
-                            for reply in thread_replies:
-                                reply_user = reply.get('user')
-                                reply_bot = reply.get('bot_id') is not None
-                                reply_name = _resolve_user_display_name(client, reply_user, reply_bot, user_name_cache)
-                                reply_ts = reply.get('ts', '')
-                                reply_text = reply.get('text', '').strip()
-                                reply_time = _format_slack_timestamp(reply_ts)
-
-                                if len(reply_text) > COMMAND_DISPLAY_TRUNCATE_LENGTH:
-                                    reply_text = reply_text[:COMMAND_DISPLAY_TRUNCATE_LENGTH] + "..."
-                                
-                                if reply_time:
-                                    reply_line = f"    • [{reply_time}] {reply_name}: {reply_text}"
-                                else:
-                                    reply_line = f"    • {reply_name}: {reply_text}"
-                                
-                                if total_length + len(reply_line) > max_total_length:
-                                    logger.warning(f"Reached total context limit. Stopping at thread reply.")
-                                    break
-                                
-                                context_parts.append(reply_line)
-                                total_length += len(reply_line)
+                            total_length = _append_context_replies(
+                                context_parts, client, thread_replies, user_name_cache,
+                                total_length, max_total_length,
+                            )
                 
                 except Exception as e:
                     logger.debug(f"Could not fetch thread for message {ts}: {e}")
@@ -713,8 +768,7 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
         rca_incident_id = incident_id if session_id else None
         # Create session if not exists
         if not session_id:
-            # Generate a title from the message (first TITLE_MAX_LENGTH chars)
-            title = 'Slack: ' + (message_text[:TITLE_MAX_LENGTH] + "..." if len(message_text) > TITLE_MAX_LENGTH else message_text)
+            title = slack_session_title(message_text)
             
             # Trigger metadata for tracking
             trigger_metadata = {
@@ -740,11 +794,14 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
             
             for i, msg in enumerate(context_messages, 1):
                 display_name = msg.get('display_name', msg.get('user', 'Unknown'))
+                speaker = format_slack_speaker(
+                    msg.get('user'), display_name, is_bot=bool(msg.get('is_bot')),
+                )
                 text = msg.get('text', '').strip()
                 timestamp = msg.get('timestamp', '')
                 readable_time = _format_slack_timestamp(timestamp)
                 timestamp_prefix = f"[{readable_time}] " if readable_time else ""
-                context_str += f"{i}. {timestamp_prefix}{display_name}: {text}\n"
+                context_str += f"{i}. {timestamp_prefix}{speaker}: {text}\n"
             
             context_str += "--- End of thread context ---\n"
         
@@ -756,6 +813,7 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
         # so the agent can resolve references like "this channel" and scope any
         # directive it saves to the right channel (matches routing/descriptions).
         channel_label = _resolve_channel_label(user_id, channel)
+        # Mention rules live in the Slack skill and system prompt, not this turn.
         channel_header = f"[Slack message from channel {channel_label}]\n\n"
         full_message = f"{channel_header}{message_text}{context_str}"
         

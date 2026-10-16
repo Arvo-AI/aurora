@@ -8,6 +8,10 @@ Aurora exposes a focused, token-lean tool surface over [MCP](https://modelcontex
 
 The surface is **hybrid**: a small set of always-visible tools handles the 80% case, and a search-and-call pattern (`search_tools` + `call_tool`) reaches the long tail.
 
+:::info Looking to connect your own MCP server to Aurora?
+This page is about external clients calling **into** Aurora. For the reverse — registering an MCP server you own so Aurora can query it during investigations — see [Custom MCP Servers](./custom-mcp-servers.md).
+:::
+
 ## Tool Tiers
 
 ### Tier 1 — Always visible

@@ -322,6 +322,7 @@ MAIN_MODEL=anthropic/claude-sonnet-5    # auto-translated to us.anthropic.claude
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RCA_MODEL` | - | Model for background RCA (format: `provider/model`). Overrides `RCA_OPTIMIZE_COSTS` when set. Default RCA path when `ORCHESTRATOR_ENABLED=false`. |
+| `JIRA_RCA_JUDGE_MODEL` | `RCA_MODEL` | Yes/no model for Jira automatic RCA. Unset uses the resolved `RCA_MODEL`. |
 | `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` = `anthropic/claude-haiku-4.5`, `false` = `anthropic/claude-opus-5.5` |
 | `ORCHESTRATOR_ENABLED` | `false` | Multi-agent RCA orchestrator (opt-in). When `true`, a lead orchestrator triages each background RCA and may fan out parallel read-only sub-agents; `RCA_MODEL` is ignored. When `false` (default), RCA uses the single-agent path with `RCA_MODEL`. |
 | `RCA_ORCHESTRATOR_MODEL` | - | *Only when `ORCHESTRATOR_ENABLED=true`.* Brain model for triage + synthesis. Format: `provider/model`. |
@@ -538,15 +539,7 @@ OVH_EU_CLIENT_SECRET=your-eu-client-secret
 
 ### Scaleway
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NEXT_PUBLIC_ENABLE_SCALEWAY` | `false` | Enable Scaleway connector in UI |
-
-```bash
-NEXT_PUBLIC_ENABLE_SCALEWAY=true
-```
-
-> No additional server-side credentials required. Users connect via API key through the UI.
+The Scaleway connector is always available. Users connect with an API key; no server-side credentials are required.
 
 ### Confluence
 
@@ -617,6 +610,16 @@ SMTP_FROM_NAME=Aurora
 | `BACKEND_URL` | `http://aurora-server:5080` | Internal Aurora API URL (shared with other services) |
 
 The MCP server authenticates clients via Bearer tokens stored in the `mcp_tokens` database table. No additional environment variable is needed for token configuration -- see the [MCP integration guide](../integrations/mcp) for details.
+
+## Custom MCP Servers
+
+Controls Aurora connecting **out** to MCP servers you register, which is the opposite direction from the section above. See [Custom MCP Servers](../integrations/custom-mcp-servers).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_ALLOW_PRIVATE_TARGETS` | `true` (Compose, Helm, and when unset) | Allow registering MCP servers on private, loopback or link-local addresses. Default is on for self-hosted OSS. Set `false` on multi-tenant SaaS: with it on, anyone holding `connectors:write` can aim Aurora at any address it can reach, including cloud metadata endpoints. |
+
+The redirect URI Aurora presents to OAuth providers is derived from `FRONTEND_URL` as `<FRONTEND_URL>/mcp/callback`. Credentials go to the configured secrets backend, so there is no env var for them.
 
 ## Rate Limiting
 

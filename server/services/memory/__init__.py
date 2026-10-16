@@ -62,13 +62,24 @@ PLATFORM_MEMORY_IDENTITIES: Dict[str, PlatformMemoryIdentity] = {
 SLACK_MEMORY_CATEGORY = PLATFORM_MEMORY_IDENTITIES["slack"].category
 SLACK_MEMORY_TITLE = PLATFORM_MEMORY_IDENTITIES["slack"].title
 
+# The Jira automatic-RCA policy (one per org): the judge reads it to decide which
+# tickets get an RCA, and users and the agent refine it like the Slack entry.
+JIRA_MEMORY_CATEGORY = "context"
+JIRA_MEMORY_TITLE = "Jira RCA"
+
+# Jira-triggered RCAs. The agent only receives this memory in Auto mode.
+JIRA_POLICY_SOURCES = frozenset({"jira"})
+
 # Well-known entries whose (category, title) pair IS their stable identity —
 # seeders, the agent's prompt injector, and route lookups all pin to it rather
 # than to an id. Users may freely edit their content and description, but renaming,
 # recategorizing, or deleting one would silently detach it from those lookups
 # (e.g. the Slack policy would stop being injected, with no error), so the
 # memory routes reject those operations.
-PROTECTED_ENTRIES = frozenset(i.key for i in PLATFORM_MEMORY_IDENTITIES.values())
+PROTECTED_ENTRIES = frozenset(
+    [i.key for i in PLATFORM_MEMORY_IDENTITIES.values()]
+    + [(JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE)]
+)
 
 
 def policy_entries_for_source(source: Optional[str]) -> List[Tuple[str, str]]:
@@ -89,7 +100,6 @@ def policy_entries_for_source(source: Optional[str]) -> List[Tuple[str, str]]:
     if src == TEAM_ROUTING_SOURCE:
         return [i.key for i in PLATFORM_MEMORY_IDENTITIES.values()]
     return [i.key for i in PLATFORM_MEMORY_IDENTITIES.values() if src in i.policy_sources]
-
 
 # All valid categories (used by memory_tool for validation)
 ALL_CATEGORIES = MEMORY_CATEGORIES + AGENT_CATEGORIES

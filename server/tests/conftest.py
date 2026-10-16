@@ -50,6 +50,11 @@ _OPTIONAL_PACKAGES = (
     "hvac", "redis", "celery", "flask_socketio",
     "flask_cors", "langchain", "langgraph", "requests", "tiktoken",
     "dotenv", "flask",
+    # The MCP SDK, used by connectors/mcp_connector/client.py. CI does not
+    # install it, so it is stubbed here. httpx comes in with the SDK, so it is
+    # absent from CI for the same reason.
+    "mcp", "mcp.client", "mcp.client.sse", "mcp.client.streamable_http",
+    "mcp.client.auth", "httpx",
     # routes/memory/routes.py imports PdfReader at module scope for upload
     # text-extraction, so the blueprint is unimportable without it — even for
     # tests that never touch the upload route.
@@ -150,6 +155,7 @@ for _pkg in _OPTIONAL_PACKAGES:
     if not _is_installed(_pkg):
         _stub(_pkg)
 
+
 # Whether the real google.oauth2 is importable must be sampled BEFORE any
 # stubbing runs. Once `google.oauth2` is placed in sys.modules, find_spec()
 # returns that stub's own ModuleSpec, so _is_installed() answers True and the
@@ -200,11 +206,18 @@ def _install_flask_limiter_stub() -> None:
         # @limiter.limit("10 per minute") / @limiter.shared_limit(...)
         limit = staticmethod(_passthrough_decorator)
         shared_limit = staticmethod(_passthrough_decorator)
-        exempt = staticmethod(_passthrough_decorator)
 
         # Bare decorators — applied directly to a function, not called first.
+        # `exempt` belongs here, not with `limit` above: chat_routes.py applies
+        # it as a plain `@limiter.exempt`, so a decorator-factory would hand
+        # Flask the factory's inner function and every route would register
+        # under the same `__name__`.
         @staticmethod
         def request_filter(func):
+            return func
+
+        @staticmethod
+        def exempt(func):
             return func
 
         def init_app(self, _app: Any) -> None:

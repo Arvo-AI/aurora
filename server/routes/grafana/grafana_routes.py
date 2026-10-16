@@ -1,11 +1,11 @@
 import logging
-import os
 from typing import Tuple
 
 from flask import Blueprint, jsonify, request
 
 from routes.grafana.tasks import process_grafana_alert
 from utils.db.connection_pool import db_pool
+from utils.web.public_url import external_backend_url
 from utils.log_sanitizer import sanitize
 from utils.auth.token_management import store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -234,13 +234,7 @@ def get_webhook_url(user_id):
     from utils.secrets.secret_ref_utils import get_token_owner_id
     webhook_owner_id = get_token_owner_id(user_id, "grafana")
 
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-
-    if ngrok_url and backend_url.startswith("http://localhost"):
-        base_url = ngrok_url
-    else:
-        base_url = backend_url
+    base_url = external_backend_url()
 
     webhook_url = f"{base_url}/grafana/alerts/webhook/{webhook_owner_id}"
 

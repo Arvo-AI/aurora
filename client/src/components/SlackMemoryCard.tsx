@@ -3,7 +3,6 @@
 import { PlatformMemoryCard } from "@/components/PlatformMemoryCard";
 
 interface SlackMemoryCardProps {
-  // Editing is gated on the same role check the rest of the manage page uses.
   readonly canWrite: boolean;
 }
 

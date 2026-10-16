@@ -1,0 +1,278 @@
+"""Storage and naming helpers for customer-registered MCP servers.
+
+All servers for an org live in a single Vault secret under the ``mcp`` provider,
+because ``store_tokens_in_db`` supports one secret per ``(org_id, provider)``.
+Shared by the routes and the agent tool builder so both agree on labels, tool
+names, and the read/write split.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from typing import Any, Dict, List, Optional, Tuple
+
+PROVIDER = "mcp"
+
+MAX_SERVERS = 10
+MAX_LABEL_CHARS = 32
+
+MAX_TOOL_NAME_CHARS = 64
+TOOL_PREFIX = "mcp"
+
+# Read-verb allowlist, used only when the server declares no annotations.
+# Inverted relative to the built-in servers' denylist in
+# mcp_tools.is_destructive_mcp_tool: that one knows its servers' naming, while a
+# customer server can call a destructive tool anything ("purge_cache", "apply").
+# Unknown names must therefore be treated as writes, not reads.
+READ_VERBS = (
+    "get", "list", "search", "read", "describe", "query", "fetch", "check",
+    # Verbs real servers use for pure lookups: Context7 names its lookup
+    # "resolve-library-id", DeepWiki names one "ask_wiki_question".
+    "resolve", "ask", "find", "show", "view", "inspect", "lookup", "count",
+    "diff", "explain", "summarize", "analyze", "validate",
+)
+READ_PREFIXES = tuple(f"{verb}{sep}" for verb in READ_VERBS for sep in ("_", "-"))
+
+# What the agent may do with one tool. Two states, because that is all there is
+# to decide: run it, or ask the user first. ``confirm`` is withheld in
+# background runs where nobody can answer. Nothing stored means "derive from the
+# read/write classification", which is why there is no third mode.
+TOOL_MODES = ("allow", "confirm")
+
+
+def slugify_label(raw: Any) -> str:
+    """Normalise a user-supplied label to ``[a-z0-9-]``, or '' if unusable."""
+    text = re.sub(r"[^a-z0-9]+", "-", str(raw or "").strip().lower()).strip("-")
+    return text[:MAX_LABEL_CHARS].strip("-")
+
+
+def is_read_tool(tool: Any) -> bool:
+    """Whether a tool is safe to run without confirmation.
+
+    Accepts a tool dict (preferred) or a bare name. Precedence:
+
+    1. ``annotations.destructiveHint`` -- an explicit "this mutates" always wins.
+    2. ``annotations.readOnlyHint`` -- trust the server author over our guess.
+    3. Name verb, for servers that send no annotations at all (DeepWiki).
+
+    A hostile server can claim ``readOnlyHint`` on a destructive tool. That is
+    what the per-tool ``confirm`` override exists for; annotations buy accuracy,
+    not trust.
+    """
+    if isinstance(tool, dict):
+        name = tool.get("name", "")
+        annotations = tool.get("annotations")
+        if isinstance(annotations, dict):
+            if annotations.get("destructiveHint") is True:
+                return False
+            if annotations.get("readOnlyHint") is True:
+                return True
+    else:
+        name = tool
+    return str(name or "").lower().startswith(READ_PREFIXES)
+
+
+def qualified_tool_name(label: str, tool_name: str) -> str:
+    """Build a unique, bounded tool name for a server's tool.
+
+    ``mcp_<label>_<tool>`` truncated to 64 chars. When truncation is needed the
+    tail is replaced by a short hash of the full name, so two long tool names
+    sharing a prefix cannot collapse onto each other.
+    """
+    safe_label = re.sub(r"[^a-zA-Z0-9]+", "_", label).strip("_")
+    safe_tool = re.sub(r"[^a-zA-Z0-9]+", "_", str(tool_name or "")).strip("_")
+    name = f"{TOOL_PREFIX}_{safe_label}_{safe_tool}"
+    if len(name) <= MAX_TOOL_NAME_CHARS:
+        return name
+    digest = hashlib.sha256(f"{label}/{tool_name}".encode()).hexdigest()[:8]
+    return f"{name[: MAX_TOOL_NAME_CHARS - 9]}_{digest}"
+
+
+def tool_mode(server: Dict[str, Any], tool: Any) -> str:
+    """What the agent may do with one tool: ``allow`` or ``confirm``.
+
+    Takes a tool dict (preferred) or a bare name. With no stored override the
+    answer is derived from the read/write classification, so the common case
+    needs no configuration and the UI can show the real behaviour rather than a
+    neutral "auto" that means different things on different rows.
+
+    A bare name can only be classified by its verb prefix, which is the same
+    fallback ``is_read_tool`` uses when a server sends no annotations.
+    """
+    name = tool.get("name", "") if isinstance(tool, dict) else tool
+    modes = server.get("tool_modes")
+    if isinstance(modes, dict) and modes.get(name) in TOOL_MODES:
+        return modes[name]
+    return "allow" if is_read_tool(tool) else "confirm"
+
+
+def fingerprint(user_id: str) -> str:
+    """Cheap identity of a user's MCP config, for cache keys.
+
+    Changes whenever a server is registered, refreshed, removed, or a tool mode
+    is flipped -- all of which change the tool list the agent is built with.
+    Returns "" on any failure so a Vault hiccup degrades to a stale list for one
+    cache window rather than breaking tool building.
+    """
+    try:
+        return ",".join(sorted(
+            f"{s.get('label')}@{s.get('validated_at')}:{sorted((s.get('tool_modes') or {}).items())}"
+            for s in list_servers(user_id)
+        ))
+    except Exception:
+        return ""
+
+
+def server_summary(server: Dict[str, Any]) -> Dict[str, Any]:
+    """Credential-free view of a server, safe for API responses and the agent."""
+    tools = server.get("tools") or []
+    auth = server.get("auth") or {}
+    return {
+        "label": server.get("label", ""),
+        "url": server.get("url", ""),
+        "transport": server.get("transport", "streamable_http"),
+        "authType": auth.get("type", "none"),
+        "toolCount": len(tools),
+        "tools": [
+            {
+                "name": t.get("name", ""),
+                "write": not is_read_tool(t),
+                # Lets the UI say "the server told us" rather than "we guessed".
+                "declared": isinstance(t.get("annotations"), dict),
+                "mode": tool_mode(server, t),
+            }
+            for t in tools
+        ],
+        "validatedAt": server.get("validated_at"),
+    }
+
+
+def list_servers(user_id: str) -> List[Dict[str, Any]]:
+    """All registered servers for the caller's org, or [] when none."""
+    from utils.auth.token_management import get_token_data
+
+    try:
+        blob = get_token_data(user_id, PROVIDER) or {}
+    except Exception:
+        return []
+    servers = blob.get("servers")
+    if not isinstance(servers, list):
+        return []
+    return [
+        s for s in servers
+        if isinstance(s, dict) and s.get("label") and s.get("url")
+    ]
+
+
+def find_server(user_id: str, label: str) -> Optional[Dict[str, Any]]:
+    """One server by label, or None."""
+    target = slugify_label(label)
+    return next((s for s in list_servers(user_id) if s.get("label") == target), None)
+
+
+def save_servers(user_id: str, servers: List[Dict[str, Any]]) -> None:
+    """Persist the server list, deleting the secret entirely when empty."""
+    from utils.auth.token_management import store_tokens_in_db
+    from utils.secrets.secret_ref_utils import delete_user_secret
+
+    if not servers:
+        delete_user_secret(user_id, PROVIDER)
+        return
+    store_tokens_in_db(user_id, {"servers": servers}, PROVIDER)
+
+
+def upsert_server(user_id: str, server: Dict[str, Any]) -> Tuple[bool, str]:
+    """Add or replace a server by label. Returns (ok, error_message)."""
+    servers = list_servers(user_id)
+    label = server.get("label", "")
+    existing = next((i for i, s in enumerate(servers) if s.get("label") == label), None)
+    if existing is None and len(servers) >= MAX_SERVERS:
+        return False, f"At most {MAX_SERVERS} MCP servers can be registered"
+    if existing is None:
+        servers.append(server)
+    else:
+        servers[existing] = server
+    save_servers(user_id, servers)
+    return True, ""
+
+
+def set_tool_mode(user_id: str, label: str, tool_name: str, mode: str) -> Tuple[bool, str]:
+    """Persist one tool's override. Returns (ok, error_message).
+
+    Targeted rather than a full upsert so changing a mode never re-probes the
+    server or risks overwriting its cached tool list.
+    """
+    if mode not in TOOL_MODES:
+        return False, f"mode must be one of: {', '.join(TOOL_MODES)}"
+
+    target = slugify_label(label)
+    servers = list_servers(user_id)
+    server = next((s for s in servers if s.get("label") == target), None)
+    if server is None:
+        return False, "Unknown MCP server"
+    if not any(t.get("name") == tool_name for t in server.get("tools") or []):
+        return False, f"Server '{target}' exposes no tool named '{tool_name}'"
+
+    modes = dict(server.get("tool_modes") or {})
+    modes[tool_name] = mode
+    server["tool_modes"] = modes
+
+    save_servers(user_id, servers)
+    return True, ""
+
+
+def remove_server(user_id: str, label: str) -> bool:
+    """Remove one server by label. Returns False when the label was unknown."""
+    target = slugify_label(label)
+    servers = list_servers(user_id)
+    remaining = [s for s in servers if s.get("label") != target]
+    if len(remaining) == len(servers):
+        return False
+    save_servers(user_id, remaining)
+    return True
+
+
+def update_auth(user_id: str, label: str, auth: Dict[str, Any]) -> None:
+    """Replace one server's stored credentials, leaving everything else intact.
+
+    Used after an OAuth refresh. Re-reads the server list rather than taking a
+    caller-held copy so a concurrent edit to a *different* server is not lost.
+
+    ponytail: still a read-modify-write, so two parallel refreshes of the SAME
+    server can clobber each other -- the loser's rotated refresh token is lost
+    and that server needs reconnecting. Accepted: the window is one HTTP
+    round-trip and the damage is recoverable from the UI. Upgrade path is a
+    short Redis lock keyed on (org_id, label) around refresh-and-store.
+    """
+    target = slugify_label(label)
+    servers = list_servers(user_id)
+    found = False
+    for server in servers:
+        if server.get("label") == target:
+            server["auth"] = auth
+            found = True
+            break
+    if found:
+        save_servers(user_id, servers)
+
+
+def mcp_servers_section(user_id: str) -> str:
+    """Connected servers for the skill template: labels and counts, not names.
+
+    Ten servers with 150 tools each would put 1500 names into the system prompt
+    on every turn, which is what the mcp_list_tools indirection exists to avoid.
+    Lives here rather than beside the tool builder so ``SkillRegistry`` can
+    import it without pulling in langchain.
+    """
+    servers = list_servers(user_id)
+    if not servers:
+        return "(no custom MCP servers registered)"
+
+    lines: List[str] = []
+    for server in servers:
+        tools = server.get("tools") or []
+        writes = sum(1 for t in tools if not is_read_tool(t))
+        suffix = f", {writes} need confirmation" if writes else ""
+        lines.append(f"- {server['label']} ({len(tools)} tools{suffix})")
+    return "\n".join(lines)

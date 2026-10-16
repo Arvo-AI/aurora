@@ -5,6 +5,8 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify
+from services.actions.ownership import reassign_actions_to_admin
+from services.connectors.ownership import reassign_connectors_to_admin
 from utils.db.connection_pool import db_pool
 from utils.db.org_backfill import migrate_user_to_org, _USER_SCOPED_TABLES_SQL, _INCIDENT_CHILD_TABLES_SQL
 from utils.auth import VALID_ROLES, normalize_email
@@ -466,20 +468,35 @@ def remove_member(user_id, target_user_id):
                     (target_user_id, org_id),
                 )
                 target_row = cursor.fetchone()
+                # Not in this org — don't delete another org's onboarding row
+                if not target_row:
+                    return jsonify({"error": "User not found in this org"}), 404
                 if target_row and target_row[0] == 'admin' and remaining_admins < 1:
                     return jsonify({"error": "Cannot remove the last admin"}), 400
 
-                # Clear FK references before deleting the user
+                # Clear FK references before deleting the user.
+                # No ON DELETE CASCADE, so a leftover onboarding row blocks the delete.
+                cursor.execute(
+                    "DELETE FROM onboarding_selections WHERE user_id = %s AND org_id = %s",
+                    (target_user_id, org_id),
+                )
                 cursor.execute(
                     "DELETE FROM org_invitations WHERE invited_by = %s", (target_user_id,)
                 )
                 cursor.execute(
                     "UPDATE organizations SET created_by = NULL WHERE created_by = %s", (target_user_id,)
                 )
-                # Clean up user-scoped data (RLS-protected tables)
-                set_rls_context(cursor, conn, target_user_id, log_prefix="[OrgRemoveMember]")
+                # Clean up user-scoped data (RLS-protected tables).
+                # Reassign while the user row still exists so RLS can see the org.
+                # Pin the org this request already checked, not a cached users.org_id.
+                rls_org = set_rls_context(
+                    cursor, conn, target_user_id, org_id=org_id, log_prefix="[OrgRemoveMember]"
+                )
+                if rls_org:
+                    reassign_actions_to_admin(cursor, rls_org, target_user_id)
+                    reassign_connectors_to_admin(cursor, rls_org, target_user_id)
                 for tbl in (
-                    "user_tokens", "user_connections", "user_manual_vms",
+                    "user_manual_vms",
                     "user_preferences", "rca_notification_emails",
                 ):
                     cursor.execute(f"DELETE FROM {tbl} WHERE user_id = %s", (target_user_id,))

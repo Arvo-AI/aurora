@@ -1,0 +1,336 @@
+"""MCP protocol client for customer-registered remote MCP servers.
+
+Remote transports only: Streamable HTTP, or HTTP+SSE for servers that predate
+it. The transport is detected at registration and stored, so later calls go
+straight to the one that worked. stdio is deliberately unsupported -- spawning a
+customer-supplied command inside the Aurora container would be remote code
+execution.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar
+
+from mcp import ClientSession
+from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
+
+from connectors.mcp_connector.net import assert_allowed_target
+from connectors.mcp_connector.oauth import OAuthDiscoveryError, is_expired, refresh_token
+
+_T = TypeVar("_T")
+
+HANDSHAKE_TIMEOUT = 20.0
+
+# Storage bound, not a prompt bound: the agent reaches these tools through
+# mcp_list_tools/mcp_call_tool, so a server's tool count no longer affects the
+# per-turn prompt. All of an org's servers share one Vault secret, and this caps
+# that blob (~1.5KB/tool, so 10 servers x 256 is ~3.8MB against an 8MB measured
+# ceiling on file storage). Well above the largest server seen (GitHub's 49).
+MAX_TOOLS_PER_SERVER = 256
+MAX_DESCRIPTION_CHARS = 1000
+
+# tools/list is paginated and the SDK does not follow the cursor for us. Bound
+# the walk: a buggy or adversarial server returning a constant nextCursor would
+# otherwise spin until the request times out.
+MAX_TOOL_PAGES = 10
+
+TRANSPORTS = ("streamable_http", "sse")
+AUTH_TYPES = ("bearer", "header", "oauth", "none")
+
+
+class MCPConnectionError(Exception):
+    """Transport, handshake, or protocol failure against a remote MCP server."""
+
+
+class MCPAuthError(MCPConnectionError):
+    """Server rejected our credentials (HTTP 401/403).
+
+    Distinct from its parent so the routes can answer "check the token" instead
+    of "cannot reach the server", which sends the user chasing the wrong thing.
+    """
+
+
+def _auth_failure_status(exc: BaseException) -> Optional[int]:
+    """The HTTP 401 or 403 carried by the exception chain, else None.
+
+    Status code only -- never message text. A proxy's 403 body or a tool result
+    that merely mentions "401" must not be reported as "check your token". This
+    also gates the OAuth refresh retry, so a false positive would hammer the
+    vendor's token endpoint on an unrelated network error.
+
+    The code is returned rather than a bool because 401 means a bad or expired
+    credential and 403 means a valid one without the required access.
+    """
+    response = getattr(exc, "response", None)
+    for status in (getattr(response, "status_code", None), getattr(exc, "status_code", None)):
+        if status in (401, 403):
+            return status
+    for sub in getattr(exc, "exceptions", ()) or ():
+        found = _auth_failure_status(sub)
+        if found:
+            return found
+    cause = exc.__cause__
+    return _auth_failure_status(cause) if cause is not None else None
+
+
+def build_headers(auth: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Build request headers from a stored auth config. Never logged."""
+    if not auth:
+        return {}
+    auth_type = (auth.get("type") or "none").lower()
+    if auth_type in ("bearer", "oauth"):
+        token = auth.get("token") or auth.get("access_token") or ""
+        return {"Authorization": f"Bearer {token}"} if token else {}
+    if auth_type == "header":
+        name, value = auth.get("header_name"), auth.get("token")
+        return {name: value} if name and value else {}
+    return {}
+
+
+async def _run(
+    url: str,
+    auth: Optional[Dict[str, Any]],
+    transport: str,
+    op: "Callable[[ClientSession], Awaitable[_T]]",
+    on_refresh: "Optional[Callable[[Dict[str, Any]], None]]" = None,
+) -> Tuple[_T, str]:
+    """Open a session on the configured transport and run ``op``.
+
+    For OAuth servers the token is refreshed proactively when already expired,
+    and reactively on a 401 (one retry). ``on_refresh`` is called with the new
+    auth blob so the caller can persist it -- most servers rotate the refresh
+    token, and dropping the new one disconnects the server at the next expiry.
+
+    ponytail: one handshake per operation, no session reuse or pooling. Ceiling
+    is added latency on turns that make several calls to the same server.
+    Upgrade path: cache the session per (user, server) behind a short TTL.
+    """
+    assert_allowed_target(url)
+
+    # "auto" (the default for a new registration) tries streamable HTTP then
+    # SSE, the order the MCP spec recommends. Users cannot be expected to know
+    # which one a URL speaks. ``probe`` returns whichever worked and the caller
+    # stores it, so only the first connection ever pays for two attempts.
+    chosen = transport if transport in TRANSPORTS else "auto"
+
+    # Refresh up front when the token is already known to be expired: the
+    # request would fail anyway, and this saves a guaranteed round-trip.
+    if is_expired(auth) and _can_refresh(auth):
+        auth = await _refresh(auth)
+        if on_refresh:
+            on_refresh(auth)
+
+    try:
+        return await _attempt_transports(url, auth, chosen, op)
+    except MCPAuthError:
+        # Retried exactly once, and only when a refresh could plausibly help. A
+        # second failure means the grant was revoked; looping would hammer the
+        # vendor's token endpoint.
+        if not _can_refresh(auth):
+            raise
+        refreshed = await _refresh(auth)
+        if on_refresh:
+            on_refresh(refreshed)
+        return await _attempt_transports(url, refreshed, chosen, op)
+
+
+async def _attempt_transports(
+    url: str,
+    auth: Optional[Dict[str, Any]],
+    chosen: str,
+    op: "Callable[[ClientSession], Awaitable[_T]]",
+) -> Tuple[_T, str]:
+    """Run ``op``, detecting the transport when it is not already known.
+
+    Only ``MCPConnectionError`` triggers the fallback. An ``MCPAuthError`` means
+    the transport worked and the credentials did not -- retrying as SSE would
+    bury a clear "check the token" behind a confusing transport failure. It is
+    re-raised explicitly because it *subclasses* ``MCPConnectionError``.
+    """
+    if chosen != "auto":
+        return await _attempt(url, auth, chosen, op), chosen
+    try:
+        return await _attempt(url, auth, "streamable_http", op), "streamable_http"
+    except MCPAuthError:
+        raise
+    except MCPConnectionError:
+        return await _attempt(url, auth, "sse", op), "sse"
+
+
+def _can_refresh(auth: Optional[Dict[str, Any]]) -> bool:
+    return bool(
+        auth
+        and auth.get("type") == "oauth"
+        and auth.get("refresh_token")
+        and auth.get("token_endpoint")
+    )
+
+
+async def _refresh(auth: Dict[str, Any]) -> Dict[str, Any]:
+    """Refresh an expired OAuth token, mapping failure to a reconnect prompt."""
+    try:
+        return await refresh_token(auth)
+    except OAuthDiscoveryError as exc:
+        raise MCPAuthError(
+            f"This server's authorization has expired and could not be renewed "
+            f"({exc}). Reconnect it."
+        ) from exc
+
+
+async def _attempt(
+    url: str,
+    auth: Optional[Dict[str, Any]],
+    chosen: str,
+    op: "Callable[[ClientSession], Awaitable[_T]]",
+) -> _T:
+    """One handshake-and-run against the chosen transport."""
+    headers = build_headers(auth)
+    client = (
+        sse_client(url, headers=headers, timeout=HANDSHAKE_TIMEOUT)
+        if chosen == "sse"
+        else streamablehttp_client(url, headers=headers, timeout=HANDSHAKE_TIMEOUT)
+    )
+    try:
+        async with client as streams:
+            # streamablehttp_client yields a third element (a session-id getter).
+            async with ClientSession(streams[0], streams[1]) as session:
+                await session.initialize()
+                return await op(session)
+    except Exception as exc:
+        status = _auth_failure_status(exc)
+        if status == 403:
+            raise MCPAuthError(
+                "The server accepted the credentials but refused access (HTTP 403). "
+                "The token is valid; it lacks the permissions this server needs."
+            ) from exc
+        if status:
+            raise MCPAuthError(
+                "The server rejected the credentials (HTTP 401). Check that the "
+                "token is correct, complete, and has not expired."
+            ) from exc
+        raise MCPConnectionError(_describe(exc)) from exc
+
+
+def _describe(exc: BaseException) -> str:
+    """Readable one-line cause for an exception, unwrapping ExceptionGroups.
+
+    The MCP SDK runs its transport inside an anyio task group, so a plain
+    connection refusal arrives as "unhandled errors in a TaskGroup (1
+    sub-exception)" -- useless to a user who mistyped a URL. Walk into the
+    group and the ``__cause__`` chain for the message that actually explains it.
+    """
+    for sub in getattr(exc, "exceptions", ()) or ():
+        described = _describe(sub)
+        if described:
+            return described
+    text = str(exc).strip()
+    if not text or "unhandled errors in a TaskGroup" in text:
+        if exc.__cause__ is not None:
+            return _describe(exc.__cause__)
+        return type(exc).__name__
+    return f"{type(exc).__name__}: {text}" if len(text) < 40 else text
+
+
+def _clean_tool(tool: Any) -> Optional[Dict[str, Any]]:
+    """Reduce an SDK Tool to the JSON we cache, or None if unusable."""
+    name = getattr(tool, "name", "") or ""
+    if not name:
+        return None
+    description = (getattr(tool, "description", "") or "")[:MAX_DESCRIPTION_CHARS]
+    schema = getattr(tool, "inputSchema", None)
+    cleaned = {
+        "name": name,
+        "description": description,
+        "inputSchema": schema if isinstance(schema, dict) else {},
+    }
+    # Keep only the two hints that drive classification. The SDK model carries
+    # more (title, idempotentHint, openWorldHint) that we would be storing in
+    # Vault for nothing.
+    annotations = getattr(tool, "annotations", None)
+    hints = {
+        key: getattr(annotations, key)
+        for key in ("readOnlyHint", "destructiveHint")
+        if isinstance(getattr(annotations, key, None), bool)
+    } if annotations is not None else {}
+    if hints:
+        cleaned["annotations"] = hints
+    return cleaned
+
+
+async def probe(
+    url: str,
+    auth: Optional[Dict[str, Any]] = None,
+    transport: str = "auto",
+    on_refresh: "Optional[Callable[[Dict[str, Any]], None]]" = None,
+) -> Tuple[List[Dict[str, Any]], str]:
+    """Handshake and list every tool. Returns (tools, transport_used).
+
+    ``transport`` defaults to "auto", which tries streamable HTTP then SSE. Pass
+    a stored value to skip detection. Raises ``ValueError`` for a rejected URL,
+    ``MCPAuthError`` for bad credentials, ``MCPConnectionError`` otherwise.
+    """
+
+    async def _list(session: ClientSession) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        seen: set = set()
+        cursor: Optional[str] = None
+        for _ in range(MAX_TOOL_PAGES):
+            page = await session.list_tools(cursor)
+            for tool in page.tools or []:
+                cleaned = _clean_tool(tool)
+                # A server that repeats a cursor would otherwise duplicate tools.
+                if cleaned and cleaned["name"] not in seen:
+                    seen.add(cleaned["name"])
+                    out.append(cleaned)
+            cursor = getattr(page, "nextCursor", None)
+            if not cursor:
+                break
+        return out
+
+    tools, used = await _run(url, auth, transport, _list, on_refresh)
+    if not tools:
+        raise MCPConnectionError("Server completed the handshake but exposed no tools")
+    # Not truncated here: the caller filters by read/write first, so capping now
+    # could hide a server's read tools behind its writes.
+    return tools, used
+
+
+def flatten_content(result: Any) -> str:
+    """Flatten an MCP CallToolResult into text for the LLM."""
+    parts: List[str] = []
+    for item in getattr(result, "content", None) or []:
+        text = getattr(item, "text", None)
+        if text:
+            parts.append(text)
+            continue
+        resource = getattr(item, "resource", None)
+        res_text = getattr(resource, "text", None) if resource else None
+        if res_text:
+            parts.append(res_text)
+        elif resource is not None and getattr(resource, "blob", None):
+            parts.append("[binary content omitted]")
+        else:
+            parts.append(str(item))
+    joined = "\n".join(p for p in parts if p)
+    if getattr(result, "isError", False):
+        return f"Tool reported an error: {joined or 'no detail provided'}"
+    return joined or "(tool returned no content)"
+
+
+async def call(
+    url: str,
+    auth: Optional[Dict[str, Any]],
+    transport: str,
+    tool_name: str,
+    arguments: Dict[str, Any],
+    on_refresh: "Optional[Callable[[Dict[str, Any]], None]]" = None,
+) -> str:
+    """Invoke one tool and return its content flattened to text."""
+
+    async def _call(session: ClientSession) -> str:
+        result = await session.call_tool(tool_name, arguments or {})
+        return flatten_content(result)
+
+    text, _used = await _run(url, auth, transport, _call, on_refresh)
+    return text

@@ -55,7 +55,7 @@
     "cmdk": "1.0.4",
     "dagre": "^0.8.5",
     "date-fns": "latest",
-    "dompurify": "^3.4.12",
+    "dompurify": "^3.4.16",
     "dotenv": "^16.4.7",
     "embla-carousel-react": "8.5.1",
     "framer-motion": "^12.12.2",
@@ -64,7 +64,7 @@
     "jszip": "^3.10.1",
     "lodash.debounce": "^4.0.8",
     "lucide-react": "^0.469.0",
-    "next": "^15.5.18",
+    "next": "^15.5.27",
     "next-auth": "^5.0.0-beta.32",
     "next-themes": "^0.4.4",
     "openai": "^4.91.1",
@@ -115,6 +115,9 @@
     "picomatch": "^4.0.4",
     "yaml": "^2.8.3",
     "flatted": "^3.4.2",
-    "postcss": "$postcss"
+    "postcss": "$postcss",
+    "chokidar": "^4.0.3",
+    "braces": "https://github.com/micromatch/braces/tarball/28d440b5dd449dbf1fe6f3506cf94ecca4d02660",
+    "postcss-selector-parser": "7.1.6"
   }
 }

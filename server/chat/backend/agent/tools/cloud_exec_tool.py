@@ -131,6 +131,34 @@ def check_cli_availability(cli_tool: str) -> bool:
 # OLD GLOBAL AZURE FUNCTION REMOVED - Use setup_azure_environment_isolated() instead
 
 
+def _credential_setup_error(fallback: str) -> str:
+    """Name the secrets backend when it, rather than the provider, is the problem.
+
+    Every provider's credentials are read through the same backend, so an outage
+    there fails them all at once. Thin wrapper kept so the provider setup paths
+    below don't each import from utils.secrets.
+    """
+    from utils.secrets import credential_error_message
+
+    return credential_error_message(fallback)
+
+
+def _credential_setup_failure(fallback: str, command: str, requires_connection: bool = False) -> str:
+    """Build the JSON error payload for a provider whose credential setup failed.
+
+    `requires_connection` drives a "connect your account" prompt in the UI, which
+    is actively misleading during a secrets-backend outage: the connector is fine
+    and reconnecting cannot help, so the flag is dropped in that case.
+    """
+    message = _credential_setup_error(fallback)
+    payload = {"error": message, "final_command": command}
+    # Message unchanged means the backend is healthy, so this really is a
+    # missing/invalid credential and the reconnect prompt is correct.
+    if requires_connection and message == fallback:
+        payload["requires_connection"] = True
+    return json.dumps(payload)
+
+
 def setup_azure_environment_isolated(user_id: str, subscription_id: str | None = None):
     """Set up Azure environment with isolated credentials - NO global state modification."""
     try:
@@ -566,7 +594,12 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
             account_identity = sa_email if sa_email else "aurora-discovery@local"
             fd = os.open(properties_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as _pf:
-                _pf.write(f"[core]\naccount = {account_identity}\n")
+                # project lets `bq` pick up a default via `gcloud config list`
+                # when the command itself has no --project_id.
+                lines = ["[core]", f"account = {account_identity}"]
+                if project_id:
+                    lines.append(f"project = {project_id}")
+                _pf.write("\n".join(lines) + "\n")
         except OSError as mkdir_err:
             logger.warning(
                 "GCP isolated env: could not write CLOUDSDK_CONFIG properties (error_type=%s)",
@@ -1235,6 +1268,7 @@ def _cloud_exec_aws_multi_account(
         })
 
     def _run_on_account(conn: dict) -> dict:
+        """Run the command against one account with its own isolated credential env."""
         account_id = conn.get("account_id", "unknown")
         region = conn.get("region") or "us-east-1"
         try:
@@ -1243,9 +1277,11 @@ def _cloud_exec_aws_multi_account(
             )
             if not success:
                 return {"account_id": account_id, "region": region, "success": False,
-                        "error": "Failed to assume role — check the server log for the "
-                                 "underlying STS error (ExternalId mismatch and a missing "
-                                 "trust-policy principal both surface as AccessDenied)"}
+                        "error": (
+                            "Failed to assume role — check the server log for the "
+                            "underlying STS error (ExternalId mismatch and a missing "
+                            "trust-policy principal both surface as AccessDenied)"
+                        )}
 
             cmd = command.strip()
             if not cmd.startswith("aws"):
@@ -1310,6 +1346,47 @@ def _is_azure_cli_command(command: str) -> bool:
     except ValueError:
         return False
     return first not in ('kubectl', 'helm', 'terraform')
+
+
+# Default CLI plus every other binary this tool invokes without prefixing.
+# The policy gate and the exec path both read this so they judge the same string.
+_PROVIDER_CLIS = {
+    "gcp": ("gcloud", ("gcloud", "kubectl", "gsutil", "bq", "helm", "terraform")),
+    "gcloud": ("gcloud", ("gcloud", "kubectl", "gsutil", "bq", "helm", "terraform")),
+    "aws": ("aws", ("aws", "kubectl", "eksctl", "sam", "cdk", "helm", "terraform")),
+    "amazon": ("aws", ("aws", "kubectl", "eksctl", "sam", "cdk", "helm", "terraform")),
+    "azure": ("az", ("az", "kubectl", "helm", "terraform")),
+    "az": ("az", ("az", "kubectl", "helm", "terraform")),
+    "ovh": ("ovhcloud", ("ovhcloud", "kubectl", "helm", "terraform")),
+    "scaleway": ("scw", ("scw", "kubectl", "helm", "terraform")),
+    "flyio": ("fly", ("fly", "flyctl")),
+    "tailscale": ("tailscale", ("tailscale",)),
+}
+
+
+def _first_command_token(command: str) -> str:
+    try:
+        return shlex.split(command)[0].lower() if command.strip() else ""
+    except ValueError:
+        return ""
+
+
+def _command_for_policy(provider: str, command: str) -> str:
+    """String the allowlist and the exec path both use.
+
+    `vm list` becomes `az vm list`. Sibling CLIs exec runs bare
+    (`kubectl`, `gsutil`, `eksctl`) stay bare so `^kubectl` can match.
+    """
+    spec = _PROVIDER_CLIS.get((provider or "").lower())
+    if spec is None:
+        return command
+    default_cli, supported = spec
+    first = _first_command_token(command)
+    # First token is already a CLI this provider runs as-is. A substring
+    # check would treat `azcopy` as `az` and skip the prefix exec still adds.
+    if first in supported:
+        return command
+    return f"{default_cli} {command}"
 
 
 def _azure_can_fan_out(command: str) -> bool:
@@ -1486,7 +1563,7 @@ def _cloud_exec_azure_multi_subscription(
     if not setup_ok:
         return json.dumps({
             "success": False,
-            "error": "Failed to authenticate with Azure",
+            "error": _credential_setup_error("Failed to authenticate with Azure"),
             "multi_subscription": True,
             "command": command,
             "provider": "azure",
@@ -1544,6 +1621,54 @@ def _cloud_exec_azure_multi_subscription(
         "provider": "azure",
         "results_by_subscription": results,
     })
+
+
+def _redact_oauth_access_token(argv: list) -> str:
+    """Join argv for logs. The access token never appears in the result."""
+    redacted = []
+    skip_value = False
+    for token in argv:
+        if skip_value:
+            redacted.append("[REDACTED]")
+            skip_value = False
+            continue
+        if token == "--oauth_access_token":
+            redacted.append(token)
+            skip_value = True
+            continue
+        if token.startswith("--oauth_access_token="):
+            redacted.append("--oauth_access_token=[REDACTED]")
+            continue
+        redacted.append(token)
+    return " ".join(shlex.quote(part) for part in redacted)
+
+
+def _argv_has_flag(argv: list, name: str) -> bool:
+    return any(token == name or token.startswith(name + "=") for token in argv)
+
+
+def prepare_bq_exec(
+    command: str,
+    access_token: Optional[str],
+    project_id: Optional[str],
+) -> Tuple[list, str]:
+    """Argv for `bq`, plus a log-safe rendering of that argv.
+
+    `bq` reads `--oauth_access_token` and does not read CLOUDSDK_AUTH_ACCESS_TOKEN.
+    The token is placed only on the argv. Callers must log the returned string,
+    not the argv. A project the command already sets is left alone.
+    """
+    argv = shlex.split(command)
+    if not argv or argv[0] != "bq":
+        return argv, _redact_oauth_access_token(argv)
+
+    insert_at = 1
+    if project_id and not _argv_has_flag(argv, "--project_id"):
+        argv.insert(insert_at, f"--project_id={project_id}")
+        insert_at += 1
+    if access_token and not _argv_has_flag(argv, "--oauth_access_token"):
+        argv.insert(insert_at, f"--oauth_access_token={access_token}")
+    return argv, _redact_oauth_access_token(argv)
 
 
 def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None, account_id: Optional[str] = None) -> str:
@@ -1649,13 +1774,9 @@ Security & Compliance
         provider = normalized_provider
 
         # Unified gate: signature + org policy + LLM judge + HITL (foreground).
-        # Prepend CLI prefix so patterns like ^aws\s+ match (cloud_exec receives
-        # the subcommand without the provider prefix, e.g. "ecs list-clusters").
-        _CLI_PREFIX = {"aws": "aws", "gcp": "gcloud", "azure": "az",
-                       "scaleway": "scw", "ovh": "ovhcloud", "tailscale": "tailscale",
-                       "flyio": "fly"}
-        prefix = _CLI_PREFIX.get(provider.lower(), "")
-        gated_cmd = f"{prefix} {command}" if prefix and not command.strip().startswith(prefix) else command
+        # Provider subcommands arrive without their CLI (`ecs list-clusters`);
+        # kubectl/helm/bq already include it and must not be prefixed.
+        gated_cmd = _command_for_policy(provider, command)
         from utils.auth.command_gate import gate_command
         gate = gate_command(user_id=user_id, tool_name="cloud_exec", command=gated_cmd)
         if not gate.allowed:
@@ -1663,8 +1784,9 @@ Security & Compliance
                            user_id, gate.code, gate.block_reason[:200])
             error_msg = gate.block_reason
             if gate.code == "POLICY_DENIED" and "No matching allow rule" in error_msg:
+                cli = gated_cmd.strip().split(None, 1)[0] if gated_cmd.strip() else provider
                 error_msg += (
-                    f". To allow {prefix or provider} commands, go to Settings > Security > "
+                    f". To allow {cli} commands, go to Settings > Security > "
                     "Command Policies and re-apply a template or manually add an allow rule."
                 )
             return json.dumps({
@@ -1699,7 +1821,7 @@ Security & Compliance
                     )
             success, subscription_id, auth_method, isolated_env, auth_argv = setup_azure_environment_isolated(user_id, target_subscription)
             if not success:
-                return json.dumps({"error": f"Failed to setup Azure environment with {provider_preference} authentication", "final_command": command})
+                return _credential_setup_failure(f"Failed to setup Azure environment with {provider_preference} authentication", command)
             resource_id = subscription_id
             # Reuse an existing `az login` for these credentials when one is cached.
             # None means this command keeps its private directory and logs in itself.
@@ -1726,31 +1848,37 @@ Security & Compliance
                 target_account_id=account_id,
             )
             if not success:
-                return json.dumps({"error": f"Failed to setup AWS environment with {provider_preference} authentication", "final_command": command})
+                return json.dumps({
+                    "error": (
+                        f"Failed to setup AWS environment with {provider_preference} "
+                        "authentication"
+                    ),
+                    "final_command": command,
+                })
             resource_id = region
         elif normalized_provider == 'ovh':
             # OVH isolated setup
             success, project_id, auth_method, isolated_env = setup_ovh_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": f"Failed to setup OVH environment with {provider_preference} authentication. Please connect your OVH account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure(f"Failed to setup OVH environment with {provider_preference} authentication. Please connect your OVH account first.", command, requires_connection=True)
             resource_id = project_id
         elif normalized_provider == 'scaleway':
             # Scaleway isolated setup
             success, project_id, auth_method, isolated_env = setup_scaleway_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": f"Failed to setup Scaleway environment with {provider_preference} authentication. Please connect your Scaleway account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure(f"Failed to setup Scaleway environment with {provider_preference} authentication. Please connect your Scaleway account first.", command, requires_connection=True)
             resource_id = project_id
         elif normalized_provider == 'tailscale':
             # Tailscale isolated setup - uses REST API, not CLI
             success, tailnet, auth_method, isolated_env = setup_tailscale_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": f"Failed to setup Tailscale environment. Please connect your Tailscale account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure("Failed to setup Tailscale environment. Please connect your Tailscale account first.", command, requires_connection=True)
             resource_id = tailnet
         elif normalized_provider == 'flyio':
             # Fly.io isolated setup - uses FLY_API_TOKEN env var
             success, org_slug, auth_method, isolated_env = setup_flyio_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": "Failed to setup Fly.io environment. Please connect your Fly.io account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure("Failed to setup Fly.io environment. Please connect your Fly.io account first.", command, requires_connection=True)
             resource_id = org_slug
         elif normalized_provider not in CLOUD_EXEC_PROVIDERS:
             return json.dumps({
@@ -1764,7 +1892,7 @@ Security & Compliance
             # GCP isolated setup (default)
             success, project_id, auth_method, isolated_env = setup_gcp_environment_isolated(user_id, selected_project_id, provider_preference)
             if not success:
-                return json.dumps({"error": f"Failed to setup GCP environment with {provider_preference} authentication", "final_command": command})
+                return _credential_setup_failure(f"Failed to setup GCP environment with {provider_preference} authentication", command)
             resource_id = project_id
 
         logger.info(f"Using {auth_method} authentication for resource {resource_id}")
@@ -1956,47 +2084,23 @@ Security & Compliance
         except ValueError:
             _first_token = ''  # fall back gracefully if parsing fails here – will be handled later
 
-        # Define supported CLI tools for each provider
-        if provider.lower() in ['gcp', 'gcloud']:
-            supported_cli_tools = ['gcloud', 'kubectl', 'gsutil', 'bq', 'helm', 'terraform']
-            default_cli = 'gcloud'
-        elif provider.lower() in ['aws', 'amazon']:
-            supported_cli_tools = ['aws', 'kubectl', 'eksctl', 'sam', 'cdk', 'helm', 'terraform']
-            default_cli = 'aws'
-        elif provider.lower() in ['azure', 'az']:
-            supported_cli_tools = ['az', 'kubectl', 'helm', 'terraform']
-            default_cli = 'az'
-        elif provider.lower() == 'ovh':
-            supported_cli_tools = ['ovhcloud', 'kubectl', 'helm', 'terraform']
-            default_cli = 'ovhcloud'
-        elif provider.lower() == 'scaleway':
-            supported_cli_tools = ['scw', 'kubectl', 'helm', 'terraform']
-            default_cli = 'scw'
-        elif provider.lower() == 'flyio':
-            supported_cli_tools = ['fly', 'flyctl']
-            default_cli = 'fly'
+        # Same table the policy gate uses, so a sibling CLI is not prefixed
+        # on one path and left bare on the other.
+        spec = _PROVIDER_CLIS.get(provider.lower())
+        if spec is None:
+            default_cli, supported_cli_tools = "", ()
         else:
-            supported_cli_tools = []
-            default_cli = ''
+            default_cli, supported_cli_tools = spec
 
         cli_tool = _first_token if _first_token in supported_cli_tools else default_cli
 
         # Terraform should run without provider-specific prefixing
         terraform_invocation = cli_tool == 'terraform'
 
-        # If the command does not start with a recognised CLI tool, default to provider CLI
-        if provider.lower() in ['gcp', 'gcloud'] and cli_tool == 'gcloud' and not terraform_invocation and not command.strip().startswith('gcloud'):
-            command = f"gcloud {command}"
-        elif provider.lower() in ['aws', 'amazon'] and cli_tool == 'aws' and not terraform_invocation and not command.strip().startswith('aws'):
-            command = f"aws {command}"
-        elif provider.lower() in ['azure', 'az'] and cli_tool == 'az' and not terraform_invocation and not command.strip().startswith('az'):
-            command = f"az {command}"
-        elif provider.lower() == 'ovh' and cli_tool == 'ovhcloud' and not terraform_invocation and not command.strip().startswith('ovhcloud'):
-            command = f"ovhcloud {command}"
-        elif provider.lower() == 'scaleway' and cli_tool == 'scw' and not terraform_invocation and not command.strip().startswith('scw'):
-            command = f"scw {command}"
-        elif provider.lower() == 'flyio' and cli_tool == 'fly' and not command.strip().startswith(('fly ', 'flyctl ')):
-            command = f"fly {command}"
+        # Match the string already checked by the allowlist. First-token, not
+        # startswith, so `azcopy` is not mistaken for `az`.
+        if spec is not None and not terraform_invocation:
+            command = _command_for_policy(provider, command)
 
         # Apply provider-specific convenience flags
         if provider.lower() in ['gcp', 'gcloud'] and cli_tool == 'gcloud':
@@ -2192,7 +2296,19 @@ Security & Compliance
         else:
             # Use direct command for GCP and AWS
             exec_command = command_args
-        
+
+        bq_token = None
+        if cli_tool == "bq":
+            bq_project = region_or_project
+            if isinstance(isolated_env, dict):
+                bq_token = (
+                    isolated_env.get("CLOUDSDK_AUTH_ACCESS_TOKEN")
+                    or isolated_env.get("GOOGLE_OAUTH_ACCESS_TOKEN")
+                )
+                bq_project = isolated_env.get("GOOGLE_CLOUD_PROJECT") or bq_project
+            # Project only. The token is applied inside terminal_run, after the hash.
+            exec_command, _ = prepare_bq_exec(command, None, bq_project)
+
         # Execute the command
         exec_start = time.perf_counter()
         exec_started_at = time.time()
@@ -2202,7 +2318,11 @@ Security & Compliance
                 capture_output=True,
                 text=True,
                 timeout=effective_timeout,
-                env=isolated_env  # Use ISOLATED environment - NO global state!
+                env=isolated_env,  # Use ISOLATED environment - NO global state!
+                # The gate already judged the user command. The token is added
+                # after that hash, and a second judge treats it as theft.
+                trusted=(cli_tool == "bq"),
+                oauth_access_token=bq_token,
             )
             # A cached login can be gone (swept, expired) or predate a newly
             # connected subscription. Log in again and retry exactly once.
@@ -2215,7 +2335,9 @@ Security & Compliance
                         capture_output=True,
                         text=True,
                         timeout=effective_timeout,
-                        env=isolated_env
+                        env=isolated_env,
+                        trusted=(cli_tool == "bq"),
+                        oauth_access_token=bq_token,
                     )
             logger.info(f"TIME: cloud command execution took {time.perf_counter() - exec_start:.2f}s")
             # Entra-integrated AKS writes a kubeconfig whose exec plugin defaults to

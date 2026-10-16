@@ -10,7 +10,7 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
@@ -81,6 +81,7 @@ def process_jira_webhook(
     self,
     payload: Dict[str, Any],
     user_id: Optional[str] = None,
+    jql_clauses: Optional[List[str]] = None,
 ) -> None:
     """Process a Jira webhook payload: create incident and trigger RCA."""
     webhook_event = payload.get("webhookEvent", "")
@@ -99,6 +100,11 @@ def process_jira_webhook(
 
         if not issue:
             logger.warning("[JIRA][WEBHOOK] No issue in payload; skipping")
+            return
+
+        # Confirmed here so the webhook can answer before Jira's search returns.
+        if jql_clauses and not _saved_jql_matches(user_id, issue_key, jql_clauses):
+            logger.info("[JIRA][WEBHOOK] Saved JQL did not match %s", sanitize(issue_key))
             return
 
         from utils.db.connection_pool import db_pool
@@ -383,3 +389,37 @@ def _dispatch_rca(
                 conn.commit()
             except Exception:
                 logger.debug("[JIRA][WEBHOOK] Failed to mark RCA session failed", exc_info=True)
+
+
+@celery_app.task(
+    bind=True, max_retries=2, default_retry_delay=30, name="jira.judge_ticket"
+)
+def judge_jira_ticket(self, payload: Dict[str, Any], user_id: str) -> Optional[Dict[str, Any]]:
+    """Auto mode: let the judge decide whether this ticket gets an RCA."""
+    from routes.jira.rca_judge import judge_and_route
+
+    try:
+        return judge_and_route(
+            payload,
+            user_id,
+            start_rca=lambda: process_jira_webhook.delay(payload=payload, user_id=user_id),
+        )
+    # Any failure leaves no judged key, and Jira will not resend the webhook.
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+
+def _saved_jql_matches(user_id: str, issue_key: str, clauses: List[str]) -> bool:
+    """True when a saved clause still selects this issue. Transient Jira errors propagate."""
+    from routes.jira.jira_routes import _get_jira_client, _with_refresh
+    from routes.jira.rca_filters import jql_matches_issue
+
+    client, creds, error = _get_jira_client(user_id)
+    if error or client is None:
+        raise RuntimeError(error or "Jira client unavailable")
+    return bool(_with_refresh(
+        user_id,
+        creds,
+        client,
+        lambda c: jql_matches_issue(c, issue_key, clauses),
+    ))

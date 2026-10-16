@@ -546,6 +546,50 @@ class TestProvisioning:
         assert password_hash.startswith("$2")
 
 
+    def _provision_new_user(self, signup_app):
+        app, mod = signup_app
+        db_pool, conn, cur = _mock_db(
+            mod, [None, None, ("new-user",), None, None, ("new-org",)]
+        )
+        with app.test_request_context(), patch.object(mod, "db_pool", db_pool), \
+             patch("utils.auth.enforcer.assign_role_to_user"), \
+             patch("utils.auth.command_policy.seed_default_command_policy"), \
+             patch("utils.auth.tool_registry.seed_org_tool_permissions"), \
+             patch("routes.audit_routes.record_audit_event"):
+            return mod._provision_and_handoff(self._IDENTITY, _install_payload())
+
+    def test_new_user_fires_after_user_created(self, signup_app):
+        hook = MagicMock()
+        with patch("utils.hooks.get_hook", return_value=hook) as get_hook:
+            self._provision_new_user(signup_app)
+        get_hook.assert_called_once_with("after_user_created")
+        hook.assert_called_once_with("new-user", "new-org", "octo@cat.dev", "github", True)
+
+    def test_returning_user_does_not_fire_after_user_created(self, signup_app):
+        app, mod = signup_app
+        db_pool, conn, cur = _mock_db(mod, [("user-9",), ("org-9",)])
+        with app.test_request_context(), patch.object(mod, "db_pool", db_pool), \
+             patch("utils.auth.tool_registry.seed_org_tool_permissions"), \
+             patch("utils.hooks.get_hook") as get_hook:
+            mod._provision_and_handoff(self._IDENTITY, _install_payload())
+        get_hook.assert_not_called()
+
+    def test_raising_after_user_created_does_not_block_signup(self, signup_app):
+        import utils.hooks as hooks
+
+        class Broken:
+            @staticmethod
+            def after_user_created(*args):
+                raise RuntimeError("analytics down")
+
+        with patch.object(hooks, "_hooks_module", Broken), \
+             patch.object(hooks, "_hooks_loaded", True), \
+             patch.dict(hooks._hook_cache, clear=True):
+            response, user_id, _, created = self._provision_new_user(signup_app)
+        assert created is True
+        assert "/sign-in?handoff=" in response.location
+
+
 class TestOrgIdentity:
     def test_collision_suffixes(self, signup_app):
         app, mod = signup_app

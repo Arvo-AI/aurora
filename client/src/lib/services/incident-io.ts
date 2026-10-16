@@ -49,9 +49,68 @@ export interface IncidentIoSeveritiesResponse {
   severities: IncidentIoOrgSeverity[];
 }
 
+// What the connected API key can write, from incident.io's identity roles.
+// `checked` is false when the roles could not be read.
+export interface IncidentIoPostbackAccess {
+  checked: boolean;
+  incidents: boolean;
+  // Account-level on-call edit: notes can land on every alert.
+  alerts: boolean;
+  // Team-only on-call edit: notes 403 on alerts owned by other teams.
+  alertsScoped?: boolean;
+}
+
+export interface PostbackAccessWarning {
+  consequence: string;
+  permission: string;
+}
+
+// Shown on the connector when post-back cannot reach every destination.
+// Null when the key can write both, or when the check itself did not run.
+export function postbackAccessMessage(access: IncidentIoPostbackAccess | null | undefined): PostbackAccessWarning | null {
+  // Nothing to warn about when the check did not run, or when both writes work.
+  if (!access?.checked || (access.incidents && access.alerts)) return null;
+  // Team scope is not full alert write: other teams' alerts are refused.
+  if (access.alertsScoped && access.incidents) {
+    return {
+      consequence: "Can write back to incidents. Alert notes only reach this key's teams",
+      permission: "Grant Create and manage on call ressources at the account level to cover every alert",
+    };
+  }
+  // Notes only, and only on the key's teams. Incident updates will not post.
+  if (access.alertsScoped) {
+    return {
+      consequence: "Alert notes only reach this key's teams, and incident updates won't post",
+      permission: "Add the Edit incidents permission, and grant Create and manage on call ressources at the account level",
+    };
+  }
+  // Incident updates will post; alert notes will not.
+  if (access.incidents) {
+    return {
+      consequence: "Can write back to incidents but not alerts",
+      permission: "Add the Create and manage on call ressources permission",
+    };
+  }
+  // Alert notes will post; incident updates will not.
+  if (access.alerts) {
+    return {
+      consequence: "Can write back to alerts but not incidents",
+      permission: "Add the Edit incidents permission",
+    };
+  }
+  // Neither destination is writable.
+  return {
+    consequence: "Can't write back to incidents or alerts",
+    permission: "Add the Edit incidents and Create and manage on call ressources permissions",
+  };
+}
+
 export interface IncidentIoRcaSettings {
   rcaEnabled: boolean;
   postbackEnabled: boolean;
+  // True when the client asked to enable post-back but the API key cannot write anywhere.
+  postbackRefused?: boolean;
+  postbackAccess?: IncidentIoPostbackAccess;
   // RCA on incident.io *alert* events (public_alert.*), not just incidents.
   alertRcaEnabled: boolean;
   // Minimum severity to investigate when no allowlist is set. Either a fixed

@@ -26,6 +26,9 @@ RLS_EXCLUSIONS: Set[str] = {
                                   # (callback runs before login, webhook has no user ctx)
     "onboarding_selections",      # written once during onboarding via admin connection;
                                   # org_id is explicit from the authenticated user lookup
+    "org_sso_configs",            # read by SAML discovery/ACS before any session exists
+    "org_sso_domains",            # email-domain -> org lookup runs before login
+    "saml_requests",              # burned by the ACS callback, which has no session
 }
 
 

@@ -13,6 +13,7 @@ from flask import Blueprint, jsonify, request
 
 from connectors.jenkins_connector.api_client import JenkinsClient
 from utils.db.connection_pool import db_pool
+from utils.web.public_url import external_backend_url
 from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signature
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -736,11 +737,11 @@ def deployment_webhook(user_id: str):
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Return the webhook URL and Jenkinsfile snippets for the authenticated user."""
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
+    # No configured backend: the request host is the only URL we can offer.
     if not backend_url:
         backend_url = request.host_url.rstrip("/")
-    base_url = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
+    base_url = external_backend_url(backend_url)
 
     webhook_url = f"{base_url}/cloudbees/webhook/{user_id}"
 

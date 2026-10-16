@@ -8,6 +8,8 @@ import os
 import logging
 from typing import Dict
 
+from utils.web.public_url import external_backend_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,15 +47,7 @@ def get_oauth2_config() -> Dict[str, Dict[str, str]]:
                 logger.warning(f"OAuth2 credentials not configured for {region}")
                 continue
 
-            # Redirect URI: construct from NEXT_PUBLIC_BACKEND_URL (or ngrok URL for development)
-            ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-            backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-
-            # For development, prefer ngrok URL if available
-            if ngrok_url and backend_url.startswith("http://localhost"):
-                base_url = ngrok_url
-            else:
-                base_url = backend_url
+            base_url = external_backend_url()
 
             if not base_url:
                 logger.error(f"Missing redirect URI for {region} (set NEXT_PUBLIC_BACKEND_URL)")

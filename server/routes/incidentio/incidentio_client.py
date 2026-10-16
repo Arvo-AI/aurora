@@ -6,13 +6,52 @@ from typing import Any, Dict, Optional
 
 import requests
 
-INCIDENTIO_API_BASE = "https://api.incident.io/v2"
+INCIDENTIO_API_HOST = "https://api.incident.io"
+# incident.io versions per service, not per API: most of what we call is v2, but
+# alert notes only exist on v1, so the version is part of the request not the base.
+INCIDENTIO_DEFAULT_API_VERSION = "v2"
 INCIDENTIO_TIMEOUT = 15
+# Settings re-check identity whenever scopes are incomplete (that result is not
+# cached), so a hung call must not hold the page for the normal API timeout.
+_POSTBACK_IDENTITY_TIMEOUT = 3
 # incident_alerts paging: 50 is the API maximum; 20 pages = 1000 links per lookup
 _PAGE_SIZE = 50
 _MAX_PAGES = 20
 
 logger = logging.getLogger(__name__)
+
+# Account-level "Edit incidents". A message-only incident update is this role,
+# not a separate "create updates" permission.
+INCIDENT_WRITE_ROLE = "incident_editor"
+# "Create and manage on call ressources" (on_call_editor) bundles alerts.edit.
+# Account-level covers every alert. The same role in team_roles covers only the key's teams.
+ALERT_WRITE_ROLE = "on_call_editor"
+
+
+def classify_postback_roles(roles, team_roles=None) -> Dict[str, bool]:
+    """Which RCA destinations this key's roles can write, from GET /v1/identity.
+
+    team_roles apply only to resources owned by the key's teams, so a team-only
+    on_call_editor is not full alert write: another team's alert still 403s.
+    """
+    account = set(roles or [])
+    teams = set(team_roles or [])
+    # Account role already covers every team; team_roles don't narrow it.
+    alerts = ALERT_WRITE_ROLE in account
+    return {
+        "incidents": INCIDENT_WRITE_ROLE in account,
+        "alerts": alerts,
+        "alertsScoped": (not alerts) and ALERT_WRITE_ROLE in teams,
+    }
+
+
+def postback_can_enable(access: Dict[str, Any]) -> bool:
+    """Whether turning post-back on would reach at least one destination."""
+    # Identity was unreachable — don't block the toggle on a blip.
+    if not access.get("checked"):
+        return True
+    # Team-scoped alert write still reaches that key's teams, so the toggle can turn on.
+    return bool(access.get("incidents") or access.get("alerts") or access.get("alertsScoped"))
 
 
 class IncidentioAPIError(Exception):
@@ -57,12 +96,20 @@ class IncidentioClient:
             "Accept": "application/json",
         }
 
-    def _request(self, method: str, path: str, **kwargs) -> requests.Response:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        api_version: str = INCIDENTIO_DEFAULT_API_VERSION,
+        timeout: float = INCIDENTIO_TIMEOUT,
+        **kwargs,
+    ) -> requests.Response:
         """One API call; network and HTTP failures surface as IncidentioAPIError."""
-        url = f"{INCIDENTIO_API_BASE}{path}"
+        url = f"{INCIDENTIO_API_HOST}/{api_version}{path}"
         try:
             response = requests.request(
-                method, url, headers=self.headers, timeout=INCIDENTIO_TIMEOUT, **kwargs
+                method, url, headers=self.headers, timeout=timeout, **kwargs
             )
             response.raise_for_status()
             return response
@@ -72,12 +119,32 @@ class IncidentioClient:
             raise IncidentioAPIError(IncidentioAPIError.UNREACHABLE)
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else None
-            logger.warning("[INCIDENTIO] HTTP %s from %s", status, path)
+            logger.warning("[INCIDENTIO] HTTP %s from /%s%s", status, api_version, path)
             if status == 401:
                 raise IncidentioAPIError(IncidentioAPIError.INVALID_KEY, status)
             if status == 403:
                 raise IncidentioAPIError(IncidentioAPIError.FORBIDDEN, status)
             raise IncidentioAPIError(IncidentioAPIError.API_ERROR, status)
+
+    def get_identity(self, *, timeout: float = INCIDENTIO_TIMEOUT) -> Dict[str, Any]:
+        """Roles on this API key. Any valid key can call it, and it writes nothing."""
+        return self._request("GET", "/identity", api_version="v1", timeout=timeout).json()
+
+    def read_postback_access(self) -> Dict[str, Any]:
+        """Whether this key can post incident updates and alert notes.
+
+        ``checked`` is false when identity could not be read, so the caller
+        does not treat a timeout as a missing permission.
+        """
+        unknown = {"checked": False, "incidents": False, "alerts": False, "alertsScoped": False}
+        try:
+            payload = self.get_identity(timeout=_POSTBACK_IDENTITY_TIMEOUT) or {}
+        except IncidentioAPIError:
+            logger.warning("[INCIDENTIO] Could not read API key roles for the post-back check")
+            return unknown
+        identity = payload.get("identity") or {}
+        caps = classify_postback_roles(identity.get("roles"), identity.get("team_roles"))
+        return {"checked": True, **caps}
 
     def list_incidents(self, page_size: int = 5) -> Dict[str, Any]:
         """First page of the org's incidents (used to validate a key on connect)."""
@@ -101,6 +168,43 @@ class IncidentioClient:
         if idempotency_key:
             body["idempotency_key"] = idempotency_key
         return self._request("POST", "/incident_updates", json=body).json()
+
+    def get_alert(self, alert_id: str) -> Dict[str, Any]:
+        """One alert, including the groups it belongs to."""
+        return self._request("GET", f"/alerts/{alert_id}").json()
+
+    def post_alert_note(
+        self,
+        content: str,
+        *,
+        alert_id: Optional[str] = None,
+        alert_group_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Add a markdown note to one alert, or to an alert group's shared thread.
+
+        Provide exactly one of alert_id or alert_group_id. Grouped alerts share
+        one pulse thread, so a group note is posted once instead of per alert.
+        Alert notes are v1 and have no idempotency key.
+        """
+        # The API rejects a body that sets both ids, or neither.
+        if bool(alert_id) == bool(alert_group_id):
+            raise ValueError("provide exactly one of alert_id or alert_group_id")
+        body: Dict[str, Any] = {"content": content}
+        if alert_group_id:
+            body["alert_group_id"] = alert_group_id
+        else:
+            body["alert_id"] = alert_id
+        return self._request("POST", "/alert_notes", api_version="v1", json=body).json()
+
+    def get_alert_note(self, note_id: str) -> Dict[str, Any]:
+        """One alert note, so a later finding can be appended instead of duplicated."""
+        return self._request("GET", f"/alert_notes/{note_id}", api_version="v1").json()
+
+    def update_alert_note(self, note_id: str, content: str) -> Dict[str, Any]:
+        """Replace a note's markdown. incident.io has no patch; the body is the whole note."""
+        return self._request(
+            "PUT", f"/alert_notes/{note_id}", api_version="v1", json={"content": content},
+        ).json()
 
     def list_incident_alerts(
         self, alert_id: Optional[str] = None, *, incident_id: Optional[str] = None

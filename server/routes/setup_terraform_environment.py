@@ -431,13 +431,13 @@ def setup_terraform_environment(user_id: str):
         # If still no preference, require explicit user selection
         if not provider_preference:
             logger.error("No provider preference found in database or context. User must select a cloud provider before running Terraform operations.")
-            return False, None, None
+            return False, None, None, None
 
         # Handle case where provider_preference is a list (multiple providers selected)
         if isinstance(provider_preference, list):
             if len(provider_preference) == 0:
                 logger.error("No provider preference selected. User must select a cloud provider before running Terraform operations.")
-                return False, None, None
+                return False, None, None, None
             elif len(provider_preference) == 1:
                 provider_preference = provider_preference[0]
                 logger.info(f"Single provider selected: {provider_preference}")
@@ -470,35 +470,39 @@ def setup_terraform_environment(user_id: str):
         # Ensure provider_preference is a string
         if not isinstance(provider_preference, str):
             logger.error("Invalid provider preference format")
-            return False, None, None
+            return False, None, None, None
 
         provider_preference = provider_preference.lower()
         logger.info(f"Setting up Terraform environment for provider: {provider_preference}")
 
         # Handle specific providers - USE ISOLATED VERSIONS
         if provider_preference.lower() == "azure":
-            return setup_azure_terraform_environment_isolated(user_id)
+            success, resource_id, isolated_env = setup_azure_terraform_environment_isolated(user_id)
         elif provider_preference.lower() == "aws":
-            return setup_aws_terraform_environment_isolated(user_id)
+            success, resource_id, isolated_env = setup_aws_terraform_environment_isolated(user_id)
         elif provider_preference.lower() == "ovh":
-            return setup_ovh_terraform_environment_isolated(user_id)
+            success, resource_id, isolated_env = setup_ovh_terraform_environment_isolated(user_id)
         elif provider_preference.lower() == "scaleway":
-            return setup_scaleway_terraform_environment_isolated(user_id)
+            success, resource_id, isolated_env = setup_scaleway_terraform_environment_isolated(user_id)
         else:
             # Default to GCP for backwards compatibility
-            return setup_gcp_terraform_environment_isolated(user_id)
+            success, resource_id, isolated_env = setup_gcp_terraform_environment_isolated(user_id)
+        return success, resource_id, isolated_env, provider_preference
 
     except Exception as e:
         logger.error(f"Failed to setup Terraform environment: {e}")
-        return False, None, None
+        return False, None, None, None
 
 
 def setup_terraform_environment_isolated(user_id: str):
-    """Set up Terraform environment with isolated credentials - returns (success, resource_id, isolated_env)."""
+    """Set up Terraform environment with isolated credentials.
+
+    Returns (success, resource_id, isolated_env, provider).
+    """
     return setup_terraform_environment(user_id)
 
 
 def setup_terraform_environment_legacy(user_id: str):
     """Legacy wrapper for backward compatibility - returns only (success, resource_id)."""
-    success, resource_id, isolated_env = setup_terraform_environment(user_id)
+    success, resource_id, isolated_env, _provider = setup_terraform_environment(user_id)
     return success, resource_id

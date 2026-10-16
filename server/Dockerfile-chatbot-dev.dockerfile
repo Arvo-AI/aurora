@@ -118,7 +118,7 @@ RUN ARCH=$(dpkg --print-architecture) && \
     else \
         echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
-    wget -q --https-only https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_${TERRAFORM_ARCH}.zip && \
+    curl -fsSL --proto '=https' --proto-redir '=https' "https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_${TERRAFORM_ARCH}.zip" -o "terraform_1.7.5_linux_${TERRAFORM_ARCH}.zip" && \
     unzip terraform_1.7.5_linux_${TERRAFORM_ARCH}.zip && \
     mv terraform /usr/local/bin/ && \
     rm terraform_1.7.5_linux_${TERRAFORM_ARCH}.zip

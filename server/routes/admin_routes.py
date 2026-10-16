@@ -13,6 +13,8 @@ from flask import Blueprint, request, jsonify
 import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
+from services.actions.ownership import reassign_actions_to_admin
+from services.connectors.ownership import reassign_connectors_to_admin
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.enforcer import (
     assign_role_to_user,
@@ -209,6 +211,7 @@ def create_user(user_id):
 
         # Assign the new user's role in Casbin (RBAC policy engine)
         new_user_id = row[0]
+        get_hook("after_user_created")(new_user_id, org_id, email, "admin", False)
         try:
             from utils.auth.enforcer import assign_role_to_user
             if org_id:
@@ -371,7 +374,9 @@ def delete_user(user_id, target_user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix=_LOG_PREFIX)
+            # Pin RLS to the request org. The header can differ from users.org_id,
+            # and reassignment filters on that same org_id.
+            set_rls_context(cur, conn, user_id, org_id=org_id, log_prefix=_LOG_PREFIX)
 
             cur.execute(
                 "SELECT id, email FROM users WHERE id = %s AND org_id IS NOT DISTINCT FROM %s",
@@ -383,11 +388,18 @@ def delete_user(user_id, target_user_id):
 
             target_email = target[1]
 
-            # Clear FK references and user-scoped data
+            # Actions run as created_by; connectors are the org's credentials.
+            # Move both before the user row disappears.
+            if org_id:
+                reassign_actions_to_admin(cur, org_id, target_user_id)
+                reassign_connectors_to_admin(cur, org_id, target_user_id)
+
+            # Clear FK references and user-scoped data. Connector rows are
+            # reassigned above — deleting them would drop the org's credentials.
             cur.execute("DELETE FROM org_invitations WHERE invited_by = %s", (target_user_id,))
             cur.execute("UPDATE organizations SET created_by = NULL WHERE created_by = %s", (target_user_id,))
             for tbl in (
-                "user_tokens", "user_connections", "user_manual_vms",
+                "user_manual_vms",
                 "user_preferences", "rca_notification_emails",
             ):
                 cur.execute(f"DELETE FROM {tbl} WHERE user_id = %s", (target_user_id,))

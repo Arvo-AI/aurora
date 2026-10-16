@@ -87,19 +87,22 @@ def fetch_entry_by_title(cursor, org_id: str, category: str, title: str) -> Opti
     return serialize_entry(row) if row else None
 
 
-def get_memory_content(user_id: str, category: str, title: str) -> Optional[str]:
-    """Fetch a single artifact's raw content by (category, title).
+def get_memory_content(
+    user_id: str, category: str, title: str, *, strict: bool = False,
+) -> Optional[str]:
+    """Content for one entry, or None when that entry is absent.
 
-    Plain DB read under RLS — the direct-Python counterpart to the agent
-    `read_memory` tool (which returns a JSON envelope for LLM consumption).
-    Returns None when the entry is absent or on any error, so callers can treat
-    "missing" and "empty" the same way.
+    strict=True re-raises a read failure so the caller can retry instead of
+    treating an outage as "no entry".
     """
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 org_id = set_rls_context(cursor, conn, user_id, log_prefix="[MemoryQueries:content]")
+                # No org means the read never ran, not that the entry is missing.
                 if not org_id:
+                    if strict:
+                        raise RuntimeError("no org for memory read")
                     return None
                 cursor.execute(
                     """SELECT content FROM artifacts
@@ -110,6 +113,8 @@ def get_memory_content(user_id: str, category: str, title: str) -> Optional[str]
                 return (row[0] or "") if row else None
     except Exception:
         logger.exception("[MemoryQueries] Failed to fetch content for %s/%s", category, title)
+        if strict:
+            raise
         return None
 
 

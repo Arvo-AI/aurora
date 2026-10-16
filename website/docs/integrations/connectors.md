@@ -49,7 +49,13 @@ gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
   --member="serviceAccount:$SA" --role="roles/container.viewer"
 gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
   --member="serviceAccount:$SA" --role="roles/compute.viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/bigquery.dataViewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/bigquery.jobUser"
 ```
+
+`roles/viewer` lists BigQuery datasets but cannot run queries. `bigquery.dataViewer` reads table data; `bigquery.jobUser` runs query jobs. Together they allow read-only `SELECT` investigations (no DML/DDL).
 
 For full investigation access (running commands in sandboxed pods, checking deployments, etc.), add `roles/editor` or the specific roles your team needs.
 
@@ -1046,8 +1052,6 @@ For Atlassian Cloud (`*.atlassian.net`):
 ##### 2. Configure Environment
 
 ```bash
-NEXT_PUBLIC_ENABLE_CONFLUENCE=true
-NEXT_PUBLIC_ENABLE_JIRA=true
 ATLASSIAN_CLIENT_ID=your-client-id
 ATLASSIAN_CLIENT_SECRET=your-client-secret
 ```
@@ -1059,7 +1063,7 @@ ATLASSIAN_CLIENT_SECRET=your-client-secret
 3. Click **Connect with Atlassian**
 4. Authorize Aurora in the Atlassian popup
 5. Connection complete - the site URL is detected automatically
-6. For Jira, choose the agent permission tier (Read Only or Full Access)
+6. For Jira, turn on **Comment back on Jira tickets** if you want Aurora to post after an investigation, then choose **Comment only** or **Create & comment**. This only gates automatic posts — asking Aurora in chat to comment on a ticket works either way
 
 #### Option B: Data Center (PAT)
 
@@ -1072,10 +1076,15 @@ For self-hosted Confluence or Jira instances:
 2. Click **Create token**, name: `Aurora`, set expiry as needed
 3. Copy the token
 
-**Jira:**
-1. In Jira, go to your profile > **Personal Access Tokens**
-2. Click **Create token**, name: `Aurora`, set expiry as needed
-3. Copy the token
+**Jira (Data Center / Server 8.14+ only — not Jira Cloud):**
+1. Click your avatar (top right) → **Profile**
+2. In the **left sidebar**, select **Personal access tokens**
+3. Click **Create token**, name: `Aurora`, set expiry as needed
+4. Copy the token immediately (shown once)
+
+:::note Jira Cloud has no PAT
+If you use `*.atlassian.net`, you will not see **Personal access tokens** under Profile. Use **Option A (OAuth)** above instead.
+:::
 
 ##### 2. Connect via Aurora UI
 
@@ -1896,8 +1905,13 @@ Only **posting** (review comments) uses the bot; investigation reads always use 
 
 ---
 
-## Credential Storage
+## Anything Else: Custom MCP Servers
 
+If a system you need has no connector above, you can register your own [MCP](https://modelcontextprotocol.io/) server and Aurora will discover and use its tools. See [Custom MCP Servers](./custom-mcp-servers.md).
+
+---
+
+## Credential Storage
 All connector credentials are stored securely in HashiCorp Vault:
 
 - Credentials are encrypted at rest

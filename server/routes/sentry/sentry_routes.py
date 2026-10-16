@@ -12,7 +12,6 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -25,6 +24,7 @@ from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, resolve_org_id, set_rls_context
 from utils.secrets.secret_ref_utils import delete_user_secret
+from utils.web.public_url import external_backend_url
 from routes.sentry.tasks import extract_sentry_title, process_sentry_event
 
 logger = logging.getLogger(__name__)
@@ -88,11 +88,7 @@ def _build_client_from_creds(creds: Dict[str, Any]) -> Optional[SentryClient]:
 
 def _resolve_webhook_base_url() -> str:
     """Return the public base URL for receiving Sentry webhooks."""
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-    if ngrok_url and backend_url.startswith("http://localhost"):
-        return ngrok_url
-    return backend_url
+    return external_backend_url()
 
 
 def _verify_sentry_signature(raw_body: bytes, signature_header: str, client_secret: str) -> bool:

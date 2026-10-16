@@ -147,6 +147,105 @@ def _get_cached(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListSt
     return allow, deny, states
 
 
+_BQ_READ_VERBS = frozenset({"ls", "show", "head", "query"})
+_BQ_WRITE_VERBS = frozenset({"rm", "load", "update", "cp", "insert", "mk"})
+# A write verb in statement position: start, after ';', or after ')'.
+# `SELECT delete FROM t` does not match. `SELECT 1; DROP TABLE t` does.
+_BQ_STATEMENT_WRITE = re.compile(
+    r"(?:^|[;)])\s*(insert|update|delete|merge|create|drop|alter|truncate|export|load|grant|revoke|call|execute)\b",
+    re.I,
+)
+_BQ_RESULT_WRITE = re.compile(
+    r"--(?:destination_table|append_table)\b|(?<![\w-])--replace\b",
+    re.I,
+)
+
+
+def _bq_verb(command: str) -> str:
+    for token in command.split()[1:]:
+        if not token.startswith("-"):
+            return token.lower()
+    return ""
+
+
+def _split_quoted(command: str) -> Tuple[List[str], str]:
+    """Quoted spans, and the command with those spans removed."""
+    spans: List[str] = []
+    bare = []
+    i = 0
+    n = len(command)
+    while i < n:
+        if command[i] not in "'\"":
+            bare.append(command[i])
+            i += 1
+            continue
+        quote = command[i]
+        i += 1
+        start = i
+        while i < n and command[i] != quote:
+            i += 2 if command[i] == "\\" else 1
+        spans.append(command[start:i])
+        i += 1
+    return spans, "".join(bare)
+
+
+def _sql_without_literals(sql: str) -> str:
+    """Drop '--' comments and quoted strings so a word inside them is not a statement."""
+    out = []
+    i = 0
+    n = len(sql)
+    while i < n:
+        if sql.startswith("--", i):
+            nl = sql.find("\n", i)
+            i = n if nl < 0 else nl
+            continue
+        if sql[i] in "'\"":
+            quote = sql[i]
+            i += 1
+            while i < n and sql[i] != quote:
+                i += 2 if sql[i] == "\\" else 1
+            i += 1
+            out.append(" ")
+            continue
+        out.append(sql[i])
+        i += 1
+    return "".join(out)
+
+
+def _bq_sql(command: str) -> str:
+    """Every quoted span, then the unquoted tail. Each span is its own statement."""
+    spans, bare = _split_quoted(command)
+    tokens = bare.split()
+    try:
+        start = next(n for n, token in enumerate(tokens) if token.lower() == "query")
+    except StopIteration:
+        tail = ""
+    else:
+        tail = " ".join(token for token in tokens[start + 1:] if not token.startswith("-"))
+    return " ; ".join(spans + ([tail] if tail else []))
+
+
+def _bq_is_write(command: str) -> bool:
+    head = command.strip().split(None, 1)
+    if not head or head[0].lower() != "bq":
+        return False
+    verb = _bq_verb(command)
+    if verb in _BQ_WRITE_VERBS:
+        dry = verb == "mk" and any(
+            token == "--dry_run" or token.startswith("--dry_run=") for token in command.split()
+        )
+        return not dry
+    if verb != "query":
+        return False
+    if _BQ_RESULT_WRITE.search(command):
+        return True
+    return _BQ_STATEMENT_WRITE.search(_sql_without_literals(_bq_sql(command))) is not None
+
+
+def _rule_allows_bq_query(pattern: str) -> bool:
+    return "query" in pattern and ("bq\\s" in pattern or "|bq)\\s" in pattern)
+
+
 def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
     """Core gate. Returns whether *command* is allowed for *org_id*.
 
@@ -164,6 +263,8 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
 
     if not states.denylist_enabled and not states.allowlist_enabled:
         return CommandVerdict(allowed=True, rule_description="Policy lists are disabled")
+
+    bq_write = _bq_is_write(command)
 
     deny_hit = next(
         (r for r in deny_rules if r.compiled.search(command)),
@@ -183,7 +284,17 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
             allowlist_exhausted=(states.allowlist_enabled and allow_hit is None),
         )
 
+    if bq_write:
+        return CommandVerdict(allowed=False, rule_description="BigQuery write")
+
     if states.allowlist_enabled and allow_hit is None:
+        head = command.strip().split(None, 1)
+        if (
+            head and head[0].lower() == "bq"
+            and _bq_verb(command) in _BQ_READ_VERBS
+            and any(_rule_allows_bq_query(rule.pattern) for rule in allow_rules)
+        ):
+            return CommandVerdict(allowed=True, rule_description="BigQuery read-only operations")
         return CommandVerdict(
             allowed=False,
             rule_description="No matching allow rule",
@@ -658,7 +769,7 @@ def get_policy_templates() -> List[dict]:
                  "description": "GCP logging, monitoring, asset inventory, and config"},
                 {"priority": 168, "pattern": r"^gsutil\s+(ls|cat|stat|du|cp\s+gs://|rsync\s+-n)\b",
                  "description": "GCP Storage read operations (ls, cat, stat, download)"},
-                {"priority": 167, "pattern": r"^bq\s+(ls|show|head|query\s+--dry_run|mk\s+--dry_run)\b",
+                {"priority": 167, "pattern": r"^bq\s+(ls|show|head|query|mk\s+--dry_run)\b",
                  "description": "BigQuery read-only operations"},
                 # Azure -- Reader role + Log Analytics Reader + Monitoring Reader
                 {"priority": 160, "pattern": r"^az\s+.+\b(list|show|get|describe|display|query|download)\b",

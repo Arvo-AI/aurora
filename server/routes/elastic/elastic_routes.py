@@ -3,7 +3,6 @@
 import hmac
 import json
 import logging
-import os
 import re
 import secrets
 from typing import Any, Dict, Optional
@@ -29,6 +28,7 @@ from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import hash_for_log, sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
+from utils.web.public_url import external_backend_url
 
 logger = logging.getLogger(__name__)
 
@@ -140,11 +140,7 @@ def _validate_key(client: ElasticClient):
 
 def _resolve_webhook_base_url() -> str:
     """Public base URL for the Kibana webhook (ngrok in local dev, else the backend URL)."""
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-    if ngrok_url and backend_url.startswith("http://localhost"):
-        return ngrok_url
-    return backend_url
+    return external_backend_url()
 
 
 def _status_for_error(exc: ElasticAPIError) -> int:

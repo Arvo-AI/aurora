@@ -362,8 +362,18 @@ class Agent:
                         # the raw trigger source too.
                         _rca_ctx = getattr(state, "rca_context", None) or {}
                         _src = str(_rca_ctx.get("source") or getattr(state, "trigger_source", None) or "").lower()
-                        from services.memory import policy_entries_for_source
+                        from services.memory import (
+                            JIRA_MEMORY_CATEGORY,
+                            JIRA_MEMORY_TITLE,
+                            JIRA_POLICY_SOURCES,
+                            policy_entries_for_source,
+                        )
                         _force_entries = policy_entries_for_source(_src) or None
+                        # Filters mode never reads the Jira policy, so only Auto mode gets it
+                        if _src in JIRA_POLICY_SOURCES:
+                            from routes.jira.jira_routes import get_jira_rca_mode
+                            if get_jira_rca_mode(state.user_id) == "auto":
+                                _force_entries = [(JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE)]
                         _memory_prefetch = MemoryPrefetch(
                             user_id=state.user_id,
                             session_id=state.session_id,

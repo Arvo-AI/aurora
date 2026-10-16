@@ -93,25 +93,23 @@ async function errorResponseFromBackend(response: Response, errorLabel: string):
   );
 }
 
-// Proxy a Next.js API-route request to the Python backend with auth, timeout, and error normalisation.
-export async function forwardRequest(
+// Shared core for both the authenticated and public proxies. `baseHeaders` is the
+// only thing that differs between them.
+async function proxyToBackend(
   request: NextRequest,
   method: string,
   backendPath: string,
   errorLabel: string,
+  baseHeaders: Record<string, string>,
   options: { timeoutMs?: number; passBody?: boolean } = {},
 ): Promise<NextResponse> {
   const { timeoutMs = 30_000, passBody = !METHODS_WITHOUT_BODY.has(method.toUpperCase()) } = options;
 
   try {
-    const authResult = await getAuthenticatedUser();
-    if (authResult instanceof NextResponse) return authResult;
-    const { headers: authHeaders } = authResult;
-
     const { searchParams } = new URL(request.url);
     const url = buildUrl(backendPath, searchParams.toString());
 
-    const headers: Record<string, string> = { ...authHeaders };
+    const headers: Record<string, string> = { ...baseHeaders };
     if (env.INTERNAL_API_SECRET) {
       headers['X-Internal-Secret'] = env.INTERNAL_API_SECRET;
     }
@@ -155,6 +153,42 @@ export async function forwardRequest(
     console.error(`[api/${errorLabel}] Error:`, safeError);
     return NextResponse.json({ error: `Failed to load ${errorLabel}` }, { status: 500 });
   }
+}
+
+// Proxy a Next.js API-route request to the Python backend with auth, timeout, and error normalisation.
+export async function forwardRequest(
+  request: NextRequest,
+  method: string,
+  backendPath: string,
+  errorLabel: string,
+  options: { timeoutMs?: number; passBody?: boolean } = {},
+): Promise<NextResponse> {
+  const authResult = await getAuthenticatedUser();
+  if (authResult instanceof NextResponse) return authResult;
+
+  return proxyToBackend(request, method, backendPath, errorLabel, authResult.headers, options);
+}
+
+/**
+ * Proxy a request to the backend *without* a user session.
+ *
+ * For the handful of endpoints that cannot have one — registration, and the
+ * password-reset pair, where the caller is locked out of their account by
+ * definition. Still sends the internal API secret, so the backend can tell a
+ * request that came through this proxy from one that didn't; the endpoint itself
+ * is responsible for its own rate limiting and abuse controls.
+ *
+ * Use `forwardRequest` for everything else: omitting identity is only correct
+ * when the route genuinely has no user to act on behalf of.
+ */
+export async function forwardPublicRequest(
+  request: NextRequest,
+  method: string,
+  backendPath: string,
+  errorLabel: string,
+  options: { timeoutMs?: number; passBody?: boolean } = {},
+): Promise<NextResponse> {
+  return proxyToBackend(request, method, backendPath, errorLabel, {}, options);
 }
 
 /**

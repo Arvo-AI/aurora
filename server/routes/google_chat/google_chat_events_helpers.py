@@ -5,11 +5,11 @@ Mirrors the Slack events helpers for feature parity.
 
 import html
 import logging
-import os
 import re
 import requests
 from typing import Optional, Tuple
 from utils.db.connection_pool import db_pool
+from utils.web.public_url import external_backend_url
 from datetime import datetime
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
@@ -39,9 +39,7 @@ def verify_google_chat_request(request_data: dict) -> bool:
         logger.warning("Google Chat request missing Bearer token")
         return False
 
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    audience = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
+    audience = external_backend_url()
     events_url = f"{audience}/google-chat/events"
 
     if not events_url or events_url == "/google-chat/events":

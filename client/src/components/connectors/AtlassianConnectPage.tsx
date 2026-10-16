@@ -10,6 +10,13 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
+import { JiraAutomaticRca, JiraRcaRule } from "@/components/connectors/JiraAutomaticRca";
+import { PolicyMemoryCard } from "@/components/PolicyMemoryCard";
+import { useUser } from "@/hooks/useAuthHooks";
+import { canWrite as checkCanWrite } from "@/lib/roles";
+
+type JiraRcaMode = "filters" | "auto";
 
 interface ProductConfig {
   key: "jira" | "confluence";
@@ -20,6 +27,7 @@ interface ProductConfig {
   dcLabel: string;
   patUrlPlaceholder: string;
   storageKey: string;
+  patSteps?: string[];
 }
 
 interface SiblingConfig {
@@ -38,6 +46,8 @@ interface AtlassianConnectPageProps {
 
 export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageProps) {
   const { toast } = useToast();
+  const { user } = useUser();
+  const canWrite = checkCanWrite(user?.role);
   const [status, setStatus] = useState<AtlassianStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -47,7 +57,12 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const [patToken, setPatToken] = useState("");
   const [isPatConnecting, setIsPatConnecting] = useState(false);
   const [jiraMode, setJiraMode] = useState<"full" | "comment_only">("comment_only");
+  const [commentBack, setCommentBack] = useState(false);
+  const [rcaRules, setRcaRules] = useState<JiraRcaRule[]>([]);
+  const [rcaMode, setRcaMode] = useState<JiraRcaMode>("filters");
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [settingsFailed, setSettingsFailed] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [oauthConfigError, setOauthConfigError] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState("");
@@ -71,13 +86,20 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const loadJiraSettings = async () => {
     if (product.key !== "jira") return;
     setIsLoadingSettings(true);
+    setSettingsFailed(false);
     try {
       const res = await fetch("/api/jira/settings", { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.jiraMode) setJiraMode(data.jiraMode);
-      }
-    } catch { /* silent */ } finally { setIsLoadingSettings(false); }
+      // A failed read must not look like "no filters", or the next save would wipe them.
+      if (!res.ok) throw new Error("failed");
+      const data = await res.json();
+      if (data.jiraMode) setJiraMode(data.jiraMode);
+      setCommentBack(data.commentBack === true);
+      setRcaRules(Array.isArray(data.rcaRules) ? data.rcaRules : []);
+      setRcaMode(data.rcaMode === "auto" ? "auto" : "filters");
+      setSettingsLoaded(true);
+    } catch {
+      setSettingsFailed(true);
+    } finally { setIsLoadingSettings(false); }
     try {
       const res = await fetch("/api/jira/webhook-url", { credentials: "include" });
       if (res.ok) {
@@ -87,30 +109,143 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
     } catch { /* silent */ }
   };
 
-  const saveJiraMode = async (mode: "full" | "comment_only") => {
-    const previousMode = jiraMode;
-    setJiraMode(mode);
+  // Applies one setting optimistically and rolls it back if the save fails. Returns the saved payload.
+  const saveSetting = async <T,>(
+    value: T,
+    previous: T,
+    apply: (next: T) => void,
+    body: Record<string, unknown>,
+    description: string,
+  ): Promise<Record<string, unknown> | null> => {
+    apply(value);
     setIsSavingSettings(true);
     try {
       const res = await fetch("/api/jira/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ jiraMode: mode }),
+        body: JSON.stringify(body),
       });
-      if (res.ok) {
-        toast({ title: "Settings saved", description: mode === "full" ? "Aurora can create issues and comment" : "Aurora will only comment on existing issues" });
-      } else {
-        setJiraMode(previousMode);
-        toast({ title: "Failed to save settings", variant: "destructive" });
-      }
+      if (!res.ok) throw new Error("failed");
+      toast({ title: "Settings saved", description });
+      return await res.json();
     } catch {
-      setJiraMode(previousMode);
+      apply(previous);
       toast({ title: "Failed to save settings", variant: "destructive" });
+      return null;
     } finally { setIsSavingSettings(false); }
   };
 
+  const saveJiraMode = (mode: "full" | "comment_only") => saveSetting(
+    mode, jiraMode, setJiraMode, { jiraMode: mode },
+    mode === "full" ? "Aurora can create issues and comment" : "Aurora will only comment on existing issues",
+  );
+
+  const saveCommentBack = (enabled: boolean) => saveSetting(
+    enabled, commentBack, setCommentBack, { commentBack: enabled },
+    enabled
+      ? "Aurora will comment back on Jira tickets after an investigation"
+      : "Aurora will not comment on Jira tickets",
+  );
+
+  const saveRcaMode = (next: JiraRcaMode) => saveSetting(
+    next, rcaMode, setRcaMode, { rcaMode: next },
+    next === "auto" ? "Aurora decides which tickets to investigate" : "Automatic investigations follow your filters",
+  );
+
+  const saveRcaRules = async (rules: JiraRcaRule[]) => {
+    const data = await saveSetting(
+      rules, rcaRules, setRcaRules, { rcaRules: rules },
+      rules.length === 0
+        ? "Automatic Jira investigations are off"
+        : "Automatic investigations follow the filters you saved",
+    );
+    // The server merges duplicate filters, so show what it stored.
+    if (Array.isArray(data?.rcaRules)) setRcaRules(data.rcaRules as JiraRcaRule[]);
+    return data !== null;
+  };
+
   useEffect(() => { if (connected && product.key === "jira") loadJiraSettings(); }, [connected]);
+
+  // Loading, failed, and loaded states for the automatic RCA controls.
+  const renderRcaSettings = () => {
+    if (isLoadingSettings || (!settingsLoaded && !settingsFailed)) {
+      return (
+        <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading RCA settings
+        </div>
+      );
+    }
+    // A failed read must not render editable empty settings.
+    if (settingsFailed) {
+      return (
+        <div className="mt-3 space-y-2">
+          <p className="text-xs text-destructive">Couldn&apos;t load RCA settings.</p>
+          <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => void loadJiraSettings()}>
+            Retry
+          </Button>
+        </div>
+      );
+    }
+    return (
+      <div className="mt-3 space-y-3">
+        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Automatic RCA mode">
+          {(["auto", "filters"] as const).map((value) => {
+            const selected = rcaMode === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => { if (!selected) void saveRcaMode(value); }}
+                disabled={isSavingSettings || !canWrite}
+                className={`rounded-lg border p-2.5 text-left transition-colors ${
+                  selected ? "border-[#2684FF] bg-[#2684FF]/[0.04]" : "border-border hover:bg-muted/50"
+                }`}
+              >
+                <span className="text-sm font-medium">{value === "auto" ? "Auto" : "Filters"}</span>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {value === "auto"
+                    ? "Aurora judges each ticket using the memory below"
+                    : "Only tickets matching your filters"}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+        {rcaMode === "auto" ? (
+          <PolicyMemoryCard
+            canWrite={canWrite}
+            endpoint="jira"
+            name="Jira RCA"
+            className="shadow-none"
+            placeholder="Describe which Jira tickets Aurora should investigate (markdown)."
+            description={
+              <>
+                Aurora reads this before judging each new or changed ticket. It also
+                updates it when your team says what to investigate, e.g. &quot;never
+                investigate QA tickets&quot;. Filters are ignored in Auto. Comments
+                never start an RCA.
+              </>
+            }
+          />
+        ) : (
+          <>
+            <p className="text-xs text-muted-foreground">
+              A status filter only matches after the ticket is updated.
+            </p>
+            <JiraAutomaticRca
+              rules={rcaRules}
+              saving={isSavingSettings}
+              onSave={saveRcaRules}
+            />
+          </>
+        )}
+      </div>
+    );
+  };
 
   const handleOAuthConnect = async () => {
     setIsConnecting(true);
@@ -222,7 +357,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">RCA Permissions</CardTitle>
                 <CardDescription className="text-xs">
-                  Choose what Aurora can do with Jira during Root Cause Analysis
+                  Aurora reads Jira for investigation context. Commenting back stays off until you turn it on.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2 pt-0">
@@ -232,6 +367,25 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                   </div>
                 ) : (
                   <>
+                    <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                      <div className="space-y-0.5">
+                        <Label htmlFor="jira-comment-back" className="text-sm font-medium">
+                          Comment back on Jira tickets
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          After an investigation, post the RCA onto the matching ticket.
+                          Comments are posted by the account that connected Jira.
+                        </p>
+                      </div>
+                      <Switch
+                        id="jira-comment-back"
+                        checked={commentBack}
+                        onCheckedChange={saveCommentBack}
+                        disabled={isSavingSettings}
+                      />
+                    </div>
+                    {commentBack && (
+                      <>
                     <button
                       onClick={() => saveJiraMode("comment_only")}
                       disabled={isSavingSettings}
@@ -281,13 +435,15 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                         </p>
                       </div>
                     </button>
+                      </>
+                    )}
                   </>
                 )}
               </CardContent>
             </Card>
           )}
 
-          {product.key === "jira" && webhookUrl && (
+          {product.key === "jira" && (
             <Card>
               <CardHeader className="pb-3">
                 <div className="flex items-center gap-2">
@@ -295,36 +451,38 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                   <CardTitle className="text-base">Incoming Webhook</CardTitle>
                 </div>
                 <CardDescription className="text-xs">
-                  Trigger Aurora RCA automatically when a bug is filed.
-                  In Jira: Settings &rarr; System &rarr; Advanced &rarr; WebHooks &rarr; paste this URL and select &quot;Issue created&quot;.
+                  Paste this URL in Jira under Settings &rarr; System &rarr; Advanced &rarr; WebHooks,
+                  and select &quot;Issue created&quot; and &quot;Issue updated&quot;.
+                  Choose below which tickets Aurora investigates.
                 </CardDescription>
               </CardHeader>
               <CardContent className="pt-0">
-                <div className="flex items-center gap-2">
-                  <Input
-                    readOnly
-                    value={webhookUrl}
-                    className="font-mono text-xs bg-muted/50"
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(webhookUrl);
-                        setWebhookCopied(true);
-                        setTimeout(() => setWebhookCopied(false), 2000);
-                      } catch {
-                        toast({ title: "Couldn't copy to clipboard", description: "Copy the webhook URL manually.", variant: "destructive" });
-                      }
-                    }}
-                  >
-                    {webhookCopied ? <CheckCircle className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
-                  </Button>
-                </div>
-                <p className="text-[11px] text-muted-foreground mt-2">
-                  Triggers on issue types: Bug, Incident, Problem, Defect, Production Issue. Other types are ignored.
-                </p>
+                {/* The URL request can fail on its own; the filters still have to be editable. */}
+                {webhookUrl && (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      readOnly
+                      value={webhookUrl}
+                      className="font-mono text-xs bg-muted/50"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(webhookUrl);
+                          setWebhookCopied(true);
+                          setTimeout(() => setWebhookCopied(false), 2000);
+                        } catch {
+                          toast({ title: "Couldn't copy to clipboard", description: "Copy the webhook URL manually.", variant: "destructive" });
+                        }
+                      }}
+                    >
+                      {webhookCopied ? <CheckCircle className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                    </Button>
+                  </div>
+                )}
+                {renderRcaSettings()}
               </CardContent>
             </Card>
           )}
@@ -449,6 +607,13 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
             <CardHeader>
               <CardTitle className="text-base">{product.dcLabel}</CardTitle>
               <CardDescription>Connect via Personal Access Token</CardDescription>
+              {product.patSteps && product.patSteps.length > 0 && (
+                <ol className="list-decimal space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground">
+                  {product.patSteps.map((step) => (
+                    <li key={step}>{step}</li>
+                  ))}
+                </ol>
+              )}
             </CardHeader>
             <CardContent>
               <form onSubmit={handlePatConnect} className="space-y-3">
