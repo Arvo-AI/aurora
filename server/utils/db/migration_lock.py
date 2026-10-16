@@ -1,0 +1,65 @@
+"""Startup migration lock: a bounded wait instead of an indefinite one."""
+
+import logging
+import os
+import time
+
+logger = logging.getLogger(__name__)
+
+MIGRATION_LOCK_KEY = 42
+# Stays under the Helm startup probe window (~300s) so the pod reports a clear error
+_DEFAULT_WAIT_SECONDS = 240.0
+_POLL_SECONDS = 1.0
+_LOG_EVERY_SECONDS = 30.0
+
+
+class MigrationLockTimeout(RuntimeError):
+    """The migration lock was still held by another session after the wait."""
+
+
+def _wait_seconds() -> float:
+    raw = os.getenv("DB_MIGRATION_LOCK_TIMEOUT")
+    if not raw:
+        return _DEFAULT_WAIT_SECONDS
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("DB_MIGRATION_LOCK_TIMEOUT=%r is not a number; using default", raw)
+        return _DEFAULT_WAIT_SECONDS
+
+
+def acquire_migration_lock(conn, key: int = MIGRATION_LOCK_KEY, wait_seconds=None) -> None:
+    """Take the session-level advisory lock on an autocommit connection.
+
+    Polls pg_try_advisory_lock so a holder that never releases (e.g. an orphaned
+    session from a killed pod) fails this pod loudly rather than hanging it.
+    """
+    if wait_seconds is None:
+        wait_seconds = _wait_seconds()
+
+    with conn.cursor() as cur:
+        # Server-side keepalives let Postgres reap this session if the pod dies
+        # without closing the socket, which would otherwise pin the lock forever.
+        cur.execute("SET tcp_keepalives_idle = 30")
+        cur.execute("SET tcp_keepalives_interval = 10")
+        cur.execute("SET tcp_keepalives_count = 3")
+
+        deadline = time.monotonic() + wait_seconds
+        next_log = time.monotonic() + _LOG_EVERY_SECONDS
+        while True:
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (key,))
+            if cur.fetchone()[0]:
+                return
+
+            now = time.monotonic()
+            # Another pod is migrating; give up so the failure is visible
+            if now >= deadline:
+                raise MigrationLockTimeout(
+                    f"Could not acquire migration advisory lock {key} within "
+                    f"{wait_seconds:.0f}s; another session is holding it"
+                )
+            # Periodic progress so a waiting pod isn't silent
+            if now >= next_log:
+                logger.warning("Still waiting for migration lock %s", key)
+                next_log = now + _LOG_EVERY_SECONDS
+            time.sleep(_POLL_SECONDS)

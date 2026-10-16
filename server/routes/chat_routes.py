@@ -46,7 +46,8 @@ def generate_chat_title(messages):
     return title
 
 @chat_bp.route('/sessions', methods=['GET'])
-@limiter.exempt
+# Heaviest read in the app: bounded per user rather than exempt or on the shared default
+@limiter.limit("60 per minute")
 @require_permission("chat", "read")
 def get_chat_sessions(user_id):
     """Get all chat sessions visible to the user.
@@ -67,7 +68,8 @@ def get_chat_sessions(user_id):
         if scope == 'org':
             cursor.execute("""
                 SELECT cs.id, cs.title, cs.created_at, cs.updated_at, 
-                       CASE WHEN cs.messages IS NULL THEN '[]'::jsonb ELSE cs.messages END as messages,
+                       CASE WHEN jsonb_typeof(cs.messages) = 'array'
+                            THEN jsonb_array_length(cs.messages) ELSE 0 END as message_count,
                        CASE WHEN cs.ui_state IS NULL THEN '{}'::jsonb ELSE cs.ui_state END as ui_state,
                        COALESCE(cs.status, 'active') as status,
                        cs.user_id,
@@ -81,7 +83,8 @@ def get_chat_sessions(user_id):
         else:
             cursor.execute("""
                 SELECT cs.id, cs.title, cs.created_at, cs.updated_at, 
-                       CASE WHEN cs.messages IS NULL THEN '[]'::jsonb ELSE cs.messages END as messages,
+                       CASE WHEN jsonb_typeof(cs.messages) = 'array'
+                            THEN jsonb_array_length(cs.messages) ELSE 0 END as message_count,
                        CASE WHEN cs.ui_state IS NULL THEN '{}'::jsonb ELSE cs.ui_state END as ui_state,
                        COALESCE(cs.status, 'active') as status,
                        cs.user_id,
@@ -101,7 +104,7 @@ def get_chat_sessions(user_id):
                 'title': s[1],
                 'created_at': s[2].isoformat() if s[2] else None,
                 'updated_at': s[3].isoformat() if s[3] else None,
-                'message_count': len(s[4]) if s[4] else 0,
+                'message_count': s[4] or 0,
                 'ui_state': s[5] if s[5] else {},
                 'status': s[6] if s[6] else 'active',
                 'user_id': s[7],

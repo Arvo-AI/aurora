@@ -21,12 +21,36 @@ type RefreshResult = {
 // in-flight fetch instead of each independently hitting a stale connection.
 let inflightRefresh: Promise<RefreshResult> | null = null
 
+// A failed refresh never advances lastRefreshedAt, so without a cooldown every
+// request re-hits /api/auth/me while the backend is struggling.
+let consecutiveFailures = 0
+let backoffUntil = 0
+const BACKOFF_BASE_MS = 2000
+const BACKOFF_MAX_MS = 60_000
+
 async function refreshUserFromBackend(userId: string): Promise<RefreshResult> {
   if (inflightRefresh) return inflightRefresh
 
-  inflightRefresh = doRefreshUserFromBackend(userId).finally(() => {
-    inflightRefresh = null
-  })
+  // Still cooling down after recent failures — keep the current JWT values
+  if (Date.now() < backoffUntil) return null
+
+  inflightRefresh = doRefreshUserFromBackend(userId)
+    .then(result => {
+      if (result === null) {
+        // Exponential backoff with jitter, capped
+        consecutiveFailures += 1
+        const delay = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (consecutiveFailures - 1))
+        backoffUntil = Date.now() + delay * (0.5 + Math.random() / 2)
+      } else {
+        // Backend answered — resume normal refresh cadence
+        consecutiveFailures = 0
+        backoffUntil = 0
+      }
+      return result
+    })
+    .finally(() => {
+      inflightRefresh = null
+    })
 
   return inflightRefresh
 }
