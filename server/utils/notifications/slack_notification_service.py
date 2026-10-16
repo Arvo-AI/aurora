@@ -541,22 +541,10 @@ def send_slack_investigation_completed_notification(
                 logger.exception("[SlackNotification] Primary card post failed for incident %s in "
                                  "channel %s", incident_id, hash_for_log(channel_id))
 
-        # Then hand team-channel routing to the background agent. It reads the
-        # Slack memory, connected channels and recent history, and decides —
-        # like a teammate — which channel(s) (if any) to post to and whether to
-        # thread a follow-up on a recurring incident instead of adding noise.
-        # Fire-and-forget: never block or fail the primary card on it.
-        routed_any = False
-        try:
-            from utils.notifications.slack_team_routing import trigger_team_routing_agent
-            routed_any = trigger_team_routing_agent(user_id, incident_data)
-        except Exception:
-            logger.warning("[SlackNotification] Could not dispatch team-routing agent for "
-                           "incident %s (non-fatal)", incident_id, exc_info=True)
-
-        # Success = the incidents card posted OR the team-routing agent was
-        # dispatched. With the card toggle off, dispatching routing is success.
-        return primary_ok or routed_any
+        # Team-channel routing is dispatched once per incident from the central
+        # notification dispatcher (not here), so Slack-only orgs still get routing
+        # when the card toggle is off.
+        return primary_ok
 
     except Exception:
         logger.exception("[SlackNotification] Error sending completed notification for incident %s",

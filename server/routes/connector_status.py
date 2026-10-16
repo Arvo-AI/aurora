@@ -323,6 +323,21 @@ def _check_slack(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_teams(creds: Dict[str, Any]) -> Dict[str, Any]:
+    from connectors.teams_connector.client import get_teams_client_for_user
+
+    user_id = creds.get("_user_id")
+    # Stored access tokens last ~1h, so go through the client that refreshes them
+    client = get_teams_client_for_user(user_id) if user_id else None
+    if not client:
+        return {"connected": False}
+    try:
+        client.get_me()
+        return {"connected": True}
+    except Exception:
+        return {"connected": False}
+
+
 def _check_google_chat(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Validates Google Chat connection via service account."""
     from connectors.google_chat_connector.client import get_chat_app_client
@@ -834,6 +849,7 @@ PROVIDER_CHECKERS = {
     "confluence": _check_confluence,
     "jira": _check_jira,
     "slack": _check_slack,
+    "teams": _check_teams,
     "google_chat": _check_google_chat,
     "github": _check_github,
     "gitlab": _check_gitlab,

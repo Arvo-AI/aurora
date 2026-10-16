@@ -56,7 +56,10 @@ export interface MemoryEntry {
 // pair — so renaming, recategorizing, or deleting one would silently detach it.
 // The backend rejects those with 403; the UI hides the affordances so it never
 // comes up.
-const PROTECTED_ENTRIES: ReadonlySet<string> = new Set(["context/Slack"]);
+const PROTECTED_ENTRIES: ReadonlySet<string> = new Set([
+  "context/Slack",
+  "context/Microsoft Teams",
+]);
 
 export function isProtectedEntry(entry: Pick<MemoryEntry, "category" | "title" | "is_protected">): boolean {
   if (typeof entry.is_protected === "boolean") return entry.is_protected;

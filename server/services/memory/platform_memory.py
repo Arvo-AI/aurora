@@ -25,6 +25,7 @@ from utils.log_sanitizer import sanitize
 from services.artifacts.store import create_version
 from services.memory import PLATFORM_MEMORY_IDENTITIES, PlatformMemoryIdentity
 from services.memory.slack_memory import SLACK_MEMORY_DEFAULT_CONTENT, SLACK_MEMORY_DESCRIPTION
+from services.memory.teams_memory import TEAMS_MEMORY_DEFAULT_CONTENT, TEAMS_MEMORY_DESCRIPTION
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,11 @@ PLATFORM_MEMORY_SPECS: Dict[str, PlatformMemorySpec] = {
         identity=PLATFORM_MEMORY_IDENTITIES["slack"],
         description=SLACK_MEMORY_DESCRIPTION,
         default_content=SLACK_MEMORY_DEFAULT_CONTENT,
+    ),
+    "teams": PlatformMemorySpec(
+        identity=PLATFORM_MEMORY_IDENTITIES["teams"],
+        description=TEAMS_MEMORY_DESCRIPTION,
+        default_content=TEAMS_MEMORY_DEFAULT_CONTENT,
     ),
 }
 

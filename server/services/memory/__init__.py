@@ -50,6 +50,12 @@ PLATFORM_MEMORY_IDENTITIES: Dict[str, PlatformMemoryIdentity] = {
         title="Slack",
         policy_sources=frozenset({"slack"}),
     ),
+    "teams": PlatformMemoryIdentity(
+        platform="teams",
+        category="context",
+        title="Microsoft Teams",
+        policy_sources=frozenset({"teams"}),
+    ),
 }
 
 # Slack aliases — kept so existing imports keep working.

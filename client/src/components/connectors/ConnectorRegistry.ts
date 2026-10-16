@@ -297,6 +297,18 @@ class ConnectorRegistry {
       });
 
     this.register({
+        id: "teams",
+        name: "Microsoft Teams",
+        description:
+          "Install the Aurora Teams app in each team, then connect your Microsoft tenant in Aurora for @mentions, routing, and incident updates.",
+        iconPath: "/microsoft-teams.svg",
+        iconBgColor: "bg-muted",
+        category: "Communication",
+        storageKey: "isTeamsConnected",
+        useCustomConnection: true,
+      });
+
+    this.register({
         id: "google_chat",
         name: "Google Chat",
         description: "Receive alerts and notifications directly in Google Chat. Connect your Google Workspace to get real-time updates and interact with Aurora.",

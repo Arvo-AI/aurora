@@ -31,7 +31,8 @@ def _sha(s: str) -> str:
 def test_slack_identity_and_strings_unchanged():
     ident = PLATFORM_MEMORY_IDENTITIES["slack"]
     assert ident.key == (SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE) == ("context", "Slack")
-    assert PROTECTED_ENTRIES == frozenset({("context", "Slack")})
+    assert ("context", "Slack") in PROTECTED_ENTRIES
+    assert ("context", "Microsoft Teams") in PROTECTED_ENTRIES
     # slack_memory owns the strings the spec is built from; both must be the pre-refactor text.
     assert _sha(slack_memory.SLACK_MEMORY_DESCRIPTION) == _SLACK_DESCRIPTION_SHA
     assert _sha(slack_memory.SLACK_MEMORY_DEFAULT_CONTENT) == _SLACK_CONTENT_SHA
@@ -40,7 +41,7 @@ def test_slack_identity_and_strings_unchanged():
 @pytest.mark.parametrize("source,expected", [
     ("slack", [("context", "Slack")]),
     ("SLACK", [("context", "Slack")]),
-    ("team_routing", [("context", "Slack")]),
+    ("team_routing", [("context", "Slack"), ("context", "Microsoft Teams")]),
     ("slack_button", []),
     ("google_chat", []),
     ("grafana", []),
@@ -58,7 +59,11 @@ def test_a_second_platform_gets_its_own_memory_and_joins_the_routing_agent():
         assert policy_entries_for_source("fake") == [("context", "Fake Chat")]
         assert policy_entries_for_source("slack") == [("context", "Slack")]
         # One routing agent decides for every platform, so it gets every policy.
-        assert policy_entries_for_source("team_routing") == [("context", "Slack"), ("context", "Fake Chat")]
+        assert policy_entries_for_source("team_routing") == [
+            ("context", "Slack"),
+            ("context", "Microsoft Teams"),
+            ("context", "Fake Chat"),
+        ]
 
 
 def _db(existing_row=None, insert_row=("artifact-1",)):

@@ -128,3 +128,58 @@ def test_card_toggle_on_passes_primary_card_true(wired, monkeypatch):
     monkeypatch.setattr(dispatcher, "_get_incident_data", lambda incident_id, user_id: _incident())
     dispatcher.notify_investigation_completed("u1", "i1", session_id="s1")
     wired["slack"].assert_called_once_with("u1", _incident(), post_primary_card=True)
+
+
+# --- team-channel routing: dispatched once per incident from the dispatcher ---------------
+
+@pytest.fixture
+def routing(wired, monkeypatch):
+    from utils.notifications import team_routing
+
+    mock = MagicMock(return_value=True)
+    monkeypatch.setattr(team_routing, "trigger_team_routing_agent", mock)
+    monkeypatch.setattr(dispatcher, "_has_teams_connected", lambda user_id: False)
+    monkeypatch.setattr(dispatcher, "_get_incident_data", lambda incident_id, user_id: _incident())
+    return mock
+
+
+def test_routing_fires_once_per_completed_incident(routing):
+    dispatcher.notify_investigation_completed("u1", "i1", session_id="s1")
+    routing.assert_called_once_with("u1", _incident())
+
+
+def test_routing_is_skipped_on_refresh_only(routing):
+    dispatcher.notify_investigation_completed("u1", "i1", session_id="s1", refresh_only=True)
+    routing.assert_not_called()
+
+
+def test_routing_still_runs_when_the_slack_card_toggle_is_off(routing, monkeypatch):
+    monkeypatch.setattr(
+        dispatcher, "get_org_preference",
+        lambda org_id, key, default=None: False if key == "slack_investigation_complete_notifications" else True,
+    )
+    dispatcher.notify_investigation_completed("u1", "i1", session_id="s1")
+    routing.assert_called_once()
+
+
+def test_routing_runs_for_a_teams_only_org(routing, monkeypatch):
+    monkeypatch.setattr(dispatcher, "_has_slack_connected", lambda user_id: False)
+    monkeypatch.setattr(dispatcher, "_has_teams_connected", lambda user_id: True)
+    teams_svc = types.ModuleType("utils.notifications.teams_notification_service")
+    teams_svc.send_teams_investigation_completed_notification = MagicMock(return_value=True)
+    monkeypatch.setitem(sys.modules, "utils.notifications.teams_notification_service", teams_svc)
+    dispatcher.notify_investigation_completed("u1", "i1", session_id="s1")
+    routing.assert_called_once()
+
+
+def test_routing_is_skipped_with_no_chat_platform_connected(routing, monkeypatch):
+    monkeypatch.setattr(dispatcher, "_has_slack_connected", lambda user_id: False)
+    dispatcher.notify_investigation_completed("u1", "i1", session_id="s1")
+    routing.assert_not_called()
+
+
+def test_a_routing_failure_does_not_break_the_other_notifications(routing, wired):
+    routing.side_effect = RuntimeError("agent queue down")
+    dispatcher.notify_investigation_completed("u1", "i1", session_id="s1")
+    wired["slack"].assert_called_once()
+    wired["gchat"].assert_called_once()
