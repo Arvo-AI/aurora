@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-10-16
+
+### Added
+- Jira: automatic RCA starts only for a saved project and ticket type. Until a
+  rule is saved, webhooks are ignored, including the previous hardcoded types
+  (Bug, Incident, Problem, Defect, Production Issue). Rules are edited on the
+  Jira connector page. Asking Aurora to investigate a specific ticket is
+  unchanged, and commenting back stays a separate switch.
+
+### Fixed
+- SSH: managed SSH keys are visible to the rest of the org. List, rename, and
+  private-key load follow the same org check as manual VMs, and terminal
+  sessions mount those keys. Private-key load stays limited to `aurora_ssh`
+  rows.
+- Slack: replies mention the asker with Slack's `<@USERID>` token, so the
+  mention notifies them. Aurora's own mention is stripped from the question;
+  other people's mentions are kept.
+- SSO: SAML login stores the member's first and last name. A `name` claim that
+  is only the given name no longer hides the surname. A later login fills in a
+  surname only when the stored name is that given name; any other stored name
+  is left alone.
+
 ## [1.5.8] - 2026-10-15
 
 ### Added
@@ -22,12 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already allows `bq`. The command is gated as `bq`, not `gcloud bq`. Write
   SQL and mutating `bq` subcommands stay denied, and a token on the command
   is not logged.
-
-### Fixed
-- SSO: SAML login stores the member's first and last name. A `name` claim that
-  is only the given name no longer hides the surname. A later login fills in a
-  surname only when the stored name is that given name; any other stored name
-  is left alone.
 
 ## [1.5.7] - 2026-10-13
 
