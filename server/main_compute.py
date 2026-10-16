@@ -734,11 +734,11 @@ def initialize_app():
     # Acquire a session-level advisory lock so that concurrent gunicorn workers
     # serialise DDL (CREATE TABLE / ALTER TABLE) instead of deadlocking.
     from utils.db.db_utils import connect_to_db_as_admin
+    from utils.db.migration_lock import MIGRATION_LOCK_KEY, acquire_migration_lock
     conn = connect_to_db_as_admin()
     try:
         conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_lock(42)")
+        acquire_migration_lock(conn)
         conn.autocommit = False
         try:
             ensure_database_exists()
@@ -746,7 +746,7 @@ def initialize_app():
         finally:
             conn.autocommit = True
             with conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_unlock(42)")
+                cur.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK_KEY,))
     finally:
         conn.close()
 
