@@ -9,6 +9,7 @@ connection_check:
   function: is_slack_connected
 tools:
   - list_slack_channels
+  - list_slack_users
   - get_channel_history
   - get_thread_replies
   - get_connected_slack_channels
@@ -24,8 +25,9 @@ metadata:
 
 ## Overview
 Tools for working in Slack. The investigation tools (`list_slack_channels`,
-`get_channel_history`, `get_thread_replies`, `get_connected_slack_channels`) are
-read-only and used during postmortem generation and interactive investigation to
+`list_slack_users`, `get_channel_history`, `get_thread_replies`,
+`get_connected_slack_channels`) are read-only and used during postmortem
+generation and interactive investigation to
 gather human context (deployment decisions, communication gaps, resolution
 steps). In **Agent mode** you also get `post_slack_message` to post a message or
 threaded reply.
@@ -40,6 +42,9 @@ skill only covers *when* to use each and Slack-specific behaviour.
   posting about an incident or notifying a team — and combine it with the
   `Slack` behaviour memory (below), which holds the team/channel routing
   *preferences* the descriptions alone don't capture.
+- **`list_slack_users`** finds people to notify. Pass a name prefix (`a` for
+  Ada and Alex). Copy the returned `<@USERID>` into the message. A plain `@name`
+  does not notify, and an id you invent will not either.
 - **`list_slack_channels`** is a live, description-less listing of channels the
   bot can access — use it for discovery (scan names/topics for a service or
   "incident"/"oncall"/"alerts"), not routing.
@@ -108,6 +113,8 @@ This is learned behaviour: the map starts empty and gets better every incident.
 ## Limitations
 - `post_slack_message` posts a plain mrkdwn message (or threaded reply); rich
   interactive cards are still posted by the notification service, not the agent
+- A notification mention is a `<@USERID>` token from the thread or from
+  `list_slack_users`. Copy it; never invent one. `@name` is plain text and does not notify
 - Reading a PUBLIC channel auto-joins it on not_in_channel, so Aurora can read
   any public channel it can see even without an invite. PRIVATE channels still
   require a human to invite the bot

@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 
 _ERR_NO_USER = "No user context available."
 _ERR_NOT_CONNECTED = "Slack not connected for this user."
+# users.list has no name filter, so a prefix is applied while paging.
+_USER_LIST_PAGE_SIZE = 200
+_USER_LIST_MAX_PAGES = 15
+_USER_LIST_MAX_RESULTS = 20
 # Slack hard-caps a single message's text; keep well under it so a post never
 # fails wholesale on an over-long body (the agent should be terse anyway).
 _MAX_POST_CHARS = 3000
@@ -35,6 +39,17 @@ _MAX_POST_CHARS = 3000
 class ListSlackChannelsArgs(BaseModel):
     """Arguments for listing Slack channels."""
     pass
+
+
+class ListSlackUsersArgs(BaseModel):
+    """Arguments for finding Slack users to mention."""
+    name: str = Field(
+        description=(
+            "Case-insensitive prefix matched against first name, display name, "
+            "and full name. 'a' returns Ada and Alex. Required so the whole "
+            "workspace is not returned."
+        ),
+    )
 
 
 class GetChannelHistoryArgs(BaseModel):
@@ -67,7 +82,13 @@ class GetThreadRepliesArgs(BaseModel):
 class PostSlackMessageArgs(BaseModel):
     """Arguments for posting a message to a Slack channel."""
     channel_id: str = Field(description="The Slack channel ID to post to (e.g. C01234ABCDE)")
-    text: str = Field(description="The message text (Slack mrkdwn). Keep it short and human.")
+    text: str = Field(
+        description=(
+            "The message text (Slack mrkdwn). To notify someone, include the <@USERID> "
+            "from the thread or from list_slack_users. A plain @name does not notify. "
+            "Keep it short and human."
+        ),
+    )
     thread_ts: Optional[str] = Field(
         default=None,
         description=(
@@ -148,6 +169,92 @@ def list_slack_channels(user_id: str | None = None, **kwargs) -> str:
     except Exception as e:
         logger.info("[SlackTool] Failed to list channels: %s", type(e).__name__)
         return json.dumps({"error": f"Failed to list Slack channels: {e}"})
+
+
+def _slack_name_fields(member: dict) -> tuple[str, str, str]:
+    profile = member.get("profile") or {}
+    display = (profile.get("display_name") or "").strip()
+    real = (profile.get("real_name") or member.get("real_name") or "").strip()
+    source = real or display
+    first = source.split()[0] if source else ""
+    return display, real, first
+
+
+def _matches_name_prefix(member: dict, prefix: str) -> bool:
+    needle = prefix.casefold()
+    return any(
+        value.casefold().startswith(needle)
+        for value in _slack_name_fields(member)
+        if value
+    )
+
+
+def _is_taggable_person(member: dict) -> bool:
+    # Bots and deactivated accounts have no one to notify.
+    if member.get("deleted") or member.get("is_bot"):
+        return False
+    return bool(member.get("id")) and member.get("id") != "USLACKBOT"
+
+
+def list_slack_users(name: str = "", user_id: str | None = None, **kwargs) -> str:
+    """Find people whose name starts with a prefix, with the mention token Slack notifies on."""
+    if not user_id:
+        return json.dumps({"error": _ERR_NO_USER})
+
+    prefix = (name or "").strip()
+    # An empty prefix would page the whole workspace into the prompt.
+    if not prefix:
+        return json.dumps({"error": "name prefix is required, for example 'a' or 'ada'."})
+
+    client = get_slack_client_for_user(user_id)
+    if not client:
+        return json.dumps({"error": _ERR_NOT_CONNECTED})
+
+    matches = []
+    cursor = ""
+    scanned_all = True
+    try:
+        for _ in range(_USER_LIST_MAX_PAGES):
+            params = {"limit": _USER_LIST_PAGE_SIZE}
+            # First page has no cursor; later pages continue where Slack left off.
+            if cursor:
+                params["cursor"] = cursor
+            result = client._make_request("GET", "users.list", params)
+            for member in result.get("members") or []:
+                if not _is_taggable_person(member) or not _matches_name_prefix(member, prefix):
+                    continue
+                display, real, _first = _slack_name_fields(member)
+                matches.append({
+                    "mention": f"<@{member['id']}>",
+                    "display_name": display,
+                    "real_name": real,
+                })
+                # Enough to disambiguate; a longer prefix can narrow further.
+                if len(matches) >= _USER_LIST_MAX_RESULTS:
+                    break
+            # Hit the result cap before the workspace ended — later people may match too.
+            if len(matches) >= _USER_LIST_MAX_RESULTS:
+                scanned_all = False
+                break
+            cursor = (result.get("response_metadata") or {}).get("next_cursor") or ""
+            # Slack signals the last page with an empty cursor.
+            if not cursor:
+                break
+        else:
+            # The page cap ran out with Slack still offering another page.
+            scanned_all = not cursor
+    except Exception as e:
+        logger.info("[SlackTool] Failed to list users: %s", type(e).__name__)
+        return json.dumps({"error": f"Failed to list Slack users: {e}"})
+
+    payload = {"status": "ok", "users": matches, "total": len(matches)}
+    # Page cap hit with workspace still unread — the prefix may be too short.
+    if not scanned_all:
+        payload["truncated"] = True
+        payload["message"] = "Scanned part of the workspace. Pass a longer prefix to narrow it."
+    elif not matches:
+        payload["message"] = f"No one whose name starts with {prefix!r}."
+    return json.dumps(payload)
 
 
 def get_channel_history(

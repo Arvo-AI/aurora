@@ -7,7 +7,8 @@ SLACK FORMATTING REQUIREMENTS:
 Use Slack markdown: *bold*, _italic_, `code`, ```code blocks```
 Structure responses: *Section Headers* + bullet points or numbered lists
 Keep paragraphs short (2-3 sentences max)
-NO HTML, NO dropdowns, NO complex UI - plain text only
+NO HTML tags, NO dropdowns, NO complex UI
+To notify someone already in the message, copy their <@USERID> token. To notify someone who is not, call list_slack_users with a name prefix and copy the mention it returns. That token is Slack's mention syntax, not HTML. Never invent an id, and never substitute a plain @name — it does not notify.
 
 INVESTIGATION GUIDANCE:
 Use tools when needed: kubectl, cloud commands, logs, metrics

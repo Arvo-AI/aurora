@@ -4,7 +4,6 @@ Handles incoming messages with @Aurora mentions.
 """
 
 import logging
-import re
 import json
 import os
 from flask import Blueprint, request, jsonify
@@ -19,6 +18,9 @@ from routes.slack.slack_events_helpers import (
     get_session_from_thread,
     send_message_to_aurora,
     get_workspace_member,
+    format_asked_by,
+    mention_bot_ids,
+    strip_bot_mentions,
 )
 from utils.secrets.secret_ref_utils import get_user_token_data
 from chat.background.task import run_background_chat
@@ -169,9 +171,15 @@ def process_event_callback(data: dict) -> None:
                 
                 # 2. Logic processing (if no errors yet and client exists)
                 if client and not response_text:
-                    # Remove @Aurora mention from text
-                    clean_msg = re.sub(r'<@[A-Z0-9]+>', '', text).strip()
-                    
+                    # Drop Aurora's mention only. Other <@USERID> tokens are who to tag.
+                    bot_user_ids = mention_bot_ids(data.get("authorizations"))
+                    # Some deliveries omit authorizations; the install stored our bot id.
+                    if not bot_user_ids:
+                        stored_bot = (get_user_token_data(user_id, "slack") or {}).get("bot_user_id")
+                        bot_user_ids = mention_bot_ids(None, stored_bot)
+                    clean_msg = strip_bot_mentions(text, bot_user_ids)
+
+                    # Bare @Aurora with no question — send the intro, don't start a chat.
                     if not clean_msg:
                         response_text = (
                             "Hi! I'm Aurora, your AI SRE assistant.\n\n"
@@ -181,11 +189,8 @@ def process_event_callback(data: dict) -> None:
                     else:
                         response_text = "Thinking..."
                         trigger_background = True
-                        # Update text to cleaned version for background task
-                        text = clean_msg
-                        if asked_by:
-                            # Keep attribution visible in the session title and prompt
-                            text = f"Asked by {asked_by}: {clean_msg}"
+                        # <@USERID> is the only form Slack will notify on.
+                        text = format_asked_by(slack_user_id, asked_by, clean_msg)
 
                 # 3. Execution
                 if client:
