@@ -868,6 +868,8 @@ Until Microsoft finishes validating the app (or an admin publishes it to the org
 
 [Download the Aurora Teams app](pathname:///downloads/aurora-teams-app.zip)
 
+Teams needs the `.zip` itself. Safari unzips downloads into a folder by default, so download with Chrome or Edge, or turn off **Safari → Settings → General → Open "safe" files after downloading**. If you already have the folder, open it, select `manifest.json`, `color.png` and `outline.png`, and choose **Compress**. Compressing the folder itself puts the manifest one level down, and Teams rejects the package.
+
 1. In Teams: **Apps** → **Manage your apps** → **Upload an app** → **Upload a custom app**.
 2. Select the zip. If upload is blocked, a Teams admin has to allow custom apps (Teams admin center → **Teams apps** → **Setup policies** → **Upload custom apps**).
 3. Add Aurora to the team: Team **···** → **Manage team** → **Apps** → **Install**.

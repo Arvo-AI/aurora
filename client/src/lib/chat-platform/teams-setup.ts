@@ -23,7 +23,8 @@ export const TEAMS_CUSTOMER_SETUP = {
   installWhy:
     "Microsoft only sends @mentions and bot messages in teams where the app is installed. Connect in Aurora does not add the app for you.",
   installSteps: [
-    "Download the Aurora Teams app below.",
+    "Download the Aurora Teams app below. Keep it as a .zip — Teams only accepts the zip.",
+    "Safari unzips downloads into a folder. Download with Chrome or Edge, or turn off Safari Settings → General → Open “safe” files after downloading. If you already have the folder, open it, select the three files inside, and choose Compress — zipping the folder itself nests manifest.json and Teams rejects it.",
     "In Teams: Apps → Manage your apps → Upload an app → Upload a custom app, and select the zip.",
     "Add it to the team: Team ··· → Manage team → Apps → Aurora → Install.",
   ],
