@@ -96,6 +96,27 @@ def _get_worker_agent():
     return _worker_agent
 
 
+def _build_slack_progress_reporter(user_id: str, trigger_metadata: Optional[Dict[str, Any]], wf):
+    """Reporter for the Slack placeholder, or None when this turn has no placeholder to edit."""
+    meta = trigger_metadata or {}
+    # slack_button's placeholder says what is executing; a generic note would replace it
+    if meta.get("source") != "slack":
+        return None
+    channel = meta.get("channel")
+    message_ts = meta.get("thinking_message_ts")
+    if not channel or not message_ts:
+        return None
+    if os.environ.get("SLACK_PROGRESS_UPDATES_ENABLED", "true").lower() in ("0", "false", "no"):
+        return None
+    try:
+        from chat.background.slack_progress import SlackProgressReporter
+
+        return SlackProgressReporter(user_id=user_id, channel=channel, message_ts=message_ts, workflow=wf)
+    except Exception:
+        logger.warning("[BackgroundChat] Could not set up Slack progress reporter", exc_info=True)
+        return None
+
+
 def _resolve_permitted_tools(user_id: str) -> Optional[set]:
     """Resolve permitted tools for background chats. Always fetches fresh from DB."""
     try:
@@ -1400,12 +1421,17 @@ async def _execute_background_chat(
         # and LLMManager on every task (~2s cold-start savings).
         agent = _get_worker_agent()
         
-        # Create background websocket (no-op, just discards messages)
-        background_ws = BackgroundWebSocket()
-        
         # Create workflow for this session
         wf = Workflow(agent, session_id)
         logger.info("[BackgroundChat] Created agent + workflow (singleton reuse)")
+
+        # Slack mentions leave a "Thinking…" placeholder; keep editing it with live
+        # progress so a long investigation doesn't look hung. Other sources get the
+        # plain discarding websocket.
+        progress_reporter = _build_slack_progress_reporter(user_id, trigger_metadata, wf)
+        background_ws = BackgroundWebSocket(
+            on_message=progress_reporter.observe if progress_reporter else None
+        )
         
         # Build RCA context for system prompt (NOT added to user message)
         rca_context = _build_rca_context(
@@ -1536,12 +1562,24 @@ async def _execute_background_chat(
         is_action_source = (trigger_metadata or {}).get('source') == 'action'
 
         # Run the workflow - this is the same function used by regular chats
-        await process_workflow_async(wf, state, background_ws, user_id, incident_id=None if is_action_source else incident_id)
-        
-        # CRITICAL: Wait for any ongoing tool calls to complete before marking as done
-        # The workflow stream might complete, but tool calls could still be running
-        if hasattr(wf, '_wait_for_ongoing_tool_calls'):
-            await wf._wait_for_ongoing_tool_calls()
+        progress_task = asyncio.create_task(progress_reporter.run()) if progress_reporter else None
+        try:
+            await process_workflow_async(wf, state, background_ws, user_id, incident_id=None if is_action_source else incident_id)
+
+            # CRITICAL: Wait for any ongoing tool calls to complete before marking as done
+            # The workflow stream might complete, but tool calls could still be running
+            if hasattr(wf, '_wait_for_ongoing_tool_calls'):
+                await wf._wait_for_ongoing_tool_calls()
+        finally:
+            # Must finish before the final answer is written to the same Slack
+            # message, or a late progress edit would overwrite the real response.
+            if progress_reporter and progress_task:
+                progress_reporter.stop()
+                try:
+                    await progress_task
+                except Exception:
+                    logger.debug("[BackgroundChat] Slack progress task ended with error", exc_info=True)
+                logger.info("[BackgroundChat] Slack progress updates sent: %d", progress_reporter.updates_sent)
 
         # Send Slack response immediately — don't wait for post-processing
         _slack_early_sent = False

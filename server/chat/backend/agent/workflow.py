@@ -51,6 +51,8 @@ class Workflow:
         self._ui_state = None  # Store UI state to save with messages
         self._stream_text_by_id: dict[str, str] = {}
         self._history_prefix_len: int = 0
+        # This turn's capture. Agent.tool_capture_instance is shared across workflows.
+        self.tool_capture = None
 
     async def _wait_for_ongoing_tool_calls(self):
         """Waits briefly for any tool calls that are currently in progress to complete.
@@ -917,10 +919,13 @@ class Workflow:
                 org_id=getattr(input_state, 'org_id', None),
             )
             self.agent.set_tool_capture(tool_capture)
-            
+
             # Set workflow context for tools to access during confirmation
             from chat.backend.agent.tools.cloud_tools import _set_ctx
             _set_ctx("workflow", self)
+
+        # Slack progress reads this object, not the Agent slot a concurrent turn can replace
+        self.tool_capture = tool_capture
         
         # Load existing context if session_id is provided
         if input_state.session_id and input_state.user_id:
