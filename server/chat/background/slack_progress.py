@@ -26,6 +26,8 @@ _THOUGHT_MAX_CHARS = 280
 _TEXT_BUFFER_MAX_CHARS = 4000
 # Give up on the placeholder after this many failed edits (deleted message, revoked token…).
 _MAX_CONSECUTIVE_FAILURES = 3
+# An in-flight edit blocks the final answer (to_thread can't be cancelled); keep it short
+_EDIT_TIMEOUT_SECONDS = 10
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n+")
 
@@ -174,7 +176,16 @@ class SlackProgressReporter:
                 message = json.loads(message)
             except (TypeError, ValueError):
                 return
-        if not isinstance(message, dict) or message.get("type") != "message":
+        if not isinstance(message, dict):
+            return
+        # Text before and after a tool call is separate thought; keep a break so
+        # "…done." and "Checking…" don't fuse into one sentence
+        if message.get("type") == "tool_call":
+            with self._lock:
+                if self._text_buffer and not self._text_buffer.endswith("\n"):
+                    self._text_buffer += "\n"
+            return
+        if message.get("type") != "message":
             return
         data = message.get("data")
         text = data.get("text") if isinstance(data, dict) else data
@@ -237,7 +248,10 @@ class SlackProgressReporter:
         # No Slack client means the final send will fail too; nothing useful to do here
         if client is None:
             raise RuntimeError("no Slack client for user")
-        client.update_message(channel=self.channel, ts=self.message_ts, text=text)
+        client.update_message(
+            channel=self.channel, ts=self.message_ts, text=text,
+            timeout=_EDIT_TIMEOUT_SECONDS, max_retries=0,
+        )
 
     async def run(self) -> None:
         """Edit the placeholder every ``interval`` seconds until ``stop()`` is called."""

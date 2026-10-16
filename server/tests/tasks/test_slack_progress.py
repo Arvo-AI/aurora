@@ -74,21 +74,17 @@ def test_slack_markup_is_escaped_in_thought(bg):
     assert bg.sp.latest_thought("Pods <api> & <web> are down.") == "Pods &lt;api&gt; &amp; &lt;web&gt; are down."
 
 
-def test_render_progress_note_is_labelled_as_not_the_answer(bg):
+def test_render_progress_note_shows_elapsed_tools_and_thought(bg):
     note = bg.sp.render_progress_note(
         elapsed_seconds=380,
         completed_tool_calls=12,
         running_tool="`cloud_exec` — `kubectl get pods`",
         thought="Batch 1 worked.",
     )
-    assert "Still working on this" in note
     assert "6m 20s elapsed" in note
     assert "12 tool calls so far" in note
-    assert "not the answer" in note
-    assert "replaced with the full response" in note
     assert "*Currently running:* `cloud_exec` — `kubectl get pods`" in note
     assert "> Batch 1 worked." in note
-    assert "(may change)" in note
 
 
 def test_render_progress_note_omits_empty_sections(bg):
@@ -144,6 +140,15 @@ def test_observe_collects_only_streamed_text_frames(bg):
     assert bg.sp.latest_thought(r._text_buffer) == "First sentence. Second one."
 
 
+def test_tool_call_frame_separates_thoughts_across_messages(bg):
+    r = _reporter(bg)
+    r.observe({"type": "message", "data": {"text": "Done with clusters (22)."}})
+    r.observe({"type": "tool_call", "data": {"tool_name": "cloud_exec"}})
+    r.observe({"type": "message", "data": {"text": "Checking batch 2."}})
+    # Without a separator the two would fuse and the cap couldn't isolate the newest sentence
+    assert bg.sp.latest_thought(r._text_buffer, max_chars=20) == "Checking batch 2."
+
+
 def test_snapshot_reads_running_tool_and_history_from_capture(bg):
     cap = _capture(running=[("cloud_exec", {"command": "kubectl get pods -A"})], completed=4)
     r = _reporter(bg, cap)
@@ -165,16 +170,18 @@ def test_snapshot_redacts_secrets_in_running_command(bg):
 
 def test_snapshot_survives_missing_capture(bg):
     note = _reporter(bg, capture=None).snapshot()
-    assert "Still working on this" in note
+    assert "elapsed" in note
 
 
 def test_run_edits_placeholder_until_stopped_and_never_after(bg):
     r = _reporter(bg, _capture())
     sent = []
+    budgets = []
 
     class _Client:
-        def update_message(self, channel, ts, text):
+        def update_message(self, channel, ts, text, **kw):
             sent.append((channel, ts, text))
+            budgets.append(kw)
 
     r._client = _Client()
 
@@ -192,8 +199,10 @@ def test_run_edits_placeholder_until_stopped_and_never_after(bg):
     assert count >= 2
     assert len(sent) == count, "no edits may land after stop() returns"
     assert all(c == "C000" and ts == "1.0" for c, ts, _ in sent)
-    assert "not the answer" in sent[-1][2]
+    assert "elapsed" in sent[-1][2]
     assert r.updates_sent == count
+    # A slow Slack must not hold up the final answer
+    assert all(b == {"timeout": 10, "max_retries": 0} for b in budgets)
 
 
 def test_run_gives_up_after_consecutive_failures(bg):
@@ -238,7 +247,8 @@ def test_background_websocket_forwards_frames_and_swallows_observer_errors(bg):
     "meta, expect",
     [
         ({"source": "slack", "channel": "C1", "thinking_message_ts": "1.2"}, True),
-        ({"source": "slack_button", "channel": "C1", "thinking_message_ts": "1.2"}, True),
+        # slack_button keeps its "Executing: ..." placeholder
+        ({"source": "slack_button", "channel": "C1", "thinking_message_ts": "1.2"}, False),
         ({"source": "slack", "channel": "C1"}, False),
         ({"source": "google_chat", "channel": "C1", "thinking_message_ts": "1.2"}, False),
         ({"source": "grafana"}, False),

@@ -110,14 +110,15 @@ class SlackClient:
         result = self._make_request("POST", "chat.postMessage", data)
         return result
     
-    def update_message(self, channel: str, ts: str, text: str, blocks: Optional[List[Dict]] = None) -> Dict[str, Any]:
+    def update_message(self, channel: str, ts: str, text: str, blocks: Optional[List[Dict]] = None,
+                       timeout: int = 30, max_retries: int = 3) -> Dict[str, Any]:
         """Update an existing message in a Slack channel. Pass blocks=[] to
         replace a Block Kit message with plain text (omitting blocks keeps the
-        old ones)."""
+        old ones). Best-effort callers can shrink timeout/max_retries."""
         data = {"channel": channel, "ts": ts, "text": text}
         if blocks is not None:
             data["blocks"] = blocks
-        return self._make_request("POST", "chat.update", data)
+        return self._make_request("POST", "chat.update", data, timeout=timeout, max_retries=max_retries)
 
     def delete_message(self, channel: str, ts: str) -> None:
         """Delete a message from a Slack channel. Raises ValueError on failure.

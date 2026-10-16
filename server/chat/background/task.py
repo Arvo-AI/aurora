@@ -99,8 +99,8 @@ def _get_worker_agent():
 def _build_slack_progress_reporter(user_id: str, trigger_metadata: Optional[Dict[str, Any]], wf):
     """Reporter for the Slack placeholder, or None when this turn has no placeholder to edit."""
     meta = trigger_metadata or {}
-    # Only Slack-originated turns post a "Thinking…" message we can keep updating
-    if meta.get("source") not in ("slack", "slack_button"):
+    # slack_button's placeholder says what is executing; a generic note would replace it
+    if meta.get("source") != "slack":
         return None
     channel = meta.get("channel")
     message_ts = meta.get("thinking_message_ts")
