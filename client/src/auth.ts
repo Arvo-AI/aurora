@@ -40,7 +40,9 @@ async function refreshUserFromBackend(userId: string): Promise<RefreshResult> {
         // Exponential backoff with jitter, capped
         consecutiveFailures += 1
         const delay = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (consecutiveFailures - 1))
-        backoffUntil = Date.now() + delay * (0.5 + Math.random() / 2)
+        // Jitter only spreads retries across pods; it needs no secure randomness
+        const jitter = crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32
+        backoffUntil = Date.now() + delay * (0.5 + jitter / 2)
       } else {
         // Backend answered — resume normal refresh cadence
         consecutiveFailures = 0
