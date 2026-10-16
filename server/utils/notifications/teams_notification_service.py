@@ -82,8 +82,8 @@ def _post_html(tenant_id: str, team_id: str, channel_id: str, title: str, body_h
         )
         return True
     except TeamsBotError:
-        # No traceback: the post path reads Vault secrets, and exception logging can capture them
-        logger.warning("[TeamsNotification] bot post failed for channel %s", sanitize(channel_id))
+        # channel_id is read out of the Vault credential blob, so it stays out of the log
+        logger.warning("[TeamsNotification] bot post failed")
         return False
 
 
