@@ -112,7 +112,8 @@ def _teams_oauth_failure_redirect(error_code: str) -> str:
     try:
         extra = f"&redirect_uri={quote(get_redirect_uri(), safe='')}"
     except ValueError:
-        pass
+        # If redirect URI config is invalid/missing, continue without the optional parameter.
+        logger.debug("Teams OAuth failure redirect: could not append redirect_uri", exc_info=True)
     return (
         f"{FRONTEND_URL}/teams/setup?teams_auth=failed"
         f"&error={quote(error_code, safe='')}{extra}"
