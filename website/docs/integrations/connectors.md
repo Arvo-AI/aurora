@@ -941,13 +941,12 @@ For Atlassian Cloud (`*.atlassian.net`):
 4. Click **Create**
 5. Go to **Distribution**, set Distribution Status to **Sharing**, fill in the required vendor fields (name, privacy policy URL), set Personal Data Declaration to **Yes**, and save. Without this, non-owner users will see "You don't have access to this app."
 6. Go to **Permissions** and add scopes for the products you want:
-   - **Confluence API** > **Add** > **Configure** > **Classic scopes** > **Edit Scopes**. Select these four (Scope Name, then the code shown in that dialog):
-     - **Read Confluence detailed content** — `read:confluence-content.all`
-     - **Read Confluence space summary** — `read:confluence-space.summary`
-     - **Read user** — `read:confluence-user`
-     - **Search Confluence content and space summaries** — `search:confluence`
+   - **Confluence API** > **Add** > **Configure** > **Granular scopes** > **Edit Scopes**. Select:
+     - **View pages** — `read:page:confluence`
+     - **View spaces** — `read:space:confluence`
+     - **View user details** — `read:user:confluence`
 
-     Leave the other rows in that dialog unselected (write, groups, global settings, attachments). Add these on the **Classic scopes** tab. Aurora requests these four codes; scopes from the **Granular scopes** tab (for example **View pages**, `read:page:confluence`) are not part of that request, so the connect step fails with "scopes not added to the app."
+     The **Classic scopes** tab is a different list. Aurora does not use those rows. **Search Confluence content and space summaries** (`search:confluence`) is the exception: it is only on **Classic scopes** > **Edit Scopes**. Select that one there too.
 
    - **Jira platform REST API** > **Add** > **Configure**:
      - `read:jira-work`
@@ -1026,7 +1025,7 @@ Data Center short links work correctly.
 | "Insufficient Jira scopes" | Ensure OAuth app has `read:jira-work`, `write:jira-work`, and `read:jira-user` scopes |
 | "Atlassian OAuth configuration missing" | Set `ATLASSIAN_CLIENT_ID` and `ATLASSIAN_CLIENT_SECRET` in `.env` |
 | "You don't have access to this app" | Enable **Sharing** in the Distribution tab of your Atlassian OAuth app |
-| "Scopes not added to the app" | On **Classic scopes** > **Edit Scopes**, select Read Confluence detailed content, Read Confluence space summary, Read user, and Search Confluence content and space summaries |
+| "Scopes not added to the app" | On **Granular scopes** > **Edit Scopes**, select View pages, View spaces, and View user details. On **Classic scopes**, select Search Confluence content and space summaries |
 
 ---
 
