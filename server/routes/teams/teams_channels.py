@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, request
 
 from connectors.teams_connector.client import TeamsClient, get_teams_client_for_user
 from routes.slack.slack_backfill_config import BACKFILL_STALE_MINUTES
+from routes.teams import teams_installs
 from services.channels import prefs as channel_prefs
 from services.channels import registry
 from services.channels.classify import classify_channel
@@ -187,6 +188,27 @@ def _enumerate_member_channels(user_id: str, client: TeamsClient | None = None) 
     return out
 
 
+def _prune_stale_channels(cur, user_id: str, member_ids: set[str]) -> None:
+    """Delete this user's own rows for channels they can no longer see.
+
+    Other members' rows are left alone (this user's team list says nothing about
+    them), and the incidents-card channel is never pruned.
+    """
+    cur.execute(
+        "SELECT channel_id FROM slack_channels WHERE provider = %s AND user_id = %s",
+        (_PROVIDER, user_id),
+    )
+    card_id = _get_card_channel_id(user_id)
+    stale_ids = [r[0] for r in cur.fetchall() if r[0] not in member_ids and r[0] != card_id]
+    if not stale_ids:
+        return
+    cur.execute(
+        """DELETE FROM slack_channels
+            WHERE provider = %s AND user_id = %s AND channel_id = ANY(%s)""",
+        (_PROVIDER, user_id, stale_ids),
+    )
+
+
 def auto_register_channels(user_id: str, team_id: str | None = None, *,
                            describe_limit: int = MAX_AUTO_CHANNELS) -> int:
     client = get_teams_client_for_user(user_id)
@@ -197,11 +219,17 @@ def auto_register_channels(user_id: str, team_id: str | None = None, *,
         )
         return 0
     member_channels = _enumerate_member_channels(user_id, client)
-    member_ids = {c["channel_id"] for c in member_channels}
+    installed, unknown = teams_installs.resolve_installed_teams(
+        user_id, client, {c["team_id"] for c in member_channels},
+    )
+    # Only teams with the bot installed get active channels (and LLM descriptions)
+    active_channels = [c for c in member_channels if c["team_id"] in installed]
+    # Teams we couldn't verify keep their existing rows so an outage doesn't wipe them
+    member_ids = {c["channel_id"] for c in member_channels if c["team_id"] in installed | unknown}
 
     org_id = resolve_org(user_id)
     newly_added: list[str] = []
-    team_by_channel = {c["channel_id"]: c["team_id"] for c in member_channels}
+    team_by_channel = {c["channel_id"]: c["team_id"] for c in active_channels}
     try:
         with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[TeamsChannels:auto]")
@@ -216,7 +244,7 @@ def auto_register_channels(user_id: str, team_id: str | None = None, *,
             status_by_id = {r[0]: r[2] for r in rows}
             is_stale_by_id = {r[0]: bool(r[3]) for r in rows}
 
-            for ch in member_channels:
+            for ch in active_channels:
                 cid = ch["channel_id"]
                 status = status_by_id.get(cid)
                 needs_describe = (
@@ -229,27 +257,13 @@ def auto_register_channels(user_id: str, team_id: str | None = None, *,
 
             newly_added = _mark_pending(cur, newly_added)
 
-            pruned_card = False
-            if existing:
-                stale_ids = [cid for cid in existing if cid not in member_ids]
-                if stale_ids:
-                    card_id = _get_card_channel_id(user_id)
-                    pruned_card = bool(card_id and card_id in stale_ids)
-                    cur.execute(
-                        """DELETE FROM slack_channels
-                           WHERE provider = %s AND channel_id = ANY(%s)""",
-                        (_PROVIDER, stale_ids),
-                    )
+            # A truncated listing would make every channel past the cap look gone
+            if len(member_channels) < LIST_CHANNELS_CAP:
+                _prune_stale_channels(cur, user_id, member_ids)
             conn.commit()
     except Exception:
         logger.warning("[TeamsChannels] auto_register DB failed", exc_info=True)
         return 0
-
-    if pruned_card:
-        try:
-            _clear_card_channel(user_id)
-        except Exception:
-            logger.warning("[TeamsChannels] failed to clear pruned card channel", exc_info=True)
 
     for channel_id in newly_added:
         _enqueue_metadata(user_id, channel_id, team_by_channel.get(channel_id))
@@ -309,12 +323,24 @@ def register_single_channel(
     return is_new
 
 
+def _team_has_bot(user_id: str, team_id: str) -> bool:
+    """Live check that the bot is installed, so a channel can't be activated where it can't post."""
+    client = get_teams_client_for_user(user_id)
+    if not client:
+        return False
+    installed, _unknown = teams_installs.resolve_installed_teams(user_id, client, [team_id])
+    return team_id in installed
+
+
 def _activate_channels(user_id: str, channel_ids: list[str]) -> int:
     activated = 0
     described = 0
     for channel_id in channel_ids:
         tid = _team_id_for_channel(user_id, channel_id)
         if not tid:
+            continue
+        # Bot isn't in this team — activating would create a channel it can't use
+        if not _team_has_bot(user_id, tid):
             continue
         describe = described < MAX_ACTIVATE_DESCRIBE
         if register_single_channel(user_id, channel_id, team_id=tid, describe=describe):
@@ -357,7 +383,6 @@ def _fetch_all_workspace_channels(user_id: str) -> list[dict] | None:
     client = get_teams_client_for_user(user_id)
     if not client:
         return None
-    hidden = channel_prefs.get_hidden_channel_ids(user_id, _PROVIDER)
     slim: list[dict] = []
     for team in client.list_joined_teams():
         team_id = team.get("id")
@@ -368,7 +393,7 @@ def _fetch_all_workspace_channels(user_id: str) -> list[dict] | None:
             if len(slim) >= LIST_CHANNELS_CAP:
                 break
             cid = ch.get("id")
-            if not cid or cid in hidden:
+            if not cid:
                 continue
             slim.append({
                 "channel_id": cid,
@@ -392,6 +417,7 @@ def _list_available_channels(user_id: str, member_ids: set[str]) -> list[dict]:
     all_ch = _fetch_all_workspace_channels(user_id)
     if not all_ch:
         return []
+    installed = teams_installs.get_installed_team_ids(user_id)
     available = []
     for ch in all_ch:
         cid = ch.get("channel_id")
@@ -407,6 +433,7 @@ def _list_available_channels(user_id: str, member_ids: set[str]) -> list[dict]:
             "team_name": ch.get("team_name"),
             "is_private": ch.get("is_private", False),
             "is_member": False,
+            "bot_installed": ch.get("team_id") in installed,
             "channel_type": channel_type,
             "detected_platform": platform,
             "metadata_summary": None,
@@ -560,6 +587,12 @@ def restore_teams_channel(user_id, channel_id):
             "error": "Could not resolve team for this channel. Pass team_id in the body.",
             "code": "team_unknown",
         }), 400
+    # Bot isn't in this team — activating would create a channel it can't use
+    if not _team_has_bot(user_id, team_id):
+        return jsonify({
+            "error": "Add the Aurora bot to this team in Microsoft Teams, then try again.",
+            "code": "bot_not_installed",
+        }), 409
     register_single_channel(user_id, channel_id, team_id=team_id)
     return jsonify({"channel_id": channel_id, "is_dismissed": False})
 
@@ -629,3 +662,60 @@ def activate_teams_channels(user_id):
         logger.exception("[TeamsChannels] enqueue activate failed")
         return jsonify({"error": "Failed to activate channels"}), 500
     return jsonify({"message": "Activation started", "queued": len(channel_ids)})
+
+
+def remove_team_channels(user_id: str, team_id: str) -> None:
+    """Bot left the team — drop its channel rows and any incidents card pointing there."""
+    try:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[TeamsChannels:team_removed]")
+            cur.execute(
+                "SELECT channel_id FROM slack_channels WHERE provider = %s AND team_id = %s",
+                (_PROVIDER, team_id),
+            )
+            channel_ids = [r[0] for r in cur.fetchall()]
+            cur.execute(
+                "DELETE FROM slack_channels WHERE provider = %s AND team_id = %s",
+                (_PROVIDER, team_id),
+            )
+            conn.commit()
+        # The card can't post to a team the bot has left
+        if _get_card_channel_id(user_id) in channel_ids:
+            _clear_card_channel(user_id)
+    except Exception:
+        logger.warning("[TeamsChannels] team removal cleanup failed", exc_info=True)
+    _invalidate_available_cache(user_id)
+
+
+def remove_channel(user_id: str, channel_id: str) -> None:
+    """Channel deleted in Teams — drop its row and the incidents card if it was one."""
+    try:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[TeamsChannels:channel_deleted]")
+            cur.execute(
+                "DELETE FROM slack_channels WHERE provider = %s AND channel_id = %s",
+                (_PROVIDER, channel_id),
+            )
+            conn.commit()
+        if _get_card_channel_id(user_id) == channel_id:
+            _clear_card_channel(user_id)
+    except Exception:
+        logger.warning("[TeamsChannels] channel removal failed", exc_info=True)
+    _invalidate_available_cache(user_id)
+
+
+def rename_channel(user_id: str, channel_id: str, name: str) -> None:
+    if not name:
+        return
+    try:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[TeamsChannels:renamed]")
+            cur.execute(
+                """UPDATE slack_channels SET channel_name = %s, updated_at = NOW()
+                    WHERE provider = %s AND channel_id = %s""",
+                (name[:512], _PROVIDER, channel_id),
+            )
+            conn.commit()
+    except Exception:
+        logger.warning("[TeamsChannels] channel rename failed", exc_info=True)
+    _invalidate_available_cache(user_id)

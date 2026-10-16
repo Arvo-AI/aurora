@@ -62,9 +62,11 @@ def clear_incidents_channel(user_id: str, provider: str) -> None:
         store_org_preference(org_id, incidents_channel_pref_key(provider), "")
         store_org_preference(org_id, incidents_channel_name_pref_key(provider), "")
     creds = get_credentials_from_db(user_id, provider) or {}
-    creds.pop("incidents_channel_id", None)
-    creds.pop("incidents_channel_name", None)
-    store_tokens_in_db(user_id, creds, provider)
+    # Not connected — storing {} would create a user_tokens row for a provider that was never connected
+    if creds:
+        creds.pop("incidents_channel_id", None)
+        creds.pop("incidents_channel_name", None)
+        store_tokens_in_db(user_id, creds, provider)
 
 
 def hidden_channels_pref_key(provider: str) -> str:

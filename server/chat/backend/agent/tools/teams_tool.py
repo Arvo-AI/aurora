@@ -9,7 +9,11 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from connectors.teams_connector.client import TeamsAPIError, get_teams_client_for_user
+from connectors.teams_connector.client import (
+    TeamsAPIError,
+    get_teams_client_for_user,
+    has_teams_credentials,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +24,31 @@ _PROVIDER = "teams"
 
 
 def is_teams_connected(user_id: str) -> bool:
-    try:
-        return get_teams_client_for_user(user_id) is not None
-    except Exception:
-        return False
+    # Runs per notification and tool build — must not refresh tokens or hit the network
+    return has_teams_credentials(user_id)
+
+
+def _channel_access_error(user_id: str, channel_id: str, *, action: str) -> Optional[str]:
+    """JSON error unless ``channel_id`` is an active registered channel (hidden/dismissed ones aren't)."""
+    from services.channels import registry
+
+    is_member = registry.channel_membership(user_id, _PROVIDER, channel_id)
+    # Lookup failed — refuse rather than risk touching a channel the org opted out of
+    if is_member is None:
+        return json.dumps({
+            "error": f"Could not verify Aurora's membership of channel {channel_id}; {action}.",
+            "code": "membership_check_failed",
+        })
+    # Not in the registry — dismissed, hidden or never activated
+    if not is_member:
+        return json.dumps({
+            "error": (
+                f"Aurora is not registered as a member of channel {channel_id}. "
+                "Only use channels returned by get_connected_teams_channels."
+            ),
+            "code": "channel_not_active",
+        })
+    return None
 
 
 def _format_message(msg: dict) -> dict:
@@ -74,6 +99,10 @@ def get_teams_channel_history(
         return json.dumps({"error": _ERR_NO_USER})
     if not team_id or not channel_id:
         return json.dumps({"error": "team_id and channel_id are required."})
+    channel_id = channel_id.split(";", 1)[0]
+    denied = _channel_access_error(user_id, channel_id, action="history not read")
+    if denied:
+        return denied
     client = get_teams_client_for_user(user_id)
     if not client:
         return json.dumps({"error": _ERR_NOT_CONNECTED})
@@ -113,22 +142,10 @@ def post_teams_message(
     if len(text) > _MAX_POST_CHARS:
         text = text[: _MAX_POST_CHARS - 3] + "..."
 
-    from services.channels import registry
-
-    is_member = registry.channel_membership(user_id, _PROVIDER, channel_id)
-    if is_member is None:
-        return json.dumps({
-            "error": f"Could not verify Aurora's membership of channel {channel_id}; message not posted.",
-            "code": "membership_check_failed",
-        })
-    if not is_member:
-        return json.dumps({
-            "error": (
-                f"Aurora is not registered as a member of channel {channel_id}. "
-                "Only post to channels returned by get_connected_teams_channels."
-            ),
-            "code": "channel_not_active",
-        })
+    channel_id = channel_id.split(";", 1)[0]
+    denied = _channel_access_error(user_id, channel_id, action="message not posted")
+    if denied:
+        return denied
 
     try:
         from connectors.teams_connector.bot_client import (
@@ -221,6 +238,12 @@ def get_teams_thread_replies(
 ) -> str:
     if not user_id:
         return json.dumps({"error": _ERR_NO_USER})
+    if not team_id or not channel_id or not message_id:
+        return json.dumps({"error": "team_id, channel_id and message_id are required."})
+    channel_id = channel_id.split(";", 1)[0]
+    denied = _channel_access_error(user_id, channel_id, action="replies not read")
+    if denied:
+        return denied
     client = get_teams_client_for_user(user_id)
     if not client:
         return json.dumps({"error": _ERR_NOT_CONNECTED})

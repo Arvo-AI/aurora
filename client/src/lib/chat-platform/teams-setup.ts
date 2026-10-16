@@ -67,6 +67,8 @@ export function teamsOAuthFailureMessage(
       redirectHint,
     invalid_state: "OAuth session expired. Click Connect again and finish Microsoft sign-in without long delays.",
     no_token: "Microsoft sign-in succeeded but Aurora could not read an access token. Try Connect again.",
+    tenant_unresolved:
+      "Microsoft sign-in succeeded but Aurora could not determine your Microsoft tenant, so Teams messages could not be matched to this workspace. Ask a developer to check the Teams app setup (scopes and TEAMS_TENANT_ID), then Connect again.",
     unexpected_error: "Something went wrong finishing Teams setup. Check server logs and try Connect again.",
   };
   return messages[errorCode] ?? `Teams setup failed (${errorCode}).${redirectHint}`;

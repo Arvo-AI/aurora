@@ -33,7 +33,8 @@ def _redirect_base() -> str:
 
 
 def _config() -> Dict[str, str]:
-    tenant = os.getenv("TEAMS_TENANT_ID", "common")
+    # Compose exports unset vars as "", so blank must count as unset.
+    tenant = (os.getenv("TEAMS_TENANT_ID") or "").strip()
     return {
         "client_id": os.getenv("TEAMS_CLIENT_ID", ""),
         "client_secret": os.getenv("TEAMS_CLIENT_SECRET", ""),
@@ -50,11 +51,14 @@ def _validate() -> Dict[str, str]:
         missing_env.append("TEAMS_CLIENT_ID")
     if not cfg["client_secret"]:
         missing_env.append("TEAMS_CLIENT_SECRET")
+    if not cfg["tenant_id"]:
+        missing_env.append("TEAMS_TENANT_ID")
     if not _redirect_base():
         missing_env.append("NEXT_PUBLIC_BACKEND_URL (or NGROK_URL for local dev)")
     if missing_env:
         raise ValueError(
-            "Microsoft Teams OAuth is not configured on this Aurora instance. Set "
+            "Microsoft Teams OAuth is not configured on this Aurora instance. "
+            "A developer needs to finish the Teams setup: set "
             + ", ".join(missing_env)
             + " in .env and restart the server. Setup guide: "
             "https://arvo-ai.github.io/aurora/docs/integrations/connectors#microsoft-teams"

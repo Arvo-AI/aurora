@@ -2244,7 +2244,11 @@ def _send_response_to_teams(
         team_id = trigger_metadata.get("team_id")
         channel_id = trigger_metadata.get("channel_id")
         reply_to_id = trigger_metadata.get("reply_to_id")
-        if not team_id or not channel_id:
+        # A DM has no team, but can still be answered in its own conversation
+        can_reply_in_conversation = bool(
+            trigger_metadata.get("service_url") and trigger_metadata.get("conversation_id")
+        )
+        if not channel_id or (not team_id and not can_reply_in_conversation):
             logger.warning("[BackgroundChat] Missing Teams team_id/channel_id for session %s", session_id)
             return False
 
@@ -2311,12 +2315,12 @@ def _send_response_to_teams(
                 reply_to_id=reply_to_id,
             )
         else:
+            # No conversation to reply in, and the mention's id isn't a thread root — post top-level
             send_message_to_team_channel(
                 tenant_id=tenant_id,
                 team_id=team_id,
                 channel_id=channel_id,
                 text=text,
-                reply_to_id=reply_to_id,
                 service_url=service_url,
             )
         _record_teams_reply_delivered(user_id)

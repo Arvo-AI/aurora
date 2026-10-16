@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import requests
 
@@ -24,6 +26,43 @@ _TOKEN_CACHE: Dict[str, Any] = {"url": None, "token": None, "expires_at": 0.0}
 
 class TeamsBotError(TeamsAPIError):
     pass
+
+
+# Teams conversation ids look like 19:abc@thread.tacv2;messageid=1700000000000.
+_CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9_.@:;=-]+$")
+# The bot's bearer token is only ever sent to Microsoft's Bot Connector hosts.
+_SERVICE_URL_HOST_SUFFIXES = (".botframework.com",)
+_SERVICE_URL_HOSTS = ("smba.trafficmanager.net", "botframework.com")
+
+
+def is_allowed_service_url(url: Optional[str]) -> bool:
+    """True only for https Bot Connector URLs, so a forged serviceUrl can't capture our token."""
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        parsed = urlparse(url.strip())
+        host = (parsed.hostname or "").lower()
+        # Port access raises on malformed values; only the default https port is valid
+        port = parsed.port
+    except ValueError:
+        return False
+    if parsed.scheme != "https" or parsed.username or parsed.password or port not in (None, 443):
+        return False
+    return host in _SERVICE_URL_HOSTS or host.endswith(_SERVICE_URL_HOST_SUFFIXES)
+
+
+def _safe_conversation_id(value: str, *, label: str = "conversation_id") -> str:
+    if not value or len(value) > 512 or value in (".", "..") or not _CONVERSATION_ID_RE.match(value):
+        raise TeamsBotError(f"Invalid Bot Framework {label}")
+    return value
+
+
+def thread_conversation_id(channel_id: str, root_message_id: str) -> str:
+    """Conversation id that posts into the thread under ``root_message_id``."""
+    base = (channel_id or "").split(";", 1)[0]
+    TeamsClient._safe_segment(base, label="channel_id")
+    TeamsClient._safe_segment(root_message_id, label="message_id")
+    return f"{base};messageid={root_message_id}"
 
 
 def _app_id() -> str:
@@ -92,6 +131,9 @@ def get_bot_access_token() -> str:
 
 def _normalized_service_url(service_url: Optional[str]) -> str:
     url = (service_url or _DEFAULT_SERVICE_URL).strip()
+    # Every outbound call carries the bot token, so refuse hosts we don't recognise
+    if not is_allowed_service_url(url):
+        raise TeamsBotError("Refusing to call a non-Bot-Connector service URL")
     if not url.endswith("/"):
         url += "/"
     return url
@@ -124,6 +166,8 @@ def _post_activity(
     service_url: str,
     path: str,
     body: Dict[str, Any],
+    *,
+    timeout: int = 30,
 ) -> Dict[str, Any]:
     token = get_bot_access_token()
     url = f"{_normalized_service_url(service_url)}{path.lstrip('/')}"
@@ -131,7 +175,7 @@ def _post_activity(
         url,
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         json=body,
-        timeout=30,
+        timeout=timeout,
     )
     if not resp.ok:
         raise TeamsBotError(
@@ -143,6 +187,21 @@ def _post_activity(
     return resp.json()
 
 
+def team_has_bot(service_url: Optional[str], team_thread_id: str) -> Optional[bool]:
+    """True/False if the bot is/isn't installed in the team; None if Microsoft couldn't say."""
+    team_thread_id = _safe_conversation_id(team_thread_id, label="team_id")
+    url = f"{_normalized_service_url(service_url)}v3/teams/{team_thread_id}/conversations"
+    resp = requests.get(url, headers={"Authorization": f"Bearer {get_bot_access_token()}"}, timeout=10)
+    # The channel list is only served to a bot that is in the team
+    if resp.ok:
+        return True
+    # Roster/permission refusal means the bot isn't a member
+    if resp.status_code in (403, 404):
+        return False
+    # Auth or 5xx trouble says nothing about installation
+    return None
+
+
 def send_reply_in_conversation(
     *,
     service_url: str,
@@ -150,8 +209,10 @@ def send_reply_in_conversation(
     text: str,
     reply_to_id: Optional[str] = None,
     text_format: str = "plain",
+    timeout: int = 30,
 ) -> Dict[str, Any]:
     """Reply in an existing conversation (e.g. after an @mention activity)."""
+    conversation_id = _safe_conversation_id(conversation_id)
     app_id = _app_id()
     activity: Dict[str, Any] = {
         "type": "message",
@@ -165,6 +226,7 @@ def send_reply_in_conversation(
         service_url,
         f"v3/conversations/{conversation_id}/activities",
         activity,
+        timeout=timeout,
     )
 
 
@@ -177,6 +239,8 @@ def update_activity_in_conversation(
     text_format: str = "plain",
 ) -> Dict[str, Any]:
     """Replace an existing bot message (e.g. swap 'Thinking…' for the final reply)."""
+    conversation_id = _safe_conversation_id(conversation_id)
+    activity_id = _safe_conversation_id(activity_id, label="activity_id")
     app_id = _app_id()
     activity: Dict[str, Any] = {
         "type": "message",
@@ -203,12 +267,24 @@ def send_message_to_team_channel(
     text_format: str = "plain",
 ) -> Dict[str, Any]:
     """Proactive channel message as the bot (incident cards, routing, tools)."""
+    # Mention-derived ids can carry a ;messageid= suffix that isn't part of the channel id
+    channel_id = (channel_id or "").split(";", 1)[0]
     TeamsClient._safe_segment(tenant_id, label="tenant_id")
     TeamsClient._safe_segment(team_id, label="team_id")
     TeamsClient._safe_segment(channel_id, label="channel_id")
 
-    app_id = _app_id()
     svc = _normalized_service_url(service_url)
+    # Create Conversation ignores replyToId, so a thread reply is posted into
+    # the root message's own conversation id instead.
+    if reply_to_id:
+        return send_reply_in_conversation(
+            service_url=svc,
+            conversation_id=thread_conversation_id(channel_id, reply_to_id),
+            text=text,
+            text_format=text_format,
+        )
+
+    app_id = _app_id()
     body: Dict[str, Any] = {
         "bot": {"id": _bot_recipient_id(app_id), "name": "Aurora"},
         "isGroup": True,
@@ -224,8 +300,6 @@ def send_message_to_team_channel(
             "textFormat": "html" if text_format == "html" else "plain",
         },
     }
-    if reply_to_id:
-        body["activity"]["replyToId"] = reply_to_id
     return _post_activity(svc, "v3/conversations", body)
 
 

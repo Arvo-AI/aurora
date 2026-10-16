@@ -4,8 +4,10 @@ import logging
 import os
 import secrets
 import time
+import uuid
 from urllib.parse import quote
 
+import jwt
 import requests
 from flask import Blueprint, jsonify, redirect, request
 
@@ -16,6 +18,7 @@ from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_st
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_credentials_from_db, get_org_id_for_user, get_org_preference
 from utils.auth.token_management import store_tokens_in_db
+from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 teams_bp = Blueprint("teams", __name__)
@@ -105,7 +108,8 @@ def teams_callback():
         ms_error = request.args.get("error")
         if ms_error:
             # Microsoft returned an error (denied consent, policy block, etc.) — no code.
-            ms_desc = (request.args.get("error_description") or "").split("\n")[0][:500]
+            ms_error = sanitize(ms_error)[:100]
+            ms_desc = sanitize((request.args.get("error_description") or "").split("\n")[0][:500])
             logger.warning(
                 "Teams OAuth callback error from Microsoft: %s%s",
                 ms_error,
@@ -134,10 +138,15 @@ def teams_callback():
         if not access_token:
             return redirect(_teams_oauth_failure_redirect("no_token"))
 
-        # Resolve tenant id from the token's id_token claims when present.
-        tenant_id = token_data.get("tenant_id")
+        # The v2 token endpoint has no tenant_id field — the id_token's tid claim carries it
+        tenant_id = _tenant_from_id_token(token_data.get("id_token"))
+        # id_token missing or unreadable — fall back to Graph /organization
         if not tenant_id:
             tenant_id = _tenant_from_graph(access_token)
+        # Without a tenant every inbound @mention is "unknown tenant", so don't report success
+        if not tenant_id:
+            logger.error("Teams OAuth could not resolve the tenant id; refusing to store the connection")
+            return redirect(_teams_oauth_failure_redirect("tenant_unresolved"))
 
         teams_token_data = {
             "access_token": access_token,
@@ -222,6 +231,20 @@ def _last_bot_message_at(user_id: str) -> int | None:
     try:
         return int(raw)
     except (TypeError, ValueError):
+        return None
+
+
+def _tenant_from_id_token(id_token: str | None) -> str | None:
+    """Read ``tid`` from the id_token. Unverified is fine: it came straight from Microsoft over TLS."""
+    if not id_token:
+        return None
+    try:
+        claims = jwt.decode(id_token, options={"verify_signature": False})
+        tid = claims.get("tid")
+        # Reject anything that isn't a GUID so junk never becomes a lookup key
+        return str(uuid.UUID(str(tid))) if tid else None
+    except (jwt.PyJWTError, ValueError):
+        logger.debug("Could not read tenant from Teams id_token", exc_info=True)
         return None
 
 

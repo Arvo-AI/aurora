@@ -122,6 +122,22 @@ def auto_register_channels_task(self, user_id: str, team_id: str | None = None):
 
 
 @celery_app.task(
+    name="routes.teams.teams_channel_metadata.register_channel_task",
+    bind=True,
+    max_retries=2,
+)
+def register_channel_task(self, user_id: str, channel_id: str, team_id: str):
+    try:
+        from routes.teams.teams_channels import register_single_channel
+        register_single_channel(user_id, channel_id, team_id=team_id)
+    except Exception as exc:
+        try:
+            self.retry(countdown=30, exc=exc)
+        except self.MaxRetriesExceededError:
+            logger.warning("[TeamsRegisterChannel] gave up for user %s", sanitize(user_id))
+
+
+@celery_app.task(
     name="routes.teams.teams_channel_metadata.bulk_activate_channels_task",
     bind=True,
     max_retries=2,

@@ -324,16 +324,16 @@ def _check_slack(creds: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _check_teams(creds: Dict[str, Any]) -> Dict[str, Any]:
-    access_token = creds.get("access_token")
-    if not access_token:
+    from connectors.teams_connector.client import get_teams_client_for_user
+
+    user_id = creds.get("_user_id")
+    # Stored access tokens last ~1h, so go through the client that refreshes them
+    client = get_teams_client_for_user(user_id) if user_id else None
+    if not client:
         return {"connected": False}
     try:
-        r = requests.get(
-            "https://graph.microsoft.com/v1.0/me",
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=HTTP_TIMEOUT,
-        )
-        return {"connected": r.ok}
+        client.get_me()
+        return {"connected": True}
     except Exception:
         return {"connected": False}
 

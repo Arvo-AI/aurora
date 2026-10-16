@@ -32,6 +32,8 @@ export interface TeamsConnectedChannel {
   channel_name?: string;
   is_private?: boolean;
   is_member?: boolean;
+  // False when the Aurora bot isn't installed in this channel's team
+  bot_installed?: boolean;
   channel_type?: string;
   detected_platform?: string | null;
   metadata_summary?: string | null;

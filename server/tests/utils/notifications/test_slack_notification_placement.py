@@ -498,3 +498,36 @@ class TestCardToggleVsRouting:
         assert ok is False
         assert all(m["channel"] != CHAN for m in client.sent), client.sent
         assert client.deleted == []
+
+
+class TestSlackNoLongerRoutes:
+    """Routing is dispatched once per incident by the central dispatcher, so the
+    Slack notifier must not also fire it (that would route twice)."""
+
+    @pytest.mark.parametrize("post_primary_card", [True, False])
+    def test_notifier_never_dispatches_team_routing(self, monkeypatch, make_client, patched_db,
+                                                    standalone, slack_helpers_stub, post_primary_card):
+        client = make_client()
+        monkeypatch.setattr(svc, "get_slack_client_for_user", lambda user_id: client)
+        monkeypatch.setattr(svc, "_get_incidents_channel_id", lambda user_id, c: CHAN)
+        calls = []
+        monkeypatch.setattr(
+            slack_team_routing, "trigger_team_routing_agent",
+            lambda user_id, data: calls.append(user_id) or True,
+        )
+
+        svc.send_slack_investigation_completed_notification(
+            "u1", standalone(), post_primary_card=post_primary_card,
+        )
+        assert calls == []
+
+    def test_return_value_reflects_only_the_incidents_card(self, monkeypatch, make_client, patched_db,
+                                                           standalone, slack_helpers_stub):
+        client = make_client()
+        monkeypatch.setattr(svc, "get_slack_client_for_user", lambda user_id: client)
+        monkeypatch.setattr(svc, "_get_incidents_channel_id", lambda user_id, c: CHAN)
+        # Card off: nothing was posted, so there is nothing to report as sent
+        assert svc.send_slack_investigation_completed_notification(
+            "u1", standalone(), post_primary_card=False,
+        ) is False
+
