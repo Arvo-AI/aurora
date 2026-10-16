@@ -150,15 +150,22 @@ def get_user_id_from_teams_tenant(tenant_id: str) -> Optional[str]:
     if not tenant_id:
         return None
     try:
+        # FORCE RLS hides user_tokens without an org set, and an inbound activity has none
         with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
-            cur.execute(
-                """SELECT user_id FROM user_tokens
-                   WHERE provider = 'teams' AND subscription_id = %s AND is_active = TRUE
-                   ORDER BY timestamp DESC LIMIT 1""",
-                (tenant_id,),
-            )
-            row = cur.fetchone()
-            return row[0] if row else None
+            cur.execute("SELECT DISTINCT org_id FROM users WHERE org_id IS NOT NULL")
+            org_ids = [row[0] for row in cur.fetchall()]
+            for org_id in org_ids:
+                cur.execute("SET myapp.current_org_id = %s", (org_id,))
+                cur.execute(
+                    """SELECT user_id FROM user_tokens
+                       WHERE provider = 'teams' AND subscription_id = %s AND is_active = TRUE
+                       ORDER BY timestamp DESC LIMIT 1""",
+                    (tenant_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    return row[0]
+            return None
     except Exception:
         logger.exception("Failed to resolve Teams tenant to Aurora user")
         return None
