@@ -21,7 +21,7 @@ import type {
   ChatPlatformStatus,
   NotificationPreferenceKey,
 } from "@/lib/chat-platform/manage-config";
-import { TEAMS_CUSTOMER_SETUP, TEAMS_SETUP_DOCS_URL } from "@/lib/chat-platform/teams-setup";
+import { TEAMS_APP_DOWNLOAD_URL, TEAMS_CUSTOMER_SETUP, TEAMS_SETUP_DOCS_URL } from "@/lib/chat-platform/teams-setup";
 import { TeamsSetupIncompleteBanner } from "@/components/chat-platform/TeamsSetupIncompleteBanner";
 import type { TeamsStatus } from "@/lib/services/teams";
 
@@ -645,6 +645,13 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
                 {config.copy.activateHint}{" "}
                 <a href="/teams/setup" className="text-primary hover:underline">
                   Full setup steps
+                </a>
+                {" · "}
+                <a
+                  href={TEAMS_APP_DOWNLOAD_URL}
+                  className="text-primary hover:underline"
+                >
+                  Download Teams app
                 </a>
                 {" · "}
                 <a

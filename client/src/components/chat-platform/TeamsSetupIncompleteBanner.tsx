@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { TEAMS_APP_DOWNLOAD_URL } from "@/lib/chat-platform/teams-setup";
 import type { TeamsStatus } from "@/lib/services/teams";
 
 export function TeamsSetupIncompleteBanner({
@@ -71,6 +72,10 @@ export function TeamsSetupIncompleteBanner({
           <Link href="/teams/setup" className="text-primary hover:underline">
             Full setup steps
           </Link>
+          {" · "}
+          <a href={TEAMS_APP_DOWNLOAD_URL} className="text-primary hover:underline">
+            Download Teams app
+          </a>
         </p>
       </CardContent>
     </Card>

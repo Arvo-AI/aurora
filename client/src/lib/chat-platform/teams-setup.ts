@@ -1,6 +1,10 @@
 export const TEAMS_SETUP_DOCS_URL =
   "https://arvo-ai.github.io/aurora/docs/integrations/connectors#microsoft-teams";
 
+// Hosted Aurora bot package. Sideload this until the app is in the org catalog.
+export const TEAMS_APP_DOWNLOAD_URL =
+  "https://github.com/Arvo-AI/aurora/releases/download/teams-app-1.0.2/aurora-teams-app.zip";
+
 /** Shown in Aurora UI — org admins / end users (not platform operators). */
 export const TEAMS_CUSTOMER_SETUP = {
   headline: "Three steps — in this order",
@@ -19,12 +23,12 @@ export const TEAMS_CUSTOMER_SETUP = {
   installWhy:
     "Microsoft only sends @mentions and bot messages in teams where the app is installed. Connect in Aurora does not add the app for you.",
   installSteps: [
-    "In Teams (desktop or web), open the team where Aurora should work.",
-    "Team ··· → Manage team → Apps — or in a channel: + → Add an app.",
-    "Search for your organization’s Aurora app (often under Built for your org), then Add to this team → Install.",
+    "Download the Aurora Teams app below.",
+    "In Teams: Apps → Manage your apps → Upload an app → Upload a custom app, and select the zip.",
+    "Add it to the team: Team ··· → Manage team → Apps → Aurora → Install.",
   ],
   installNote:
-    "Don’t see an Aurora app? Ask your Aurora platform administrator — they publish it to your tenant before users can install it.",
+    "If Upload a custom app is missing, a Teams admin must allow custom apps. Once Aurora is published to your org, you can also install it from Built for your org and skip the zip.",
   verifyTitle: "3. Confirm with an @mention",
   verifySteps: [
     "In a channel where the app is installed, send a message that @mentions Aurora (use the app’s display name, e.g. “@Aurora hello”).",

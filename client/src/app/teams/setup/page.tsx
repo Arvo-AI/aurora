@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { teamsService } from "@/lib/services/teams";
 import { apiErrorMessage } from "@/lib/services/api-client";
 import {
+  TEAMS_APP_DOWNLOAD_URL,
   TEAMS_CUSTOMER_SETUP,
   TEAMS_SETUP_DOCS_URL,
   teamsOAuthFailureMessage,
@@ -148,6 +149,12 @@ function TeamsSetupContent() {
             <CardDescription>{copy.installWhy}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm text-zinc-300">
+            <Button variant="outline" asChild className="w-full sm:w-auto">
+              <a href={TEAMS_APP_DOWNLOAD_URL}>
+                Download Teams app
+                <ExternalLink className="h-3.5 w-3.5 ml-2" />
+              </a>
+            </Button>
             <p className="text-xs text-zinc-500">{copy.installNote}</p>
             <ol className="list-decimal list-inside space-y-2">
               {copy.installSteps.map((step) => (
