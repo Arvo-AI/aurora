@@ -5,15 +5,26 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Blueprint, jsonify, request
 
 from connectors.atlassian_auth.auth import refresh_access_token
 from connectors.jira_connector.client import JiraClient
 from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
+from routes.jira.field_options import status_names, unique_names
+from routes.jira.rca_filters import (
+    PROJECT_KEY_RE as _PROJECT_KEY_RE,
+    decide_webhook,
+    normalize_rca_rules,
+)
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_user_preference, resolve_org_id, set_rls_context
+from utils.auth.stateless_auth import (
+    get_org_id_from_request,
+    get_user_preference,
+    resolve_org_id,
+    set_rls_context,
+)
 from utils.db.db_utils import connect_to_db_as_user
 from utils.web.public_url import external_backend_url
 from utils.auth.token_management import get_token_data, store_tokens_in_db
@@ -267,7 +278,24 @@ def link_issues(user_id):
 
 JIRA_MODE_KEY = "jira_mode"
 JIRA_COMMENT_BACK_KEY = "jira_comment_back"
+JIRA_RCA_RULES_KEY = "jira_rca_rules"
+JIRA_RCA_MODE_KEY = "jira_rca_mode"
 VALID_MODES = ("full", "comment_only")
+RCA_MODES = ("filters", "auto")
+
+
+def get_jira_rca_rules(user_id: str, *, strict: bool = False) -> List[Dict[str, Any]]:
+    """Stored automatic-RCA rules. A missing or corrupt value triggers nothing."""
+    stored = get_user_preference(user_id, JIRA_RCA_RULES_KEY, default=[], strict=strict)
+    if not isinstance(stored, list):
+        return []
+    return stored
+
+
+def get_jira_rca_mode(user_id: str, *, strict: bool = False) -> str:
+    """'auto' only when chosen. Unset or unknown values stay on the saved filters."""
+    stored = get_user_preference(user_id, JIRA_RCA_MODE_KEY, default="filters", strict=strict)
+    return "auto" if stored == "auto" else "filters"
 
 
 def jira_comment_back_enabled(user_id: str) -> bool:
@@ -281,9 +309,22 @@ def _store_jira_settings(
     *,
     mode: Optional[str],
     comment_back: Optional[bool],
+    rca_rules: Optional[List[Dict[str, Any]]] = None,
+    rca_mode: Optional[str] = None,
 ) -> bool:
     """Write all supplied Jira prefs in one transaction."""
-    if mode is None and comment_back is None:
+    # None means "not sent". An empty rule list is a real value: it turns automatic RCA off.
+    updates = [
+        (key, value)
+        for key, value in (
+            (JIRA_MODE_KEY, mode),
+            (JIRA_COMMENT_BACK_KEY, comment_back),
+            (JIRA_RCA_RULES_KEY, rca_rules),
+            (JIRA_RCA_MODE_KEY, rca_mode),
+        )
+        if value is not None
+    ]
+    if not updates:
         return True
 
     conn = None
@@ -295,9 +336,7 @@ def _store_jira_settings(
         if not org_id:
             return False
 
-        for key, value in ((JIRA_MODE_KEY, mode), (JIRA_COMMENT_BACK_KEY, comment_back)):
-            if value is None:
-                continue
+        for key, value in updates:
             cursor.execute(
                 "DELETE FROM user_preferences WHERE org_id = %s AND preference_key = %s",
                 (org_id, key),
@@ -325,7 +364,12 @@ def _store_jira_settings(
 
 def _settings_payload(user_id: str) -> Dict[str, Any]:
     mode = get_user_preference(user_id, JIRA_MODE_KEY, default="comment_only")
-    return {"jiraMode": mode, "commentBack": jira_comment_back_enabled(user_id)}
+    return {
+        "jiraMode": mode,
+        "commentBack": jira_comment_back_enabled(user_id),
+        "rcaRules": get_jira_rca_rules(user_id),
+        "rcaMode": get_jira_rca_mode(user_id),
+    }
 
 
 @jira_bp.route("/settings", methods=["GET"])
@@ -338,25 +382,51 @@ def get_settings(user_id):
 # PUT /jira/settings
 # ------------------------------------------------------------------
 
+def _parse_settings_update(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Validated settings to store, or an error message for a 400."""
+    mode = data.get("jiraMode")
+    comment_back = data.get("commentBack")
+    rca_mode = data.get("rcaMode")
+
+    # Each control saves on its own — mode, comment-back, RCA rules, and RCA mode.
+    if mode is None and comment_back is None and "rcaRules" not in data and rca_mode is None:
+        return {}, "jiraMode, commentBack, rcaRules, or rcaMode is required"
+    if mode is not None and mode not in VALID_MODES:
+        return {}, f"jiraMode must be one of: {', '.join(VALID_MODES)}"
+    if comment_back is not None and not isinstance(comment_back, bool):
+        return {}, "commentBack must be a boolean"
+    if rca_mode is not None and rca_mode not in RCA_MODES:
+        return {}, f"rcaMode must be one of: {', '.join(RCA_MODES)}"
+
+    rca_rules = None
+    if "rcaRules" in data:
+        rca_rules, rules_error = normalize_rca_rules(data.get("rcaRules"))
+        if rules_error:
+            return {}, rules_error
+
+    return {
+        "mode": mode,
+        "comment_back": comment_back,
+        "rca_rules": rca_rules,
+        "rca_mode": rca_mode,
+    }, None
+
+
 @jira_bp.route("/settings", methods=["PUT"])
 @require_permission("connectors", "write")
 def update_settings(user_id):
     data = request.get_json(force=True, silent=True) or {}
-    mode = data.get("jiraMode")
-    comment_back = data.get("commentBack")
-
-    # Either field can be saved on its own — the mode picker and the
-    # comment-back switch are separate controls.
-    if mode is None and comment_back is None:
-        return jsonify({"error": "jiraMode or commentBack is required"}), 400
-
-    if mode is not None and mode not in VALID_MODES:
-        return jsonify({"error": f"jiraMode must be one of: {', '.join(VALID_MODES)}"}), 400
-    if comment_back is not None and not isinstance(comment_back, bool):
-        return jsonify({"error": "commentBack must be a boolean"}), 400
-
-    if not _store_jira_settings(user_id, mode=mode, comment_back=comment_back):
+    settings, error = _parse_settings_update(data)
+    if error:
+        return jsonify({"error": error}), 400
+    if not _store_jira_settings(user_id, **settings):
         return jsonify({"error": "Failed to store Jira settings"}), 500
+
+    # Auto needs its policy memory; create it now so the card shows it right away.
+    if settings["rca_mode"] == "auto":
+        from services.memory.jira_memory import seed_jira_memory
+        # Request org, not the TTL-cached users.org_id, so a just-changed org is seeded correctly.
+        seed_jira_memory(user_id, org_id=get_org_id_from_request())
 
     # Jira prefs are org-scoped — invalidate every member's cached tool list.
     from chat.backend.agent.tools.mcp_tools import (
@@ -371,10 +441,12 @@ def update_settings(user_id):
         clear_credentials_cache(user_id)
 
     logger.info(
-        "[JIRA] Updated settings for user %s: jiraMode=%s commentBack=%s",
+        "[JIRA] Updated settings for user %s: jiraMode=%s commentBack=%s rcaRules=%s rcaMode=%s",
         sanitize(user_id),
-        sanitize(mode),
-        sanitize(comment_back),
+        sanitize(settings["mode"]),
+        sanitize(settings["comment_back"]),
+        sanitize(len(settings["rca_rules"]) if settings["rca_rules"] is not None else None),
+        sanitize(settings["rca_mode"]),
     )
 
     payload = _settings_payload(user_id)
@@ -449,8 +521,105 @@ def disconnect(user_id):
 
 
 # ------------------------------------------------------------------
+# GET /jira/projects — projects the connected account can see
+# ------------------------------------------------------------------
+
+@jira_bp.route("/projects", methods=["GET"])
+@require_permission("connectors", "read")
+def list_jira_projects(user_id):
+    """Project keys for the automatic-RCA picker."""
+    client, creds, error = _get_jira_client(user_id)
+    if error:
+        return jsonify({"error": error}), 404 if not creds else 400
+
+    try:
+        projects = _with_refresh(user_id, creds, client, lambda c: c.list_projects())
+    except Exception:
+        logger.exception("[JIRA] List projects failed for user %s", sanitize(user_id))
+        return jsonify({"error": "Failed to list Jira projects"}), 502
+
+    slim = []
+    for project in projects or []:
+        key = str(project.get("key") or "").strip()
+        # A project without a key cannot be selected or matched later.
+        if not key:
+            continue
+        slim.append({"key": key, "name": project.get("name") or key})
+    return jsonify({"projects": slim})
+
+
+# ------------------------------------------------------------------
+# GET /jira/projects/<project_key>/field-options
+# ------------------------------------------------------------------
+
+_FIELD_OPTION_LOADERS = (
+    # Jira's own order, so the picker matches the project's issue type scheme.
+    ("issueTypes", lambda client, project_key: unique_names(client.get_issue_types(project_key), sort=False)),
+    ("priorities", lambda client, project_key: unique_names(client.list_priorities(project_key))),
+    ("components", lambda client, project_key: unique_names(client.list_components(project_key))),
+    ("statuses", lambda client, project_key: status_names(client.list_statuses(project_key))),
+)
+
+
+@jira_bp.route("/projects/<project_key>/field-options", methods=["GET"])
+@require_permission("connectors", "read")
+def list_project_field_options(user_id, project_key):
+    """Ticket types, priorities, labels, components, and statuses for one project's filter form."""
+    if not _PROJECT_KEY_RE.fullmatch(project_key or ""):
+        return jsonify({"error": "projectKey must look like a Jira project key"}), 400
+
+    client, creds, error = _get_jira_client(user_id)
+    if error:
+        return jsonify({"error": error}), 404 if not creds else 400
+
+    payload = {"projectKey": project_key, "labelsTruncated": False, "errors": []}
+    for name, load in _FIELD_OPTION_LOADERS:
+        try:
+            payload[name] = _with_refresh(
+                user_id, creds, client, lambda c, load=load: load(c, project_key),
+            )
+        except Exception:
+            # One catalog failing still leaves the other pickers usable.
+            logger.exception("[JIRA] List %s failed for user %s", name, sanitize(user_id))
+            payload[name] = []
+            payload["errors"].append(name)
+
+    try:
+        labels, truncated = _with_refresh(user_id, creds, client, lambda c: c.list_labels())
+        payload["labels"] = unique_names(labels)
+        payload["labelsTruncated"] = truncated
+    except Exception:
+        logger.exception("[JIRA] List labels failed for user %s", sanitize(user_id))
+        payload["labels"] = []
+        payload["errors"].append("labels")
+
+    return jsonify(payload)
+
+
+# ------------------------------------------------------------------
 # POST /jira/webhook/<user_id> — Jira automation webhook receiver
 # ------------------------------------------------------------------
+
+def _read_rca_settings(user_id: str) -> Tuple[str, List[Dict[str, Any]]]:
+    """Strict reads: a failure raises instead of looking like "no rules"."""
+    rca_mode = get_jira_rca_mode(user_id, strict=True)
+    # Auto ignores the filters, so it doesn't need them.
+    if rca_mode == "auto":
+        return rca_mode, []
+    return rca_mode, get_jira_rca_rules(user_id, strict=True)
+
+
+def _enqueue_webhook(decision: Dict[str, Any], payload: Dict[str, Any], user_id: str) -> None:
+    from routes.jira.tasks import judge_jira_ticket, process_jira_webhook
+
+    # The judge is an LLM call; run it off the request so Jira gets a fast answer.
+    if decision["action"] == "judge":
+        judge_jira_ticket.delay(payload=payload, user_id=user_id)
+        return
+    # JQL is confirmed in the task. A Jira round trip here would turn a slow search into a 503.
+    jql_clauses = (decision.get("jql") or []) if decision["action"] == "jql" else None
+    process_jira_webhook.delay(payload=payload, user_id=user_id, jql_clauses=jql_clauses)
+
 
 @jira_bp.route("/webhook/<user_id>", methods=["POST"])
 def webhook(user_id: str):
@@ -467,7 +636,8 @@ def webhook(user_id: str):
     # Without this, any POST to /jira/webhook/<user_id> would enqueue Celery
     # work and dispatch an LLM-backed RCA for any (guessable) user_id — the
     # same connector-existence check the PagerDuty/OpsGenie handlers enforce.
-    if not get_token_data(user_id, "jira"):
+    creds = get_token_data(user_id, "jira")
+    if not creds:
         logger.warning("[JIRA][WEBHOOK] Webhook for user %s with no Jira connection", sanitize(user_id))
         return jsonify({"error": "Jira not connected for this user"}), 404
 
@@ -480,14 +650,32 @@ def webhook(user_id: str):
     if not issue:
         return jsonify({"status": "ignored", "reason": "no issue in payload"}), 200
 
-    issue_type = (issue.get("fields", {}).get("issuetype") or {}).get("name", "").lower()
-    if issue_type not in ("bug", "incident", "problem", "defect", "production issue"):
-        logger.info("[JIRA][WEBHOOK] Ignored issue type '%s' (key=%s)", sanitize(issue_type), sanitize(issue.get("key", "?")))
-        return jsonify({"status": "ignored", "reason": "issue type not configured for RCA"}), 200
-
-    from routes.jira.tasks import process_jira_webhook
+    # Automatic RCA is opt-in. Asking Aurora to investigate a named ticket
+    # does not go through this path.
     try:
-        process_jira_webhook.delay(payload=payload, user_id=user_id)
+        rca_mode, rules = _read_rca_settings(user_id)
+    except Exception:
+        # A failed read must not look like "no rules" — Jira will retry a 503.
+        logger.exception("[JIRA][WEBHOOK] Could not read RCA settings for user %s", sanitize(user_id))
+        return jsonify({"status": "error", "reason": "could not read RCA settings"}), 503
+
+    decision = decide_webhook(payload, rules, rca_mode)
+    action = decision["action"]
+    scope = decision.get("scope") or {}
+
+    # A comment, a ticket that misses every filter, or anything else that isn't an investigation.
+    if action not in ("rca", "jql", "judge"):
+        logger.info(
+            "[JIRA][WEBHOOK] Ignored %s (project=%s type=%s reason=%s)",
+            sanitize(issue.get("key", "?")),
+            sanitize(scope.get("projectKey") or "?"),
+            sanitize(scope.get("issueType") or "?"),
+            sanitize(decision.get("reason") or "filters"),
+        )
+        return jsonify({"status": "ignored", "reason": decision.get("reason") or "filters"}), 200
+
+    try:
+        _enqueue_webhook(decision, payload, user_id)
     except Exception:
         # Broker/registration failure is on our side, not the sender's — return
         # 503 so Jira retries rather than treating it as a malformed webhook (500).
@@ -515,6 +703,8 @@ def get_webhook_url(user_id):
     # Ngrok replaces localhost; otherwise prefer an explicit public API URL.
     base_url = tunneled if tunneled != backend_url else (public_url or backend_url)
     url = f"{base_url}/jira/webhook/{user_id}"
-    # These are the recommended Jira events to subscribe the webhook to — not a
-    # server-enforced allowlist. The handler filters by issue type, not event name.
-    return jsonify({"webhook_url": url, "recommended_events": ["jira:issue_created", "jira:issue_updated"]})
+    # Recommended events, not an allowlist. Creates and updates start RCA when a filter matches.
+    return jsonify({
+        "webhook_url": url,
+        "recommended_events": ["jira:issue_created", "jira:issue_updated"],
+    })
