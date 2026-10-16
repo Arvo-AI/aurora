@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-10-16
+
+### Added
+- Jira: automatic RCA starts only for a saved project and ticket type. Until a
+  rule is saved, webhooks are ignored, including the previous hardcoded types
+  (Bug, Incident, Problem, Defect, Production Issue). Rules are edited on the
+  Jira connector page. Asking Aurora to investigate a specific ticket is
+  unchanged, and commenting back stays a separate switch.
+
+### Fixed
+- SSH: managed SSH keys are visible to the rest of the org. List, rename, and
+  private-key load follow the same org check as manual VMs, and terminal
+  sessions mount those keys. Private-key load stays limited to `aurora_ssh`
+  rows.
+- Slack: replies mention the asker with Slack's `<@USERID>` token, so the
+  mention notifies them. Aurora's own mention is stripped from the question;
+  other people's mentions are kept.
+- SSO: SAML login stores the member's first and last name. A `name` claim that
+  is only the given name no longer hides the surname. A later login fills in a
+  surname only when the stored name is that given name; any other stored name
+  is left alone.
+
+## [1.5.8] - 2026-10-15
+
+### Added
+- Models: Gemini 4 Argon (`gemini-4-argon`) in the Google and Vertex pickers.
+  Introductory price is $2/$10 per 1M tokens through November 30, 2026.
+- GCP: Ask-mode and agent investigations can query BigQuery. The read-only
+  identity gets `bigquery.dataViewer` and `bigquery.jobUser` (existing OAuth
+  connections are synced once), and `bq` receives the access token and project
+  at exec time.
+
+### Fixed
+- GCP: `bq query` SELECTs are no longer a false-positive HITL when the org
+  already allows `bq`. The command is gated as `bq`, not `gcloud bq`. Write
+  SQL and mutating `bq` subcommands stay denied, and a token on the command
+  is not logged.
+
+## [1.5.7] - 2026-10-13
+
+### Fixed
+- Org: removing a member who had saved onboarding selections failed, because
+  `onboarding_selections` has no `ON DELETE CASCADE`. Those rows are deleted
+  with the other foreign-key cleanup before the user is removed.
+- Actions and connectors: deleting a user left scheduled actions pointing at a
+  missing owner, so later runs failed at session creation, and removed the
+  connectors they had connected, so the rest of the org lost them. Both are
+  reassigned to the oldest other admin before the user row is removed. A
+  connector that admin already has is dropped instead of duplicated. The
+  scheduler retries the same reassignment for owners who are already gone.
+- Azure: `cloud_exec` prefixed every command with `az` before the org
+  allowlist, so `kubectl logs` and `kubectl top` were checked as `az kubectl
+  ...` and rejected even when the Observability Only template allows them.
+  Standalone CLIs (`kubectl`, `oc`, `helm`, `terraform`, `gsutil`, `bq`) are
+  now gated as written. Provider subcommands are still prefixed.
+
 ## [1.5.6] - 2026-10-08
 
 ### Added

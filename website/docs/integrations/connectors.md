@@ -49,7 +49,13 @@ gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
   --member="serviceAccount:$SA" --role="roles/container.viewer"
 gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
   --member="serviceAccount:$SA" --role="roles/compute.viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/bigquery.dataViewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/bigquery.jobUser"
 ```
+
+`roles/viewer` lists BigQuery datasets but cannot run queries. `bigquery.dataViewer` reads table data; `bigquery.jobUser` runs query jobs. Together they allow read-only `SELECT` investigations (no DML/DDL).
 
 For full investigation access (running commands in sandboxed pods, checking deployments, etc.), add `roles/editor` or the specific roles your team needs.
 

@@ -143,6 +143,7 @@ _CURRENT_GENERATION = {
     "openai/gpt-5.6-terra",
     "openai/gpt-5.6-luna",
     "google/gemini-3.8-flash",
+    "google/gemini-4-argon",
 }
 
 
@@ -205,6 +206,7 @@ _PUBLISHED_CUTOFFS = {
     "anthropic/claude-opus-4-5": (2025, 5, 1),
     "anthropic/claude-haiku-4.5": (2025, 2, 1),
     "anthropic/claude-sonnet-4-5": (2025, 1, 1),
+    "google/gemini-4-argon": (2026, 3, 1),
     "google/gemini-3.8-flash": (2026, 3, 1),
     "google/gemini-3.6-flash": (2026, 3, 1),
     "google/gemini-3.5-flash-lite": (2026, 3, 1),

@@ -1,6 +1,7 @@
 import logging
 import json
 import base64
+import time
 import urllib.parse
 from celery_config import celery_app
 from .auth_compatibility import (
@@ -12,8 +13,17 @@ from .billing import has_active_billing
 from .gcp.projects import select_best_project
 from .gcp.apis import enable_single_api
 from utils.auth.stateless_auth import get_credentials_from_db, get_user_preference, store_user_preference
-from connectors.gcp_connector.auth.service_accounts import generate_sa_access_token
-import time
+from connectors.gcp_connector.auth.service_accounts import (
+    SYNC_GCP_READONLY_ROLES_TASK,
+    generate_sa_access_token,
+    sync_read_only_roles,
+)
+
+@celery_app.task(name=SYNC_GCP_READONLY_ROLES_TASK)
+def sync_gcp_readonly_roles(user_id):
+    """Bring an existing OAuth connect up to READ_ONLY_PROJECT_ROLES."""
+    sync_read_only_roles(user_id)
+
 
 @celery_app.task(bind=True)
 def gcp_post_auth_setup_task(self, user_id, selected_project_ids=None):

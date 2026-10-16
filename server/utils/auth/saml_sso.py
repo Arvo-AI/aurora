@@ -42,8 +42,25 @@ _NAME_ATTRS = (
     "name",
     "urn:oid:2.16.840.1.113730.3.1.241",
 )
-_GIVEN_ATTRS = ("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname", "firstName", "givenName")
-_SURNAME_ATTRS = ("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname", "lastName", "sn")
+_GIVEN_ATTRS = (
+    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname",
+    "urn:oid:2.5.4.42",
+    "givenName",
+    "firstName",
+    "first_name",
+    "given_name",
+)
+_SURNAME_ATTRS = (
+    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname",
+    "urn:oid:2.5.4.4",
+    "surname",
+    "sn",
+    "lastName",
+    "last_name",
+    "familyName",
+    "family_name",
+)
+_NAME_MAX = 255  # users.name is VARCHAR(255)
 
 
 class SsoError(Exception):
@@ -156,34 +173,114 @@ def request_data(flask_request) -> dict:
     }
 
 
-def _first(attrs: dict, names: tuple) -> str:
-    for name in names:
-        values = attrs.get(name) or []
-        for value in values:
-            if isinstance(value, str) and value.strip():
-                return value.strip()
+def _attr_sources(auth) -> tuple:
+    # Name is the claim URI; FriendlyName is the short form some IdPs send alone.
+    raw = [auth.get_attributes() or {}]
+    friendly = getattr(auth, "get_friendlyname_attributes", None)
+    if callable(friendly):
+        raw.append(friendly() or {})
+    # Fold once per source. Group claims are large, and every lookup shares this.
+    return tuple(_index_attrs(source) for source in raw)
+
+
+def _index_attrs(attrs) -> tuple[dict, dict]:
+    exact = attrs if isinstance(attrs, dict) else {}
+    folded: dict = {}
+    for key, values in exact.items():
+        # Claim names are strings; anything else isn't a key we look up.
+        if not isinstance(key, str):
+            continue
+        # Merge every casing so an empty first key cannot hide a later value.
+        bucket = folded.setdefault(key.casefold(), [])
+        if isinstance(values, list):
+            bucket.extend(values)
+        # A lone string must stay one value, not be split into characters.
+        elif values is not None:
+            bucket.append(values)
+    return exact, folded
+
+
+def _first_value(values) -> str:
+    for value in values or []:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
     return ""
+
+
+def _first(sources: tuple, names: tuple) -> str:
+    for exact, folded in sources:
+        for name in names:
+            # The spelled key beats a case-only twin, in preference-list order.
+            found = _first_value(exact.get(name))
+            if found:
+                return found
+            found = _first_value(folded.get(name.casefold()))
+            if found:
+                return found
+    return ""
+
+
+def _has_token(text: str, token: str) -> bool:
+    # Surnames can be several words ("van Dyke"); match that whole sequence.
+    parts = [part.casefold() for part in text.split()]
+    words = [word.casefold() for word in token.split()]
+    if not words or len(words) > len(parts):
+        return False
+    width = len(words)
+    return any(parts[i:i + width] == words for i in range(len(parts) - width + 1))
+
+
+def _fit_name(name: str) -> str:
+    return name[:_NAME_MAX].rstrip()
+
+
+def _join_name(given: str, surname: str, display: str) -> str:
+    # A display name that already includes the surname keeps middle names.
+    if surname and _has_token(display, surname):
+        return display
+    # givenName is sometimes already "First Last"; don't append the surname twice.
+    if surname and _has_token(given, surname):
+        return given
+    # Both parts are present — `name` is often only the given name.
+    if given and surname:
+        return f"{given} {surname}"
+    # Only a one-word display is a bare first name. A longer one is already
+    # the full name; punctuation and accents make token matching unreliable.
+    if (
+        display and surname and len(display.split()) == 1
+        and display.casefold() != surname.casefold()
+    ):
+        return f"{display} {surname}"
+    return display or given or surname
+
+
+def _person_name(sources: tuple) -> str | None:
+    """First and last name when the IdP sent both; otherwise the display name."""
+    given = _first(sources, _GIVEN_ATTRS)
+    surname = _first(sources, _SURNAME_ATTRS)
+    display = _first(sources, _NAME_ATTRS)
+    # Entra's `name` claim is the UPN, not a personal name.
+    if "@" in display:
+        display = ""
+    name = _join_name(given, surname, display)
+    return _fit_name(name) if name else None
 
 
 def extract_identity(auth) -> dict:
     """Pull subject/email/name out of a validated ``OneLogin_Saml2_Auth``."""
-    attrs = auth.get_attributes() or {}
+    sources = _attr_sources(auth)
     name_id = (auth.get_nameid() or "").strip()
 
     # Entra's NameID defaults to the UPN, which can be renamed; the object ID
     # attribute is immutable, so prefer it as the account key.
-    subject = _first(attrs, _SUBJECT_ATTRS) or name_id
+    subject = _first(sources, _SUBJECT_ATTRS) or name_id
 
-    email = normalize_email(_first(attrs, _EMAIL_ATTRS))
+    email = normalize_email(_first(sources, _EMAIL_ATTRS))
     # Many IdPs send the email only as the NameID.
     if not email and "@" in name_id:
         email = normalize_email(name_id)
 
-    name = _first(attrs, _NAME_ATTRS)
-    if not name:
-        name = " ".join(p for p in (_first(attrs, _GIVEN_ATTRS), _first(attrs, _SURNAME_ATTRS)) if p)
-
-    return {"subject": subject, "email": email, "name": name or None}
+    return {"subject": subject, "email": email, "name": _person_name(sources)}
 
 
 def normalize_domain(domain) -> str:
@@ -276,6 +373,26 @@ def burn_request_id(cur, request_id: str, org_id: str) -> bool:
     return cur.fetchone() is not None
 
 
+def _store_display_name(cur, user_id: str, name: str | None) -> None:
+    # An assertion with no name must not wipe the one already stored.
+    if not name:
+        return
+    # One round-trip, and no read/write window. Fill a blank, or extend a
+    # given-name-only value ("Ada" -> "Ada Lovelace"). Any other stored name
+    # — an invite, a user edit — stays put.
+    cur.execute(
+        """UPDATE users
+              SET name = %s
+            WHERE id = %s
+              AND COALESCE(name, '') <> %s
+              AND (
+                    COALESCE(name, '') = ''
+                    OR starts_with(%s, COALESCE(name, '') || ' ')
+                  )""",
+        (name, user_id, name, name),
+    )
+
+
 def resolve_user(
     cur, org_id: str, identity: dict, default_role: str, _retried: bool = False,
 ) -> tuple[str, bool]:
@@ -306,6 +423,8 @@ def resolve_user(
     )
     row = cur.fetchone()
     if row:
+        # Later logins correct a name that was stored as only the given name.
+        _store_display_name(cur, row[0], identity.get("name"))
         return row[0], False
 
     cur.execute(
@@ -331,6 +450,7 @@ def resolve_user(
                 WHERE id = %s""",
             (subject, user_id),
         )
+        # Invited members already have a name; don't replace it with the IdP's.
         return user_id, False
 
     # Address belongs to another org's account; never move people across orgs.

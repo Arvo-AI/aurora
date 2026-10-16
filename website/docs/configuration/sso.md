@@ -35,7 +35,7 @@ Assertions must be signed (the default in Entra ID, Okta and Google Workspace). 
 
 - **Email**: the `emailaddress` / `email` / `mail` attribute, or the NameID when it's an email.
 - **User ID**: Entra's `objectidentifier` claim when present (immutable), otherwise the NameID.
-- **Name**: `displayname` / `name`, or given name + surname.
+- **Name**: given name and surname when both are present; otherwise `displayname` / `name`. A `name` claim that is only the given name does not hide the surname. A name already stored in full is not replaced on later logins.
 
 In Entra ID, assign the users or groups who should have access to the application.
 

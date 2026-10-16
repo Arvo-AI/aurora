@@ -628,6 +628,11 @@ export function parseSlackCommand(toolName: string, toolInput: string): string {
     return "Slack: List channels"
   }
 
+  if (toolName === "list_slack_users") {
+    const name = typeof args.name === "string" ? args.name.trim() : ""
+    return name ? `Slack: Find users (${name})` : "Slack: Find users"
+  }
+
   if (toolName === "get_channel_history") {
     const parts: string[] = []
     if (args.channel_id) parts.push(`#${args.channel_id}`)

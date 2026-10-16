@@ -18,6 +18,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from services.memory import (
+    JIRA_MEMORY_CATEGORY,
+    JIRA_MEMORY_TITLE,
     PROTECTED_ENTRIES,
     SLACK_MEMORY_CATEGORY,
     SLACK_MEMORY_TITLE,
@@ -44,6 +46,12 @@ def test_slack_memory_stays_user_writable():
     assert (SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE) in PROTECTED_ENTRIES
     assert SLACK_MEMORY_CATEGORY in USER_WRITABLE_CATEGORIES
     assert SLACK_MEMORY_CATEGORY != SYSTEM_CATEGORY
+
+
+def test_jira_rca_memory_is_protected_and_user_writable():
+    """The judge and Jira-sourced RCAs pin to this pair, same as Slack."""
+    assert (JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE) in PROTECTED_ENTRIES
+    assert JIRA_MEMORY_CATEGORY in USER_WRITABLE_CATEGORIES
 
 
 def test_agent_injector_key_matches_the_protected_identity():

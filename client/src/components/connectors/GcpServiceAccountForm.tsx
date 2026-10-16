@@ -290,7 +290,9 @@ export function GcpServiceAccountForm({ onSuccess }: GcpServiceAccountFormProps)
             viewer-tier roles on that project —{" "}
             <code className="font-mono">roles/viewer</code>,{" "}
             <code className="font-mono">roles/logging.viewer</code>,{" "}
-            <code className="font-mono">roles/monitoring.viewer</code>, etc. A
+            <code className="font-mono">roles/monitoring.viewer</code>,{" "}
+            <code className="font-mono">roles/bigquery.dataViewer</code>, and{" "}
+            <code className="font-mono">roles/bigquery.jobUser</code>. A
             folder-level binding doesn&apos;t reach sibling folders; bind at the
             org level (or each folder individually) to cover everything.
           </p>

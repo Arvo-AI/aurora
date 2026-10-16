@@ -24,6 +24,7 @@ For GCP:
 2. Get command help: cloud_exec('gcp', 'CATEGORY --help')
 3. Try beta commands: cloud_exec('gcp', 'beta CATEGORY --help')
 4. List services: cloud_exec('gcp', 'services list --available')
+5. BigQuery is the `bq` CLI, not a gcloud subcommand: cloud_exec('gcp', "bq query --nouse_legacy_sql 'SELECT ...'")
 
 For Azure:
 1. EXPLORE the az CLI: cloud_exec('azure', 'help | grep KEYWORD')

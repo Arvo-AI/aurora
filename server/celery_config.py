@@ -165,6 +165,7 @@ celery_app.conf.update(
         'routes.slack.slack_channel_metadata',
         'utils.repo_metadata',
         'services.actions.scheduler',
+        'services.connectors.heal',
     ],
     # Periodic task schedule
     beat_schedule={
@@ -195,6 +196,12 @@ celery_app.conf.update(
         'run-scheduled-actions': {
             'task': 'services.actions.scheduler.run_scheduled_actions',
             'schedule': 60.0,  # Check every minute
+        },
+        # Safety net for connector rows whose owner was removed outside the
+        # member-deletion path. Not on the minute action tick.
+        'reassign-orphaned-connectors': {
+            'task': 'services.connectors.heal.reassign_orphaned_connectors',
+            'schedule': 3600.0,
         },
         # Safety net so every Slack channel Aurora is a member of eventually gets
         # an LLM description (agent routing only offers described channels).
