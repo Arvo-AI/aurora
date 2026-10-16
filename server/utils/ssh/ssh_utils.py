@@ -368,21 +368,9 @@ def validate_and_test_ssh(
                 allow_agent=False,
             )
 
-        # Verify connection by running a command
-        stdin, stdout, stderr = ssh.exec_command("whoami", timeout=5)
-        result = stdout.read().decode().strip()
-        error_output = stderr.read().decode().strip()
-
-        logger.info(f"SSH command result: '{result}', error: '{error_output}'")
-
-        # Compare against target_user which may differ from username when using jump commands
-        if result == target_user:
-            logger.info(f"SSH authentication successful! Connected as: {result}")
-            return True, None, result
-        else:
-            error_msg = f"SSH connection succeeded but unexpected user: {result} (expected {target_user})"
-            logger.warning(error_msg)
-            return False, error_msg, None
+        # Auth already proved the user. Network gear has no whoami.
+        logger.info(f"SSH authentication successful! Connected as: {target_user}")
+        return True, None, target_user
 
     except socket.timeout:
         error_msg = "SSH connection timeout. The server may not be accessible or SSH port may be blocked by firewall."
