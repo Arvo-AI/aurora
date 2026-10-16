@@ -121,6 +121,20 @@ def test_page_read_uses_v2_when_v1_returns_401_for_a_granular_token():
     assert req.call_count == 2
 
 
+def test_v2_server_error_keeps_the_401_and_is_logged(caplog):
+    client = _cloud_client()
+    with caplog.at_level("WARNING"):
+        with patch.object(
+            _client.requests,
+            "request",
+            side_effect=[_response(401), _response(500)],
+        ):
+            with pytest.raises(requests.HTTPError) as exc:
+                client.get_page("1")
+    assert exc.value.response.status_code == 401
+    assert any("v2 probe failed" in rec.message for rec in caplog.records)
+
+
 def test_expired_classic_token_keeps_the_401_when_v2_also_rejects():
     client = _cloud_client()
     with patch.object(

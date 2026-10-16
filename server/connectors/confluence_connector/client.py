@@ -284,7 +284,17 @@ class ConfluenceClient:
                     return self._request_v2(
                         "GET", v2_path, params=v2_params, log_errors=False
                     )
-                except requests.RequestException:
+                except requests.RequestException as v2_exc:
+                    v2_response = getattr(v2_exc, "response", None)
+                    v2_status = v2_response.status_code if v2_response is not None else None
+                    # 401/403 just means this token has no v2 scope. Anything else
+                    # is a real failure, and the raised 401 would hide it.
+                    if v2_status not in (401, 403):
+                        logger.warning(
+                            "Confluence v2 probe failed: GET %s (%s)",
+                            v2_path,
+                            type(v2_exc).__name__,
+                        )
                     raise exc from None
             logger.exception(
                 "Confluence API request failed: GET %s (%s)",
