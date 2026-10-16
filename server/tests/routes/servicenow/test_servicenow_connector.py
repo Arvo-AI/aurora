@@ -158,12 +158,6 @@ def test_is_resolved(payload, resolved):
     assert tasks.is_resolved(payload) is resolved
 
 
-@pytest.mark.parametrize("priority, minimum, passes", [
-    (1, 1, True), (2, 1, False), (2, 2, True), (3, 2, False), (5, 5, True),
-    (None, 5, True), (None, 4, False), (None, 1, False),
-])
-def test_priority_passes(priority, minimum, passes):
-    assert tasks.priority_passes(priority, minimum) is passes
 
 
 def test_alert_title_and_service():

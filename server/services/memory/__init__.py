@@ -34,6 +34,14 @@ JIRA_MEMORY_TITLE = "Jira RCA"
 # Jira-triggered RCAs. The agent only receives this memory in Auto mode.
 JIRA_POLICY_SOURCES = frozenset({"jira"})
 
+# The ServiceNow automatic-RCA policy (one per org), the ITSM counterpart of the
+# Jira entry: the judge reads it in Auto mode and the team edits it in place.
+SERVICENOW_MEMORY_CATEGORY = "context"
+SERVICENOW_MEMORY_TITLE = "ServiceNow RCA"
+
+# ServiceNow-triggered RCAs. The agent only receives this memory in Auto mode.
+SERVICENOW_POLICY_SOURCES = frozenset({"servicenow"})
+
 # Well-known entries whose (category, title) pair IS their stable identity —
 # seeders, the agent's prompt injector, and route lookups all pin to it rather
 # than to an id. Users may freely edit their content and description, but renaming,
@@ -43,6 +51,7 @@ JIRA_POLICY_SOURCES = frozenset({"jira"})
 PROTECTED_ENTRIES = frozenset({
     (SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE),
     (JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE),
+    (SERVICENOW_MEMORY_CATEGORY, SERVICENOW_MEMORY_TITLE),
 })
 
 # All valid categories (used by memory_tool for validation)

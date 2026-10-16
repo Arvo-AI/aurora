@@ -53,6 +53,8 @@ class ModelConfig:
     )
     # Yes/no per Jira ticket. Unset uses the resolved RCA model, which is opus when cost optimization is off.
     JIRA_RCA_JUDGE_MODEL = os.getenv("JIRA_RCA_JUDGE_MODEL") or RCA_MODEL
+    # Yes/no per ServiceNow incident, same default as the Jira judge.
+    SERVICENOW_RCA_JUDGE_MODEL = os.getenv("SERVICENOW_RCA_JUDGE_MODEL") or RCA_MODEL
 
     # Multi-agent RCA orchestrator — required when ORCHESTRATOR_ENABLED=true.
     # No fallback to MAIN_MODEL/RCA_MODEL: must be set explicitly.

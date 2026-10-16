@@ -48,7 +48,9 @@ def app(monkeypatch):
     # route module holding a request proxy bound to stale context variables.
     # Re-import it so the view reads the same ``flask.request`` the test client sets.
     global routes
-    routes = importlib.reload(routes)
+    name = "routes.servicenow.servicenow_routes"
+    # tests/auth evicts routes.* from sys.modules; reload() then raises ImportError.
+    routes = importlib.reload(sys.modules[name]) if name in sys.modules else importlib.import_module(name)
     application = flask.Flask(__name__)
     application.register_blueprint(routes.servicenow_bp, url_prefix="/servicenow")
     monkeypatch.setattr(routes, "get_token_data", lambda user_id, provider: (
@@ -58,8 +60,14 @@ def app(monkeypatch):
     # The Celery stub installed by whichever test module loaded first may or may not
     # give the task a .delay attribute; set it either way.
     monkeypatch.setattr(routes.process_servicenow_event, "delay",
-                        lambda payload, user_id: enqueued.append((payload, user_id)), raising=False)
+                        lambda payload, user_id, decision=None: enqueued.append((payload, user_id, decision)),
+                        raising=False)
+    # Filters mode with one saved rule: priority 1 and 2 incidents are investigated.
+    settings = {"mode": "filters", "rules": [{"priorities": ["1", "2"]}]}
+    monkeypatch.setattr(routes, "get_rca_mode", lambda user_id, strict=False: settings["mode"])
+    monkeypatch.setattr(routes, "get_rca_rules", lambda user_id, strict=False: settings["rules"])
     application.config["ENQUEUED"] = enqueued
+    application.config["SETTINGS"] = settings
     return application
 
 
@@ -71,8 +79,44 @@ def _post(client, user=USER, headers=None, json=None):
 def test_accepts_with_header_secret_and_enqueues(app):
     resp = _post(app.test_client(), headers={"X-Aurora-Webhook-Secret": SECRET})
     assert resp.status_code == 200
-    assert resp.get_json() == {"received": True}
-    assert app.config["ENQUEUED"] == [({"sys_id": SYS_ID, "number": "INC0010001", "priority": "1", "event": "inserted"}, USER)]
+    assert resp.get_json() == {"received": True, "status": "accepted", "action": "rca"}
+    payload, user, decision = app.config["ENQUEUED"][0]
+    assert payload == {"sys_id": SYS_ID, "number": "INC0010001", "priority": "1", "event": "inserted"}
+    assert user == USER
+    assert decision["action"] == "rca"
+
+
+def test_new_incident_outside_the_filters_is_ignored_without_a_queue_entry(app):
+    body = {"sys_id": SYS_ID, "number": "INC0010002", "priority": "4", "event": "inserted"}
+    resp = _post(app.test_client(), headers={"X-Aurora-Webhook-Secret": SECRET}, json=body)
+    assert resp.status_code == 200
+    assert resp.get_json() == {"received": True, "status": "ignored", "reason": "filters"}
+    assert app.config["ENQUEUED"] == []
+
+
+def test_update_events_are_always_queued_so_known_incidents_stay_in_sync(app):
+    body = {"sys_id": SYS_ID, "number": "INC0010002", "priority": "4", "event": "updated", "state": "6"}
+    resp = _post(app.test_client(), headers={"X-Aurora-Webhook-Secret": SECRET}, json=body)
+    assert resp.status_code == 200
+    assert resp.get_json()["action"] == "ignore"
+    assert app.config["ENQUEUED"][0][2]["action"] == "ignore"
+
+
+def test_auto_mode_sends_new_incidents_to_the_judge(app):
+    app.config["SETTINGS"]["mode"] = "auto"
+    body = {"sys_id": SYS_ID, "number": "INC0010003", "priority": "5", "event": "inserted"}
+    resp = _post(app.test_client(), headers={"X-Aurora-Webhook-Secret": SECRET}, json=body)
+    assert resp.status_code == 200
+    assert app.config["ENQUEUED"][0][2]["action"] == "judge"
+
+
+def test_settings_read_failure_is_503_not_ignored(app, monkeypatch):
+    def _boom(user_id, strict=False):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(routes, "get_rca_mode", _boom)
+    resp = _post(app.test_client(), headers={"X-Aurora-Webhook-Secret": SECRET})
+    assert resp.status_code == 503
+    assert app.config["ENQUEUED"] == []
 
 
 def test_accepts_bearer_secret(app):

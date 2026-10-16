@@ -29,7 +29,7 @@ def secret_matches(stored: Optional[str], header_value: Optional[str], authoriza
 
 
 def business_rule_script() -> str:
-    """The After-Insert Business Rule the customer pastes into ServiceNow.
+    """The After Insert/Update Business Rule the customer pastes into ServiceNow.
 
     The URL and secret live in two system properties so the script itself
     holds no secret and survives copy/paste between instances.
@@ -54,10 +54,15 @@ def business_rule_script() -> str:
     state: current.getValue('state'),
     state_label: current.getDisplayValue('state'),
     category: current.getDisplayValue('category'),
+    subcategory: current.getDisplayValue('subcategory'),
     assignment_group: current.getDisplayValue('assignment_group'),
+    assigned_to: current.getDisplayValue('assigned_to'),
     cmdb_ci: current.getDisplayValue('cmdb_ci'),
     caller: current.getDisplayValue('caller_id'),
     opened_at: current.getValue('opened_at'),
+    resolved_at: current.getValue('resolved_at'),
+    close_code: current.getValue('close_code'),
+    close_notes: current.getValue('close_notes'),
     sys_updated_on: current.getValue('sys_updated_on')
   };
   try {

@@ -1285,6 +1285,16 @@ def update_incident(user_id, incident_id: str):
                             "[INCIDENTS] on-resolved actions failed for %s",
                             sanitize(incident_id),
                         )
+                    # ServiceNow-sourced incidents: mirror the resolution onto the
+                    # ServiceNow record when the org opted in (never raises).
+                    try:
+                        from utils.notifications.servicenow_notification_service import sync_servicenow_resolution
+                        sync_servicenow_resolution(user_id, incident_id)
+                    except Exception:
+                        logger.warning(
+                            "[INCIDENTS] ServiceNow resolution sync failed for %s",
+                            sanitize(incident_id),
+                        )
 
                 logger.info(
                     "[INCIDENTS] Updated incident %s for user %s", sanitize(incident_id), sanitize(user_id)

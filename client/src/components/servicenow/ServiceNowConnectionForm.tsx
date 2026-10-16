@@ -167,8 +167,9 @@ export function ServiceNowConnectionForm({ onConnect, loading }: ServiceNowConne
           </div>
 
           <p className="text-xs text-muted-foreground">
-            The account needs read access to the incident table and permission to add work notes. Credentials are
-            stored securely in Vault.
+            Use a dedicated integration account with the itil role. On Yokohama and Zurich, basic auth also needs the
+            snc_basic_auth_api_access role (or &quot;Web service access only&quot;), or use OAuth client credentials.
+            Credentials are stored securely in Vault.
           </p>
 
           <Button type="submit" className="w-full" disabled={!canSubmit}>

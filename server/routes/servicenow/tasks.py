@@ -1,9 +1,11 @@
 """Background Celery task for ServiceNow incident webhooks.
 
 A Business Rule on the customer's Incident table POSTs the record to
-``/servicenow/webhook/<user_id>``; this task stores the raw event, creates
-(or updates) the Aurora incident and starts the RCA pipeline, the same flow
-as the Jira and PagerDuty connectors.
+``/servicenow/webhook/<user_id>``. The route decides what a new incident
+deserves (RCA, a saved-query check, the Auto-mode judge, or nothing) and this
+task carries it out: it stores the raw event, creates the Aurora incident and
+starts the RCA pipeline, the same flow as the Jira and PagerDuty connectors.
+An update to an incident Aurora already tracks only syncs its state.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
@@ -27,11 +29,19 @@ logger = logging.getLogger(__name__)
 SOURCE = "servicenow"
 _LOG = "[SERVICENOW][WEBHOOK]"
 
-# Per-user RCA preferences (read by the routes and by this task).
-PREF_RCA_ENABLED = "servicenow_rca_enabled"
-PREF_MIN_PRIORITY = "servicenow_min_priority"
+# Org-wide settings (read by the routes, this task, the agent tools and the
+# dispatcher). Same shape as the Jira connector: a trigger mode with saved
+# filters or the judge, a default-off write-back, and a write scope.
+PREF_RCA_MODE = "servicenow_rca_mode"
+PREF_RCA_RULES = "servicenow_rca_rules"
 PREF_WORK_NOTES = "servicenow_work_notes_enabled"
-DEFAULT_MIN_PRIORITY = 5  # 5 = investigate every priority
+PREF_WRITE_MODE = "servicenow_write_mode"
+PREF_RESOLVE_SYNC = "servicenow_resolve_sync"
+PREF_RESOLVE_CLOSE_CODE = "servicenow_resolve_close_code"
+RCA_MODES = ("filters", "auto")
+WRITE_MODES = ("notes_only", "full")
+DEFAULT_CLOSE_CODE = "Solution provided"
+MAX_CLOSE_CODE = 80
 
 _PRIORITY_RE = re.compile(r"[1-5]")
 # ServiceNow incident states: 1 New, 2 In Progress, 3 On Hold, 6 Resolved, 7 Closed, 8 Canceled
@@ -70,29 +80,63 @@ def is_resolved(payload: Dict[str, Any]) -> bool:
     return value in _RESOLVED_STATE_VALUES or label in _RESOLVED_STATE_LABELS
 
 
-def priority_passes(priority: Optional[int], min_priority: int) -> bool:
-    """RCA runs for priorities at or more urgent than ``min_priority`` (1 = most urgent).
+# ── settings ─────────────────────────────────────────────────────────
 
-    An incident with no priority is investigated only when everything is (5).
-    """
-    if priority is None:
-        return min_priority >= 5
-    return priority <= min_priority
+
+def get_rca_mode(user_id: str, *, strict: bool = False) -> str:
+    """'auto' only when chosen. Unset or unknown values stay on the saved filters."""
+    from utils.auth.stateless_auth import get_user_preference
+
+    stored = get_user_preference(user_id, PREF_RCA_MODE, default="filters", strict=strict)
+    return "auto" if stored == "auto" else "filters"
+
+
+def get_rca_rules(user_id: str, *, strict: bool = False) -> List[Dict[str, Any]]:
+    """Stored automatic-RCA rules. A missing or corrupt value triggers nothing."""
+    from utils.auth.stateless_auth import get_user_preference
+
+    stored = get_user_preference(user_id, PREF_RCA_RULES, default=[], strict=strict)
+    return stored if isinstance(stored, list) else []
+
+
+def work_notes_enabled(user_id: str) -> bool:
+    """True only when the org opted in to write-back. Anything but an explicit true stays off."""
+    from utils.auth.stateless_auth import get_user_preference
+
+    return get_user_preference(user_id, PREF_WORK_NOTES, default=False) is True
+
+
+def get_write_mode(user_id: str) -> str:
+    """'full' (create and update incidents) only when chosen; otherwise work notes only."""
+    from utils.auth.stateless_auth import get_user_preference
+
+    stored = get_user_preference(user_id, PREF_WRITE_MODE, default="notes_only")
+    return "full" if stored == "full" else "notes_only"
+
+
+def get_resolve_sync(user_id: str) -> Dict[str, Any]:
+    """Whether resolving an Aurora incident resolves the ServiceNow incident, and the close code used."""
+    from utils.auth.stateless_auth import get_user_preference
+
+    enabled = get_user_preference(user_id, PREF_RESOLVE_SYNC, default=False) is True
+    code = get_user_preference(user_id, PREF_RESOLVE_CLOSE_CODE, default=DEFAULT_CLOSE_CODE)
+    code = " ".join(str(code or "").split())[:MAX_CLOSE_CODE] or DEFAULT_CLOSE_CODE
+    return {"enabled": enabled, "closeCode": code}
 
 
 def get_rca_settings(user_id: str) -> Dict[str, Any]:
-    from utils.auth.stateless_auth import get_user_preference
-
-    enabled = get_user_preference(user_id, PREF_RCA_ENABLED, default=True)
-    min_priority = priority_number(
-        get_user_preference(user_id, PREF_MIN_PRIORITY, default=DEFAULT_MIN_PRIORITY)
-    ) or DEFAULT_MIN_PRIORITY
-    work_notes = get_user_preference(user_id, PREF_WORK_NOTES, default=False)
+    resolve = get_resolve_sync(user_id)
     return {
-        "rcaEnabled": enabled is not False,
-        "minPriority": min_priority,
-        "workNotesEnabled": work_notes is True,
+        "rcaMode": get_rca_mode(user_id),
+        "rcaRules": get_rca_rules(user_id),
+        "workNotesEnabled": work_notes_enabled(user_id),
+        "writeMode": get_write_mode(user_id),
+        "resolveSync": resolve["enabled"],
+        "resolveCloseCode": resolve["closeCode"],
     }
+
+
+# ── payload mapping ──────────────────────────────────────────────────
 
 
 def parse_servicenow_datetime(value: Any) -> Optional[datetime]:
@@ -127,6 +171,8 @@ def alert_service(payload: Dict[str, Any]) -> str:
 
 
 def build_alert_metadata(payload: Dict[str, Any], instance_url: Optional[str]) -> Dict[str, Any]:
+    from routes.servicenow.rca_filters import state_value
+
     sys_id = str(payload.get("sys_id") or "")
     meta: Dict[str, Any] = {
         "sysId": sys_id,
@@ -135,18 +181,25 @@ def build_alert_metadata(payload: Dict[str, Any], instance_url: Optional[str]) -
         "impact": payload.get("impact") or "",
         "urgency": payload.get("urgency") or "",
         "state": payload.get("state_label") or payload.get("state") or "",
+        "stateValue": state_value(payload),
         "category": payload.get("category") or "",
+        "subcategory": payload.get("subcategory") or "",
         "assignmentGroup": payload.get("assignment_group") or "",
+        "assignedTo": payload.get("assigned_to") or "",
         "cmdbCi": payload.get("cmdb_ci") or "",
         "caller": payload.get("caller") or "",
         "openedAt": payload.get("opened_at") or "",
+        "resolvedAt": payload.get("resolved_at") or "",
+        "updatedAt": payload.get("sys_updated_on") or "",
+        "closeCode": payload.get("close_code") or "",
         "event": str(payload.get("event") or "inserted").lower(),
     }
     if instance_url and sys_id:
         meta["incidentUrl"] = incident_url(instance_url, sys_id)
-    description = payload.get("description")
-    if description:
-        meta["description"] = str(description)[:2000]
+    for key, field in (("description", "description"), ("closeNotes", "close_notes")):
+        value = payload.get(field)
+        if value:
+            meta[key] = str(value)[:2000]
     return {key: value for key, value in meta.items() if value not in ("", None)}
 
 
@@ -166,9 +219,17 @@ def process_servicenow_event(
     self,
     payload: Dict[str, Any],
     user_id: Optional[str] = None,
+    decision: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Store the event, upsert the Aurora incident and dispatch the RCA."""
+    """Sync a known incident, or carry out the route's decision for a new one.
+
+    ``decision`` comes from ``routes.servicenow.rca_filters.decide_webhook``:
+    ``rca`` creates the incident and investigates, ``query`` first confirms a
+    saved encoded query against the instance, ``judge`` asks the Auto-mode
+    judge, ``ignore`` creates nothing. Absent means ``rca``.
+    """
     payload = payload or {}
+    decision = decision if isinstance(decision, dict) else {"action": "rca"}
     sys_id = str(payload.get("sys_id") or "")
     number = str(payload.get("number") or "")
 
@@ -200,80 +261,35 @@ def process_servicenow_event(
                     return
 
                 received_at = datetime.now(timezone.utc)
-                _store_event(cursor, conn, user_id, org_id, payload, event_kind, title, status, severity, received_at)
-
-                alert_fired_at = parse_servicenow_datetime(payload.get("opened_at"))
                 source_alert_id = source_alert_id_for(org_id, sys_id)
 
-                if event_kind == "inserted" and status != "resolved" and _try_correlate(
-                    cursor, conn, user_id, org_id, source_alert_id,
-                    title, service, severity, metadata, payload,
-                ):
+                existing = _find_existing(cursor, org_id, user_id, source_alert_id)
+                if existing:
+                    _store_event(cursor, conn, user_id, org_id, payload, event_kind, title, status, severity, received_at)
+                    _sync_existing(cursor, conn, user_id, org_id, existing, status, severity, metadata, number, event_kind)
+                    _notify_sse(user_id, org_id, existing["id"])
                     return
 
-                cursor.execute(
-                    """
-                    INSERT INTO incidents
-                    (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
-                     severity, status, started_at, alert_metadata, alert_fired_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
-                    SET updated_at = CURRENT_TIMESTAMP,
-                        alert_metadata = EXCLUDED.alert_metadata,
-                        status = CASE WHEN EXCLUDED.status = 'resolved' THEN 'resolved'
-                                      ELSE incidents.status END
-                    RETURNING id, (xmax = 0) AS inserted
-                    """,
-                    (
-                        user_id, org_id, SOURCE, source_alert_id, title, service,
-                        severity, status, received_at, json.dumps(metadata), alert_fired_at,
-                    ),
-                )
-                incident_row = cursor.fetchone()
-                incident_id = incident_row[0] if incident_row else None
-                incident_was_inserted = bool(incident_row[1]) if incident_row else False
-                conn.commit()
-
-                if not incident_id:
-                    logger.error("%s Failed to create incident for %s", _LOG, sanitize(number))
+                action = str(decision.get("action") or "rca")
+                if action == "ignore":
+                    logger.info("%s Ignored %s: outside the saved filters", _LOG, sanitize(number))
+                    return
+                if action == "query" and not _saved_query_matches(creds, sys_id, decision.get("query") or []):
+                    logger.info("%s Ignored %s: saved query did not match", _LOG, sanitize(number))
                     return
 
-                if not incident_was_inserted:
-                    # Update event (or duplicate delivery): the row is refreshed, the
-                    # RCA already ran or is running; never dispatch a second one.
-                    logger.info(
-                        "%s Updated existing incident %s for %s (event=%s, status=%s)",
-                        _LOG, incident_id, sanitize(number), event_kind, status,
+                def create() -> None:
+                    _create_and_investigate(
+                        cursor, conn, user_id, org_id, payload, event_kind, title, status,
+                        severity, service, metadata, received_at, source_alert_id, number, sys_id,
                     )
-                    _notify_sse(user_id, org_id, incident_id)
-                    return
 
-                _record_primary_alert(
-                    cursor, conn, user_id, org_id, incident_id, source_alert_id,
-                    title, service, severity, metadata,
-                )
-                _record_lifecycle_event(cursor, conn, user_id, org_id, incident_id)
-                logger.info("%s Created incident %s for %s", _LOG, incident_id, sanitize(number))
+                if action == "judge":
+                    from routes.servicenow.rca_judge import judge_and_route
 
-                _notify_and_summarize(
-                    user_id, org_id, incident_id, title, severity, service, payload, metadata,
-                )
-
-                if status == "resolved":
-                    logger.info("%s Incident %s arrived already resolved; no RCA", _LOG, incident_id)
+                    judge_and_route(payload, user_id, start_rca=create)
                     return
-                settings = get_rca_settings(user_id)
-                if not settings["rcaEnabled"]:
-                    logger.info("%s RCA disabled for user %s; skipping", _LOG, user_id)
-                    return
-                priority = incident_priority(payload)
-                if not priority_passes(priority, settings["minPriority"]):
-                    logger.info(
-                        "%s Priority %s below minimum %s; skipping RCA for %s",
-                        _LOG, priority, settings["minPriority"], sanitize(number),
-                    )
-                    return
-                _dispatch_rca(cursor, conn, user_id, incident_id, title, number, sys_id, payload)
+                create()
 
     except Exception as exc:
         logger.exception("%s Failed to process event", _LOG)
@@ -281,6 +297,117 @@ def process_servicenow_event(
 
 
 # ── pipeline steps ───────────────────────────────────────────────────
+
+
+def _find_existing(cursor, org_id: str, user_id: str, source_alert_id: int) -> Optional[Dict[str, Any]]:
+    cursor.execute(
+        """SELECT id, status FROM incidents
+           WHERE org_id = %s AND source_type = %s AND source_alert_id = %s AND user_id = %s""",
+        (org_id, SOURCE, source_alert_id, user_id),
+    )
+    row = cursor.fetchone()
+    return {"id": row[0], "status": row[1]} if row else None
+
+
+def _sync_existing(
+    cursor, conn, user_id: str, org_id: str, existing: Dict[str, Any], status: str,
+    severity: str, metadata: Dict[str, Any], number: str, event_kind: str,
+) -> None:
+    """Mirror the ServiceNow record onto the Aurora incident: fields, severity and state.
+
+    Resolved, Closed or Canceled in ServiceNow resolves the Aurora incident.
+    An incident ServiceNow reopens (it was resolved there and is active again)
+    goes back to analyzed or investigating. The RCA already ran or is running,
+    so nothing is dispatched.
+    """
+    incident_id = existing["id"]
+    cursor.execute(
+        """
+        UPDATE incidents
+        SET updated_at = CURRENT_TIMESTAMP,
+            alert_metadata = %s,
+            severity = %s,
+            resolved_at = CASE WHEN %s = 'resolved' AND resolved_at IS NULL
+                               THEN CURRENT_TIMESTAMP ELSE resolved_at END,
+            status = CASE
+                WHEN %s = 'resolved' THEN 'resolved'
+                WHEN status = 'resolved' AND (alert_metadata->>'stateValue') IN ('6', '7', '8')
+                    THEN CASE WHEN COALESCE(aurora_summary, '') <> '' THEN 'analyzed' ELSE 'investigating' END
+                ELSE status END
+        WHERE id = %s
+        RETURNING status
+        """,
+        (json.dumps(metadata), severity, status, status, incident_id),
+    )
+    row = cursor.fetchone()
+    conn.commit()
+    new_status = row[0] if row else existing["status"]
+    if new_status != existing["status"]:
+        event_type = "resolved" if new_status == "resolved" else "status_changed"
+        _record_lifecycle_event(cursor, conn, user_id, org_id, incident_id, event_type, new_status, existing["status"])
+    logger.info(
+        "%s Synced incident %s for %s (event=%s, status %s -> %s)",
+        _LOG, incident_id, sanitize(number), event_kind, existing["status"], new_status,
+    )
+
+
+def _saved_query_matches(creds: Dict[str, Any], sys_id: str, clauses: List[str]) -> bool:
+    """True when a saved clause still selects this incident. Transient errors propagate."""
+    from routes.servicenow.rca_filters import query_matches_incident
+    from routes.servicenow.servicenow_client import ServiceNowClient
+
+    if not creds.get("instance_url"):
+        raise RuntimeError("ServiceNow credentials unavailable")
+    client = ServiceNowClient.from_credentials(creds)
+    return query_matches_incident(client, sys_id, [str(c) for c in clauses if isinstance(c, str)])
+
+
+def _create_and_investigate(
+    cursor, conn, user_id: str, org_id: str, payload: Dict[str, Any], event_kind: str,
+    title: str, status: str, severity: str, service: str, metadata: Dict[str, Any],
+    received_at: datetime, source_alert_id: int, number: str, sys_id: str,
+) -> None:
+    _store_event(cursor, conn, user_id, org_id, payload, event_kind, title, status, severity, received_at)
+
+    alert_fired_at = parse_servicenow_datetime(payload.get("opened_at"))
+    if status != "resolved" and _try_correlate(
+        cursor, conn, user_id, org_id, source_alert_id, title, service, severity, metadata, payload,
+    ):
+        return
+
+    cursor.execute(
+        """
+        INSERT INTO incidents
+        (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
+         severity, status, started_at, alert_metadata, alert_fired_at, resolved_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                CASE WHEN %s = 'resolved' THEN CURRENT_TIMESTAMP ELSE NULL END)
+        ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO NOTHING
+        RETURNING id
+        """,
+        (
+            user_id, org_id, SOURCE, source_alert_id, title, service,
+            severity, status, received_at, json.dumps(metadata), alert_fired_at, status,
+        ),
+    )
+    incident_row = cursor.fetchone()
+    conn.commit()
+    if not incident_row:
+        # A concurrent delivery created it first; that delivery owns the RCA.
+        logger.info("%s Incident for %s was created by another delivery; nothing to do", _LOG, sanitize(number))
+        return
+    incident_id = incident_row[0]
+
+    _record_primary_alert(cursor, conn, user_id, org_id, incident_id, source_alert_id, title, service, severity, metadata)
+    _record_lifecycle_event(cursor, conn, user_id, org_id, incident_id, "created", "investigating")
+    logger.info("%s Created incident %s for %s", _LOG, incident_id, sanitize(number))
+
+    _notify_and_summarize(user_id, org_id, incident_id, title, severity, service, payload, metadata)
+
+    if status == "resolved":
+        logger.info("%s Incident %s arrived already resolved; no RCA", _LOG, incident_id)
+        return
+    _dispatch_rca(cursor, conn, user_id, incident_id, title, number, sys_id, payload)
 
 
 def _store_event(
@@ -337,14 +464,17 @@ def _record_primary_alert(
         raise
 
 
-def _record_lifecycle_event(cursor, conn, user_id: str, org_id: str, incident_id) -> None:
+def _record_lifecycle_event(
+    cursor, conn, user_id: str, org_id: str, incident_id, event_type: str,
+    new_value: str, previous_value: Optional[str] = None,
+) -> None:
     try:
         cursor.execute("SAVEPOINT sp_servicenow_lifecycle")
         cursor.execute(
             """INSERT INTO incident_lifecycle_events
-               (incident_id, user_id, org_id, event_type, new_value)
-               VALUES (%s, %s, %s, %s, %s)""",
-            (incident_id, user_id, org_id, "created", "investigating"),
+               (incident_id, user_id, org_id, event_type, previous_value, new_value)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (incident_id, user_id, org_id, event_type, previous_value, new_value),
         )
         cursor.execute("RELEASE SAVEPOINT sp_servicenow_lifecycle")
         conn.commit()

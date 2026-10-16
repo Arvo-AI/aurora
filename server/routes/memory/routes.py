@@ -25,10 +25,13 @@ from services.memory import (
     SLACK_MEMORY_TITLE,
     JIRA_MEMORY_CATEGORY,
     JIRA_MEMORY_TITLE,
+    SERVICENOW_MEMORY_CATEGORY,
+    SERVICENOW_MEMORY_TITLE,
 )
 from services.memory.queries import fetch_entry_by_id, fetch_entry_by_title
 from services.memory.slack_memory import seed_slack_memory
 from services.memory.jira_memory import seed_jira_memory
+from services.memory.servicenow_memory import seed_servicenow_memory
 from services.artifacts.store import create_version
 from utils.validation import strip_nul
 
@@ -451,6 +454,15 @@ def get_jira_memory(user_id):
     """The "Jira RCA" entry Auto mode's judge follows, editable on the Jira page."""
     return _get_policy_memory(
         user_id, JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE, seed_jira_memory, "Jira"
+    )
+
+
+@memory_bp.route("/servicenow", methods=["GET"])
+@require_permission("memory", "read")
+def get_servicenow_memory(user_id):
+    """The "ServiceNow RCA" entry Auto mode's judge follows, editable on the ServiceNow page."""
+    return _get_policy_memory(
+        user_id, SERVICENOW_MEMORY_CATEGORY, SERVICENOW_MEMORY_TITLE, seed_servicenow_memory, "ServiceNow"
     )
 
 

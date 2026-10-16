@@ -31,21 +31,39 @@ export interface ServiceNowWebhookUrlResponse {
   businessRuleScript: string;
 }
 
-export type ServiceNowMinPriority = 1 | 2 | 3 | 4 | 5;
+export type ServiceNowRcaMode = 'filters' | 'auto';
+export type ServiceNowWriteMode = 'notes_only' | 'full';
 
-export interface ServiceNowRcaSettings {
-  rcaEnabled: boolean;
-  minPriority: ServiceNowMinPriority;
-  workNotesEnabled: boolean;
+// One saved filter. Every list is any-of; an empty list leaves that dimension open.
+export interface ServiceNowRcaRule {
+  priorities?: string[];
+  assignmentGroups?: string[];
+  categories?: string[];
+  states?: string[];
+  query?: string;
 }
 
-export const SERVICENOW_PRIORITY_OPTIONS: ReadonlyArray<{ value: ServiceNowMinPriority; label: string }> = [
-  { value: 1, label: '1 - Critical' },
-  { value: 2, label: '2 - High' },
-  { value: 3, label: '3 - Moderate' },
-  { value: 4, label: '4 - Low' },
-  { value: 5, label: '5 - Planning (all incidents)' },
-];
+export interface ServiceNowRcaSettings {
+  rcaMode: ServiceNowRcaMode;
+  rcaRules: ServiceNowRcaRule[];
+  workNotesEnabled: boolean;
+  writeMode: ServiceNowWriteMode;
+  resolveSync: boolean;
+  resolveCloseCode: string;
+}
+
+export interface ServiceNowChoice {
+  value: string;
+  label: string;
+}
+
+export interface ServiceNowFieldOptions {
+  priorities: ServiceNowChoice[];
+  states: ServiceNowChoice[];
+  assignmentGroups: string[];
+  categories: string[];
+  errors: string[];
+}
 
 const API_BASE = '/api/servicenow';
 
@@ -118,27 +136,31 @@ export const serviceNowService = {
     return raw.webhookSecret;
   },
 
-  async getRcaSettings(): Promise<ServiceNowRcaSettings | null> {
-    try {
-      return await apiRequest<ServiceNowRcaSettings>(`${API_BASE}/rca-settings`, {
-        cache: 'no-store',
-      });
-    } catch (error) {
-      console.error('[serviceNowService] Failed to fetch RCA settings:', error);
-      return null;
-    }
+  // Throws on failure so the card can show an error state instead of empty settings.
+  async getRcaSettings(): Promise<ServiceNowRcaSettings> {
+    const raw = await apiRequest<ServiceNowRcaSettings>(`${API_BASE}/rca-settings`, {
+      cache: 'no-store',
+    });
+    if (!raw) throw new Error('No settings returned');
+    return raw;
   },
 
-  async updateRcaSettings(settings: Partial<ServiceNowRcaSettings>): Promise<ServiceNowRcaSettings | null> {
-    try {
-      return await apiRequest<ServiceNowRcaSettings>(`${API_BASE}/rca-settings`, {
-        method: 'PUT',
-        body: JSON.stringify(settings),
-        cache: 'no-store',
-      });
-    } catch (error) {
-      console.error('[serviceNowService] Failed to update RCA settings:', error);
-      return null;
-    }
+  async updateRcaSettings(settings: Partial<ServiceNowRcaSettings>): Promise<ServiceNowRcaSettings> {
+    const raw = await apiRequest<ServiceNowRcaSettings>(`${API_BASE}/rca-settings`, {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+      cache: 'no-store',
+      retries: 0,
+    });
+    if (!raw) throw new Error('No settings returned');
+    return raw;
+  },
+
+  async getFieldOptions(): Promise<ServiceNowFieldOptions> {
+    const raw = await apiRequest<ServiceNowFieldOptions>(`${API_BASE}/field-options`, {
+      cache: 'no-store',
+    });
+    if (!raw) throw new Error('No field options returned');
+    return raw;
   },
 };

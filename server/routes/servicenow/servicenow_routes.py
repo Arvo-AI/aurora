@@ -1,13 +1,17 @@
 """ServiceNow connector routes: connect, status, disconnect, webhook URL and
-secret, the inbound incident webhook, and the per-user RCA settings."""
+secret, the inbound incident webhook, the org RCA settings and the option
+catalog behind the filter pickers."""
 
+import json
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Blueprint, jsonify, request
 
+from routes.servicenow.field_options import build_field_options
+from routes.servicenow.rca_filters import decide_webhook, normalize_rca_rules
 from routes.servicenow.servicenow_client import (
     ServiceNowAPIError,
     ServiceNowClient,
@@ -15,9 +19,17 @@ from routes.servicenow.servicenow_client import (
     normalize_instance_url,
 )
 from routes.servicenow.tasks import (
-    PREF_MIN_PRIORITY,
-    PREF_RCA_ENABLED,
+    MAX_CLOSE_CODE,
+    PREF_RCA_MODE,
+    PREF_RCA_RULES,
+    PREF_RESOLVE_CLOSE_CODE,
+    PREF_RESOLVE_SYNC,
     PREF_WORK_NOTES,
+    PREF_WRITE_MODE,
+    RCA_MODES,
+    WRITE_MODES,
+    get_rca_mode,
+    get_rca_rules,
     get_rca_settings,
     process_servicenow_event,
 )
@@ -28,8 +40,10 @@ from routes.servicenow.webhook_auth import (
     secret_matches,
 )
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import store_user_preference
+from utils.auth.stateless_auth import get_org_id_from_request, resolve_org_id, set_rls_context
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.db.db_utils import connect_to_db_as_user
+from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.web.public_url import external_backend_url
 
@@ -156,6 +170,7 @@ def connect(user_id):
         "validated_at": datetime.now(timezone.utc).isoformat(),
         # A reconnect keeps the secret so the customer's Business Rule keeps working.
         "webhook_secret": existing.get("webhook_secret") or new_webhook_secret(),
+        # Write access is assumed until ServiceNow refuses a write (403), which clears it.
         "capabilities": {"can_read_incidents": True, "can_write_incidents": True},
     }
     if auth_type == "basic":
@@ -214,13 +229,14 @@ def get_webhook_url(user_id):
         "webhookSecret": creds["webhook_secret"],
         "headerName": WEBHOOK_SECRET_HEADER,
         "instructions": [
-            "1. In ServiceNow, open System Properties and create two properties: "
+            "In ServiceNow, open System Properties and create two properties: "
             "x_aurora.webhook_url (the URL above) and x_aurora.webhook_secret (the secret above, type password).",
-            "2. Open System Definition > Business Rules and click New.",
-            "3. Table: Incident [incident]. Tick Advanced. When: After. Tick Insert (tick Update too if you "
-            "want resolved and closed states mirrored). Add filter conditions if only some incidents should be investigated.",
-            "4. Paste the script below into the Script tab and save.",
-            "5. Create a test incident. It appears on the Aurora Incidents page within seconds.",
+            "Open System Definition > Business Rules and click New.",
+            "Table: Incident [incident]. Tick Advanced. When: After. Tick Insert and Update "
+            "(Update keeps the Aurora incident in sync when the ServiceNow incident changes state).",
+            "Paste the script below into the Script tab and save.",
+            "Choose which incidents Aurora investigates in the Automatic RCA settings, then create a "
+            "test incident. It appears on the Aurora Incidents page within seconds.",
         ],
         "businessRuleScript": business_rule_script(),
     })
@@ -246,9 +262,23 @@ def rotate_webhook_secret(user_id):
 # ── inbound webhook (no session; authenticated by the shared secret) ──
 
 
+def _read_rca_settings(user_id: str) -> Tuple[str, List[Dict[str, Any]]]:
+    """Strict reads: a failure raises instead of looking like "no rules"."""
+    rca_mode = get_rca_mode(user_id, strict=True)
+    # Auto ignores the filters, so it doesn't need them.
+    if rca_mode == "auto":
+        return rca_mode, []
+    return rca_mode, get_rca_rules(user_id, strict=True)
+
+
 @servicenow_bp.route("/webhook/<user_id>", methods=["POST"])
 def webhook(user_id: str):
-    """Receive an incident record from the customer's Business Rule."""
+    """Receive an incident record from the customer's Business Rule.
+
+    A new incident is accepted only when the org's filters (or the Auto-mode
+    judge) say so; an update to an incident Aurora already tracks is always
+    queued so its state stays in sync.
+    """
     if not user_id or not _USER_ID_RE.fullmatch(user_id):
         return jsonify({"error": "user_id is required"}), 400
 
@@ -273,21 +303,121 @@ def webhook(user_id: str):
     if not is_sys_id(sys_id):
         return jsonify({"error": "sys_id is required"}), 400
 
+    event_kind = str(payload.get("event") or "inserted").lower()
+    number = _log_safe(payload.get("number", ""))
+
+    # Automatic RCA is opt-in. Asking Aurora to investigate a named incident does not go through here.
+    try:
+        rca_mode, rules = _read_rca_settings(user_id)
+    except Exception:
+        # A failed read must not look like "no rules"; the Business Rule logs the 503.
+        logger.exception("[SERVICENOW] Could not read RCA settings for user %s", log_uid)
+        return jsonify({"error": "could not read RCA settings"}), 503
+
+    decision = decide_webhook(payload, rules, rca_mode)
+    action = decision["action"]
+    scope = decision.get("scope") or {}
+    if action == "ignore" and event_kind == "inserted":
+        # Nothing to sync and nothing to investigate: no incident, no queue.
+        logger.info(
+            "[SERVICENOW] Ignored %s (priority=%s group=%s category=%s reason=%s)",
+            number, _log_safe(scope.get("priority") or "?"), _log_safe(scope.get("assignmentGroup") or "?"),
+            _log_safe(scope.get("category") or "?"), _log_safe(decision.get("reason") or "filters"),
+        )
+        return jsonify({"received": True, "status": "ignored", "reason": decision.get("reason") or "filters"})
+
     logger.info(
-        "[SERVICENOW] Webhook received: user=%s number=%s event=%s",
-        log_uid, _log_safe(payload.get("number", "")), _log_safe(payload.get("event", "inserted")),
+        "[SERVICENOW] Webhook received: user=%s number=%s event=%s action=%s",
+        log_uid, number, _log_safe(event_kind), _log_safe(action),
     )
     try:
-        process_servicenow_event.delay(payload, user_id)
+        process_servicenow_event.delay(payload, user_id, decision=decision)
     except Exception:
         # Broker failure is on our side: 503 so the Business Rule logs it as a retryable error.
         logger.exception("[SERVICENOW] Failed to enqueue webhook for user %s", log_uid)
         return jsonify({"error": "could not enqueue webhook for processing"}), 503
 
-    return jsonify({"received": True})
+    return jsonify({"received": True, "status": "accepted", "action": action})
 
 
 # ── RCA settings ─────────────────────────────────────────────────────
+
+
+def _store_settings(user_id: str, updates: List[Tuple[str, Any]]) -> bool:
+    """Write all supplied ServiceNow prefs in one transaction (org-wide, like Jira)."""
+    if not updates:
+        return True
+    conn = None
+    cursor = None
+    try:
+        conn = connect_to_db_as_user()
+        cursor = conn.cursor()
+        org_id = set_rls_context(cursor, conn, user_id, log_prefix="[SERVICENOW:Settings]")
+        if not org_id:
+            return False
+        for key, value in updates:
+            cursor.execute(
+                "DELETE FROM user_preferences WHERE org_id = %s AND preference_key = %s",
+                (org_id, key),
+            )
+            cursor.execute(
+                """
+                INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (user_id, org_id, key, json.dumps(value)),
+            )
+        conn.commit()
+        return True
+    except Exception:
+        logger.exception("[SERVICENOW] Failed to store settings for user %s", sanitize(user_id))
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+def _parse_settings_update(data: Dict[str, Any]) -> Tuple[List[Tuple[str, Any]], Optional[str]]:
+    """Validated (pref key, value) pairs to store, or an error message for a 400."""
+    updates: List[Tuple[str, Any]] = []
+    known = ("rcaMode", "rcaRules", "workNotesEnabled", "writeMode", "resolveSync", "resolveCloseCode")
+    if not any(key in data for key in known):
+        return [], "rcaMode, rcaRules, workNotesEnabled, writeMode, resolveSync, or resolveCloseCode is required"
+
+    if "rcaMode" in data:
+        if data["rcaMode"] not in RCA_MODES:
+            return [], f"rcaMode must be one of: {', '.join(RCA_MODES)}"
+        updates.append((PREF_RCA_MODE, data["rcaMode"]))
+    if "rcaRules" in data:
+        rules, error = normalize_rca_rules(data.get("rcaRules"))
+        if error:
+            return [], error
+        updates.append((PREF_RCA_RULES, rules))
+    if "workNotesEnabled" in data:
+        if not isinstance(data["workNotesEnabled"], bool):
+            return [], "workNotesEnabled must be a boolean"
+        updates.append((PREF_WORK_NOTES, data["workNotesEnabled"]))
+    if "writeMode" in data:
+        if data["writeMode"] not in WRITE_MODES:
+            return [], f"writeMode must be one of: {', '.join(WRITE_MODES)}"
+        updates.append((PREF_WRITE_MODE, data["writeMode"]))
+    if "resolveSync" in data:
+        if not isinstance(data["resolveSync"], bool):
+            return [], "resolveSync must be a boolean"
+        updates.append((PREF_RESOLVE_SYNC, data["resolveSync"]))
+    if "resolveCloseCode" in data:
+        code = data["resolveCloseCode"]
+        if not isinstance(code, str):
+            return [], "resolveCloseCode must be text"
+        code = " ".join(code.split())
+        if not code or len(code) > MAX_CLOSE_CODE:
+            return [], f"resolveCloseCode must be 1–{MAX_CLOSE_CODE} characters"
+        updates.append((PREF_RESOLVE_CLOSE_CODE, code))
+    return updates, None
 
 
 @servicenow_bp.route("/rca-settings", methods=["GET"])
@@ -303,26 +433,56 @@ def update_rca_settings(user_id):
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
         data = {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON body"}), 400
 
-    rca_enabled = data.get("rcaEnabled")
-    min_priority = data.get("minPriority")
-    work_notes = data.get("workNotesEnabled")
+    updates, error = _parse_settings_update(data)
+    if error:
+        return jsonify({"error": error}), 400
+    # Turning writes on only makes sense with an instance to write to.
+    wants_write = data.get("workNotesEnabled") is True or data.get("resolveSync") is True
+    if wants_write and not _stored_credentials(user_id):
+        return jsonify({"error": "Connect ServiceNow before enabling write-back"}), 400
 
-    if rca_enabled is not None:
-        if not isinstance(rca_enabled, bool):
-            return jsonify({"error": "rcaEnabled must be a boolean"}), 400
-        store_user_preference(user_id, PREF_RCA_ENABLED, rca_enabled)
+    if not _store_settings(user_id, updates):
+        return jsonify({"error": "Failed to store ServiceNow settings"}), 500
 
-    if min_priority is not None:
-        if isinstance(min_priority, bool) or not isinstance(min_priority, int) or not 1 <= min_priority <= 5:
-            return jsonify({"error": "minPriority must be an integer from 1 to 5"}), 400
-        store_user_preference(user_id, PREF_MIN_PRIORITY, min_priority)
+    # Auto needs its policy memory; create it now so the card shows it right away.
+    if data.get("rcaMode") == "auto":
+        from services.memory.servicenow_memory import seed_servicenow_memory
+        # Request org, not the TTL-cached users.org_id, so a just-changed org is seeded correctly.
+        seed_servicenow_memory(user_id, org_id=get_org_id_from_request())
 
-    if work_notes is not None:
-        if not isinstance(work_notes, bool):
-            return jsonify({"error": "workNotesEnabled must be a boolean"}), 400
-        if work_notes and not _stored_credentials(user_id):
-            return jsonify({"error": "Connect ServiceNow before enabling work notes"}), 400
-        store_user_preference(user_id, PREF_WORK_NOTES, work_notes)
+    # Write-back prefs decide which tools are bound; drop every member's cached tool list.
+    from chat.backend.agent.tools.mcp_tools import clear_credentials_cache, clear_credentials_cache_for_org
 
-    return jsonify(get_rca_settings(user_id))
+    org_id = resolve_org_id(user_id)
+    if org_id:
+        clear_credentials_cache_for_org(org_id)
+    else:
+        clear_credentials_cache(user_id)
+
+    logger.info(
+        "[SERVICENOW] Updated settings for user %s: %s",
+        sanitize(user_id), sanitize(", ".join(key for key, _ in updates)),
+    )
+    payload = get_rca_settings(user_id)
+    payload["success"] = True
+    return jsonify(payload)
+
+
+# ── option catalog for the filter pickers ────────────────────────────
+
+
+@servicenow_bp.route("/field-options", methods=["GET"])
+@require_permission("connectors", "read")
+def field_options(user_id):
+    """Priorities, states, assignment groups and categories the rules editor can pick from."""
+    creds = _stored_credentials(user_id)
+    if not creds:
+        return jsonify({"error": "ServiceNow is not connected"}), 400
+    try:
+        client = ServiceNowClient.from_credentials(creds)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(build_field_options(client))

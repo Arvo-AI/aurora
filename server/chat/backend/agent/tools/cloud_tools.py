@@ -94,11 +94,10 @@ from .elastic_tool import (
     ElasticGetAlertsArgs,
 )
 from .servicenow_tool import (
-    list_servicenow_incidents,
-    get_servicenow_incident,
-    is_servicenow_connected,
-    ListServiceNowIncidentsArgs,
-    GetServiceNowIncidentArgs,
+    list_servicenow_incidents, get_servicenow_incident, is_servicenow_connected,
+    servicenow_add_work_note, servicenow_create_incident, servicenow_update_incident,
+    ListServiceNowIncidentsArgs, GetServiceNowIncidentArgs,
+    ServiceNowAddWorkNoteArgs, ServiceNowCreateIncidentArgs, ServiceNowUpdateIncidentArgs,
 )
 from .incidentio_tool import (
     list_incidentio_incidents,
@@ -2325,6 +2324,38 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             ),
             args_schema=GetServiceNowIncidentArgs,
         ))
+
+        # Write tools: only RCA runs need the org opt-in; elsewhere a user asked for the write.
+        try:
+            from routes.servicenow.tasks import get_write_mode as _sn_write_mode
+            from routes.servicenow.tasks import work_notes_enabled as _sn_work_notes_enabled
+
+            _sn_write_tools = []
+            if not _is_background_rca(state_context, is_background) or _sn_work_notes_enabled(user_id):
+                _sn_write_tools.append(
+                    (servicenow_add_work_note, "servicenow_add_work_note", ServiceNowAddWorkNoteArgs,
+                     "Post a work note on a ServiceNow incident (by number or sys_id). Internal by default; "
+                     "set customer_visible=true for an additional comment the caller sees."),
+                )
+                if _sn_write_mode(user_id) == "full":
+                    _sn_write_tools.extend([
+                        (servicenow_create_incident, "servicenow_create_incident", ServiceNowCreateIncidentArgs,
+                         "Create a ServiceNow incident. Needs a short_description; priority, category, "
+                         "assignment group, caller and configuration item are optional."),
+                        (servicenow_update_incident, "servicenow_update_incident", ServiceNowUpdateIncidentArgs,
+                         "Update a ServiceNow incident: state, priority, impact, urgency, assignment, "
+                         "category, close code and notes."),
+                    ])
+            for _func, _name, _schema, _desc in _sn_write_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final, name=_name, description=_desc, args_schema=_schema,
+                ))
+            logging.info(f"Added {2 + len(_sn_write_tools)} ServiceNow tools for user {user_id}")
+        except Exception as e:
+            logging.warning(f"Failed to add ServiceNow write tools: {e}")
     else:
         logging.debug(f"ServiceNow tools not added - user {user_id} not connected to ServiceNow")
 

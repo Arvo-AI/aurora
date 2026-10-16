@@ -24,6 +24,17 @@ logger = logging.getLogger(__name__)
 
 SERVICENOW_TIMEOUT = 20
 INCIDENT_TABLE_PATH = "/api/now/table/incident"
+GROUP_TABLE_PATH = "/api/now/table/sys_user_group"
+CHOICE_TABLE_PATH = "/api/now/table/sys_choice"
+# Catalog reads (assignment groups, categories) stop here; the filter UI is a picker, not a browser.
+CATALOG_LIMIT = 200
+# Fields the agent may set when it creates or updates an incident. Everything
+# else (sys_*, caller unlock, approval fields, journal history) stays untouched.
+WRITABLE_INCIDENT_FIELDS = frozenset({
+    "short_description", "description", "priority", "impact", "urgency", "state",
+    "category", "subcategory", "assignment_group", "assigned_to", "cmdb_ci", "caller_id",
+    "close_code", "close_notes", "work_notes", "comments",
+})
 # Fields returned to the agent tools and used by the connection check.
 INCIDENT_FIELDS = (
     "sys_id,number,short_description,description,priority,impact,urgency,state,"
@@ -280,14 +291,119 @@ class ServiceNowClient:
             return rows[0] if rows else None
         raise ValueError("Incident reference must be a sys_id or an incident number such as INC0010001")
 
-    def add_work_note(self, sys_id: str, text: str) -> Dict[str, Any]:
-        """Append one work note to an incident. Returns the updated record fields."""
+    def add_work_note(self, sys_id: str, text: str, customer_visible: bool = False) -> Dict[str, Any]:
+        """Append one journal entry to an incident: a work note (internal) or, when
+        ``customer_visible``, an additional comment the caller sees. Returns the
+        updated record fields."""
         if not is_sys_id(sys_id):
             raise ValueError("sys_id must be a 32-character hex id")
+        field = "comments" if customer_visible else "work_notes"
         data = self._request(
             "PATCH", f"{INCIDENT_TABLE_PATH}/{sys_id}",
             params={"sysparm_fields": "sys_id,number,sys_updated_on"},
-            json_body={"work_notes": text},
+            json_body={field: text},
         )
         result = data.get("result")
         return result if isinstance(result, dict) else {}
+
+    @staticmethod
+    def _writable(fields: Dict[str, Any]) -> Dict[str, Any]:
+        body = {
+            key: value for key, value in (fields or {}).items()
+            if key in WRITABLE_INCIDENT_FIELDS and value not in (None, "")
+        }
+        if not body:
+            raise ValueError(
+                "No writable fields given; allowed: " + ", ".join(sorted(WRITABLE_INCIDENT_FIELDS))
+            )
+        return body
+
+    def create_incident(self, fields: Dict[str, Any]) -> Dict[str, Any]:
+        """Create an incident. Reference fields (assignment_group, caller_id, cmdb_ci)
+        accept display names: the request sets sysparm_input_display_value."""
+        body = self._writable(fields)
+        if not str(body.get("short_description") or "").strip():
+            raise ValueError("short_description is required to create an incident")
+        data = self._request(
+            "POST", INCIDENT_TABLE_PATH,
+            params={
+                "sysparm_fields": "sys_id,number,short_description,state,priority,assignment_group",
+                "sysparm_display_value": "true",
+                "sysparm_exclude_reference_link": "true",
+                "sysparm_input_display_value": "true",
+            },
+            json_body=body,
+        )
+        result = data.get("result")
+        return result if isinstance(result, dict) else {}
+
+    def update_incident(self, sys_id: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        """Update writable fields on an incident by sys_id. Display names are accepted
+        for reference fields, as in create_incident."""
+        if not is_sys_id(sys_id):
+            raise ValueError("sys_id must be a 32-character hex id")
+        body = self._writable(fields)
+        data = self._request(
+            "PATCH", f"{INCIDENT_TABLE_PATH}/{sys_id}",
+            params={
+                "sysparm_fields": "sys_id,number,short_description,state,priority,assignment_group,sys_updated_on",
+                "sysparm_display_value": "true",
+                "sysparm_exclude_reference_link": "true",
+                "sysparm_input_display_value": "true",
+            },
+            json_body=body,
+        )
+        result = data.get("result")
+        return result if isinstance(result, dict) else {}
+
+    # ── catalogs for the filter pickers ──────────────────────────────
+
+    @staticmethod
+    def _names(rows: Any, key: str) -> List[str]:
+        names: List[str] = []
+        seen = set()
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            value = row.get(key)
+            if isinstance(value, dict):
+                value = value.get("display_value") or value.get("value")
+            name = " ".join(str(value or "").split())
+            if name and name.casefold() not in seen:
+                seen.add(name.casefold())
+                names.append(name)
+        return names
+
+    def list_assignment_groups(self) -> List[str]:
+        """Active group names from sys_user_group, alphabetical."""
+        data = self._request(
+            "GET", GROUP_TABLE_PATH,
+            params={
+                "sysparm_query": "active=true^ORDERBYname",
+                "sysparm_fields": "name",
+                "sysparm_limit": CATALOG_LIMIT,
+            },
+        )
+        return self._names(data.get("result"), "name")
+
+    def list_categories(self) -> List[str]:
+        """Incident category labels from the choice list, in display order."""
+        data = self._request(
+            "GET", CHOICE_TABLE_PATH,
+            params={
+                "sysparm_query": "name=incident^element=category^inactive=false^language=en^ORDERBYsequence",
+                "sysparm_fields": "label,value",
+                "sysparm_limit": CATALOG_LIMIT,
+            },
+        )
+        return self._names(data.get("result"), "label")
+
+    def distinct_incident_values(self, field: str) -> List[str]:
+        """Display values of ``field`` on recent incidents: the fallback when a
+        catalog table is not readable with the connected account."""
+        if field not in ("assignment_group", "category"):
+            raise ValueError("Unsupported field")
+        rows = self.list_incidents(
+            query=f"{field}ISNOTEMPTY^ORDERBYDESCopened_at", limit=100, fields=field,
+        )
+        return sorted(self._names(rows, field), key=str.casefold)
