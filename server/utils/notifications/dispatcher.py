@@ -112,7 +112,7 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                            i.recurrence_of_incident_id, anchor.slack_message_ts, anchor.alert_title,
                            grp.occurrence_number, grp.group_size, grp.last_fired_at,
                            i.alert_metadata, i.pagerduty_note_id,
-                           i.incidentio_update_id, i.source_alert_id
+                           i.incidentio_update_id, i.source_alert_id, i.servicenow_note_id
                     FROM incidents i
                     LEFT JOIN incidents anchor ON anchor.id = i.recurrence_of_incident_id
                     JOIN grp ON grp.id = i.id
@@ -153,6 +153,7 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                         'pagerduty_note_id': result[21],
                         'incidentio_update_id': result[22],
                         'source_alert_id': result[23],
+                        'servicenow_note_id': result[24],
                     }
         return None
     except Exception:
@@ -503,6 +504,17 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
                 send_incidentio_incident_update(user_id, incident_data)
             except Exception:
                 logger.exception("[Dispatcher] incident.io update failed")
+
+        # --- ServiceNow work note --- (completion only, anchors only, once; opt-in
+        # per user on the ServiceNow connector page; the service checks the stored
+        # credentials can still write)
+        if (not refresh_only and incident_data.get('source_type') == 'servicenow'
+                and bool(get_user_preference(user_id, 'servicenow_work_notes_enabled', default=False))):
+            try:
+                from utils.notifications.servicenow_notification_service import send_servicenow_work_note
+                send_servicenow_work_note(user_id, incident_data)
+            except Exception:
+                logger.exception("[Dispatcher] ServiceNow work note failed")
 
     except Exception:
         logger.exception("[Dispatcher] Error in notify_investigation_completed")

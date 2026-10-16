@@ -182,6 +182,17 @@ class ConnectorRegistry {
       });
 
     this.register({
+        id: "servicenow",
+        name: "ServiceNow",
+        description: "Investigate ServiceNow incidents automatically and post the root cause back as a work note",
+        iconPath: "/servicenow.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Incident Management",
+        path: "/servicenow/auth",
+        storageKey: "isServiceNowConnected",
+      });
+
+    this.register({
         id: "bigpanda",
         name: "BigPanda",
         description: "Connect BigPanda for AIOps incident correlation. Receive pre-correlated incident clusters with enriched metadata for improved root cause analysis.",

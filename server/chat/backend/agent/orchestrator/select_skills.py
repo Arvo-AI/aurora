@@ -66,6 +66,8 @@ _TOOL_METADATA: dict = {
     "list_incidentio_incidents": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
     "get_incidentio_incident": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
     "get_incidentio_timeline": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
+    "list_servicenow_incidents": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
+    "get_servicenow_incident": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
     # General research
     "web_search": {"capability_tags": ["memory"], "mutates": False, "cacheable": True},
     # Bitbucket — source control + CI (mirror of github tagging)

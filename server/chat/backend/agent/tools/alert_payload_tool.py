@@ -28,6 +28,7 @@ _SOURCE_TABLE_MAP = {
     "bigpanda": "bigpanda_events",
     "netdata": "netdata_alerts",
     "incidentio": "incidentio_alerts",
+    "servicenow": "servicenow_events",
     "jenkins": "jenkins_deployment_events",
     "cloudbees": "jenkins_deployment_events",
     "spinnaker": "spinnaker_deployment_events",

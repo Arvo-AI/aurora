@@ -146,6 +146,7 @@ celery_app.conf.update(
         'routes.jira.tasks',
         'routes.spinnaker.tasks',
         'routes.incidentio.tasks',
+        'routes.servicenow.tasks',
         'utils.terminal.terminal_pod_cleanup',
         'chat.background.task',
         'chat.background.summarization',
@@ -242,6 +243,12 @@ try:
     logging.info("PagerDuty tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import PagerDuty tasks: {e}")
+
+try:
+    import routes.servicenow.tasks
+    logging.info("ServiceNow tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import ServiceNow tasks: {e}")
 
 try:
     import routes.opsgenie.tasks  # noqa: F401

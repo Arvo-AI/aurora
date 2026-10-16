@@ -93,6 +93,13 @@ from .elastic_tool import (
     ElasticEsqlArgs,
     ElasticGetAlertsArgs,
 )
+from .servicenow_tool import (
+    list_servicenow_incidents,
+    get_servicenow_incident,
+    is_servicenow_connected,
+    ListServiceNowIncidentsArgs,
+    GetServiceNowIncidentArgs,
+)
 from .incidentio_tool import (
     list_incidentio_incidents,
     get_incidentio_incident,
@@ -2269,6 +2276,41 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added {len(_elastic_tool_specs)} Elastic tools for user {user_id}")
     else:
         logging.debug(f"Elastic tools not added - user {user_id} not connected to Elastic")
+
+    # Add ServiceNow tools if connected
+    if is_servicenow_connected(user_id):
+        context_wrapped_sn_list = with_user_context(list_servicenow_incidents)
+        notification_wrapped_sn_list = with_completion_notification(context_wrapped_sn_list)
+        final_sn_list_func = wrap_func_with_capture(notification_wrapped_sn_list, "list_servicenow_incidents") if tool_capture else notification_wrapped_sn_list
+
+        tools.append(StructuredTool.from_function(
+            func=final_sn_list_func,
+            name="list_servicenow_incidents",
+            description=(
+                "List ServiceNow incidents, newest first. Use this to find related or "
+                "recurring incidents: filter by state (active/new/in_progress/on_hold/"
+                "resolved/closed), priority (1-5), assignment group, or a free-text "
+                "match on the description. Read-only."
+            ),
+            args_schema=ListServiceNowIncidentsArgs,
+        ))
+
+        context_wrapped_sn_get = with_user_context(get_servicenow_incident)
+        notification_wrapped_sn_get = with_completion_notification(context_wrapped_sn_get)
+        final_sn_get_func = wrap_func_with_capture(notification_wrapped_sn_get, "get_servicenow_incident") if tool_capture else notification_wrapped_sn_get
+
+        tools.append(StructuredTool.from_function(
+            func=final_sn_get_func,
+            name="get_servicenow_incident",
+            description=(
+                "Get one ServiceNow incident by number (INC0010001) or sys_id: priority, "
+                "impact, urgency, state, category, assignment group, configuration item, "
+                "caller, description and close notes. Read-only."
+            ),
+            args_schema=GetServiceNowIncidentArgs,
+        ))
+    else:
+        logging.debug(f"ServiceNow tools not added - user {user_id} not connected to ServiceNow")
 
     # Add incident.io tools if connected
     if is_incidentio_connected(user_id):

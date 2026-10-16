@@ -579,6 +579,17 @@ def _check_spinnaker(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_servicenow(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Mirrors /servicenow status — one incident read with the stored credentials."""
+    from routes.servicenow.servicenow_client import ServiceNowClient
+
+    try:
+        ServiceNowClient.from_credentials(creds).test_connection()
+        return {"connected": True, "authType": creds.get("auth_type", "basic")}
+    except Exception:
+        return {"connected": False}
+
+
 def _check_pagerduty(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Mirrors /pagerduty status — validates with live API call + OAuth refresh."""
     from routes.pagerduty.pagerduty_helpers import PagerDutyClient, PagerDutyAPIError, validate_token
@@ -865,6 +876,7 @@ PROVIDER_CHECKERS = {
     "notion": _check_notion,
     "spinnaker": _check_spinnaker,
     "pagerduty": _check_pagerduty,
+    "servicenow": _check_servicenow,
     "opsgenie":      _check_opsgenie,
     "dynatrace": _check_dynatrace,
     "bigpanda": _check_bigpanda,

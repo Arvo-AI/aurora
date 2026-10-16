@@ -58,6 +58,8 @@ _TOOL_NAME_MAPPING: Dict[str, str] = {
     "list_incidentio_incidents": "incident.io",
     "get_incidentio_incident": "incident.io",
     "get_incidentio_timeline": "incident.io Timeline",
+    "list_servicenow_incidents": "ServiceNow",
+    "get_servicenow_incident": "ServiceNow",
     "confluence_runbook_parse": "Confluence Runbook",
     "confluence_search_similar": "Confluence Search",
     "confluence_search_runbooks": "Confluence Runbooks",
