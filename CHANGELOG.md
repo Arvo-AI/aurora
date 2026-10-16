@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Confluence: OAuth setup uses the classic scopes shown in the developer
+  console Edit Scopes dialog (Read Confluence detailed content, Read
+  Confluence space summary, Read user, and Search Confluence content and
+  space summaries). Add those on an existing app before the next connect.
+  Tokens that already have the older granular scopes keep working.
+
 ## [1.5.9] - 2026-10-16
 
 ### Added

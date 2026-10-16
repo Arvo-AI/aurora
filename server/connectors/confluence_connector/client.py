@@ -228,7 +228,11 @@ class ConfluenceClient:
             )
 
     def _request(
-        self, method: str, path: str, params: Optional[Dict[str, Any]] = None
+        self,
+        method: str,
+        path: str,
+        params: Optional[Dict[str, Any]] = None,
+        log_errors: bool = True,
     ) -> Dict[str, Any]:
         url = f"{self.api_base}{path}"
         try:
@@ -242,11 +246,66 @@ class ConfluenceClient:
             response.raise_for_status()
             return response.json()
         except requests.RequestException as exc:
-            logger.error("Confluence API request failed: %s %s (%s)", method, path, type(exc).__name__)
+            if log_errors:
+                logger.error(
+                    "Confluence API request failed: %s %s (%s)",
+                    method,
+                    path,
+                    type(exc).__name__,
+                )
+            raise
+
+    def _get_classic_then_granular(
+        self,
+        v1_path: str,
+        v2_path: str,
+        v1_params: Optional[Dict[str, Any]] = None,
+        v2_params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Call v1, which classic scopes authorize.
+
+        A 403 means the token only has granular scopes, so retry on v2.
+        A 401 retries v2 too, but a v2 failure keeps the 401 so callers refresh.
+        """
+        # Data Center and PAT have no v2 base
+        if not self.api_v2_base:
+            return self._request("GET", v1_path, params=v1_params)
+        try:
+            return self._request("GET", v1_path, params=v1_params, log_errors=False)
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            # Granular-only tokens are refused by v1; v2 accepts them
+            if status == 403:
+                return self._request_v2("GET", v2_path, params=v2_params)
+            # Expired classic tokens are also 401. Keep that 401 if v2 fails
+            # so the caller refreshes instead of treating it as a hard denial.
+            if status == 401:
+                try:
+                    return self._request_v2(
+                        "GET", v2_path, params=v2_params, log_errors=False
+                    )
+                except requests.RequestException:
+                    raise exc from None
+            logger.error(
+                "Confluence API request failed: GET %s (%s)",
+                v1_path,
+                type(exc).__name__,
+            )
+            raise
+        except requests.RequestException as exc:
+            logger.error(
+                "Confluence API request failed: GET %s (%s)",
+                v1_path,
+                type(exc).__name__,
+            )
             raise
 
     def _request_v2(
-        self, method: str, path: str, params: Optional[Dict[str, Any]] = None
+        self,
+        method: str,
+        path: str,
+        params: Optional[Dict[str, Any]] = None,
+        log_errors: bool = True,
     ) -> Dict[str, Any]:
         """Make a request to the v2 API (for granular OAuth scopes)."""
         if not self.api_v2_base:
@@ -263,9 +322,13 @@ class ConfluenceClient:
             response.raise_for_status()
             return response.json()
         except requests.RequestException as exc:
-            logger.error(
-                "Confluence v2 API request failed: %s %s (%s)", method, path, type(exc).__name__
-            )
+            if log_errors:
+                logger.error(
+                    "Confluence v2 API request failed: %s %s (%s)",
+                    method,
+                    path,
+                    type(exc).__name__,
+                )
             raise
 
     def _request_post(
@@ -290,30 +353,28 @@ class ConfluenceClient:
     def get_current_user(self) -> Dict[str, Any]:
         """Validate credentials by checking access to the API.
 
-        With granular scopes, we validate by listing spaces (read:space:confluence)
-        since the Confluence /users/current endpoint requires different permissions.
+        Cloud OAuth lists spaces. /user/current needs a user read that
+        granular-only tokens do not have.
         """
+        # Cloud OAuth always has a v2 base; Data Center and PAT do not
         if self.api_v2_base:
-            # Use spaces endpoint for validation - we have read:space:confluence
             spaces_result = self.list_spaces(limit=1)
             return {
                 "type": "oauth_validated",
                 "displayName": "Confluence User",
                 "spaces_accessible": len(spaces_result.get("results", [])) > 0,
             }
-        # Fall back to v1 for Data Center/Server or classic scopes
         return self._request("GET", "/user/current")
 
     def get_page(self, page_id: str, expand: str = DEFAULT_EXPAND) -> Dict[str, Any]:
-        """Fetch a Confluence page by ID using v2 API for OAuth."""
-        if self.api_v2_base:
-            # V2 API uses different expand format
-            return self._request_v2(
-                "GET", f"/pages/{page_id}", params={"body-format": "storage"}
-            )
-        # Fall back to v1 for Data Center/Server
+        """Fetch a Confluence page by ID."""
         params = {"expand": expand} if expand else None
-        return self._request("GET", f"/content/{page_id}", params=params)
+        return self._get_classic_then_granular(
+            f"/content/{page_id}",
+            f"/pages/{page_id}",
+            v1_params=params,
+            v2_params={"body-format": "storage"},
+        )
 
     def search_content(
         self,
@@ -342,9 +403,10 @@ class ConfluenceClient:
 
     def list_spaces(self, limit: int = 10) -> Dict[str, Any]:
         """List Confluence spaces."""
-        if self.api_v2_base:
-            return self._request_v2("GET", "/spaces", params={"limit": limit})
-        return self._request("GET", "/space", params={"limit": limit})
+        params = {"limit": limit}
+        return self._get_classic_then_granular(
+            "/space", "/spaces", v1_params=params, v2_params=params
+        )
 
     def create_page(
         self,
