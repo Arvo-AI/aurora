@@ -41,6 +41,7 @@ CONNECTOR_DIRS: frozenset = frozenset({
     "sentry",
     "sharepoint",
     "slack",
+    "teams",
     "spinnaker",
     "splunk",
     "elastic",

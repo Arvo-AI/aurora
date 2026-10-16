@@ -21,13 +21,11 @@ from services.memory import (
     USER_WRITABLE_CATEGORIES,
     SYSTEM_CATEGORY,
     PROTECTED_ENTRIES,
-    SLACK_MEMORY_CATEGORY,
-    SLACK_MEMORY_TITLE,
     JIRA_MEMORY_CATEGORY,
     JIRA_MEMORY_TITLE,
 )
 from services.memory.queries import fetch_entry_by_id, fetch_entry_by_title
-from services.memory.slack_memory import seed_slack_memory
+from services.memory.platform_memory import get_spec, seed_platform_memory
 from services.memory.jira_memory import seed_jira_memory
 from services.artifacts.store import create_version
 from utils.validation import strip_nul
@@ -93,6 +91,7 @@ def list_entries(user_id):
                 "last_edited_by": row[4],
                 "last_edited_by_name": row[5],
                 "updated_at": row[6].isoformat() if row[6] else None,
+                "is_protected": (row[2], row[1]) in PROTECTED_ENTRIES,
             }
             for row in rows
         ]
@@ -400,58 +399,65 @@ def update_entry(user_id, entry_id):
         return jsonify({"error": "Failed to update memory entry"}), 500
 
 
-def _get_policy_memory(user_id, category, title, seed, label):
-    """Fetch a well-known policy entry, seeding it if absent.
-
-    Seed-on-read covers orgs whose connect-time seed never ran or failed, so the
-    connector card never has to render an "it's missing" state.
-    """
-    org_id = get_org_id_from_request()
-
-    try:
-        with db_pool.get_user_connection() as conn:
-            cursor = conn.cursor()
-            # Pin RLS to the same org the WHERE clause filters on (and that RBAC
-            # authorized) — if they disagree, RLS hides the row and this 500s.
-            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
-            entry = fetch_entry_by_title(cursor, org_id, category, title)
-
-        # Missing — seed into the same org, then re-read (seeding commits on its own connection).
-        if entry is None:
-            seed(user_id, org_id=org_id)
-            with db_pool.get_user_connection() as conn:
-                cursor = conn.cursor()
-                set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
-                entry = fetch_entry_by_title(cursor, org_id, category, title)
-
-        # Still missing means seeding failed (it logs its own reason).
-        if entry is None:
-            return jsonify({"error": f"Failed to load the {label} memory entry"}), 500
-
-        return jsonify({"entry": entry}), 200
-
-    except Exception:
-        # No interpolation of request-derived values; the traceback is enough.
-        logger.exception("[Memory] Error getting %s memory", label)
-        return jsonify({"error": f"Failed to get the {label} memory entry"}), 500
+def _read_or_seed_policy(user_id, org_id, category, title, seed) -> dict | None:
+    """The entry if it exists or seeding created it. None when seeding failed."""
+    with db_pool.get_user_connection() as conn:
+        cursor = conn.cursor()
+        # Pin RLS to the same org the WHERE clause filters on (and that RBAC
+        # authorized) — if they disagree, RLS hides the row and this 500s.
+        set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
+        entry = fetch_entry_by_title(cursor, org_id, category, title)
+    # Already there — connect-time seeding did its job
+    if entry is not None:
+        return entry
+    # Missing — covers orgs that connected before seeding shipped, or whose
+    # connect-time seed failed (it's best-effort there).
+    seed(user_id, org_id=org_id)
+    with db_pool.get_user_connection() as conn:
+        cursor = conn.cursor()
+        set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
+        return fetch_entry_by_title(cursor, org_id, category, title)
 
 
-@memory_bp.route("/slack", methods=["GET"])
+@memory_bp.route("/platform/<platform>", methods=["GET"])
 @require_permission("memory", "read")
-def get_slack_memory(user_id):
-    """The "Slack" entry, surfaced so the Slack page can edit it in place."""
-    return _get_policy_memory(
-        user_id, SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE, seed_slack_memory, "Slack"
-    )
+def get_platform_memory(user_id, platform):
+    """A chat platform's policy memory, seeded if absent, for its manage page."""
+    spec = get_spec(platform)
+    # Not a registered chat platform
+    if spec is None:
+        return jsonify({"error": "Unknown platform"}), 404
+    org_id = get_org_id_from_request()
+    try:
+        entry = _read_or_seed_policy(
+            user_id, org_id, spec.category, spec.title,
+            lambda uid, org_id=None: seed_platform_memory(uid, spec.platform, org_id=org_id),
+        )
+        # Still missing means seeding failed (it logs its own reason)
+        if entry is None:
+            return jsonify({"error": f"Failed to load the {spec.title} memory entry"}), 500
+        return jsonify({"entry": entry}), 200
+    except Exception:
+        # No request-derived values in the message; the traceback is enough
+        logger.exception("[Memory] Error getting platform memory")
+        return jsonify({"error": f"Failed to get the {spec.title} memory entry"}), 500
 
 
 @memory_bp.route("/jira", methods=["GET"])
 @require_permission("memory", "read")
 def get_jira_memory(user_id):
     """The "Jira RCA" entry Auto mode's judge follows, editable on the Jira page."""
-    return _get_policy_memory(
-        user_id, JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE, seed_jira_memory, "Jira"
-    )
+    org_id = get_org_id_from_request()
+    try:
+        entry = _read_or_seed_policy(
+            user_id, org_id, JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE, seed_jira_memory,
+        )
+        if entry is None:
+            return jsonify({"error": "Failed to load the Jira memory entry"}), 500
+        return jsonify({"entry": entry}), 200
+    except Exception:
+        logger.exception("[Memory] Error getting Jira memory")
+        return jsonify({"error": "Failed to get the Jira memory entry"}), 500
 
 
 @memory_bp.route("/upload", methods=["POST"])

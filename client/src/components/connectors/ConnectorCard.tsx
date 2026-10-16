@@ -46,6 +46,34 @@ function BitbucketStatusBadge() {
   return <TwoTierBadge isAuthenticated={isAuthenticated} isConnected={isConnected} />;
 }
 
+function TeamsStatusBadge({ status }: { status: { connected?: boolean; setup_complete?: boolean } | null }) {
+  if (!status?.connected) return null;
+  if (status.setup_complete) {
+    return (
+      <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
+        <Check className="h-4 w-4" />
+        <span className="text-xs font-medium">Connected</span>
+      </div>
+    );
+  }
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400 cursor-default">
+            <AlertCircle className="h-4 w-4" />
+            <span className="text-xs font-medium">Setup incomplete</span>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-xs text-xs">
+          OAuth is done. In each team, add your org’s Aurora app from Teams → Apps, then @mention
+          the bot in a channel.
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 interface ConnectorCardProps {
   connector: ConnectorConfig;
   connectedOverride?: boolean;
@@ -73,6 +101,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
     isCheckingConnection,
     isLoadingDetails,
     slackStatus,
+    teamsStatus,
     googleChatStatus,
     checkGitHubStatus,
   } = useConnectorStatus(connector, userId, connectedOverride);
@@ -136,6 +165,15 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         await handleSlackOAuth();
       } else {
         router.push("/slack/manage");
+      }
+      return;
+    }
+
+    if (connector.id === "teams") {
+      if (!isConnected) {
+        router.push("/teams/setup");
+      } else {
+        router.push("/teams/manage");
       }
       return;
     }
@@ -225,6 +263,9 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
     if (connector.id === "bitbucket") {
       return <BitbucketStatusBadge />;
     }
+    if (connector.id === "teams") {
+      return <TeamsStatusBadge status={teamsStatus} />;
+    }
 
     if (connector.id === "onprem" && isCheckingConnection) {
       return (
@@ -235,7 +276,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
       );
     }
 
-    if (isConnected) {
+    if (isConnected && connector.id !== "teams") {
       return (
         <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
           <Check className="h-4 w-4" />

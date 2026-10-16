@@ -28,7 +28,7 @@ from typing import Dict, List, Optional
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 
-from services.memory import MEMORY_CATEGORIES
+from services.memory import MEMORY_CATEGORIES, PROTECTED_ENTRIES
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,10 @@ def serialize_entry(row) -> Dict:
         "last_edited_by": row[5],
         "last_edited_by_name": row[6],
         "updated_at": row[7].isoformat() if row[7] else None,
+        # Identity-locked entries (see PROTECTED_ENTRIES): content is editable,
+        # but rename/recategorize/delete are refused. Surfaced so the client
+        # doesn't have to mirror the registry.
+        "is_protected": (row[2], row[1]) in PROTECTED_ENTRIES,
     }
 
 

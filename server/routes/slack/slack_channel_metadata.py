@@ -11,6 +11,7 @@ import time
 
 from celery_config import celery_app
 from chat.backend.agent.utils.message_content import extract_text_from_content
+from services.channels.metadata import render_metadata_prompt
 from routes.slack.slack_backfill_config import (
     BACKFILL_INTERVAL_SECONDS,
     BACKFILL_STALE_MINUTES,
@@ -19,15 +20,12 @@ from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
-METADATA_PROMPT = (
-    "Write a 2-3 sentence description of this Slack channel for an AI SRE "
-    "teammate. State what the channel is used for, which team or service it "
-    "serves, and whether it's an incident/alerting channel (and from which "
-    "platform if apparent, e.g. incident.io/PagerDuty/Opsgenie). Infer from the "
-    "name, topic, purpose, and recent messages. Output ONLY the description — "
-    "no notes, caveats, or markdown headers.\n\n"
-    "{context}"
-)
+# Slack's descriptive fields, as named in the shared prompt template.
+_SLACK_FIELDS_HINT = "name, topic, purpose"
+
+# The Slack rendering of the shared template (still a template over
+# ``{context}``); the task formats it per channel.
+METADATA_PROMPT = render_metadata_prompt("Slack", _SLACK_FIELDS_HINT, "{context}")
 
 # --- Periodic backfill bounds ----------------------------------------------
 # Descriptions are normally enqueued by a user-triggered reconcile pass, which is

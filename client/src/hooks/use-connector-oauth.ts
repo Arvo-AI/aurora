@@ -3,7 +3,15 @@ import { useToast } from "@/hooks/use-toast";
 import { BitbucketIntegrationService } from "@/components/bitbucket-provider-integration";
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { slackService } from "@/lib/services/slack";
+import { teamsService } from "@/lib/services/teams";
 import { ProjectCache } from "@/components/cloud-provider/projects/projectUtils";
+import { apiErrorMessage } from "@/lib/services/api-client";
+
+const TEAMS_SETUP_DOCS_URL =
+  "https://arvo-ai.github.io/aurora/docs/integrations/connectors#microsoft-teams";
+
+/** Long enough to read env-var guidance in the connect failure toast. */
+const OAUTH_ERROR_TOAST_DURATION_MS = 12_000;
 
 export function useConnectorOAuth(connector: ConnectorConfig, userId: string | null) {
   const { toast } = useToast();
@@ -12,7 +20,8 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
   // Wrapper function to handle userId validation and common OAuth flow logic
   const withOAuthHandler = async (
     handler: () => Promise<void>,
-    errorMessage: string
+    errorMessage: string,
+    options?: { duration?: number; setupGuideUrl?: string },
   ): Promise<void> => {
     if (!userId) {
       toast({
@@ -27,12 +36,17 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
 
     try {
       await handler();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("OAuth error:", error);
+      let description = apiErrorMessage(error, errorMessage);
+      if (options?.setupGuideUrl && !description.includes(options.setupGuideUrl)) {
+        description += ` Setup guide: ${options.setupGuideUrl}`;
+      }
       toast({
         title: "Connection Failed",
-        description: error.message || errorMessage,
+        description,
         variant: "destructive",
+        duration: options?.duration ?? OAUTH_ERROR_TOAST_DURATION_MS,
       });
       setIsConnecting(false);
       throw error;
@@ -85,6 +99,21 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
     );
   };
 
+  const handleTeamsOAuth = async () => {
+    await withOAuthHandler(
+      async () => {
+        const response = await teamsService.connect();
+        if (response.oauth_url) {
+          window.location.href = response.oauth_url;
+        } else {
+          throw new Error("No OAuth URL received");
+        }
+      },
+      "Failed to connect to Microsoft Teams",
+      { setupGuideUrl: TEAMS_SETUP_DOCS_URL },
+    );
+  };
+
   const handleGCPOAuth = async () => {
     await withOAuthHandler(
       async () => {
@@ -115,6 +144,7 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
     isConnecting,
     handleBitbucketOAuth,
     handleSlackOAuth,
+    handleTeamsOAuth,
     handleGCPOAuth,
   };
 }
