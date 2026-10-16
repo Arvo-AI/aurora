@@ -403,7 +403,7 @@ def _fetch_all_workspace_channels(user_id: str) -> list[dict] | None:
                 "is_private": ch.get("membershipType") == "private",
                 "description": ch.get("description") or "",
             })
-    if key and slim is not None:
+    if key:
         try:
             redis = get_redis_client()
             if redis:

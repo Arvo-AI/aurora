@@ -234,17 +234,41 @@ def _last_bot_message_at(user_id: str) -> int | None:
         return None
 
 
+_MS_JWKS_URL = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
+_MS_JWKS_CLIENT: jwt.PyJWKClient | None = None
+
+
+def _decode_id_token(id_token: str) -> dict:
+    """Verify the id_token's signature and audience against Microsoft's signing keys."""
+    global _MS_JWKS_CLIENT
+    if _MS_JWKS_CLIENT is None:
+        _MS_JWKS_CLIENT = jwt.PyJWKClient(_MS_JWKS_URL)
+    signing_key = _MS_JWKS_CLIENT.get_signing_key_from_jwt(id_token)
+    return jwt.decode(
+        id_token,
+        signing_key.key,
+        algorithms=["RS256"],
+        audience=os.getenv("TEAMS_CLIENT_ID", ""),
+    )
+
+
 def _tenant_from_id_token(id_token: str | None) -> str | None:
-    """Read ``tid`` from the id_token. Unverified is fine: it came straight from Microsoft over TLS."""
+    """Verified ``tid`` from the id_token, or None so the caller falls back to Graph."""
     if not id_token:
         return None
     try:
-        claims = jwt.decode(id_token, options={"verify_signature": False})
-        tid = claims.get("tid")
-        # Reject anything that isn't a GUID so junk never becomes a lookup key
-        return str(uuid.UUID(str(tid))) if tid else None
+        claims = _decode_id_token(id_token)
+        tid = str(uuid.UUID(str(claims.get("tid"))))
+        # Multi-tenant keys sign for every tenant, so the issuer must name this tid
+        if str(claims.get("iss", "")).lower() != f"https://login.microsoftonline.com/{tid}/v2.0":
+            return None
+        return tid
     except (jwt.PyJWTError, ValueError):
-        logger.debug("Could not read tenant from Teams id_token", exc_info=True)
+        logger.debug("Could not verify tenant from Teams id_token", exc_info=True)
+        return None
+    # JWKS fetch failures surface as requests errors, not PyJWTError
+    except requests.RequestException:
+        logger.debug("Could not fetch Microsoft signing keys", exc_info=True)
         return None
 
 

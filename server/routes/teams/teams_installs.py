@@ -127,6 +127,35 @@ def _probe(org_id: str, client, team_id: str) -> Optional[bool]:
         return None
 
 
+def _classify_team(
+    org_id: str, client, team_id: str, persisted: set[str], *, redis_up: bool, may_probe: bool,
+) -> tuple[Optional[bool], bool]:
+    """(True installed | False absent | None unknown, whether a probe was spent)."""
+    cached = _cache_get(org_id, team_id)
+    # Verified recently — trust the cached answer
+    if cached is not None:
+        return cached, False
+    known = team_id in persisted
+    # Without a cache every sync would re-probe known installs, so trust the stored list
+    if not redis_up and known:
+        return True, False
+    # Probe budget spent — leave the rest for the next sync
+    if not may_probe:
+        return (True if known else None), False
+
+    found = _probe(org_id, client, team_id)
+    if found is True:
+        persisted.add(team_id)
+        _cache_set(org_id, team_id, True)
+    elif found is False:
+        persisted.discard(team_id)
+        _cache_set(org_id, team_id, False)
+    # Couldn't tell — keep what we knew rather than flip state on an outage
+    elif known:
+        return True, True
+    return found, True
+
+
 def resolve_installed_teams(user_id: str, client, team_ids: Iterable[str]) -> tuple[set[str], set[str]]:
     """Split teams into (installed, unknown); anything else is confirmed not installed."""
     org_id = get_org_id_for_user(user_id)
@@ -135,40 +164,23 @@ def resolve_installed_teams(user_id: str, client, team_ids: Iterable[str]) -> tu
         return set(), set(teams)
 
     persisted = _read_ids(org_id)
+    original = set(persisted)
     redis_up = _redis_available()
     installed: set[str] = set()
     unknown: set[str] = set()
     probes = 0
 
     for team_id in teams:
-        cached = _cache_get(org_id, team_id)
-        # Verified recently — trust the cached answer
-        if cached is not None:
-            if cached:
-                installed.add(team_id)
-            continue
-        # Without a cache every sync would re-probe known installs, so trust the stored list
-        if not redis_up and team_id in persisted:
+        result, probed = _classify_team(
+            org_id, client, team_id, persisted,
+            redis_up=redis_up, may_probe=probes < MAX_PROBES_PER_SYNC,
+        )
+        probes += probed
+        if result is True:
             installed.add(team_id)
-            continue
-        # Probe budget spent — leave the rest for the next sync
-        if probes >= MAX_PROBES_PER_SYNC:
-            (installed if team_id in persisted else unknown).add(team_id)
-            continue
+        elif result is None:
+            unknown.add(team_id)
 
-        probes += 1
-        found = _probe(org_id, client, team_id)
-        if found is True:
-            installed.add(team_id)
-            persisted.add(team_id)
-            _cache_set(org_id, team_id, True)
-        elif found is False:
-            persisted.discard(team_id)
-            _cache_set(org_id, team_id, False)
-        # Couldn't tell — keep what we knew rather than flip state on an outage
-        else:
-            (installed if team_id in persisted else unknown).add(team_id)
-
-    if persisted != _read_ids(org_id):
+    if persisted != original:
         _write_ids(org_id, persisted)
     return installed, unknown

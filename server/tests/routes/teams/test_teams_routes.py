@@ -1,6 +1,7 @@
 """Teams OAuth callback: state handling, tenant resolution and log hygiene."""
 
 import importlib
+import json
 import logging
 import sys
 import types
@@ -47,6 +48,7 @@ def oauth(routes, monkeypatch):
     monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "https://aurora.example.com")
     monkeypatch.setattr(routes, "exchange_code_for_token", lambda code: state["token"])
     monkeypatch.setattr(routes, "_tenant_from_graph", lambda token: state["graph_tenant"])
+    monkeypatch.setattr(routes, "_decode_id_token", _fake_verified_decode)
     monkeypatch.setattr(routes, "store_tokens_in_db", lambda uid, data, prov: state["stored"].append((uid, data, prov)))
 
     # Post-connect side effects (memory seed + channel sync) are covered elsewhere
@@ -60,7 +62,13 @@ def oauth(routes, monkeypatch):
 
 
 def _id_token(**claims):
-    return jwt.encode(claims, "irrelevant-secret-for-test-only-0123456789", algorithm="HS256")
+    """Claims as JSON; `oauth` swaps the signature check for a plain parse."""
+    claims.setdefault("iss", f"https://login.microsoftonline.com/{claims.get('tid')}/v2.0")
+    return json.dumps(claims)
+
+
+def _fake_verified_decode(token):
+    return json.loads(token)
 
 
 def _location(resp):
@@ -142,12 +150,50 @@ def test_missing_access_token_fails(app, routes, oauth):
 
 
 @pytest.mark.parametrize("token", [None, "", "not-a-jwt", _id_token(sub="x"), _id_token(tid="not-a-guid")])
-def test_id_token_without_a_guid_tid_is_ignored(routes, token):
+def test_id_token_without_a_guid_tid_is_ignored(routes, oauth, token):
     assert routes._tenant_from_id_token(token) is None
 
 
-def test_id_token_tid_is_normalised(routes):
+def test_id_token_tid_is_normalised(routes, oauth):
     assert routes._tenant_from_id_token(_id_token(tid=TENANT.upper())) == TENANT
+
+
+def test_id_token_whose_issuer_names_another_tenant_is_ignored(routes, oauth):
+    other = "99999999-9999-9999-9999-999999999999"
+    forged = _id_token(tid=TENANT, iss=f"https://login.microsoftonline.com/{other}/v2.0")
+    assert routes._tenant_from_id_token(forged) is None
+
+
+def test_id_token_that_fails_verification_falls_back_to_graph(app, routes, oauth, monkeypatch):
+    def reject(token):
+        raise jwt.InvalidSignatureError("bad signature")
+
+    monkeypatch.setattr(routes, "_decode_id_token", reject)
+    oauth["token"] = {"access_token": "at", "id_token": _id_token(tid=TENANT)}
+    oauth["graph_tenant"] = "from-graph"
+    _begin(routes)
+    app.test_client().get("/teams/callback?code=abc&state=good-state")
+    assert oauth["stored"][0][1]["tenant_id"] == "from-graph"
+
+
+def test_id_token_is_verified_with_rs256_and_our_client_id(routes, monkeypatch):
+    seen = {}
+
+    class FakeJwks:
+        def get_signing_key_from_jwt(self, token):
+            return type("Key", (), {"key": "pubkey"})()
+
+    def fake_decode(token, key, **kwargs):
+        seen.update(kwargs, key=key)
+        return {}
+
+    monkeypatch.setenv("TEAMS_CLIENT_ID", "client-id")
+    monkeypatch.setattr(routes, "_MS_JWKS_CLIENT", FakeJwks())
+    monkeypatch.setattr(routes.jwt, "decode", fake_decode)
+    routes._decode_id_token("tok")
+    assert seen["algorithms"] == ["RS256"]
+    assert seen["audience"] == "client-id"
+    assert seen["key"] == "pubkey"
 
 
 # --- Microsoft error param ------------------------------------------------------------------
