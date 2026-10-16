@@ -443,7 +443,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
             </Card>
           )}
 
-          {product.key === "jira" && webhookUrl && (
+          {product.key === "jira" && (
             <Card>
               <CardHeader className="pb-3">
                 <div className="flex items-center gap-2">
@@ -457,28 +457,31 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                 </CardDescription>
               </CardHeader>
               <CardContent className="pt-0">
-                <div className="flex items-center gap-2">
-                  <Input
-                    readOnly
-                    value={webhookUrl}
-                    className="font-mono text-xs bg-muted/50"
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(webhookUrl);
-                        setWebhookCopied(true);
-                        setTimeout(() => setWebhookCopied(false), 2000);
-                      } catch {
-                        toast({ title: "Couldn't copy to clipboard", description: "Copy the webhook URL manually.", variant: "destructive" });
-                      }
-                    }}
-                  >
-                    {webhookCopied ? <CheckCircle className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
-                  </Button>
-                </div>
+                {/* The URL request can fail on its own; the filters still have to be editable. */}
+                {webhookUrl && (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      readOnly
+                      value={webhookUrl}
+                      className="font-mono text-xs bg-muted/50"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(webhookUrl);
+                          setWebhookCopied(true);
+                          setTimeout(() => setWebhookCopied(false), 2000);
+                        } catch {
+                          toast({ title: "Couldn't copy to clipboard", description: "Copy the webhook URL manually.", variant: "destructive" });
+                        }
+                      }}
+                    >
+                      {webhookCopied ? <CheckCircle className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                    </Button>
+                  </div>
+                )}
                 {renderRcaSettings()}
               </CardContent>
             </Card>

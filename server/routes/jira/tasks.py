@@ -396,7 +396,7 @@ def _dispatch_rca(
 )
 def judge_jira_ticket(self, payload: Dict[str, Any], user_id: str) -> Optional[Dict[str, Any]]:
     """Auto mode: let the judge decide whether this ticket gets an RCA."""
-    from routes.jira.rca_judge import JudgeUnavailable, judge_and_route
+    from routes.jira.rca_judge import judge_and_route
 
     try:
         return judge_and_route(
@@ -404,7 +404,8 @@ def judge_jira_ticket(self, payload: Dict[str, Any], user_id: str) -> Optional[D
             user_id,
             start_rca=lambda: process_jira_webhook.delay(payload=payload, user_id=user_id),
         )
-    except JudgeUnavailable as exc:
+    # Any failure leaves no judged key, and Jira will not resend the webhook.
+    except Exception as exc:
         raise self.retry(exc=exc)
 
 

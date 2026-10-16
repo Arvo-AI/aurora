@@ -19,7 +19,12 @@ from routes.jira.rca_filters import (
     normalize_rca_rules,
 )
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_user_preference, resolve_org_id, set_rls_context
+from utils.auth.stateless_auth import (
+    get_org_id_from_request,
+    get_user_preference,
+    resolve_org_id,
+    set_rls_context,
+)
 from utils.db.db_utils import connect_to_db_as_user
 from utils.web.public_url import external_backend_url
 from utils.auth.token_management import get_token_data, store_tokens_in_db
@@ -420,7 +425,8 @@ def update_settings(user_id):
     # Auto needs its policy memory; create it now so the card shows it right away.
     if settings["rca_mode"] == "auto":
         from services.memory.jira_memory import seed_jira_memory
-        seed_jira_memory(user_id)
+        # Request org, not the TTL-cached users.org_id, so a just-changed org is seeded correctly.
+        seed_jira_memory(user_id, org_id=get_org_id_from_request())
 
     # Jira prefs are org-scoped — invalidate every member's cached tool list.
     from chat.backend.agent.tools.mcp_tools import (
@@ -611,7 +617,7 @@ def _enqueue_webhook(decision: Dict[str, Any], payload: Dict[str, Any], user_id:
         judge_jira_ticket.delay(payload=payload, user_id=user_id)
         return
     # JQL is confirmed in the task. A Jira round trip here would turn a slow search into a 503.
-    jql_clauses = decision.get("jql") or [] if decision["action"] == "jql" else None
+    jql_clauses = (decision.get("jql") or []) if decision["action"] == "jql" else None
     process_jira_webhook.delay(payload=payload, user_id=user_id, jql_clauses=jql_clauses)
 
 

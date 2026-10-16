@@ -31,7 +31,7 @@ SLACK_POLICY_SOURCES = frozenset({"slack", "team_routing"})
 JIRA_MEMORY_CATEGORY = "context"
 JIRA_MEMORY_TITLE = "Jira RCA"
 
-# Jira-triggered RCAs always see the policy, so they can refine it from what they find.
+# Jira-triggered RCAs. The agent only receives this memory in Auto mode.
 JIRA_POLICY_SOURCES = frozenset({"jira"})
 
 # Well-known entries whose (category, title) pair IS their stable identity —

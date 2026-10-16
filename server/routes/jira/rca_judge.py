@@ -19,6 +19,8 @@ _MAX_SUMMARY = 300
 _MAX_DESCRIPTION = 3000
 _JUDGED_TTL_SECONDS = 30 * 24 * 3600
 _JUDGE_HOURLY_LIMIT = 120
+# Stored once an RCA is started, so later edits of the same ticket skip the judge.
+_INVESTIGATED = "investigated"
 
 _JUDGE_SYSTEM = """You decide whether Aurora, an SRE assistant, should automatically run a root cause analysis (RCA) for a Jira ticket.
 
@@ -81,7 +83,7 @@ def judge_ticket(user_id: str, policy: str, ticket: Dict[str, Any]) -> Optional[
     from chat.backend.agent.providers import create_chat_model
     from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
 
-    model = ModelConfig.RCA_MODEL
+    model = ModelConfig.JIRA_RCA_JUDGE_MODEL
     messages = [
         SystemMessage(content=_JUDGE_SYSTEM.format(policy=policy.strip())),
         HumanMessage(content="TICKET (JSON):\n" + json.dumps(ticket, ensure_ascii=False)),
@@ -152,10 +154,16 @@ def _jira_policy(user_id: str) -> str:
     from services.memory.jira_memory import JIRA_MEMORY_DEFAULT_CONTENT, seed_jira_memory
     from services.memory.queries import get_memory_content
 
-    policy = get_memory_content(user_id, JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE)
+    try:
+        policy = get_memory_content(
+            user_id, JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE, strict=True,
+        )
+    except Exception as exc:
+        # A failed read must retry. Defaults would ignore team rules the read never saw.
+        raise JudgeUnavailable("policy unavailable") from exc
     if policy and policy.strip():
         return policy
-    # First Auto ticket for this org: create the editable entry, judge with the defaults.
+    # Absent, not broken: create the editable entry and judge with the defaults.
     seed_jira_memory(user_id)
     return JIRA_MEMORY_DEFAULT_CONTENT
 
@@ -168,16 +176,17 @@ def judge_and_route(
     from utils.hooks import get_hook
 
     ticket = ticket_for_judge(payload.get("issue") or {})
-    issue_key = ticket["key"] or "unknown"
+    issue_key = str(ticket.get("key") or "").strip()
     org_id = get_org_id_for_user(user_id)
     if not org_id:
         logger.warning("[JIRA][JUDGE] No org for user %s; skipping", sanitize(user_id))
         return {"status": "no_org"}
 
     fingerprint = ticket_fingerprint(ticket)
-    judged_key = _judged_key(org_id, issue_key)
-    # An edit that doesn't change what the ticket says keeps its verdict. Without Redis, re-judge.
-    if _redis_or(False, lambda r: r.get(judged_key) == fingerprint):
+    judged_key = _judged_key(org_id, issue_key) if issue_key else ""
+    # Keyless tickets must not share one slot. Without Redis, re-judge.
+    stored = _redis_or(None, lambda r: r.get(judged_key)) if issue_key else None
+    if stored in (_INVESTIGATED, fingerprint):
         return {"status": "unchanged"}
 
     hook_allowed, hook_message = get_hook("before_llm_call")(org_id, user_id)
@@ -189,8 +198,9 @@ def judge_and_route(
         logger.warning("[JIRA][JUDGE] Hourly judge limit reached; skipping %s", sanitize(issue_key))
         return {"status": "rate_limited"}
 
+    policy = _jira_policy(user_id)
     try:
-        verdict = judge_ticket(user_id, _jira_policy(user_id), ticket)
+        verdict = judge_ticket(user_id, policy, ticket)
     except Exception as exc:
         logger.exception("[JIRA][JUDGE] Judge call failed for %s", sanitize(issue_key))
         raise JudgeUnavailable("judge call failed") from exc
@@ -205,5 +215,8 @@ def judge_and_route(
     if verdict.investigate:
         start_rca()
     # Remembered only once the RCA is handed off, so a failed enqueue gets judged again.
-    _redis_or(None, lambda r: r.set(judged_key, fingerprint, ex=_JUDGED_TTL_SECONDS))
+    # An investigation stays settled when the summary changes. A skip is only valid for this wording.
+    if issue_key:
+        remembered = _INVESTIGATED if verdict.investigate else fingerprint
+        _redis_or(None, lambda r: r.set(judged_key, remembered, ex=_JUDGED_TTL_SECONDS))
     return {"status": "judged", "investigate": verdict.investigate}

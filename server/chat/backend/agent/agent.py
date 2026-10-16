@@ -373,9 +373,11 @@ class Agent:
                         )
                         if _src in SLACK_POLICY_SOURCES:
                             _force_entries = [(SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE)]
-                        # Jira-triggered RCAs can learn the ticket wasn't worth investigating.
+                        # Filters mode never reads this entry, so don't hand it to the agent there.
                         elif _src in JIRA_POLICY_SOURCES:
-                            _force_entries = [(JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE)]
+                            from routes.jira.jira_routes import get_jira_rca_mode
+                            if get_jira_rca_mode(state.user_id) == "auto":
+                                _force_entries = [(JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE)]
                         _memory_prefetch = MemoryPrefetch(
                             user_id=state.user_id,
                             session_id=state.session_id,
