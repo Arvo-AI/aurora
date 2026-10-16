@@ -81,7 +81,8 @@ def get_auth_url(state: str) -> str:
         "redirect_uri": cfg["redirect_uri"],
         "state": state,
         "response_type": "code",
-        "prompt": "consent",
+        # select_account lets a non-admin through after tenant consent; prompt=consent re-asks
+        "prompt": "select_account",
     }
     return f"{AUTH_URL.format(tenant=cfg['tenant_id'])}?{urlencode(params)}"
 

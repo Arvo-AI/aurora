@@ -138,7 +138,7 @@ x-common-env: &common-env
   SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
   # Microsoft Teams OAuth and Bot Framework
   TEAMS_CLIENT_ID: ${TEAMS_CLIENT_ID}
-  TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
+  # TEAMS_CLIENT_SECRET is not here — only aurora-server, celery_worker, and chatbot mint bot tokens
   TEAMS_TENANT_ID: ${TEAMS_TENANT_ID}
   TEAMS_APP_ID: ${TEAMS_APP_ID}
   # Slack Socket Mode: SLACK_APP_TOKEN is intentionally NOT in this shared env —
@@ -225,6 +225,7 @@ services:
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
       GUNICORN_THREADS: ${GUNICORN_THREADS:-32}
       <<: *common-env
+      TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       FLASK_PORT: ${FLASK_PORT:-5080}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
 
@@ -327,6 +328,7 @@ services:
         -Q high,celery
     environment:
       <<: *common-env
+      TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
 
@@ -462,6 +464,7 @@ services:
       - terraform-workdir:/app/terraform_workdir
     environment:
       <<: *common-env
+      TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
 
       # Frontend URL

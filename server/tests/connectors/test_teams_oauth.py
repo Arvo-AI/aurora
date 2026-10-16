@@ -37,6 +37,7 @@ def test_tenant_guid_is_used_in_the_authorize_url(configured, monkeypatch):
     url = oauth.get_auth_url(state="s")
     assert url.startswith("https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/oauth2/v2.0/authorize?")
     assert "state=s" in url
+    assert "prompt=select_account" in url
 
 
 def test_explicit_common_is_still_allowed(configured, monkeypatch):

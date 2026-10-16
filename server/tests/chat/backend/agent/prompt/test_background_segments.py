@@ -29,6 +29,7 @@ def _segments_for(source: str) -> list:
 @pytest.mark.parametrize("source,expected", [
     ("slack", "background_source_slack"),
     ("SLACK", "background_source_slack"),
+    ("teams", "background_source_teams"),
     ("google_chat", "background_source_google_chat"),
 ])
 def test_platform_sources_pick_their_segment(source, expected):
@@ -42,3 +43,4 @@ def test_other_sources_fall_through_to_general(source):
     names = _segments_for(source)
     assert "background_source_general" in names
     assert "background_source_slack" not in names
+    assert "background_source_teams" not in names
