@@ -162,8 +162,13 @@ def test_without_an_app_id_nothing_counts_as_a_mention(monkeypatch):
 # --- tenant -> user ------------------------------------------------------------------
 
 class _Cursor:
-    def __init__(self, row):
+    """user_tokens rows are only visible under the org that owns them, like FORCE RLS."""
+
+    def __init__(self, row, owner_org="org-a", orgs=("org-z", "org-a")):
         self.row = row
+        self.owner_org = owner_org
+        self.orgs = orgs
+        self.current_org = None
         self.executed = []
 
     def __enter__(self):
@@ -174,9 +179,14 @@ class _Cursor:
 
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
+        if sql.startswith("SET myapp.current_org_id"):
+            self.current_org = params[0]
+
+    def fetchall(self):
+        return [(o,) for o in self.orgs]
 
     def fetchone(self):
-        return self.row
+        return self.row if self.current_org == self.owner_org else None
 
 
 def _patch_pool(monkeypatch, row=None, error=None):
@@ -199,9 +209,16 @@ def _patch_pool(monkeypatch, row=None, error=None):
 def test_tenant_resolves_to_the_connecting_user(monkeypatch):
     cursor = _patch_pool(monkeypatch, row=("uid-admin",))
     assert h.get_user_id_from_teams_tenant("tenant-1") == "uid-admin"
-    sql, params = cursor.executed[0]
+    lookups = [(s, p) for s, p in cursor.executed if "user_tokens" in s]
+    sql, params = lookups[-1]
     assert "provider = 'teams'" in sql and "is_active = TRUE" in sql
     assert params == ("tenant-1",)
+
+
+def test_tenant_lookup_sets_the_owning_org_before_reading_user_tokens(monkeypatch):
+    cursor = _patch_pool(monkeypatch, row=("uid-admin",))
+    assert h.get_user_id_from_teams_tenant("tenant-1") == "uid-admin"
+    assert cursor.current_org == "org-a"
 
 
 def test_unknown_tenant_resolves_to_none(monkeypatch):
