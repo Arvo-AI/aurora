@@ -247,7 +247,7 @@ class ConfluenceClient:
             return response.json()
         except requests.RequestException as exc:
             if log_errors:
-                logger.error(
+                logger.exception(
                     "Confluence API request failed: %s %s (%s)",
                     method,
                     path,
@@ -286,14 +286,14 @@ class ConfluenceClient:
                     )
                 except requests.RequestException:
                     raise exc from None
-            logger.error(
+            logger.exception(
                 "Confluence API request failed: GET %s (%s)",
                 v1_path,
                 type(exc).__name__,
             )
             raise
         except requests.RequestException as exc:
-            logger.error(
+            logger.exception(
                 "Confluence API request failed: GET %s (%s)",
                 v1_path,
                 type(exc).__name__,
@@ -323,7 +323,7 @@ class ConfluenceClient:
             return response.json()
         except requests.RequestException as exc:
             if log_errors:
-                logger.error(
+                logger.exception(
                     "Confluence v2 API request failed: %s %s (%s)",
                     method,
                     path,
