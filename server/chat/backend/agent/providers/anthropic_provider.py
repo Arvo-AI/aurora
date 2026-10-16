@@ -7,10 +7,12 @@ Requires ANTHROPIC_API_KEY environment variable.
 
 import logging
 import os
+from typing import Optional
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from chat.backend.agent.utils.cache_control import CACHE_STYLE_CACHE_CONTROL
 from .base_provider import BaseLLMProvider
 from ._sampling_guard import make_adaptive_sampling_cls
 from ..model_mapper import ModelMapper
@@ -74,6 +76,10 @@ class AnthropicProvider(BaseLLMProvider):
     def is_available(self) -> bool:
         """Check if Anthropic API key is configured."""
         return bool(self.api_key)
+
+    def prompt_cache_style(self, model: str) -> Optional[str]:
+        # ChatAnthropic reads cache_control straight off content blocks
+        return CACHE_STYLE_CACHE_CONTROL
 
     def supports_model(self, model: str) -> bool:
         """

@@ -537,6 +537,8 @@ def initialize_tables():
                         request_type VARCHAR(100),
                         input_tokens INTEGER NOT NULL DEFAULT 0,
                         output_tokens INTEGER NOT NULL DEFAULT 0,
+                        cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                        cache_write_tokens INTEGER NOT NULL DEFAULT 0,
                         total_tokens INTEGER GENERATED ALWAYS AS (input_tokens + output_tokens) STORED,
                         estimated_cost DECIMAL(10,6) DEFAULT 0.00,
                         surcharge_rate DECIMAL(5,4) DEFAULT 0.0000,
@@ -2284,6 +2286,18 @@ def initialize_tables():
                 logging.warning(
                     f"Error adding surcharge fields to llm_usage_tracking: {e}"
                 )
+                conn.rollback()
+
+            # Migration: Add prompt-cache token columns to llm_usage_tracking
+            try:
+                cursor.execute("""
+                    ALTER TABLE llm_usage_tracking
+                    ADD COLUMN IF NOT EXISTS cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS cache_write_tokens INTEGER NOT NULL DEFAULT 0;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding cache token columns to llm_usage_tracking: {e}")
                 conn.rollback()
 
             # Migration: Zero out surcharge_rate (markup removed, raw provider costs only)
