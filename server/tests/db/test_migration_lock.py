@@ -65,7 +65,18 @@ def test_enables_server_side_keepalives_before_locking(monkeypatch):
     assert "pg_try_advisory_lock" in statements[-1]
 
 
-@pytest.mark.parametrize("raw, expected", [(None, 240.0), ("90", 90.0), ("garbage", 240.0)])
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        (None, 240.0),
+        ("90", 90.0),
+        ("garbage", 240.0),
+        ("nan", 240.0),
+        ("inf", 240.0),
+        ("0", 240.0),
+        ("-5", 240.0),
+    ],
+)
 def test_wait_seconds_from_env(monkeypatch, raw, expected):
     if raw is None:
         monkeypatch.delenv("DB_MIGRATION_LOCK_TIMEOUT", raising=False)

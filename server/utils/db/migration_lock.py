@@ -1,6 +1,7 @@
 """Startup migration lock: a bounded wait instead of an indefinite one."""
 
 import logging
+import math
 import os
 import time
 
@@ -22,10 +23,15 @@ def _wait_seconds() -> float:
     if not raw:
         return _DEFAULT_WAIT_SECONDS
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
         logger.warning("DB_MIGRATION_LOCK_TIMEOUT=%r is not a number; using default", raw)
         return _DEFAULT_WAIT_SECONDS
+    # nan/inf never reach the deadline and <= 0 fails at once; both defeat the bound
+    if not math.isfinite(value) or value <= 0:
+        logger.warning("DB_MIGRATION_LOCK_TIMEOUT=%r is out of range; using default", raw)
+        return _DEFAULT_WAIT_SECONDS
+    return value
 
 
 def acquire_migration_lock(conn, key: int = MIGRATION_LOCK_KEY, wait_seconds=None) -> None:

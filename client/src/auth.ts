@@ -22,9 +22,9 @@ type RefreshResult = {
 let inflightRefresh: Promise<RefreshResult> | null = null
 
 // A failed refresh never advances lastRefreshedAt, so without a cooldown every
-// request re-hits /api/auth/me while the backend is struggling.
-let consecutiveFailures = 0
-let backoffUntil = 0
+// request re-hits /api/auth/me while the backend is struggling. Tracked per
+// user so one user's failure can't defer another user's revalidation.
+const refreshBackoff = new Map<string, { failures: number; until: number }>()
 const BACKOFF_BASE_MS = 2000
 const BACKOFF_MAX_MS = 60_000
 
@@ -32,21 +32,21 @@ async function refreshUserFromBackend(userId: string): Promise<RefreshResult> {
   if (inflightRefresh) return inflightRefresh
 
   // Still cooling down after recent failures — keep the current JWT values
-  if (Date.now() < backoffUntil) return null
+  const cooldown = refreshBackoff.get(userId)
+  if (cooldown && Date.now() < cooldown.until) return null
 
   inflightRefresh = doRefreshUserFromBackend(userId)
     .then(result => {
       if (result === null) {
         // Exponential backoff with jitter, capped
-        consecutiveFailures += 1
-        const delay = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (consecutiveFailures - 1))
+        const failures = (cooldown?.failures ?? 0) + 1
+        const delay = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (failures - 1))
         // Jitter only spreads retries across pods; it needs no secure randomness
         const jitter = crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32
-        backoffUntil = Date.now() + delay * (0.5 + jitter / 2)
+        refreshBackoff.set(userId, { failures, until: Date.now() + delay * (0.5 + jitter / 2) })
       } else {
         // Backend answered — resume normal refresh cadence
-        consecutiveFailures = 0
-        backoffUntil = 0
+        refreshBackoff.delete(userId)
       }
       return result
     })
