@@ -65,10 +65,13 @@ def teams_connect(user_id):
             "redirect_uri": get_redirect_uri(),
             "message": "Redirect to Microsoft for authentication",
         })
-    except ValueError as exc:
-        # Missing env vars or invalid connect params — safe to show the operator-facing text.
-        logger.warning("Teams OAuth connect refused: %s", exc)
-        return jsonify({"error": str(exc), "error_code": "TEAMS_OAUTH_NOT_CONFIGURED"}), 503
+    except ValueError:
+        # Missing env vars — the detail stays in the log, not in the response body
+        logger.warning("Teams OAuth connect refused: configuration is incomplete", exc_info=True)
+        return jsonify({
+            "error": "Microsoft Teams is not configured. A developer needs to finish the Teams setup.",
+            "error_code": "TEAMS_OAUTH_NOT_CONFIGURED",
+        }), 503
     except Exception:
         logger.exception("Error initiating Teams OAuth")
         return jsonify({"error": "Failed to initiate Teams OAuth"}), 500
@@ -88,6 +91,20 @@ def teams_disconnect(user_id):
     except Exception:
         logger.exception("Error disconnecting Teams")
         return jsonify({"error": "Failed to disconnect Microsoft Teams"}), 500
+
+
+def _oauth_error_code(ms_error: str, ms_desc: str) -> str:
+    """A fixed code for the setup page. The raw Microsoft text never enters the redirect."""
+    desc = ms_desc.lower()
+    # Single-tenant app sent to the /common endpoint — only the description says so
+    if "/common endpoint" in desc or "not configured as a multi-tenant" in desc:
+        return "single_tenant_common"
+    # Only codes the setup page has copy for
+    if ms_error == "access_denied":
+        return "access_denied"
+    if ms_error == "invalid_request":
+        return "invalid_request"
+    return "oauth_error"
 
 
 def _teams_oauth_failure_redirect(error_code: str) -> str:
@@ -115,8 +132,7 @@ def teams_callback():
                 ms_error,
                 f" — {ms_desc}" if ms_desc else "",
             )
-            extra = f"&error_description={quote(ms_desc, safe='')}" if ms_desc else ""
-            return redirect(_teams_oauth_failure_redirect(ms_error) + extra)
+            return redirect(_teams_oauth_failure_redirect(_oauth_error_code(ms_error, ms_desc)))
 
         code = request.args.get("code")
         state = request.args.get("state")

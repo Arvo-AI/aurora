@@ -36,21 +36,15 @@ function TeamsSetupContent() {
     oauthFailureHandled.current = true;
     const error = searchParams.get("error") || "unknown";
     const uriFromCallback = searchParams.get("redirect_uri");
-    const msDetail = searchParams.get("error_description");
     if (uriFromCallback) {
       setRedirectUriHint(uriFromCallback);
     }
-    const baseMessage = teamsOAuthFailureMessage(
-      error,
-      uriFromCallback ?? redirectUriHint ?? undefined,
-      msDetail ?? undefined,
-    );
     toast({
       title: "Microsoft Teams not connected",
-      description:
-        baseMessage.includes("TEAMS_TENANT_ID") || !msDetail
-          ? baseMessage
-          : `${baseMessage} Microsoft: ${msDetail}`,
+      description: teamsOAuthFailureMessage(
+        error,
+        uriFromCallback ?? redirectUriHint ?? undefined,
+      ),
       variant: "destructive",
       duration: 16_000,
     });

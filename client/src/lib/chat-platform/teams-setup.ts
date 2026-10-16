@@ -34,23 +34,7 @@ export const TEAMS_CUSTOMER_SETUP = {
     "Aurora records when the bot receives a channel message. That confirms Teams is delivering traffic to your organization’s Aurora instance.",
 } as const;
 
-export function teamsOAuthFailureMessage(
-  errorCode: string,
-  redirectUri?: string,
-  msDescription?: string,
-): string {
-  const desc = msDescription ?? "";
-  if (
-    desc.includes("/common endpoint") ||
-    desc.includes("multi-tenant application") ||
-    desc.includes("not configured as a multi-tenant")
-  ) {
-    return (
-      "Your Entra app is single-tenant, but Aurora is using the /common sign-in endpoint (TEAMS_TENANT_ID=common). " +
-      "Set TEAMS_TENANT_ID in .env to your Directory (tenant) ID from Microsoft Entra ID → Overview, restart aurora-server, then Connect again. " +
-      "Alternatively, change the app registration Supported account types to multitenant."
-    );
-  }
+export function teamsOAuthFailureMessage(errorCode: string, redirectUri?: string): string {
   const entraAuthPath =
     "Microsoft Entra ID → App registrations (not Enterprise applications) → open the app whose Application (client) ID matches TEAMS_CLIENT_ID in .env → Authentication → Web redirect URIs";
   const redirectHint = redirectUri
@@ -59,9 +43,14 @@ export function teamsOAuthFailureMessage(
 
   const messages: Record<string, string> = {
     access_denied: "Sign-in or consent was cancelled in Microsoft.",
+    single_tenant_common:
+      "Your Entra app is single-tenant, but Aurora is using the /common sign-in endpoint (TEAMS_TENANT_ID=common). " +
+      "Set TEAMS_TENANT_ID in .env to your Directory (tenant) ID from Microsoft Entra ID → Overview, restart aurora-server, then Connect again. " +
+      "Alternatively, change the app registration Supported account types to multitenant.",
     invalid_request:
-      "Microsoft rejected the OAuth request (redirect URI or platform type). Use a single Web platform (not SPA), no trailing slash on the URI, and keep ngrok on port 5080. See the Microsoft line below for the exact AADSTS code." +
+      "Microsoft rejected the OAuth request (redirect URI or platform type). Use a single Web platform (not SPA), no trailing slash on the URI, and keep ngrok on port 5080." +
       redirectHint,
+    oauth_error: "Microsoft sign-in failed. Check server logs for the exact error, then try Connect again.",
     no_code_or_state:
       "Microsoft did not return an authorization code. If the redirect URI is already in Entra, confirm it is on the same app registration as TEAMS_CLIENT_ID, keep ngrok running, and finish sign-in in one step." +
       redirectHint,

@@ -21,7 +21,8 @@ from routes.teams.teams_events_helpers import (
 teams_events_bp = Blueprint("teams_events", __name__)
 logger = logging.getLogger(__name__)
 
-_MENTION_RE = re.compile(r"<at>.*?</at>", re.IGNORECASE)
+# Activity text is attacker-controlled; a lazy .* here backtracks on a long run of "<at>"
+_MENTION_RE = re.compile(r"<at>[^<]{0,200}</at>", re.IGNORECASE)
 
 
 @teams_events_bp.route("/messages", methods=["POST"])

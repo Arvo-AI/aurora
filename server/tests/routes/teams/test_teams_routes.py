@@ -219,3 +219,18 @@ def test_microsoft_error_redirects_to_setup_with_the_code(app, oauth):
     resp = app.test_client().get("/teams/callback?error=access_denied")
     assert _error_code(resp) == "access_denied"
     assert "/teams/setup" in _location(resp)
+    # The raw Microsoft text never rides along in the redirect
+    assert "error_description" not in _location(resp)
+
+
+def test_unknown_microsoft_error_becomes_a_fixed_code(app, oauth):
+    resp = app.test_client().get("/teams/callback?error=https://evil.example/phish")
+    assert _error_code(resp) == "oauth_error"
+
+
+def test_single_tenant_description_maps_to_its_own_code(app, oauth):
+    resp = app.test_client().get(
+        "/teams/callback?error=invalid_request&error_description=not%20configured%20as%20a%20multi-tenant"
+    )
+    assert _error_code(resp) == "single_tenant_common"
+    assert "error_description" not in _location(resp)
