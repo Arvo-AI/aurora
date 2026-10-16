@@ -42,17 +42,29 @@ class FakeCursor:
             if "must_change_password = FALSE" in sql:
                 user["must_change_password"] = False
             self._result = []
+        elif sql.startswith("UPDATE users SET name"):
+            # The guard has to live in the SQL: a SELECT-then-UPDATE would race.
+            if "starts_with" not in sql:
+                raise AssertionError(f"name update lost its guard: {sql}")
+            name, user_id, _unchanged, _extension = params
+            user = next(u for u in self.users if u["id"] == user_id)
+            current = user.get("name") or ""
+            if current != name and (current == "" or name.startswith(current + " ")):
+                user["name"] = name
+            self._result = []
         elif sql.startswith(("SAVEPOINT", "ROLLBACK TO SAVEPOINT")):
             self._result = []
         elif sql.startswith("INSERT INTO users"):
-            email, _pw, _name, _role, org_id, subject = params
+            email, _pw, name, _role, org_id, subject = params
             # Simulates a concurrent login committing the same user first.
             if self.race_winner:
                 self.users.append(self.race_winner)
                 self.race_winner = None
                 raise psycopg2.errors.UniqueViolation()
             new_id = f"uid-{len(self.users) + 1}"
-            self.users.append({"id": new_id, "email": email, "org_id": org_id, "sso_subject": subject})
+            self.users.append({
+                "id": new_id, "email": email, "name": name, "org_id": org_id, "sso_subject": subject,
+            })
             self._result = [(new_id,)]
         elif sql.startswith("SELECT 1 FROM org_sso_configs c"):
             org_id, domain = params
@@ -81,6 +93,100 @@ def _identity(subject="sub-1", email="first.last@example.com", name="First Last"
     return {"subject": subject, "email": email, "name": name}
 
 
+class _Auth:
+    def __init__(self, attrs, name_id="", friendly=None):
+        self._attrs = attrs
+        self._name_id = name_id
+        self._friendly = friendly or {}
+
+    def get_attributes(self):
+        return self._attrs
+
+    def get_friendlyname_attributes(self):
+        return self._friendly
+
+    def get_nameid(self):
+        return self._name_id
+
+
+class TestExtractIdentity:
+    def test_first_name_only_claim_does_not_hide_surname(self):
+        # Okta/Google often map `name` to the given name and send the surname separately.
+        auth = _Auth({
+            "name": ["First"],
+            "firstName": ["First"],
+            "lastName": ["Last"],
+            "email": ["first.last@example.com"],
+        })
+        assert sso.extract_identity(auth)["name"] == "First Last"
+
+    def test_entra_givenname_and_surname_are_joined(self):
+        auth = _Auth({
+            "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname": ["First"],
+            "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname": ["Last"],
+            "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress": ["first.last@example.com"],
+            "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name": ["first.last@example.com"],
+        }, name_id="first.last@example.com")
+        identity = sso.extract_identity(auth)
+        assert identity["name"] == "First Last"
+        assert identity["email"] == "first.last@example.com"
+
+    def test_multiword_surname_already_in_display_name_is_not_repeated(self):
+        auth = _Auth({"displayName": ["Ada van Dyke"], "surname": ["van Dyke"]})
+        assert sso.extract_identity(auth)["name"] == "Ada van Dyke"
+
+    @pytest.mark.parametrize("display,surname", [
+        ("Lovelace, Ada", "Lovelace"),
+        ("José García", "Garcia"),
+        ("Sean O\u2019Brien", "O'Brien"),
+        ("Lovelace", "Lovelace"),
+    ])
+    def test_punctuated_or_accented_display_name_is_not_extended(self, display, surname):
+        # Token matching misses commas, accents, and curly apostrophes.
+        auth = _Auth({"displayName": [display], "sn": [surname]})
+        assert sso.extract_identity(auth)["name"] == display
+
+    def test_exact_key_wins_over_an_earlier_different_casing(self):
+        auth = _Auth({
+            "GivenName": ["Wrong"],
+            "givenName": ["First"],
+            "sn": ["Last"],
+        })
+        assert sso.extract_identity(auth)["name"] == "First Last"
+
+    def test_empty_exact_key_falls_through_to_the_other_casing(self):
+        auth = _Auth({"givenName": [" "], "GivenName": ["First"], "sn": ["Last"]})
+        assert sso.extract_identity(auth)["name"] == "First Last"
+
+    def test_display_name_with_middle_name_is_kept(self):
+        auth = _Auth({
+            "displayName": ["First Q. Last"],
+            "givenName": ["First"],
+            "sn": ["Last"],
+        })
+        assert sso.extract_identity(auth)["name"] == "First Q. Last"
+
+    def test_friendly_name_surname_and_oid_given_name(self):
+        auth = _Auth(
+            {"urn:oid:2.5.4.42": ["First"]},
+            friendly={"surname": ["Last"], "mail": ["first.last@example.com"]},
+        )
+        identity = sso.extract_identity(auth)
+        assert identity["name"] == "First Last"
+        assert identity["email"] == "first.last@example.com"
+
+    def test_underscore_and_case_variants(self):
+        auth = _Auth({"First_Name": ["First"], "Last_Name": ["Last"]})
+        assert sso.extract_identity(auth)["name"] == "First Last"
+
+    def test_email_shaped_name_claim_is_not_a_personal_name(self):
+        auth = _Auth({
+            "name": ["first.last@example.com"],
+            "givenName": ["First"],
+        })
+        assert sso.extract_identity(auth)["name"] == "First"
+
+
 ACME_DOMAIN = {"org_id": "org-acme", "domain": "example.com", "verified": True}
 
 
@@ -89,7 +195,10 @@ class TestResolveUser:
         cur = FakeCursor(domains=[ACME_DOMAIN])
         user_id, created = sso.resolve_user(cur, "org-acme", _identity(), "viewer")
         assert created is True
-        assert cur.users == [{"id": user_id, "email": "first.last@example.com", "org_id": "org-acme", "sso_subject": "sub-1"}]
+        assert cur.users == [{
+            "id": user_id, "email": "first.last@example.com", "name": "First Last",
+            "org_id": "org-acme", "sso_subject": "sub-1",
+        }]
 
     def test_concurrent_first_login_resolves_to_winner(self):
         cur = FakeCursor(domains=[ACME_DOMAIN])
@@ -100,9 +209,50 @@ class TestResolveUser:
         # The IdP renamed the user's address; the immutable subject still matches.
         cur = FakeCursor(
             domains=[ACME_DOMAIN],
-            users=[{"id": "uid-a", "email": "old.name@example.com", "org_id": "org-acme", "sso_subject": "sub-1"}],
+            users=[{"id": "uid-a", "email": "old.name@example.com", "name": "First",
+                    "org_id": "org-acme", "sso_subject": "sub-1"}],
         )
         assert sso.resolve_user(cur, "org-acme", _identity(email="new.name@example.com"), "viewer") == ("uid-a", False)
+        # The IdP's full name replaces a first-name-only value from an earlier login.
+        assert cur.users[0]["name"] == "First Last"
+
+    def test_returning_login_does_not_replace_full_name_with_given_name(self):
+        cur = FakeCursor(
+            domains=[ACME_DOMAIN],
+            users=[{"id": "uid-a", "email": "first.last@example.com", "name": "First Last",
+                    "org_id": "org-acme", "sso_subject": "sub-1"}],
+        )
+        assert sso.resolve_user(cur, "org-acme", _identity(name="First"), "viewer") == ("uid-a", False)
+        assert cur.users[0]["name"] == "First Last"
+
+    def test_returning_login_keeps_name_when_idp_omits_it(self):
+        cur = FakeCursor(
+            domains=[ACME_DOMAIN],
+            users=[{"id": "uid-a", "email": "first.last@example.com", "name": "First Last",
+                    "org_id": "org-acme", "sso_subject": "sub-1"}],
+        )
+        identity = _identity(name=None)
+        assert sso.resolve_user(cur, "org-acme", identity, "viewer") == ("uid-a", False)
+        assert cur.users[0]["name"] == "First Last"
+
+    def test_linking_invited_member_does_not_overwrite_name(self):
+        cur = FakeCursor(
+            domains=[ACME_DOMAIN],
+            users=[{"id": "uid-a", "email": "first.last@example.com", "name": "Invited Name",
+                    "org_id": "org-acme", "sso_subject": None}],
+        )
+        assert sso.resolve_user(cur, "org-acme", _identity(name="First Last"), "viewer") == ("uid-a", False)
+        assert cur.users[0]["name"] == "Invited Name"
+
+    def test_second_login_keeps_a_stored_full_name(self):
+        # The link above is the first login. The next one matches sso_subject.
+        cur = FakeCursor(
+            domains=[ACME_DOMAIN],
+            users=[{"id": "uid-a", "email": "first.last@example.com", "name": "Invited Name",
+                    "org_id": "org-acme", "sso_subject": "sub-1"}],
+        )
+        assert sso.resolve_user(cur, "org-acme", _identity(name="First Last"), "viewer") == ("uid-a", False)
+        assert cur.users[0]["name"] == "Invited Name"
 
     def test_existing_password_member_gets_linked(self):
         cur = FakeCursor(
