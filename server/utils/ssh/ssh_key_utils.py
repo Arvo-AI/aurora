@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from utils.db.connection_pool import db_pool
+from utils.db.org_scope import resolve_org, org_read_predicate
 from utils.secrets.secret_ref_utils import get_user_token_data
 
 logger = logging.getLogger(__name__)
@@ -105,21 +106,22 @@ def _serialize_key_row(user_id: str, row: tuple) -> Dict[str, Any]:
 
 
 def _get_single_key(user_id: str, key_id: int) -> Optional[Dict[str, Any]]:
+    predicate, pred_params = org_read_predicate(user_id, resolve_org(user_id))
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             from utils.auth.stateless_auth import set_rls_context
             set_rls_context(cur, conn, user_id, log_prefix="[SSHKeyUtils]")
             cur.execute(
-                """
+                f"""
                 SELECT id, provider, token_data, secret_ref, timestamp
                 FROM user_tokens
-                WHERE user_id = %s
+                WHERE {predicate}
                   AND id = %s
                   AND provider LIKE 'aurora_ssh%%'
                   AND is_active = TRUE
                 LIMIT 1;
                 """,
-                (user_id, key_id),
+                (*pred_params, key_id),
             )
             row = cur.fetchone()
     return _serialize_key_row(user_id, row) if row else None

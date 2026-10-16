@@ -17,6 +17,7 @@ from utils.ssh.ssh_key_utils import (
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import store_tokens_in_db
 from utils.auth.stateless_auth import set_rls_context
+from utils.db.org_scope import resolve_org, org_read_predicate
 
 ssh_keys_bp = Blueprint("ssh_keys_bp", __name__)
 logger = logging.getLogger(__name__)
@@ -27,20 +28,21 @@ logger = logging.getLogger(__name__)
 
 
 def _list_user_keys(user_id: str) -> List[Dict[str, Any]]:
-    """Fetch keys for a user using RLS-aware connection."""
+    """Fetch keys visible to this user (own rows, or any row in their org)."""
+    predicate, pred_params = org_read_predicate(user_id, resolve_org(user_id))
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[SSHKeys:list]")
             cur.execute(
-                """
+                f"""
                 SELECT id, provider, token_data, secret_ref, timestamp
                 FROM user_tokens
-                WHERE user_id = %s
+                WHERE {predicate}
                   AND provider LIKE 'aurora_ssh%%'
                   AND is_active = TRUE
                 ORDER BY timestamp DESC;
                 """,
-                (user_id,),
+                pred_params,
             )
             rows = cur.fetchall()
     return [_serialize_key_row(user_id, row) for row in rows]
@@ -49,20 +51,21 @@ def _list_user_keys(user_id: str) -> List[Dict[str, Any]]:
 
 
 def _load_raw_key_row(user_id: str, key_id: int) -> Optional[tuple]:
+    predicate, pred_params = org_read_predicate(user_id, resolve_org(user_id))
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[SSHKeys:load]")
             cur.execute(
-                """
+                f"""
                 SELECT id, provider, token_data, secret_ref, timestamp
                 FROM user_tokens
-                WHERE user_id = %s
+                WHERE {predicate}
                   AND id = %s
                   AND provider LIKE 'aurora_ssh%%'
                   AND is_active = TRUE
                 LIMIT 1;
                 """,
-                (user_id, key_id),
+                (*pred_params, key_id),
             )
             return cur.fetchone()
 

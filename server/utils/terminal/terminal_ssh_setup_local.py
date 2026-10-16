@@ -15,6 +15,7 @@ def ensure_local_ssh_keys(user_id: str) -> bool:
     try:
         from utils.auth.token_management import get_token_data
         from utils.db.connection_pool import db_pool
+        from utils.db.org_scope import resolve_org, org_read_predicate
         
         # Get user's SSH keys
         ssh_keys = {}
@@ -22,9 +23,10 @@ def ensure_local_ssh_keys(user_id: str) -> bool:
             cursor = conn.cursor()
             from utils.auth.stateless_auth import set_rls_context
             set_rls_context(cursor, conn, user_id, log_prefix="[SSHSetupLocal:ensure_local_ssh_keys]")
+            predicate, pred_params = org_read_predicate(user_id, resolve_org(user_id))
             cursor.execute(
-                "SELECT provider FROM user_tokens WHERE user_id = %s AND provider LIKE %s",
-                (user_id, '%_ssh_%')
+                f"SELECT provider FROM user_tokens WHERE {predicate} AND provider LIKE %s",
+                (*pred_params, '%_ssh_%'),
             )
             
             for row in cursor.fetchall():
