@@ -54,6 +54,29 @@ def _forbid_llm(monkeypatch) -> MagicMock:
     return spy
 
 
+class TestJudgeTimeoutConfig:
+    """The judge timeout budget is read from ``GUARDRAILS_LLM_TIMEOUT_SECONDS``
+    (default 10 s, fail-closed semantics unchanged)."""
+
+    def test_default_timeout_is_10s(self, monkeypatch):
+        from utils.security import config as cfg_module
+
+        monkeypatch.delenv("GUARDRAILS_LLM_TIMEOUT_SECONDS", raising=False)
+        assert cfg_module._load().llm_timeout_seconds == 10.0
+
+    def test_env_override(self, monkeypatch):
+        from utils.security import config as cfg_module
+
+        monkeypatch.setenv("GUARDRAILS_LLM_TIMEOUT_SECONDS", "30")
+        assert cfg_module._load().llm_timeout_seconds == 30.0
+
+    def test_invalid_value_falls_back_to_default(self, monkeypatch):
+        from utils.security import config as cfg_module
+
+        monkeypatch.setenv("GUARDRAILS_LLM_TIMEOUT_SECONDS", "soon")
+        assert cfg_module._load().llm_timeout_seconds == 10.0
+
+
 # ---------------------------------------------------------------------------
 # Disabled config -- the only legitimate let-through path
 # ---------------------------------------------------------------------------

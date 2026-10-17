@@ -19,7 +19,9 @@ The full pipeline runs in this order, and any layer can block:
                                 threats signatures cannot express.
 
 The judge always fails closed: any timeout, LLM error, or missing user
-context returns a blocking verdict.
+context returns a blocking verdict. The timeout budget is configurable via
+``GUARDRAILS_LLM_TIMEOUT_SECONDS`` (default 10 s); fail-closed semantics are
+unchanged -- only how long the judge waits for the LLM before blocking.
 
 Adapted from Meta's PurpleLlama AlignmentCheck architecture (MIT licensed),
 rewritten to evaluate inherent danger rather than intent alignment.
@@ -40,8 +42,6 @@ from pydantic import BaseModel, Field
 from utils.security.config import config
 
 logger = logging.getLogger(__name__)
-
-_TIMEOUT_SECONDS = 10
 
 
 def _fingerprint(command: str) -> str:
@@ -173,7 +173,7 @@ def check_command_safety(
             )
         return verdict
     except concurrent.futures.TimeoutError:
-        logger.exception("[CommandSafety] LLM timed out after %ds", _TIMEOUT_SECONDS)
+        logger.exception("[CommandSafety] LLM timed out after %ds", config.llm_timeout_seconds)
         return _fail_verdict("timeout")
     except Exception as e:
         logger.exception("[CommandSafety] LLM call failed")
@@ -241,7 +241,7 @@ def _call_llm(prompt: str, user_id: Optional[str], session_id: Optional[str]) ->
     error_msg = None
     try:
         future = _executor.submit(llm.invoke, messages)
-        result = future.result(timeout=_TIMEOUT_SECONDS)
+        result = future.result(timeout=config.llm_timeout_seconds)
     except Exception as e:
         error_msg = str(e)
         raise
