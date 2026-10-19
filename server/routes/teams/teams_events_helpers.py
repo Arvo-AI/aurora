@@ -154,18 +154,23 @@ def get_user_id_from_teams_tenant(tenant_id: str) -> Optional[str]:
         with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT DISTINCT org_id FROM users WHERE org_id IS NOT NULL")
             org_ids = [row[0] for row in cur.fetchall()]
+            # One tenant can be connected in more than one org; the org list has no order
+            matches = []
             for org_id in org_ids:
                 cur.execute("SET myapp.current_org_id = %s", (org_id,))
                 cur.execute(
-                    """SELECT user_id FROM user_tokens
+                    """SELECT user_id, timestamp FROM user_tokens
                        WHERE provider = 'teams' AND subscription_id = %s AND is_active = TRUE
                        ORDER BY timestamp DESC LIMIT 1""",
                     (tenant_id,),
                 )
                 row = cur.fetchone()
                 if row:
-                    return row[0]
-            return None
+                    matches.append(row)
+            if not matches:
+                return None
+            matches.sort(key=lambda row: (row[1] is not None, row[1] or ""), reverse=True)
+            return matches[0][0]
     except Exception:
         logger.exception("Failed to resolve Teams tenant to Aurora user")
         return None

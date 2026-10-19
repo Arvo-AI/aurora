@@ -164,10 +164,11 @@ def test_without_an_app_id_nothing_counts_as_a_mention(monkeypatch):
 class _Cursor:
     """user_tokens rows are only visible under the org that owns them, like FORCE RLS."""
 
-    def __init__(self, row, owner_org="org-a", orgs=("org-z", "org-a")):
+    def __init__(self, row, owner_org="org-a", orgs=("org-z", "org-a"), rows_by_org=None):
         self.row = row
         self.owner_org = owner_org
         self.orgs = orgs
+        self.rows_by_org = rows_by_org
         self.current_org = None
         self.executed = []
 
@@ -186,11 +187,16 @@ class _Cursor:
         return [(o,) for o in self.orgs]
 
     def fetchone(self):
-        return self.row if self.current_org == self.owner_org else None
+        if self.rows_by_org is not None:
+            return self.rows_by_org.get(self.current_org)
+        if self.current_org != self.owner_org or self.row is None:
+            return None
+        # The lookup reads (user_id, timestamp); a bare user id is the newest in its org
+        return self.row if len(self.row) > 1 else (self.row[0], 1)
 
 
-def _patch_pool(monkeypatch, row=None, error=None):
-    cursor = _Cursor(row)
+def _patch_pool(monkeypatch, row=None, error=None, rows_by_org=None):
+    cursor = _Cursor(row, rows_by_org=rows_by_org)
 
     @contextmanager
     def conn_ctx():
@@ -212,7 +218,16 @@ def test_tenant_resolves_to_the_connecting_user(monkeypatch):
     lookups = [(s, p) for s, p in cursor.executed if "user_tokens" in s]
     sql, params = lookups[-1]
     assert "provider = 'teams'" in sql and "is_active = TRUE" in sql
+    assert "timestamp" in sql
     assert params == ("tenant-1",)
+
+
+def test_newest_token_wins_when_an_older_org_is_listed_first(monkeypatch):
+    _patch_pool(
+        monkeypatch,
+        rows_by_org={"org-z": ("uid-old", 1), "org-a": ("uid-new", 2)},
+    )
+    assert h.get_user_id_from_teams_tenant("tenant-1") == "uid-new"
 
 
 def test_tenant_lookup_sets_the_owning_org_before_reading_user_tokens(monkeypatch):
