@@ -367,3 +367,8 @@ pre[class*="language-"] > code[class*="language-"] {
   0%, 100% { opacity: 0.6; }
   50% { opacity: 1; }
 }
+
+/* Hide the Next.js dev indicator until the early script parks it on the right. */
+nextjs-portal {
+  visibility: hidden;
+}
