@@ -46,8 +46,9 @@ def generate_chat_title(messages):
     return title
 
 @chat_bp.route('/sessions', methods=['GET'])
-# Heaviest read in the app: bounded per user rather than exempt or on the shared default
-@limiter.limit("60 per minute")
+# Heaviest read in the app. The chat page mounts this list three times and each
+# polls every 3s while a session is in_progress, so 60/min 429s one tab.
+@limiter.limit("240 per minute")
 @require_permission("chat", "read")
 def get_chat_sessions(user_id):
     """Get all chat sessions visible to the user.
