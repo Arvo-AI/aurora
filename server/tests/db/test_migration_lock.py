@@ -54,6 +54,48 @@ def test_raises_when_holder_never_releases(monkeypatch):
     assert len(_lock_calls(cur)) <= 7
 
 
+class _PoolWrapper:
+    """Minimal stand-in for PooledConnectionWrapper: attribute sets stay here."""
+
+    def __init__(self, inner):
+        self._connection = inner
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
+def test_wait_runs_outside_a_transaction_on_a_pooled_connection(monkeypatch):
+    monkeypatch.setattr(ml.time, "sleep", lambda _s: None)
+    raw, cur = _conn([True])
+    raw.autocommit = False
+    during = []
+    cur.execute.side_effect = lambda *_a, **_k: during.append(raw.autocommit)
+    wrapper = _PoolWrapper(raw)
+    wrapper.autocommit = True
+
+    ml.acquire_migration_lock(wrapper, wait_seconds=5)
+
+    # Assignment stuck on the wrapper; acquire has to enable it on psycopg2
+    assert raw.autocommit is True
+    assert during
+    assert all(during)
+    raw.rollback.assert_called_once()
+
+
+def test_reset_clears_keepalive_overrides():
+    raw, cur = _conn([True])
+    raw.autocommit = True
+
+    ml.reset_migration_session(raw)
+
+    statements = [c.args[0] for c in cur.execute.call_args_list]
+    assert statements == [
+        "RESET tcp_keepalives_idle",
+        "RESET tcp_keepalives_interval",
+        "RESET tcp_keepalives_count",
+    ]
+
+
 def test_enables_server_side_keepalives_before_locking(monkeypatch):
     monkeypatch.setattr(ml.time, "sleep", lambda _s: None)
     conn, cur = _conn([True])

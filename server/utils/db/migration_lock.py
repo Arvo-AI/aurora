@@ -34,6 +34,25 @@ def _wait_seconds() -> float:
     return value
 
 
+def _raw_connection(conn):
+    # PooledConnectionWrapper stores psycopg2 on _connection. Assigning
+    # attributes on the wrapper never reaches it, and MagicMock invents
+    # attributes, so only a real instance dict entry counts.
+    inner = getattr(conn, "__dict__", {}).get("_connection")
+    return inner if inner is not None else conn
+
+
+def set_connection_autocommit(conn, enabled: bool) -> None:
+    """Set autocommit on the psycopg2 connection, not a pool wrapper."""
+    raw = _raw_connection(conn)
+    if bool(raw.autocommit) == enabled:
+        return
+    # psycopg2 refuses to enable autocommit inside an open transaction
+    if enabled:
+        raw.rollback()
+    raw.autocommit = enabled
+
+
 def acquire_migration_lock(conn, key: int = MIGRATION_LOCK_KEY, wait_seconds=None) -> None:
     """Take the session-level advisory lock on an autocommit connection.
 
@@ -42,6 +61,10 @@ def acquire_migration_lock(conn, key: int = MIGRATION_LOCK_KEY, wait_seconds=Non
     """
     if wait_seconds is None:
         wait_seconds = _wait_seconds()
+
+    # Sleeping inside an open transaction is idle-in-transaction for the whole
+    # wait. `conn.autocommit = True` on the pool wrapper does not do this.
+    set_connection_autocommit(conn, True)
 
     with conn.cursor() as cur:
         # Server-side keepalives let Postgres reap this session if the pod dies
@@ -69,3 +92,15 @@ def acquire_migration_lock(conn, key: int = MIGRATION_LOCK_KEY, wait_seconds=Non
                 logger.warning("Still waiting for migration lock %s", key)
                 next_log = now + _LOG_EVERY_SECONDS
             time.sleep(_POLL_SECONDS)
+
+
+def reset_migration_session(conn) -> None:
+    """Clear the keepalive overrides before a pooled connection is reused."""
+    try:
+        set_connection_autocommit(conn, True)
+        with _raw_connection(conn).cursor() as cur:
+            cur.execute("RESET tcp_keepalives_idle")
+            cur.execute("RESET tcp_keepalives_interval")
+            cur.execute("RESET tcp_keepalives_count")
+    except Exception:
+        logger.warning("Could not reset migration-lock session settings")
