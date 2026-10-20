@@ -10,6 +10,7 @@ an arbitrary URL.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -47,7 +48,7 @@ _SYS_ID_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 _NUMBER_RE = re.compile(r"^[A-Za-z]{2,10}\d{4,12}$")
 # Refresh a cached OAuth token this many seconds before ServiceNow expires it.
 _TOKEN_REFRESH_MARGIN = 60
-_token_cache: Dict[Tuple[str, str], Tuple[str, float]] = {}
+_token_cache: Dict[Tuple[str, str, str], Tuple[str, float]] = {}
 _token_lock = threading.Lock()
 
 
@@ -142,8 +143,12 @@ class ServiceNowClient:
 
     # ── auth ─────────────────────────────────────────────────────────
 
-    def _cache_key(self) -> Tuple[str, str]:
-        return (self.instance_url, self.client_id or "")
+    def _cache_key(self) -> Tuple[str, str, str]:
+        # The cache is process-wide. The secret is part of the key so a reconnect
+        # with a rotated secret, or another org presenting the same instance and
+        # client id, never reuses a token it did not earn.
+        secret_digest = hashlib.sha256((self.client_secret or "").encode("utf-8")).hexdigest()
+        return (self.instance_url, self.client_id or "", secret_digest)
 
     def _oauth_token(self) -> str:
         now = time.monotonic()

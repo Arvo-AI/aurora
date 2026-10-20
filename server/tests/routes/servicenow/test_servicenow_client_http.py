@@ -213,3 +213,20 @@ def test_unreachable_host_is_a_clean_error(client_factory):
     with pytest.raises(sn.ServiceNowAPIError) as exc:
         client.test_connection()
     assert exc.value.status_code is None
+
+
+def test_oauth_token_is_not_reused_for_a_different_secret(client_factory):
+    """The cache key carries the secret: same instance + client id with another secret must not ride the cached token."""
+    good, state = client_factory(auth_type="oauth_client_credentials", username=None, password=None,
+                                 client_id="cid", client_secret="cs")
+    assert good.test_connection()["ok"] is True
+    assert state.token_calls == 1
+
+    other, _ = client_factory(auth_type="oauth_client_credentials", username=None, password=None,
+                              client_id="cid", client_secret="wrong")
+    # client_factory clears the cache; re-prime it with the good client to prove the reuse is what's blocked.
+    assert good.test_connection()["ok"] is True
+    with pytest.raises(sn.ServiceNowAPIError) as exc:
+        other.test_connection()
+    assert exc.value.status_code == 401
+    assert state.token_calls == 2  # a second token request was made for the other secret
