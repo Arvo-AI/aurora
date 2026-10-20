@@ -216,15 +216,20 @@ def cancel_bq_job(
     project_id: Optional[str],
     location: Optional[str],
     access_token: Optional[str],
-    env: Optional[dict],
+    env: dict,
 ) -> bool:
     """Stop a query job we started. Direct exec, because Ask mode blocks cancel."""
+    # None inherits the server environment, including any ambient credentials
+    if not isinstance(env, dict):
+        logger.warning("bq cancel skipped for job %s: no isolated env", job_id)
+        return False
     argv = ["bq"]
     if project_id:
         argv.append(f"--project_id={project_id}")
     if location:
         argv.append(f"--location={location}")
-    argv.extend(["cancel", job_id])
+    # Default cancel waits until the job is DONE, which can outlast this call
+    argv.extend(["--synchronous_mode=false", "cancel", job_id])
     try:
         result = terminal_run(
             argv,
@@ -251,7 +256,7 @@ def explain_bq_timeout(
     project_id: Optional[str],
     location: Optional[str],
     access_token: Optional[str],
-    env: Optional[dict],
+    env: dict,
     timeout_s: int,
 ):
     """Cancel the job behind a killed query and say so in stderr."""

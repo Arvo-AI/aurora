@@ -197,7 +197,10 @@ def test_timeout_cancels_the_query_job(monkeypatch):
     assert argv[0] == "bq"
     assert "--project_id=my-project" in argv
     assert "--location=US" in argv
+    assert "--synchronous_mode=false" in argv
+    assert argv.index("--synchronous_mode=false") < argv.index("cancel")
     assert argv[-2:] == ["cancel", "aurora-abc"]
+    assert kwargs["env"] == {"PATH": "/usr/bin"}
     assert "ya29.secret" not in argv
     assert kwargs["oauth_access_token"] == "ya29.secret"
     assert kwargs["trusted"] is True
@@ -212,6 +215,24 @@ def test_failed_cancel_says_the_job_may_still_be_running(monkeypatch):
             stderr = "already done"
 
         return Result()
+
+    monkeypatch.setattr("chat.backend.agent.tools.bq_exec.terminal_run", fake_run)
+    result = CompletedProcess(args=[], returncode=124, stdout="", stderr="timed out")
+    explain_bq_timeout(
+        result,
+        job_id="aurora-abc",
+        project_id="p",
+        location=None,
+        access_token=None,
+        env={"PATH": "/usr/bin"},
+        timeout_s=300,
+    )
+    assert "may still be running" in result.stderr
+
+
+def test_cancel_without_an_isolated_env_does_not_run(monkeypatch):
+    def fake_run(args, **kwargs):
+        raise AssertionError("cancel should not run")
 
     monkeypatch.setattr("chat.backend.agent.tools.bq_exec.terminal_run", fake_run)
     result = CompletedProcess(args=[], returncode=124, stdout="", stderr="timed out")
