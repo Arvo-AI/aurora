@@ -541,11 +541,12 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
         # --- ServiceNow work note --- (completion only, anchors only, once; opt-in
         # per user on the ServiceNow connector page; the service checks the stored
         # credentials can still write)
-        if (not refresh_only and incident_data.get('source_type') == 'servicenow'
-                and bool(get_user_preference(user_id, 'servicenow_work_notes_enabled', default=False))):
+        if not refresh_only and incident_data.get('source_type') == 'servicenow':
             try:
+                from routes.servicenow.tasks import work_notes_enabled as _sn_work_notes_enabled
                 from utils.notifications.servicenow_notification_service import send_servicenow_work_note
-                send_servicenow_work_note(user_id, incident_data)
+                if _sn_work_notes_enabled(user_id):
+                    send_servicenow_work_note(user_id, incident_data)
             except Exception:
                 logger.exception("[Dispatcher] ServiceNow work note failed")
 

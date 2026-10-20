@@ -125,6 +125,20 @@ class TestSettings:
         assert message in resp.get_json()["error"]
         assert app.config["STORED"] == {}
 
+    def test_switching_work_notes_off_resets_the_scope_and_the_resolve_sync(self, app):
+        """Off means off: a remembered full scope must not survive the switch being turned off."""
+        assert _put(app, {"workNotesEnabled": False}).status_code == 200
+        stored = app.config["STORED"]
+        assert stored[routes.PREF_WORK_NOTES] is False
+        assert stored[routes.PREF_WRITE_MODE] == "notes_only"
+        assert stored[routes.PREF_RESOLVE_SYNC] is False
+
+    def test_switching_work_notes_on_leaves_the_scope_alone(self, app):
+        assert _put(app, {"workNotesEnabled": True}).status_code == 200
+        stored = app.config["STORED"]
+        assert stored[routes.PREF_WORK_NOTES] is True
+        assert routes.PREF_WRITE_MODE not in stored
+
     def test_write_back_needs_a_connection(self, app, monkeypatch):
         monkeypatch.setattr(routes, "_stored_credentials", lambda user_id: None)
         resp = _put(app, {"workNotesEnabled": True})

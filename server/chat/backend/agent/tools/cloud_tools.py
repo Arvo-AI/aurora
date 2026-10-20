@@ -2357,46 +2357,48 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     else:
         logging.debug(f"Elastic tools not added - user {user_id} not connected to Elastic")
 
-    # Add ServiceNow tools if connected
-    if is_servicenow_connected(user_id):
-        context_wrapped_sn_list = with_user_context(list_servicenow_incidents)
-        notification_wrapped_sn_list = with_completion_notification(context_wrapped_sn_list)
-        final_sn_list_func = wrap_func_with_capture(notification_wrapped_sn_list, "list_servicenow_incidents") if tool_capture else notification_wrapped_sn_list
-
-        tools.append(StructuredTool.from_function(
-            func=final_sn_list_func,
-            name="list_servicenow_incidents",
-            description=(
-                "List ServiceNow incidents, newest first. Use this to find related or "
-                "recurring incidents: filter by state (active/new/in_progress/on_hold/"
-                "resolved/closed), priority (1-5), assignment group, or a free-text "
-                "match on the description. Read-only."
-            ),
-            args_schema=ListServiceNowIncidentsArgs,
-        ))
-
-        context_wrapped_sn_get = with_user_context(get_servicenow_incident)
-        notification_wrapped_sn_get = with_completion_notification(context_wrapped_sn_get)
-        final_sn_get_func = wrap_func_with_capture(notification_wrapped_sn_get, "get_servicenow_incident") if tool_capture else notification_wrapped_sn_get
-
-        tools.append(StructuredTool.from_function(
-            func=final_sn_get_func,
-            name="get_servicenow_incident",
-            description=(
-                "Get one ServiceNow incident by number (INC0010001) or sys_id: priority, "
-                "impact, urgency, state, category, assignment group, configuration item, "
-                "caller, description and close notes. Read-only."
-            ),
-            args_schema=GetServiceNowIncidentArgs,
-        ))
-
-        # Write tools: only RCA runs need the org opt-in; elsewhere a user asked for the write.
+    # Add ServiceNow tools if connected. The whole block is guarded so a registration
+    # error cannot abort tool construction for every other connector.
+    if _safe_connected(is_servicenow_connected, "ServiceNow"):
         try:
+            context_wrapped_sn_list = with_user_context(list_servicenow_incidents)
+            notification_wrapped_sn_list = with_completion_notification(context_wrapped_sn_list)
+            final_sn_list_func = wrap_func_with_capture(notification_wrapped_sn_list, "list_servicenow_incidents") if tool_capture else notification_wrapped_sn_list
+
+            tools.append(StructuredTool.from_function(
+                func=final_sn_list_func,
+                name="list_servicenow_incidents",
+                description=(
+                    "List ServiceNow incidents, newest first. Use this to find related or "
+                    "recurring incidents: filter by state (active/new/in_progress/on_hold/"
+                    "resolved/closed), priority (1-5), assignment group, or a free-text "
+                    "match on the description. Read-only."
+                ),
+                args_schema=ListServiceNowIncidentsArgs,
+            ))
+
+            context_wrapped_sn_get = with_user_context(get_servicenow_incident)
+            notification_wrapped_sn_get = with_completion_notification(context_wrapped_sn_get)
+            final_sn_get_func = wrap_func_with_capture(notification_wrapped_sn_get, "get_servicenow_incident") if tool_capture else notification_wrapped_sn_get
+
+            tools.append(StructuredTool.from_function(
+                func=final_sn_get_func,
+                name="get_servicenow_incident",
+                description=(
+                    "Get one ServiceNow incident by number (INC0010001) or sys_id: priority, "
+                    "impact, urgency, state, category, assignment group, configuration item, "
+                    "caller, description and close notes. Read-only."
+                ),
+                args_schema=GetServiceNowIncidentArgs,
+            ))
+
+            # Write tools are bound only with the org's opt-in, whatever the session type:
+            # the connector-page switch is the single control over ServiceNow writes.
             from routes.servicenow.tasks import get_write_mode as _sn_write_mode
             from routes.servicenow.tasks import work_notes_enabled as _sn_work_notes_enabled
 
             _sn_write_tools = []
-            if not _is_background_rca(state_context, is_background) or _sn_work_notes_enabled(user_id):
+            if _sn_work_notes_enabled(user_id):
                 _sn_write_tools.append(
                     (servicenow_add_work_note, "servicenow_add_work_note", ServiceNowAddWorkNoteArgs,
                      "Post a work note on a ServiceNow incident (by number or sys_id). Internal by default; "
@@ -2420,7 +2422,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 ))
             logging.info(f"Added {2 + len(_sn_write_tools)} ServiceNow tools for user {user_id}")
         except Exception as e:
-            logging.warning(f"Failed to add ServiceNow write tools: {e}")
+            logging.warning(f"Failed to add ServiceNow tools for user {user_id}: {e}")
     else:
         logging.debug(f"ServiceNow tools not added - user {user_id} not connected to ServiceNow")
 

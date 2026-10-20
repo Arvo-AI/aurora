@@ -36,6 +36,8 @@ from chat.backend.agent.tools import servicenow_tool as tool  # noqa: E402
 SYS_ID = "f" * 32
 _RCA_SESSION = SimpleNamespace(is_background=True, incident_id="inc-1", rca_context={"source": "servicenow"})
 _CHAT_SESSION = SimpleNamespace(is_background=False, incident_id=None, rca_context=None)
+# An unattended Action: background, but not an RCA (no incident, source "action").
+_ACTION_SESSION = SimpleNamespace(is_background=True, incident_id=None, rca_context={"source": "action"})
 
 
 def _set_session(monkeypatch, state):
@@ -70,7 +72,10 @@ def client(monkeypatch):
     (tool.servicenow_create_incident, ("Checkout down",)),
     (tool.servicenow_update_incident, ("INC0010001", {"state": "in_progress"})),
 ])
-@pytest.mark.parametrize("state", [None, _RCA_SESSION], ids=["no-session", "background-rca"])
+@pytest.mark.parametrize(
+    "state", [None, _RCA_SESSION, _CHAT_SESSION, _ACTION_SESSION],
+    ids=["no-session", "background-rca", "interactive-chat", "background-action"],
+)
 def test_write_tools_blocked_when_write_back_off(monkeypatch, prefs, client, fn, args, state):
     _set_session(monkeypatch, state)
     with pytest.raises(ValueError, match="write-back is disabled"):
@@ -80,11 +85,43 @@ def test_write_tools_blocked_when_write_back_off(monkeypatch, prefs, client, fn,
     client.update_incident.assert_not_called()
 
 
-def test_user_requested_note_allowed_when_write_back_off(monkeypatch, prefs, client):
+def test_chat_requests_write_once_the_switch_is_on(monkeypatch, prefs, client):
+    """The connector-page switch is the single control: a chat request needs it too, and is enough."""
+    prefs["work_notes"] = True
     _set_session(monkeypatch, _CHAT_SESSION)
     out = json.loads(tool.servicenow_add_work_note("INC0010001", "hello", user_id="uid-1"))
     assert out["status"] == "success" and out["sys_id"] == SYS_ID
     client.add_work_note.assert_called_once_with(SYS_ID, "hello", customer_visible=False)
+
+
+@pytest.mark.parametrize("fn,args,method", [
+    (tool.servicenow_add_work_note, ("INC0010001", "hello"), "add_work_note"),
+    (tool.servicenow_create_incident, ("Checkout down",), "create_incident"),
+    (tool.servicenow_update_incident, ("INC0010001", {"state": "in_progress"}), "update_incident"),
+])
+def test_a_403_downgrades_the_stored_write_capability(monkeypatch, prefs, client, fn, args, method):
+    """A forbidden account must not be retried on every later call: the capability is cleared, like the work-note service does."""
+    prefs.update(work_notes=True, write_mode="full")
+    _set_session(monkeypatch, _RCA_SESSION)
+    getattr(client, method).side_effect = tool.ServiceNowAPIError("Insufficient rights", 403)
+    disabled = MagicMock()
+    monkeypatch.setattr("utils.notifications.servicenow_notification_service.disable_write_capability", disabled)
+    out = json.loads(fn(*args, user_id="uid-1"))
+    assert "error" in out
+    disabled.assert_called_once()
+    assert disabled.call_args[0][0] == "uid-1"
+    assert disabled.call_args[0][1]["instance_url"] == client.instance_url
+
+
+def test_a_non_403_failure_keeps_the_write_capability(monkeypatch, prefs, client):
+    prefs["work_notes"] = True
+    _set_session(monkeypatch, _RCA_SESSION)
+    client.add_work_note.side_effect = tool.ServiceNowAPIError("gateway", 502)
+    disabled = MagicMock()
+    monkeypatch.setattr("utils.notifications.servicenow_notification_service.disable_write_capability", disabled)
+    out = json.loads(tool.servicenow_add_work_note("INC0010001", "hello", user_id="uid-1"))
+    assert "error" in out
+    disabled.assert_not_called()
 
 
 def test_rca_note_allowed_once_opted_in(monkeypatch, prefs, client):

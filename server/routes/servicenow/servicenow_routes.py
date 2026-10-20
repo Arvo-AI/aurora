@@ -423,6 +423,11 @@ def _parse_settings_update(data: Dict[str, Any]) -> Tuple[List[Tuple[str, Any]],
         if not isinstance(data["workNotesEnabled"], bool):
             return [], "workNotesEnabled must be a boolean"
         updates.append((PREF_WORK_NOTES, data["workNotesEnabled"]))
+        if data["workNotesEnabled"] is False:
+            # Off means off: drop the write scope and the resolve sync with it, so a
+            # later re-enable starts from notes only instead of a remembered full scope.
+            updates.append((PREF_WRITE_MODE, "notes_only"))
+            updates.append((PREF_RESOLVE_SYNC, False))
     if "writeMode" in data:
         if data["writeMode"] not in WRITE_MODES:
             return [], f"writeMode must be one of: {', '.join(WRITE_MODES)}"

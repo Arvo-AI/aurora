@@ -130,14 +130,13 @@ class ServiceNowUpdateIncidentArgs(BaseModel):
 
 
 def _require_servicenow_write(user_id: str) -> None:
-    """Unattended RCA writes need the org's opt-in. A user asking in chat does not."""
-    from routes.servicenow.tasks import work_notes_enabled
-    from utils.cloud.cloud_utils import _is_background_rca, get_state_context
+    """Every ServiceNow write needs the org's opt-in: chat, Actions and unattended RCAs alike.
 
-    state = get_state_context()
-    # Outside an RCA a user asked for the write; unknown sessions still need the opt-in.
-    if state is not None and not _is_background_rca(state, getattr(state, "is_background", False)):
-        return
+    The "Post work notes" switch on the connector page is the single control over
+    what Aurora writes to ServiceNow; the session type never bypasses it.
+    """
+    from routes.servicenow.tasks import work_notes_enabled
+
     if not work_notes_enabled(user_id):
         raise ValueError(
             "ServiceNow write-back is disabled. Turn on \"Post work notes on ServiceNow incidents\" "
@@ -153,6 +152,20 @@ def _require_servicenow_full_write_mode(user_id: str) -> None:
             "ServiceNow is set to work notes only. Choose \"Create & update incidents\" under "
             "Connectors > ServiceNow to create or update incidents."
         )
+
+
+def _forget_write_access_on_403(user_id: str, exc: Exception) -> None:
+    """ServiceNow answered 403: the account cannot write, so stop retrying it on every later call.
+
+    Same downgrade the completion work note and the resolution sync apply.
+    """
+    if not (isinstance(exc, ServiceNowAPIError) and exc.status_code == 403):
+        return
+    creds = _get_servicenow_credentials(user_id)
+    if creds:
+        from utils.notifications.servicenow_notification_service import disable_write_capability
+
+        disable_write_capability(user_id, creds)
 
 
 # ── helpers ──────────────────────────────────────────────────────────
@@ -369,6 +382,7 @@ def servicenow_add_work_note(
         result = client.add_work_note(sys_id, text, customer_visible=bool(customer_visible))
     except (ServiceNowAPIError, ValueError) as exc:
         logger.warning("[SERVICENOW-TOOL] Work note failed for user %s: %s", user_id, exc)
+        _forget_write_access_on_403(user_id, exc)
         return json.dumps({"error": f"Failed to post the note: {exc}. Continue using other tools."})
     return json.dumps({
         "status": "success",
@@ -420,6 +434,7 @@ def servicenow_create_incident(
         result = client.create_incident(fields)
     except (ServiceNowAPIError, ValueError) as exc:
         logger.warning("[SERVICENOW-TOOL] Create incident failed for user %s: %s", user_id, exc)
+        _forget_write_access_on_403(user_id, exc)
         return json.dumps({
             "error": f"Failed to create the incident: {exc}",
             "hint": "Check the category, assignment group and caller names exist on the instance, "
@@ -463,6 +478,7 @@ def servicenow_update_incident(
         result = client.update_incident(sys_id, body)
     except (ServiceNowAPIError, ValueError) as exc:
         logger.warning("[SERVICENOW-TOOL] Update incident failed for user %s: %s", user_id, exc)
+        _forget_write_access_on_403(user_id, exc)
         return json.dumps({
             "error": f"Failed to update the incident: {exc}",
             "hint": "Resolving needs close_code and close_notes; reference fields need names that exist.",

@@ -65,7 +65,7 @@ def _eligibility(incident_data: Dict[str, Any]) -> Tuple[bool, str, Optional[str
     return True, "", sys_id, root_cause, impact
 
 
-def _disable_write_capability(user_id: str, creds: Dict[str, Any]) -> None:
+def disable_write_capability(user_id: str, creds: Dict[str, Any]) -> None:
     caps = {**(creds.get("capabilities") or {}), "can_write_incidents": False}
     try:
         store_tokens_in_db(user_id, {**creds, "capabilities": caps}, "servicenow")
@@ -85,7 +85,7 @@ def _handle_post_error(e: ServiceNowAPIError, incident_id: str, user_id: str, cr
         return
     _claims.release(incident_id, user_id)
     if e.status_code == 403:
-        _disable_write_capability(user_id, creds)
+        disable_write_capability(user_id, creds)
         logger.warning(
             "%s ServiceNow refused the work note for incident %s (forbidden); write capability disabled",
             _LOG, incident_id,
@@ -217,7 +217,7 @@ def sync_servicenow_resolution(user_id: str, incident_id: str) -> bool:
             })
         except ServiceNowAPIError as e:
             if e.status_code == 403:
-                _disable_write_capability(user_id, creds)
+                disable_write_capability(user_id, creds)
                 logger.warning("%s ServiceNow refused to resolve %s (forbidden); write capability disabled", _LOG, sys_id)
             else:
                 logger.warning("%s ServiceNow did not resolve %s: %s", _LOG, sys_id, e)
