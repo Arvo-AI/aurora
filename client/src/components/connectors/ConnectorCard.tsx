@@ -46,7 +46,25 @@ function BitbucketStatusBadge() {
   return <TwoTierBadge isAuthenticated={isAuthenticated} isConnected={isConnected} />;
 }
 
-function TeamsStatusBadge({ status }: { status: { connected?: boolean; setup_complete?: boolean } | null }) {
+function TeamsStatusBadge({ status }: { status: { connected?: boolean; setup_complete?: boolean; displaced?: boolean; error?: string } | null }) {
+  if (status?.displaced) {
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div tabIndex={0} className="flex items-center gap-1 text-amber-600 dark:text-amber-400 cursor-default">
+              <AlertCircle className="h-4 w-4" />
+              <span className="text-xs font-medium">Connected elsewhere</span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-xs text-xs">
+            {status.error ||
+              "This Microsoft Teams account is connected in another organization, so it no longer receives messages here."}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
   if (!status?.connected) return null;
   if (status.setup_complete) {
     return (
