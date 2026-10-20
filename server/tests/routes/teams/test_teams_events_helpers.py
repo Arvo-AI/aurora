@@ -162,8 +162,14 @@ def test_without_an_app_id_nothing_counts_as_a_mention(monkeypatch):
 # --- tenant -> user ------------------------------------------------------------------
 
 class _Cursor:
-    def __init__(self, row):
+    """user_tokens rows are only visible under the org that owns them, like FORCE RLS."""
+
+    def __init__(self, row, owner_org="org-a", orgs=("org-z", "org-a"), rows_by_org=None):
         self.row = row
+        self.owner_org = owner_org
+        self.orgs = orgs
+        self.rows_by_org = rows_by_org
+        self.current_org = None
         self.executed = []
 
     def __enter__(self):
@@ -174,13 +180,23 @@ class _Cursor:
 
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
+        if sql.startswith("SET myapp.current_org_id"):
+            self.current_org = params[0]
+
+    def fetchall(self):
+        return [(o,) for o in self.orgs]
 
     def fetchone(self):
-        return self.row
+        if self.rows_by_org is not None:
+            return self.rows_by_org.get(self.current_org)
+        if self.current_org != self.owner_org or self.row is None:
+            return None
+        # The lookup reads (user_id, timestamp); a bare user id is the newest in its org
+        return self.row if len(self.row) > 1 else (self.row[0], 1)
 
 
-def _patch_pool(monkeypatch, row=None, error=None):
-    cursor = _Cursor(row)
+def _patch_pool(monkeypatch, row=None, error=None, rows_by_org=None):
+    cursor = _Cursor(row, rows_by_org=rows_by_org)
 
     @contextmanager
     def conn_ctx():
@@ -199,9 +215,115 @@ def _patch_pool(monkeypatch, row=None, error=None):
 def test_tenant_resolves_to_the_connecting_user(monkeypatch):
     cursor = _patch_pool(monkeypatch, row=("uid-admin",))
     assert h.get_user_id_from_teams_tenant("tenant-1") == "uid-admin"
-    sql, params = cursor.executed[0]
+    lookups = [(s, p) for s, p in cursor.executed if "user_tokens" in s]
+    sql, params = lookups[-1]
     assert "provider = 'teams'" in sql and "is_active = TRUE" in sql
+    assert "timestamp" in sql
     assert params == ("tenant-1",)
+
+
+def test_newest_token_wins_when_an_older_org_is_listed_first(monkeypatch):
+    disconnected = []
+    monkeypatch.setattr(h, "_disconnect_older_teams_orgs", lambda losers: disconnected.append(losers))
+    _patch_pool(
+        monkeypatch,
+        rows_by_org={"org-z": ("uid-old", 1), "org-a": ("uid-new", 2)},
+    )
+    assert h.get_user_id_from_teams_tenant("tenant-1") == "uid-new"
+    assert disconnected == [[("org-z", "uid-old", 1)]]
+
+
+def test_a_single_org_is_not_logged_out(monkeypatch):
+    disconnected = []
+    monkeypatch.setattr(h, "_disconnect_older_teams_orgs", lambda losers: disconnected.append(losers))
+    _patch_pool(monkeypatch, row=("uid-admin",))
+    assert h.get_user_id_from_teams_tenant("tenant-1") == "uid-admin"
+    assert disconnected == []
+
+
+def test_disconnect_removes_the_old_token_and_leaves_a_notice(monkeypatch, caplog):
+    deleted = []
+    remembered = []
+    purged = []
+    monkeypatch.setattr(h, "_delete_teams_token", lambda user_id: deleted.append(user_id) or (True, 1))
+    monkeypatch.setattr(h, "_remember_teams_displaced", lambda org_id: remembered.append(org_id))
+    monkeypatch.setattr(h, "_purge_teams_data", lambda user_id: purged.append(user_id))
+
+    with caplog.at_level("WARNING"):
+        h._disconnect_older_teams_orgs([("org-old", "uid-old", 1)])
+
+    assert deleted == ["uid-old"]
+    assert remembered == ["org-old"]
+    assert purged == ["uid-old"]
+    assert "org-old" in caplog.text
+
+
+def test_a_failed_delete_does_not_claim_the_org_was_logged_out(monkeypatch):
+    remembered = []
+
+    def _purge(_user_id):
+        raise AssertionError("purge")
+
+    monkeypatch.setattr(h, "_delete_teams_token", lambda user_id: (False, 0))
+    monkeypatch.setattr(h, "_remember_teams_displaced", lambda org_id: remembered.append(org_id))
+    monkeypatch.setattr(h, "_purge_teams_data", _purge)
+
+    h._disconnect_older_teams_orgs([("org-old", "uid-old", 1)])
+    assert remembered == []
+
+
+def test_a_removed_row_is_marked_logged_out_even_if_vault_delete_failed(monkeypatch):
+    remembered = []
+    purged = []
+    monkeypatch.setattr(h, "_delete_teams_token", lambda user_id: (False, 1))
+    monkeypatch.setattr(h, "_remember_teams_displaced", lambda org_id: remembered.append(org_id))
+    monkeypatch.setattr(h, "_purge_teams_data", lambda user_id: purged.append(user_id))
+
+    h._disconnect_older_teams_orgs([("org-old", "uid-old", 1)])
+    assert remembered == ["org-old"]
+    assert purged == ["uid-old"]
+
+
+def test_a_timestamp_tie_is_not_routed_or_disconnected(monkeypatch, caplog):
+    disconnected = []
+    monkeypatch.setattr(h, "_disconnect_older_teams_orgs", lambda losers: disconnected.append(losers))
+    _patch_pool(
+        monkeypatch,
+        rows_by_org={"org-z": ("uid-a", 1), "org-a": ("uid-b", 1)},
+    )
+    with caplog.at_level("WARNING"):
+        assert h.get_user_id_from_teams_tenant("tenant-1") is None
+    assert disconnected == []
+    assert "org-z" in caplog.text and "org-a" in caplog.text
+
+
+def test_another_orgs_token_blocks_a_new_connection(monkeypatch):
+    monkeypatch.setattr(
+        h,
+        "_teams_token_matches",
+        lambda tenant_id: [("org-old", "uid-old", 1)],
+    )
+    assert h.teams_tenant_bound_elsewhere("tenant-1", "org-new") is True
+    assert h.teams_tenant_bound_elsewhere("tenant-1", "org-old") is False
+
+
+def test_displacement_notice_only_when_the_org_was_logged_out(monkeypatch):
+    stored = {("org-old", h.TEAMS_DISPLACED_PREF): "connected_elsewhere"}
+    monkeypatch.setattr(
+        "utils.auth.stateless_auth.get_org_preference",
+        lambda org_id, key, default=None: stored.get((org_id, key), default),
+    )
+    notice = h.teams_displacement_notice("org-old")
+    assert notice["displaced"] is True
+    assert notice["connected"] is False
+    assert "another organization" in notice["error"]
+    assert h.teams_displacement_notice("org-new") is None
+
+
+def test_tenant_lookup_sets_the_owning_org_before_reading_user_tokens(monkeypatch):
+    cursor = _patch_pool(monkeypatch, row=("uid-admin",))
+    assert h.get_user_id_from_teams_tenant("tenant-1") == "uid-admin"
+    assert cursor.current_org == "org-a"
 
 
 def test_unknown_tenant_resolves_to_none(monkeypatch):

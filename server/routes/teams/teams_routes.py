@@ -32,6 +32,10 @@ def teams_status(user_id):
     try:
         creds = get_credentials_from_db(user_id, "teams")
         if not creds or not creds.get("access_token"):
+            # Logged out because a newer org connected the same tenant
+            displaced = _teams_displaced_status(user_id)
+            if displaced:
+                return jsonify(displaced)
             return jsonify({"connected": False})
         client = get_teams_client_for_user(user_id)
         if not client:
@@ -172,7 +176,18 @@ def teams_callback():
             "tenant_id": tenant_id,
             "connected_at": int(time.time()),
         }
+        org_id = get_org_id_for_user(user_id)
+        # No org to attach the token to
+        if not org_id:
+            logger.warning("Refusing Teams connect because the Aurora user has no organization")
+            return redirect(_teams_oauth_failure_redirect("unexpected_error"))
+        # Delegated OAuth does not prove this user administers the tenant
+        if _tenant_bound_elsewhere(tenant_id, org_id):
+            logger.warning("Refusing Teams connect because the tenant is already connected in another org")
+            return redirect(_teams_oauth_failure_redirect("tenant_already_connected"))
+
         store_tokens_in_db(user_id, teams_token_data, "teams")
+        _clear_teams_displacement(org_id)
 
         try:
             from services.memory.teams_memory import seed_teams_memory
@@ -190,6 +205,30 @@ def teams_callback():
     except Exception:
         logger.exception("Error during Teams callback")
         return redirect(_teams_oauth_failure_redirect("unexpected_error"))
+
+
+def _teams_displaced_status(user_id: str) -> dict | None:
+    org_id = get_org_id_for_user(user_id)
+    if not org_id:
+        return None
+    from routes.teams.teams_events_helpers import teams_displacement_notice
+
+    return teams_displacement_notice(org_id)
+
+
+def _tenant_bound_elsewhere(tenant_id: str, org_id: str) -> bool:
+    from routes.teams.teams_events_helpers import teams_tenant_bound_elsewhere
+
+    return teams_tenant_bound_elsewhere(tenant_id, org_id)
+
+
+def _clear_teams_displacement(org_id: str) -> None:
+    try:
+        from routes.teams.teams_events_helpers import clear_teams_displacement
+
+        clear_teams_displacement(org_id)
+    except Exception:
+        logger.warning("Failed to clear the Teams displacement notice (non-fatal)", exc_info=True)
 
 
 def _teams_setup_state(user_id: str, last_bot_message_at: int | None) -> dict:
