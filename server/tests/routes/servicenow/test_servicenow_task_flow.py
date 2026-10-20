@@ -1,5 +1,6 @@
 """process_servicenow_event: connection scope and the reopen-without-RCA path."""
 
+import importlib
 import sys
 from types import ModuleType
 from unittest.mock import MagicMock
@@ -7,10 +8,8 @@ from unittest.mock import MagicMock
 import pytest
 
 
-def _install_import_stubs() -> None:
-    rca_pb = ModuleType("chat.background.rca_prompt_builder")
-    rca_pb.build_rca_prompt = lambda *a, **k: ("prompt", "rail")  # type: ignore[attr-defined]
-    sys.modules.setdefault("chat.background.rca_prompt_builder", rca_pb)
+def _celery_stub() -> ModuleType:
+    """A celery_config whose @celery_app.task returns the plain function (with a no-op .delay)."""
     celery_cfg = ModuleType("celery_config")
 
     class _App:
@@ -23,12 +22,29 @@ def _install_import_stubs() -> None:
             return _decorator
 
     celery_cfg.celery_app = _App()  # type: ignore[attr-defined]
-    sys.modules.setdefault("celery_config", celery_cfg)
+    return celery_cfg
 
 
-_install_import_stubs()
+rca_pb = ModuleType("chat.background.rca_prompt_builder")
+rca_pb.build_rca_prompt = lambda *a, **k: ("prompt", "rail")  # type: ignore[attr-defined]
+sys.modules.setdefault("chat.background.rca_prompt_builder", rca_pb)
 
-from routes.servicenow import tasks  # noqa: E402
+
+@pytest.fixture
+def tasks(monkeypatch):
+    """A fresh routes.servicenow.tasks imported under the stub celery_config.
+
+    CI installs no celery, and tests/auth leaves a MagicMock celery_config in
+    sys.modules; a module-level import would then turn process_servicenow_event
+    into a MagicMock that silently does nothing. Importing inside the fixture
+    with our stub pinned makes the task a plain function every time.
+    """
+    monkeypatch.setitem(sys.modules, "celery_config", _celery_stub())
+    monkeypatch.delitem(sys.modules, "routes.servicenow.tasks", raising=False)
+    mod = importlib.import_module("routes.servicenow.tasks")
+    assert not isinstance(mod.process_servicenow_event, MagicMock)
+    return mod
+
 
 SYS_ID = "d" * 32
 CREDS = {"instance_url": "https://acme.service-now.com", "auth_type": "basic", "username": "u", "password": "p"}
@@ -93,12 +109,8 @@ class _Pool:
         return _Ctx()
 
 
-def _run_task(payload, decision):
-    task = tasks.process_servicenow_event
-    run = getattr(task, "run", None)
-    if run is not None:  # real Celery task: run() is bound to the task instance
-        return run(payload, "user-1", decision=decision)
-    return task(None, payload, "user-1", decision=decision)  # stubbed celery: plain function
+def _run_task(tasks, payload, decision):
+    return tasks.process_servicenow_event(None, payload, "user-1", decision=decision)  # plain function under the stub
 
 
 @pytest.fixture
@@ -123,7 +135,7 @@ def pool(monkeypatch):
     return fake
 
 
-def test_new_incident_decisions_run_with_no_pooled_connection_held(monkeypatch, pool):
+def test_new_incident_decisions_run_with_no_pooled_connection_held(monkeypatch, tasks, pool):
     seen = {}
     monkeypatch.setattr(tasks, "_find_existing", lambda *a: None)
 
@@ -140,14 +152,14 @@ def test_new_incident_decisions_run_with_no_pooled_connection_held(monkeypatch, 
     monkeypatch.setattr(tasks, "_saved_query_matches", query_check)
     monkeypatch.setattr(tasks, "_create_and_investigate", create)
 
-    _run_task(_payload(), {"action": "query", "query": ["priority=1"]})
+    _run_task(tasks, _payload(), {"action": "query", "query": ["priority=1"]})
 
     assert seen["query_open"] == 0, "the saved-query check must not hold a pooled connection"
     assert seen["create_open"] == 1, "the writes run on a fresh connection"
     assert pool.enters == 2 and pool.open == 0
 
 
-def test_judge_mode_decides_outside_the_connection_and_creates_inside_it(monkeypatch, pool):
+def test_judge_mode_decides_outside_the_connection_and_creates_inside_it(monkeypatch, tasks, pool):
     seen = {}
     monkeypatch.setattr(tasks, "_find_existing", lambda *a: None)
     monkeypatch.setattr(tasks, "_create_and_investigate", lambda *a: seen.setdefault("create_open", pool.open) or True)
@@ -160,13 +172,13 @@ def test_judge_mode_decides_outside_the_connection_and_creates_inside_it(monkeyp
     judge_mod.judge_and_route = judge  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "routes.servicenow.rca_judge", judge_mod)
 
-    _run_task(_payload(), {"action": "judge"})
+    _run_task(tasks, _payload(), {"action": "judge"})
 
     assert seen["judge_open"] == 0 and seen["create_open"] == 1
     assert pool.open == 0
 
 
-def test_known_incident_is_synced_with_the_payload_for_a_possible_reopen(monkeypatch, pool):
+def test_known_incident_is_synced_with_the_payload_for_a_possible_reopen(monkeypatch, tasks, pool):
     existing = {"id": "inc-1", "status": "resolved", "rca_task_id": None}
     synced = MagicMock()
     monkeypatch.setattr(tasks, "_find_existing", lambda *a: dict(existing))
@@ -176,7 +188,7 @@ def test_known_incident_is_synced_with_the_payload_for_a_possible_reopen(monkeyp
     create = MagicMock()
     monkeypatch.setattr(tasks, "_create_and_investigate", create)
 
-    _run_task(_payload(event="updated", state="2"), {"action": "rca"})
+    _run_task(tasks, _payload(event="updated", state="2"), {"action": "rca"})
 
     synced.assert_called_once()
     kwargs = synced.call_args.kwargs
@@ -191,7 +203,7 @@ def test_known_incident_is_synced_with_the_payload_for_a_possible_reopen(monkeyp
     ("resolved", "resolved", None, False),           # still resolved: nothing to do
     ("investigating", "investigating", None, False),  # plain update of an active incident
 ])
-def test_reopen_dispatches_an_rca_only_when_none_ever_ran(monkeypatch, existing_status, new_status, rca_task_id, dispatched):
+def test_reopen_dispatches_an_rca_only_when_none_ever_ran(monkeypatch, tasks, existing_status, new_status, rca_task_id, dispatched):
     cursor = _Cursor(fetch=(new_status,))
     conn = _Conn(cursor)
     monkeypatch.setattr(tasks, "_record_lifecycle_event", lambda *a, **k: None)
@@ -212,7 +224,7 @@ def test_reopen_dispatches_an_rca_only_when_none_ever_ran(monkeypatch, existing_
         dispatch.assert_not_called()
 
 
-def test_find_existing_reports_whether_an_rca_ran():
+def test_find_existing_reports_whether_an_rca_ran(tasks):
     cursor = _Cursor(fetch=("inc-1", "resolved", None))
     assert tasks._find_existing(cursor, "org-1", "user-1", 42) == {"id": "inc-1", "status": "resolved", "rca_task_id": None}
     cursor = _Cursor(fetch=("inc-1", "analyzed", "task-1"))
