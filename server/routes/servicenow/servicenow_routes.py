@@ -62,6 +62,17 @@ def _log_safe(value: Any, max_len: int = 80) -> str:
     return _SAFE_LOG_RE.sub("", str(value))[:max_len]
 
 
+def _public_error(exc: Exception, fallback: str) -> str:
+    """Fixed, user-facing text for a failed ServiceNow call; the exception itself stays in the logs."""
+    if isinstance(exc, ServiceNowAPIError):
+        if exc.status_code in (401, 403):
+            return f"ServiceNow rejected the credentials (HTTP {exc.status_code})"
+        if exc.status_code:
+            return f"ServiceNow returned HTTP {exc.status_code}"
+        return "Could not reach ServiceNow (timeout or network error)"
+    return fallback
+
+
 def _stored_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         creds = get_token_data(user_id, PROVIDER)
@@ -107,9 +118,10 @@ def status(user_id):
     try:
         ServiceNowClient.from_credentials(creds).test_connection()
     except (ServiceNowAPIError, ValueError) as exc:
+        # The credentials are still stored, so the connection stays connected and the
+        # auth page keeps the webhook and RCA settings; the probe failure rides on `error`.
         logger.warning("[SERVICENOW] Status check failed for user %s: %s", user_id, exc)
-        payload["connected"] = False
-        payload["error"] = str(exc)
+        payload["error"] = _public_error(exc, "Stored ServiceNow credentials are incomplete; reconnect ServiceNow")
     return jsonify(payload)
 
 
@@ -125,7 +137,10 @@ def connect(user_id):
     try:
         instance_url = normalize_instance_url(str(data.get("instanceUrl") or ""))
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        logger.info("[SERVICENOW] Rejected instance URL for user %s: %s", sanitize(user_id), exc)
+        return jsonify({
+            "error": "Instance URL must be a plain https ServiceNow host, for example https://acme.service-now.com",
+        }), 400
 
     auth_type = str(data.get("authType") or "basic")
     if auth_type not in AUTH_TYPES:
@@ -160,7 +175,7 @@ def connect(user_id):
     except ServiceNowAPIError as exc:
         logger.warning("[SERVICENOW] Connection validation failed for user %s: %s", user_id, exc)
         http_status = 400 if exc.status_code in (401, 403) else 502
-        return jsonify({"error": str(exc)}), http_status
+        return jsonify({"error": _public_error(exc, "Could not validate the ServiceNow connection")}), http_status
 
     existing = _stored_credentials(user_id) or {}
     token_payload: Dict[str, Any] = {
@@ -229,14 +244,21 @@ def get_webhook_url(user_id):
         "webhookSecret": creds["webhook_secret"],
         "headerName": WEBHOOK_SECRET_HEADER,
         "instructions": [
-            "In ServiceNow, open System Properties and create two properties: "
-            "x_aurora.webhook_url (the URL above) and x_aurora.webhook_secret (the secret above, type password).",
+            (
+                "In ServiceNow, open System Properties and create two properties: "
+                "x_aurora.webhook_url (the URL above) and x_aurora.webhook_secret (the secret above, type password)."
+            ),
             "Open System Definition > Business Rules and click New.",
-            "Table: Incident [incident]. Tick Advanced. When: After. Tick Insert and Update "
-            "(Update keeps the Aurora incident in sync when the ServiceNow incident changes state).",
+            (
+                "Table: Incident [incident]. Tick Advanced. When: Async. Tick Insert and Update "
+                "(Update keeps the Aurora incident in sync when the ServiceNow incident changes state; "
+                "Async means a slow Aurora never delays saving the incident)."
+            ),
             "Paste the script below into the Script tab and save.",
-            "Choose which incidents Aurora investigates in the Automatic RCA settings, then create a "
-            "test incident. It appears on the Aurora Incidents page within seconds.",
+            (
+                "Choose which incidents Aurora investigates in the Automatic RCA settings, then create a "
+                "test incident. It appears on the Aurora Incidents page within seconds."
+            ),
         ],
         "businessRuleScript": business_rule_script(),
     })
@@ -484,5 +506,6 @@ def field_options(user_id):
     try:
         client = ServiceNowClient.from_credentials(creds)
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        logger.warning("[SERVICENOW] Stored credentials unusable for user %s: %s", sanitize(user_id), exc)
+        return jsonify({"error": "Stored ServiceNow credentials are incomplete; reconnect ServiceNow"}), 400
     return jsonify(build_field_options(client))

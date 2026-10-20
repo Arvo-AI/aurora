@@ -144,3 +144,37 @@ class TestSettings:
         assert data["categories"] == ["Software"]
         assert [p["value"] for p in data["priorities"]] == ["1", "2", "3", "4", "5"]
         assert data["errors"] == []
+
+
+@pytest.mark.skipif(
+    not hasattr(routes.status, "__wrapped__"),
+    reason="require_permission does not expose __wrapped__ in this build",
+)
+class TestStatusProbe:
+    """A failed live probe must not turn a stored connection into 'disconnected', and no exception text leaks."""
+
+    @pytest.mark.parametrize("status_code, message", [
+        (503, "ServiceNow returned HTTP 503"),
+        (None, "Could not reach ServiceNow (timeout or network error)"),
+        (401, "ServiceNow rejected the credentials (HTTP 401)"),
+    ])
+    def test_probe_failure_keeps_connected_and_reports_a_fixed_error(self, app, monkeypatch, status_code, message):
+        class _Client:
+            def test_connection(self):
+                raise routes.ServiceNowAPIError("socket detail that must not reach the client", status_code)
+        monkeypatch.setattr(routes.ServiceNowClient, "from_credentials", staticmethod(lambda creds: _Client()))
+        resp = app.test_client().get("/servicenow/status")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["connected"] is True
+        assert body["instanceUrl"] == "https://acme.service-now.com"
+        assert body["error"] == message
+        assert "socket detail" not in resp.get_data(as_text=True)
+
+    def test_healthy_probe_has_no_error(self, app, monkeypatch):
+        class _Client:
+            def test_connection(self):
+                return {"ok": True}
+        monkeypatch.setattr(routes.ServiceNowClient, "from_credentials", staticmethod(lambda creds: _Client()))
+        body = app.test_client().get("/servicenow/status").get_json()
+        assert body["connected"] is True and "error" not in body
