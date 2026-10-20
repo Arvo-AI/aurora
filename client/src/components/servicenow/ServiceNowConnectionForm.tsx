@@ -13,7 +13,10 @@ interface ServiceNowConnectionFormProps {
   readonly loading: boolean;
 }
 
-const INSTANCE_URL_PATTERN = /^https:\/\/[a-z0-9-]+\.service-now\.com\/?$/i;
+// Shape only: an https origin with no path. Which hosts are accepted
+// (*.service-now.com, *.servicenowservices.com and SERVICENOW_ALLOWED_HOSTS) is
+// decided by the server's normalize_instance_url, so the two never disagree.
+const INSTANCE_URL_PATTERN = /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)+\/?$/i;
 
 export function ServiceNowConnectionForm({ onConnect, loading }: ServiceNowConnectionFormProps) {
   const [instanceUrl, setInstanceUrl] = useState("");
@@ -71,7 +74,7 @@ export function ServiceNowConnectionForm({ onConnect, loading }: ServiceNowConne
             />
             {trimmedUrl && !urlValid && (
               <p className="text-xs text-red-600 dark:text-red-400">
-                Use the form https://&lt;name&gt;.service-now.com
+                Use the form https://&lt;instance&gt;.service-now.com (or your instance&apos;s own host), with no path
               </p>
             )}
           </div>
@@ -87,7 +90,7 @@ export function ServiceNowConnectionForm({ onConnect, loading }: ServiceNowConne
                   checked={authType === "basic"}
                   onChange={() => setAuthType("basic")}
                 />
-                Basic auth (username and password)
+                Service account (username and password)
               </label>
               <label className="flex items-center gap-2 text-sm cursor-pointer">
                 <input
@@ -104,6 +107,23 @@ export function ServiceNowConnectionForm({ onConnect, loading }: ServiceNowConne
 
           {authType === "basic" ? (
             <>
+              <details className="rounded-md border px-3 py-2 text-sm">
+                <summary className="cursor-pointer font-medium">How to create the service account</summary>
+                <ol className="mt-2 list-decimal space-y-1 pl-5 text-muted-foreground">
+                  <li>
+                    In ServiceNow open <span className="font-medium text-foreground">User Administration &gt; Users &gt; New</span>.
+                    Create a dedicated user (for example <code>aurora</code>), tick{" "}
+                    <span className="font-medium text-foreground">Web service access only</span>, then use{" "}
+                    <span className="font-medium text-foreground">Set Password</span> and save the user.
+                  </li>
+                  <li>
+                    Under <span className="font-medium text-foreground">Roles</span> add <code>itil</code> (read and write
+                    incidents). On Yokohama, Zurich and later also add <code>snc_basic_auth_api_access</code>, or the
+                    instance refuses basic auth on the REST API with &quot;Authentication failed&quot;.
+                  </li>
+                  <li>Enter that user name and password below.</li>
+                </ol>
+              </details>
               <div className="space-y-2">
                 <Label htmlFor="servicenow-username">Username</Label>
                 <Input
@@ -130,6 +150,26 @@ export function ServiceNowConnectionForm({ onConnect, loading }: ServiceNowConne
             </>
           ) : (
             <>
+              <details className="rounded-md border px-3 py-2 text-sm">
+                <summary className="cursor-pointer font-medium">How to register the OAuth client</summary>
+                <ol className="mt-2 list-decimal space-y-1 pl-5 text-muted-foreground">
+                  <li>
+                    Create the integration user first (see the service-account steps) with the <code>itil</code> role.
+                  </li>
+                  <li>
+                    Open <span className="font-medium text-foreground">System OAuth &gt; Application Registry &gt; New &gt; Create
+                    an OAuth API endpoint for external clients</span>. Name it (for example Aurora) and copy the{" "}
+                    <span className="font-medium text-foreground">Client ID</span> and{" "}
+                    <span className="font-medium text-foreground">Client Secret</span>.
+                  </li>
+                  <li>
+                    Set <span className="font-medium text-foreground">OAuth Application User</span> to the integration user.
+                    The client-credentials grant must be enabled on the instance: system property{" "}
+                    <code>glide.oauth.inbound.client.credential.grant_type.enabled</code> = <code>true</code>.
+                  </li>
+                  <li>Enter the Client ID and Client Secret below. Aurora requests tokens from <code>/oauth_token.do</code>.</li>
+                </ol>
+              </details>
               <div className="space-y-2">
                 <Label htmlFor="servicenow-client-id">Client ID</Label>
                 <Input
@@ -167,9 +207,8 @@ export function ServiceNowConnectionForm({ onConnect, loading }: ServiceNowConne
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Use a dedicated integration account with the itil role. On Yokohama and Zurich, basic auth also needs the
-            snc_basic_auth_api_access role (or &quot;Web service access only&quot;), or use OAuth client credentials.
-            Credentials are stored securely in Vault.
+            Aurora validates the connection by reading one incident before storing anything. Credentials are stored in
+            Vault; OAuth tokens are kept in memory only.
           </p>
 
           <Button type="submit" className="w-full" disabled={!canSubmit}>

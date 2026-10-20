@@ -44,8 +44,8 @@ Since Yokohama, ServiceNow blocks basic authentication on the REST API for any a
 
 ### Authentication methods
 
-- **Basic auth**: username and password of the integration account.
-- **OAuth 2.0 client credentials**: an **Application Registry** entry of type "OAuth API endpoint for external clients" with the client credentials grant enabled (system property `glide.oauth.inbound.client.credential.grant_type.enabled` = true) and the integration account as the **OAuth Application User**. Aurora requests tokens from `/oauth_token.do`.
+- **Service account (basic auth)**: create the user under **User Administration > Users > New**, tick **Web service access only**, use **Set Password** and save; add the roles from the table above. Enter its username and password in Aurora.
+- **OAuth 2.0 client credentials**: open **System OAuth > Application Registry > New > Create an OAuth API endpoint for external clients**, copy the **Client ID** and **Client Secret**, and set the integration account as the **OAuth Application User**. The client credentials grant must be enabled on the instance (system property `glide.oauth.inbound.client.credential.grant_type.enabled` = true). Aurora requests tokens from `/oauth_token.do` and keeps them in memory only. Not affected by the basic-auth restriction.
 
 Aurora validates the connection by reading one incident from the Table API before storing anything.
 
@@ -80,7 +80,7 @@ In ServiceNow, open `sys_properties.list` and create:
 
 1. **System Definition > Business Rules > New**
 2. Table: **Incident [incident]**, tick **Advanced**
-3. **When to run**: When = **after**, tick **Insert** and **Update** (Update is what keeps the Aurora incident in sync)
+3. **When to run**: When = **async**, tick **Insert** and **Update** (Update is what keeps the Aurora incident in sync). Async means the incident save never waits on Aurora; the script also caps its call at 10 seconds
 4. **Advanced**: paste the script from the connector page, then Submit
 
 The script posts the incident's `sys_id`, `number`, `short_description`, `description`, priority, impact, urgency, state, category, subcategory, assignment group, assignee, configuration item, caller, `opened_at`, `resolved_at`, close code, close notes and `sys_updated_on`, with an `event` of `inserted` or `updated`, and the `X-Aurora-Webhook-Secret` header. Filter conditions on the rule are optional; Aurora's own filters below usually make them unnecessary.
@@ -92,7 +92,9 @@ On the connector page, **Automatic RCA** is either:
 - **Filters** (default): add one or more filters. Each filter is any-of on priorities, assignment groups, categories and states, plus an optional encoded-query clause that Aurora confirms against the instance (`sys_id=<incident>^<clause>`) before starting. A new incident matching any filter is investigated. With no filters, nothing is investigated.
 - **Auto**: Aurora asks an LLM whether each new incident describes a real failure, following the **ServiceNow RCA** memory shown under the toggle. Edit it there, or tell Aurora in chat ("never investigate incidents assigned to Service Desk") and it updates the memory. Verdicts are remembered per incident; a skipped incident is judged again only when its text changes.
 
-A new incident that does not qualify is ignored and never becomes an Aurora incident. Updates to an incident Aurora already tracks only sync its state; they never start a second RCA.
+A new incident that does not qualify is ignored and never becomes an Aurora incident. Updates to an incident Aurora already tracks only sync its state; they never start a second RCA. The one exception is an incident that arrived already resolved (so no RCA ran) and is later reopened in ServiceNow: that reopen starts its first RCA.
+
+Incident states: Aurora treats state values 6 (Resolved), 7 (Closed) and 8 (Canceled), or any state whose label is Resolved, Closed or Canceled, as resolved. Other custom states keep the Aurora incident open and are not offered in the Filters picker.
 
 ### 6. Test
 
@@ -112,7 +114,7 @@ Everything Aurora writes to ServiceNow is off by default and controlled on the c
 
 Work notes are posted at most once per incident (recurrences attach to the original). If ServiceNow answers 403 to any write, Aurora disables writes for that connection until you reconnect with an account that has the required role.
 
-In chat, a user can always ask Aurora to post a note or update an incident; the toggles only govern unattended investigations.
+The switch governs every ServiceNow write, in chat and in unattended investigations alike. Turning it off also resets the write scope to work notes only and turns the resolution sync off.
 
 ## Agent Tools
 

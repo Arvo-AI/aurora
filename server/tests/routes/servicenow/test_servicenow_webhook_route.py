@@ -153,7 +153,7 @@ def test_rejects_payload_without_a_valid_sys_id(app, body):
 
 
 def test_broker_failure_is_503(app, monkeypatch):
-    def _boom(payload, user_id):
+    def _boom(payload, user_id, decision=None):  # same signature the route uses: delay(payload, user_id, decision=...)
         raise RuntimeError("broker down")
     monkeypatch.setattr(routes.process_servicenow_event, "delay", _boom, raising=False)
     resp = _post(app.test_client(), headers={"X-Aurora-Webhook-Secret": SECRET})

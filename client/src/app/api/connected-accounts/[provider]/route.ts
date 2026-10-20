@@ -470,22 +470,7 @@ export async function DELETE(
 
     // Special handling for ServiceNow (backend disconnect is POST)
     if (provider === 'servicenow') {
-      const response = await fetch(`${API_BASE_URL}/servicenow/disconnect`, {
-        method: 'POST',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting ServiceNow:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect ServiceNow' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
+      return forwardRequest(request, 'POST', '/servicenow/disconnect', 'servicenow-disconnect')
     }
 
     // Special handling for Sentry

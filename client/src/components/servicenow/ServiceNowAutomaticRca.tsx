@@ -213,6 +213,7 @@ export function ServiceNowAutomaticRca({ rules, saving, onSave }: Readonly<Servi
   const removeRule = (index: number) => {
     void onSave(rules.filter((_, item) => item !== index));
     if (editingIndex === index) resetForm();
+    else if (editingIndex !== null && editingIndex > index) setEditingIndex(editingIndex - 1);
   };
 
   const renderPicker = ({ field, label, empty }: (typeof PICKERS)[number]) => (

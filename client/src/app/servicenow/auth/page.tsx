@@ -38,6 +38,8 @@ export default function ServiceNowAuthPage() {
     try {
       const result = await serviceNowService.connect(payload);
       updateLocalState(result);
+      window.dispatchEvent(new CustomEvent("providerStateChanged"));
+      window.dispatchEvent(new CustomEvent("servicenowStateChanged"));
       toast({ title: "Success", description: "ServiceNow connected successfully!" });
     } catch (err: any) {
       console.error("ServiceNow connection failed", err);
@@ -55,6 +57,7 @@ export default function ServiceNowAuthPage() {
     setLoading(true);
     try {
       await disconnect();
+      window.dispatchEvent(new CustomEvent("providerStateChanged"));
       window.dispatchEvent(new CustomEvent("servicenowStateChanged"));
       toast({ title: "Success", description: "ServiceNow disconnected successfully" });
     } catch (err: any) {
@@ -149,6 +152,11 @@ export default function ServiceNowAuthPage() {
                   <span className="text-muted-foreground">Instance</span>
                   <span className="font-medium break-all text-right">{status?.instanceUrl ?? "Unknown"}</span>
                 </div>
+                {status?.error && (
+                  <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                    Last check failed: {status.error}. The stored credentials are kept; reconnect if it persists.
+                  </p>
+                )}
                 <div className="flex justify-between gap-4">
                   <span className="text-muted-foreground">Authentication</span>
                   <span className="font-medium">
