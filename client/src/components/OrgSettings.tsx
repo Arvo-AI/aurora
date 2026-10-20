@@ -14,6 +14,7 @@ import OrgMembers from "@/app/org/components/OrgMembers";
 import OrgActivity from "@/app/org/components/OrgActivity";
 import OrgInvitations from "@/app/org/components/OrgInvitations";
 import McpTokens from "@/app/org/components/McpTokens";
+import ConnectorAccess from "@/app/org/components/ConnectorAccess";
 import { SsoSettings } from "@/components/SsoSettings";
 
 const BASE_ORG_TABS = ["overview", "members", "invitations", "activity", "mcp"];
@@ -47,7 +48,7 @@ export function OrgSettings() {
 
   const isAdmin = checkAdmin(user?.role);
   // SSO config is admin-only (backend enforces org:manage too)
-  const orgTabs = isAdmin ? [...BASE_ORG_TABS, "sso"] : BASE_ORG_TABS;
+  const orgTabs = isAdmin ? [...BASE_ORG_TABS, "access", "sso"] : BASE_ORG_TABS;
   const editingNameRef = React.useRef(false);
   editingNameRef.current = editingName;
 
@@ -209,6 +210,11 @@ export function OrgSettings() {
         <TabsContent value="mcp">
           <McpTokens />
         </TabsContent>
+        {isAdmin && (
+          <TabsContent value="access">
+            <ConnectorAccess />
+          </TabsContent>
+        )}
         {isAdmin && (
           <TabsContent value="sso">
             <SsoSettings />

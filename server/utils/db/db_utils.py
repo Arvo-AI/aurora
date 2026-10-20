@@ -1240,6 +1240,18 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_otp_org
                         ON org_tool_permissions(org_id);
                 """,
+                "org_connector_access": """
+                    CREATE TABLE IF NOT EXISTS org_connector_access (
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        connector VARCHAR(128) NOT NULL,
+                        scope_id VARCHAR(256) NOT NULL DEFAULT '',
+                        credential VARCHAR(64) NOT NULL DEFAULT '',
+                        role VARCHAR(50) NOT NULL,
+                        updated_by VARCHAR(255),
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (org_id, connector, scope_id, credential, role)
+                    );
+                """,
                 "org_invitations": """
                     CREATE TABLE IF NOT EXISTS org_invitations (
                         id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
@@ -1663,6 +1675,7 @@ def initialize_tables():
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
             rls_tables.append("org_tool_permissions")
+            rls_tables.append("org_connector_access")
             rls_tables.append("rca_findings")
             rls_tables.append("actions")
             rls_tables.append("action_runs")

@@ -169,6 +169,14 @@ class SkillRegistry:
 
         try:
             is_connected, ctx_data = self._dispatch_check(skill_id, method, check, user_id)
+            # Per-server MCP limits are applied when the server list is rendered.
+            # Every other skill is one connector, so a role without a grant
+            # looks disconnected.
+            gate = check.get("provider_key") or skill_id
+            if is_connected and skill_id != "mcp" and gate:
+                from utils.auth.connector_access import may_use
+                if not may_use(user_id, gate):
+                    is_connected, ctx_data = False, {}
             self._connection_cache[cache_key] = (time.monotonic(), is_connected, ctx_data)
             return is_connected, ctx_data
         except Exception as e:

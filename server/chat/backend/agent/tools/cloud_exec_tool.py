@@ -283,29 +283,21 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
             workspace_id = aws_conn["workspace_id"]
 
             current_mode = get_mode_from_context()
-            role_arn = aws_conn.get("role_arn")
-
-            # Apply session policy for read-only mode
-            session_policy = None
-            if ModeAccessController.is_read_only_mode(current_mode):
-                # First check if user has a dedicated read-only role configured
-                read_only_role = aws_conn.get("read_only_role_arn")
-                if read_only_role:
-                    # Use dedicated read-only role if available
-                    role_arn = read_only_role
-                    logger.info("Using AWS read-only role for user %s", hash_for_log(user_id))
-                else:
-                    # Apply restrictive session policy to make the role read-only
-                    # NOTE: Session policies work as an intersection with base role permissions.
-                    # If the base role lacks read permissions, this may fail at runtime.
-                    # For reliable read-only mode, users should provide a dedicated read-only role.
-                    session_policy = get_read_only_session_policy()
-                    logger.warning(
-                        "Read-only mode enabled for user %s but no read_only_role_arn provided. "
-                        "Using session policy fallback. This may fail if the base role lacks read permissions. "
-                        "Consider providing a dedicated read-only role for better reliability.",
-                        hash_for_log(user_id)
-                    )
+            from utils.auth.connector_access import credentials_for_user, select_aws_role
+            ask_mode = ModeAccessController.is_read_only_mode(current_mode)
+            role_arn, use_session_policy = select_aws_role(
+                aws_conn,
+                credentials_for_user(user_id, "aws", str(aws_conn.get("account_id") or "")),
+                ask_mode,
+            )
+            # No grant for this account: the role cannot use it.
+            if not role_arn:
+                logger.info(
+                    "AWS account %s is not granted to this role",
+                    hash_for_log(str(aws_conn.get("account_id"))),
+                )
+                return False, None, None, None
+            session_policy = get_read_only_session_policy() if use_session_policy else None
 
             sts_creds = assume_workspace_role(
                 role_arn=role_arn,
@@ -456,19 +448,21 @@ def setup_aws_environments_all_accounts(user_id: str):
         return []
 
     current_mode = get_mode_from_context()
-    default_session_policy = None
-    if ModeAccessController.is_read_only_mode(current_mode):
-        default_session_policy = get_read_only_session_policy()
+    ask_mode = ModeAccessController.is_read_only_mode(current_mode)
+    from utils.auth.connector_access import access_for, select_aws_role
+    access = access_for(user_id)
 
     account_envs = []
     for conn in connections:
-        role_arn = conn.get("role_arn")
         account_id = conn.get("account_id")
         region = conn.get("region") or "us-east-1"
-        session_policy = default_session_policy
+        role_arn, use_session_policy = select_aws_role(
+            conn, access.credentials("aws", str(account_id or "")), ask_mode,
+        )
+        session_policy = get_read_only_session_policy() if use_session_policy else None
 
         if not role_arn:
-            logger.warning("Skipping account %s – no role_arn", account_id)
+            logger.warning("Skipping account %s – not granted to this role", account_id)
             continue
 
         # Each account's ExternalId belongs to the workspace that registered it
@@ -476,12 +470,6 @@ def setup_aws_environments_all_accounts(user_id: str):
         if not external_id:
             logger.warning("Skipping account %s – could not resolve ExternalId", account_id)
             continue
-
-        if ModeAccessController.is_read_only_mode(current_mode):
-            ro_arn = conn.get("read_only_role_arn")
-            if ro_arn:
-                role_arn = ro_arn
-                session_policy = None
 
         try:
             creds = assume_workspace_role(

@@ -550,6 +550,17 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
         scopes = ["https://www.googleapis.com/auth/cloud-platform"]
 
     normalized_mode = (mode or '').strip().lower()
+    from utils.auth.connector_access import credentials_for_user, gcp_token_mode
+    override = gcp_token_mode(
+        credentials_for_user(user_id, "gcp", selected_project_id or ""),
+        normalized_mode,
+    )
+    # No grant: don't mint a token. A read-only grant forces the read-only
+    # service account even when the chat is in Agent mode.
+    if override == "deny":
+        raise ValueError("Your role cannot use this GCP project.")
+    if override:
+        normalized_mode = override
     
     from utils.auth.token_management import get_token_data
     from connectors.gcp_connector.auth.oauth import get_credentials
