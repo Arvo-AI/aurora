@@ -467,9 +467,17 @@ def get_jira_memory(user_id):
 @require_permission("memory", "read")
 def get_servicenow_memory(user_id):
     """The "ServiceNow RCA" entry Auto mode's judge follows, editable on the ServiceNow page."""
-    return _get_policy_memory(
-        user_id, SERVICENOW_MEMORY_CATEGORY, SERVICENOW_MEMORY_TITLE, seed_servicenow_memory, "ServiceNow"
-    )
+    org_id = get_org_id_from_request()
+    try:
+        entry = _read_or_seed_policy(
+            user_id, org_id, SERVICENOW_MEMORY_CATEGORY, SERVICENOW_MEMORY_TITLE, seed_servicenow_memory,
+        )
+        if entry is None:
+            return jsonify({"error": "Failed to load the ServiceNow memory entry"}), 500
+        return jsonify({"entry": entry}), 200
+    except Exception:
+        logger.exception("[Memory] Error getting ServiceNow memory")
+        return jsonify({"error": "Failed to get the ServiceNow memory entry"}), 500
 
 
 @memory_bp.route("/upload", methods=["POST"])
