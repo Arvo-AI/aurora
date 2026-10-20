@@ -6,12 +6,13 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import uuid
 import contextvars
 from utils.terminal.terminal_run import terminal_run
 import time
 import requests
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, NamedTuple, Optional, Tuple
 from langchain_core.tools import StructuredTool
 from pathlib import Path
 
@@ -1200,10 +1201,60 @@ def setup_flyio_environment_isolated(user_id: str, selected_org: str | None = No
         return False, None, None, None
 
 
+_BQ_QUERY_TIMEOUT_SECONDS = 300
+# Applied only when the command does not set --maximum_bytes_billed.
+_BQ_DEFAULT_BYTES_BILLED = 10_000_000_000
+# 1 TiB. An explicit flag cannot go past the on-demand price of one tebibyte.
+_BQ_BYTES_BILLED_CEILING = 1024 ** 4
+_BQ_DEFAULT_MAX_ROWS = 100
+# Past this the output trim drops the extra rows before the model sees them.
+_BQ_MAX_ROWS_CEILING = 1000
+
+
+# Verbs bq accepts. A flag value such as `--location US` must not be treated as one.
+_BQ_VERBS = frozenset({
+    "query", "wait", "ls", "show", "head", "mk", "rm", "cp", "load",
+    "extract", "cancel", "help", "version", "init", "update", "shell",
+    "partition", "insert",
+})
+
+
+def _bq_verb_index(tokens: list) -> Optional[int]:
+    """Index of the bq verb, or None when tokens are not a bq command."""
+    if not tokens or tokens[0] != "bq":
+        return None
+    for i, token in enumerate(tokens):
+        if i > 0 and token in _BQ_VERBS:
+            return i
+    return None
+
+
+def _bq_subcommand(command: str) -> Optional[str]:
+    """The bq verb. None when the command is not bq or the verb is unknown."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    index = _bq_verb_index(tokens)
+    if index is None:
+        return None
+    return tokens[index]
+
+
 def get_command_timeout(command: str, user_timeout: int = None) -> int:
-    """Determine timeout for a command. Use user_timeout if provided, else adapt based on command type."""
+    """Use a positive caller timeout. Otherwise pick one from the command."""
     if user_timeout is not None:
-        return user_timeout
+        try:
+            requested = int(user_timeout)
+        except (TypeError, ValueError):
+            requested = 0
+        # Zero or negative is not a wait, so the command default still applies
+        if requested > 0:
+            return requested
+
+    # Match the bq verb, not the SQL, so "created_at" does not change the limit
+    if _bq_subcommand(command) in ("query", "wait"):
+        return _BQ_QUERY_TIMEOUT_SECONDS
 
     # Very long-running operations (20 minutes) - based on typical cloud provider timings:
     # - Kubernetes clusters (GKE: 3-6min create/delete, EKS: 10-20min, AKS: 10-18min)
@@ -1647,20 +1698,75 @@ def _argv_has_flag(argv: list, name: str) -> bool:
     return any(token == name or token.startswith(name + "=") for token in argv)
 
 
+def _flag_value(argv: list, name: str) -> Optional[str]:
+    """Value of --name=value or --name value. None when the flag is absent."""
+    for i, token in enumerate(argv):
+        if token == name:
+            if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                return argv[i + 1]
+            return None
+        prefix = name + "="
+        if token.startswith(prefix):
+            return token[len(prefix):]
+    return None
+
+
+def _replace_flag_value(argv: list, name: str, new_value: str) -> None:
+    for i, token in enumerate(argv):
+        if token == name and i + 1 < len(argv):
+            argv[i + 1] = new_value
+            return
+        if token.startswith(name + "="):
+            argv[i] = f"{name}={new_value}"
+            return
+
+
+def _parse_int(raw: Optional[str]) -> Optional[int]:
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bounded_int_flag(argv: list, name: str, default: int, ceiling: int) -> str:
+    """Flag token to insert, or '' when the command already has one.
+
+    A value above the ceiling is rewritten in place.
+    """
+    if not _argv_has_flag(argv, name):
+        return f"{name}={default}"
+    parsed = _parse_int(_flag_value(argv, name))
+    # Leave a non-numeric value for bq to reject
+    if parsed is not None and parsed > ceiling:
+        _replace_flag_value(argv, name, str(ceiling))
+    return ""
+
+
+def _bq_subcommand_index(argv: list) -> Optional[int]:
+    return _bq_verb_index(argv)
+
+
+class BqExec(NamedTuple):
+    argv: list
+    logged: str
+    job_id: Optional[str]
+
+
 def prepare_bq_exec(
     command: str,
     access_token: Optional[str],
     project_id: Optional[str],
-) -> Tuple[list, str]:
-    """Argv for `bq`, plus a log-safe rendering of that argv.
+) -> BqExec:
+    """Argv for `bq`, a log-safe rendering, and the query job id.
 
-    `bq` reads `--oauth_access_token` and does not read CLOUDSDK_AUTH_ACCESS_TOKEN.
-    The token is placed only on the argv. Callers must log the returned string,
-    not the argv. A project the command already sets is left alone.
+    The access token is placed only on the argv. Callers must log `logged`,
+    not the argv. Query caps are filled in when missing and clamped when too high.
     """
     argv = shlex.split(command)
     if not argv or argv[0] != "bq":
-        return argv, _redact_oauth_access_token(argv)
+        return BqExec(argv, _redact_oauth_access_token(argv), None)
 
     insert_at = 1
     if project_id and not _argv_has_flag(argv, "--project_id"):
@@ -1668,7 +1774,97 @@ def prepare_bq_exec(
         insert_at += 1
     if access_token and not _argv_has_flag(argv, "--oauth_access_token"):
         argv.insert(insert_at, f"--oauth_access_token={access_token}")
-    return argv, _redact_oauth_access_token(argv)
+
+    query_idx = _bq_subcommand_index(argv)
+    # Caps apply to queries. ls and show stay as the command wrote them.
+    if query_idx is None or argv[query_idx] != "query":
+        return BqExec(argv, _redact_oauth_access_token(argv), None)
+
+    # Global flags belong before the verb
+    if not _argv_has_flag(argv, "--format"):
+        argv.insert(query_idx, "--format=json")
+        query_idx += 1
+
+    to_insert = []
+    # Standard SQL unless the command already picked a dialect
+    if not _argv_has_flag(argv, "--nouse_legacy_sql") and not _argv_has_flag(argv, "--use_legacy_sql"):
+        to_insert.append("--nouse_legacy_sql")
+    for flag in (
+        _bounded_int_flag(argv, "--maximum_bytes_billed", _BQ_DEFAULT_BYTES_BILLED, _BQ_BYTES_BILLED_CEILING),
+        _bounded_int_flag(argv, "--max_rows", _BQ_DEFAULT_MAX_ROWS, _BQ_MAX_ROWS_CEILING),
+    ):
+        if flag:
+            to_insert.append(flag)
+
+    job_id = _flag_value(argv, "--job_id")
+    # Our id is what cancel uses when the CLI is killed
+    if not job_id:
+        job_id = f"aurora-{uuid.uuid4().hex}"
+        if _argv_has_flag(argv, "--job_id"):
+            _replace_flag_value(argv, "--job_id", job_id)
+        else:
+            to_insert.append(f"--job_id={job_id}")
+
+    for offset, flag in enumerate(to_insert):
+        argv.insert(query_idx + 1 + offset, flag)
+    return BqExec(argv, _redact_oauth_access_token(argv), job_id)
+
+
+def cancel_bq_job(
+    job_id: str,
+    project_id: Optional[str],
+    location: Optional[str],
+    access_token: Optional[str],
+    env: Optional[dict],
+) -> bool:
+    """Stop a query job we started. Direct exec, because Ask mode blocks cancel."""
+    argv = ["bq"]
+    if project_id:
+        argv.append(f"--project_id={project_id}")
+    if location:
+        argv.append(f"--location={location}")
+    argv.extend(["cancel", job_id])
+    try:
+        result = terminal_run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+            trusted=True,
+            oauth_access_token=access_token,
+        )
+    except Exception:
+        logger.warning("bq cancel failed for job %s", job_id)
+        return False
+    if result.returncode != 0:
+        logger.warning("bq cancel exited %s for job %s", result.returncode, job_id)
+        return False
+    return True
+
+
+def explain_bq_timeout(
+    result,
+    *,
+    job_id: Optional[str],
+    project_id: Optional[str],
+    location: Optional[str],
+    access_token: Optional[str],
+    env: Optional[dict],
+    timeout_s: int,
+):
+    """Cancel the job behind a killed query and say so in stderr."""
+    if result.returncode != 124 or not job_id:
+        return result
+    cancelled = cancel_bq_job(job_id, project_id, location, access_token, env)
+    if cancelled:
+        result.stderr = f"Query exceeded the {timeout_s}s timeout. The BigQuery job was cancelled."
+    else:
+        result.stderr = (
+            f"Query exceeded the {timeout_s}s timeout. "
+            "Cancelling the BigQuery job failed; it may still be running."
+        )
+    return result
 
 
 def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None, account_id: Optional[str] = None) -> str:
@@ -2298,6 +2494,9 @@ Security & Compliance
             exec_command = command_args
 
         bq_token = None
+        bq_job_id = None
+        bq_location = None
+        bq_project = None
         if cli_tool == "bq":
             bq_project = region_or_project
             if isinstance(isolated_env, dict):
@@ -2307,7 +2506,10 @@ Security & Compliance
                 )
                 bq_project = isolated_env.get("GOOGLE_CLOUD_PROJECT") or bq_project
             # Project only. The token is applied inside terminal_run, after the hash.
-            exec_command, _ = prepare_bq_exec(command, None, bq_project)
+            prepared = prepare_bq_exec(command, None, bq_project)
+            exec_command = prepared.argv
+            bq_job_id = prepared.job_id
+            bq_location = _flag_value(prepared.argv, "--location")
 
         # Execute the command
         exec_start = time.perf_counter()
@@ -2340,6 +2542,16 @@ Security & Compliance
                         oauth_access_token=bq_token,
                     )
             logger.info(f"TIME: cloud command execution took {time.perf_counter() - exec_start:.2f}s")
+            if cli_tool == "bq":
+                explain_bq_timeout(
+                    result,
+                    job_id=bq_job_id,
+                    project_id=bq_project,
+                    location=bq_location,
+                    access_token=bq_token,
+                    env=isolated_env,
+                    timeout_s=effective_timeout,
+                )
             # Entra-integrated AKS writes a kubeconfig whose exec plugin defaults to
             # devicecode, which is interactive. Convert it to service-principal auth
             # so subsequent kubectl calls work headless. Non-Entra clusters get a
