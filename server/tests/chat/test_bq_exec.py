@@ -1,14 +1,14 @@
 """bq argv built by cloud_exec. The access token must not reach the log string."""
 
-from chat.backend.agent.tools.cloud_exec_tool import (
+from chat.backend.agent.tools.bq_exec import (
     _BQ_BYTES_BILLED_CEILING,
     _BQ_DEFAULT_BYTES_BILLED,
     _BQ_DEFAULT_MAX_ROWS,
     _BQ_MAX_ROWS_CEILING,
     explain_bq_timeout,
-    get_command_timeout,
     prepare_bq_exec,
 )
+from chat.backend.agent.tools.cloud_exec_tool import get_command_timeout
 from utils.terminal.terminal_run import CompletedProcess, terminal_run
 
 
@@ -182,7 +182,7 @@ def test_timeout_cancels_the_query_job(monkeypatch):
 
         return Result()
 
-    monkeypatch.setattr("chat.backend.agent.tools.cloud_exec_tool.terminal_run", fake_run)
+    monkeypatch.setattr("chat.backend.agent.tools.bq_exec.terminal_run", fake_run)
     result = CompletedProcess(args=[], returncode=124, stdout="", stderr="timed out")
     explain_bq_timeout(
         result,
@@ -213,7 +213,7 @@ def test_failed_cancel_says_the_job_may_still_be_running(monkeypatch):
 
         return Result()
 
-    monkeypatch.setattr("chat.backend.agent.tools.cloud_exec_tool.terminal_run", fake_run)
+    monkeypatch.setattr("chat.backend.agent.tools.bq_exec.terminal_run", fake_run)
     result = CompletedProcess(args=[], returncode=124, stdout="", stderr="timed out")
     explain_bq_timeout(
         result,
@@ -231,7 +231,7 @@ def test_a_finished_query_is_not_cancelled(monkeypatch):
     def fake_run(args, **kwargs):
         raise AssertionError("cancel should not run")
 
-    monkeypatch.setattr("chat.backend.agent.tools.cloud_exec_tool.terminal_run", fake_run)
+    monkeypatch.setattr("chat.backend.agent.tools.bq_exec.terminal_run", fake_run)
     result = CompletedProcess(args=[], returncode=0, stdout="[]", stderr="")
     explain_bq_timeout(
         result,
