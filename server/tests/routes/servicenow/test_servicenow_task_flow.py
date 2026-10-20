@@ -103,10 +103,23 @@ def _run_task(payload, decision):
 
 @pytest.fixture
 def pool(monkeypatch):
+    """Stub the three modules the task imports inside its body.
+
+    They go in via sys.modules, not setattr on the real modules: tests/auth
+    leaves MagicMock stand-ins for ``utils.auth.*`` / ``utils.db.*`` in
+    sys.modules in a full-suite run, and a setattr on those would silently
+    miss, making the task return early at the org lookup.
+    """
     fake = _Pool()
-    monkeypatch.setattr("utils.db.connection_pool.db_pool", fake)
-    monkeypatch.setattr("utils.auth.stateless_auth.set_rls_context", lambda *a, **k: "org-1")
-    monkeypatch.setattr("utils.auth.token_management.get_token_data", lambda user_id, source: dict(CREDS))
+    pool_mod = ModuleType("utils.db.connection_pool")
+    pool_mod.db_pool = fake  # type: ignore[attr-defined]
+    auth_mod = ModuleType("utils.auth.stateless_auth")
+    auth_mod.set_rls_context = lambda *a, **k: "org-1"  # type: ignore[attr-defined]
+    token_mod = ModuleType("utils.auth.token_management")
+    token_mod.get_token_data = lambda user_id, source: dict(CREDS)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "utils.db.connection_pool", pool_mod)
+    monkeypatch.setitem(sys.modules, "utils.auth.stateless_auth", auth_mod)
+    monkeypatch.setitem(sys.modules, "utils.auth.token_management", token_mod)
     return fake
 
 
