@@ -1,10 +1,8 @@
-"""Seed the default "Slack" memory entry (category ``context``, title ``Slack``)
-on connect. It's an ordinary memory entry — this only creates the starting policy, 
-never overwrites an existing one.
+"""Slack's policy memory: the default "Slack" entry (category ``context``, title
+``Slack``) seeded on connect. It's an ordinary memory entry — seeding only
+creates the starting policy, never overwrites an existing one. The Slack wording
+lives here; the seeding mechanics are platform-generic (``platform_memory``).
 """
-
-from services.memory import SLACK_MEMORY_CATEGORY, SLACK_MEMORY_TITLE
-from services.memory.seed import seed_memory_entry
 
 SLACK_MEMORY_DESCRIPTION = (
     "Slack behaviour: tone, when Aurora speaks, and which teams/channels to "
@@ -61,13 +59,10 @@ different style under "Per-channel notes".
 
 
 def seed_slack_memory(user_id: str, org_id: str | None = None) -> bool:
-    """Create the default "Slack" memory for an org if absent. True if created."""
-    return seed_memory_entry(
-        user_id,
-        category=SLACK_MEMORY_CATEGORY,
-        title=SLACK_MEMORY_TITLE,
-        content=SLACK_MEMORY_DEFAULT_CONTENT,
-        description=SLACK_MEMORY_DESCRIPTION,
-        org_id=org_id,
-        log_prefix="[SlackMemory]",
-    )
+    """Create the default "Slack" memory for an org if absent (idempotent,
+    non-destructive). Returns True if a new entry was created. See
+    ``seed_platform_memory`` for the ``org_id`` contract."""
+    # Imported here, not at module top: platform_memory builds its spec registry
+    # from this module's strings.
+    from services.memory import platform_memory
+    return platform_memory.seed_platform_memory(user_id, "slack", org_id=org_id)

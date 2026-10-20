@@ -21,7 +21,8 @@ ENV UV_CACHE_DIR="/tmp/.cache/uv"
 # Set the working directory
 WORKDIR /app 
 
-# Disable HTTP pipelining to prevent CDN hash mismatches
+# Disable HTTP pipelining to prevent CDN hash mismatches.
+# tini is the celery worker's PID 1; this image has no init of its own.
 RUN echo 'Acquire::http::Pipeline-Depth "0";' > /etc/apt/apt.conf.d/99fixhash && \
     apt-get update && apt-get install -y \
     libpq-dev \
@@ -38,6 +39,7 @@ RUN echo 'Acquire::http::Pipeline-Depth "0";' > /etc/apt/apt.conf.d/99fixhash &&
     lsb-release \
     openssh-client \
     dnsutils \
+    tini \
     --no-install-recommends && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 

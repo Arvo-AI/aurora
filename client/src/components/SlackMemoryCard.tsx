@@ -1,18 +1,19 @@
 "use client";
 
-import { PolicyMemoryCard } from "@/components/PolicyMemoryCard";
+import { PlatformMemoryCard } from "@/components/PlatformMemoryCard";
 
 interface SlackMemoryCardProps {
   readonly canWrite: boolean;
 }
 
+// The Slack memory is an ordinary `context` / "Slack" memory entry, surfaced on
+// the Slack manage page via the platform-generic card.
 export function SlackMemoryCard({ canWrite }: SlackMemoryCardProps) {
   return (
-    <PolicyMemoryCard
+    <PlatformMemoryCard
+      platform="slack"
+      displayName="Slack"
       canWrite={canWrite}
-      endpoint="slack"
-      name="Slack"
-      placeholder="Describe how Aurora should behave in Slack (markdown)."
       description={
         <>
           How Aurora behaves in Slack — its tone, when it speaks up, the message

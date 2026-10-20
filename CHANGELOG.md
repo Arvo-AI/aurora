@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.10] - 2026-10-16
+
+### Added
+- Microsoft Teams connector. Connect with a Microsoft work account, install the
+  Aurora app in each team, and @mention it in a channel or a direct message to
+  start an investigation. Incident cards, failure notices, and post-investigation
+  routing post as the Aurora bot. Channels can be activated, described, and
+  chosen as the incident-card channel, and Teams behaviour is an editable policy
+  memory. Until the app is in the org catalog, setup offers a package to upload
+  as a custom app.
+- One routing pass per completed investigation covers every connected chat
+  platform. With Slack and Teams both connected, that run reads both policies
+  and posts where each one says to.
+
+### Changed
+- Slack and Teams share the channel and memory manage pages. A Slack-only org
+  keeps the same Slack policy text and @mention behaviour.
+- Post-investigation routing no longer depends on the Slack incident-card
+  toggle. It runs once when Slack or Teams is connected, and a card refresh
+  does not run it again.
+
 ## [1.5.9] - 2026-10-16
 
 ### Added
