@@ -1194,6 +1194,8 @@ def update_incident(user_id, incident_id: str):
     if "summary" in data and len(str(data["summary"])) > 10000:
         return jsonify({"error": "Summary too long (max 10000 characters)"}), 400
 
+    sync_servicenow = False
+    updated_id = None
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -1285,25 +1287,29 @@ def update_incident(user_id, incident_id: str):
                             "[INCIDENTS] on-resolved actions failed for %s",
                             sanitize(incident_id),
                         )
-                    # ServiceNow-sourced incidents: mirror the resolution onto the
-                    # ServiceNow record when the org opted in (never raises).
-                    try:
-                        from utils.notifications.servicenow_notification_service import sync_servicenow_resolution
-                        sync_servicenow_resolution(user_id, incident_id)
-                    except Exception:
-                        logger.warning(
-                            "[INCIDENTS] ServiceNow resolution sync failed for %s",
-                            sanitize(incident_id),
-                        )
+                    sync_servicenow = True
 
                 logger.info(
                     "[INCIDENTS] Updated incident %s for user %s", sanitize(incident_id), sanitize(user_id)
                 )
-                return jsonify({"success": True, "id": str(result[0])}), 200
+                updated_id = str(result[0])
 
     except Exception as exc:
         logger.exception("[INCIDENTS] Failed to update incident for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to update incident"}), 500
+
+    if sync_servicenow:
+        # ServiceNow-sourced incidents: mirror the resolution onto the ServiceNow
+        # record when the org opted in (never raises). Runs after the pooled
+        # connection above is released: the sync fetches a token, PATCHes the
+        # incident and opens its own connection, so a slow instance must not sit
+        # on two pooled connections while the user waits.
+        try:
+            from utils.notifications.servicenow_notification_service import sync_servicenow_resolution
+            sync_servicenow_resolution(user_id, incident_id)
+        except Exception:
+            logger.warning("[INCIDENTS] ServiceNow resolution sync failed for %s", sanitize(incident_id))
+    return jsonify({"success": True, "id": updated_id}), 200
 
 
 @incidents_bp.route("/api/incidents/<incident_id>/chat", methods=["POST"])
