@@ -15,7 +15,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
@@ -254,42 +254,52 @@ def process_servicenow_event(
         metadata = build_alert_metadata(payload, instance_url)
         status = "resolved" if is_resolved(payload) else "investigating"
 
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                org_id = set_rls_context(cursor, conn, user_id, log_prefix=_LOG)
-                if not org_id:
-                    return
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            org_id = set_rls_context(cursor, conn, user_id, log_prefix=_LOG)
+            if not org_id:
+                return
 
-                received_at = datetime.now(timezone.utc)
-                source_alert_id = source_alert_id_for(org_id, sys_id)
+            received_at = datetime.now(timezone.utc)
+            source_alert_id = source_alert_id_for(org_id, sys_id)
 
-                existing = _find_existing(cursor, org_id, user_id, source_alert_id)
-                if existing:
-                    _store_event(cursor, conn, user_id, org_id, payload, event_kind, title, status, severity, received_at)
-                    _sync_existing(cursor, conn, user_id, org_id, existing, status, severity, metadata, number, event_kind)
-                    _notify_sse(user_id, org_id, existing["id"])
-                    return
+            existing = _find_existing(cursor, org_id, user_id, source_alert_id)
+            if existing:
+                _store_event(cursor, conn, user_id, org_id, payload, event_kind, title, status, severity, received_at)
+                _sync_existing(
+                    cursor, conn, user_id, org_id, existing, status, severity, metadata, number, event_kind,
+                    title=title, sys_id=sys_id, payload=payload,
+                )
+                _notify_sse(user_id, org_id, existing["id"])
+                return
 
-                action = str(decision.get("action") or "rca")
-                if action == "ignore":
-                    logger.info("%s Ignored %s: outside the saved filters", _LOG, sanitize(number))
-                    return
-                if action == "query" and not _saved_query_matches(creds, sys_id, decision.get("query") or []):
-                    logger.info("%s Ignored %s: saved query did not match", _LOG, sanitize(number))
-                    return
+        # The pooled connection is released here on purpose: the saved-query check
+        # waits on ServiceNow (up to the client timeout) and the judge waits on an
+        # LLM, and a webhook burst must not pin the admin pool for that long.
+        action = str(decision.get("action") or "rca")
+        if action == "ignore":
+            logger.info("%s Ignored %s: outside the saved filters", _LOG, sanitize(number))
+            return
+        if action == "query" and not _saved_query_matches(creds, sys_id, decision.get("query") or []):
+            logger.info("%s Ignored %s: saved query did not match", _LOG, sanitize(number))
+            return
 
-                def create() -> None:
-                    _create_and_investigate(
-                        cursor, conn, user_id, org_id, payload, event_kind, title, status,
-                        severity, service, metadata, received_at, source_alert_id, number, sys_id,
-                    )
+        def create() -> bool:
+            # A fresh connection only for the writes. A concurrent delivery that got
+            # there first is caught by the insert's ON CONFLICT DO NOTHING.
+            with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG):
+                    return False
+                return _create_and_investigate(
+                    cursor, conn, user_id, org_id, payload, event_kind, title, status,
+                    severity, service, metadata, received_at, source_alert_id, number, sys_id,
+                )
 
-                if action == "judge":
-                    from routes.servicenow.rca_judge import judge_and_route
+        if action == "judge":
+            from routes.servicenow.rca_judge import judge_and_route
 
-                    judge_and_route(payload, user_id, start_rca=create)
-                    return
-                create()
+            judge_and_route(payload, user_id, start_rca=create)
+            return
+        create()
 
     except Exception as exc:
         logger.exception("%s Failed to process event", _LOG)
@@ -301,24 +311,28 @@ def process_servicenow_event(
 
 def _find_existing(cursor, org_id: str, user_id: str, source_alert_id: int) -> Optional[Dict[str, Any]]:
     cursor.execute(
-        """SELECT id, status FROM incidents
+        """SELECT id, status, rca_celery_task_id FROM incidents
            WHERE org_id = %s AND source_type = %s AND source_alert_id = %s AND user_id = %s""",
         (org_id, SOURCE, source_alert_id, user_id),
     )
     row = cursor.fetchone()
-    return {"id": row[0], "status": row[1]} if row else None
+    if not row:
+        return None
+    return {"id": row[0], "status": row[1], "rca_task_id": row[2] if len(row) > 2 else None}
 
 
 def _sync_existing(
     cursor, conn, user_id: str, org_id: str, existing: Dict[str, Any], status: str,
     severity: str, metadata: Dict[str, Any], number: str, event_kind: str,
+    *, title: str = "", sys_id: str = "", payload: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Mirror the ServiceNow record onto the Aurora incident: fields, severity and state.
 
     Resolved, Closed or Canceled in ServiceNow resolves the Aurora incident.
     An incident ServiceNow reopens (it was resolved there and is active again)
-    goes back to analyzed or investigating. The RCA already ran or is running,
-    so nothing is dispatched.
+    goes back to analyzed or investigating. If an RCA already ran or is running
+    nothing is dispatched; if none ever ran (the incident arrived already
+    resolved) the reopen starts one.
     """
     incident_id = existing["id"]
     cursor.execute(
@@ -349,6 +363,10 @@ def _sync_existing(
         "%s Synced incident %s for %s (event=%s, status %s -> %s)",
         _LOG, incident_id, sanitize(number), event_kind, existing["status"], new_status,
     )
+    reopened = existing["status"] == "resolved" and new_status != "resolved"
+    if reopened and not existing.get("rca_task_id") and payload is not None:
+        logger.info("%s Incident %s reopened in ServiceNow with no prior RCA; investigating now", _LOG, incident_id)
+        _dispatch_rca(cursor, conn, user_id, incident_id, title or alert_title(payload), number, sys_id, payload)
 
 
 def _saved_query_matches(creds: Dict[str, Any], sys_id: str, clauses: List[str]) -> bool:
@@ -366,14 +384,21 @@ def _create_and_investigate(
     cursor, conn, user_id: str, org_id: str, payload: Dict[str, Any], event_kind: str,
     title: str, status: str, severity: str, service: str, metadata: Dict[str, Any],
     received_at: datetime, source_alert_id: int, number: str, sys_id: str,
-) -> None:
+) -> bool:
+    """Create the Aurora incident and start its RCA. True once an investigation covers it.
+
+    False means no RCA ran: the incident arrived already resolved (a reopen in
+    ServiceNow starts one, see ``_sync_existing``) or the org could not be
+    resolved. The Auto-mode judge only remembers an incident as investigated
+    when this is True.
+    """
     _store_event(cursor, conn, user_id, org_id, payload, event_kind, title, status, severity, received_at)
 
     alert_fired_at = parse_servicenow_datetime(payload.get("opened_at"))
     if status != "resolved" and _try_correlate(
         cursor, conn, user_id, org_id, source_alert_id, title, service, severity, metadata, payload,
     ):
-        return
+        return True
 
     cursor.execute(
         """
@@ -395,7 +420,7 @@ def _create_and_investigate(
     if not incident_row:
         # A concurrent delivery created it first; that delivery owns the RCA.
         logger.info("%s Incident for %s was created by another delivery; nothing to do", _LOG, sanitize(number))
-        return
+        return True
     incident_id = incident_row[0]
 
     _record_primary_alert(cursor, conn, user_id, org_id, incident_id, source_alert_id, title, service, severity, metadata)
@@ -406,8 +431,9 @@ def _create_and_investigate(
 
     if status == "resolved":
         logger.info("%s Incident %s arrived already resolved; no RCA", _LOG, incident_id)
-        return
+        return False
     _dispatch_rca(cursor, conn, user_id, incident_id, title, number, sys_id, payload)
+    return True
 
 
 def _store_event(
