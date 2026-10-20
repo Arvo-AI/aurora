@@ -152,6 +152,7 @@ def test_bq_query_timeout_follows_the_verb_and_an_explicit_value_wins():
     assert get_command_timeout("bq ls") == 60
     assert get_command_timeout("bq show dataset.table") == 60
     assert get_command_timeout("bq query 'SELECT 1'", 3000) == 3000
+    assert get_command_timeout("bq query 'SELECT 1'", 86400) == 3600
     assert get_command_timeout("bq ls", 3000) == 3000
     assert get_command_timeout("bq query 'SELECT 1'", 0) == 300
     assert get_command_timeout("bq --location US query 'SELECT 1'") == 300

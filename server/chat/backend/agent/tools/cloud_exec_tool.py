@@ -12,7 +12,7 @@ from utils.terminal.terminal_run import terminal_run
 import time
 import requests
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
-from typing import Dict, Any, NamedTuple, Optional, Tuple
+from typing import NamedTuple, Optional, Tuple
 from langchain_core.tools import StructuredTool
 from pathlib import Path
 
@@ -1202,6 +1202,8 @@ def setup_flyio_environment_isolated(user_id: str, selected_org: str | None = No
 
 
 _BQ_QUERY_TIMEOUT_SECONDS = 300
+# A model-supplied timeout cannot hold the worker, or the session's tool lock, longer than this.
+_COMMAND_TIMEOUT_CEILING = 3600
 # Applied only when the command does not set --maximum_bytes_billed.
 _BQ_DEFAULT_BYTES_BILLED = 10_000_000_000
 # 1 TiB. An explicit flag cannot go past the on-demand price of one tebibyte.
@@ -1250,7 +1252,7 @@ def get_command_timeout(command: str, user_timeout: int = None) -> int:
             requested = 0
         # Zero or negative is not a wait, so the command default still applies
         if requested > 0:
-            return requested
+            return min(requested, _COMMAND_TIMEOUT_CEILING)
 
     # Match the bq verb, not the SQL, so "created_at" does not change the limit
     if _bq_subcommand(command) in ("query", "wait"):

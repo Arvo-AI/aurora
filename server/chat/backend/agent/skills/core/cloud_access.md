@@ -24,7 +24,7 @@ For GCP:
 2. Get command help: cloud_exec('gcp', 'CATEGORY --help')
 3. Try beta commands: cloud_exec('gcp', 'beta CATEGORY --help')
 4. List services: cloud_exec('gcp', 'services list --available')
-5. BigQuery is the `bq` CLI, not a gcloud subcommand: cloud_exec('gcp', "bq query --nouse_legacy_sql 'SELECT ...'"). Pass timeout= seconds when the query needs longer than 300. A query that sets no cap is limited to 10 GB billed and 100 rows; set `--maximum_bytes_billed` or `--max_rows` to raise that, up to 1 TiB and 1,000 rows.
+5. BigQuery is the `bq` CLI, not a gcloud subcommand: cloud_exec('gcp', "bq query --nouse_legacy_sql 'SELECT ...'"). Pass timeout= seconds (at most 3600) when the query needs longer than 300. A query that sets no cap is limited to 10 GB billed and 100 rows; set `--maximum_bytes_billed` or `--max_rows` to raise that, up to 1 TiB and 1,000 rows.
 
 For Azure:
 1. EXPLORE the az CLI: cloud_exec('azure', 'help | grep KEYWORD')

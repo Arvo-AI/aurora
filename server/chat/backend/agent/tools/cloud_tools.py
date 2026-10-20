@@ -1348,8 +1348,8 @@ def get_cloud_tools():
     def cloud_exec_wrapper(provider: str, command: str, output_file: Optional[str] = None, account_id: Optional[str] = None, timeout: Optional[int] = None, **kwargs) -> str:
         """Execute cloud CLI commands. Provider and command are required.
 
-        Pass timeout (seconds) when a command needs longer than its default.
-        `bq query` and `bq wait` default to 300 seconds. Use output_file to save
+        Pass timeout (seconds) when a command needs longer than its default,
+        up to 3600. `bq query` and `bq wait` default to 300 seconds. Use output_file to save
         raw output to a file (useful for kubeconfig).
 
 For AWS with multiple connected accounts: the FIRST investigative call omit account_id to query all accounts.
