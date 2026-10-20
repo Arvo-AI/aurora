@@ -96,6 +96,17 @@ def test_investigate_verdict_starts_an_rca(judge_env):
     judge_env["start_rca"].assert_called_once()
 
 
+def test_a_start_that_ran_no_rca_is_not_remembered_as_investigated(judge_env):
+    """start_rca returning False (the incident arrived already resolved) keeps only the fingerprint."""
+    judge_env["judge"].return_value = JudgeVerdict(investigate=True, reason="outage")
+    judge_env["start_rca"].return_value = False
+    assert judge_env["run"](_payload()) == {"status": "judged", "investigate": True}
+    judge_env["start_rca"].assert_called_once()
+    remembered = judge_env["redis"].set.call_args.args[1]
+    assert remembered != "investigated"
+    assert remembered == incident_fingerprint(incident_for_judge(_payload()))
+
+
 def test_skip_verdict_starts_nothing(judge_env):
     judge_env["judge"].return_value = JudgeVerdict(investigate=False, reason="service request")
     judge_env["run"](_payload("Order a new laptop"))

@@ -82,7 +82,7 @@ def judge_incident(user_id: str, policy: str, incident: Dict[str, Any]) -> Optio
     from chat.backend.agent.providers import create_chat_model
     from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
 
-    model = ModelConfig.SERVICENOW_RCA_JUDGE_MODEL
+    model = ModelConfig.RCA_MODEL
     messages = [
         SystemMessage(content=_JUDGE_SYSTEM.format(policy=policy.strip())),
         HumanMessage(content="INCIDENT (JSON):\n" + json.dumps(incident, ensure_ascii=False)),
@@ -217,11 +217,12 @@ def judge_and_route(
         "%s %s investigate=%s reason=%s",
         _LOG, sanitize(number), verdict.investigate, sanitize(verdict.reason[:200]),
     )
-    if verdict.investigate:
-        start_rca()
+    started = start_rca() if verdict.investigate else False
     # Remembered only once the RCA is handed off, so a failed start gets judged again.
-    # An investigation stays settled when the text changes. A skip is only valid for this wording.
+    # An investigation stays settled when the text changes. A skip is only valid for this
+    # wording. start_rca returning False means no RCA ran (the incident arrived already
+    # resolved), so only the fingerprint is kept and a reopen is judged afresh.
     if sys_id:
-        remembered = _INVESTIGATED if verdict.investigate else fingerprint
+        remembered = _INVESTIGATED if (verdict.investigate and started is not False) else fingerprint
         _redis_or(None, lambda r: r.set(judged_key, remembered, ex=_JUDGED_TTL_SECONDS))
     return {"status": "judged", "investigate": verdict.investigate}
