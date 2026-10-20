@@ -176,8 +176,18 @@ def teams_callback():
             "tenant_id": tenant_id,
             "connected_at": int(time.time()),
         }
+        org_id = get_org_id_for_user(user_id)
+        # No org to attach the token to
+        if not org_id:
+            logger.warning("Refusing Teams connect because the Aurora user has no organization")
+            return redirect(_teams_oauth_failure_redirect("unexpected_error"))
+        # Delegated OAuth does not prove this user administers the tenant
+        if _tenant_bound_elsewhere(tenant_id, org_id):
+            logger.warning("Refusing Teams connect because the tenant is already connected in another org")
+            return redirect(_teams_oauth_failure_redirect("tenant_already_connected"))
+
         store_tokens_in_db(user_id, teams_token_data, "teams")
-        _take_over_teams_tenant(user_id, tenant_id)
+        _clear_teams_displacement(org_id)
 
         try:
             from services.memory.teams_memory import seed_teams_memory
@@ -206,21 +216,19 @@ def _teams_displaced_status(user_id: str) -> dict | None:
     return teams_displacement_notice(org_id)
 
 
-def _take_over_teams_tenant(user_id: str, tenant_id: str) -> None:
-    """This org just connected the tenant, so older copies in other orgs stop working."""
+def _tenant_bound_elsewhere(tenant_id: str, org_id: str) -> bool:
+    from routes.teams.teams_events_helpers import teams_tenant_bound_elsewhere
+
+    return teams_tenant_bound_elsewhere(tenant_id, org_id)
+
+
+def _clear_teams_displacement(org_id: str) -> None:
     try:
-        org_id = get_org_id_for_user(user_id)
-        if not org_id:
-            return
-        from routes.teams.teams_events_helpers import (
-            clear_teams_displacement,
-            release_older_teams_connections,
-        )
+        from routes.teams.teams_events_helpers import clear_teams_displacement
 
         clear_teams_displacement(org_id)
-        release_older_teams_connections(tenant_id, keep_org_id=org_id)
     except Exception:
-        logger.warning("Failed to release older Teams connections (non-fatal)", exc_info=True)
+        logger.warning("Failed to clear the Teams displacement notice (non-fatal)", exc_info=True)
 
 
 def _teams_setup_state(user_id: str, last_bot_message_at: int | None) -> dict:

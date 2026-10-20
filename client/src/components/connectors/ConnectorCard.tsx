@@ -52,7 +52,7 @@ function TeamsStatusBadge({ status }: { status: { connected?: boolean; setup_com
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400 cursor-default">
+            <div tabIndex={0} className="flex items-center gap-1 text-amber-600 dark:text-amber-400 cursor-default">
               <AlertCircle className="h-4 w-4" />
               <span className="text-xs font-medium">Connected elsewhere</span>
             </div>

@@ -204,13 +204,19 @@ def _disconnect_older_teams_orgs(losers: list[tuple]) -> None:
     for org_id, user_id, _timestamp in losers:
         try:
             deleted_ok, deleted_rows = _delete_teams_token(user_id)
-            # Leave the token in place if the delete failed — a notice with a live token is a lie
-            if not deleted_ok or not deleted_rows:
+            # The row is still there, so a "logged out" notice would be wrong
+            if not deleted_rows:
                 logger.warning(
                     "Teams token for org %s was not removed after a newer org connected it",
                     sanitize(str(org_id)),
                 )
                 continue
+            # The DB row is gone even when Vault delete fails, so the org is logged out
+            if not deleted_ok:
+                logger.warning(
+                    "Teams token row removed for org %s but its Vault secret was not deleted",
+                    sanitize(str(org_id)),
+                )
             _remember_teams_displaced(org_id)
             _purge_teams_data(user_id)
         except Exception:
@@ -234,22 +240,16 @@ def _token_is_older(candidate: tuple, keeper: tuple) -> bool:
     return candidate_ts < keeper_ts
 
 
-def release_older_teams_connections(tenant_id: str, keep_org_id: str) -> None:
-    """The org that just connected owns the tenant; every older copy is logged out."""
-    if not tenant_id or not keep_org_id:
-        return
+def teams_tenant_bound_elsewhere(tenant_id: str, org_id: str) -> bool:
+    """True when another org already holds this tenant. A failed lookup refuses the connect."""
+    if not tenant_id or not org_id:
+        return True
     try:
         matches = _teams_token_matches(tenant_id)
     except Exception:
-        logger.exception("Failed to look for other Teams connections for this tenant")
-        return
-    keeper = next((match for match in matches if match[0] == keep_org_id), None)
-    # Our row isn't visible yet — don't guess, the next inbound message settles it
-    if keeper is None:
-        return
-    losers = [match for match in matches if match[0] != keep_org_id and _token_is_older(match, keeper)]
-    if losers:
-        _disconnect_older_teams_orgs(losers)
+        logger.exception("Failed to check whether this Teams tenant is already connected")
+        return True
+    return any(match[0] != org_id for match in matches)
 
 
 def clear_teams_displacement(org_id: str) -> None:
@@ -285,11 +285,21 @@ def get_user_id_from_teams_tenant(tenant_id: str) -> Optional[str]:
         return None
     if not matches:
         return None
+    if len(matches) == 1:
+        return matches[0][1]
     matches.sort(key=lambda row: (row[2] is not None, row[2] or ""), reverse=True)
-    # Newest connection receives the message; the others are logged out so they can see why
-    if len(matches) > 1:
-        _disconnect_older_teams_orgs(matches[1:])
-    return matches[0][1]
+    keeper = matches[0]
+    losers = [match for match in matches[1:] if _token_is_older(match, keeper)]
+    # A tie has no single owner — don't route the message or delete either connection
+    if len(losers) != len(matches) - 1:
+        org_ids = ", ".join(sanitize(str(match[0])) for match in matches)
+        logger.warning(
+            "Teams tenant is connected in orgs with no single newest token; not routing: %s",
+            org_ids,
+        )
+        return None
+    _disconnect_older_teams_orgs(losers)
+    return keeper[1]
 
 
 def _post_teams_thinking_placeholder(

@@ -260,6 +260,7 @@ def test_disconnect_removes_the_old_token_and_leaves_a_notice(monkeypatch, caplo
 
 def test_a_failed_delete_does_not_claim_the_org_was_logged_out(monkeypatch):
     remembered = []
+
     def _purge(_user_id):
         raise AssertionError("purge")
 
@@ -271,22 +272,39 @@ def test_a_failed_delete_does_not_claim_the_org_was_logged_out(monkeypatch):
     assert remembered == []
 
 
-def test_a_new_connection_logs_out_only_older_copies(monkeypatch):
-    dropped = []
+def test_a_removed_row_is_marked_logged_out_even_if_vault_delete_failed(monkeypatch):
+    remembered = []
+    purged = []
+    monkeypatch.setattr(h, "_delete_teams_token", lambda user_id: (False, 1))
+    monkeypatch.setattr(h, "_remember_teams_displaced", lambda org_id: remembered.append(org_id))
+    monkeypatch.setattr(h, "_purge_teams_data", lambda user_id: purged.append(user_id))
+
+    h._disconnect_older_teams_orgs([("org-old", "uid-old", 1)])
+    assert remembered == ["org-old"]
+    assert purged == ["uid-old"]
+
+
+def test_a_timestamp_tie_is_not_routed_or_disconnected(monkeypatch, caplog):
+    disconnected = []
+    monkeypatch.setattr(h, "_disconnect_older_teams_orgs", lambda losers: disconnected.append(losers))
+    _patch_pool(
+        monkeypatch,
+        rows_by_org={"org-z": ("uid-a", 1), "org-a": ("uid-b", 1)},
+    )
+    with caplog.at_level("WARNING"):
+        assert h.get_user_id_from_teams_tenant("tenant-1") is None
+    assert disconnected == []
+    assert "org-z" in caplog.text and "org-a" in caplog.text
+
+
+def test_another_orgs_token_blocks_a_new_connection(monkeypatch):
     monkeypatch.setattr(
         h,
         "_teams_token_matches",
-        lambda tenant_id: [("org-old", "uid-old", 1), ("org-new", "uid-new", 5)],
+        lambda tenant_id: [("org-old", "uid-old", 1)],
     )
-    monkeypatch.setattr(h, "_disconnect_older_teams_orgs", lambda losers: dropped.extend(losers))
-
-    h.release_older_teams_connections("tenant-1", keep_org_id="org-new")
-    assert dropped == [("org-old", "uid-old", 1)]
-
-    dropped.clear()
-    # The older org connecting must not kick out the newer one
-    h.release_older_teams_connections("tenant-1", keep_org_id="org-old")
-    assert dropped == []
+    assert h.teams_tenant_bound_elsewhere("tenant-1", "org-new") is True
+    assert h.teams_tenant_bound_elsewhere("tenant-1", "org-old") is False
 
 
 def test_displacement_notice_only_when_the_org_was_logged_out(monkeypatch):

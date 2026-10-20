@@ -50,7 +50,9 @@ def oauth(routes, monkeypatch):
     monkeypatch.setattr(routes, "_tenant_from_graph", lambda token: state["graph_tenant"])
     monkeypatch.setattr(routes, "_decode_id_token", _fake_verified_decode)
     monkeypatch.setattr(routes, "store_tokens_in_db", lambda uid, data, prov: state["stored"].append((uid, data, prov)))
-    monkeypatch.setattr(routes, "_take_over_teams_tenant", lambda user_id, tenant_id: state.setdefault("takeovers", []).append((user_id, tenant_id)))
+    monkeypatch.setattr(routes, "get_org_id_for_user", lambda user_id: "org-a")
+    monkeypatch.setattr(routes, "_tenant_bound_elsewhere", lambda tenant_id, org_id: bool(state.get("bound_elsewhere")))
+    monkeypatch.setattr(routes, "_clear_teams_displacement", lambda org_id: None)
 
     # Post-connect side effects (memory seed + channel sync) are covered elsewhere
     import routes.teams.teams_channel_metadata as metadata
@@ -125,8 +127,16 @@ def test_tenant_comes_from_the_id_token(app, routes, oauth):
     assert (uid, provider) == ("uid-admin", "teams")
     assert data["tenant_id"] == TENANT
     assert data["refresh_token"] == "rt"
-    # The connecting org keeps the tenant; any older copy is logged out
-    assert oauth["takeovers"] == [("uid-admin", TENANT)]
+
+
+def test_a_tenant_already_connected_elsewhere_is_not_stored(app, routes, oauth):
+    oauth["token"] = {"access_token": "at", "id_token": _id_token(tid=TENANT)}
+    oauth["bound_elsewhere"] = True
+    _begin(routes)
+    resp = app.test_client().get("/teams/callback?code=abc&state=good-state")
+    assert _error_code(resp) == "tenant_already_connected"
+    assert oauth["stored"] == []
+    assert oauth["memory"] == 0
 
 
 def test_graph_is_the_fallback_when_there_is_no_id_token(app, routes, oauth):
