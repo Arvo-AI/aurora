@@ -1182,6 +1182,16 @@ async def handle_connection(websocket) -> None:
             # Resolve org for tenant-scoped DB queries
             org_id = get_org_id_for_user(user_id) if user_id else None
 
+            # Org setting: viewers run chats only when an admin has allowed it
+            if question and user_id and org_id:
+                from utils.auth.viewer_run import viewer_may_run
+                if not viewer_may_run(user_id, org_id):
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "data": {"text": "Chat isn't enabled for viewers in this organization."},
+                    }))
+                    continue
+
             # RBAC: block viewers from sending messages in incident-linked sessions
             _rbac_incident_id = None
             if session_id and user_id and org_id:

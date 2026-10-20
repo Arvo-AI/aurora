@@ -395,6 +395,9 @@ app.register_blueprint(tool_permissions_bp)
 from routes.connector_access import connector_access_bp
 app.register_blueprint(connector_access_bp)
 
+from routes.org_teams import org_teams_bp
+app.register_blueprint(org_teams_bp)
+
 # --- GitHub Integration Routes (App-first, OAuth gated by GITHUB_AUTH_MODE) ---
 from routes.github.github_user_repos import github_user_repos_bp
 from routes.github.github_repo_selection import github_repo_selection_bp

@@ -19,6 +19,16 @@ import { SsoSettings } from "@/components/SsoSettings";
 
 const BASE_ORG_TABS = ["overview", "members", "invitations", "activity", "mcp"];
 
+const TAB_LABELS: Record<string, string> = {
+  overview: "Overview",
+  members: "Members and teams",
+  invitations: "Invitations",
+  activity: "Activity",
+  mcp: "MCP",
+  access: "Access",
+  sso: "SSO",
+};
+
 interface OrgData {
   id: string;
   name: string;
@@ -187,9 +197,9 @@ export function OrgSettings() {
               <TabsTrigger
                 key={tab}
                 value={tab}
-                className="px-0 pb-2 pt-0 rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-muted-foreground data-[state=active]:text-foreground capitalize text-sm font-medium"
+                className="px-0 pb-2 pt-0 rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-muted-foreground data-[state=active]:text-foreground text-sm font-medium"
               >
-                {tab === "mcp" || tab === "sso" ? tab.toUpperCase() : tab}
+                {TAB_LABELS[tab] ?? tab}
               </TabsTrigger>
             ))}
           </TabsList>

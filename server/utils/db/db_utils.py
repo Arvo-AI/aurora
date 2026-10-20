@@ -1243,13 +1243,40 @@ def initialize_tables():
                 "org_connector_access": """
                     CREATE TABLE IF NOT EXISTS org_connector_access (
                         org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        team_id VARCHAR(255) NOT NULL DEFAULT '',
                         connector VARCHAR(128) NOT NULL,
                         scope_id VARCHAR(256) NOT NULL DEFAULT '',
                         credential VARCHAR(64) NOT NULL DEFAULT '',
                         role VARCHAR(50) NOT NULL,
                         updated_by VARCHAR(255),
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        PRIMARY KEY (org_id, connector, scope_id, credential, role)
+                        PRIMARY KEY (org_id, team_id, connector, scope_id, credential, role)
+                    );
+                """,
+                "org_teams": """
+                    CREATE TABLE IF NOT EXISTS org_teams (
+                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        name VARCHAR(80) NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (org_id, name)
+                    );
+                """,
+                "org_team_members": """
+                    CREATE TABLE IF NOT EXISTS org_team_members (
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        team_id VARCHAR(255) NOT NULL REFERENCES org_teams(id) ON DELETE CASCADE,
+                        user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        PRIMARY KEY (team_id, user_id)
+                    );
+                """,
+                "org_team_grants": """
+                    CREATE TABLE IF NOT EXISTS org_team_grants (
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        team_id VARCHAR(255) NOT NULL REFERENCES org_teams(id) ON DELETE CASCADE,
+                        connector VARCHAR(128) NOT NULL,
+                        scope_id VARCHAR(256) NOT NULL DEFAULT '',
+                        PRIMARY KEY (team_id, connector, scope_id)
                     );
                 """,
                 "org_invitations": """
@@ -1676,6 +1703,34 @@ def initialize_tables():
             rls_tables.append("org_command_policies")
             rls_tables.append("org_tool_permissions")
             rls_tables.append("org_connector_access")
+
+            # Team overrides live in the same table. Existing installs predate team_id.
+            try:
+                cursor.execute(
+                    "ALTER TABLE org_connector_access "
+                    "ADD COLUMN IF NOT EXISTS team_id VARCHAR(255) NOT NULL DEFAULT '';"
+                )
+                cursor.execute(
+                    """SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                        WHERE conrelid = 'org_connector_access'::regclass AND contype = 'p'"""
+                )
+                primary = cursor.fetchone()
+                # Old primary key has no team, so two audiences could not store the same role
+                if primary and "team_id" not in primary[0]:
+                    cursor.execute(
+                        "ALTER TABLE org_connector_access DROP CONSTRAINT org_connector_access_pkey"
+                    )
+                    cursor.execute(
+                        """ALTER TABLE org_connector_access
+                           ADD PRIMARY KEY (org_id, team_id, connector, scope_id, credential, role)"""
+                    )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error ensuring team_id on org_connector_access: {e}")
+                conn.rollback()
+            rls_tables.append("org_teams")
+            rls_tables.append("org_team_members")
+            rls_tables.append("org_team_grants")
             rls_tables.append("rca_findings")
             rls_tables.append("actions")
             rls_tables.append("action_runs")

@@ -41,6 +41,26 @@ from utils.security.read_only_classifier import (  # noqa: F401
 from utils.log_sanitizer import hash_for_log
 
 
+def connector_call_denied(user_id: str, provider: str, account_id: Optional[str], command: str) -> Optional[str]:
+    """JSON refusal when this caller cannot use the connector, else None.
+
+    Runs after the command guardrail and before any cloud login.
+    """
+    from utils.auth.connector_access import denial_text, may_use
+
+    # A blank account asks about the connector as a whole.
+    if may_use(user_id, provider, str(account_id or "")):
+        return None
+    logger.info("cloud_exec connector denied provider=%s", provider)
+    return json.dumps({
+        "success": False,
+        "error": denial_text(user_id, provider),
+        "code": "CONNECTOR_DENIED",
+        "final_command": command,
+        "provider": provider,
+    })
+
+
 def _normalize_cloud_exec_provider(raw: Optional[str]) -> str:
     """Turn CLI nicknames (e.g. gcloud, az) into the standard provider id from CLOUD_EXEC_PROVIDERS."""
     p = (raw or "").strip().lower()
@@ -1784,6 +1804,11 @@ Security & Compliance
                 "final_command": command,
                 "provider": provider.lower(),
             })
+
+        # Guardrail passed. Still refuse before login when this role or team cannot use the connector.
+        denied = connector_call_denied(user_id, normalized_provider, account_id, command)
+        if denied:
+            return denied
 
         # Set up ISOLATED environment based on provider - NO GLOBAL STATE!
         isolated_env = None

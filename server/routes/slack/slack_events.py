@@ -187,10 +187,18 @@ def process_event_callback(data: dict) -> None:
                             "For example: \"@Aurora my pods are failing in my production cluster. What's going on?\""
                         )
                     else:
-                        response_text = "Thinking..."
-                        trigger_background = True
-                        # <@USERID> is the only form Slack will notify on.
-                        text = format_asked_by(slack_user_id, asked_by, clean_msg)
+                        from utils.auth.stateless_auth import get_org_id_for_user
+                        from utils.auth.viewer_run import slack_caller_may_run
+
+                        org_id = get_org_id_for_user(user_id)
+                        # Viewers, and Slack members with no Aurora account, follow the org switch
+                        if org_id and not slack_caller_may_run(org_id, user_id, unlinked=asked_by is not None):
+                            response_text = "Starting a chat isn't enabled for your role. Ask an admin to turn it on."
+                        else:
+                            response_text = "Thinking..."
+                            trigger_background = True
+                            # <@USERID> is the only form Slack will notify on.
+                            text = format_asked_by(slack_user_id, asked_by, clean_msg)
 
                 # 3. Execution
                 if client:

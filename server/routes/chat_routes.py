@@ -133,6 +133,9 @@ def create_chat_session(user_id):
         ui_state = data.get('ui_state', {})
         
         org_id = get_org_id_from_request()
+        from utils.auth.viewer_run import viewer_may_run
+        if org_id and not viewer_may_run(user_id, org_id):
+            return jsonify({"error": "Chat isn't enabled for viewers in this organization."}), 403
 
         # Generate title from messages if not provided
         if not title:
@@ -507,6 +510,9 @@ def post_chat_message(user_id, session_id):
     GET /sessions/<id>/messages?after=<seq> for the assistant reply.
     """
     org_id = get_org_id_from_request()
+    from utils.auth.viewer_run import viewer_may_run
+    if org_id and not viewer_may_run(user_id, org_id):
+        return jsonify({"error": "Chat isn't enabled for viewers in this organization."}), 403
     data = request.get_json(silent=True) or {}
 
     message = (data.get('message') or '').strip()
