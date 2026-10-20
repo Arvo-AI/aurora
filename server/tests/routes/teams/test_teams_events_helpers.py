@@ -242,53 +242,33 @@ def test_a_single_org_is_not_logged_out(monkeypatch):
 
 
 def test_disconnect_removes_the_old_token_and_leaves_a_notice(monkeypatch, caplog):
-    prefs = {}
     deleted = []
+    remembered = []
     purged = []
-
-    def _delete(user_id, provider):
-        deleted.append((user_id, provider))
-        return True, 1
-
-    monkeypatch.setattr(
-        "utils.secrets.secret_ref_utils.delete_user_secret",
-        _delete,
-    )
-    monkeypatch.setattr(
-        "utils.auth.stateless_auth.store_org_preference",
-        lambda org_id, key, value: prefs.__setitem__((org_id, key), value),
-    )
-    monkeypatch.setattr(
-        "routes.teams.teams_channels.purge_teams_connector_data",
-        lambda user_id: purged.append(user_id),
-    )
+    monkeypatch.setattr(h, "_delete_teams_token", lambda user_id: deleted.append(user_id) or (True, 1))
+    monkeypatch.setattr(h, "_remember_teams_displaced", lambda org_id: remembered.append(org_id))
+    monkeypatch.setattr(h, "_purge_teams_data", lambda user_id: purged.append(user_id))
 
     with caplog.at_level("WARNING"):
         h._disconnect_older_teams_orgs([("org-old", "uid-old", 1)])
 
-    assert deleted == [("uid-old", "teams")]
+    assert deleted == ["uid-old"]
+    assert remembered == ["org-old"]
     assert purged == ["uid-old"]
-    assert prefs[("org-old", h.TEAMS_DISPLACED_PREF)] == "connected_elsewhere"
     assert "org-old" in caplog.text
 
 
 def test_a_failed_delete_does_not_claim_the_org_was_logged_out(monkeypatch):
-    prefs = {}
-    monkeypatch.setattr(
-        "utils.secrets.secret_ref_utils.delete_user_secret",
-        lambda user_id, provider: (False, 0),
-    )
-    monkeypatch.setattr(
-        "utils.auth.stateless_auth.store_org_preference",
-        lambda org_id, key, value: prefs.__setitem__((org_id, key), value),
-    )
+    remembered = []
     def _purge(_user_id):
         raise AssertionError("purge")
 
-    monkeypatch.setattr("routes.teams.teams_channels.purge_teams_connector_data", _purge)
+    monkeypatch.setattr(h, "_delete_teams_token", lambda user_id: (False, 0))
+    monkeypatch.setattr(h, "_remember_teams_displaced", lambda org_id: remembered.append(org_id))
+    monkeypatch.setattr(h, "_purge_teams_data", _purge)
 
     h._disconnect_older_teams_orgs([("org-old", "uid-old", 1)])
-    assert prefs == {}
+    assert remembered == []
 
 
 def test_a_new_connection_logs_out_only_older_copies(monkeypatch):

@@ -176,12 +176,26 @@ def _teams_token_matches(tenant_id: str) -> list[tuple]:
         return matches
 
 
-def _disconnect_older_teams_orgs(losers: list[tuple]) -> None:
-    """Log out every org that lost this tenant, and leave a notice for its settings page."""
-    from routes.teams.teams_channels import purge_teams_connector_data
-    from utils.auth.stateless_auth import store_org_preference
+def _delete_teams_token(user_id: str):
     from utils.secrets.secret_ref_utils import delete_user_secret
 
+    return delete_user_secret(user_id, "teams")
+
+
+def _remember_teams_displaced(org_id: str) -> None:
+    from utils.auth.stateless_auth import store_org_preference
+
+    store_org_preference(org_id, TEAMS_DISPLACED_PREF, "connected_elsewhere")
+
+
+def _purge_teams_data(user_id: str) -> None:
+    from routes.teams.teams_channels import purge_teams_connector_data
+
+    purge_teams_connector_data(user_id)
+
+
+def _disconnect_older_teams_orgs(losers: list[tuple]) -> None:
+    """Log out every org that lost this tenant, and leave a notice for its settings page."""
     org_ids = [org_id for org_id, _user_id, _timestamp in losers]
     logger.warning(
         "Teams tenant is connected in more than one org; disconnecting the older ones: %s",
@@ -189,7 +203,7 @@ def _disconnect_older_teams_orgs(losers: list[tuple]) -> None:
     )
     for org_id, user_id, _timestamp in losers:
         try:
-            deleted_ok, deleted_rows = delete_user_secret(user_id, "teams")
+            deleted_ok, deleted_rows = _delete_teams_token(user_id)
             # Leave the token in place if the delete failed — a notice with a live token is a lie
             if not deleted_ok or not deleted_rows:
                 logger.warning(
@@ -197,8 +211,8 @@ def _disconnect_older_teams_orgs(losers: list[tuple]) -> None:
                     sanitize(str(org_id)),
                 )
                 continue
-            store_org_preference(org_id, TEAMS_DISPLACED_PREF, "connected_elsewhere")
-            purge_teams_connector_data(user_id)
+            _remember_teams_displaced(org_id)
+            _purge_teams_data(user_id)
         except Exception:
             logger.warning(
                 "Failed to disconnect Teams for org %s after it was connected elsewhere",
