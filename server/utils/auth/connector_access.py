@@ -221,7 +221,8 @@ class Access:
         team_part = ",".join(sorted(self.team_ids)) + ":" + ",".join(sorted(
             f"{g.team_id}/{g.connector}/{g.scope_id}/{g.credential}/{g.role}" for g in self.team_rules
         ))
-        return f"{role_part}|{team_part}"
+        # A role change has to miss the tool cache even when the grants did not change.
+        return f"{role_part}|{team_part}|roles={','.join(sorted(self.roles))}"
 
 
 def load_team_rules(user_id: str) -> tuple:

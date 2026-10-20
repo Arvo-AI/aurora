@@ -1525,6 +1525,17 @@ def _retry_stale_subscriptions(azure_login, connections: list, results: dict,
         results.update(_fan_out_azure(stale, run_one))
 
 
+def _granted_azure_connections(user_id: str, connections: list) -> list:
+    """Subscriptions this caller may use. An unlimited connector keeps every row."""
+    from utils.auth.connector_access import access_for
+
+    access = access_for(user_id)
+    return [
+        row for row in connections
+        if access.may_use("azure", str(row.get("account_id") or ""))
+    ]
+
+
 def _cloud_exec_azure_multi_subscription(
     user_id: str,
     connections: list,
@@ -1821,7 +1832,20 @@ Security & Compliance
             target_subscription = account_id or selected_project_id
             if not target_subscription and _azure_can_fan_out(original_command):
                 from utils.db.connection_utils import get_all_user_connections
-                all_subs = get_all_user_connections(user_id, "azure") if user_id else []
+                raw_subs = get_all_user_connections(user_id, "azure") if user_id else []
+                # A grant on one subscription must not log in to the others.
+                all_subs = _granted_azure_connections(user_id, raw_subs) if user_id else raw_subs
+                if raw_subs and not all_subs:
+                    from utils.auth.connector_access import denial_text
+                    denied = connector_call_denied(user_id, "azure", None, command)
+                    # A whole-connector grant still matches an empty scope, so say no here.
+                    return denied or json.dumps({
+                        "success": False,
+                        "error": denial_text(user_id, "azure"),
+                        "code": "CONNECTOR_DENIED",
+                        "final_command": command,
+                        "provider": "azure",
+                    })
                 if len(all_subs) > 1:
                     return _cloud_exec_azure_multi_subscription(
                         user_id=user_id,
@@ -1832,6 +1856,12 @@ Security & Compliance
                         output_file=output_file,
                         fn_start=fn_start,
                     )
+                if len(all_subs) == 1:
+                    target_subscription = str(all_subs[0].get("account_id") or "") or None
+            if target_subscription and user_id:
+                from utils.auth.connector_access import may_use
+                if not may_use(user_id, "azure", str(target_subscription)):
+                    return connector_call_denied(user_id, "azure", target_subscription, command)
             success, subscription_id, auth_method, isolated_env, auth_argv = setup_azure_environment_isolated(user_id, target_subscription)
             if not success:
                 return _credential_setup_failure(f"Failed to setup Azure environment with {provider_preference} authentication", command)

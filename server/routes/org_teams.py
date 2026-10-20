@@ -64,6 +64,12 @@ def _load(cur, org_id: str) -> dict:
 def _replace(cur, org_id: str, team_id: str, member_ids: list, grants: list) -> None:
     cur.execute("DELETE FROM org_team_members WHERE org_id = %s AND team_id = %s", (org_id, team_id))
     cur.execute("DELETE FROM org_team_grants WHERE org_id = %s AND team_id = %s", (org_id, team_id))
+    # One team per person: moving someone here removes them from any other team.
+    if member_ids:
+        cur.execute(
+            "DELETE FROM org_team_members WHERE org_id = %s AND user_id = ANY(%s)",
+            (org_id, member_ids),
+        )
     for member_id in member_ids:
         cur.execute(
             """INSERT INTO org_team_members (org_id, team_id, user_id)

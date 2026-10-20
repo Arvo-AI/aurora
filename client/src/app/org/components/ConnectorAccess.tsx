@@ -383,7 +383,7 @@ export default function ConnectorAccess() {
   const [saving, setSaving] = useState<string | null>(null);
   const [savingRun, setSavingRun] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (isCurrent: () => boolean = () => true) => {
     const teamQuery = audience === EVERYONE ? "" : `?teamId=${encodeURIComponent(audience)}`;
     try {
       const [accessRes, runRes, teamsRes] = await Promise.all([
@@ -391,6 +391,8 @@ export default function ConnectorAccess() {
         fetch("/api/org/viewer-run"),
         fetch("/api/org/teams"),
       ]);
+      // A slower response for the previous audience must not overwrite this one.
+      if (!isCurrent()) return;
       if (!accessRes.ok) throw new Error("Could not load connector access");
       const data = await accessRes.json();
       setConnectors(data.connectors ?? []);
@@ -403,13 +405,17 @@ export default function ConnectorAccess() {
         setTeams((teamData.teams ?? []).map((team: AudienceTeam) => ({ id: team.id, name: team.name })));
       }
     } catch {
-      toast({ title: "Could not load connector access", variant: "destructive" });
+      if (isCurrent()) toast({ title: "Could not load connector access", variant: "destructive" });
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [audience]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    let active = true;
+    void load(() => active);
+    return () => { active = false; };
+  }, [load]);
 
   async function applyRole(roleId: string, on: boolean) {
     const role = ROLES.find((item) => item.id === roleId);

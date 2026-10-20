@@ -167,10 +167,13 @@ def list_servers(user_id: str) -> List[Dict[str, Any]]:
 
 def servers_for_user(user_id: str) -> List[Dict[str, Any]]:
     """Servers this user may call, after the org's connector access rules."""
-    from utils.auth.connector_access import may_use
+    from utils.auth.connector_access import access_for
 
     servers = list_servers(user_id)
-    return [s for s in servers if may_use(user_id, f"mcp:{s['label']}")]
+    if not servers:
+        return []
+    access = access_for(user_id)
+    return [s for s in servers if access.may_use(f"mcp:{s['label']}")]
 
 
 def find_server(user_id: str, label: str) -> Optional[Dict[str, Any]]:

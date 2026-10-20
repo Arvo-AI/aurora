@@ -16,6 +16,18 @@ def test_closed_connector_is_refused_before_login(monkeypatch):
     assert "Access tab" in body["error"]
 
 
+def test_azure_fanout_keeps_only_granted_subscriptions(monkeypatch):
+    class _Access:
+        def may_use(self, connector, scope_id=""):
+            return scope_id == "sub-a"
+
+    monkeypatch.setattr("utils.auth.connector_access.access_for", lambda user_id: _Access())
+    from chat.backend.agent.tools.cloud_exec_tool import _granted_azure_connections
+
+    kept = _granted_azure_connections("uid", [{"account_id": "sub-a"}, {"account_id": "sub-b"}])
+    assert [row["account_id"] for row in kept] == ["sub-a"]
+
+
 def test_open_connector_is_not_refused(monkeypatch):
     monkeypatch.setattr(
         "utils.auth.connector_access.may_use",
