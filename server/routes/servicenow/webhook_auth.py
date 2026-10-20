@@ -69,6 +69,7 @@ def business_rule_script() -> str:
     var r = new sn_ws.RESTMessageV2();
     r.setEndpoint(endpoint);
     r.setHttpMethod('POST');
+    r.setHttpTimeout(10000); // never hold the incident save on a slow Aurora
     r.setRequestHeader('Content-Type', 'application/json');
     r.setRequestHeader('X-Aurora-Webhook-Secret', secret);
     r.setRequestBody(JSON.stringify(body));
