@@ -104,6 +104,20 @@ function TeamsSetupContent() {
             <p className="text-xs text-amber-500/90 mt-2">{copy.orderNote}</p>
           </div>
 
+          {teamsStatus?.displaced && (
+            <Card className="border-amber-500/40 bg-amber-500/[0.06]">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg text-amber-800 dark:text-amber-200">
+                  Connected in another organization
+                </CardTitle>
+                <CardDescription>
+                  {teamsStatus.error ||
+                    "This Microsoft Teams account is connected in another organization, so it no longer receives messages here. Connect it again below to use it in this organization."}
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          )}
+
           {teamsStatus?.connected && <TeamsSetupIncompleteBanner status={teamsStatus} />}
 
           <Card className="border-zinc-800 bg-zinc-950">

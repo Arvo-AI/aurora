@@ -146,34 +146,136 @@ def is_bot_mentioned(activity: Dict[str, Any]) -> bool:
     return False
 
 
+# Set on the org that lost the tenant, so its Teams page can explain the logout.
+TEAMS_DISPLACED_PREF = "teams_displaced"
+TEAMS_DISPLACED_MESSAGE = (
+    "This Microsoft Teams account is connected in another organization, "
+    "so it no longer receives messages here."
+)
+
+
+def _teams_token_matches(tenant_id: str) -> list[tuple]:
+    """(org_id, user_id, timestamp) for every org with an active token for this tenant."""
+    # FORCE RLS hides user_tokens without an org set, and an inbound activity has none
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT org_id FROM users WHERE org_id IS NOT NULL")
+        org_ids = [row[0] for row in cur.fetchall()]
+        # One tenant can be connected in more than one org; the org list has no order
+        matches = []
+        for org_id in org_ids:
+            cur.execute("SET myapp.current_org_id = %s", (org_id,))
+            cur.execute(
+                """SELECT user_id, timestamp FROM user_tokens
+                   WHERE provider = 'teams' AND subscription_id = %s AND is_active = TRUE
+                   ORDER BY timestamp DESC LIMIT 1""",
+                (tenant_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                matches.append((org_id, row[0], row[1]))
+        return matches
+
+
+def _disconnect_older_teams_orgs(losers: list[tuple]) -> None:
+    """Log out every org that lost this tenant, and leave a notice for its settings page."""
+    from routes.teams.teams_channels import purge_teams_connector_data
+    from utils.auth.stateless_auth import store_org_preference
+    from utils.secrets.secret_ref_utils import delete_user_secret
+
+    org_ids = [org_id for org_id, _user_id, _timestamp in losers]
+    logger.warning(
+        "Teams tenant is connected in more than one org; disconnecting the older ones: %s",
+        ", ".join(sanitize(str(org_id)) for org_id in org_ids),
+    )
+    for org_id, user_id, _timestamp in losers:
+        try:
+            deleted_ok, deleted_rows = delete_user_secret(user_id, "teams")
+            # Leave the token in place if the delete failed — a notice with a live token is a lie
+            if not deleted_ok or not deleted_rows:
+                logger.warning(
+                    "Teams token for org %s was not removed after a newer org connected it",
+                    sanitize(str(org_id)),
+                )
+                continue
+            store_org_preference(org_id, TEAMS_DISPLACED_PREF, "connected_elsewhere")
+            purge_teams_connector_data(user_id)
+        except Exception:
+            logger.warning(
+                "Failed to disconnect Teams for org %s after it was connected elsewhere",
+                sanitize(str(org_id)),
+                exc_info=True,
+            )
+
+
+def _token_is_older(candidate: tuple, keeper: tuple) -> bool:
+    candidate_ts = candidate[2]
+    keeper_ts = keeper[2]
+    # A missing timestamp never outranks a stored one
+    if candidate_ts is None:
+        return keeper_ts is not None
+    # Keeper has no timestamp, so don't treat the other row as older
+    if keeper_ts is None:
+        return False
+    # A tie stays connected until a later message picks one
+    return candidate_ts < keeper_ts
+
+
+def release_older_teams_connections(tenant_id: str, keep_org_id: str) -> None:
+    """The org that just connected owns the tenant; every older copy is logged out."""
+    if not tenant_id or not keep_org_id:
+        return
+    try:
+        matches = _teams_token_matches(tenant_id)
+    except Exception:
+        logger.exception("Failed to look for other Teams connections for this tenant")
+        return
+    keeper = next((match for match in matches if match[0] == keep_org_id), None)
+    # Our row isn't visible yet — don't guess, the next inbound message settles it
+    if keeper is None:
+        return
+    losers = [match for match in matches if match[0] != keep_org_id and _token_is_older(match, keeper)]
+    if losers:
+        _disconnect_older_teams_orgs(losers)
+
+
+def clear_teams_displacement(org_id: str) -> None:
+    """A fresh connect in this org means the earlier takeover notice no longer applies."""
+    from utils.auth.stateless_auth import get_org_preference, store_org_preference
+
+    if not org_id or not get_org_preference(org_id, TEAMS_DISPLACED_PREF):
+        return
+    store_org_preference(org_id, TEAMS_DISPLACED_PREF, "")
+
+
+def teams_displacement_notice(org_id: str) -> dict | None:
+    from utils.auth.stateless_auth import get_org_preference
+
+    if not org_id:
+        return None
+    if get_org_preference(org_id, TEAMS_DISPLACED_PREF) != "connected_elsewhere":
+        return None
+    return {
+        "connected": False,
+        "displaced": True,
+        "error": TEAMS_DISPLACED_MESSAGE,
+    }
+
+
 def get_user_id_from_teams_tenant(tenant_id: str) -> Optional[str]:
     if not tenant_id:
         return None
     try:
-        # FORCE RLS hides user_tokens without an org set, and an inbound activity has none
-        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT org_id FROM users WHERE org_id IS NOT NULL")
-            org_ids = [row[0] for row in cur.fetchall()]
-            # One tenant can be connected in more than one org; the org list has no order
-            matches = []
-            for org_id in org_ids:
-                cur.execute("SET myapp.current_org_id = %s", (org_id,))
-                cur.execute(
-                    """SELECT user_id, timestamp FROM user_tokens
-                       WHERE provider = 'teams' AND subscription_id = %s AND is_active = TRUE
-                       ORDER BY timestamp DESC LIMIT 1""",
-                    (tenant_id,),
-                )
-                row = cur.fetchone()
-                if row:
-                    matches.append(row)
-            if not matches:
-                return None
-            matches.sort(key=lambda row: (row[1] is not None, row[1] or ""), reverse=True)
-            return matches[0][0]
+        matches = _teams_token_matches(tenant_id)
     except Exception:
         logger.exception("Failed to resolve Teams tenant to Aurora user")
         return None
+    if not matches:
+        return None
+    matches.sort(key=lambda row: (row[2] is not None, row[2] or ""), reverse=True)
+    # Newest connection receives the message; the others are logged out so they can see why
+    if len(matches) > 1:
+        _disconnect_older_teams_orgs(matches[1:])
+    return matches[0][1]
 
 
 def _post_teams_thinking_placeholder(

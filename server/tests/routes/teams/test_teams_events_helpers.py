@@ -223,11 +223,103 @@ def test_tenant_resolves_to_the_connecting_user(monkeypatch):
 
 
 def test_newest_token_wins_when_an_older_org_is_listed_first(monkeypatch):
+    disconnected = []
+    monkeypatch.setattr(h, "_disconnect_older_teams_orgs", lambda losers: disconnected.append(losers))
     _patch_pool(
         monkeypatch,
         rows_by_org={"org-z": ("uid-old", 1), "org-a": ("uid-new", 2)},
     )
     assert h.get_user_id_from_teams_tenant("tenant-1") == "uid-new"
+    assert disconnected == [[("org-z", "uid-old", 1)]]
+
+
+def test_a_single_org_is_not_logged_out(monkeypatch):
+    disconnected = []
+    monkeypatch.setattr(h, "_disconnect_older_teams_orgs", lambda losers: disconnected.append(losers))
+    _patch_pool(monkeypatch, row=("uid-admin",))
+    assert h.get_user_id_from_teams_tenant("tenant-1") == "uid-admin"
+    assert disconnected == []
+
+
+def test_disconnect_removes_the_old_token_and_leaves_a_notice(monkeypatch, caplog):
+    prefs = {}
+    deleted = []
+    purged = []
+
+    def _delete(user_id, provider):
+        deleted.append((user_id, provider))
+        return True, 1
+
+    monkeypatch.setattr(
+        "utils.secrets.secret_ref_utils.delete_user_secret",
+        _delete,
+    )
+    monkeypatch.setattr(
+        "utils.auth.stateless_auth.store_org_preference",
+        lambda org_id, key, value: prefs.__setitem__((org_id, key), value),
+    )
+    monkeypatch.setattr(
+        "routes.teams.teams_channels.purge_teams_connector_data",
+        lambda user_id: purged.append(user_id),
+    )
+
+    with caplog.at_level("WARNING"):
+        h._disconnect_older_teams_orgs([("org-old", "uid-old", 1)])
+
+    assert deleted == [("uid-old", "teams")]
+    assert purged == ["uid-old"]
+    assert prefs[("org-old", h.TEAMS_DISPLACED_PREF)] == "connected_elsewhere"
+    assert "org-old" in caplog.text
+
+
+def test_a_failed_delete_does_not_claim_the_org_was_logged_out(monkeypatch):
+    prefs = {}
+    monkeypatch.setattr(
+        "utils.secrets.secret_ref_utils.delete_user_secret",
+        lambda user_id, provider: (False, 0),
+    )
+    monkeypatch.setattr(
+        "utils.auth.stateless_auth.store_org_preference",
+        lambda org_id, key, value: prefs.__setitem__((org_id, key), value),
+    )
+    def _purge(_user_id):
+        raise AssertionError("purge")
+
+    monkeypatch.setattr("routes.teams.teams_channels.purge_teams_connector_data", _purge)
+
+    h._disconnect_older_teams_orgs([("org-old", "uid-old", 1)])
+    assert prefs == {}
+
+
+def test_a_new_connection_logs_out_only_older_copies(monkeypatch):
+    dropped = []
+    monkeypatch.setattr(
+        h,
+        "_teams_token_matches",
+        lambda tenant_id: [("org-old", "uid-old", 1), ("org-new", "uid-new", 5)],
+    )
+    monkeypatch.setattr(h, "_disconnect_older_teams_orgs", lambda losers: dropped.extend(losers))
+
+    h.release_older_teams_connections("tenant-1", keep_org_id="org-new")
+    assert dropped == [("org-old", "uid-old", 1)]
+
+    dropped.clear()
+    # The older org connecting must not kick out the newer one
+    h.release_older_teams_connections("tenant-1", keep_org_id="org-old")
+    assert dropped == []
+
+
+def test_displacement_notice_only_when_the_org_was_logged_out(monkeypatch):
+    stored = {("org-old", h.TEAMS_DISPLACED_PREF): "connected_elsewhere"}
+    monkeypatch.setattr(
+        "utils.auth.stateless_auth.get_org_preference",
+        lambda org_id, key, default=None: stored.get((org_id, key), default),
+    )
+    notice = h.teams_displacement_notice("org-old")
+    assert notice["displaced"] is True
+    assert notice["connected"] is False
+    assert "another organization" in notice["error"]
+    assert h.teams_displacement_notice("org-new") is None
 
 
 def test_tenant_lookup_sets_the_owning_org_before_reading_user_tokens(monkeypatch):

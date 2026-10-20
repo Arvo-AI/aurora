@@ -32,6 +32,10 @@ def teams_status(user_id):
     try:
         creds = get_credentials_from_db(user_id, "teams")
         if not creds or not creds.get("access_token"):
+            # Logged out because a newer org connected the same tenant
+            displaced = _teams_displaced_status(user_id)
+            if displaced:
+                return jsonify(displaced)
             return jsonify({"connected": False})
         client = get_teams_client_for_user(user_id)
         if not client:
@@ -173,6 +177,7 @@ def teams_callback():
             "connected_at": int(time.time()),
         }
         store_tokens_in_db(user_id, teams_token_data, "teams")
+        _take_over_teams_tenant(user_id, tenant_id)
 
         try:
             from services.memory.teams_memory import seed_teams_memory
@@ -190,6 +195,32 @@ def teams_callback():
     except Exception:
         logger.exception("Error during Teams callback")
         return redirect(_teams_oauth_failure_redirect("unexpected_error"))
+
+
+def _teams_displaced_status(user_id: str) -> dict | None:
+    org_id = get_org_id_for_user(user_id)
+    if not org_id:
+        return None
+    from routes.teams.teams_events_helpers import teams_displacement_notice
+
+    return teams_displacement_notice(org_id)
+
+
+def _take_over_teams_tenant(user_id: str, tenant_id: str) -> None:
+    """This org just connected the tenant, so older copies in other orgs stop working."""
+    try:
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            return
+        from routes.teams.teams_events_helpers import (
+            clear_teams_displacement,
+            release_older_teams_connections,
+        )
+
+        clear_teams_displacement(org_id)
+        release_older_teams_connections(tenant_id, keep_org_id=org_id)
+    except Exception:
+        logger.warning("Failed to release older Teams connections (non-fatal)", exc_info=True)
 
 
 def _teams_setup_state(user_id: str, last_bot_message_at: int | None) -> dict:
