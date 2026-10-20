@@ -1202,8 +1202,8 @@ def setup_flyio_environment_isolated(user_id: str, selected_org: str | None = No
 
 
 _BQ_QUERY_TIMEOUT_SECONDS = 300
-# A model-supplied timeout cannot hold the worker, or the session's tool lock, longer than this.
-_COMMAND_TIMEOUT_CEILING = 3600
+# Chat and background tasks both end at 1800s, so a longer command never returns.
+_COMMAND_TIMEOUT_CEILING = 1800
 # Applied only when the command does not set --maximum_bytes_billed.
 _BQ_DEFAULT_BYTES_BILLED = 10_000_000_000
 # 1 TiB. An explicit flag cannot go past the on-demand price of one tebibyte.
