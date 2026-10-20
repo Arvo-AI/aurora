@@ -1744,8 +1744,48 @@ def _bounded_int_flag(argv: list, name: str, default: int, ceiling: int) -> str:
     return ""
 
 
-def _bq_subcommand_index(argv: list) -> Optional[int]:
-    return _bq_verb_index(argv)
+def _query_limit_flags(argv: list) -> list:
+    """Caps to insert. Empty when the command already sets that flag."""
+    flags = []
+    # Standard SQL unless the command already picked a dialect
+    if not _argv_has_flag(argv, "--nouse_legacy_sql") and not _argv_has_flag(argv, "--use_legacy_sql"):
+        flags.append("--nouse_legacy_sql")
+    for flag in (
+        _bounded_int_flag(argv, "--maximum_bytes_billed", _BQ_DEFAULT_BYTES_BILLED, _BQ_BYTES_BILLED_CEILING),
+        _bounded_int_flag(argv, "--max_rows", _BQ_DEFAULT_MAX_ROWS, _BQ_MAX_ROWS_CEILING),
+    ):
+        if flag:
+            flags.append(flag)
+    return flags
+
+
+def _assign_job_id(argv: list) -> Tuple[str, str]:
+    """Return the job id and a flag to insert, or '' when one is already set."""
+    job_id = _flag_value(argv, "--job_id")
+    if job_id:
+        return job_id, ""
+    job_id = f"aurora-{uuid.uuid4().hex}"
+    # An empty --job_id still occupies the flag, so replace it instead of adding another
+    if _argv_has_flag(argv, "--job_id"):
+        _replace_flag_value(argv, "--job_id", job_id)
+        return job_id, ""
+    return job_id, f"--job_id={job_id}"
+
+
+def _apply_bq_query_defaults(argv: list) -> str:
+    """Fill query caps and return the job id cancel uses if the CLI is killed."""
+    query_idx = _bq_verb_index(argv)
+    # Global flags belong before the verb
+    if not _argv_has_flag(argv, "--format"):
+        argv.insert(query_idx, "--format=json")
+        query_idx += 1
+    flags = _query_limit_flags(argv)
+    job_id, job_flag = _assign_job_id(argv)
+    if job_flag:
+        flags.append(job_flag)
+    for offset, flag in enumerate(flags):
+        argv.insert(query_idx + 1 + offset, flag)
+    return job_id
 
 
 class BqExec(NamedTuple):
@@ -1775,38 +1815,12 @@ def prepare_bq_exec(
     if access_token and not _argv_has_flag(argv, "--oauth_access_token"):
         argv.insert(insert_at, f"--oauth_access_token={access_token}")
 
-    query_idx = _bq_subcommand_index(argv)
+    query_idx = _bq_verb_index(argv)
     # Caps apply to queries. ls and show stay as the command wrote them.
     if query_idx is None or argv[query_idx] != "query":
         return BqExec(argv, _redact_oauth_access_token(argv), None)
-
-    # Global flags belong before the verb
-    if not _argv_has_flag(argv, "--format"):
-        argv.insert(query_idx, "--format=json")
-        query_idx += 1
-
-    to_insert = []
-    # Standard SQL unless the command already picked a dialect
-    if not _argv_has_flag(argv, "--nouse_legacy_sql") and not _argv_has_flag(argv, "--use_legacy_sql"):
-        to_insert.append("--nouse_legacy_sql")
-    for flag in (
-        _bounded_int_flag(argv, "--maximum_bytes_billed", _BQ_DEFAULT_BYTES_BILLED, _BQ_BYTES_BILLED_CEILING),
-        _bounded_int_flag(argv, "--max_rows", _BQ_DEFAULT_MAX_ROWS, _BQ_MAX_ROWS_CEILING),
-    ):
-        if flag:
-            to_insert.append(flag)
-
-    job_id = _flag_value(argv, "--job_id")
-    # Our id is what cancel uses when the CLI is killed
-    if not job_id:
-        job_id = f"aurora-{uuid.uuid4().hex}"
-        if _argv_has_flag(argv, "--job_id"):
-            _replace_flag_value(argv, "--job_id", job_id)
-        else:
-            to_insert.append(f"--job_id={job_id}")
-
-    for offset, flag in enumerate(to_insert):
-        argv.insert(query_idx + 1 + offset, flag)
+    # Apply first. The log string has to be the argv that actually runs.
+    job_id = _apply_bq_query_defaults(argv)
     return BqExec(argv, _redact_oauth_access_token(argv), job_id)
 
 
