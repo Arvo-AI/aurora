@@ -258,7 +258,7 @@ except ImportError as e:
     logging.warning(f"Failed to import PagerDuty tasks: {e}")
 
 try:
-    import routes.servicenow.tasks
+    import routes.servicenow.tasks  # noqa: F401
     logging.info("ServiceNow tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import ServiceNow tasks: {e}")
