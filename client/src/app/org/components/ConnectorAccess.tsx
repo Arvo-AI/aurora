@@ -120,7 +120,8 @@ function shownGrants(connector: Connector): Grant[] {
 
 function grantsEqual(a: Grant[], b: Grant[]): boolean {
   const key = (g: Grant) => `${g.scopeId}/${g.credential}/${g.role}`;
-  return [...a].map(key).sort().join(",") === [...b].map(key).sort().join(",");
+  const ordered = (grants: Grant[]) => grants.map(key).sort((x, y) => x.localeCompare(y)).join(",");
+  return ordered(a) === ordered(b);
 }
 
 function isChecked(connector: Connector, scopeId: string, roleId: string): boolean {

@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
-from utils.auth import ROLE_ADMIN, ROLE_EDITOR, ROLE_VIEWER, VALID_ROLES
+from utils.auth import ROLE_ADMIN, ROLE_EDITOR, ROLE_VIEWER
 from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)

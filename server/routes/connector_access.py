@@ -341,7 +341,7 @@ def put_viewer_run(user_id: str):
     except Exception:
         logger.exception("Failed to save viewer run settings")
         return jsonify({"error": "Could not save"}), 500
-    logger.info("Viewer chats enabled=%s by user %s", body["chat"], sanitize(user_id))
+    logger.info("Viewer chat setting updated by user %s", sanitize(user_id))
     return jsonify({"chat": body["chat"]})
 
 
@@ -412,8 +412,8 @@ def save_access(user_id: str, connector: str):
         return jsonify({"error": "Could not save connector access"}), 500
 
     logger.info(
-        "Connector access for %s team=%s limited=%s grants=%d by user %s",
-        sanitize(connector), bool(team_id), store, len(rows) if store else 0, sanitize(user_id),
+        "Connector access saved for %s by user %s",
+        sanitize(connector), sanitize(user_id),
     )
     updated = {c["id"]: c for c in _fresh_catalog(user_id, team_id)}
     return jsonify(updated.get(connector))

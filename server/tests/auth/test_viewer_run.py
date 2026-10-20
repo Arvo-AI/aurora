@@ -1,4 +1,4 @@
-from utils.auth.viewer_run import flag_enabled, viewer_only
+from utils.auth.viewer_run import flag_enabled, slack_caller_may_run, viewer_only
 
 
 def test_missing_preference_uses_the_default():
@@ -10,6 +10,10 @@ def test_only_an_explicit_false_turns_a_flag_off():
     assert flag_enabled("false", True) is False
     assert flag_enabled("true", False) is True
     assert flag_enabled("no", True) is False
+
+
+def test_unlinked_slack_member_is_not_gated_as_a_viewer():
+    assert slack_caller_may_run("org", "uid", unlinked=True) is True
 
 
 def test_editor_and_admin_are_not_viewer_only():

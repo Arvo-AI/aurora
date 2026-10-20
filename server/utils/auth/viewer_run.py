@@ -62,10 +62,9 @@ def viewer_may_run(user_id: str, org_id: str) -> bool:
 
 def slack_caller_may_run(org_id: str, user_id: str, *, unlinked: bool) -> bool:
     """A Slack mention starts a chat. Unlinked members run as the workspace."""
-    if org_allows_viewers(org_id):
-        return True
+    # No Aurora account: the existing workspace identity, not a viewer.
     if unlinked:
-        return False
+        return True
     return viewer_may_run(user_id, org_id)
 
 
