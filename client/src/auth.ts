@@ -25,17 +25,22 @@ const inflightByUser = new Map<string, Promise<RefreshResult>>()
 // A failed refresh never advances lastRefreshedAt, so without a cooldown every
 // request re-hits /api/auth/me while the backend is struggling. Tracked per
 // user so one user's failure can't defer another user's revalidation.
+// An explicit session update bypasses it: org switch retries that path on
+// purpose after the first call loses the 3s timeout.
 const refreshBackoff = new Map<string, { failures: number; until: number }>()
 const BACKOFF_BASE_MS = 2000
 const BACKOFF_MAX_MS = 60_000
 
-async function refreshUserFromBackend(userId: string): Promise<RefreshResult> {
+async function refreshUserFromBackend(
+  userId: string,
+  options?: { force?: boolean },
+): Promise<RefreshResult> {
   const existing = inflightByUser.get(userId)
   if (existing) return existing
 
-  // Still cooling down after recent failures — keep the current JWT values
+  // Org-switch retries must reach the backend; cooldown is only for periodic checks
   const cooldown = refreshBackoff.get(userId)
-  if (cooldown && Date.now() < cooldown.until) return null
+  if (!options?.force && cooldown && Date.now() < cooldown.until) return null
 
   const pending = doRefreshUserFromBackend(userId)
     .then(result => {
@@ -220,7 +225,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       const now = Math.floor(Date.now() / 1000)
 
       if (trigger === "update" || now - lastRefreshed > ROLE_REVALIDATE_SECONDS) {
-        const fresh = await refreshUserFromBackend(token.id as string)
+        // "update" is the org-switch retry loop — it can't sit out the cooldown
+        const fresh = await refreshUserFromBackend(token.id as string, {
+          force: trigger === "update",
+        })
         if (fresh === "not_found") {
           // User no longer exists in DB (stale session after DB reset).
           // Wipe the token so the session callback produces an empty
