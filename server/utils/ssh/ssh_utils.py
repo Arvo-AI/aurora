@@ -368,9 +368,35 @@ def validate_and_test_ssh(
                 allow_agent=False,
             )
 
-        # Auth already proved the user. Network gear has no whoami.
-        logger.info(f"SSH authentication successful! Connected as: {target_user}")
-        return True, None, target_user
+        # whoami proves the session can carry a command. Network OSes have no
+        # such command; their error text is still a live channel.
+        result = ""
+        error_output = ""
+        try:
+            _stdin, stdout, stderr = ssh.exec_command("whoami", timeout=5)
+            result = stdout.read().decode(errors="replace").strip()
+            error_output = stderr.read().decode(errors="replace").strip()
+        except (socket.timeout, paramiko.SSHException, OSError) as exc:
+            # A reply already in hand means the channel worked
+            if not result and not error_output:
+                error_msg = "SSH login succeeded but the session channel failed."
+                logger.warning(f"{error_msg} ({exc})")
+                return False, error_msg, None
+
+        transport = ssh.get_transport()
+        # Nothing came back and the session is gone
+        if not result and not error_output and (
+            transport is None or not transport.is_active()
+        ):
+            error_msg = "SSH login succeeded but the session dropped."
+            logger.warning(error_msg)
+            return False, error_msg, None
+
+        # Error text from a network OS is not the login name
+        connected_as = result if result == target_user else target_user
+        logger.info(f"SSH command result: '{result}', error: '{error_output}'")
+        logger.info(f"SSH authentication successful! Connected as: {connected_as}")
+        return True, None, connected_as
 
     except socket.timeout:
         error_msg = "SSH connection timeout. The server may not be accessible or SSH port may be blocked by firewall."
