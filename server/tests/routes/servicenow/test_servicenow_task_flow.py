@@ -1,5 +1,6 @@
 """process_servicenow_event: connection scope and the reopen-without-RCA path."""
 
+import contextlib
 import importlib
 import json
 import os
@@ -437,16 +438,19 @@ def test_dispatch_skips_a_rate_limited_user_without_touching_the_connection(monk
 def _pg_connect():
     psycopg2 = pytest.importorskip("psycopg2")
     host, port = os.getenv("POSTGRES_HOST"), os.getenv("POSTGRES_PORT")
-    if not host or not port:
+    connection = None
+    if host and port:
+        try:
+            connection = psycopg2.connect(
+                host=host, port=int(port), dbname=os.getenv("POSTGRES_DB", "aurora_db"),
+                user=os.getenv("POSTGRES_USER", "aurora"), password=os.getenv("POSTGRES_PASSWORD", ""),
+                sslmode=os.getenv("POSTGRES_SSLMODE", "prefer"),
+            )
+        except psycopg2.OperationalError:
+            connection = None  # configured but unreachable: skip below, same as tests/conftest.py
+    if connection is None:
         pytest.skip("PostgreSQL is not reachable (POSTGRES_HOST/PORT unset or unreachable)")
-    try:
-        return psycopg2.connect(
-            host=host, port=int(port), dbname=os.getenv("POSTGRES_DB", "aurora_db"),
-            user=os.getenv("POSTGRES_USER", "aurora"), password=os.getenv("POSTGRES_PASSWORD", ""),
-            sslmode=os.getenv("POSTGRES_SSLMODE", "prefer"),
-        )
-    except psycopg2.OperationalError:
-        pytest.skip("PostgreSQL is not reachable (POSTGRES_HOST/PORT unset or unreachable)")
+    return connection
 
 
 @pytest.fixture
@@ -478,10 +482,8 @@ def pg_schema():
         yield task_conn, other_conn
     finally:
         for conn in (task_conn, other_conn):
-            try:
+            with contextlib.suppress(Exception):  # a broken connection has nothing to roll back
                 conn.rollback()
-            except Exception:
-                pass
         try:
             with task_conn.cursor() as cur:
                 cur.execute(f"DROP SCHEMA {schema} CASCADE")
