@@ -5,6 +5,7 @@ from chat.backend.agent.tools.bq_exec import (
     _BQ_DEFAULT_BYTES_BILLED,
     _BQ_DEFAULT_MAX_ROWS,
     _BQ_MAX_ROWS_CEILING,
+    bq_query_project,
     explain_bq_timeout,
     prepare_bq_exec,
 )
@@ -159,6 +160,17 @@ def test_bq_query_timeout_follows_the_verb_and_an_explicit_value_wins():
     assert get_command_timeout("bq --location US query 'SELECT 1'") == 300
 
 
+def test_cancel_uses_the_project_on_the_command():
+    explicit, _logged, _job_id = prepare_bq_exec(
+        "bq --project_id=other query 'SELECT 1'", None, "my-project"
+    )
+    assert bq_query_project(explicit, "my-project") == "other"
+
+    # No flag on the command — cancel falls back to the connected project
+    inserted, _logged, _job_id = prepare_bq_exec("bq query 'SELECT 1'", None, "my-project")
+    assert bq_query_project(inserted, "my-project") == "my-project"
+
+
 def test_location_before_the_verb_still_gets_query_caps():
     argv, _logged, job_id = prepare_bq_exec(
         "bq --location US query 'SELECT 1'", None, "my-project"
@@ -204,7 +216,9 @@ def test_timeout_cancels_the_query_job(monkeypatch):
     assert "ya29.secret" not in argv
     assert kwargs["oauth_access_token"] == "ya29.secret"
     assert kwargs["trusted"] is True
-    assert result.stderr == "Query exceeded the 300s timeout. The BigQuery job was cancelled."
+    assert result.stderr == (
+        "Query exceeded the 300s timeout. Cancellation of the BigQuery job was requested."
+    )
 
 
 def test_failed_cancel_says_the_job_may_still_be_running(monkeypatch):

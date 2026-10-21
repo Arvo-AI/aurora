@@ -85,6 +85,11 @@ def bq_query_location(argv: list) -> Optional[str]:
     return _flag_value(argv, "--location")
 
 
+def bq_query_project(argv: list, default: Optional[str] = None) -> Optional[str]:
+    """Project the query ran in. An explicit --project_id wins over the default."""
+    return _flag_value(argv, "--project_id") or default
+
+
 def _flag_value(argv: list, name: str) -> Optional[str]:
     """Value of --name=value or --name value. None when the flag is absent."""
     for i, token in enumerate(argv):
@@ -263,8 +268,12 @@ def explain_bq_timeout(
     if result.returncode != 124 or not job_id:
         return result
     cancelled = cancel_bq_job(job_id, project_id, location, access_token, env)
+    # --synchronous_mode=false returns before the job reaches DONE
     if cancelled:
-        result.stderr = f"Query exceeded the {timeout_s}s timeout. The BigQuery job was cancelled."
+        result.stderr = (
+            f"Query exceeded the {timeout_s}s timeout. "
+            "Cancellation of the BigQuery job was requested."
+        )
     else:
         result.stderr = (
             f"Query exceeded the {timeout_s}s timeout. "

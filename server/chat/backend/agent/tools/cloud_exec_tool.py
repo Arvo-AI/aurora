@@ -27,7 +27,7 @@ from utils.auth.cloud_auth import generate_contextual_access_token
 from utils.auth.cloud_auth import generate_azure_access_token
 from utils.cloud import azure_login_cache
 from utils.secrets.secret_ref_utils import get_user_token_data, get_token_owner_id
-from .bq_exec import bq_command_timeout, bq_query_location, explain_bq_timeout, prepare_bq_exec
+from .bq_exec import bq_command_timeout, bq_query_location, bq_query_project, explain_bq_timeout, prepare_bq_exec
 from .output_sanitizer import sanitize_command_output, filter_error_messages, truncate_json_fields
 from .cloud_provider_utils import determine_target_provider_from_context
 from chat.backend.agent.prompt.prompt_builder import CLOUD_EXEC_PROVIDERS
@@ -2282,6 +2282,8 @@ Security & Compliance
             exec_command = prepared.argv
             bq_job_id = prepared.job_id
             bq_location = bq_query_location(prepared.argv)
+            # The command's --project_id can differ from the connected project
+            bq_project = bq_query_project(prepared.argv, bq_project)
 
         # Execute the command
         exec_start = time.perf_counter()
