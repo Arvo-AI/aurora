@@ -8,6 +8,8 @@ export interface TeamsPendingSetupStep {
 
 export interface TeamsStatus {
   connected: boolean;
+  /** Logged out because a newer organization connected the same tenant. */
+  displaced?: boolean;
   /** Entra OAuth + Graph token valid. */
   oauth_connected?: boolean;
   /** Recent bot @mention received (Teams app + messaging endpoint). */
@@ -58,6 +60,7 @@ export const teamsService = {
       const setupComplete = data?.setup_complete as boolean | undefined;
       return {
         connected,
+        displaced: Boolean(data?.displaced),
         oauth_connected: (data?.oauth_connected as boolean | undefined) ?? connected,
         bot_verified: Boolean(data?.bot_verified),
         setup_complete: setupComplete ?? false,

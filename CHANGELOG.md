@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- GCP: `bq query` and `bq wait` run for 300 seconds unless `cloud_exec` is
+  given a `timeout` (capped at 600 seconds). Queries get a 10 GB billed cap
+  and a 100-row cap unless the command sets its own, up to 1 TiB and 1,000
+  rows. When a query hits its timeout, Aurora tries to cancel the job.
+
 ## [1.5.10] - 2026-10-16
 
 ### Added

@@ -759,21 +759,33 @@ def initialize_app():
     # Acquire a session-level advisory lock so that concurrent gunicorn workers
     # serialise DDL (CREATE TABLE / ALTER TABLE) instead of deadlocking.
     from utils.db.db_utils import connect_to_db_as_admin
+    from utils.db.migration_lock import (
+        MIGRATION_LOCK_KEY,
+        acquire_migration_lock,
+        reset_migration_session,
+        set_connection_autocommit,
+    )
     conn = connect_to_db_as_admin()
     try:
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_lock(42)")
-        conn.autocommit = False
+        # The pool wrapper swallows `conn.autocommit = ...`, so set it on the
+        # psycopg2 connection. Otherwise the wait sleeps inside a transaction.
+        set_connection_autocommit(conn, True)
+        acquire_migration_lock(conn)
         try:
+            set_connection_autocommit(conn, False)
             ensure_database_exists()
             initialize_tables()
         finally:
-            conn.autocommit = True
+            set_connection_autocommit(conn, True)
             with conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_unlock(42)")
+                cur.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK_KEY,))
     finally:
-        conn.close()
+        try:
+            reset_migration_session(conn)
+            # Next checkout expects a transactional connection
+            set_connection_autocommit(conn, False)
+        finally:
+            conn.close()
 
     # Initialize Casbin RBAC enforcer (seeds default policies on first run)
     try:

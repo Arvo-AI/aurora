@@ -1098,13 +1098,13 @@ def get_cloud_tools():
         return list(cached_tools)
     
     # Create wrapper function to capture tool results
+    # timeout is a model parameter, so it stays in the tool-call signature.
     INTERNAL_CONTEXT_KEYS = {
         "user_id",
         "session_id",
         "provider_preference",
         "event_loop",
         "websocket_sender",
-        "timeout",
         "state",
     }
 
@@ -1351,17 +1351,20 @@ def get_cloud_tools():
     tools = []
     
     # Create wrapper for cloud_exec to hide internal parameters from AI
-    def cloud_exec_wrapper(provider: str, command: str, output_file: Optional[str] = None, account_id: Optional[str] = None, **kwargs) -> str:
-        """Execute cloud CLI commands. Provider and command are required. Use output_file to save raw output to a file (useful for kubeconfig).
-        
+    def cloud_exec_wrapper(provider: str, command: str, output_file: Optional[str] = None, account_id: Optional[str] = None, timeout: Optional[int] = None, **kwargs) -> str:
+        """Execute cloud CLI commands. Provider and command are required.
+
+        Pass timeout (seconds) when a command needs longer than its default,
+        up to 600. `bq query` and `bq wait` default to 300 seconds. Use output_file to save
+        raw output to a file (useful for kubeconfig).
+
 For AWS with multiple connected accounts: the FIRST investigative call omit account_id to query all accounts.
 Once you identify which account has the issue, pass account_id (e.g. 'account') to target that specific account."""
         user_id = kwargs.get('user_id')
         session_id = kwargs.get('session_id')
         provider_preference = kwargs.get('provider_preference')
-        timeout = kwargs.get('timeout')
-        
-        return cloud_exec(provider, command, user_id=user_id, session_id=session_id, 
+
+        return cloud_exec(provider, command, user_id=user_id, session_id=session_id,
                          provider_preference=provider_preference, timeout=timeout,
                          output_file=output_file, account_id=account_id)
     

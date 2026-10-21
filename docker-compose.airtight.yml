@@ -22,6 +22,7 @@ x-common-env: &common-env
   POSTGRES_PORT: ${POSTGRES_PORT}
   DB_POOL_MIN: ${DB_POOL_MIN:-2}
   DB_POOL_MAX: ${DB_POOL_MAX:-20}
+  DB_MIGRATION_LOCK_TIMEOUT: ${DB_MIGRATION_LOCK_TIMEOUT:-240}
 
   # Redis
   REDIS_URL: ${REDIS_URL}
@@ -132,6 +133,11 @@ x-common-env: &common-env
   GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}
   GUARDRAILS_SIGMA_ENABLED: ${GUARDRAILS_SIGMA_ENABLED:-true}
   GUARDRAILS_LLM_MODEL: ${GUARDRAILS_LLM_MODEL:-}
+
+  # Slack: keep editing the "Thinking…" placeholder with live progress while a
+  # background investigation runs. Interval in seconds (min 10).
+  SLACK_PROGRESS_UPDATES_ENABLED: ${SLACK_PROGRESS_UPDATES_ENABLED:-true}
+  SLACK_PROGRESS_UPDATE_INTERVAL_SECONDS: ${SLACK_PROGRESS_UPDATE_INTERVAL_SECONDS:-30}
 
   # Vertex AI (Google Cloud)
   VERTEX_AI_PROJECT: ${VERTEX_AI_PROJECT}

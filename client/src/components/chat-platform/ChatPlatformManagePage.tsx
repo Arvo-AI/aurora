@@ -503,8 +503,13 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
   }
 
   if (!platformStatus?.connected) {
-    const setupLabel =
-      config.id === "teams" ? "Continue Teams setup" : `Connect ${config.displayName}`;
+    const displaced =
+      config.id === "teams" && Boolean((platformStatus as TeamsStatus | null)?.displaced);
+    const setupLabel = displaced
+      ? "Connect in this organization"
+      : config.id === "teams"
+        ? "Continue Teams setup"
+        : `Connect ${config.displayName}`;
     return (
       <div className="min-h-screen bg-black text-white p-8">
         <div className="max-w-lg mx-auto space-y-6">
@@ -521,18 +526,23 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
             <div className="p-2 rounded-lg bg-white">
               <img src={config.logoSrc} alt={config.displayName} className="h-8 w-8" />
             </div>
-            <h1 className="text-2xl font-bold">{config.displayName} not connected</h1>
+            <h1 className="text-2xl font-bold">
+              {displaced ? "Teams is connected in another organization" : `${config.displayName} not connected`}
+            </h1>
           </div>
           <Card className="border-amber-500/40 bg-zinc-950">
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
                 <AlertCircle className="h-5 w-5 text-amber-500" />
-                Connect before managing
+                {displaced ? "This connection no longer receives messages" : "Connect before managing"}
               </CardTitle>
               <CardDescription>
-                {config.id === "teams"
-                  ? "Finish step 1 (Connect in Aurora) on the setup page. Manage opens channel settings, notifications, and the bot check after OAuth."
-                  : `Connect ${config.displayName} from the connectors page first. Manage is available after the connection succeeds.`}
+                {displaced
+                  ? (platformStatus as TeamsStatus).error ||
+                    "This Microsoft Teams account is connected in another organization, so it no longer receives messages here."
+                  : config.id === "teams"
+                    ? "Finish step 1 (Connect in Aurora) on the setup page. Manage opens channel settings, notifications, and the bot check after OAuth."
+                    : `Connect ${config.displayName} from the connectors page first. Manage is available after the connection succeeds.`}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
