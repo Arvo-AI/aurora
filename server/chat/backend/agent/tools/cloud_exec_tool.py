@@ -1536,6 +1536,20 @@ def _granted_azure_connections(user_id: str, connections: list) -> list:
     ]
 
 
+def _refuse_resolved_azure(user_id: str, subscription_id, command: str, isolated_env) -> Optional[str]:
+    """Deny a subscription login resolved on its own, and drop its temp config."""
+    if not user_id or not subscription_id:
+        return None
+    from utils.auth.connector_access import may_use
+
+    if may_use(user_id, "azure", str(subscription_id)):
+        return None
+    config_dir = (isolated_env or {}).get("AZURE_CONFIG_DIR")
+    if config_dir:
+        shutil.rmtree(config_dir, ignore_errors=True)
+    return connector_call_denied(user_id, "azure", subscription_id, command)
+
+
 def _cloud_exec_azure_multi_subscription(
     user_id: str,
     connections: list,
@@ -1865,6 +1879,11 @@ Security & Compliance
             success, subscription_id, auth_method, isolated_env, auth_argv = setup_azure_environment_isolated(user_id, target_subscription)
             if not success:
                 return _credential_setup_failure(f"Failed to setup Azure environment with {provider_preference} authentication", command)
+            # The caller named no subscription, so login picked a default. That
+            # default still has to be one this role was granted.
+            refused = _refuse_resolved_azure(user_id, subscription_id, command, isolated_env)
+            if refused:
+                return refused
             resource_id = subscription_id
             # Reuse an existing `az login` for these credentials when one is cached.
             # None means this command keeps its private directory and logs in itself.

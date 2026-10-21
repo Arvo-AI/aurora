@@ -28,6 +28,21 @@ def test_azure_fanout_keeps_only_granted_subscriptions(monkeypatch):
     assert [row["account_id"] for row in kept] == ["sub-a"]
 
 
+def test_resolved_azure_subscription_is_refused_when_not_granted(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "utils.auth.connector_access.may_use",
+        lambda user_id, connector, scope_id="": scope_id == "sub-a",
+    )
+    from chat.backend.agent.tools.cloud_exec_tool import _refuse_resolved_azure
+
+    config = tmp_path / "az-config"
+    config.mkdir()
+    body = json.loads(_refuse_resolved_azure("uid", "sub-b", "group list", {"AZURE_CONFIG_DIR": str(config)}))
+    assert body["code"] == "CONNECTOR_DENIED"
+    assert not config.exists()
+    assert _refuse_resolved_azure("uid", "sub-a", "group list", {"AZURE_CONFIG_DIR": str(config)}) is None
+
+
 def test_open_connector_is_not_refused(monkeypatch):
     monkeypatch.setattr(
         "utils.auth.connector_access.may_use",
