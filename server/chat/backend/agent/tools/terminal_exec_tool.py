@@ -256,15 +256,43 @@ def terminal_exec(
 
     # Ask mode ignores the allow list. Slack is always Ask, so only a
     # read-only ssh may proceed; scp/sftp copy files and stay refused.
-    program = command.lstrip().split(None, 1)[0].rsplit("/", 1)[-1] if command.lstrip() else ""
-    if program in ("ssh", "scp", "sftp"):
+    # A client later in the line (`true && ssh host reboot`, `sudo ssh`)
+    # has to hit the same check as one in the first token.
+    from utils.security.read_only_classifier import (
+        COMMAND_WRAPPERS,
+        analyze_segment,
+        describe_rejection,
+        is_read_only_command,
+        split_segments,
+    )
+    ssh_clients = ("ssh", "scp", "sftp")
+    program = command.lstrip().split(None, 1)[0].rsplit("/", 1)[-1].lower() if command.lstrip() else ""
+    segments = split_segments(command)
+
+    def _segment_runs_ssh(segment):
+        facts = analyze_segment(segment)
+        if facts.executable in ssh_clients:
+            return True
+        # `sudo ssh` / `timeout 5 ssh` hide the client in the wrapper's arguments.
+        if facts.executable in COMMAND_WRAPPERS:
+            return any(tok.rsplit("/", 1)[-1] in ssh_clients for tok in segment)
+        return False
+
+    if segments is None:
+        # A redirect refuses to split, which would hide `echo x > f && ssh`.
+        has_ssh_client = program in ssh_clients or any(
+            tok.strip("\"'`").rsplit("/", 1)[-1].lower() in ssh_clients
+            for tok in command.split()
+        )
+    else:
+        has_ssh_client = program in ssh_clients or any(
+            _segment_runs_ssh(segment) for segment in segments
+        )
+    if has_ssh_client:
         from utils.cloud.cloud_utils import get_mode_from_context
         mode = get_mode_from_context()
         if (mode or "").strip().lower() == "ask":
             from chat.backend.agent.access.mode_access_controller import ModeAccessController
-            from utils.security.read_only_classifier import (
-                describe_rejection, is_read_only_command,
-            )
             allowed, message = ModeAccessController.ensure_cloud_command_allowed(
                 mode, is_read_only_command(command), command, describe_rejection(command),
             )

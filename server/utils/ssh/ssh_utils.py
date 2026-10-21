@@ -374,12 +374,18 @@ def validate_and_test_ssh(
         result = ""
         error_output = ""
         channel_error = None
+        exec_rejected = False
         try:
             _stdin, stdout, stderr = ssh.exec_command("whoami", timeout=5)
-            result = stdout.read().decode(errors="replace").strip()
-            error_output = stderr.read().decode(errors="replace").strip()
-        except (socket.timeout, paramiko.SSHException, OSError) as exc:
-            channel_error = exc
+        except paramiko.SSHException:
+            # connect() already authenticated. Some servers refuse the exec request.
+            exec_rejected = True
+        else:
+            try:
+                result = stdout.read().decode(errors="replace").strip()
+                error_output = stderr.read().decode(errors="replace").strip()
+            except (socket.timeout, paramiko.SSHException, OSError) as exc:
+                channel_error = exc
 
         transport = ssh.get_transport()
         success, error_msg, connected_as = session_reply_result(
@@ -388,8 +394,9 @@ def validate_and_test_ssh(
             target_user,
             transport_active=transport is not None and transport.is_active(),
             channel_error=channel_error is not None,
+            exec_rejected=exec_rejected,
         )
-        # Timeout, a rejected channel, or a dead transport with no reply
+        # Timeout, or a dead transport with no reply
         if not success:
             detail = f" ({channel_error})" if channel_error else ""
             logger.warning(f"{error_msg}{detail}")

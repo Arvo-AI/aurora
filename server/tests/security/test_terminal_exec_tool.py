@@ -422,6 +422,25 @@ class TestTerminalExecInvokesHelpers:
         )
         assert json.loads(copied)["code"] == "READ_ONLY_MODE"
 
+        # The client is not the first token. Ask mode still has to refuse it.
+        chained = terminal_exec(
+            command="true && ssh admin@198.51.100.1 reboot",
+            user_id="u-1",
+            session_id="s-1",
+        )
+        assert json.loads(chained)["code"] == "READ_ONLY_MODE"
+        stubs.gate.assert_not_called()
+
+        stubs.gate.reset_mock()
+        stubs.terminal_run.reset_mock()
+        terminal_exec(
+            command="ssh -J user@bastion admin@198.51.100.1 uptime",
+            user_id="u-1",
+            session_id="s-1",
+        )
+        stubs.gate.assert_called()
+        stubs.terminal_run.assert_called()
+
     def test_non_ssh_command_skips_ssh_rewrite_helper(self, cleanup_lazy_module_stubs):
         transform_spy = MagicMock(side_effect=_transform_ssh_jump_to_proxy)
         metachar_spy = MagicMock(side_effect=_has_shell_metacharacters)

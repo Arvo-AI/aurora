@@ -13,8 +13,14 @@ def session_reply_result(
     *,
     transport_active: bool,
     channel_error: bool = False,
+    exec_rejected: bool = False,
 ) -> Tuple[bool, Optional[str], Optional[str]]:
-    # A reply already in hand means the channel worked
+    # connect() already authenticated. A server may refuse the exec channel
+    # after that, and the login is still a passed check.
+    if exec_rejected and not result and not error_output:
+        return True, None, target_user
+
+    # A timeout or a dropped read, with nothing in hand, is still a failed check.
     if channel_error and not result and not error_output:
         return False, CHANNEL_FAILED, None
 

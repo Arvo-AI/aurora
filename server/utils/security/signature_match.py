@@ -11,6 +11,7 @@ hand-written rules when ``config.sigma_enabled`` is True.
 
 import logging
 import re
+import shlex
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -131,33 +132,165 @@ def _load_sigma() -> None:
 _load_sigma()
 
 
-# An identity file authenticates ssh. The same path anywhere else is the key
-# being read or copied. `\S*?` lets `-i /home/me/.ssh/id_rsa` match without
-# treating the characters before `.ssh` as a second path.
-_SSH_IDENTITY_USE = re.compile(
-    r"(?i)(?:-i\s*[\"']?\S*?\.ssh/id_[^\s\"']+"
-    r"|-o\s*[\"']?IdentityFile[=\s]+[\"']?\S*?\.ssh/id_[^\s\"']+)"
-)
+# An identity file authenticates ssh. The same path on any other program
+# (`sort -i ~/.ssh/id_rsa`) is the key being read. Only ssh/scp/sftp's own
+# `-i` / `IdentityFile` options are dropped, and only before the destination,
+# so a remote command cannot hide behind that exemption.
+_SSH_CLIENTS = frozenset({"ssh", "scp", "sftp"})
 _SSH_KEY_PATH = re.compile(r"(?i)\.ssh/(?:id_|authorized_keys)")
+_SHELL_CONTROL = "();<>|&`"
+# Options whose next token is a value, so it must not be read as the destination.
+_SSH_OPTION_TAKES_VALUE = frozenset({
+    "-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l",
+    "-m", "-O", "-o", "-p", "-Q", "-R", "-S", "-W", "-w",
+})
 
 
-def ssh_key_material_exposed(command: str) -> bool:
+def _shell_segments(command: str):
+    """Split *command* on shell operators, keeping quoted text in one token."""
+    try:
+        lexer = shlex.shlex(
+            command.replace("\n", " ; "), posix=True, punctuation_chars=_SHELL_CONTROL,
+        )
+        lexer.whitespace_split = True
+        raw = list(lexer)
+    except ValueError:
+        return None
+    segments: list[list[str]] = [[]]
+    for token in raw:
+        if token and all(char in _SHELL_CONTROL for char in token):
+            segments.append([])
+            continue
+        segments[-1].append(token)
+    return [segment for segment in segments if segment]
+
+
+def _segment_program(tokens: list[str]) -> str:
+    for token in tokens:
+        # A leading `VAR=value` is not the program.
+        if "=" in token and not token.startswith("-") and not token.startswith("/"):
+            continue
+        return token.rsplit("/", 1)[-1]
+    return ""
+
+
+def _without_client_identity(tokens: list[str], depth: int = 0) -> str:
+    """Drop ssh/scp/sftp identity options. Leave every other token in place."""
+    if depth >= 2 or not tokens:
+        return " ".join(tokens)
+    kept: list[str] = []
+    index = 0
+    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("-"):
+        kept.append(tokens[index])
+        index += 1
+    if index >= len(tokens) or _segment_program(tokens[index:]) not in _SSH_CLIENTS:
+        return " ".join(tokens)
+    kept.append(tokens[index])
+    index += 1
+    while index < len(tokens):
+        token = tokens[index]
+        # `--` ends the client's options. The rest is the remote command or paths.
+        if token == "--":
+            kept.extend(tokens[index:])
+            break
+        if token == "-i":
+            index += 2
+            continue
+        if token.startswith("-i") and len(token) > 2:
+            index += 1
+            continue
+        if token == "-o" and index + 1 < len(tokens):
+            value = tokens[index + 1]
+            key = value.split("=", 1)[0].strip().lower()
+            # IdentityFile is the long form of `-i`.
+            if key == "identityfile":
+                index += 2
+                continue
+            # The jump rewrite nests another ssh inside ProxyCommand.
+            if key == "proxycommand":
+                nested_src = value.split("=", 1)[1] if "=" in value else ""
+                try:
+                    nested = shlex.split(nested_src)
+                except ValueError:
+                    kept.append(value)
+                else:
+                    kept.append(_without_client_identity(nested, depth + 1))
+                index += 2
+                continue
+            kept.extend((token, value))
+            index += 2
+            continue
+        if token.startswith("-o") and len(token) > 2:
+            value = token[2:]
+            key = value.split("=", 1)[0].strip().lower()
+            if key == "identityfile":
+                index += 1
+                continue
+            if key == "proxycommand":
+                nested_src = value.split("=", 1)[1] if "=" in value else ""
+                try:
+                    nested = shlex.split(nested_src)
+                except ValueError:
+                    kept.append(value)
+                else:
+                    kept.append(_without_client_identity(nested, depth + 1))
+                index += 1
+                continue
+            kept.append(token)
+            index += 1
+            continue
+        # A value such as `%h:%p` is not the destination, so a later `-i` is
+        # still this client's identity option.
+        if token in _SSH_OPTION_TAKES_VALUE:
+            kept.append(token)
+            if index + 1 < len(tokens):
+                kept.append(tokens[index + 1])
+            index += 2
+            continue
+        if len(token) > 2 and token[:2] in _SSH_OPTION_TAKES_VALUE:
+            kept.append(token)
+            index += 1
+            continue
+        # The destination starts the remote command, which keeps its own `-i`.
+        if not token.startswith("-"):
+            kept.extend(tokens[index:])
+            break
+        kept.append(token)
+        index += 1
+    return " ".join(kept)
+
+
+def _invokes_ssh_client(command: str) -> bool:
+    segments = _shell_segments(command)
+    if not segments:
+        return False
+    return any(_segment_program(segment) in _SSH_CLIENTS for segment in segments)
+
+
+def ssh_key_material_exposed(command: str, *, allow_identity_option: bool = True) -> bool:
     """True when *command* reads or copies a private key or authorized_keys.
 
-    `ssh -i ~/.ssh/id_*` only selects the key Aurora already mounted. A second
-    reference (`cat`, `scp` of the key file) is still exposure.
+    `ssh -i` selects the key Aurora mounted. Any other reference, including
+    `sort -i` of that path, is still exposure.
     """
     if not command or not _SSH_KEY_PATH.search(command):
         return False
-    # Drop identity-file arguments and see if a key path is still there.
-    return _SSH_KEY_PATH.search(_SSH_IDENTITY_USE.sub(" ", command)) is not None
+    if not allow_identity_option:
+        return True
+    segments = _shell_segments(command)
+    # Unparseable, or no ssh client owns the `-i`. The path is a real read.
+    if not segments or not any(_segment_program(segment) in _SSH_CLIENTS for segment in segments):
+        return True
+    stripped = " ".join(_without_client_identity(segment) for segment in segments)
+    return _SSH_KEY_PATH.search(stripped) is not None
 
 
 def check_signature(command: str) -> SignatureVerdict:
     """Run command against all signature rules. Returns on first match."""
     # Identity-file use is not credential theft; reading the key file is.
     # Checked before the regex table so a key path cannot hide behind a later rule.
-    if ssh_key_material_exposed(command):
+    # The exemption applies only to an ssh/scp/sftp invocation's own options.
+    if ssh_key_material_exposed(command, allow_identity_option=_invokes_ssh_client(command)):
         return SignatureVerdict(
             matched=True,
             technique=T_CRED_SSH,
