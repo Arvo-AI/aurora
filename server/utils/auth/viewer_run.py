@@ -60,6 +60,12 @@ def viewer_may_run(user_id: str, org_id: str) -> bool:
     return org_allows_viewers(org_id)
 
 
+def message_starts_chat(question, data: dict) -> bool:
+    """True when this websocket message starts work the viewer switch covers."""
+    # An action button sends no question text and still starts a chat.
+    return bool(question or data.get("direct_tool_call") or data.get("trigger_action"))
+
+
 def slack_caller_may_run(org_id: str, user_id: str, *, unlinked: bool) -> bool:
     """A Slack mention starts a chat. Unlinked members run as the workspace."""
     # No Aurora account: the existing workspace identity, not a viewer.

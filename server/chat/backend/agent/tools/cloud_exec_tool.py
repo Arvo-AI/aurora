@@ -1550,6 +1550,73 @@ def _refuse_resolved_azure(user_id: str, subscription_id, command: str, isolated
     return connector_call_denied(user_id, "azure", subscription_id, command)
 
 
+_AZURE_SUB_PATH = re.compile(r"/subscriptions/([^/\"'\s]+)", re.IGNORECASE)
+_AZURE_SUB_FLAGS = {"--subscription", "--subscriptions", "-s"}
+
+
+def _explicit_azure_subscriptions(command: str) -> Optional[list]:
+    """Subscription names or ids the command names. None when it can't be parsed."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    found: list = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        name = token.lower().split("=", 1)[0]
+        if name in _AZURE_SUB_FLAGS:
+            multi = name == "--subscriptions"
+            if "=" in token:
+                values = [token.split("=", 1)[1]]
+                i += 1
+            else:
+                values = []
+                i += 1
+                while i < len(tokens) and not tokens[i].startswith("-"):
+                    values.append(tokens[i])
+                    i += 1
+                    if not multi:
+                        break
+            if not values:
+                found.append("")
+            for value in values:
+                found.extend(part for part in value.split(",") if part)
+            continue
+        found.extend(_AZURE_SUB_PATH.findall(token))
+        i += 1
+    return found
+
+
+def _refuse_named_azure(user_id: str, command: str, connections: list) -> Optional[str]:
+    """Deny a command that names a subscription this role was not granted.
+
+    Grants are stored by subscription id. A name that doesn't match a connected
+    id is refused while the connector is limited, because the login can reach
+    any subscription the service principal can see.
+    """
+    named = _explicit_azure_subscriptions(command)
+    from utils.auth.connector_access import access_for
+
+    access = access_for(user_id)
+    # Not limited: the command keeps the previous behavior.
+    if access.credentials("azure") is None:
+        return None
+    # An unparseable command could hide a subscription flag.
+    if named is None:
+        return connector_call_denied(user_id, "azure", None, command)
+    by_id = {
+        str(row.get("account_id") or "").lower(): str(row.get("account_id") or "")
+        for row in connections
+        if row.get("account_id")
+    }
+    for raw in named:
+        canonical = by_id.get(str(raw).lower())
+        if not canonical or not access.may_use("azure", canonical):
+            return connector_call_denied(user_id, "azure", raw or None, command)
+    return None
+
+
 def _cloud_exec_azure_multi_subscription(
     user_id: str,
     connections: list,
@@ -1844,9 +1911,25 @@ Security & Compliance
             # specific subscription was requested. kubectl/helm inherit their
             # context from `aks get-credentials` and must not fan out.
             target_subscription = account_id or selected_project_id
-            if not target_subscription and _azure_can_fan_out(original_command):
+            named = _explicit_azure_subscriptions(original_command) if user_id else []
+            raw_subs = []
+            if user_id:
                 from utils.db.connection_utils import get_all_user_connections
-                raw_subs = get_all_user_connections(user_id, "azure") if user_id else []
+                raw_subs = get_all_user_connections(user_id, "azure")
+                # --subscription on the command bypasses the account_id check.
+                refused_named = _refuse_named_azure(user_id, original_command, raw_subs)
+                if refused_named:
+                    return refused_named
+                # Already scoped, so don't also run it on every other subscription.
+                if named and not target_subscription:
+                    wanted = str(named[0]).lower()
+                    match = next(
+                        (row.get("account_id") for row in raw_subs
+                         if str(row.get("account_id") or "").lower() == wanted),
+                        None,
+                    )
+                    target_subscription = str(match or "") or None
+            if not target_subscription and _azure_can_fan_out(original_command):
                 # A grant on one subscription must not log in to the others.
                 all_subs = _granted_azure_connections(user_id, raw_subs) if user_id else raw_subs
                 if raw_subs and not all_subs:

@@ -43,6 +43,34 @@ def test_resolved_azure_subscription_is_refused_when_not_granted(monkeypatch, tm
     assert _refuse_resolved_azure("uid", "sub-a", "group list", {"AZURE_CONFIG_DIR": str(config)}) is None
 
 
+def test_command_subscription_is_refused_when_not_granted(monkeypatch):
+    class _Access:
+        team_ids = set()
+
+        def credentials(self, connector, scope_id=""):
+            return frozenset({"write"})
+
+        def may_use(self, connector, scope_id=""):
+            return scope_id == "sub-a"
+
+        def checked_as(self, team_names=None):
+            return "viewer"
+
+    monkeypatch.setattr("utils.auth.connector_access.access_for", lambda user_id: _Access())
+    from chat.backend.agent.tools.cloud_exec_tool import _explicit_azure_subscriptions, _refuse_named_azure
+
+    connections = [{"account_id": "sub-a"}]
+    command = "az group list --subscription sub-b"
+    assert _explicit_azure_subscriptions(command) == ["sub-b"]
+    assert _explicit_azure_subscriptions("az resource show --ids /subscriptions/sub-b/resourceGroups/rg") == ["sub-b"]
+    assert _explicit_azure_subscriptions("az graph query --subscriptions sub-a,sub-b") == ["sub-a", "sub-b"]
+    body = json.loads(_refuse_named_azure("uid", command, connections))
+    assert body["code"] == "CONNECTOR_DENIED"
+    assert _refuse_named_azure("uid", "az graph query --subscriptions sub-a,sub-b", connections) is not None
+    assert _refuse_named_azure("uid", "az group list --subscription sub-a", connections) is None
+    assert _refuse_named_azure("uid", "az group list -s SUB-A", connections) is None
+
+
 def test_open_connector_is_not_refused(monkeypatch):
     monkeypatch.setattr(
         "utils.auth.connector_access.may_use",

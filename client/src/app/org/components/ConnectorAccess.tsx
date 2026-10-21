@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { Check, Loader2, MessageSquare } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -382,8 +382,13 @@ export default function ConnectorAccess() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [savingRun, setSavingRun] = useState(false);
+  const audienceRef = useRef(audience);
+  audienceRef.current = audience;
 
   const load = useCallback(async (isCurrent: () => boolean = () => true) => {
+    const requested = audience;
+    // A save-failure reload has no effect callback, so the audience is the other check.
+    const still = () => isCurrent() && audienceRef.current === requested;
     const teamQuery = audience === EVERYONE ? "" : `?teamId=${encodeURIComponent(audience)}`;
     try {
       const [accessRes, runRes, teamsRes] = await Promise.all([
@@ -392,22 +397,25 @@ export default function ConnectorAccess() {
         fetch("/api/org/teams"),
       ]);
       // A slower response for the previous audience must not overwrite this one.
-      if (!isCurrent()) return;
+      if (!still()) return;
       if (!accessRes.ok) throw new Error("Could not load connector access");
       const data = await accessRes.json();
+      if (!still()) return;
       setConnectors(data.connectors ?? []);
       if (runRes.ok) {
         const run = await runRes.json();
+        if (!still()) return;
         setViewerRun({ chat: Boolean(run.chat) });
       }
       if (teamsRes.ok) {
         const teamData = await teamsRes.json();
+        if (!still()) return;
         setTeams((teamData.teams ?? []).map((team: AudienceTeam) => ({ id: team.id, name: team.name })));
       }
     } catch {
-      if (isCurrent()) toast({ title: "Could not load connector access", variant: "destructive" });
+      if (still()) toast({ title: "Could not load connector access", variant: "destructive" });
     } finally {
-      if (isCurrent()) setLoading(false);
+      if (still()) setLoading(false);
     }
   }, [audience]);
 

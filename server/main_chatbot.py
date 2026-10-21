@@ -1182,8 +1182,9 @@ async def handle_connection(websocket) -> None:
             # Resolve org for tenant-scoped DB queries
             org_id = get_org_id_for_user(user_id) if user_id else None
 
-            # A tool call with no question is still a chat the viewer switch covers.
-            if user_id and org_id and (question or data.get("direct_tool_call")):
+            # A tool call or action with no question is still a chat the viewer switch covers.
+            from utils.auth.viewer_run import message_starts_chat
+            if user_id and org_id and message_starts_chat(question, data):
                 from utils.auth.viewer_run import viewer_may_run
                 if not viewer_may_run(user_id, org_id):
                     await websocket.send(json.dumps({
