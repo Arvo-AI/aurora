@@ -1,7 +1,10 @@
 # ============================================
 # Development Stage
 # ============================================
-FROM oven/bun:1.2.22-alpine AS dev
+# Bun >= 1.4 emits node:http "close" when a browser tab goes away. Older
+# images never abort the incident SSE relays, so the frontend leaks until
+# OOM (#703). Dev, builder, and prod share this image.
+FROM oven/bun:1.4.2-alpine AS dev
 
 # Node is optional at runtime (FRONTEND_DEV_RUNTIME=node). Installed in the image so
 # devs can switch via .env without rebuilding a separate Dockerfile target.
@@ -28,7 +31,7 @@ CMD ["/docker-dev-start.sh"]
 # ============================================
 # Production Builder Stage
 # ============================================
-FROM oven/bun:1.2.22-alpine AS builder
+FROM oven/bun:1.4.2-alpine AS builder
 
 # Declare build arguments for NEXT_PUBLIC_ variables
 
@@ -64,7 +67,7 @@ RUN bun run build
 # ============================================
 # Production Runner Stage
 # ============================================
-FROM oven/bun:1.2.22-alpine AS prod
+FROM oven/bun:1.4.2-alpine AS prod
 
 WORKDIR /app
 
