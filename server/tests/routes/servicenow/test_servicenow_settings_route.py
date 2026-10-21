@@ -191,4 +191,5 @@ class TestStatusProbe:
                 return {"ok": True}
         monkeypatch.setattr(routes.ServiceNowClient, "from_credentials", staticmethod(lambda creds: _Client()))
         body = app.test_client().get("/servicenow/status").get_json()
-        assert body["connected"] is True and "error" not in body
+        assert body["connected"] is True
+        assert "error" not in body

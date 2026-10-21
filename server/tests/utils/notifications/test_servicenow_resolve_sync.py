@@ -80,7 +80,8 @@ def test_forbidden_disables_write_capability(wired):
     prefs, incident, client, writes = wired
     client.update_incident.side_effect = ServiceNowAPIError("forbidden", 403)
     assert svc.sync_servicenow_resolution("u1", "i1") is False
-    assert writes and writes[0]["capabilities"]["can_write_incidents"] is False
+    assert writes
+    assert writes[0]["capabilities"]["can_write_incidents"] is False
 
 
 def test_other_errors_never_raise(wired):

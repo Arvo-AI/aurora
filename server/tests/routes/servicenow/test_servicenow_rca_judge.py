@@ -123,8 +123,9 @@ def test_an_edit_that_changes_nothing_is_not_judged_again(judge_env):
 def test_a_failed_rca_handoff_is_judged_again(judge_env):
     judge_env["judge"].return_value = JudgeVerdict(investigate=True, reason="outage")
     judge_env["start_rca"].side_effect = ConnectionError("db down")
+    payload = _payload()
     with pytest.raises(ConnectionError):
-        judge_env["run"](_payload())
+        judge_env["run"](payload)
     judge_env["start_rca"].side_effect = None
     assert judge_env["run"](_payload())["status"] == "judged"
 
@@ -137,8 +138,9 @@ def test_hourly_limit_stops_the_judge(judge_env):
 
 def test_no_verdict_asks_for_a_retry_and_remembers_nothing(judge_env):
     judge_env["judge"].return_value = None
+    payload = _payload()
     with pytest.raises(JudgeUnavailable):
-        judge_env["run"](_payload())
+        judge_env["run"](payload)
     judge_env["start_rca"].assert_not_called()
     judge_env["redis"].set.assert_not_called()
 
@@ -160,9 +162,11 @@ def test_a_skipped_incident_is_rejudged_when_its_content_changes(judge_env):
 
 
 def test_policy_read_failure_is_retried_not_defaulted():
+    payload = _payload()
+    start_rca = MagicMock()
     with patch("utils.auth.stateless_auth.get_org_id_for_user", return_value="org-test"), \
          patch.object(rca_judge, "_redis", return_value=None), \
          patch("utils.hooks.get_hook", return_value=lambda org_id, user_id: (True, "")), \
          patch("services.memory.queries.get_memory_content", side_effect=RuntimeError("db down")):
         with pytest.raises(JudgeUnavailable):
-            judge_and_route(_payload(), "uid-1", start_rca=MagicMock())
+            judge_and_route(payload, "uid-1", start_rca=start_rca)

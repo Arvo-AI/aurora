@@ -122,7 +122,8 @@ def test_forbidden_releases_the_claim_and_disables_writes(wired):
     assert svc.send_servicenow_work_note("u1", _anchor()) is False
     assert claims.released == ["i1"]
     assert claims.recorded == []
-    assert writes and writes[-1]["capabilities"]["can_write_incidents"] is False
+    assert writes
+    assert writes[-1]["capabilities"]["can_write_incidents"] is False
 
 
 def test_other_4xx_releases_the_claim_but_keeps_the_capability(wired):

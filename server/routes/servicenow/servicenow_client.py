@@ -52,6 +52,9 @@ _token_cache: Dict[Tuple[str, str, str], Tuple[str, float]] = {}
 _token_lock = threading.Lock()
 
 
+_JSON = "application/json"
+
+
 class ServiceNowAPIError(Exception):
     """Vendor error carrying the HTTP status when one came back (None = no response)."""
 
@@ -164,7 +167,7 @@ class ServiceNowClient:
                     "client_id": self.client_id or "",
                     "client_secret": self.client_secret or "",
                 },
-                headers={"Accept": "application/json"},
+                headers={"Accept": _JSON},
                 timeout=self.timeout,
             )
         except requests.exceptions.Timeout as exc:
@@ -207,7 +210,7 @@ class ServiceNowClient:
         params: Optional[Dict[str, Any]] = None,
         json_body: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        headers = {"Accept": _JSON, "Content-Type": _JSON}
         auth = None
         if self.auth_type == "oauth_client_credentials":
             headers["Authorization"] = f"Bearer {self._oauth_token()}"

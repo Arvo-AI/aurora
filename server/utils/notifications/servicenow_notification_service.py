@@ -152,14 +152,13 @@ def _load_incident(user_id: str, incident_id: str) -> Optional[Dict[str, Any]]:
     from utils.auth.stateless_auth import set_rls_context
     from utils.db.connection_pool import db_pool
 
-    with db_pool.get_admin_connection() as conn:
-        with conn.cursor() as cursor:
-            set_rls_context(cursor, conn, user_id, log_prefix=_LOG)
-            cursor.execute(
-                "SELECT source_type, alert_metadata, aurora_summary FROM incidents WHERE id = %s",
-                (incident_id,),
-            )
-            row = cursor.fetchone()
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+        set_rls_context(cursor, conn, user_id, log_prefix=_LOG)
+        cursor.execute(
+            "SELECT source_type, alert_metadata, aurora_summary FROM incidents WHERE id = %s",
+            (incident_id,),
+        )
+        row = cursor.fetchone()
     if not row:
         return None
     return {"source_type": row[0], "alert_metadata": row[1], "aurora_summary": row[2]}

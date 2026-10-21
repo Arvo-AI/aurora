@@ -156,7 +156,8 @@ def test_new_incident_decisions_run_with_no_pooled_connection_held(monkeypatch, 
 
     assert seen["query_open"] == 0, "the saved-query check must not hold a pooled connection"
     assert seen["create_open"] == 1, "the writes run on a fresh connection"
-    assert pool.enters == 2 and pool.open == 0
+    assert pool.enters == 2
+    assert pool.open == 0
 
 
 def test_judge_mode_decides_outside_the_connection_and_creates_inside_it(monkeypatch, tasks, pool):
@@ -174,7 +175,8 @@ def test_judge_mode_decides_outside_the_connection_and_creates_inside_it(monkeyp
 
     _run_task(tasks, _payload(), {"action": "judge"})
 
-    assert seen["judge_open"] == 0 and seen["create_open"] == 1
+    assert seen["judge_open"] == 0
+    assert seen["create_open"] == 1
     assert pool.open == 0
 
 
@@ -192,9 +194,12 @@ def test_known_incident_is_synced_with_the_payload_for_a_possible_reopen(monkeyp
 
     synced.assert_called_once()
     kwargs = synced.call_args.kwargs
-    assert kwargs["sys_id"] == SYS_ID and kwargs["payload"]["number"] == "INC0010009" and kwargs["title"]
+    assert kwargs["sys_id"] == SYS_ID
+    assert kwargs["payload"]["number"] == "INC0010009"
+    assert kwargs["title"]
     create.assert_not_called()
-    assert pool.enters == 1 and pool.open == 0
+    assert pool.enters == 1
+    assert pool.open == 0
 
 
 @pytest.mark.parametrize("existing_status, new_status, rca_task_id, dispatched", [
@@ -219,7 +224,9 @@ def test_reopen_dispatches_an_rca_only_when_none_ever_ran(monkeypatch, tasks, ex
     if dispatched:
         dispatch.assert_called_once()
         args = dispatch.call_args.args
-        assert args[3] == "inc-1" and args[4] == "Checkout down" and args[6] == SYS_ID
+        assert args[3] == "inc-1"
+        assert args[4] == "Checkout down"
+        assert args[6] == SYS_ID
     else:
         dispatch.assert_not_called()
 

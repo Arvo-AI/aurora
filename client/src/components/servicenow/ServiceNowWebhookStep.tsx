@@ -31,7 +31,7 @@ export function ServiceNowWebhookStep() {
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    void (async () => {
       const data = await serviceNowService.getWebhookUrl();
       if (cancelled) return;
       setWebhookData(data);
@@ -216,7 +216,7 @@ export function ServiceNowWebhookStep() {
             <AlertDialogAction
               onClick={(e) => {
                 e.preventDefault();
-                handleRotate();
+                void handleRotate();
               }}
               disabled={rotating}
             >

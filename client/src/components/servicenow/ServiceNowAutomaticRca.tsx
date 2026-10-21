@@ -243,7 +243,7 @@ export function ServiceNowAutomaticRca({ rules, saving, onSave }: Readonly<Servi
       {rules.length > 0 ? (
         <ul className="space-y-1.5">
           {rules.map((rule, index) => (
-            <li key={index} className="flex items-start justify-between gap-2 rounded-md border px-2.5 py-2">
+            <li key={JSON.stringify(rule)} className="flex items-start justify-between gap-2 rounded-md border px-2.5 py-2">
               <button type="button" className="min-w-0 text-left" onClick={() => startEdit(index)} disabled={saving}>
                 <p className="text-sm font-medium">Filter {index + 1}</p>
                 <p className="text-xs text-muted-foreground break-words">{summarizeRule(rule, options)}</p>

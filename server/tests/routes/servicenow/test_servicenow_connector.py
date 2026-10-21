@@ -119,7 +119,8 @@ def test_secret_matches_header_or_bearer_only():
 def test_business_rule_script_sends_the_secret_header_and_the_fields_we_map():
     script = webhook_auth.business_rule_script()
     assert "X-Aurora-Webhook-Secret" in script
-    assert "x_aurora.webhook_url" in script and "x_aurora.webhook_secret" in script
+    assert "x_aurora.webhook_url" in script
+    assert "x_aurora.webhook_secret" in script
     for field in ("sys_id", "number", "short_description", "priority", "priority_label",
                   "state", "state_label", "assignment_group", "cmdb_ci", "opened_at", "event"):
         assert field in script
@@ -189,7 +190,9 @@ def test_build_alert_metadata_keeps_sys_id_and_deep_link_and_drops_empties():
 
 def test_parse_servicenow_datetime():
     parsed = tasks.parse_servicenow_datetime("2026-10-08 21:15:03")
-    assert parsed is not None and parsed.tzinfo == timezone.utc and parsed.hour == 21
+    assert parsed is not None
+    assert parsed.tzinfo == timezone.utc
+    assert parsed.hour == 21
     assert tasks.parse_servicenow_datetime("2026-10-08T21:15:03Z").minute == 15
     assert tasks.parse_servicenow_datetime("not a date") is None
     assert tasks.parse_servicenow_datetime("") is None

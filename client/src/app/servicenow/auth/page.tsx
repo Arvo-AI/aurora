@@ -16,6 +16,12 @@ import Image from "next/image";
 
 const BRAND_COLOR = "#62D84E";
 
+function authLabel(status: { authType?: string; username?: string } | null | undefined): string {
+  if (status?.authType === "oauth_client_credentials") return "OAuth client credentials";
+  if (status?.authType !== "basic") return "Unknown";
+  return status.username ? `Basic auth (${status.username})` : "Basic auth";
+}
+
 export default function ServiceNowAuthPage() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
@@ -160,11 +166,7 @@ export default function ServiceNowAuthPage() {
                 <div className="flex justify-between gap-4">
                   <span className="text-muted-foreground">Authentication</span>
                   <span className="font-medium">
-                    {status?.authType === "oauth_client_credentials"
-                      ? "OAuth client credentials"
-                      : status?.authType === "basic"
-                        ? `Basic auth${status.username ? ` (${status.username})` : ""}`
-                        : "Unknown"}
+                    {authLabel(status)}
                   </span>
                 </div>
                 <div className="pt-2">

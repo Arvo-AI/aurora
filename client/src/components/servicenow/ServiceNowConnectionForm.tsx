@@ -90,7 +90,7 @@ export function ServiceNowConnectionForm({ onConnect, loading }: ServiceNowConne
                   checked={authType === "basic"}
                   onChange={() => setAuthType("basic")}
                 />
-                Service account (username and password)
+                <span>Service account (username and password)</span>
               </label>
               <label className="flex items-center gap-2 text-sm cursor-pointer">
                 <input
@@ -100,7 +100,7 @@ export function ServiceNowConnectionForm({ onConnect, loading }: ServiceNowConne
                   checked={authType === "oauth_client_credentials"}
                   onChange={() => setAuthType("oauth_client_credentials")}
                 />
-                OAuth client credentials
+                <span>OAuth client credentials</span>
               </label>
             </div>
           </fieldset>

@@ -58,6 +58,9 @@ _USER_ID_RE = re.compile(r"^[A-Za-z0-9\-]{1,64}$")
 _MAX_FIELD = 512
 
 
+_ERR_NOT_CONNECTED = "ServiceNow is not connected"
+
+
 def _log_safe(value: Any, max_len: int = 80) -> str:
     return _SAFE_LOG_RE.sub("", str(value))[:max_len]
 
@@ -228,7 +231,7 @@ def get_webhook_url(user_id):
     """Webhook URL, shared secret and the Business Rule script for this user."""
     creds = _stored_credentials(user_id)
     if not creds:
-        return jsonify({"error": "ServiceNow is not connected"}), 400
+        return jsonify({"error": _ERR_NOT_CONNECTED}), 400
 
     if not creds.get("webhook_secret"):
         creds["webhook_secret"] = new_webhook_secret()
@@ -270,7 +273,7 @@ def rotate_webhook_secret(user_id):
     """Issue a new shared secret; the old one stops working immediately."""
     creds = _stored_credentials(user_id)
     if not creds:
-        return jsonify({"error": "ServiceNow is not connected"}), 400
+        return jsonify({"error": _ERR_NOT_CONNECTED}), 400
     creds["webhook_secret"] = new_webhook_secret()
     try:
         store_tokens_in_db(user_id, creds, PROVIDER)
@@ -507,7 +510,7 @@ def field_options(user_id):
     """Priorities, states, assignment groups and categories the rules editor can pick from."""
     creds = _stored_credentials(user_id)
     if not creds:
-        return jsonify({"error": "ServiceNow is not connected"}), 400
+        return jsonify({"error": _ERR_NOT_CONNECTED}), 400
     try:
         client = ServiceNowClient.from_credentials(creds)
     except ValueError as exc:

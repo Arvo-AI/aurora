@@ -95,7 +95,8 @@ def test_invalid_rules_are_rejected(raw, message):
 
 def test_too_many_rules_rejected():
     rules, error = normalize_rca_rules([{"priorities": [str(1 + i % 5)], "query": f"q{i}"} for i in range(51)])
-    assert rules is None and "At most 50" in error
+    assert rules is None
+    assert "At most 50" in error
 
 
 # ── scope + matching ─────────────────────────────────────────────────
@@ -143,7 +144,8 @@ def test_decide_webhook_actions():
         "action": "ignore", "reason": "filters", "scope": extract_webhook_scope(_incident(priority="4")),
     }
     decision = decide_webhook(_incident(priority="3"), [{"priorities": ["3"], "query": "impact=1"}])
-    assert decision["action"] == "query" and decision["query"] == ["impact=1"]
+    assert decision["action"] == "query"
+    assert decision["query"] == ["impact=1"]
     assert decide_webhook(_incident(priority="5"), [], "auto")["action"] == "judge"
 
 

@@ -90,7 +90,8 @@ def test_chat_requests_write_once_the_switch_is_on(monkeypatch, prefs, client):
     prefs["work_notes"] = True
     _set_session(monkeypatch, _CHAT_SESSION)
     out = json.loads(tool.servicenow_add_work_note("INC0010001", "hello", user_id="uid-1"))
-    assert out["status"] == "success" and out["sys_id"] == SYS_ID
+    assert out["status"] == "success"
+    assert out["sys_id"] == SYS_ID
     client.add_work_note.assert_called_once_with(SYS_ID, "hello", customer_visible=False)
 
 
@@ -149,10 +150,13 @@ def test_full_scope_create_and_update(monkeypatch, prefs, client):
     created = json.loads(tool.servicenow_create_incident(
         "Checkout down", description="500s", priority=2, assignment_group="Platform", user_id="uid-1",
     ))
-    assert created["number"] == "INC0010002" and created["url"].endswith(f"sys_id={SYS_ID}")
+    assert created["number"] == "INC0010002"
+    assert created["url"].endswith(f"sys_id={SYS_ID}")
     client.create_incident.assert_called_once()
     body = client.create_incident.call_args[0][0]
-    assert body["priority"] == "2" and body["assignment_group"] == "Platform" and body["caller_id"] is None
+    assert body["priority"] == "2"
+    assert body["assignment_group"] == "Platform"
+    assert body["caller_id"] is None
 
     updated = json.loads(tool.servicenow_update_incident(
         "INC0010001", {"state": "Resolved", "close_code": "Solution provided", "close_notes": "fixed", "sys_id": "nope"},

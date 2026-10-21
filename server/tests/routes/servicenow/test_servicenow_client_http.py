@@ -139,7 +139,8 @@ def test_basic_auth_connection_check_hits_the_incident_table(client_factory):
     assert client.test_connection() == {"ok": True, "sample_count": 1}
     method, path, headers, query = state.requests[-1]
     assert (method, path) == ("GET", "/api/now/table/incident")
-    assert "sysparm_limit=1" in query and headers["Authorization"].startswith("Basic ")
+    assert "sysparm_limit=1" in query
+    assert headers["Authorization"].startswith("Basic ")
 
 
 def test_wrong_password_is_a_401_error(client_factory):
@@ -154,7 +155,8 @@ def test_list_and_get_parse_the_result_envelope(client_factory):
     rows = client.list_incidents(query="active=true^ORDERBYDESCopened_at", limit=5)
     assert rows == [RECORD]
     _, _, _, query = state.requests[-1]
-    assert "sysparm_display_value=true" in query and "sysparm_limit=5" in query
+    assert "sysparm_display_value=true" in query
+    assert "sysparm_limit=5" in query
     assert client.get_incident(SYS_ID) == RECORD
     assert client.get_incident("INC0010001") == RECORD
     assert client.get_incident("INC9999999") is None
@@ -196,7 +198,8 @@ def test_oauth_client_credentials_fetches_then_caches_the_token(client_factory):
     bearer_calls = [r for r in state.requests if r[0] == "GET" and r[2].get("Authorization") == "Bearer tok-123"]
     assert len(bearer_calls) == 2
     token_post = next(r for r in state.requests if r[1] == "/oauth_token.do")
-    assert "grant_type=client_credentials" in token_post[3] and "client_id=cid" in token_post[3]
+    assert "grant_type=client_credentials" in token_post[3]
+    assert "client_id=cid" in token_post[3]
 
 
 def test_oauth_bad_secret_is_rejected_at_token_time(client_factory):

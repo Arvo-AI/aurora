@@ -32,10 +32,11 @@ _ERR_NOT_CONNECTED = json.dumps({"error": "ServiceNow not connected"})
 MAX_OUTPUT_SIZE = 500_000
 _MAX_NOTE = 8000
 _MAX_TEXT = 4000
+_INCIDENT_REF = "Incident number (for example INC0010001) or sys_id."
 
 # Encoded-query separators and control characters are stripped from free text
 # so a tool argument can never add its own query clauses.
-_QUERY_UNSAFE_RE = re.compile(r"[\^\r\n\t\x00-\x1f]")
+_QUERY_UNSAFE_RE = re.compile(r"[\^\x00-\x1f]")
 _STATE_QUERIES = {
     "active": "active=true",
     "new": "state=1",
@@ -87,12 +88,12 @@ class ListServiceNowIncidentsArgs(BaseModel):
 
 class GetServiceNowIncidentArgs(BaseModel):
     """Arguments for get_servicenow_incident."""
-    incident: str = Field(description="Incident number (for example INC0010001) or sys_id.")
+    incident: str = Field(description=_INCIDENT_REF)
 
 
 class ServiceNowAddWorkNoteArgs(BaseModel):
     """Arguments for servicenow_add_work_note."""
-    incident: str = Field(description="Incident number (for example INC0010001) or sys_id.")
+    incident: str = Field(description=_INCIDENT_REF)
     note: str = Field(description="The note text (markdown is shown as plain text in ServiceNow).")
     customer_visible: bool = Field(
         default=False,
@@ -115,7 +116,7 @@ class ServiceNowCreateIncidentArgs(BaseModel):
 
 class ServiceNowUpdateIncidentArgs(BaseModel):
     """Arguments for servicenow_update_incident."""
-    incident: str = Field(description="Incident number (for example INC0010001) or sys_id.")
+    incident: str = Field(description=_INCIDENT_REF)
     fields: Dict[str, Any] = Field(
         description=(
             "Fields to change. Allowed: short_description, description, priority (1-5), impact (1-3), "
@@ -175,8 +176,8 @@ def _get_servicenow_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         creds = get_token_data(user_id, "servicenow")
         return creds if creds and creds.get("instance_url") else None
-    except Exception as exc:
-        logger.error("[SERVICENOW-TOOL] Failed to get credentials: %s", exc)
+    except Exception:
+        logger.exception("[SERVICENOW-TOOL] Failed to get credentials")
         return None
 
 

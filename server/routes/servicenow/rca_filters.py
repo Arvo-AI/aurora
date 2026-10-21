@@ -12,12 +12,12 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from utils.rca_rule_lists import check_rule_list, clean_name_list
+
 logger = logging.getLogger(__name__)
 
 _MAX_RCA_RULES = 50
-_MAX_VALUES = 30
 _MAX_QUERY = 500
-_MAX_NAME = 80
 
 # ServiceNow incident priorities and states are fixed choice lists.
 PRIORITY_VALUES = ("1", "2", "3", "4", "5")
@@ -35,39 +35,8 @@ NAME_FIELDS = ("assignmentGroups", "categories")
 CHOICE_FIELDS = (("priorities", PRIORITY_VALUES), ("states", STATE_VALUES))
 FILTER_FIELDS = NAME_FIELDS + tuple(field for field, _ in CHOICE_FIELDS)
 
-_CONTROL_RE = re.compile(r"[\r\n\t\x00-\x1f]")
+_CONTROL_RE = re.compile(r"[\x00-\x1f]")
 _DIGIT_RE = re.compile(r"[1-8]")
-
-
-def _clean_name(value: Any, label: str) -> Tuple[Optional[str], Optional[str]]:
-    if not isinstance(value, str):
-        return None, f"{label} must be text"
-    cleaned = " ".join(value.split())
-    if not cleaned or len(cleaned) > _MAX_NAME:
-        return None, f"Each {label} must be 1–{_MAX_NAME} characters"
-    return cleaned, None
-
-
-def _clean_name_list(raw: Any, label: str) -> Tuple[Optional[List[str]], Optional[str]]:
-    """Dedupe a list of names. Missing means no constraint, not an error."""
-    if raw is None:
-        return [], None
-    if not isinstance(raw, list):
-        return None, f"{label} must be a list"
-    seen: Dict[str, str] = {}
-    for item in raw:
-        # A blank entry is an empty chip, not a filter value.
-        if isinstance(item, str) and not item.strip():
-            continue
-        cleaned, error = _clean_name(item, label)
-        if error or cleaned is None:
-            return None, error
-        folded = cleaned.casefold()
-        if folded not in seen:
-            seen[folded] = cleaned
-    if len(seen) > _MAX_VALUES:
-        return None, f"At most {_MAX_VALUES} {label}"
-    return list(seen.values()), None
 
 
 def _clean_choice_list(raw: Any, label: str, allowed: Tuple[str, ...]) -> Tuple[Optional[List[str]], Optional[str]]:
@@ -119,7 +88,7 @@ def _clean_rule(item: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         return None, "Each filter must be an object"
     rule: Dict[str, Any] = {}
     for field in NAME_FIELDS:
-        rule[field], error = _clean_name_list(item.get(field), field)
+        rule[field], error = clean_name_list(item.get(field), field)
         if error:
             return None, error
     for field, allowed in CHOICE_FIELDS:
@@ -145,10 +114,9 @@ def _signature(rule: Dict[str, Any]) -> Tuple[Any, ...]:
 
 def normalize_rca_rules(raw: Any) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
     """Validate rules. An empty list means nothing auto-triggers."""
-    if not isinstance(raw, list):
-        return None, "rcaRules must be a list"
-    if len(raw) > _MAX_RCA_RULES:
-        return None, f"At most {_MAX_RCA_RULES} filters can be configured"
+    error = check_rule_list(raw, _MAX_RCA_RULES)
+    if error:
+        return None, error
     merged: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
     for item in raw:
         rule, error = _clean_rule(item)
