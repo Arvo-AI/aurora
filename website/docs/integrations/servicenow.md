@@ -44,7 +44,7 @@ Since Yokohama, ServiceNow blocks basic authentication on the REST API for any a
 
 ### Authentication methods
 
-- **Service account (basic auth)**: create the user under **User Administration > Users > New**, tick **Web service access only**, use **Set Password** and save; add the roles from the table above. Enter its username and password in Aurora.
+- **Service account (basic auth)**: create the user under **User Administration > Users > New** as a human or machine account (an AI user type does not work), tick **Web service access only**, use **Set Password** and save; add the roles from the table above. Enter its username and password in Aurora.
 - **OAuth 2.0 client credentials**: open **System OAuth > Application Registry > New > Create an OAuth API endpoint for external clients**, copy the **Client ID** and **Client Secret**, and set the integration account as the **OAuth Application User**. The client credentials grant must be enabled on the instance (system property `glide.oauth.inbound.client.credential.grant_type.enabled` = true). Aurora requests tokens from `/oauth_token.do` and keeps them in memory only. Not affected by the basic-auth restriction.
 
 Aurora validates the connection by reading one incident from the Table API before storing anything.

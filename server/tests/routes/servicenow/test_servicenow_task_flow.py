@@ -25,9 +25,10 @@ def _celery_stub() -> ModuleType:
     return celery_cfg
 
 
-rca_pb = ModuleType("chat.background.rca_prompt_builder")
-rca_pb.build_rca_prompt = lambda *a, **k: ("prompt", "rail")  # type: ignore[attr-defined]
-sys.modules.setdefault("chat.background.rca_prompt_builder", rca_pb)
+def _prompt_builder_stub() -> ModuleType:
+    rca_pb = ModuleType("chat.background.rca_prompt_builder")
+    rca_pb.build_rca_prompt = lambda *a, **k: ("prompt", "rail")  # type: ignore[attr-defined]
+    return rca_pb
 
 
 @pytest.fixture
@@ -40,6 +41,7 @@ def tasks(monkeypatch):
     with our stub pinned makes the task a plain function every time.
     """
     monkeypatch.setitem(sys.modules, "celery_config", _celery_stub())
+    monkeypatch.setitem(sys.modules, "chat.background.rca_prompt_builder", _prompt_builder_stub())
     monkeypatch.delitem(sys.modules, "routes.servicenow.tasks", raising=False)
     mod = importlib.import_module("routes.servicenow.tasks")
     assert not isinstance(mod.process_servicenow_event, MagicMock)
@@ -58,14 +60,17 @@ def _payload(**fields):
 
 
 class _Cursor:
-    def __init__(self, fetch=None):
+    def __init__(self, fetch=None, fetches=None):
         self.fetch = fetch
+        self.fetches = list(fetches) if fetches else None  # consumed in order when given
         self.executed = []
 
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
 
     def fetchone(self):
+        if self.fetches:
+            return self.fetches.pop(0)
         return self.fetch
 
     def __enter__(self):
@@ -209,7 +214,8 @@ def test_known_incident_is_synced_with_the_payload_for_a_possible_reopen(monkeyp
     ("investigating", "investigating", None, False),  # plain update of an active incident
 ])
 def test_reopen_dispatches_an_rca_only_when_none_ever_ran(monkeypatch, tasks, existing_status, new_status, rca_task_id, dispatched):
-    cursor = _Cursor(fetch=(new_status,))
+    # First fetch: the row lock (status, rca task); second: UPDATE ... RETURNING status.
+    cursor = _Cursor(fetches=[(existing_status, rca_task_id), (new_status,)])
     conn = _Conn(cursor)
     monkeypatch.setattr(tasks, "_record_lifecycle_event", lambda *a, **k: None)
     dispatch = MagicMock()
@@ -221,6 +227,7 @@ def test_reopen_dispatches_an_rca_only_when_none_ever_ran(monkeypatch, tasks, ex
         "INC0010009", "updated", title="Checkout down", sys_id=SYS_ID, payload=_payload(),
     )
 
+    assert "FOR UPDATE" in cursor.executed[0][0]
     if dispatched:
         dispatch.assert_called_once()
         args = dispatch.call_args.args
@@ -229,6 +236,22 @@ def test_reopen_dispatches_an_rca_only_when_none_ever_ran(monkeypatch, tasks, ex
         assert args[6] == SYS_ID
     else:
         dispatch.assert_not_called()
+
+
+def test_reopen_trusts_the_locked_row_over_the_earlier_read(monkeypatch, tasks):
+    """A concurrent delivery already reopened the incident: the lock shows it active, so no second RCA."""
+    cursor = _Cursor(fetches=[("investigating", None), ("investigating",)])
+    monkeypatch.setattr(tasks, "_record_lifecycle_event", lambda *a, **k: None)
+    dispatch = MagicMock()
+    monkeypatch.setattr(tasks, "_dispatch_rca", dispatch)
+    existing = {"id": "inc-1", "status": "resolved", "rca_task_id": None}  # stale: read before the other task committed
+
+    tasks._sync_existing(
+        cursor, _Conn(cursor), "user-1", "org-1", existing, "investigating", "high", {"stateValue": "2"},
+        "INC0010009", "updated", title="Checkout down", sys_id=SYS_ID, payload=_payload(),
+    )
+
+    dispatch.assert_not_called()
 
 
 def test_find_existing_reports_whether_an_rca_ran(tasks):

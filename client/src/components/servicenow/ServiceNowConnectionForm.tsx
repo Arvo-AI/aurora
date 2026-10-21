@@ -112,7 +112,8 @@ export function ServiceNowConnectionForm({ onConnect, loading }: ServiceNowConne
                 <ol className="mt-2 list-decimal space-y-1 pl-5 text-muted-foreground">
                   <li>
                     In ServiceNow open <span className="font-medium text-foreground">User Administration &gt; Users &gt; New</span>.
-                    Create a dedicated user (for example <code>aurora</code>), tick{" "}
+                    Create a dedicated user (for example <code>aurora</code>) as a human or machine account (an AI
+                    user type does not work), tick{" "}
                     <span className="font-medium text-foreground">Web service access only</span>, then use{" "}
                     <span className="font-medium text-foreground">Set Password</span> and save the user.
                   </li>

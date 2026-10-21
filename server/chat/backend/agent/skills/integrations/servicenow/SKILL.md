@@ -26,7 +26,7 @@ metadata:
 ## Overview
 Access to the customer's ServiceNow incident table for Root Cause Analysis: the incident that triggered the investigation, related incidents on the same configuration item or assignment group, and recent history of the same symptom.
 
-**Which tools you have:** Only call ServiceNow tools that appear in your bound tool list. During an RCA investigation you normally have `list_servicenow_incidents` and `get_servicenow_incident` only. Write tools (`servicenow_add_work_note`, `servicenow_create_incident`, `servicenow_update_incident`) are bound only when the org turned on **Post work notes on ServiceNow incidents** or the user explicitly asked you to write in chat. If a write tool is not in your list, do not attempt it: after an unattended RCA the connector posts the result as a work note on its own when write-back is enabled.
+**Which tools you have:** Only call ServiceNow tools that appear in your bound tool list. During an RCA investigation you normally have `list_servicenow_incidents` and `get_servicenow_incident` only. Write tools (`servicenow_add_work_note`, `servicenow_create_incident`, `servicenow_update_incident`) are bound only when the org turned on **Post work notes on ServiceNow incidents**. A chat request does not bypass that switch. If a write tool is not in your list, do not attempt it: after an unattended RCA the connector posts the result as a work note on its own when write-back is enabled.
 
 When write tools are bound, the write scope controls what they can do: **notes only** (post work notes on existing incidents) or **full** (also create and update incidents).
 

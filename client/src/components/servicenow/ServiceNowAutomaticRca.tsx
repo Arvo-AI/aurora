@@ -60,6 +60,9 @@ export function summarizeRule(rule: ServiceNowRcaRule, options: ServiceNowFieldO
   return parts.join(" · ") || "every incident";
 }
 
+// Mirrors MAX_VALUES in server/utils/rca_rule_lists.py: a rule lists at most this many names per field.
+const MAX_RULE_VALUES = 30;
+
 function OptionChecks({
   idPrefix,
   label,
@@ -70,6 +73,7 @@ function OptionChecks({
   loading,
   failed,
   emptyLabel,
+  max,
 }: Readonly<{
   idPrefix: string;
   label: string;
@@ -80,6 +84,7 @@ function OptionChecks({
   loading: boolean;
   failed: boolean;
   emptyLabel: string;
+  max: number;
 }>) {
   // A failed catalog is an error, not a free-text field. Keep values already on the rule.
   const known = options.map((option) => option.value);
@@ -88,6 +93,8 @@ function OptionChecks({
     : [...options, ...selected.filter((value) => !hasName(known, value)).map((value) => ({ value, label: value }))];
   const everyOn = shown.length > 0 && shown.every((option) => hasName(selected, option.value));
   const pending = loading && !failed;
+  const atCap = selected.length >= max;
+  const tooManyToSelectAll = shown.length > max;
 
   let choices: ReactNode = null;
   if (pending) {
@@ -102,13 +109,14 @@ function OptionChecks({
       <div className="max-h-40 space-y-2 overflow-y-auto">
         {shown.map((option) => {
           const id = `${idPrefix}-${option.value}`;
+          const checked = hasName(selected, option.value);
           return (
             <label key={option.value} htmlFor={id} className="flex items-center gap-2 text-sm">
               <Checkbox
                 id={id}
-                checked={hasName(selected, option.value)}
+                checked={checked}
                 onCheckedChange={(value) => onChange(toggleIn(selected, option.value, value === true))}
-                disabled={disabled}
+                disabled={disabled || (!checked && atCap)}
               />
               {option.label}
             </label>
@@ -125,14 +133,23 @@ function OptionChecks({
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs font-medium">{label}</p>
         {!pending && !failed && shown.length > 0 && (
-          <button
-            type="button"
-            className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
-            disabled={disabled}
-            onClick={() => onChange(everyOn ? [] : shown.map((option) => option.value))}
-          >
-            {everyOn ? "Clear" : "Select all"}
-          </button>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            {tooManyToSelectAll && (
+              <span>
+                {selected.length}/{max} (leave empty to match any)
+              </span>
+            )}
+            {(!tooManyToSelectAll || selected.length > 0) && (
+              <button
+                type="button"
+                className="hover:text-foreground disabled:opacity-50"
+                disabled={disabled}
+                onClick={() => onChange(everyOn || tooManyToSelectAll ? [] : shown.map((option) => option.value))}
+              >
+                {everyOn || tooManyToSelectAll ? "Clear" : "Select all"}
+              </button>
+            )}
+          </div>
         )}
       </div>
       {failed && <p className="text-xs text-destructive">Couldn&apos;t load {label.toLowerCase()} from ServiceNow.</p>}
@@ -210,8 +227,9 @@ export function ServiceNowAutomaticRca({ rules, saving, onSave }: Readonly<Servi
     if (ok) resetForm();
   };
 
-  const removeRule = (index: number) => {
-    void onSave(rules.filter((_, item) => item !== index));
+  const removeRule = async (index: number) => {
+    const ok = await onSave(rules.filter((_, item) => item !== index));
+    if (!ok) return;
     if (editingIndex === index) resetForm();
     else if (editingIndex !== null && editingIndex > index) setEditingIndex(editingIndex - 1);
   };
@@ -228,6 +246,7 @@ export function ServiceNowAutomaticRca({ rules, saving, onSave }: Readonly<Servi
       loading={optionsLoading}
       failed={optionsFailed || options?.errors.includes(field) === true}
       emptyLabel={empty}
+      max={MAX_RULE_VALUES}
     />
   );
 
@@ -254,7 +273,7 @@ export function ServiceNowAutomaticRca({ rules, saving, onSave }: Readonly<Servi
                 size="sm"
                 className="h-7 px-2 text-muted-foreground"
                 disabled={saving}
-                onClick={() => removeRule(index)}
+                onClick={() => void removeRule(index)}
                 aria-label={`Remove filter ${index + 1}`}
               >
                 <X className="h-3.5 w-3.5" />

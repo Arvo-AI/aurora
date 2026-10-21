@@ -116,17 +116,6 @@ def test_secret_matches_header_or_bearer_only():
     assert not webhook_auth.secret_matches("", "", None)
 
 
-def test_business_rule_script_sends_the_secret_header_and_the_fields_we_map():
-    script = webhook_auth.business_rule_script()
-    assert "X-Aurora-Webhook-Secret" in script
-    assert "x_aurora.webhook_url" in script
-    assert "x_aurora.webhook_secret" in script
-    for field in ("sys_id", "number", "short_description", "priority", "priority_label",
-                  "state", "state_label", "assignment_group", "cmdb_ci", "opened_at", "event"):
-        assert field in script
-    assert "RESTMessageV2" in script
-
-
 # ── payload mapping ──────────────────────────────────────────────────
 
 @pytest.mark.parametrize("value, expected", [

@@ -5,7 +5,7 @@ Read (always bound when ServiceNow is connected):
   assignment group, free text)
 - get_servicenow_incident: one incident by number (INC0010001) or sys_id
 
-Write (bound only when the org opted in, or a user asked in chat):
+Write (bound only when the org turned on "Post work notes on ServiceNow incidents"):
 - servicenow_add_work_note: a work note (or customer-visible comment) on an incident
 - servicenow_create_incident / servicenow_update_incident: "full" write mode only
 """

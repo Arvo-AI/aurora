@@ -28,7 +28,6 @@ export interface ServiceNowWebhookUrlResponse {
   webhookSecret: string;
   headerName: string;
   instructions: string[];
-  businessRuleScript: string;
 }
 
 export type ServiceNowRcaMode = 'filters' | 'auto';

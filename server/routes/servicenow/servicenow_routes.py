@@ -35,7 +35,6 @@ from routes.servicenow.tasks import (
 )
 from routes.servicenow.webhook_auth import (
     WEBHOOK_SECRET_HEADER,
-    business_rule_script,
     new_webhook_secret,
     secret_matches,
 )
@@ -228,7 +227,7 @@ def disconnect(user_id):
 @servicenow_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
-    """Webhook URL, shared secret and the Business Rule script for this user."""
+    """Webhook URL, shared secret and the setup steps for this user (the script ships with the client)."""
     creds = _stored_credentials(user_id)
     if not creds:
         return jsonify({"error": _ERR_NOT_CONNECTED}), 400
@@ -263,7 +262,6 @@ def get_webhook_url(user_id):
                 "test incident. It appears on the Aurora Incidents page within seconds."
             ),
         ],
-        "businessRuleScript": business_rule_script(),
     })
 
 

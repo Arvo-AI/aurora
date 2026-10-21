@@ -335,6 +335,13 @@ def _sync_existing(
     resolved) the reopen starts one.
     """
     incident_id = existing["id"]
+    # Lock the row first: two deliveries for one reopen must not both read the
+    # pre-update status and each start an RCA. The second waits here and then
+    # sees what the first committed.
+    cursor.execute("SELECT status, rca_celery_task_id FROM incidents WHERE id = %s FOR UPDATE", (incident_id,))
+    locked = cursor.fetchone()
+    old_status = locked[0] if locked else existing["status"]
+    old_task = locked[1] if locked and len(locked) > 1 else existing.get("rca_task_id")
     cursor.execute(
         """
         UPDATE incidents
@@ -355,16 +362,16 @@ def _sync_existing(
     )
     row = cursor.fetchone()
     conn.commit()
-    new_status = row[0] if row else existing["status"]
-    if new_status != existing["status"]:
+    new_status = row[0] if row else old_status
+    if new_status != old_status:
         event_type = "resolved" if new_status == "resolved" else "status_changed"
-        _record_lifecycle_event(cursor, conn, user_id, org_id, incident_id, event_type, new_status, existing["status"])
+        _record_lifecycle_event(cursor, conn, user_id, org_id, incident_id, event_type, new_status, old_status)
     logger.info(
         "%s Synced incident %s for %s (event=%s, status %s -> %s)",
-        _LOG, incident_id, sanitize(number), event_kind, existing["status"], new_status,
+        _LOG, incident_id, sanitize(number), event_kind, old_status, new_status,
     )
-    reopened = existing["status"] == "resolved" and new_status != "resolved"
-    if reopened and not existing.get("rca_task_id") and payload is not None:
+    reopened = old_status == "resolved" and new_status != "resolved"
+    if reopened and not old_task and payload is not None:
         logger.info("%s Incident %s reopened in ServiceNow with no prior RCA; investigating now", _LOG, incident_id)
         _dispatch_rca(cursor, conn, user_id, incident_id, title or alert_title(payload), number, sys_id, payload)
 

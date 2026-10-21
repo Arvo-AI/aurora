@@ -599,7 +599,9 @@ def _check_servicenow(creds: Dict[str, Any]) -> Dict[str, Any]:
     from routes.servicenow.servicenow_client import ServiceNowClient
 
     try:
-        ServiceNowClient.from_credentials(creds).test_connection()
+        client = ServiceNowClient.from_credentials(creds)
+        client.timeout = HTTP_TIMEOUT  # the batch probe answers in seconds, not SERVICENOW_TIMEOUT
+        client.test_connection()
         return {"connected": True, "authType": creds.get("auth_type", "basic")}
     except Exception:
         return {"connected": False}

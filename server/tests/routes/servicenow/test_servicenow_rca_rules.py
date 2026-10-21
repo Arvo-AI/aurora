@@ -58,7 +58,7 @@ def test_rules_keep_choice_values_in_catalog_order_and_dedupe_names():
         "priorities": ["2 - High", 1, "2"],
         "assignmentGroups": [" Network ", "network", ""],
         "categories": None,
-        "states": ["Resolved"] and ["6"],
+        "states": ["6"],
         "query": "  cmdb_ci.name=payments  ",
     }])
     assert error is None

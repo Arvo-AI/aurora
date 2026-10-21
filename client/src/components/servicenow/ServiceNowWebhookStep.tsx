@@ -19,6 +19,7 @@ import { ChevronDown, Copy, Eye, EyeOff, Loader2, RefreshCw } from "lucide-react
 import { useToast } from "@/hooks/use-toast";
 import { serviceNowService, type ServiceNowWebhookUrlResponse } from "@/lib/services/servicenow";
 import { copyToClipboard } from "@/lib/utils";
+import { SERVICENOW_BUSINESS_RULE_SCRIPT } from "@/components/servicenow/businessRuleScript";
 
 export function ServiceNowWebhookStep() {
   const { toast } = useToast();
@@ -175,13 +176,13 @@ export function ServiceNowWebhookStep() {
                 variant="outline"
                 size="sm"
                 className="absolute right-2 top-2"
-                onClick={() => copy(webhookData.businessRuleScript, "Business Rule script")}
+                onClick={() => copy(SERVICENOW_BUSINESS_RULE_SCRIPT, "Business Rule script")}
               >
                 <Copy className="mr-1 h-3 w-3" />
                 Copy
               </Button>
               <pre className="p-3 pr-20 bg-muted rounded text-xs overflow-x-auto max-h-96">
-                <code>{webhookData.businessRuleScript}</code>
+                <code>{SERVICENOW_BUSINESS_RULE_SCRIPT}</code>
               </pre>
             </div>
           </CollapsibleContent>

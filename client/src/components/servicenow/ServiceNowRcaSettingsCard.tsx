@@ -66,9 +66,13 @@ export function ServiceNowRcaSettingsCard() {
       setCloseCodeDraft(stored.resolveCloseCode);
       toast({ title: "Settings saved", description });
       return stored;
-    } catch {
+    } catch (err) {
       setSettings(previous);
-      toast({ title: "Failed to save settings", variant: "destructive" });
+      toast({
+        title: "Failed to save settings",
+        description: err instanceof Error && err.message ? err.message : undefined,
+        variant: "destructive",
+      });
       return null;
     } finally {
       setSaving(false);
