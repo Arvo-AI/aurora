@@ -1,7 +1,10 @@
 """process_servicenow_event: connection scope and the reopen-without-RCA path."""
 
 import importlib
+import json
+import os
 import sys
+import uuid
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -232,7 +235,7 @@ def test_reopen_dispatches_an_rca_only_when_none_ever_ran(monkeypatch, tasks, ex
         "INC0010009", "updated", title="Checkout down", sys_id=SYS_ID, payload=_payload(),
     )
 
-    assert "FOR UPDATE" in cursor.executed[0][0]
+    assert "FOR NO KEY UPDATE" in cursor.executed[0][0]
     if dispatched:
         dispatch.assert_called_once()
         args = dispatch.call_args.args
@@ -419,3 +422,141 @@ def test_dispatch_skips_a_rate_limited_user_without_touching_the_connection(monk
 
     assert cursor.executed == []
     assert conn.commits == 0
+
+
+# ── the reopen lock against a real Postgres ───────────────────────────
+#
+# _sync_existing keeps the incident row locked while _dispatch_rca creates the
+# RCA chat session on a second connection. chat_sessions.incident_id references
+# incidents(id), so that insert takes a KEY SHARE lock on the incident row; with
+# the wrong lock mode it waits on the task's own transaction and never returns.
+# Mocks cannot see that, so this runs against Postgres and skips without one
+# (POSTGRES_HOST / POSTGRES_PORT, like the other db tests).
+
+
+def _pg_connect():
+    psycopg2 = pytest.importorskip("psycopg2")
+    host, port = os.getenv("POSTGRES_HOST"), os.getenv("POSTGRES_PORT")
+    if not host or not port:
+        pytest.skip("PostgreSQL is not reachable (POSTGRES_HOST/PORT unset or unreachable)")
+    try:
+        return psycopg2.connect(
+            host=host, port=int(port), dbname=os.getenv("POSTGRES_DB", "aurora_db"),
+            user=os.getenv("POSTGRES_USER", "aurora"), password=os.getenv("POSTGRES_PASSWORD", ""),
+            sslmode=os.getenv("POSTGRES_SSLMODE", "prefer"),
+        )
+    except psycopg2.OperationalError:
+        pytest.skip("PostgreSQL is not reachable (POSTGRES_HOST/PORT unset or unreachable)")
+
+
+@pytest.fixture
+def pg_schema():
+    """Two connections on a throwaway schema with the incidents -> chat_sessions foreign key."""
+    task_conn = _pg_connect()
+    other_conn = _pg_connect()
+    schema = f"snlock_{uuid.uuid4().hex[:12]}"
+    try:
+        with task_conn.cursor() as cur:
+            cur.execute(f"CREATE SCHEMA {schema}")
+            cur.execute(f"SET search_path TO {schema}")
+            cur.execute(
+                """CREATE TABLE incidents (
+                       id uuid PRIMARY KEY, status text NOT NULL, rca_celery_task_id text,
+                       alert_metadata jsonb, severity text, resolved_at timestamptz,
+                       updated_at timestamptz, aurora_summary text)"""
+            )
+            cur.execute(
+                """CREATE TABLE chat_sessions (
+                       id uuid PRIMARY KEY, status text,
+                       incident_id uuid REFERENCES incidents(id) ON DELETE CASCADE)"""
+            )
+        task_conn.commit()
+        with other_conn.cursor() as cur:
+            cur.execute(f"SET search_path TO {schema}")
+            cur.execute("SET lock_timeout = '2000ms'")  # a blocked insert fails fast instead of hanging the test
+        other_conn.commit()
+        yield task_conn, other_conn
+    finally:
+        for conn in (task_conn, other_conn):
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        try:
+            with task_conn.cursor() as cur:
+                cur.execute(f"DROP SCHEMA {schema} CASCADE")
+            task_conn.commit()
+        finally:
+            task_conn.close()
+            other_conn.close()
+
+
+def _insert_resolved_incident(conn):
+    incident_id = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO incidents (id, status, alert_metadata, severity) VALUES (%s, 'resolved', %s, 'high')",
+            (incident_id, json.dumps({"stateValue": "6"})),
+        )
+    conn.commit()
+    return incident_id
+
+
+@pytest.mark.parametrize("lock_mode, insert_blocks", [("FOR UPDATE", True), ("FOR NO KEY UPDATE", False)])
+def test_only_a_no_key_update_lock_lets_the_session_insert_through(pg_schema, lock_mode, insert_blocks):
+    """The lock-mode fact the reopen path relies on, stated against Postgres itself."""
+    psycopg2 = pytest.importorskip("psycopg2")
+    task_conn, other_conn = pg_schema
+    incident_id = _insert_resolved_incident(task_conn)
+
+    with task_conn.cursor() as cur:
+        cur.execute(f"SELECT status FROM incidents WHERE id = %s {lock_mode}", (incident_id,))
+
+    def insert_session():
+        with other_conn.cursor() as cur:
+            cur.execute("INSERT INTO chat_sessions (id, status, incident_id) VALUES (%s, 'in_progress', %s)",
+                        (str(uuid.uuid4()), incident_id))
+        other_conn.commit()
+
+    if insert_blocks:
+        with pytest.raises(psycopg2.errors.LockNotAvailable):
+            insert_session()
+    else:
+        insert_session()
+    task_conn.rollback()
+
+
+def test_reopen_dispatch_creates_the_session_on_another_connection_without_deadlocking(monkeypatch, tasks, pg_schema):
+    """The real _sync_existing and _dispatch_rca SQL, with the session insert on a second connection."""
+    task_conn, other_conn = pg_schema
+    incident_id = _insert_resolved_incident(task_conn)
+    monkeypatch.setattr(tasks, "_record_lifecycle_event", lambda *a, **k: None)
+
+    def create_session(**kw):
+        # What chat.background.task.create_background_chat_session does: its own
+        # connection, an insert whose foreign key points at the locked incident.
+        session_id = str(uuid.uuid4())
+        with other_conn.cursor() as cur:
+            cur.execute("INSERT INTO chat_sessions (id, status, incident_id) VALUES (%s, 'in_progress', %s)",
+                        (session_id, kw["incident_id"]))
+        other_conn.commit()
+        return session_id
+
+    stub = _background_stub(lambda **kw: SimpleNamespace(id="task-pg"))
+    stub.create_background_chat_session = create_session  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "chat.background.task", stub)
+
+    with task_conn.cursor() as cursor:
+        tasks._sync_existing(
+            cursor, task_conn, "user-1", "org-1",
+            {"id": incident_id, "status": "resolved", "rca_task_id": None},
+            "investigating", "high", {"stateValue": "2"}, "INC0010009", "updated",
+            title="Checkout down", sys_id=SYS_ID, payload=_payload(),
+        )
+
+    with other_conn.cursor() as cur:  # what every other connection sees once the sync returns
+        cur.execute("SELECT status, rca_celery_task_id FROM incidents WHERE id = %s", (incident_id,))
+        status, task_id = cur.fetchone()
+        cur.execute("SELECT count(*) FROM chat_sessions WHERE incident_id = %s", (incident_id,))
+        sessions = cur.fetchone()[0]
+    assert (status, task_id, sessions) == ("investigating", "task-pg", 1)

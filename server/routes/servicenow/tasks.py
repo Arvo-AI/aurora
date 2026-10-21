@@ -351,7 +351,17 @@ def _sync_existing(
     # Lock the row first: two deliveries for one reopen must not both read the
     # pre-update status and each start an RCA. The second waits here and then
     # sees what the first committed.
-    cursor.execute("SELECT status, rca_celery_task_id FROM incidents WHERE id = %s FOR UPDATE", (incident_id,))
+    #
+    # NO KEY UPDATE, not UPDATE: the lock is still held while _dispatch_rca
+    # creates the RCA chat session on another connection, and that insert's
+    # foreign key to incidents takes a KEY SHARE lock on this row. KEY SHARE
+    # conflicts with FOR UPDATE, so the insert would wait on our own transaction
+    # for ever; it does not conflict with NO KEY UPDATE, which still serializes
+    # concurrent syncs and plain updates of the row.
+    cursor.execute(
+        "SELECT status, rca_celery_task_id FROM incidents WHERE id = %s FOR NO KEY UPDATE",
+        (incident_id,),
+    )
     locked = cursor.fetchone()
     old_status = locked[0] if locked else existing["status"]
     old_task = locked[1] if locked and len(locked) > 1 else existing.get("rca_task_id")
