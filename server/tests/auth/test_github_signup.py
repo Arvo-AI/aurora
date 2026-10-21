@@ -115,6 +115,35 @@ class TestStartRedirect:
             assert mod._verify_signup_state(state) is True
 
 
+class TestAttribution:
+    def test_website_attribution_reaches_the_app_redirect(self, signup_app):
+        app, mod = signup_app
+        resp = app.test_client().get(
+            "/github/app/signup/start?ph_did=0199a1b2-c3d4-7e5f&utm_source=aurorasre.ai"
+            "&utm_medium=website&next=https://evil.example"
+        )
+        state = resp.location.split("state=", 1)[1]
+        db_pool, _, _ = _mock_db(mod, [("user-9",), ("org-9",)])
+        with app.test_request_context(), patch.object(mod, "db_pool", db_pool), \
+             patch("utils.auth.tool_registry.seed_org_tool_permissions"):
+            response, *_ = mod._provision_and_handoff(
+                TestProvisioning._IDENTITY, _install_payload(), mod._signup_state_attribution(state)
+            )
+        assert response.location.endswith(
+            "&ph_did=0199a1b2-c3d4-7e5f&utm_source=aurorasre.ai&utm_medium=website"
+        )
+        assert "evil" not in response.location
+
+    def test_malformed_attribution_is_dropped(self, signup_app):
+        app, mod = signup_app
+        resp = app.test_client().get(
+            "/github/app/signup/start?ph_did=x%26handoff%3Dforged&utm_source=%3Cscript%3E"
+        )
+        state = resp.location.split("state=", 1)[1]
+        with app.test_request_context():
+            assert mod._signup_state_attribution(state) == {}
+
+
 class TestStateToken:
     def test_round_trip(self, signup_app):
         app, mod = signup_app
