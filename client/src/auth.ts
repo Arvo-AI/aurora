@@ -17,18 +17,53 @@ type RefreshResult = {
   isGithubProvisioned: boolean
 } | null | "not_found"
 
-// Deduplicate concurrent refresh calls — all middleware requests share one
-// in-flight fetch instead of each independently hitting a stale connection.
-let inflightRefresh: Promise<RefreshResult> | null = null
+// Parallel middleware requests for one user share one in-flight fetch.
+// Keyed by user: the response carries that user's role and org, so joining
+// another user's fetch would write their fields into this session.
+const inflightByUser = new Map<string, Promise<RefreshResult>>()
 
-async function refreshUserFromBackend(userId: string): Promise<RefreshResult> {
-  if (inflightRefresh) return inflightRefresh
+// A failed refresh never advances lastRefreshedAt, so without a cooldown every
+// request re-hits /api/auth/me while the backend is struggling. Tracked per
+// user so one user's failure can't defer another user's revalidation.
+// An explicit session update bypasses it: org switch retries that path on
+// purpose after the first call loses the 3s timeout.
+const refreshBackoff = new Map<string, { failures: number; until: number }>()
+const BACKOFF_BASE_MS = 2000
+const BACKOFF_MAX_MS = 60_000
 
-  inflightRefresh = doRefreshUserFromBackend(userId).finally(() => {
-    inflightRefresh = null
-  })
+async function refreshUserFromBackend(
+  userId: string,
+  options?: { force?: boolean },
+): Promise<RefreshResult> {
+  const existing = inflightByUser.get(userId)
+  if (existing) return existing
 
-  return inflightRefresh
+  // Org-switch retries must reach the backend; cooldown is only for periodic checks
+  const cooldown = refreshBackoff.get(userId)
+  if (!options?.force && cooldown && Date.now() < cooldown.until) return null
+
+  const pending = doRefreshUserFromBackend(userId)
+    .then(result => {
+      if (result === null) {
+        // Exponential backoff with jitter, capped
+        const failures = (refreshBackoff.get(userId)?.failures ?? 0) + 1
+        const delay = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (failures - 1))
+        // Jitter only spreads retries across pods; it needs no secure randomness
+        const jitter = crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32
+        refreshBackoff.set(userId, { failures, until: Date.now() + delay * (0.5 + jitter / 2) })
+      } else {
+        // Backend answered — resume normal refresh cadence
+        refreshBackoff.delete(userId)
+      }
+      return result
+    })
+    .finally(() => {
+      // A newer refresh for this user may already have replaced this promise
+      if (inflightByUser.get(userId) === pending) inflightByUser.delete(userId)
+    })
+
+  inflightByUser.set(userId, pending)
+  return pending
 }
 
 async function doRefreshUserFromBackend(userId: string): Promise<RefreshResult> {
@@ -190,7 +225,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       const now = Math.floor(Date.now() / 1000)
 
       if (trigger === "update" || now - lastRefreshed > ROLE_REVALIDATE_SECONDS) {
-        const fresh = await refreshUserFromBackend(token.id as string)
+        // "update" is the org-switch retry loop — it can't sit out the cooldown
+        const fresh = await refreshUserFromBackend(token.id as string, {
+          force: trigger === "update",
+        })
         if (fresh === "not_found") {
           // User no longer exists in DB (stale session after DB reset).
           // Wipe the token so the session callback produces an empty

@@ -341,6 +341,9 @@ config:
   DB_POOL_MIN: "2"
   DB_POOL_MAX: "20"
   DB_POOL_WAIT_TIMEOUT: "5"
+  # Seconds a starting server waits for the migration lock before failing;
+  # keep it under the startup probe window.
+  DB_MIGRATION_LOCK_TIMEOUT: "240"
   DB_CONNECT_TIMEOUT: "10"
   SSE_MAX_STREAMS_PER_PROCESS: "8"
 
