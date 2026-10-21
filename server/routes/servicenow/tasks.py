@@ -212,6 +212,16 @@ def source_alert_id_for(org_id: str, sys_id: str) -> int:
 # ── the task ─────────────────────────────────────────────────────────
 
 
+class RcaDispatchError(RuntimeError):
+    """The RCA task could not be queued or recorded; the delivery must be retried."""
+
+
+def _is_retry(task) -> bool:
+    """True when Celery is re-running this delivery after an earlier attempt failed."""
+    request = getattr(task, "request", None)
+    return bool(getattr(request, "retries", 0))
+
+
 @celery_app.task(
     bind=True, max_retries=3, default_retry_delay=30, name="servicenow.process_event"
 )
@@ -267,7 +277,7 @@ def process_servicenow_event(
                 _store_event(cursor, conn, user_id, org_id, payload, event_kind, title, status, severity, received_at)
                 _sync_existing(
                     cursor, conn, user_id, org_id, existing, status, severity, metadata, number, event_kind,
-                    title=title, sys_id=sys_id, payload=payload,
+                    title=title, sys_id=sys_id, payload=payload, retrying=_is_retry(self),
                 )
                 _notify_sse(user_id, org_id, existing["id"])
                 return
@@ -325,6 +335,7 @@ def _sync_existing(
     cursor, conn, user_id: str, org_id: str, existing: Dict[str, Any], status: str,
     severity: str, metadata: Dict[str, Any], number: str, event_kind: str,
     *, title: str = "", sys_id: str = "", payload: Optional[Dict[str, Any]] = None,
+    retrying: bool = False,
 ) -> None:
     """Mirror the ServiceNow record onto the Aurora incident: fields, severity and state.
 
@@ -332,7 +343,9 @@ def _sync_existing(
     An incident ServiceNow reopens (it was resolved there and is active again)
     goes back to analyzed or investigating. If an RCA already ran or is running
     nothing is dispatched; if none ever ran (the incident arrived already
-    resolved) the reopen starts one.
+    resolved) the reopen starts one. A retried delivery (``retrying``) also
+    starts the RCA of an active incident that has none: the attempt it repeats
+    is the create or reopen whose dispatch failed.
     """
     incident_id = existing["id"]
     # Lock the row first: two deliveries for one reopen must not both read the
@@ -361,8 +374,19 @@ def _sync_existing(
         (json.dumps(metadata), severity, status, status, incident_id),
     )
     row = cursor.fetchone()
-    conn.commit()
     new_status = row[0] if row else old_status
+    reopened = old_status == "resolved" and new_status != "resolved"
+    if payload is not None and _needs_rca(new_status, old_task, reopened=reopened, retrying=retrying):
+        # The row stays locked and the new state uncommitted until the RCA task id
+        # is recorded, so both land together or neither does. A dispatch failure
+        # rolls the incident back to its last committed state and raises, and the
+        # Celery retry meets the same reopen (or the same missing RCA) again.
+        logger.info(
+            "%s Incident %s is active with no RCA (%s); investigating now",
+            _LOG, incident_id, "reopened in ServiceNow" if reopened else "retried delivery",
+        )
+        _dispatch_rca(cursor, conn, user_id, incident_id, title or alert_title(payload), number, sys_id, payload)
+    conn.commit()
     if new_status != old_status:
         event_type = "resolved" if new_status == "resolved" else "status_changed"
         _record_lifecycle_event(cursor, conn, user_id, org_id, incident_id, event_type, new_status, old_status)
@@ -370,10 +394,20 @@ def _sync_existing(
         "%s Synced incident %s for %s (event=%s, status %s -> %s)",
         _LOG, incident_id, sanitize(number), event_kind, old_status, new_status,
     )
-    reopened = old_status == "resolved" and new_status != "resolved"
-    if reopened and not old_task and payload is not None:
-        logger.info("%s Incident %s reopened in ServiceNow with no prior RCA; investigating now", _LOG, incident_id)
-        _dispatch_rca(cursor, conn, user_id, incident_id, title or alert_title(payload), number, sys_id, payload)
+
+
+def _needs_rca(new_status: str, old_task: Optional[str], *, reopened: bool, retrying: bool) -> bool:
+    """Whether this delivery must start the incident's RCA.
+
+    ``rca_celery_task_id`` records a dispatched RCA; once set, nothing is
+    dispatched again. A reopen of an incident that never had one starts it, and
+    so does a retried delivery for an active incident without one. A fresh
+    delivery never does, so it cannot double up with a creation whose task id is
+    still being recorded.
+    """
+    if old_task or new_status == "resolved":
+        return False
+    return reopened or retrying
 
 
 def _saved_query_matches(creds: Dict[str, Any], sys_id: str, clauses: List[str]) -> bool:
@@ -599,7 +633,15 @@ def _dispatch_rca(
     cursor, conn, user_id: str, incident_id, title: str,
     number: str, sys_id: str, payload: Dict[str, Any],
 ) -> None:
-    """Kick off the background RCA chat for a freshly created incident."""
+    """Queue the background RCA chat for an incident and record its task id.
+
+    Commits the connection once the task id is stored, so whatever the caller
+    staged on it (a reopen's new state) becomes durable together with the task
+    id. On any failure the connection is rolled back instead, the chat session
+    is marked failed, and ``RcaDispatchError`` is raised so the Celery delivery
+    retries from the last committed state. A rate-limited user gets no RCA:
+    the function returns without committing and the caller commits as usual.
+    """
     session_id = None
     task = None
     trigger_metadata = {"source": SOURCE, "number": number, "sys_id": sys_id}
@@ -638,8 +680,12 @@ def _dispatch_rca(
         )
         conn.commit()
         logger.info("%s Triggered RCA for %s session=%s task=%s", _LOG, sanitize(number), session_id, task.id)
-    except Exception:
+    except Exception as exc:
         logger.exception("%s Failed to trigger RCA", _LOG)
+        try:
+            conn.rollback()
+        except Exception:
+            logger.debug("%s Rollback after the failed RCA dispatch failed", _LOG, exc_info=True)
         if session_id and task is None:
             try:
                 cursor.execute(
@@ -649,3 +695,4 @@ def _dispatch_rca(
                 conn.commit()
             except Exception:
                 logger.debug("%s Failed to mark RCA session failed", _LOG, exc_info=True)
+        raise RcaDispatchError(f"RCA dispatch failed for incident {incident_id}") from exc

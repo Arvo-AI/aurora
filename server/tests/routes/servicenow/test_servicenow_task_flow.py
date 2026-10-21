@@ -2,7 +2,7 @@
 
 import importlib
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -83,12 +83,17 @@ class _Cursor:
 class _Conn:
     def __init__(self, cursor):
         self._cursor = cursor
+        self.commits = 0
+        self.rollbacks = 0
 
     def cursor(self):
         return self._cursor
 
     def commit(self):
-        pass
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
 
 
 class _Pool:
@@ -260,3 +265,157 @@ def test_find_existing_reports_whether_an_rca_ran(tasks):
     cursor = _Cursor(fetch=("inc-1", "analyzed", "task-1"))
     assert tasks._find_existing(cursor, "org-1", "user-1", 42)["rca_task_id"] == "task-1"
     assert tasks._find_existing(_Cursor(fetch=None), "org-1", "user-1", 42) is None
+
+
+# ── dispatch failures are retryable ──────────────────────────────────
+
+
+def _sync(tasks, cursor, conn, existing_status="resolved", **kwargs):
+    existing = {"id": "inc-1", "status": existing_status, "rca_task_id": None}
+    return tasks._sync_existing(
+        cursor, conn, "user-1", "org-1", existing, "investigating", "high", {"stateValue": "2"},
+        "INC0010009", "updated", title="Checkout down", sys_id=SYS_ID, payload=_payload(), **kwargs,
+    )
+
+
+def test_reopen_commits_the_new_state_only_once_the_rca_is_dispatched(monkeypatch, tasks):
+    cursor = _Cursor(fetches=[("resolved", None), ("investigating",)])
+    conn = _Conn(cursor)
+    lifecycle = MagicMock()
+    monkeypatch.setattr(tasks, "_record_lifecycle_event", lifecycle)
+    commits_at_dispatch = []
+    monkeypatch.setattr(tasks, "_dispatch_rca", lambda *a: commits_at_dispatch.append(conn.commits))
+
+    _sync(tasks, cursor, conn)
+
+    assert commits_at_dispatch == [0]  # the status change was still pending when the RCA was queued
+    assert conn.commits == 1
+    lifecycle.assert_called_once()
+    assert lifecycle.call_args.args[5:] == ("status_changed", "investigating", "resolved")
+
+
+def test_reopen_dispatch_failure_leaves_nothing_committed_and_propagates(monkeypatch, tasks):
+    cursor = _Cursor(fetches=[("resolved", None), ("investigating",)])
+    conn = _Conn(cursor)
+    lifecycle = MagicMock()
+    monkeypatch.setattr(tasks, "_record_lifecycle_event", lifecycle)
+    monkeypatch.setattr(tasks, "_dispatch_rca", MagicMock(side_effect=tasks.RcaDispatchError("broker down")))
+
+    with pytest.raises(tasks.RcaDispatchError):
+        _sync(tasks, cursor, conn)
+
+    assert conn.commits == 0
+    lifecycle.assert_not_called()
+
+
+@pytest.mark.parametrize("old_task, retrying, dispatched", [
+    (None, True, True),       # the attempt being retried failed to queue this incident's RCA
+    (None, False, False),     # a fresh delivery never starts one for an active incident
+    ("task-9", True, False),  # an RCA is already recorded
+])
+def test_a_retried_delivery_starts_the_rca_an_active_incident_never_got(monkeypatch, tasks, old_task, retrying, dispatched):
+    cursor = _Cursor(fetches=[("investigating", old_task), ("investigating",)])
+    conn = _Conn(cursor)
+    monkeypatch.setattr(tasks, "_record_lifecycle_event", lambda *a, **k: None)
+    dispatch = MagicMock()
+    monkeypatch.setattr(tasks, "_dispatch_rca", dispatch)
+
+    _sync(tasks, cursor, conn, existing_status="investigating", retrying=retrying)
+
+    assert dispatch.called == dispatched
+    assert conn.commits == 1
+
+
+class _BoundTask:
+    """What Celery passes as ``self``: ``request.retries`` counts the earlier attempts."""
+
+    def __init__(self, retries):
+        self.request = SimpleNamespace(retries=retries)
+
+    def retry(self, exc=None):
+        return RuntimeError(f"retry after {exc!r}")
+
+
+@pytest.mark.parametrize("task_self, retrying", [(None, False), (_BoundTask(0), False), (_BoundTask(2), True)])
+def test_task_tells_the_sync_whether_this_delivery_is_a_retry(monkeypatch, tasks, pool, task_self, retrying):
+    synced = MagicMock()
+    monkeypatch.setattr(tasks, "_find_existing", lambda *a: {"id": "inc-1", "status": "investigating", "rca_task_id": None})
+    monkeypatch.setattr(tasks, "_store_event", lambda *a, **k: None)
+    monkeypatch.setattr(tasks, "_sync_existing", synced)
+    monkeypatch.setattr(tasks, "_notify_sse", lambda *a: None)
+
+    tasks.process_servicenow_event(task_self, _payload(event="updated", state="2"), "user-1", decision={"action": "rca"})
+
+    assert synced.call_args.kwargs["retrying"] is retrying
+
+
+def test_a_failed_dispatch_goes_through_the_celery_retry(monkeypatch, tasks, pool):
+    monkeypatch.setattr(tasks, "_find_existing", lambda *a: {"id": "inc-1", "status": "resolved", "rca_task_id": None})
+    monkeypatch.setattr(tasks, "_store_event", lambda *a, **k: None)
+    monkeypatch.setattr(tasks, "_sync_existing", MagicMock(side_effect=tasks.RcaDispatchError("broker down")))
+    notify = MagicMock()
+    monkeypatch.setattr(tasks, "_notify_sse", notify)
+
+    with pytest.raises(RuntimeError, match="retry after"):
+        tasks.process_servicenow_event(_BoundTask(0), _payload(event="updated", state="2"), "user-1", decision={"action": "rca"})
+
+    notify.assert_not_called()
+    assert pool.open == 0
+
+
+def _background_stub(delay):
+    mod = ModuleType("chat.background.task")
+    mod.is_background_chat_allowed = lambda user_id: True  # type: ignore[attr-defined]
+    mod.create_background_chat_session = lambda **kw: "sess-1"  # type: ignore[attr-defined]
+    mod.run_background_chat = SimpleNamespace(delay=delay)  # type: ignore[attr-defined]
+    return mod
+
+
+def _dispatch(tasks, cursor, conn):
+    return tasks._dispatch_rca(cursor, conn, "user-1", "inc-1", "Checkout down", "INC0010009", SYS_ID, _payload())
+
+
+def test_dispatch_records_the_task_id_and_commits(monkeypatch, tasks):
+    monkeypatch.setitem(sys.modules, "chat.background.task", _background_stub(lambda **kw: SimpleNamespace(id="task-7")))
+    cursor = _Cursor()
+    conn = _Conn(cursor)
+
+    _dispatch(tasks, cursor, conn)
+
+    sql, params = cursor.executed[-1]
+    assert "rca_celery_task_id" in sql
+    assert params == ("task-7", "inc-1")
+    assert conn.commits == 1
+    assert conn.rollbacks == 0
+
+
+def test_dispatch_failure_rolls_back_marks_the_session_failed_and_raises(monkeypatch, tasks):
+    def broker_down(**kw):
+        raise ConnectionError("broker down")
+
+    monkeypatch.setitem(sys.modules, "chat.background.task", _background_stub(broker_down))
+    cursor = _Cursor()
+    conn = _Conn(cursor)
+
+    with pytest.raises(tasks.RcaDispatchError):
+        _dispatch(tasks, cursor, conn)
+
+    assert conn.rollbacks == 1
+    assert not any("rca_celery_task_id" in sql for sql, _ in cursor.executed)
+    sql, params = cursor.executed[-1]
+    assert "chat_sessions" in sql
+    assert params == ("failed", "sess-1")
+    assert conn.commits == 1  # only the failed-session mark, after the rollback
+
+
+def test_dispatch_skips_a_rate_limited_user_without_touching_the_connection(monkeypatch, tasks):
+    stub = _background_stub(lambda **kw: SimpleNamespace(id="task-7"))
+    stub.is_background_chat_allowed = lambda user_id: False  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "chat.background.task", stub)
+    cursor = _Cursor()
+    conn = _Conn(cursor)
+
+    _dispatch(tasks, cursor, conn)
+
+    assert cursor.executed == []
+    assert conn.commits == 0
