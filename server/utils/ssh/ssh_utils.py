@@ -10,6 +10,7 @@ from utils.db.org_scope import resolve_org, org_read_predicate
 from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.auth.token_management import get_token_data
+from utils.ssh.session_reply import session_reply_result
 from utils.ssh.ssh_jump_parser import SSHJumpConfig, parse_ssh_jump_command
 
 logger = logging.getLogger(__name__)
@@ -372,28 +373,28 @@ def validate_and_test_ssh(
         # such command; their error text is still a live channel.
         result = ""
         error_output = ""
+        channel_error = None
         try:
             _stdin, stdout, stderr = ssh.exec_command("whoami", timeout=5)
             result = stdout.read().decode(errors="replace").strip()
             error_output = stderr.read().decode(errors="replace").strip()
         except (socket.timeout, paramiko.SSHException, OSError) as exc:
-            # A reply already in hand means the channel worked
-            if not result and not error_output:
-                error_msg = "SSH login succeeded but the session channel failed."
-                logger.warning(f"{error_msg} ({exc})")
-                return False, error_msg, None
+            channel_error = exc
 
         transport = ssh.get_transport()
-        # Nothing came back and the session is gone
-        if not result and not error_output and (
-            transport is None or not transport.is_active()
-        ):
-            error_msg = "SSH login succeeded but the session dropped."
-            logger.warning(error_msg)
+        success, error_msg, connected_as = session_reply_result(
+            result,
+            error_output,
+            target_user,
+            transport_active=transport is not None and transport.is_active(),
+            channel_error=channel_error is not None,
+        )
+        # Timeout, a rejected channel, or a dead transport with no reply
+        if not success:
+            detail = f" ({channel_error})" if channel_error else ""
+            logger.warning(f"{error_msg}{detail}")
             return False, error_msg, None
 
-        # Error text from a network OS is not the login name
-        connected_as = result if result == target_user else target_user
         logger.info(f"SSH command result: '{result}', error: '{error_output}'")
         logger.info(f"SSH authentication successful! Connected as: {connected_as}")
         return True, None, connected_as
