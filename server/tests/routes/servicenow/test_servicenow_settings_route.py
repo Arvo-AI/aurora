@@ -1,6 +1,8 @@
 """PUT/GET /servicenow/rca-settings and GET /servicenow/field-options through Flask's test client."""
 
+import ast
 import importlib
+import pathlib
 import sys
 from types import ModuleType
 from unittest.mock import MagicMock
@@ -193,3 +195,46 @@ class TestStatusProbe:
         body = app.test_client().get("/servicenow/status").get_json()
         assert body["connected"] is True
         assert "error" not in body
+
+
+@pytest.mark.skipif(
+    not hasattr(routes.get_webhook_url, "__wrapped__"),
+    reason="require_permission does not expose __wrapped__ in this build",
+)
+class TestWebhookUrl:
+    """GET /servicenow/webhook-url returns the shared secret, so it is a write-permission route that never writes."""
+
+    def test_route_requires_connectors_write(self):
+        tree = ast.parse(pathlib.Path(routes.__file__).read_text())
+        permissions = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef) or node.name != "get_webhook_url":
+                continue
+            for dec in node.decorator_list:
+                if isinstance(dec, ast.Call) and getattr(dec.func, "id", None) == "require_permission":
+                    permissions.append(tuple(arg.value for arg in dec.args))
+        assert permissions == [("connectors", "write")]
+
+    def test_returns_the_stored_secret_without_writing(self, app, monkeypatch):
+        writes = []
+        monkeypatch.setattr(
+            routes,
+            "_stored_credentials",
+            lambda user_id: {"instance_url": "https://acme.service-now.com", "webhook_secret": "s3cr3t"},
+        )
+        monkeypatch.setattr(routes, "store_tokens_in_db", lambda *a, **k: writes.append(a))
+        monkeypatch.setattr(routes, "_webhook_base_url", lambda: "https://aurora.example")
+        resp = app.test_client().get("/servicenow/webhook-url")
+        body = resp.get_json()
+        assert resp.status_code == 200
+        assert body["webhookUrl"] == f"https://aurora.example/servicenow/webhook/{USER}"
+        assert body["webhookSecret"] == "s3cr3t"
+        assert writes == []
+
+    def test_missing_secret_is_409_and_nothing_is_stored(self, app, monkeypatch):
+        writes = []
+        monkeypatch.setattr(routes, "store_tokens_in_db", lambda *a, **k: writes.append(a))
+        resp = app.test_client().get("/servicenow/webhook-url")
+        assert resp.status_code == 409
+        assert resp.get_json()["error"] == routes._ERR_NO_WEBHOOK_SECRET
+        assert writes == []

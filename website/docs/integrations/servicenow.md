@@ -59,7 +59,7 @@ In Aurora, go to **Connectors > ServiceNow**, enter the instance URL (`https://<
 
 ### 2. Get the Webhook URL and Secret
 
-The connector page shows the webhook URL, a generated shared secret, and the Business Rule script. The URL has the form:
+The connector page shows the webhook URL, a generated shared secret, and the Business Rule script. Opening that page needs Aurora's connectors write permission, because it shows the secret. The URL has the form:
 
 ```text
 https://<your-aurora-api>/servicenow/webhook/<your-user-id>

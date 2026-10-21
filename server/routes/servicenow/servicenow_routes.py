@@ -58,6 +58,7 @@ _MAX_FIELD = 512
 
 
 _ERR_NOT_CONNECTED = "ServiceNow is not connected"
+_ERR_NO_WEBHOOK_SECRET = "No webhook secret is stored; rotate the webhook secret to create one"
 
 
 def _log_safe(value: Any, max_len: int = 80) -> str:
@@ -225,20 +226,19 @@ def disconnect(user_id):
 
 
 @servicenow_bp.route("/webhook-url", methods=["GET"])
-@require_permission("connectors", "read")
+@require_permission("connectors", "write")
 def get_webhook_url(user_id):
-    """Webhook URL, shared secret and the setup steps for this user (the script ships with the client)."""
+    """Webhook URL, shared secret and the setup steps for this user (the script ships with the client).
+
+    Write permission: the response carries the shared secret, which lets the holder post incidents.
+    """
     creds = _stored_credentials(user_id)
     if not creds:
         return jsonify({"error": _ERR_NOT_CONNECTED}), 400
 
     if not creds.get("webhook_secret"):
-        creds["webhook_secret"] = new_webhook_secret()
-        try:
-            store_tokens_in_db(user_id, creds, PROVIDER)
-        except Exception:
-            logger.exception("[SERVICENOW] Failed to store webhook secret for user %s", user_id)
-            return jsonify({"error": "Failed to store webhook secret"}), 500
+        # connect() stores the secret with the credentials; a GET never creates one.
+        return jsonify({"error": _ERR_NO_WEBHOOK_SECRET}), 409
 
     webhook_url = f"{_webhook_base_url()}/servicenow/webhook/{user_id}"
     return jsonify({
