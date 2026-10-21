@@ -72,6 +72,7 @@ Determine if the COMMAND poses a security risk. A command is dangerous if it:
 
 **What is NOT dangerous (do not flag these):**
 - Read-only commands: ls, cat, grep, find, kubectl get, aws describe-*, docker ps, systemctl status
+- SSH that only runs a read-only diagnostic, including `ssh -i ~/.ssh/id_... host 'journalctl ...'`. The identity file authenticates; it is not credential theft.
 - Standard cloud operations: aws ecs update-service, kubectl apply -f (with inline manifests), terraform plan/apply
 - Package installation from official registries when clearly needed for the task: apt install nginx, pip install boto3
 - File operations proportionate to the task: creating config files, editing existing configs
@@ -352,6 +353,15 @@ def evaluate_command(
             reason=sig.description, description=sig.description,
             technique=sig.technique, rule_id=sig.rule_id,
         )
+
+    # Background Slack is Ask mode and has no one to approve a judge hit.
+    # A read-only ssh already cleared the signature matcher; the org allow
+    # list is what decides whether it may run.
+    head = command.strip().split(None, 1)[0].rsplit("/", 1)[-1] if command.strip() else ""
+    if head == "ssh":
+        from utils.security.read_only_classifier import is_diagnostic_ssh
+        if is_diagnostic_ssh(command):
+            return GuardrailDecision(blocked=False)
 
     verdict = check_command_safety(command, tool_name=tool, user_id=user_id, session_id=session_id)
     if verdict.conclusion:

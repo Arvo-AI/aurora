@@ -254,6 +254,28 @@ def terminal_exec(
         if command != original_command:
             logger.info(f"[SSH] Transformed -J to ProxyCommand: {command[:150]}")
 
+    # Ask mode ignores the allow list. Slack is always Ask, so only a
+    # read-only ssh may proceed; scp/sftp copy files and stay refused.
+    program = command.lstrip().split(None, 1)[0].rsplit("/", 1)[-1] if command.lstrip() else ""
+    if program in ("ssh", "scp", "sftp"):
+        from utils.cloud.cloud_utils import get_mode_from_context
+        mode = get_mode_from_context()
+        if (mode or "").strip().lower() == "ask":
+            from chat.backend.agent.access.mode_access_controller import ModeAccessController
+            from utils.security.read_only_classifier import (
+                describe_rejection, is_read_only_command,
+            )
+            allowed, message = ModeAccessController.ensure_cloud_command_allowed(
+                mode, is_read_only_command(command), command, describe_rejection(command),
+            )
+            if not allowed:
+                logger.info("Ask mode refused ssh client because it is not a read")
+                return json.dumps({
+                    "success": False,
+                    "error": message,
+                    "code": "READ_ONLY_MODE",
+                })
+
     # ROUTING: Check if command should be handled by specialized tools
     cmd_lower = command.lower().strip()
     has_shell_syntax = _has_shell_metacharacters(command)

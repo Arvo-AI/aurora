@@ -465,7 +465,164 @@ def _pipeline_rejection(facts: list) -> str:
     return ''
 
 
-def describe_rejection(command: str) -> str:
+# Host diagnostics the cloud verb list doesn't know. A write verb anywhere in
+# the remote command, or a redirect, still refuses them.
+SHELL_READ_PROGRAMS = frozenset({
+    'cat', 'head', 'tail', 'less', 'more', 'grep', 'egrep', 'fgrep', 'rg',
+    'df', 'du', 'free', 'ps', 'top', 'htop', 'uptime', 'w', 'who', 'whoami',
+    'hostname', 'uname', 'id', 'date', 'journalctl', 'dmesg', 'ls', 'wc',
+    'sort', 'uniq', 'cut', 'tr', 'stat', 'file', 'ss', 'netstat', 'lsof',
+    'ping', 'dig', 'nslookup', 'vmstat', 'iostat', 'mpstat', 'sar',
+    'lsblk', 'lscpu', 'lsmem', 'nproc', 'ip',
+    'last', 'lastlog', 'echo', 'printf',
+})
+
+# `docker pull` has no write verb, so the binary itself is not a read.
+# Only the inspection subcommands are.
+_CONTAINER_CLIS = frozenset({'docker', 'podman', 'crictl'})
+_CONTAINER_READS = frozenset({
+    'ps', 'logs', 'inspect', 'images', 'top', 'stats', 'version', 'info',
+    'port', 'diff', 'history',
+})
+
+# ssh options that consume the next argv token. Anything else starting with
+# '-' is a boolean switch (`-n`, `-tt`).
+_SSH_VALUE_FLAGS = frozenset({
+    '-B', '-b', '-c', '-D', '-E', '-e', '-F', '-I', '-i', '-J', '-L', '-l',
+    '-m', '-O', '-o', '-p', '-Q', '-R', '-S', '-W', '-w',
+})
+_SUDO_VALUE_FLAGS = frozenset({
+    '-u', '-g', '-C', '-p', '-r', '-t', '-h', '-T',
+})
+
+
+def _is_assignment(token: str) -> bool:
+    return '=' in token and not token.startswith('/') and not token.startswith('-')
+
+
+def _ssh_flag_kind(token: str) -> str:
+    """'separate' when the next token is the value, 'glued' when it's attached."""
+    if token in _SSH_VALUE_FLAGS:
+        return 'separate'
+    if len(token) > 2 and token[:2] in _SSH_VALUE_FLAGS:
+        return 'glued'
+    return ''
+
+
+def _unwrap_sudo(command: str) -> str:
+    """Drop one leading sudo/doas so the remote verb is what actually runs.
+
+    `sudo journalctl` is a read. `sudo reboot` is a write. A bare `sudo -i`
+    opens a shell and stays refused.
+    """
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return command
+    if not argv or argv[0] not in ('sudo', 'doas'):
+        return command
+    i = 1
+    while i < len(argv):
+        tok = argv[i]
+        if tok == '--':
+            return shlex.join(argv[i + 1:])
+        if tok in _SUDO_VALUE_FLAGS:
+            i += 2
+            continue
+        # Boolean sudo switches (`-n`, `-E`). `-i` with nothing after it is a login shell.
+        if tok.startswith('-'):
+            i += 1
+            continue
+        return shlex.join(argv[i:])
+    return ''
+
+
+def _is_shell_diagnostic(command: str) -> bool:
+    """Whether every program in *command* only reads."""
+    segments, _reason = _split_segments_or_reason(command)
+    if not segments:
+        return False
+    facts = [analyze_segment(seg) for seg in segments]
+    if any(f.write_verb for f in facts):
+        return False
+    if facts[0].executable in COMMAND_WRAPPERS:
+        return False
+    if any(f.executable not in DOWNSTREAM_FILTERS for f in facts[1:]):
+        return False
+    # Container CLIs mutate with subcommands that are not write verbs (`pull`).
+    if facts[0].executable in _CONTAINER_CLIS:
+        op = facts[0].operation
+        return len(op) >= 2 and op[1] in _CONTAINER_READS
+    return facts[0].executable in SHELL_READ_PROGRAMS
+
+
+def _ssh_remote_rejection(tokens: list[str], depth: int) -> str:
+    """Why an ssh invocation isn't a read, or '' when the remote command is.
+
+    The destination and `-i` path are not operations: a host named
+    `update.example` must not look like an update, and the mounted identity
+    file is how Aurora authenticates.
+    """
+    i = 0
+    while i < len(tokens) and _is_assignment(tokens[i]):
+        i += 1
+    if i >= len(tokens):
+        return 'no recognised read verb was found in it'
+    i += 1  # the ssh binary itself
+
+    tunnel = False
+    while i < len(tokens):
+        tok = tokens[i]
+        # `--` ends ssh's own options; the rest is the remote command.
+        if tok == '--':
+            remote_argv = tokens[i + 1:]
+            break
+        kind = _ssh_flag_kind(tok)
+        # `-N` / `-W` / `-s` never run a diagnostic command.
+        if tok in ('-N', '-W', '-s') or (kind == 'glued' and tok[:2] in ('-W', '-s')):
+            tunnel = True
+        if kind == 'separate':
+            if i + 1 >= len(tokens):
+                return 'no recognised read verb was found in it'
+            i += 2
+            continue
+        if kind == 'glued' or (tok.startswith('-') and tok != '-'):
+            i += 1
+            continue
+        remote_argv = tokens[i + 1:]
+        break
+    else:
+        return 'it opens an interactive shell'
+
+    if tunnel:
+        return 'it does not run a read-only remote command'
+    if not remote_argv:
+        return 'it opens an interactive shell'
+
+    # ssh joins the remote argv and hands it to the remote shell. A quoted
+    # pipeline (`ssh host "df | grep x"`) is one argv token and must be
+    # re-parsed as a shell command, not as a single literal.
+    remote = _unwrap_sudo(' '.join(remote_argv))
+    if not remote.strip():
+        return 'it opens an interactive shell'
+
+    # Reading the key file over ssh is a credential read even when the outer
+    # command only uses `-i` to authenticate.
+    from utils.security.signature_match import ssh_key_material_exposed
+    if ssh_key_material_exposed(remote):
+        return 'it returns a credential, key, secret or token'
+
+    reason = describe_rejection(remote, _ssh_depth=depth + 1)
+    if not reason:
+        return ''
+    # `df` / `journalctl` aren't cloud verbs. They're reads unless a write
+    # verb or a redirect already produced a reason above.
+    if reason == 'no recognised read verb was found in it' and _is_shell_diagnostic(remote):
+        return ''
+    return reason
+
+
+def describe_rejection(command: str, _ssh_depth: int = 0) -> str:
     """Why *command* is not read-only, as a clause, or '' when it is read-only.
 
     The agent sees this in the blocked tool's error, so it says which token
@@ -477,6 +634,16 @@ def describe_rejection(command: str) -> str:
         return parse_reason
 
     facts = [analyze_segment(seg) for seg in segments]
+
+    # ssh has no read verb of its own. The remote command is what runs, and the
+    # destination must not be scanned (`ssh update.example` is a hostname).
+    if facts[0].executable == 'ssh':
+        if _ssh_depth >= 2:
+            return 'no recognised read verb was found in it'
+        chain = _pipeline_rejection(facts)
+        if chain:
+            return chain
+        return _ssh_remote_rejection(segments[0], _ssh_depth)
 
     # Flag names gate the command (`--with-decryption`, `--dry-run`) but must
     # never provide a read-only verb, so they are collected separately.
@@ -518,3 +685,13 @@ def is_read_only_command(command: str) -> bool:
     Defaults to False: anything unrecognised is not read-only.
     """
     return not describe_rejection(command)
+
+
+def is_diagnostic_ssh(command: str) -> bool:
+    """Whether *command* is ssh running a read-only remote command."""
+    segments, _reason = _split_segments_or_reason(command)
+    if not segments:
+        return False
+    if analyze_segment(segments[0]).executable != 'ssh':
+        return False
+    return describe_rejection(command) == ''

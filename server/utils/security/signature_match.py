@@ -66,7 +66,6 @@ _r(r"\b(certutil|bitsadmin|mshta|regsvr32|rundll32)\b", T_SIGNED_BINARY, "lolbin
 # --- Credential access (T1552 / T1003) ---
 _r(r"\bcat\s+/etc/shadow\b", T_OS_CRED_SHADOW, "cred-shadow", "Reading /etc/shadow")
 _r(r"~/\.aws/credentials|\.aws/credentials", T_CRED_CLOUD, "cred-aws", "AWS credential file access")
-_r(r"~/\.ssh/(id_|authorized_keys)|\.ssh/(id_|authorized_keys)", T_CRED_SSH, "cred-ssh", "SSH key/authorized_keys access")
 _r(r"/var/run/secrets/kubernetes\.io", T_CRED_CONTAINER_API, "cred-k8s-sa", "Kubernetes service account token access")
 _r(r"\blsass\b", T_OS_CRED_LSASS, "cred-lsass", "LSASS memory access")
 # `az login` leaves the service principal secret and its tokens in these files.
@@ -132,8 +131,39 @@ def _load_sigma() -> None:
 _load_sigma()
 
 
+# An identity file authenticates ssh. The same path anywhere else is the key
+# being read or copied. `\S*?` lets `-i /home/me/.ssh/id_rsa` match without
+# treating the characters before `.ssh` as a second path.
+_SSH_IDENTITY_USE = re.compile(
+    r"(?i)(?:-i\s*[\"']?\S*?\.ssh/id_[^\s\"']+"
+    r"|-o\s*[\"']?IdentityFile[=\s]+[\"']?\S*?\.ssh/id_[^\s\"']+)"
+)
+_SSH_KEY_PATH = re.compile(r"(?i)\.ssh/(?:id_|authorized_keys)")
+
+
+def ssh_key_material_exposed(command: str) -> bool:
+    """True when *command* reads or copies a private key or authorized_keys.
+
+    `ssh -i ~/.ssh/id_*` only selects the key Aurora already mounted. A second
+    reference (`cat`, `scp` of the key file) is still exposure.
+    """
+    if not command or not _SSH_KEY_PATH.search(command):
+        return False
+    # Drop identity-file arguments and see if a key path is still there.
+    return _SSH_KEY_PATH.search(_SSH_IDENTITY_USE.sub(" ", command)) is not None
+
+
 def check_signature(command: str) -> SignatureVerdict:
     """Run command against all signature rules. Returns on first match."""
+    # Identity-file use is not credential theft; reading the key file is.
+    # Checked before the regex table so a key path cannot hide behind a later rule.
+    if ssh_key_material_exposed(command):
+        return SignatureVerdict(
+            matched=True,
+            technique=T_CRED_SSH,
+            rule_id="cred-ssh",
+            description="SSH key/authorized_keys access",
+        )
     for pattern, technique, rule_id, desc in _RULES:
         if pattern.search(command):
             return SignatureVerdict(matched=True, technique=technique, rule_id=rule_id, description=desc)

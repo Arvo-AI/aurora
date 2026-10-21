@@ -586,3 +586,47 @@ def test_bq_reads_stay_allowed(is_read_only, command):
 ])
 def test_bq_writes_stay_blocked(is_read_only, command):
     assert is_read_only(command) is False, command
+
+
+# ---------------------------------------------------------------------------
+# ssh in Ask mode. The binary has no read verb; the remote command is what
+# runs. Slack is always Ask, so a diagnostic ssh has to classify as a read
+# or the org allow list is never consulted.
+# ---------------------------------------------------------------------------
+_HOST = "admin@198.51.100.1"
+
+
+@pytest.mark.parametrize("command", [
+    f"ssh {_HOST} uptime",
+    f"ssh {_HOST} 'df -h'",
+    f"ssh {_HOST} 'journalctl -u nginx --no-pager -n 50'",
+    f"ssh {_HOST} 'sudo journalctl -u nginx --no-pager -n 50'",
+    f"ssh {_HOST} 'kubectl get pods'",
+    f"ssh {_HOST} 'systemctl status nginx'",
+    f"ssh {_HOST} 'docker ps'",
+    f"ssh {_HOST} 'df -h | grep error'",
+    f"ssh -i ~/.ssh/id_provider_vm -o BatchMode=yes {_HOST} 'uptime'",
+    f"/usr/bin/ssh {_HOST} 'cat /var/log/syslog'",
+    # The destination is a hostname, not an operation.
+    "ssh update.example uptime",
+    "ssh secrets.example 'free -m'",
+])
+def test_diagnostic_ssh_is_read_only(is_read_only, command):
+    assert is_read_only(command) is True, describe_rejection(command)
+
+
+@pytest.mark.parametrize("command", [
+    f"ssh {_HOST}",
+    f"ssh -N -L 8080:localhost:80 {_HOST}",
+    f"ssh {_HOST} 'rm -rf /tmp/x'",
+    f"ssh {_HOST} 'systemctl restart nginx'",
+    f"ssh {_HOST} 'kubectl delete pod x'",
+    f"ssh {_HOST} 'sudo reboot'",
+    f"ssh {_HOST} 'docker pull nginx'",
+    f"ssh {_HOST} 'ip route add 10.0.0.0/8 via 198.51.100.2'",
+    f"ssh {_HOST} 'cat ~/.ssh/id_rsa'",
+    f"ssh {_HOST} 'kubectl get pods | bash'",
+    f"ssh {_HOST} uptime && rm -rf /",
+])
+def test_ssh_writes_and_interactive_sessions_are_blocked(is_read_only, command):
+    assert is_read_only(command) is False, command
