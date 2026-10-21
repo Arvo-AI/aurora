@@ -1201,8 +1201,9 @@ def setup_flyio_environment_isolated(user_id: str, selected_org: str | None = No
         return False, None, None, None
 
 
-# Chat and background tasks both end at 1800s, so a longer command never returns.
-_COMMAND_TIMEOUT_CEILING = 1800
+# The chat workflow and the RCA task both die at 1800s. A command that runs
+# until then is killed before a timed-out BigQuery job can be cancelled.
+_COMMAND_TIMEOUT_CEILING = 600
 
 
 def get_command_timeout(command: str, user_timeout: int = None) -> int:

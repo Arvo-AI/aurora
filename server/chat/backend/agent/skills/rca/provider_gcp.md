@@ -35,6 +35,6 @@ When the question is whether data landed, a load job failed, or a table is empty
 - Table metadata (row count, last modified, partitioning): `cloud_exec('gcp', 'bq show --format=prettyjson DATASET.TABLE')`
 - Recent jobs: `cloud_exec('gcp', 'bq ls -j -a -n 20')`
 - Read rows only when the contents matter: `cloud_exec('gcp', "bq query --nouse_legacy_sql 'SELECT ...'")`. One quoted `SELECT` or `WITH`, with a partition or date filter and a `LIMIT`. Ask mode blocks write tokens it can see; it does not parse SQL inside the quotes.
-- `bq query` and `bq wait` run for 300 seconds. Pass `timeout` (seconds) only when the query needs longer, and keep it under 1800. The investigation is cancelled at 1800, so a higher value does not return.
+- `bq query` and `bq wait` run for 300 seconds. Pass `timeout` (seconds) only when the query needs longer, up to 600. The investigation ends at 1800, and a command that runs until then is killed before its BigQuery job can be cancelled.
 - A query with no `--maximum_bytes_billed` is capped at 10 GB, and one with no `--max_rows` returns 100 rows. Set either flag to raise it. The ceiling is 1 TiB and 1,000 rows. A cap error means narrow the filter.
 - A 403 means the connected identity cannot read BigQuery (`roles/bigquery.dataViewer` and `roles/bigquery.jobUser`). Say that. Do not treat it as proof the data is missing.

@@ -1349,7 +1349,7 @@ def get_cloud_tools():
         """Execute cloud CLI commands. Provider and command are required.
 
         Pass timeout (seconds) when a command needs longer than its default,
-        up to 1800. `bq query` and `bq wait` default to 300 seconds. Use output_file to save
+        up to 600. `bq query` and `bq wait` default to 300 seconds. Use output_file to save
         raw output to a file (useful for kubeconfig).
 
 For AWS with multiple connected accounts: the FIRST investigative call omit account_id to query all accounts.

@@ -1,5 +1,6 @@
 """Argv, caps, and cancel for `bq` commands run by cloud_exec."""
 
+import json
 import logging
 import shlex
 import uuid
@@ -122,17 +123,20 @@ def _parse_int(raw: Optional[str]) -> Optional[int]:
         return None
 
 
-def _bounded_int_flag(argv: list, name: str, default: int, ceiling: int) -> str:
-    """Flag token to insert, or '' when the command already has one.
+def _bounded_int_flag(argv: list, names: tuple, default: int, ceiling: int) -> str:
+    """Flag token to insert, or '' when the command already has one of names.
 
-    A value above the ceiling is rewritten in place.
+    A value above the ceiling is rewritten in place. names[0] is the form inserted.
     """
-    if not _argv_has_flag(argv, name):
-        return f"{name}={default}"
-    parsed = _parse_int(_flag_value(argv, name))
-    # Leave a non-numeric value for bq to reject
-    if parsed is not None and parsed > ceiling:
-        _replace_flag_value(argv, name, str(ceiling))
+    present = [name for name in names if _argv_has_flag(argv, name)]
+    # -n is --max_rows. Inserting the long form would leave the short form in charge.
+    if not present:
+        return f"{names[0]}={default}"
+    for name in present:
+        parsed = _parse_int(_flag_value(argv, name))
+        # Leave a non-numeric value for bq to reject
+        if parsed is not None and parsed > ceiling:
+            _replace_flag_value(argv, name, str(ceiling))
     return ""
 
 
@@ -143,8 +147,8 @@ def _query_limit_flags(argv: list) -> list:
     if not _argv_has_flag(argv, "--nouse_legacy_sql") and not _argv_has_flag(argv, "--use_legacy_sql"):
         flags.append("--nouse_legacy_sql")
     for flag in (
-        _bounded_int_flag(argv, "--maximum_bytes_billed", _BQ_DEFAULT_BYTES_BILLED, _BQ_BYTES_BILLED_CEILING),
-        _bounded_int_flag(argv, "--max_rows", _BQ_DEFAULT_MAX_ROWS, _BQ_MAX_ROWS_CEILING),
+        _bounded_int_flag(argv, ("--maximum_bytes_billed",), _BQ_DEFAULT_BYTES_BILLED, _BQ_BYTES_BILLED_CEILING),
+        _bounded_int_flag(argv, ("--max_rows", "-n"), _BQ_DEFAULT_MAX_ROWS, _BQ_MAX_ROWS_CEILING),
     ):
         if flag:
             flags.append(flag)
@@ -216,6 +220,63 @@ def prepare_bq_exec(
     return BqExec(argv, _redact_oauth_access_token(argv), job_id)
 
 
+def _location_from_job_list(stdout: str, job_id: str) -> Optional[str]:
+    """jobReference.location for job_id, from `bq ls -j` JSON."""
+    try:
+        jobs = json.loads(stdout or "")
+    except (TypeError, ValueError):
+        return None
+    # The CLI prints a list. The REST shape is {"jobs": [...]}
+    if isinstance(jobs, dict):
+        jobs = jobs.get("jobs") or []
+    if not isinstance(jobs, list):
+        return None
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        ref = job.get("jobReference")
+        if not isinstance(ref, dict) or ref.get("jobId") != job_id:
+            continue
+        location = ref.get("location")
+        if location:
+            return str(location)
+    return None
+
+
+def _lookup_bq_job_location(
+    job_id: str,
+    project_id: Optional[str],
+    access_token: Optional[str],
+    env: dict,
+) -> Optional[str]:
+    """Find the region jobs.list recorded. jobs.cancel does not infer it."""
+    # -a needs jobs.listAll. This identity's own jobs are enough when that is denied.
+    for list_flags in (["-j", "-a", "-n", "50"], ["-j", "-n", "50"]):
+        argv = ["bq", "--format=json"]
+        if project_id:
+            argv.append(f"--project_id={project_id}")
+        argv.extend(["ls", *list_flags])
+        try:
+            result = terminal_run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                env=env,
+                trusted=True,
+                oauth_access_token=access_token,
+            )
+        except Exception:
+            logger.warning("bq job list failed while resolving location for %s", job_id)
+            return None
+        if result.returncode != 0:
+            continue
+        location = _location_from_job_list(result.stdout, job_id)
+        if location:
+            return location
+    return None
+
+
 def cancel_bq_job(
     job_id: str,
     project_id: Optional[str],
@@ -228,6 +289,9 @@ def cancel_bq_job(
     if not isinstance(env, dict):
         logger.warning("bq cancel skipped for job %s: no isolated env", job_id)
         return False
+    # A single-region job 404s on cancel when location is omitted
+    if not location:
+        location = _lookup_bq_job_location(job_id, project_id, access_token, env)
     argv = ["bq"]
     if project_id:
         argv.append(f"--project_id={project_id}")

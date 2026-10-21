@@ -1,5 +1,7 @@
 """bq argv built by cloud_exec. The access token must not reach the log string."""
 
+import json
+
 from chat.backend.agent.tools.bq_exec import (
     _BQ_BYTES_BILLED_CEILING,
     _BQ_DEFAULT_BYTES_BILLED,
@@ -126,6 +128,18 @@ def test_max_rows_above_the_ceiling_is_clamped_and_a_lower_value_is_kept():
     assert clamped[clamped.index("--max_rows") + 1] == str(_BQ_MAX_ROWS_CEILING)
 
 
+def test_short_max_rows_is_clamped_and_does_not_grow_a_second_flag():
+    argv, _logged, _job_id = prepare_bq_exec(
+        "bq query -n 5000 'SELECT 1'", None, "p"
+    )
+    assert argv[argv.index("-n") + 1] == str(_BQ_MAX_ROWS_CEILING)
+    assert _flag_tokens(argv, "--max_rows") == []
+
+    kept, _logged, _job_id = prepare_bq_exec("bq query -n=500 'SELECT 1'", None, "p")
+    assert "-n=500" in kept
+    assert _flag_tokens(kept, "--max_rows") == []
+
+
 def test_format_and_legacy_sql_already_set_are_left_alone():
     argv, _logged, _job_id = prepare_bq_exec(
         "bq --format=csv query --use_legacy_sql 'SELECT 1'",
@@ -152,10 +166,11 @@ def test_bq_query_timeout_follows_the_verb_and_an_explicit_value_wins():
     assert get_command_timeout("bq --project_id=p wait job_123") == 300
     assert get_command_timeout("bq ls") == 60
     assert get_command_timeout("bq show dataset.table") == 60
-    assert get_command_timeout("bq query 'SELECT 1'", 900) == 900
-    assert get_command_timeout("bq query 'SELECT 1'", 3000) == 1800
-    assert get_command_timeout("bq query 'SELECT 1'", 86400) == 1800
-    assert get_command_timeout("bq ls", 3000) == 1800
+    assert get_command_timeout("bq query 'SELECT 1'", 300) == 300
+    assert get_command_timeout("bq query 'SELECT 1'", 900) == 600
+    assert get_command_timeout("bq query 'SELECT 1'", 3000) == 600
+    assert get_command_timeout("bq query 'SELECT 1'", 86400) == 600
+    assert get_command_timeout("bq ls", 3000) == 600
     assert get_command_timeout("bq query 'SELECT 1'", 0) == 300
     assert get_command_timeout("bq --location US query 'SELECT 1'") == 300
 
@@ -219,6 +234,82 @@ def test_timeout_cancels_the_query_job(monkeypatch):
     assert result.stderr == (
         "Query exceeded the 300s timeout. Cancellation of the BigQuery job was requested."
     )
+
+
+def test_cancel_resolves_location_from_the_job_list(monkeypatch):
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        if "ls" in args:
+            Result.stdout = json.dumps([{
+                "jobReference": {
+                    "jobId": "aurora-abc",
+                    "location": "northamerica-northeast1",
+                }
+            }])
+        return Result()
+
+    monkeypatch.setattr("chat.backend.agent.tools.bq_exec.terminal_run", fake_run)
+    result = CompletedProcess(args=[], returncode=124, stdout="", stderr="timed out")
+    explain_bq_timeout(
+        result,
+        job_id="aurora-abc",
+        project_id="my-project",
+        location=None,
+        access_token="ya29.secret",
+        env={"PATH": "/usr/bin"},
+        timeout_s=300,
+    )
+    assert calls[0][calls[0].index("ls"):] == ["ls", "-j", "-a", "-n", "50"]
+    assert "--location=northamerica-northeast1" in calls[1]
+    assert calls[1][-2:] == ["cancel", "aurora-abc"]
+    assert "ya29.secret" not in calls[0]
+    assert "Cancellation of the BigQuery job was requested." in result.stderr
+
+
+def test_cancel_lists_own_jobs_when_all_users_is_denied(monkeypatch):
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        if "ls" in args and args[args.index("ls") + 1:] == ["-j", "-a", "-n", "50"]:
+            Result.returncode = 1
+            return Result()
+        if "ls" in args:
+            Result.stdout = json.dumps({
+                "jobs": [{
+                    "jobReference": {"jobId": "aurora-abc", "location": "us-central1"},
+                }]
+            })
+        return Result()
+
+    monkeypatch.setattr("chat.backend.agent.tools.bq_exec.terminal_run", fake_run)
+    result = CompletedProcess(args=[], returncode=124, stdout="", stderr="timed out")
+    explain_bq_timeout(
+        result,
+        job_id="aurora-abc",
+        project_id="p",
+        location=None,
+        access_token=None,
+        env={"PATH": "/usr/bin"},
+        timeout_s=300,
+    )
+    assert calls[1][calls[1].index("ls"):] == ["ls", "-j", "-n", "50"]
+    assert "--location=us-central1" in calls[2]
+    assert "Cancellation of the BigQuery job was requested." in result.stderr
 
 
 def test_failed_cancel_says_the_job_may_still_be_running(monkeypatch):
