@@ -56,6 +56,13 @@ When an alert fires at 3 AM, your on-call engineer spends 30-60 minutes doing th
 
 </div>
 
+### How well does it work?
+
+We test it in the open. [Aurora Lab](https://github.com/Arvo-AI/aurora-lab) breaks a Kubernetes cluster in 19 known ways, sends Aurora only the alert, and grades the investigation against the injected root cause. Every run is published, including the ones Aurora gets wrong.
+
+- **[Benchmark](https://www.aurorasre.ai/benchmark)**: Aurora vs HolmesGPT vs K8sGPT on the same 19 faults, with the losses
+- **[Runbooks](https://www.aurorasre.ai/runbooks)**: one per lab fault (OOMKilled, ImagePullBackOff, Service with no endpoints, and more), built from the real runs
+
 ---
 
 ## Features
@@ -315,6 +322,7 @@ Aurora is **100% self-hosted**. Your incident data never leaves your infrastruct
 - **[GitHub Discussions](https://github.com/Arvo-AI/aurora/discussions)** — Ideas and Q&A
 - **[Documentation](https://arvo-ai.github.io/aurora/)** — Full deployment and configuration guides
 - **[Blog](https://www.aurorasre.ai/blog)** — SRE best practices, incident management guides
+- **[Aurora Lab](https://github.com/Arvo-AI/aurora-lab)** — Reproducible Kubernetes failure scenarios and every graded Aurora run
 - **[Contributing](CONTRIBUTING.md)** — We welcome PRs! Read the guide first.
 
 ---
