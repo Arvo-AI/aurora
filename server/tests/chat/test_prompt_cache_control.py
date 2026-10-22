@@ -120,7 +120,7 @@ class TestClaudeFamily:
             ("anthropic/claude-sonnet-4.5", "claude-sonnet-4-5"),
             ("bedrock/eu.anthropic.claude-sonnet-4-5-20250929-v1:0", "claude-sonnet-4-5"),
             ("bedrock/global.anthropic.claude-opus-5-5", "claude-opus-5-5"),
-            ("us.anthropic.claude-haiku-4-5-20251001-v1:0", "claude-haiku-4-5"),
+            ("us.anthropic.claude-haiku-5-5", "claude-haiku-5-5"),
             ("openai/gpt-5.5", "openai/gpt-5-5"),
         ],
     )
@@ -130,7 +130,7 @@ class TestClaudeFamily:
     def test_minimum_is_per_model_with_safe_default(self):
         assert min_cacheable_chars("anthropic/claude-opus-5.5") == 512 * 4
         assert min_cacheable_chars("bedrock/eu.anthropic.claude-sonnet-5") == 1024 * 4
-        assert min_cacheable_chars("anthropic/claude-haiku-4.5") == 4096 * 4
+        assert min_cacheable_chars("anthropic/claude-haiku-5.5") == 512 * 4
         # sonnet-5-5 must not fall into the shorter sonnet-5 prefix
         assert min_cacheable_chars("anthropic/claude-sonnet-5.5") == 512 * 4
         assert min_cacheable_chars("unknown-model") == 4096 * 4
@@ -185,9 +185,9 @@ class TestBuildCachedSystemPrompt:
         assert msg.content[1] == BEDROCK_CACHE_POINT
 
     def test_short_static_falls_back_to_one_breakpoint_on_the_whole_prompt(self):
-        # Haiku 4.5 needs 4096 tokens: the static part alone can't cache, the whole can
+        # Opus 4.5 needs 4096 tokens: the static part alone can't cache, the whole can
         static, dynamic = "s" * 12_000, "d" * 6_000
-        msg = build_cached_system_prompt("anthropic/claude-haiku-4.5", static, dynamic, provider=_bedrock())
+        msg = build_cached_system_prompt("anthropic/claude-opus-4.5", static, dynamic, provider=_bedrock())
         assert msg.content == [
             {"type": "text", "text": f"{static}\n{dynamic}"},
             {"cachePoint": {"type": "default"}},
@@ -195,7 +195,7 @@ class TestBuildCachedSystemPrompt:
 
     def test_whole_prompt_below_minimum_is_plain(self):
         static, dynamic = "s" * 8_000, "d" * 1_000
-        out = build_cached_system_prompt("anthropic/claude-haiku-4.5", static, dynamic, provider=_bedrock())
+        out = build_cached_system_prompt("anthropic/claude-opus-4.5", static, dynamic, provider=_bedrock())
         assert out == f"{static}\n{dynamic}"
 
 

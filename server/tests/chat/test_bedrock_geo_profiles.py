@@ -147,8 +147,14 @@ class TestInferenceProfileIds:
 
     def test_dated_models_keep_their_version_suffix(self, bedrock_module):
         provider = _provider(bedrock_module, "us-east-1")
-        assert provider.get_native_model_name("anthropic/claude-haiku-4.5") == (
-            "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        assert provider.get_native_model_name("anthropic/claude-sonnet-4.5") == (
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        )
+
+    def test_haiku_55_has_no_date_suffix(self, bedrock_module):
+        provider = _provider(bedrock_module, "us-east-1")
+        assert provider.get_native_model_name("anthropic/claude-haiku-5.5") == (
+            "us.anthropic.claude-haiku-5-5"
         )
 
     def test_explicit_bedrock_id_passes_through(self, bedrock_module):

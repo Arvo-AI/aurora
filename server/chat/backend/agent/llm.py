@@ -49,7 +49,7 @@ class ModelConfig:
 
     # Background RCA model - configurable via RCA_MODEL env var, falls back to cost-based selection
     RCA_MODEL = os.getenv("RCA_MODEL") or (
-        "anthropic/claude-haiku-4.5" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
+        "anthropic/claude-haiku-5.5" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
         else _DEFAULT_MODEL
     )
     # Yes/no per Jira ticket. Unset uses the resolved RCA model, which is opus when cost optimization is off.

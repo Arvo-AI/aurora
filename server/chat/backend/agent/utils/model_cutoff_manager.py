@@ -101,6 +101,9 @@ class ModelCutoffManager:
             "anthropic/claude-sonnet-5": ModelInfo(
                 "claude-sonnet-5", "anthropic", cutoff_date(2026, 1, 1), True, True
             ),
+            "anthropic/claude-haiku-5.5": ModelInfo(
+                "claude-haiku-5-5", "anthropic", cutoff_date(2026, 6, 1), True, True
+            ),
             "anthropic/claude-fable-5.1": ModelInfo(
                 "claude-fable-5-1", "anthropic", cutoff_date(2026, 6, 1), True, True
             ),

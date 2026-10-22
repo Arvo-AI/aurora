@@ -61,6 +61,9 @@ class LLMUsageTracker:
         "anthropic/claude-opus-5.5": {"input": 0.004, "output": 0.020, "cached_input": 0.0002},
         "anthropic/claude-opus-5-5": {"input": 0.004, "output": 0.020, "cached_input": 0.0002},
         "anthropic/claude-sonnet-5": {"input": 0.002, "output": 0.010, "cached_input": 0.0002},
+        # Haiku 5.5 base tier (prompts up to 100K tokens). Above that Anthropic bills 5x.
+        "anthropic/claude-haiku-5.5": {"input": 0.0001, "output": 0.0005, "cached_input": 0.00001},
+        "anthropic/claude-haiku-5-5": {"input": 0.0001, "output": 0.0005, "cached_input": 0.00001},
         "anthropic/claude-fable-5.1": {"input": 0.010, "output": 0.050, "cached_input": 0.00025},
         "anthropic/claude-fable-5-1": {"input": 0.010, "output": 0.050, "cached_input": 0.00025},
         "anthropic/claude-fable-5": {"input": 0.010, "output": 0.050, "cached_input": 0.001},

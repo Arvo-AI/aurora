@@ -217,6 +217,16 @@ MODEL_MAPPINGS = {
         "anthropic": "claude-opus-4-6",
         "provider": "anthropic",
     },
+    "anthropic/claude-haiku-5.5": {
+        "openrouter": "anthropic/claude-haiku-5.5",
+        "anthropic": "claude-haiku-5-5",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-haiku-5-5": {
+        "openrouter": "anthropic/claude-haiku-5.5",
+        "anthropic": "claude-haiku-5-5",
+        "provider": "anthropic",
+    },
     "anthropic/claude-haiku-4.5": {
         "openrouter": "anthropic/claude-haiku-4.5",
         "anthropic": "claude-haiku-4-5",

@@ -35,6 +35,7 @@ class ChatContextManager:
         "openai/gpt-5.2": 950000,  # 1M - 50K buffer
         "anthropic/claude-opus-5.5": 950000,  # 1M - 50K buffer
         "anthropic/claude-sonnet-5": 950000,  # 1M - 50K buffer
+        "anthropic/claude-haiku-5.5": 950000,  # 1M - 50K buffer
         "anthropic/claude-fable-5.1": 950000,  # 1M - 50K buffer
         "anthropic/claude-fable-5": 950000,  # 1M - 50K buffer
         "anthropic/claude-sonnet-4.6": 950000,  # 1M - 50K buffer
@@ -65,6 +66,7 @@ class ChatContextManager:
         # Bedrock-hosted Claude (same models/windows as the direct Anthropic entries above)
         "bedrock/us.anthropic.claude-opus-5-5": 950000,  # 1M - 50K buffer
         "bedrock/us.anthropic.claude-sonnet-5": 950000,  # 1M - 50K buffer
+        "bedrock/us.anthropic.claude-haiku-5-5": 950000,  # 1M - 50K buffer
         "bedrock/us.anthropic.claude-fable-5-1": 950000,  # 1M - 50K buffer
         "bedrock/us.anthropic.claude-fable-5": 950000,  # 1M - 50K buffer
         "bedrock/us.anthropic.claude-sonnet-4-6": 950000,  # 1M - 50K buffer

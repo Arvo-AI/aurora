@@ -39,7 +39,6 @@ _MIN_CACHEABLE_TOKENS = (
     ("claude-opus-4-8", 1024),
     ("claude-sonnet-4-6", 1024),
     ("claude-sonnet-4-5", 1024),
-    ("claude-haiku-4-5", 4096),
     ("claude-opus-4-5", 4096),
     ("claude-opus-4-6", 4096),
     ("claude-opus-4-7", 4096),
