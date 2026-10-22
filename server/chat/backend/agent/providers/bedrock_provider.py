@@ -192,9 +192,11 @@ class BedrockProvider(BaseLLMProvider):
                 "(pip install langchain-aws) or use gateway mode by setting BEDROCK_BASE_URL."
             ) from e
 
-        # ChatBedrockConverse forbids extra fields (no `streaming` param). Streaming
-        # still works via .astream() in the agent path. Mirrors the Vertex provider.
+        # ChatBedrockConverse forbids extra fields. `streaming` isn't one, and
+        # `request_timeout` is the OpenAI spelling — passed through, it used to land
+        # in the Converse body and 400. Streaming still works via .astream().
         kwargs.pop("streaming", None)
+        kwargs.pop("request_timeout", None)
 
         logger.info(f"Creating Bedrock (native) chat model: {native_model} (region={self.region})")
         config = {
@@ -202,6 +204,10 @@ class BedrockProvider(BaseLLMProvider):
             "temperature": temperature,
             # `global` is a profile geo, not an AWS region — boto3 needs a real one to sign against.
             "region_name": _resolve_client_region(self.region),
+            # Same budget as the gateway branch above. botocore counts max_attempts as
+            # total tries, so this is the first call plus two retries.
+            "timeout": 120,
+            "max_retries": 3,
         }
         # Pass explicit credentials only if set; otherwise rely on boto3's default
         # chain (env / shared config / IAM role).

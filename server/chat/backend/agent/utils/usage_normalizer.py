@@ -56,9 +56,11 @@ def normalize_usage(usage: Optional[Mapping[str, Any]]) -> NormalizedUsage:
     cache_total = cache_read + cache_write
     total_tokens = _as_int(usage.get("total_tokens"))
 
-    # Converse's total is input + output + cache read + cache write, so a total that
-    # matches that sum means ``input_tokens`` left the cache tokens out. Inclusive
-    # providers (Anthropic, OpenAI) report total == input + output and skip this.
+    # Converse's raw total is input + output + cache read + cache write, so a total
+    # that matches that sum means ``input_tokens`` left the cache tokens out
+    # (langchain-aws 1.3.1). Inclusive reporters — Anthropic, OpenAI, and
+    # langchain-aws >= 1.4.6, whose input already contains the cache tokens and whose
+    # total equals that input plus output — skip this.
     if cache_total and total_tokens == input_tokens + output_tokens + cache_total:
         input_tokens += cache_total
 

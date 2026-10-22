@@ -47,6 +47,22 @@ class _NoStyle(BaseLLMProvider):
     def get_native_model_name(self, model): return model
 
 
+class TestNativeClientBudget:
+    def test_native_model_bounds_timeout_and_drops_openai_timeout(self, monkeypatch):
+        pytest.importorskip("langchain_aws.chat_models.bedrock_converse")
+        monkeypatch.delenv("BEDROCK_BASE_URL", raising=False)
+        monkeypatch.setenv("BEDROCK_REGION", "us-east-1")
+
+        model = BedrockProvider().get_chat_model(
+            "anthropic/claude-sonnet-5", request_timeout=25
+        )
+
+        assert model.timeout == 120 and model.max_retries == 3
+        cfg = model._get_effective_config()
+        assert (cfg.connect_timeout, cfg.read_timeout) == (120, 120)
+        assert cfg.retries["max_attempts"] == 3
+
+
 class TestProviderStyles:
     def test_anthropic_direct_uses_cache_control(self):
         p = AnthropicProvider.__new__(AnthropicProvider)
@@ -395,6 +411,9 @@ class TestCacheSafeConverse:
         client.converse.return_value = _converse_response(cache_read=800, cache_write=100)
         msg = self._model(model_cls, client).invoke(self._messages())
 
+        # langchain-aws >= 1.4.6 already folds cache tokens into input_tokens, and the
+        # normalizer must not add them a second time.
+        assert msg.usage_metadata["input_tokens"] == 1000
         norm = normalize_usage(msg.usage_metadata)
         assert (norm.input_tokens, norm.cache_read_tokens, norm.cache_write_tokens) == (1000, 800, 100)
 
