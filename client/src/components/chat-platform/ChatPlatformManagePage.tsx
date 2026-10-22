@@ -51,6 +51,23 @@ function booleansFromMode(mode: NotifyMode): { start: boolean; end: boolean } {
   return { start: mode === "start" || mode === "both", end: mode === "end" || mode === "both" };
 }
 
+function storedBoolean(val: unknown, fallback: boolean): boolean {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === "boolean") return val;
+  return val === "true";
+}
+
+function booleansFromPrefs(
+  defaults: Record<string, boolean>,
+  stored: Record<string, unknown> | undefined,
+): Record<string, boolean> {
+  const loaded: Record<string, boolean> = {};
+  for (const [key, defaultValue] of Object.entries(defaults)) {
+    loaded[key] = storedBoolean(stored?.[key], defaultValue);
+  }
+  return loaded;
+}
+
 export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageConfig }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -220,27 +237,16 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
       keys.forEach((k) => params.append("keys", k));
 
       const response = await fetch(`/api/proxy/user-preferences/batch?${params.toString()}`);
-      if (response.ok) {
-        const data = await response.json();
-        const loaded: Record<string, boolean> = {};
-        for (const [key, defaultValue] of Object.entries(defaults)) {
-          const val = data.preferences?.[key];
-          if (val !== null && val !== undefined) {
-            loaded[key] = typeof val === "boolean" ? val : val === "true";
-          } else {
-            loaded[key] = defaultValue;
-          }
-        }
-        setPreferences((prev) => ({ ...prev, ...loaded } as Record<PreferenceKey, boolean>));
-        if (config.guestAccess) {
-          const val = data.preferences?.[config.guestAccess.preferenceKey];
-          // Never saved: keep the same default the backend uses.
-          if (val === null || val === undefined) {
-            setAllowUnregistered(config.guestAccess.defaultEnabled);
-          } else {
-            setAllowUnregistered(typeof val === "boolean" ? val : val === "true");
-          }
-        }
+      if (!response.ok) return;
+      const data = await response.json();
+      const stored = data.preferences as Record<string, unknown> | undefined;
+      setPreferences((prev) => ({ ...prev, ...booleansFromPrefs(defaults, stored) }));
+      if (config.guestAccess) {
+        // Never saved: keep the same default the backend uses.
+        setAllowUnregistered(storedBoolean(
+          stored?.[config.guestAccess.preferenceKey],
+          config.guestAccess.defaultEnabled,
+        ));
       }
     } catch (error) {
       console.error(`Error loading ${config.displayName} notification preferences:`, error);

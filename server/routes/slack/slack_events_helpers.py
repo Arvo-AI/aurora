@@ -284,14 +284,9 @@ def get_workspace_member(client, slack_user_id: str, team_id: str) -> Optional[d
         return None
 
     user = result.get("user") or {}
-    if not result.get("ok") or not user:
+    # Slack Connect, bots, and guests are not this workspace's members.
+    if not result.get("ok") or not user or _not_full_member(user, team_id):
         return None
-    if user.get("team_id") != team_id:
-        return None  # Slack Connect / external workspace
-    if user.get("deleted") or user.get("is_bot") or user.get("id") == "USLACKBOT":
-        return None
-    if user.get("is_stranger") or user.get("is_restricted") or user.get("is_ultra_restricted"):
-        return None  # external user or guest account
 
     profile = user.get("profile") or {}
     display_name = (
@@ -303,6 +298,15 @@ def get_workspace_member(client, slack_user_id: str, team_id: str) -> Optional[d
     # users:read.email puts this on the profile. Hidden emails stay unset.
     email = (profile.get("email") or "").strip() or None
     return {"display_name": display_name.strip(), "email": email}
+
+
+def _not_full_member(user: dict, team_id: str) -> bool:
+    """True for Slack Connect, bots, deleted users, and guest accounts."""
+    if user.get("team_id") != team_id:
+        return True
+    if user.get("deleted") or user.get("is_bot") or user.get("id") == "USLACKBOT":
+        return True
+    return bool(user.get("is_stranger") or user.get("is_restricted") or user.get("is_ultra_restricted"))
 
 
 # Org preference written from the Slack manage page.
@@ -332,18 +336,16 @@ def find_aurora_user_in_org(email: str, org_id: str) -> Optional[str]:
     if not email or "@" not in email or not org_id:
         return None
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                # users is not RLS-protected. Two case-variants and no exact
-                # hit can be two people, so don't pick one.
-                cursor.execute(
-                    """SELECT id, email FROM users
-                        WHERE LOWER(email) = LOWER(%s) AND org_id = %s
-                        ORDER BY (email = %s) DESC, created_at ASC
-                        LIMIT 2""",
-                    (email, org_id, email),
-                )
-                rows = cursor.fetchall()
+        # users is not RLS-protected. Two case-variants and no exact hit can be two people.
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """SELECT id, email FROM users
+                    WHERE LOWER(email) = LOWER(%s) AND org_id = %s
+                    ORDER BY (email = %s) DESC, created_at ASC
+                    LIMIT 2""",
+                (email, org_id, email),
+            )
+            rows = cursor.fetchall()
         if not rows:
             return None
         # Exact case is unambiguous. A lone case-insensitive row is too.
@@ -857,6 +859,18 @@ def _resolve_channel_label(user_id: str, channel_id: str) -> str:
     return f"#{name} ({channel_id})" if name else channel_id
 
 
+def _slack_run_metadata(channel, thread_ts, thinking_message_ts=None, access_as=None, slack_user_id=None):
+    """Session and task metadata. access_as is how a guest is checked."""
+    meta = {"source": "slack", "channel": channel, "thread_ts": thread_ts}
+    if thinking_message_ts:
+        meta["thinking_message_ts"] = thinking_message_ts
+    if access_as:
+        meta["access_as"] = access_as
+    if slack_user_id:
+        meta["slack_user_id"] = slack_user_id
+    return meta
+
+
 def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread_ts: str = None, 
                            incident_id: str = None, session_id: str = None, context_messages: list = None,
                            channel_context: str | None = None, thinking_message_ts: str | None = None,
@@ -880,23 +894,13 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
         # Create session if not exists
         if not session_id:
             title = slack_session_title(message_text)
-            
-            # Trigger metadata for tracking. access_as is how a guest is checked.
-            trigger_metadata = {
-                "source": "slack",
-                "channel": channel,
-                "thread_ts": thread_ts,
-            }
-            if access_as:
-                trigger_metadata["access_as"] = access_as
-            if slack_user_id:
-                trigger_metadata["slack_user_id"] = slack_user_id
-            
             # Create the session in the database so it appears in chat history
             session_id = create_background_chat_session(
                 user_id=user_id,
                 title=title,
-                trigger_metadata=trigger_metadata,
+                trigger_metadata=_slack_run_metadata(
+                    channel, thread_ts, access_as=access_as, slack_user_id=slack_user_id,
+                ),
                 incident_id=incident_id,
             )
         
@@ -933,17 +937,9 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
         channel_header = f"[Slack message from channel {channel_label}]\n\n"
         full_message = f"{channel_header}{message_text}{context_str}"
         
-        # Trigger metadata for tracking and response
-        trigger_metadata = {
-            "source": "slack",
-            "channel": channel,
-            "thread_ts": thread_ts,
-            "thinking_message_ts": thinking_message_ts,  # Store the thinking message timestamp
-        }
-        if access_as:
-            trigger_metadata["access_as"] = access_as
-        if slack_user_id:
-            trigger_metadata["slack_user_id"] = slack_user_id
+        trigger_metadata = _slack_run_metadata(
+            channel, thread_ts, thinking_message_ts, access_as, slack_user_id,
+        )
         
         # Launch background chat task
         # For Slack @mentions, link to incident but don't send "investigation started" notifications
