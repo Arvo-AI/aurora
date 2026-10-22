@@ -51,6 +51,7 @@ const PROVIDER_ICONS: Record<string, string> = {
   scaleway: "/scaleway.svg",
   ovh: "/ovh.svg",
   newrelic: "/newrelic.svg",
+  servicenow: "/servicenow.svg",
 };
 
 const PROVIDER_NAMES: Record<string, string> = {
@@ -79,6 +80,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   scaleway: "Scaleway",
   ovh: "OVH Cloud",
   newrelic: "New Relic",
+  servicenow: "ServiceNow",
 };
 
 const SEVERITY_STYLES: Record<string, string> = {

@@ -39,6 +39,7 @@ CONNECTOR_DIRS: frozenset = frozenset({
     "pagerduty",
     "scaleway",
     "sentry",
+    "servicenow",
     "sharepoint",
     "slack",
     "teams",

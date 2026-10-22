@@ -23,10 +23,13 @@ from services.memory import (
     PROTECTED_ENTRIES,
     JIRA_MEMORY_CATEGORY,
     JIRA_MEMORY_TITLE,
+    SERVICENOW_MEMORY_CATEGORY,
+    SERVICENOW_MEMORY_TITLE,
 )
 from services.memory.queries import fetch_entry_by_id, fetch_entry_by_title
 from services.memory.platform_memory import get_spec, seed_platform_memory
 from services.memory.jira_memory import seed_jira_memory
+from services.memory.servicenow_memory import seed_servicenow_memory
 from services.artifacts.store import create_version
 from utils.validation import strip_nul
 
@@ -458,6 +461,23 @@ def get_jira_memory(user_id):
     except Exception:
         logger.exception("[Memory] Error getting Jira memory")
         return jsonify({"error": "Failed to get the Jira memory entry"}), 500
+
+
+@memory_bp.route("/servicenow", methods=["GET"])
+@require_permission("memory", "read")
+def get_servicenow_memory(user_id):
+    """The "ServiceNow RCA" entry Auto mode's judge follows, editable on the ServiceNow page."""
+    org_id = get_org_id_from_request()
+    try:
+        entry = _read_or_seed_policy(
+            user_id, org_id, SERVICENOW_MEMORY_CATEGORY, SERVICENOW_MEMORY_TITLE, seed_servicenow_memory,
+        )
+        if entry is None:
+            return jsonify({"error": "Failed to load the ServiceNow memory entry"}), 500
+        return jsonify({"entry": entry}), 200
+    except Exception:
+        logger.exception("[Memory] Error getting ServiceNow memory")
+        return jsonify({"error": "Failed to get the ServiceNow memory entry"}), 500
 
 
 @memory_bp.route("/upload", methods=["POST"])

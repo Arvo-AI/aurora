@@ -69,6 +69,7 @@ const sidebars: SidebarsConfig = {
         'integrations/mcp',
         'integrations/custom-mcp-servers',
         'integrations/spinnaker',
+        'integrations/servicenow',
         'integrations/llm-providers',
       ],
     },

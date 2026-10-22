@@ -744,6 +744,26 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_pagerduty_events_status ON pagerduty_events(incident_status);
                     CREATE INDEX IF NOT EXISTS idx_pagerduty_events_received_at ON pagerduty_events(received_at DESC);
                 """,
+                "servicenow_events": """
+                    CREATE TABLE IF NOT EXISTS servicenow_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        event_type VARCHAR(50),
+                        sys_id VARCHAR(64),
+                        number VARCHAR(64),
+                        incident_title TEXT,
+                        incident_status VARCHAR(50),
+                        severity VARCHAR(20),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_servicenow_events_user_id ON servicenow_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_servicenow_events_sys_id ON servicenow_events(sys_id);
+                    CREATE INDEX IF NOT EXISTS idx_servicenow_events_received_at ON servicenow_events(received_at DESC);
+                """,
                 "opsgenie_events": """
                     CREATE TABLE IF NOT EXISTS opsgenie_events (
                         id SERIAL PRIMARY KEY,
@@ -1635,6 +1655,7 @@ def initialize_tables():
             rls_tables.append("newrelic_events")
             rls_tables.append("sentry_events")
             rls_tables.append("pagerduty_events")
+            rls_tables.append("servicenow_events")
 
             # Add monitoring tables
             rls_tables.append("cloudwatch_alarms")
@@ -2521,6 +2542,20 @@ def initialize_tables():
                 logging.exception("Failed to add incidentio_update_id column to incidents")
                 conn.rollback()
 
+            # Add servicenow_note_id column to incidents: marker of the RCA work note posted
+            # back to the ServiceNow incident ('pending' while a post is in flight)
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS servicenow_note_id VARCHAR(64);
+                    """
+                )
+                conn.commit()
+            except Exception:
+                logging.exception("Failed to add servicenow_note_id column to incidents")
+                conn.rollback()
+
             # Migration: Add active_tab column to incidents for UI state persistence
             try:
                 cursor.execute(
@@ -2934,7 +2969,7 @@ def initialize_tables():
             _org_id_tables = list(set(rls_tables + [
                 "users", "workspaces", "aurora_deployments",
                 "cloud_feed_metadata", "cloud_ingestion_state",
-                "pagerduty_events", "opsgenie_events", "knowledge_base_memory",
+                "pagerduty_events", "opsgenie_events", "servicenow_events", "knowledge_base_memory",
                 "knowledge_base_documents",
             ]))
             for tbl in _org_id_tables:
@@ -3148,7 +3183,7 @@ def initialize_tables():
                 "deployment_tasks", "deployments", "chat_sessions",
                 "llm_usage_tracking", "cloud_feed_metadata", "cloud_ingestion_state",
                 "grafana_alerts", "datadog_events", "netdata_alerts",
-                "pagerduty_events", "opsgenie_events", "incidents", "incident_alerts",
+                "pagerduty_events", "opsgenie_events", "servicenow_events", "incidents", "incident_alerts",
                 "rca_notification_emails", "splunk_alerts", "elastic_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
                 "bigpanda_events", "kubectl_agent_tokens",

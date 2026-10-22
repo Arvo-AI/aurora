@@ -366,6 +366,9 @@ class Agent:
                             JIRA_MEMORY_CATEGORY,
                             JIRA_MEMORY_TITLE,
                             JIRA_POLICY_SOURCES,
+                            SERVICENOW_MEMORY_CATEGORY,
+                            SERVICENOW_MEMORY_TITLE,
+                            SERVICENOW_POLICY_SOURCES,
                             policy_entries_for_source,
                         )
                         _force_entries = policy_entries_for_source(_src) or None
@@ -374,6 +377,10 @@ class Agent:
                             from routes.jira.jira_routes import get_jira_rca_mode
                             if get_jira_rca_mode(state.user_id) == "auto":
                                 _force_entries = [(JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE)]
+                        elif _src in SERVICENOW_POLICY_SOURCES:
+                            from routes.servicenow.tasks import get_rca_mode as _get_servicenow_rca_mode
+                            if _get_servicenow_rca_mode(state.user_id) == "auto":
+                                _force_entries = [(SERVICENOW_MEMORY_CATEGORY, SERVICENOW_MEMORY_TITLE)]
                         _memory_prefetch = MemoryPrefetch(
                             user_id=state.user_id,
                             session_id=state.session_id,

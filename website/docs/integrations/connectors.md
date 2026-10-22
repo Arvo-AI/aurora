@@ -1191,6 +1191,14 @@ To receive PagerDuty alerts in Aurora:
 
 ---
 
+### ServiceNow
+
+Connect with the instance URL and either Basic auth (an integration user with the `itil` role) or OAuth 2.0 client credentials. Aurora gives you a webhook URL and shared secret; a Business Rule on the Incident table POSTs new incidents to Aurora, which creates an incident and starts an RCA. Aurora can optionally post the root cause back to the incident as one work note.
+
+See the [ServiceNow integration guide](./servicenow.md) for the Business Rule script, RCA settings, and security details.
+
+---
+
 ### Datadog
 
 API Key + Application Key authentication.

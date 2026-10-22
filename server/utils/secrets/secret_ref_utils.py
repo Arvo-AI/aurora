@@ -71,6 +71,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "notion",   # Notion (documentation platform)
     "google",   # Google Chat — provider is "google_chat", split('_')[0] matches this
     "incidentio",  # incident.io connector tokens
+    "servicenow",  # ServiceNow connector tokens
     "flyio",    # Fly.io connector tokens
     "kubeconfig", # Kubernetes kubeconfig uploads
     "mcp",      # Customer-registered MCP servers (list of servers in one blob)

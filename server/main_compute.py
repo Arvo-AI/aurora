@@ -134,6 +134,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                            "Authorization", "X-Provider-Preference"],
                          "methods": ["GET", "POST", "DELETE", "OPTIONS", "PATCH"]},
+        r"/servicenow/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                           "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                             "Authorization", "X-Provider-Preference"],
+                           "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
         r"/opsgenie/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With",
                                            "X-User-ID", "Authorization", "X-Provider-Preference"],
@@ -257,6 +261,8 @@ _OPEN_PREFIXES = (
     "/spinnaker/webhook/",
     "/jira/webhook/",
     "/incidentio/alerts/webhook/",
+    # ServiceNow Business Rule webhook — verified via the per-user shared secret, not session.
+    "/servicenow/webhook/",
     "/ovh_api/ovh/oauth2/callback",
     "/azure/setup-script",
     "/azure/setup-script-ps1",
@@ -501,6 +507,11 @@ app.register_blueprint(mcp_servers_bp, url_prefix="/mcp")
 from routes.incidentio import bp as incidentio_bp  # noqa: F401
 import routes.incidentio.tasks  # noqa: F401
 app.register_blueprint(incidentio_bp, url_prefix="/incidentio")
+
+# --- ServiceNow Integration Routes ---
+from routes.servicenow import bp as servicenow_bp  # noqa: F401
+import routes.servicenow.tasks  # noqa: F401
+app.register_blueprint(servicenow_bp, url_prefix="/servicenow")
 
 # --- Coroot Integration Routes ---
 from routes.coroot import bp as coroot_bp  # noqa: F401

@@ -13,48 +13,18 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from routes.jira.field_options import unique_names
 
+from utils.rca_rule_lists import check_rule_list, clean_name_list
+
 logger = logging.getLogger(__name__)
 
 # Jira project keys are a letter plus letters, digits, or underscores.
 PROJECT_KEY_RE = re.compile(r"^[A-Za-z]\w{0,31}$", re.ASCII)
 _ISSUE_KEY_RE = re.compile(r"^[A-Za-z]\w+-\d+$", re.ASCII)
 _MAX_RCA_RULES = 50
-_MAX_VALUES = 30
 _MAX_JQL = 500
 
 # Optional any-of fields. Empty means that dimension does not narrow the rule.
 FILTER_FIELDS = ("priorities", "labels", "components", "statuses")
-
-
-def _clean_name(value: Any, label: str) -> Tuple[Optional[str], Optional[str]]:
-    if not isinstance(value, str):
-        return None, f"{label} must be text"
-    cleaned = " ".join(value.split())
-    if not cleaned or len(cleaned) > 80:
-        return None, f"Each {label} must be 1–80 characters"
-    return cleaned, None
-
-
-def _clean_name_list(raw: Any, label: str) -> Tuple[Optional[List[str]], Optional[str]]:
-    """Dedupe a list of names. Missing means no constraint, not an error."""
-    if raw is None:
-        return [], None
-    if not isinstance(raw, list):
-        return None, f"{label} must be a list"
-    seen: Dict[str, str] = {}
-    for item in raw:
-        # A blank entry is an empty chip, not a filter value.
-        if isinstance(item, str) and not item.strip():
-            continue
-        cleaned, error = _clean_name(item, label)
-        if error or cleaned is None:
-            return None, error
-        folded = cleaned.casefold()
-        if folded not in seen:
-            seen[folded] = cleaned
-    if len(seen) > _MAX_VALUES:
-        return None, f"At most {_MAX_VALUES} {label}"
-    return list(seen.values()), None
 
 
 def _jql_is_contained(jql: str) -> bool:
@@ -126,13 +96,13 @@ def _clean_rule(item: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     # Reject anything that is not a project key so a payload cannot widen the match.
     if not PROJECT_KEY_RE.fullmatch(project_key):
         return None, "projectKey must look like a Jira project key"
-    issue_types, error = _clean_name_list(item.get("issueTypes"), "ticket types")
+    issue_types, error = clean_name_list(item.get("issueTypes"), "ticket types")
     if error or not issue_types:
         return None, error or "issueTypes must list at least one ticket type"
 
     rule: Dict[str, Any] = {"projectKey": project_key, "issueTypes": issue_types}
     for field in FILTER_FIELDS:
-        rule[field], error = _clean_name_list(item.get(field), field)
+        rule[field], error = clean_name_list(item.get(field), field)
         if error:
             return None, error
     rule["jql"], error = _clean_jql(item.get("jql"))
@@ -143,10 +113,9 @@ def _clean_rule(item: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
 
 def normalize_rca_rules(raw: Any) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
     """Validate rules. An empty list means nothing auto-triggers."""
-    if not isinstance(raw, list):
-        return None, "rcaRules must be a list"
-    if len(raw) > _MAX_RCA_RULES:
-        return None, f"At most {_MAX_RCA_RULES} filters can be configured"
+    error = check_rule_list(raw, _MAX_RCA_RULES)
+    if error:
+        return None, error
 
     merged: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
     for item in raw:
@@ -159,7 +128,7 @@ def normalize_rca_rules(raw: Any) -> Tuple[Optional[List[Dict[str, Any]]], Optio
             merged[slot] = rule
             continue
         # Same project and same limits combine their ticket types.
-        types, error = _clean_name_list(merged[slot]["issueTypes"] + rule["issueTypes"], "ticket types")
+        types, error = clean_name_list(merged[slot]["issueTypes"] + rule["issueTypes"], "ticket types")
         if error:
             return None, error
         merged[slot]["issueTypes"] = types

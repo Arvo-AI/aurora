@@ -28,6 +28,7 @@ _SOURCE_TABLE_MAP = {
     "bigpanda": "bigpanda_events",
     "netdata": "netdata_alerts",
     "incidentio": "incidentio_alerts",
+    "servicenow": "servicenow_events",
     "jenkins": "jenkins_deployment_events",
     "cloudbees": "jenkins_deployment_events",
     "spinnaker": "spinnaker_deployment_events",
@@ -83,9 +84,12 @@ def _fetch_payload(cursor, conn, incident_id: str, user_id: str) -> Tuple[Option
     if not table:
         return _fetch_from_alert_metadata(cursor, incident_id, source_type)
 
-    payload_row = _lookup_payload_row(
-        cursor, table, source_alert_id, user_id, incident_created_at
-    )
+    if source_type == "servicenow":
+        payload_row = _lookup_servicenow_payload(cursor, incident_id, user_id)
+    else:
+        payload_row = _lookup_payload_row(
+            cursor, table, source_alert_id, user_id, incident_created_at
+        )
     if not payload_row or not payload_row[0]:
         return None, f"Error: No payload found in {table} for source_alert_id {source_alert_id}."
 
@@ -106,6 +110,20 @@ def _fetch_from_alert_metadata(
         payload = meta_row[0] if isinstance(meta_row[0], dict) else json.loads(meta_row[0])
         return payload, None
     return None, f"Error: No alert data found for source type '{source_type}'."
+
+
+def _lookup_servicenow_payload(cursor, incident_id: str, user_id: str):
+    """ServiceNow keeps one servicenow_events row per Business Rule delivery, and the
+    incident's source_alert_id is a hash of the record's sys_id rather than a row id.
+    Match on the sys_id kept in alert_metadata and take the newest delivery."""
+    cursor.execute(
+        """SELECT e.payload FROM servicenow_events e
+           JOIN incidents i ON i.id = %s
+           WHERE e.user_id = %s AND e.sys_id = i.alert_metadata->>'sysId'
+           ORDER BY e.received_at DESC LIMIT 1""",
+        (incident_id, user_id),
+    )
+    return cursor.fetchone()
 
 
 def _lookup_payload_row(cursor, table: str, source_alert_id, user_id: str, incident_created_at):

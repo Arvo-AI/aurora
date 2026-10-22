@@ -34,6 +34,11 @@ _STATEMENTS = {
         "UPDATE incidents SET incidentio_update_id = NULL WHERE id = %s AND incidentio_update_id = %s",
         "UPDATE incidents SET incidentio_update_id = %s WHERE id = %s",
     ),
+    "servicenow_note_id": (
+        "UPDATE incidents SET servicenow_note_id = %s WHERE id = %s AND servicenow_note_id IS NULL",
+        "UPDATE incidents SET servicenow_note_id = NULL WHERE id = %s AND servicenow_note_id = %s",
+        "UPDATE incidents SET servicenow_note_id = %s WHERE id = %s",
+    ),
 }
 
 
