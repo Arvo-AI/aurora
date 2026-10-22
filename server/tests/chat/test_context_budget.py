@@ -29,7 +29,7 @@ def _real_module(name: str):
     return module
 
 
-@pytest.fixture()
+@pytest.fixture
 def context_trim(monkeypatch):
     """Load ``context_trim.py`` with its background / cloud-context imports stubbed."""
     _real_module("langchain.agents.middleware.types")
@@ -237,6 +237,92 @@ class TestBudgetTrim:
         history = _rca_history(pairs=3, tool_chars=60_000)  # each pair ~15K tokens
         kept = self._model_call(mw, history)
         assert [m.id for m in kept] == ["task", "ai2", "tool2"]
+
+    def test_the_latest_user_message_survives_a_cut_inside_the_current_turn(self, context_trim):
+        """Interactive session with loaded history (review on #740): the current turn's
+        tool results alone exceed the low watermark, so every AIMessage boundary that fits
+        lies after the current question. The cut must land on that HumanMessage, never
+        after it — the model needs the question it is answering."""
+        from langchain_core.messages import HumanMessage
+
+        mw = context_trim.ContextSafetyMiddleware(self.MODEL, token_budget=self.BUDGET)
+        old_turns = _rca_history(pairs=10)  # old conversation: task + 10 small pairs
+        question = HumanMessage("why is checkout-api slow right now?", id="current-question")
+        current_turn = _rca_history(pairs=3, tool_chars=30_000, first_pair=10)[1:]  # ~7.5K tokens each
+        history = old_turns + [question] + current_turn
+
+        kept = self._model_call(mw, history)
+
+        assert kept[0] is history[0]
+        assert question in kept, "the current question must never be trimmed away"
+        assert kept.index(question) < kept.index(current_turn[0])
+        assert kept[-1] is history[-1]
+        assert not _orphan_tool_messages(kept)
+        # Everything after the question is kept; the old turns are what got dropped.
+        assert kept[kept.index(question) :] == history[history.index(question) :]
+        assert len(kept) < len(history)
+
+    def test_older_turns_before_the_latest_user_message_are_still_trimmed(self, context_trim):
+        """The floor only forbids cutting AFTER the latest HumanMessage: when the
+        current turn fits, the cut lands at an AIMessage boundary before the question
+        and the request still comes in under the low watermark."""
+        from langchain_core.messages import AIMessage, HumanMessage
+        from langchain_core.messages.utils import count_tokens_approximately
+
+        mw = context_trim.ContextSafetyMiddleware(self.MODEL, token_budget=self.BUDGET)
+        old_turns = _rca_history(pairs=60)  # ~32K tokens on their own
+        question = HumanMessage("and the nodes?", id="current-question")
+        current_turn = _rca_history(pairs=2, first_pair=60)[1:]
+        history = old_turns + [question] + current_turn
+
+        kept = self._model_call(mw, history)
+
+        assert kept[0] is history[0]
+        assert isinstance(kept[1], AIMessage)
+        assert question in kept
+        assert kept[-1] is history[-1]
+        assert not _orphan_tool_messages(kept)
+        assert count_tokens_approximately(kept) <= int(self.BUDGET * context_trim._TRIM_LOW_WATERMARK_RATIO)
+
+    def test_a_context_update_appended_last_does_not_disable_trimming(self, context_trim):
+        """Background RCA: correlated-alert updates arrive as a HumanMessage appended at
+        the very end. Pinning everything up to it would keep the whole history; the
+        floor instead keeps the update itself and still trims the old tool turns."""
+        from langchain_core.messages import HumanMessage
+        from langchain_core.messages.utils import count_tokens_approximately
+
+        mw = context_trim.ContextSafetyMiddleware(self.MODEL, token_budget=self.BUDGET)
+        history = _rca_history(pairs=60)
+        update = HumanMessage("[RCA CONTEXT UPDATE] correlated alert: db-primary CPU 95%", id="update")
+        history = history + [update]
+
+        kept = self._model_call(mw, history)
+
+        assert kept[0] is history[0]
+        assert kept[-1] is update
+        assert not _orphan_tool_messages(kept)
+        assert count_tokens_approximately(kept) <= int(self.BUDGET * context_trim._TRIM_LOW_WATERMARK_RATIO)
+        assert len(kept) < len(history)
+        # The next call (one more tool pair after the update) reuses the same cut.
+        turn_2 = history + _rca_history(pairs=1, first_pair=60)[1:]
+        kept_2 = self._model_call(mw, turn_2)
+        assert [m.id for m in kept_2[: len(kept)]] == [m.id for m in kept]
+        assert [m.id for m in kept_2[len(kept) :]] == ["ai60", "tool60"]
+
+    def test_the_latest_tool_call_block_survives_a_trailing_context_update(self, context_trim):
+        """The invariant "the model always sees its latest tool call with its results"
+        must hold when a correlated-alert update (a HumanMessage) is appended after an
+        oversized tool result: the cut may not move past that tool call to the update."""
+        from langchain_core.messages import HumanMessage
+
+        mw = context_trim.ContextSafetyMiddleware(self.MODEL, token_budget=self.BUDGET)
+        history = _rca_history(pairs=3, tool_chars=60_000)  # each pair ~15K tokens
+        history.append(HumanMessage("[RCA CONTEXT UPDATE] correlated alert: db-primary CPU 95%", id="update"))
+
+        kept = self._model_call(mw, history)
+
+        assert [m.id for m in kept] == ["task", "ai2", "tool2", "update"]
+        assert not _orphan_tool_messages(kept)
 
     def test_bedrock_conversation_starts_with_the_user_turn(self, context_trim):
         """langchain-aws's own converter: a trimmed request still opens with the user

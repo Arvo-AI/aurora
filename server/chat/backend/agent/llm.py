@@ -1,14 +1,19 @@
 import logging
 import os
+import threading
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, Set, Tuple
 
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel
 
 from chat.backend.agent.call_options import CHEAP_MODEL, default_auxiliary_model, max_tokens_for
-from chat.backend.agent.providers import create_chat_model, get_cached_chat_model
+from chat.backend.agent.providers import (
+    ProviderUnavailableError,
+    create_chat_model,
+    get_cached_chat_model,
+)
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
 from chat.backend.agent.utils.message_content import extract_text_from_content
 
@@ -480,6 +485,58 @@ Content to summarize:
 
 Summary:"""
 
+# Summarization models already reported as unservable in this process, so the
+# fallback is logged once per model rather than once per oversized tool output.
+_unservable_summarizers: Set[str] = set()
+_unservable_summarizers_lock = threading.Lock()
+
+
+def _build_summarizer(model_name: str, provider_mode: Optional[str], output_cap: int) -> BaseChatModel:
+    # Shared non-streaming instance without callbacks, so the summary is never
+    # streamed to the WebSocket/frontend and no client is built per call.
+    return get_cached_chat_model(
+        model_name,
+        temperature=0.4,
+        provider_mode=provider_mode,
+        max_tokens=output_cap,
+        # Summaries are mechanical; extended thinking only adds output tokens.
+        disable_thinking=True,
+    )
+
+
+def _summarizer_for(
+    model_name: str, provider_mode: Optional[str], output_cap: int
+) -> Tuple[BaseChatModel, str]:
+    """The summarizer for ``model_name``, falling back to the auxiliary default model
+    when the configured one has no provider in this deployment.
+
+    Returns ``(chat_model, model id actually used)``. A ``SUMMARIZATION_MODEL``
+    inherited from an older install — ``google/gemini-2.5-flash`` under
+    ``LLM_PROVIDER_MODE=bedrock`` with no Google credentials — would otherwise turn
+    every oversized tool output into a hard truncation. Only
+    :class:`ProviderUnavailableError` (a configuration fact) triggers the fallback;
+    network and model errors propagate so the caller's own fallback applies. An
+    explicit model that works always wins, and a fallback that is itself
+    unservable propagates as well.
+    """
+    try:
+        return _build_summarizer(model_name, provider_mode, output_cap), model_name
+    except ProviderUnavailableError as exc:
+        fallback = ModelConfig.AUXILIARY_DEFAULT_MODEL
+        if fallback == model_name:
+            raise
+        with _unservable_summarizers_lock:
+            first_time = model_name not in _unservable_summarizers
+            _unservable_summarizers.add(model_name)
+        if first_time:
+            logger.warning(
+                "Summarization model %s has no provider in this deployment (%s); "
+                "summaries fall back to %s. Set SUMMARIZATION_MODEL / "
+                "TOOL_OUTPUT_SUMMARIZATION_MODEL to a model this install can serve.",
+                model_name, exc, fallback,
+            )
+        return _build_summarizer(fallback, provider_mode, output_cap), fallback
+
 
 def summarize_text(
     content: str,
@@ -501,7 +558,9 @@ def summarize_text(
     output. Thinking is off and the output is capped at
     ``LLM_MAX_TOKENS_SUMMARY`` (default 1500). ``request_type`` labels the usage
     row: ``tool_output_summarization`` for tool outputs, ``context_compression``
-    for conversation compaction. By default never raises: on any failure the head
+    for conversation compaction. When the configured model's provider is not set
+    up in this deployment, the auxiliary default model is used instead (see
+    :func:`_summarizer_for`). By default never raises: on any failure the head
     of the content is returned with a truncation marker; ``raise_on_error=True``
     re-raises instead so a caller with its own fallback (and a result cache that
     must not remember failures) can tell the two apart.
@@ -510,6 +569,12 @@ def summarize_text(
     output_cap = max_tokens if max_tokens is not None else max_tokens_for("summary")
 
     try:
+        # Resolve the model first: the content cap and the usage row below must
+        # describe the model that actually runs (the fallback, when it applies).
+        summarizer, summarization_model = _summarizer_for(
+            summarization_model, provider_mode, output_cap
+        )
+
         # Cap content to fit within the summarization model's context window.
         # Without this, huge tool outputs (e.g. multi-MB log dumps) get embedded
         # verbatim in the prompt and blow past the model's context limit.
@@ -527,17 +592,6 @@ def summarize_text(
         logger.info(f"Summarizing {len(content)} chars using {summarization_model}")
 
         summarization_prompt = _SUMMARY_PROMPT.format(content=content)
-
-        # Shared non-streaming instance without callbacks, so the summary is never
-        # streamed to the WebSocket/frontend and no client is built per call.
-        summarizer = get_cached_chat_model(
-            summarization_model,
-            temperature=0.4,
-            provider_mode=provider_mode,
-            max_tokens=output_cap,
-            # Summaries are mechanical; extended thinking only adds output tokens.
-            disable_thinking=True,
-        )
 
         if user_id:
             from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke

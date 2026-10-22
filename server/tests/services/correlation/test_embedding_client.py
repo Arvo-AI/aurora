@@ -22,7 +22,7 @@ _CRED_VARS = (
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def clean_env(monkeypatch):
     for var in _REGION_VARS + _CRED_VARS:
         monkeypatch.delenv(var, raising=False)
@@ -42,7 +42,7 @@ def _titan_body(vector):
     return {"body": body}
 
 
-@pytest.fixture()
+@pytest.fixture
 def fake_boto3(monkeypatch):
     """Inject fake boto3 / botocore modules; returns the fake boto3 module."""
     runtime = MagicMock(name="bedrock-runtime")
@@ -151,7 +151,8 @@ class TestBedrockEmbedding:
         args, kwargs = fake_boto3.client.call_args
         assert args == ("bedrock-runtime",)
         assert kwargs["region_name"] == "eu-central-1"
-        assert "aws_access_key_id" not in kwargs and "aws_secret_access_key" not in kwargs
+        assert "aws_access_key_id" not in kwargs
+        assert "aws_secret_access_key" not in kwargs
         config = kwargs["config"]
         assert config.kwargs["retries"] == {"mode": "standard", "total_max_attempts": 3}
         assert config.kwargs["connect_timeout"] == 5
@@ -291,7 +292,9 @@ class TestEmbedCache:
         a = _client(clean_env, "bedrock/amazon.titan-embed-text-v2:0")
         b = _client(clean_env, "openai/text-embedding-3-small")
         assert a._cache_key("x") != b._cache_key("x")
-        assert a._cache_key("x") == a._cache_key("x")
+        # Deterministic across instances of the same model (the Redis key must be shared).
+        same_model = _client(clean_env, "bedrock/amazon.titan-embed-text-v2:0")
+        assert same_model._cache_key("x") == a._cache_key("x")
 
     def test_cache_is_bounded(self, clean_env, monkeypatch):
         import services.correlation.embedding_client as mod

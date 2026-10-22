@@ -84,7 +84,8 @@ class TestConversationDigest:
             {"role": "assistant", "content": "hi"},
         ]
         digest = collector.conversation_digest("s", msgs)
-        assert digest is not None and len(digest) == 64
+        assert digest is not None
+        assert len(digest) == 64
 
 
 class TestClaimExtraction:
@@ -122,15 +123,44 @@ class TestClaimExtraction:
         assert collector._claim_extraction("s-1", "d1") is False
 
 
+class TestReleaseExtraction:
+    def test_release_lets_the_same_digest_be_claimed_again(self, collector):
+        assert collector._claim_extraction("s-1", "d1") is True
+        collector._release_extraction("s-1", "d1")
+        assert collector._claim_extraction("s-1", "d1") is True
+
+    def test_release_deletes_the_redis_key_and_the_local_mark(self, collector, monkeypatch):
+        redis = MagicMock()
+        redis.set.return_value = True
+        monkeypatch.setattr(collector, "_redis_client", lambda: redis)
+        collector._claim_extraction("s-1", "d1")
+
+        collector._release_extraction("s-1", "d1")
+
+        redis.delete.assert_called_once_with("mem:extract:done:s-1:d1")
+        assert "mem:extract:done:s-1:d1" not in collector._fallback_debounce_cache
+
+    def test_redis_delete_failure_is_swallowed_and_the_local_mark_still_goes(self, collector, monkeypatch):
+        # Claimed locally while Redis was down...
+        assert collector._claim_extraction("s-1", "d1") is True
+        redis = MagicMock()
+        redis.delete.side_effect = ConnectionError("down")
+        monkeypatch.setattr(collector, "_redis_client", lambda: redis)
+
+        collector._release_extraction("s-1", "d1")  # must not raise
+
+        assert collector._claim_extraction("s-1", "d1") is True
+
+
 class TestTaskDebounce:
-    def _run(self, collector, monkeypatch, messages):
+    def _run(self, collector, monkeypatch, messages, agent=None):
         monkeypatch.setattr(collector, "get_hook", lambda name: (lambda org, user: (True, "")))
         monkeypatch.setattr(collector, "get_org_id_for_user", lambda user_id: "org-1")
         monkeypatch.setattr(
             collector.LLMContextManager, "load_context_history", staticmethod(lambda s, u: messages)
         )
         monkeypatch.setattr(collector, "build_memory_index", lambda user_id: "(index)")
-        agent_spy = MagicMock(return_value=3)
+        agent_spy = agent if agent is not None else MagicMock(return_value=3)
         monkeypatch.setattr(collector, "_run_extraction_agent", agent_spy)
         result = collector.extract_memories_from_session(MagicMock(), "sess-1", "user-1")
         return result, agent_spy
@@ -141,10 +171,40 @@ class TestTaskDebounce:
         first, spy = self._run(collector, monkeypatch, messages)
         second, spy2 = self._run(collector, monkeypatch, messages)
 
-        assert first["status"] == "ok" and first["model_calls"] == 3
+        assert first["status"] == "ok"
+        assert first["model_calls"] == 3
         spy.assert_called_once()
         assert second == {"status": "skipped", "reason": "no_new_user_messages"}
         spy2.assert_not_called()
+
+    def test_a_failed_extraction_releases_the_claim_so_the_turn_is_retried(self, collector, monkeypatch):
+        """Review on #740: the claim is taken before any work runs. A Bedrock throttle,
+        the turn cap or a soft time limit must give it back, or the redelivered run
+        (``acks_late``) would answer ``no_new_user_messages`` and the facts of that
+        turn would be lost until the user writes again."""
+        messages = [HumanMessage(content="we release on Fridays"), AIMessage(content="noted")]
+
+        failed, _ = self._run(collector, monkeypatch, messages, agent=MagicMock(side_effect=RuntimeError("throttled")))
+        retried, spy = self._run(collector, monkeypatch, messages)
+
+        assert failed["status"] == "error"
+        assert retried["status"] == "ok"
+        spy.assert_called_once()
+
+    def test_a_failure_before_the_claim_releases_nothing(self, collector, monkeypatch):
+        release_spy = MagicMock()
+        monkeypatch.setattr(collector, "_release_extraction", release_spy)
+        monkeypatch.setattr(collector, "get_hook", lambda name: (lambda org, user: (True, "")))
+        monkeypatch.setattr(collector, "get_org_id_for_user", lambda user_id: "org-1")
+        monkeypatch.setattr(
+            collector.LLMContextManager, "load_context_history",
+            staticmethod(MagicMock(side_effect=RuntimeError("db down"))),
+        )
+
+        result = collector.extract_memories_from_session(MagicMock(), "sess-1", "user-1")
+
+        assert result["status"] == "error"
+        release_spy.assert_not_called()
 
     def test_new_user_message_runs_again(self, collector, monkeypatch):
         turn_one = [HumanMessage(content="investigate pods"), AIMessage(content="done")]
@@ -179,7 +239,8 @@ class TestExtractionModelOptions:
         monkeypatch.setattr(collector, "get_cached_chat_model", fake_cached)
         monkeypatch.setattr(collector, "create_agent", lambda **kw: fake_agent)
         monkeypatch.setattr(collector, "build_memory_tools", lambda user_id, session_id=None: [])
-        monkeypatch.setattr(collector, "_serving_provider", lambda model: "bedrock")
+        # The shared resolver every other usage row goes through (review on #740).
+        monkeypatch.setattr(collector, "resolve_serving_provider", lambda model: "bedrock")
         monkeypatch.setattr(collector.ModelConfig, "MEMORY_AGENT_MODEL", "test/memory-model")
         monkeypatch.delenv("LLM_MAX_TOKENS_MEMORY_AGENT", raising=False)
 
@@ -195,4 +256,11 @@ class TestExtractionModelOptions:
         (callback,) = config["callbacks"]
         assert callback.request_type == "memory_extraction"
         assert callback.api_provider == "bedrock"
-        assert callback.user_id == "user-1" and callback.session_id == "sess-1"
+        assert callback.user_id == "user-1"
+        assert callback.session_id == "sess-1"
+
+    def test_no_private_provider_resolver_remains(self, collector):
+        """The duplicate resolver diverged from ``resolve_serving_provider`` (no strip /
+        lowercase of the mode, mode name instead of the id prefix as fallback)."""
+        assert not hasattr(collector, "_serving_provider")
+        assert not hasattr(collector, "get_registry")

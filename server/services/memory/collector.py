@@ -30,7 +30,6 @@ Cost controls (one run per conversation turn):
 
 import hashlib
 import logging
-import os
 import threading
 import time
 from typing import List, Optional
@@ -41,11 +40,11 @@ from langchain.agents import create_agent
 from celery_config import celery_app
 from chat.backend.agent.call_options import max_tokens_for
 from chat.backend.agent.llm import ModelConfig
-from chat.backend.agent.providers import get_cached_chat_model, get_registry
+from chat.backend.agent.providers import get_cached_chat_model
 from chat.backend.agent.tools.memory_tool import build_memory_tools
 from chat.backend.agent.utils.llm_context_manager import LLMContextManager
 from chat.backend.agent.utils.chat_context_manager import ChatContextManager
-from chat.backend.agent.utils.llm_usage_tracker import UsageTrackingCallback
+from chat.backend.agent.utils.llm_usage_tracker import UsageTrackingCallback, resolve_serving_provider
 from chat.backend.agent.utils.message_content import extract_text_from_content
 from services.memory.index_builder import build_memory_index
 from utils.auth.stateless_auth import get_org_id_for_user
@@ -158,13 +157,17 @@ def _redis_client():
         return None
 
 
+def _debounce_key(session_id: str, digest: str) -> str:
+    return f"{_DEBOUNCE_KEY_PREFIX}{session_id}:{digest}"
+
+
 def _claim_extraction(session_id: str, digest: str) -> bool:
     """Atomically mark this conversation state as extracted. False = already done.
 
     Redis ``SET NX EX`` when available, otherwise a process-local TTL cache (good
     enough for a single worker; a second worker would at worst run once more).
     """
-    key = f"{_DEBOUNCE_KEY_PREFIX}{session_id}:{digest}"
+    key = _debounce_key(session_id, digest)
     client = _redis_client()
     if client is not None:
         try:
@@ -173,6 +176,26 @@ def _claim_extraction(session_id: str, digest: str) -> bool:
             logger.debug("[MemoryCollector] Redis debounce failed; using local cache", exc_info=True)
     with _fallback_debounce_lock:
         return _fallback_debounce_cache.add(key, "1", ttl=_DEBOUNCE_TTL_SECONDS)
+
+
+def _release_extraction(session_id: str, digest: str) -> None:
+    """Undo a claim so a failed run can be retried.
+
+    The claim is taken before any work runs; when the extraction then fails (a
+    Bedrock throttle, the turn cap, a time-limit kill with ``acks_late`` redelivery)
+    the surviving mark would skip the redelivered run and the turn's facts would
+    never be extracted unless the user wrote again. Both stores are cleared: the
+    claim may have landed in the local cache because Redis was down at the time.
+    """
+    key = _debounce_key(session_id, digest)
+    client = _redis_client()
+    if client is not None:
+        try:
+            client.delete(key)
+        except Exception:
+            logger.debug("[MemoryCollector] Redis claim release failed", exc_info=True)
+    with _fallback_debounce_lock:
+        _fallback_debounce_cache.discard(key)
 
 
 def _clear_debounce_cache() -> None:
@@ -201,6 +224,7 @@ def extract_memories_from_session(
 ):
     """Extract and persist learnings from a conversation turn. Should be enqueued after each meaningful turn completes."""
     log_prefix = f"[MemoryCollector:{session_id[:8]}]"
+    claimed_digest: Optional[str] = None  # released again if the run fails after claiming
 
     try:
         # Check before_llm_call hook (billing/entitlement gate)
@@ -223,6 +247,7 @@ def extract_memories_from_session(
         if not _claim_extraction(session_id, digest):
             logger.info("%s Skipping: no new user messages since the last extraction", log_prefix)
             return {"status": "skipped", "reason": "no_new_user_messages"}
+        claimed_digest = digest
 
         # Build memory index upfront so the agent has a map without wasting a turn
         memory_index = build_memory_index(user_id) or "(no existing memories)"
@@ -236,6 +261,10 @@ def extract_memories_from_session(
         return {"status": "ok", "elapsed_ms": elapsed_ms, "model_calls": calls}
 
     except Exception as e:
+        # Includes Celery's SoftTimeLimitExceeded: the claim must not outlive a run
+        # that did no extraction, or the redelivered / next run would skip the turn.
+        if claimed_digest is not None:
+            _release_extraction(session_id, claimed_digest)
         logger.exception("%s Extraction failed", log_prefix)
         return {"status": "error", "error": str(e)}
 
@@ -243,15 +272,6 @@ def extract_memories_from_session(
 # ---------------------------------------------------------------------------
 # Agentic loop
 # ---------------------------------------------------------------------------
-
-
-def _serving_provider(model_name: str) -> str:
-    """Provider label for usage rows (what actually serves the model)."""
-    mode = os.getenv("LLM_PROVIDER_MODE") or "direct"
-    try:
-        return get_registry().resolve_provider_name(model_name, mode) or mode
-    except Exception:
-        return mode
 
 
 def _run_extraction_agent(
@@ -296,7 +316,8 @@ def _run_extraction_agent(
         user_id=user_id,
         session_id=session_id,
         model_name=model_name,
-        api_provider=_serving_provider(model_name),
+        # Same label (and pricing mode) every other usage row uses for this model.
+        api_provider=resolve_serving_provider(model_name),
         request_type="memory_extraction",
         request_metadata={"agent_executor": True, "memory_agent": True},
     )

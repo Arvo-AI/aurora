@@ -19,6 +19,9 @@ _OR_GEMINI_3_8_FLASH = "google/gemini-3.8-flash"
 _NATIVE_GEMINI_3_8_FLASH = "gemini-3.8-flash"
 _OR_CLAUDE_OPUS_5_5 = "anthropic/claude-opus-5.5"
 _OR_CLAUDE_FABLE_5_1 = "anthropic/claude-fable-5.1"
+# Same id as ``call_options.CHEAP_MODEL``; spelled here like its siblings so this
+# stdlib-only table does not have to import the call-options module.
+_OR_CLAUDE_HAIKU_5_5 = "anthropic/claude-haiku-5.5"
 
 # Model name mappings from OpenRouter format to native provider formats
 MODEL_MAPPINGS = {
@@ -220,13 +223,13 @@ MODEL_MAPPINGS = {
     # Cheap tier (default for RCA and every auxiliary call). Explicit rows are needed:
     # the dynamic fallback would hand the Anthropic API the dotted "claude-haiku-5.5",
     # which it does not accept (Bedrock derives its own id from the dashed name).
-    "anthropic/claude-haiku-5.5": {
-        "openrouter": "anthropic/claude-haiku-5.5",
+    _OR_CLAUDE_HAIKU_5_5: {
+        "openrouter": _OR_CLAUDE_HAIKU_5_5,
         "anthropic": "claude-haiku-5-5",
         "provider": "anthropic",
     },
     "anthropic/claude-haiku-5-5": {
-        "openrouter": "anthropic/claude-haiku-5.5",
+        "openrouter": _OR_CLAUDE_HAIKU_5_5,
         "anthropic": "claude-haiku-5-5",
         "provider": "anthropic",
     },

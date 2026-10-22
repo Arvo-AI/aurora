@@ -219,11 +219,16 @@ class OpenRouterPricingService:
 
         result = base_pricing.copy()
 
-        if "cached_input" not in result:
-            from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
-            static = LLMUsageTracker.MODEL_PRICING.get(model_name, {})
-            if "cached_input" in static:
-                result["cached_input"] = static["cached_input"]
+        # OpenRouter reports flat input/output rates only. The cache-read rate and
+        # the long-context tier (Haiku 5.5: >100K-token prompts bill 5x) come from
+        # the static table so an OpenRouter-served request is priced by the same
+        # request shape as a direct one.
+        from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
+        static = LLMUsageTracker.MODEL_PRICING.get(model_name, {})
+        if "cached_input" not in result and "cached_input" in static:
+            result["cached_input"] = static["cached_input"]
+        if "long_context" not in result and "long_context" in static:
+            result["long_context"] = dict(static["long_context"])
 
         return result
 

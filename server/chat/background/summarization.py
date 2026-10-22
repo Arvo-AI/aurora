@@ -32,11 +32,14 @@ from chat.background.suggestion_extractor import save_incident_suggestions
 logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[IncidentSummary]"
 
+# Stored when the model returned no text at all.
+_NO_SUMMARY_TEXT = "No summary generated"
+
 # Texts _update_incident_summary writes instead of a real summary. A stored
 # value equal to one of these never counts as "already summarized".
 _PLACEHOLDER_SUMMARIES = frozenset(
     {
-        "No summary generated",
+        _NO_SUMMARY_TEXT,
         "Summary generation timed out. View raw alert for details.",
         "Summary generation failed. View raw alert for details.",
         "Summary generation timed out. View investigation chat for details.",
@@ -65,15 +68,14 @@ def _fetch_stored_rca_summary(incident_id: str, user_id: str) -> Optional[str]:
     mistaken for the RCA report. Placeholder texts never qualify either.
     """
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
-                    return None
-                cursor.execute(
-                    "SELECT aurora_summary, aurora_status FROM incidents WHERE id = %s",
-                    (incident_id,),
-                )
-                row = cursor.fetchone()
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                return None
+            cursor.execute(
+                "SELECT aurora_summary, aurora_status FROM incidents WHERE id = %s",
+                (incident_id,),
+            )
+            row = cursor.fetchone()
     except Exception as e:
         logger.warning(f"{_LOG_PREFIX} Could not read the stored summary for {incident_id}: {e}")
         return None
@@ -681,7 +683,7 @@ def generate_incident_summary(
             request_type="incident_initial_summary",
         )
 
-        summary = extract_text_from_content(response.content).strip() or "No summary generated"
+        summary = extract_text_from_content(response.content).strip() or _NO_SUMMARY_TEXT
 
         logger.info(
             f"{_LOG_PREFIX} Generated summary for incident {incident_id} ({len(summary)} chars)"
@@ -758,6 +760,7 @@ def generate_incident_summary_from_chat(
     user_id: str,
     session_id: str,
     announce_completion: bool = True,
+    reuse_stored_summary: bool = False,
 ) -> Dict[str, Any]:
     """Regenerate incident summary after RCA using the RCA chat transcript with citations.
 
@@ -768,6 +771,13 @@ def generate_incident_summary_from_chat(
     once — for a folded recurrence it would otherwise post another "Still
     firing" reply — and only the Google Chat card, which is edited in place,
     is refreshed to match the new summary.
+
+    reuse_stored_summary: set by this task on its own retries (``self.retry``)
+    when the failed attempt had already stored the summary, so the retry skips
+    the model call and only redoes the post-summary steps. Never set by
+    enqueuers: a regeneration of an incident that is already ``complete`` must
+    call the model even when a transient error forces a retry — reusing the
+    previous report there would notify stale data.
     """
     from celery.exceptions import SoftTimeLimitExceeded
 
@@ -802,15 +812,20 @@ def generate_incident_summary_from_chat(
         # Idempotent re-run: a previous attempt may have generated and stored the
         # summary (plus citations and suggestions) and failed only afterwards, in
         # the recurrence check / index / notification steps. Reuse that summary
-        # instead of paying for the model call (and the recommender) again.
+        # instead of paying for the model call (and the recommender) again — but
+        # only when THIS task's earlier attempt stored it (``reuse_stored_summary``
+        # travels through ``self.retry``): the retry count alone cannot tell a
+        # stored-by-us summary from the previous report of an incident that was
+        # already complete when a regeneration was enqueued.
         used_citations: List[Citation] = []
         summary: Optional[str] = None
-        if self.request.retries > 0:
+        if reuse_stored_summary:
             summary = _fetch_stored_rca_summary(incident_id, user_id)
             if summary:
                 logger.info(
-                    f"{_LOG_PREFIX} Retry {self.request.retries}: reusing the stored summary for "
-                    f"incident {incident_id} ({len(summary)} chars); skipping the model call"
+                    "%s Retry %s: reusing the summary stored by the previous attempt for "
+                    "incident %s (%d chars); skipping the model call",
+                    _LOG_PREFIX, self.request.retries, incident_id, len(summary),
                 )
                 summary_written = True
 
@@ -945,12 +960,17 @@ def generate_incident_summary_from_chat(
         )
 
         # Retry only transient model/transport errors (throttling, 5xx, timeouts);
-        # a retry reuses the stored summary when the model call already succeeded.
+        # the retry reuses the stored summary only when THIS attempt (or an earlier
+        # one of this task) already wrote it, so a regeneration whose model call
+        # failed still calls the model instead of re-notifying the old report.
         if _should_retry(self, e):
             logger.info(
                 f"{_LOG_PREFIX} Retrying chat-based summary (attempt {self.request.retries + 1})"
             )
-            raise self.retry(exc=e)
+            raise self.retry(
+                exc=e,
+                kwargs={**(self.request.kwargs or {}), "reuse_stored_summary": summary_written},
+            )
 
         if summary_written:
             # The report is already stored; do not overwrite it with an error text
@@ -1058,39 +1078,76 @@ def _generate_chat_summary(
         model_name=ModelConfig.EMAIL_REPORT_MODEL,
         request_type="incident_rca_summary",
     )
-    summary = extract_text_from_content(response.content).strip() or "No summary generated"
+    summary = extract_text_from_content(response.content).strip() or _NO_SUMMARY_TEXT
 
     logger.info(
         f"{_LOG_PREFIX} Generated chat-based summary for incident {incident_id} ({len(summary)} chars)"
     )
 
-    # Parse used citations from the summary and save only those
-    # Handles both single [1] and multi-citations [6, 7]
-    used_citations: List[Citation] = []
-    if all_citations:
-        # Find all citation blocks like [1], [6, 7], [4, 5, 6]
-        citation_blocks = re.findall(r"\[(\d+(?:,\s*\d+)*)\]", summary)
-        # Extract all individual numbers from the blocks
-        used_keys = set()
-        for block in citation_blocks:
-            keys = re.findall(r"\d+", block)
-            used_keys.update(keys)
+    used_citations = _save_used_citations(incident_id, summary, all_citations)
 
-        used_citations = [c for c in all_citations if str(c.index) in used_keys]
-        if used_citations:
-            save_incident_citations(incident_id, used_citations)
-            logger.info(
-                f"{_LOG_PREFIX} Saved {len(used_citations)} used citations for incident {incident_id}"
-            )
+    _save_next_steps(
+        incident_id=incident_id,
+        user_id=user_id,
+        session_id=session_id,
+        basics=basics,
+        citations=used_citations if used_citations else all_citations,
+        agent_reasoning=agent_reasoning,
+        fix_suggestions=fix_suggestions,
+        summary=summary,
+    )
 
-    # Generate next steps from the investigation trace (v3 recommender).
-    # Falls back to summary-based extraction if the trace is empty.
+    return summary, used_citations
+
+
+def _save_used_citations(
+    incident_id: str, summary: str, all_citations: List[Citation]
+) -> List[Citation]:
+    """Persist the citations the summary actually references and return them.
+
+    Handles both single ``[1]`` and multi-citation ``[6, 7]`` blocks. Nothing is
+    saved (and ``[]`` is returned) when there were no citations to begin with.
+    """
+    if not all_citations:
+        return []
+    # Find all citation blocks like [1], [6, 7], [4, 5, 6]
+    citation_blocks = re.findall(r"\[(\d+(?:,\s*\d+)*)\]", summary)
+    # Extract all individual numbers from the blocks
+    used_keys = set()
+    for block in citation_blocks:
+        used_keys.update(re.findall(r"\d+", block))
+
+    used_citations = [c for c in all_citations if str(c.index) in used_keys]
+    if used_citations:
+        save_incident_citations(incident_id, used_citations)
+        logger.info(
+            f"{_LOG_PREFIX} Saved {len(used_citations)} used citations for incident {incident_id}"
+        )
+    return used_citations
+
+
+def _save_next_steps(
+    *,
+    incident_id: str,
+    user_id: str,
+    session_id: str,
+    basics: Dict[str, Any],
+    citations: List[Citation],
+    agent_reasoning: Optional[str],
+    fix_suggestions: Optional[List[Dict[str, Any]]],
+    summary: str,
+) -> None:
+    """Generate and persist Next Steps from the investigation trace (v3 recommender).
+
+    Best-effort: an empty trace yields no suggestions and any failure is logged,
+    never raised — the summary itself is already stored by the caller.
+    """
     try:
-        trace_citations = used_citations if used_citations else all_citations
-        if trace_citations:
+        suggestions = []
+        if citations:
             suggestions = generate_recommendations(
                 incident_id=incident_id,
-                citations=trace_citations,
+                citations=citations,
                 agent_reasoning=agent_reasoning or "",
                 service=basics["service"],
                 alert_title=basics["alert_title"],
@@ -1100,8 +1157,6 @@ def _generate_chat_summary(
                 existing_fixes=fix_suggestions or [],
                 rca_summary=summary or "",
             )
-        else:
-            suggestions = []
 
         if suggestions:
             save_incident_suggestions(incident_id, suggestions)
@@ -1112,8 +1167,6 @@ def _generate_chat_summary(
         logger.exception(
             f"{_LOG_PREFIX} Failed to generate recommendations for incident {incident_id}: {e}"
         )
-
-    return summary, used_citations
 
 
 def _update_incident_summary(

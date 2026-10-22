@@ -40,6 +40,19 @@ from ..model_mapper import ModelMapper
 
 logger = logging.getLogger(__name__)
 
+
+class ProviderUnavailableError(RuntimeError):
+    """The provider a model routes to is not configured in this deployment.
+
+    Raised by :meth:`ProviderRegistry.get_provider_for_model` when the forced
+    provider, OpenRouter, or the provider detected from the model prefix has no
+    credentials / endpoint. A configuration fact, not a transient failure: callers
+    with a safe substitute (``llm.summarize_text`` falls back to the auxiliary
+    default model) may catch it specifically, while ``except RuntimeError`` callers
+    keep working unchanged.
+    """
+
+
 # Hint for which env var configures each provider (used in "not available" errors).
 _ENV_VAR_HINTS = {
     "openai": "OPENAI_API_KEY",
@@ -123,7 +136,9 @@ class ProviderRegistry:
             Provider instance
 
         Raises:
-            RuntimeError: If no suitable provider is available
+            ProviderUnavailableError: If the selected provider is not configured
+                (a ``RuntimeError`` subclass).
+            RuntimeError: If the model has no direct provider mapping at all.
         """
         if mode is None:
             mode = "direct"
@@ -132,7 +147,7 @@ class ProviderRegistry:
             # Explicit OpenRouter mode - use OpenRouter for everything
             provider = self._providers["openrouter"]
             if not provider.is_available():
-                raise RuntimeError(
+                raise ProviderUnavailableError(
                     "OpenRouter provider is not available (missing OPENROUTER_API_KEY)"
                 )
             return provider
@@ -150,7 +165,7 @@ class ProviderRegistry:
                 # The operator explicitly forced this provider; don't silently route
                 # elsewhere (that would leak traffic off the intended Bedrock/VPC path).
                 hint = _ENV_VAR_HINTS.get(mode, f"{mode.upper()}_API_KEY")
-                raise RuntimeError(
+                raise ProviderUnavailableError(
                     f"LLM_PROVIDER_MODE={mode} but the '{mode}' provider is not configured. "
                     f"Set {hint} (or change LLM_PROVIDER_MODE)."
                 )
@@ -185,7 +200,7 @@ class ProviderRegistry:
         hint = _ENV_VAR_HINTS.get(
             detected_provider, f"{detected_provider.upper()}_API_KEY"
         )
-        raise RuntimeError(
+        raise ProviderUnavailableError(
             f"Provider '{detected_provider}' is not available for model '{model}'. "
             f"Configure {hint} or set LLM_PROVIDER_MODE=openrouter to use OpenRouter instead."
         )
@@ -401,6 +416,7 @@ __all__ = [
     "OllamaProvider",
     "BedrockProvider",
     "ProviderRegistry",
+    "ProviderUnavailableError",
     "get_registry",
     "create_chat_model",
     "get_cached_chat_model",

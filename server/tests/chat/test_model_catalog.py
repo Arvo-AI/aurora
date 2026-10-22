@@ -168,7 +168,7 @@ def test_default_model_is_fully_registered():
 def test_cheap_tier_is_fully_registered():
     """Every background / auxiliary call defaults to the cheap tier, so it must resolve
     in every table and be selectable (users should be able to pick what RCA runs on)."""
-    assert CHEAP_MODEL == "anthropic/claude-haiku-5.5"
+    assert ModelConfig.CHEAP_MODEL == "anthropic/claude-haiku-5.5"
     assert ModelConfig.CHEAP_MODEL == CHEAP_MODEL
     assert CHEAP_MODEL in LLMUsageTracker.MODEL_PRICING
     assert CHEAP_MODEL in ChatContextManager.MODEL_CONTEXT_LIMITS
@@ -265,7 +265,8 @@ def test_empty_model_variables_count_as_unset(monkeypatch):
     assert cfg.MAIN_MODEL == "anthropic/claude-opus-5.5"
     for name in _CHEAP_TIER_ATTRS:
         assert getattr(cfg, name) == CHEAP_MODEL, name
-    assert cfg.RCA_ORCHESTRATOR_MODEL is None and cfg.RCA_SUBAGENT_MODEL is None
+    assert cfg.RCA_ORCHESTRATOR_MODEL is None
+    assert cfg.RCA_SUBAGENT_MODEL is None
 
 
 def test_model_overrides_and_cost_switch_are_honoured(monkeypatch):
@@ -471,6 +472,31 @@ def test_haiku_5_5_pricing_has_two_tiers_and_both_spellings_agree():
     assert edge == pytest.approx(100 * 0.0001)
 
 
+def test_openrouter_pricing_keeps_the_haiku_5_5_long_context_tier(monkeypatch):
+    """Review on #740: ``get_model_pricing`` copied only ``cached_input`` from the static
+    row, so under LLM_PROVIDER_MODE=openrouter a >100K-token Haiku 5.5 prompt was priced
+    at the base rates. The tier must travel with the row (and stay a copy)."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)  # offline: fallback table only
+    service = OpenRouterPricingService()
+    row = service.get_model_pricing("anthropic/claude-haiku-5.5")
+    static = LLMUsageTracker.MODEL_PRICING["anthropic/claude-haiku-5.5"]
+    assert row["cached_input"] == static["cached_input"]
+    assert row["long_context"] == static["long_context"]
+    assert row["long_context"] is not static["long_context"]
+    # ...and the tier is what calculate_cost applies on the OpenRouter path.
+    monkeypatch.setattr(
+        "chat.backend.agent.utils.llm_usage_tracker.get_pricing_service", lambda: service
+    )
+    long = LLMUsageTracker.calculate_cost(200_000, 1_000, "anthropic/claude-haiku-5.5",
+                                          provider_mode="openrouter")
+    assert long == pytest.approx(200 * 0.0005 + 1 * 0.0025)
+    short = LLMUsageTracker.calculate_cost(10_000, 1_000, "anthropic/claude-haiku-5.5",
+                                           provider_mode="openrouter")
+    assert short == pytest.approx(10 * 0.0001 + 1 * 0.0005)
+    # Rows without a tier are returned as they were.
+    assert "long_context" not in service.get_model_pricing("openai/gpt-4.1")
+
+
 def test_two_tier_pricing_survives_the_bedrock_regional_premium(monkeypatch):
     """The regional premium multiplies every rate; it must skip the nested tier table
     instead of raising (which the outer try/except would turn into a silent $0)."""
@@ -560,6 +586,50 @@ def test_explicit_bedrock_id_carries_the_premium_under_direct_mode(monkeypatch):
     clean_direct = LLMUsageTracker.calculate_cost(10_000, 0, "anthropic/claude-haiku-5.5",
                                                   use_dynamic_pricing=False, provider_mode="anthropic")
     assert clean_direct == pytest.approx(10 * 0.0001)
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    ["global.anthropic.claude-haiku-5-5", "bedrock/global.anthropic.claude-haiku-5-5",
+     "GLOBAL.anthropic.claude-opus-5-5"],
+)
+def test_bare_global_profile_ids_never_carry_the_regional_premium(monkeypatch, model_id):
+    """Review on #740: a bare ``global.anthropic.…`` id (RCA_ORCHESTRATOR_MODEL style,
+    no ``bedrock/`` prefix) is the same global profile and bills at the direct rate,
+    whatever region the deployment signs against."""
+    monkeypatch.setenv("BEDROCK_REGION", "eu-central-1")
+    monkeypatch.delenv("BEDROCK_REGIONAL_PREMIUM", raising=False)
+    assert LLMUsageTracker._resolve_regional_premium("bedrock", model_id) == 1.0
+    # ...while the regional spelling of the same model still does.
+    assert LLMUsageTracker._resolve_regional_premium("bedrock", "eu.anthropic.claude-haiku-5-5") == 1.10
+
+
+def test_agent_callback_reads_usage_from_generations_then_llm_output():
+    """``UsageTrackingCallback`` takes the first generation whose ``usage_metadata``
+    carries a non-zero prompt and falls back to OpenAI-style ``llm_output.token_usage``
+    only when no generation reports one."""
+    from types import SimpleNamespace
+
+    from chat.backend.agent.utils.llm_usage_tracker import UsageTrackingCallback
+
+    def _gen(usage):
+        return SimpleNamespace(message=SimpleNamespace(usage_metadata=usage))
+
+    zero = {"input_tokens": 0, "output_tokens": 0}
+    real = {"input_tokens": 1_200, "output_tokens": 40, "input_token_details": {"cache_read": 1_000}}
+    result = SimpleNamespace(generations=[[_gen(zero)], [_gen(real)]], llm_output=None)
+    counts = UsageTrackingCallback._counts_from_llm_result(result)
+    assert (counts["input_tokens"], counts["output_tokens"], counts["cached_input_tokens"]) == (1_200, 40, 1_000)
+
+    openai_style = SimpleNamespace(
+        generations=[[SimpleNamespace(message=SimpleNamespace(usage_metadata=None))]],
+        llm_output={"token_usage": {"prompt_tokens": 300, "completion_tokens": 7}},
+    )
+    counts = UsageTrackingCallback._counts_from_llm_result(openai_style)
+    assert (counts["input_tokens"], counts["output_tokens"]) == (300, 7)
+
+    nothing = SimpleNamespace(generations=[], llm_output={})
+    assert UsageTrackingCallback._counts_from_llm_result(nothing)["input_tokens"] == 0
 
 
 def test_regional_premium_env_override(monkeypatch):

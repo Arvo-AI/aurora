@@ -478,7 +478,10 @@ def _track_usage(user_id, session_id, messages, start, error_msg, response=None)
     ``response`` is the raw provider message (``usage_metadata`` carries the real
     input/output token counts); the provider label is resolved through the
     registry, so a Claude judge under ``LLM_PROVIDER_MODE=bedrock`` is billed to
-    Bedrock, not to the ``anthropic`` prefix.
+    Bedrock, not to the ``anthropic`` prefix. That label is also the pricing mode
+    (the ``tracked_invoke`` / ``track_llm_call`` contract): a judge served by
+    Bedrock through a pinned ``bedrock/<geo>.…`` id carries the regional premium
+    even when ``LLM_PROVIDER_MODE`` is unset or ``direct``.
     """
     if not user_id:
         return
@@ -504,7 +507,7 @@ def _track_usage(user_id, session_id, messages, start, error_msg, response=None)
             start_time=start,
             error_message=error_msg,
             api_provider=api_provider,
-            provider_mode=provider_mode,
+            provider_mode=api_provider,
         )
     except Exception:
         logger.debug("[CommandSafety] Usage tracking failed", exc_info=True)

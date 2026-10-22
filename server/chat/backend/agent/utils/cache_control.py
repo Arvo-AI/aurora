@@ -51,7 +51,7 @@ so it covers virtually every inter-turn gap, and a 1h entry costs 2x to write.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from langchain_core.messages import SystemMessage
 
@@ -142,6 +142,67 @@ def _anthropic_single_breakpoint(system_text: str) -> List[dict]:
     return [{"type": "text", "text": system_text, "cache_control": dict(ANTHROPIC_CACHE_CONTROL)}]
 
 
+def _bedrock_native_blocks(
+    model_name: str, static_text: str, dynamic_text: str, min_chars: int
+) -> Optional[Tuple[List[dict], str]]:
+    """Converse ``cachePoint`` system blocks, or ``None`` when the static prefix is
+    too short to be worth a manual checkpoint."""
+    if len(static_text) < min_chars:
+        # No manual system point: ``BedrockPromptCacheMiddleware`` still has
+        # langchain-aws place its own system-end / last-message / tools
+        # points on the plain string, so the whole-system read is kept.
+        logger.debug(
+            "Prompt cache: no static system checkpoint for %s (static prefix "
+            "%d chars < minimum %d); library points only",
+            model_name, len(static_text), min_chars,
+        )
+        return None
+    return _bedrock_system_blocks(static_text, dynamic_text), "bedrock cachePoint"
+
+
+def _anthropic_style_blocks(
+    model_name: str, static_text: str, dynamic_text: str, plain: str, min_chars: int
+) -> Optional[Tuple[List[dict], str]]:
+    """Anthropic Messages API ``cache_control`` blocks: static + system-end breakpoints
+    when the static prefix is cacheable, the single system-end breakpoint when only
+    the whole prompt is, ``None`` when even that is below the model's minimum."""
+    if len(static_text) >= min_chars:
+        return _anthropic_system_blocks(static_text, dynamic_text), "anthropic cache_control (static + system end)"
+    if len(plain) >= min_chars:
+        return _anthropic_single_breakpoint(plain), "anthropic cache_control (system end)"
+    # Too small to cache on this model even as a whole; a breakpoint would just
+    # cost a write that can never be read back.
+    logger.debug(
+        "Prompt cache skipped for %s: prompt %d chars < minimum %d",
+        model_name, len(plain), min_chars,
+    )
+    return None
+
+
+def _cache_blocks_for(
+    provider: str,
+    bedrock_native: bool,
+    model_name: str,
+    static_text: str,
+    dynamic_text: str,
+    plain: str,
+) -> Optional[Tuple[List[dict], str]]:
+    """``(system blocks, wire-format label)`` for the serving provider, or ``None``
+    when the prompt must stay a plain string (unknown provider, explicit
+    ``bedrock/`` id through the gateway, prompt below the cacheable minimum)."""
+    min_chars = min_cacheable_chars(model_name)
+    if provider == "bedrock" and bedrock_native:
+        return _bedrock_native_blocks(model_name, static_text, dynamic_text, min_chars)
+    anthropic_style = provider in _ANTHROPIC_STYLE_PROVIDERS or (
+        provider == "bedrock" and _has_anthropic_prefix(model_name)
+    )
+    if anthropic_style:
+        # Anthropic Messages API semantics: direct, OpenRouter, or the Bedrock
+        # gateway for the anthropic/ ids it already received markers for.
+        return _anthropic_style_blocks(model_name, static_text, dynamic_text, plain, min_chars)
+    return None
+
+
 def build_cached_system_prompt(
     model_name: str,
     static_text: str,
@@ -182,44 +243,12 @@ def build_cached_system_prompt(
         return plain
 
     provider = (serving_provider or "").strip().lower()
-    min_chars = min_cacheable_chars(model_name)
-    static_cacheable = len(static_text) >= min_chars
 
     try:
-        if provider == "bedrock" and bedrock_native:
-            if not static_cacheable:
-                # No manual system point: ``BedrockPromptCacheMiddleware`` still has
-                # langchain-aws place its own system-end / last-message / tools
-                # points on the plain string, so the whole-system read is kept.
-                logger.debug(
-                    "Prompt cache: no static system checkpoint for %s (static prefix "
-                    "%d chars < minimum %d); library points only",
-                    model_name, len(static_text), min_chars,
-                )
-                return plain
-            blocks = _bedrock_system_blocks(static_text, dynamic_text)
-            wire = "bedrock cachePoint"
-        elif provider in _ANTHROPIC_STYLE_PROVIDERS or (
-            provider == "bedrock" and _has_anthropic_prefix(model_name)
-        ):
-            # Anthropic Messages API semantics: direct, OpenRouter, or the Bedrock
-            # gateway for the anthropic/ ids it already received markers for.
-            if static_cacheable:
-                blocks = _anthropic_system_blocks(static_text, dynamic_text)
-                wire = "anthropic cache_control (static + system end)"
-            elif len(plain) >= min_chars:
-                blocks = _anthropic_single_breakpoint(plain)
-                wire = "anthropic cache_control (system end)"
-            else:
-                # Too small to cache on this model even as a whole; a breakpoint
-                # would just cost a write that can never be read back.
-                logger.debug(
-                    "Prompt cache skipped for %s: prompt %d chars < minimum %d",
-                    model_name, len(plain), min_chars,
-                )
-                return plain
-        else:
+        choice = _cache_blocks_for(provider, bedrock_native, model_name, static_text, dynamic_text, plain)
+        if choice is None:
             return plain
+        blocks, wire = choice
         msg = SystemMessage(content=blocks)
         logger.info(
             "Applying prompt cache breakpoint (%s, provider=%s, ttl=5m, static_chars=%d, dynamic_chars=%d)",

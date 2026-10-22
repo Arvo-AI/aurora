@@ -134,6 +134,41 @@ class TestRetryable:
     def test_message_fragments_count(self):
         assert is_retryable_llm_error(RuntimeError("peer closed connection without sending complete message body (incomplete chunked read)")) is True
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Connection reset by peer",
+            "Server disconnected without sending a response.",
+            "RESPONSE ENDED PREMATURELY",
+        ],
+    )
+    def test_message_fragments_match_case_insensitively(self, text):
+        """Review on #740: the fragments are lower-case but the message was matched
+        raw, so these transient transport errors were final for the summarization
+        tasks while ``is_mid_stream_transport_error`` already accepted them."""
+        assert is_retryable_llm_error(RuntimeError(text)) is True
+        assert is_mid_stream_transport_error(RuntimeError(text)) is True
+
+    def test_status_attributes_ignore_booleans_and_read_nested_responses(self):
+        """``True`` is an int subclass and must not read as status 1; a botocore-style
+        dict response and an httpx-style object response both carry a status."""
+
+        class _BoolStatus(Exception):
+            status_code = True  # skipped: not a status
+            http_status = 503
+
+        assert is_retryable_llm_error(_BoolStatus("x")) is True
+
+        class _ObjectResponse(Exception):
+            response = _FakeStatusError(429)  # anything with .status_code
+
+        assert is_retryable_llm_error(_ObjectResponse("x")) is True
+
+        class _DictResponse(Exception):
+            response = {"ResponseMetadata": {"HTTPStatusCode": 404}}
+
+        assert is_retryable_llm_error(_DictResponse("x")) is False
+
     def test_none_is_not_retryable(self):
         assert is_retryable_llm_error(None) is False  # type: ignore[arg-type]
 

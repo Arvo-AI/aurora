@@ -417,7 +417,8 @@ config:
   # Bedrock route in every mode: bedrock/<geo>.anthropic.claude-haiku-5-5 on the same geo
   # in native mode (us/eu/au/jp/global), otherwise (gateway, apac., non-Claude pins)
   # MAIN_MODEL — never another provider. Under LLM_PROVIDER_MODE=bedrock in an ap-* region
-  # with clean ids they also follow MAIN_MODEL (AWS publishes no apac. Haiku 5.5 profile).
+  # with clean ids they also follow MAIN_MODEL (AWS publishes no apac. Haiku 5.5 profile),
+  # with or without BEDROCK_BASE_URL: a gateway gets the same region-derived profile id.
   # Lightweight model for mechanical summarization (alert/repo/channel summaries, synopses). Empty = cheap tier.
   SUMMARIZATION_MODEL: ""
   # Compresses oversized tool outputs during an investigation. Empty = SUMMARIZATION_MODEL, then cheap tier.

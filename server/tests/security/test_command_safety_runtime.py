@@ -490,7 +490,8 @@ class TestVerdictCache:
         first = check_command_safety("df -h", session_id="s-1")
         second = check_command_safety("df -h", session_id="s-1")
 
-        assert first.conclusion is True and first.observation == "error"
+        assert first.conclusion is True
+        assert first.observation == "error"
         assert second.conclusion is False
         assert spy.call_count == 2
 
@@ -531,13 +532,16 @@ class TestVerdictCache:
 
     def test_cache_key_contains_only_digests(self):
         key = command_safety._verdict_cache_key("sess", "Delete the prod database now", "dropdb prod", "terminal_run")
-        assert "Delete" not in key and "dropdb" not in key
+        assert "Delete" not in key
+        assert "dropdb" not in key
         prefix, sess, tool, msg_digest, cmd_digest = key.rsplit(":", 4)
         assert prefix == "cs:verdict"
         assert sess == "sess"
         assert tool == "terminal_run"
-        assert len(msg_digest) == 64 and set(msg_digest) <= _HEX_ALPHABET
-        assert len(cmd_digest) == 64 and set(cmd_digest) <= _HEX_ALPHABET
+        assert len(msg_digest) == 64
+        assert set(msg_digest) <= _HEX_ALPHABET
+        assert len(cmd_digest) == 64
+        assert set(cmd_digest) <= _HEX_ALPHABET
 
     def test_tool_name_is_part_of_the_key(self, monkeypatch):
         """The tool is judge context, so the same command through another tool re-judges."""
@@ -585,7 +589,8 @@ class TestStructuredResultAndUsage:
         out, got_raw = command_safety._unwrap_structured_result(
             {"raw": raw, "parsed": verdict, "parsing_error": None}
         )
-        assert out is verdict and got_raw is raw
+        assert out is verdict
+        assert got_raw is raw
 
     def test_parsing_failure_raises_so_the_caller_fails_closed(self):
         with pytest.raises(ValueError):
@@ -596,7 +601,8 @@ class TestStructuredResultAndUsage:
     def test_legacy_bare_verdict_still_accepted(self):
         verdict = SafetyVerdict(observation="o", thought="t", conclusion=True)
         out, raw = command_safety._unwrap_structured_result(verdict)
-        assert out is verdict and raw is None
+        assert out is verdict
+        assert raw is None
 
     def test_usage_is_recorded_under_the_resolved_model_with_the_raw_response(self, monkeypatch):
         import types
@@ -621,8 +627,36 @@ class TestStructuredResultAndUsage:
         kwargs = tracker_mod.LLMUsageTracker.track_llm_call.call_args.kwargs
         assert kwargs["model_name"] == "anthropic/claude-haiku-5.5"
         assert kwargs["api_provider"] == "bedrock"
+        assert kwargs["provider_mode"] == "bedrock"
         assert kwargs["response"] is raw_response
         assert kwargs["request_type"] == "command_safety"
+
+    def test_usage_is_priced_for_the_serving_provider_not_the_routing_mode(self, monkeypatch):
+        """Review on #740: MAIN_MODEL pinned to a bedrock/<geo> id with LLM_PROVIDER_MODE
+        unset. The judge is served (and billed) by Bedrock, so the row must be priced as
+        ``bedrock`` — with the regional premium — not as ``direct``."""
+        import types
+
+        tracker_mod = types.ModuleType("chat.backend.agent.utils.llm_usage_tracker")
+        tracker_mod.LLMUsageTracker = MagicMock()
+        llm_mod = types.ModuleType("chat.backend.agent.llm")
+        llm_mod.ModelConfig = MagicMock(GUARDRAILS_MODEL="bedrock/eu.anthropic.claude-haiku-5-5")
+        providers_mod = types.ModuleType("chat.backend.agent.providers")
+        registry = MagicMock()
+        registry.resolve_provider_name.return_value = "bedrock"
+        providers_mod.get_registry = lambda: registry
+        monkeypatch.setitem(sys.modules, "chat.backend.agent.utils.llm_usage_tracker", tracker_mod)
+        monkeypatch.setitem(sys.modules, "chat.backend.agent.llm", llm_mod)
+        monkeypatch.setitem(sys.modules, "chat.backend.agent.providers", providers_mod)
+        monkeypatch.setattr(command_safety, "config", MagicMock(enabled=True, llm_model=""))
+        monkeypatch.delenv("LLM_PROVIDER_MODE", raising=False)
+
+        command_safety._track_usage("u-1", "s-1", [{"role": "user", "content": "x"}], 0.0, None, object())
+
+        registry.resolve_provider_name.assert_called_once_with("bedrock/eu.anthropic.claude-haiku-5-5", "direct")
+        kwargs = tracker_mod.LLMUsageTracker.track_llm_call.call_args.kwargs
+        assert kwargs["api_provider"] == "bedrock"
+        assert kwargs["provider_mode"] == "bedrock"
 
 
 # ---------------------------------------------------------------------------

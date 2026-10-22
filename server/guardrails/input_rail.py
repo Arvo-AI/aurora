@@ -56,6 +56,26 @@ _FAIL_CLOSED_AUTH = "input rail auth error"
 _FAIL_CLOSED_CONNECTIVITY = "input rail connectivity error"
 _BLOCKED_REASON = "input flagged by safety policy"
 
+# Usage rows of the async path are written by fire-and-forget tasks (the DB write
+# must not sit between the rail verdict and the main model call). The set keeps a
+# strong reference until each task is done, so the loop cannot garbage-collect it.
+_background_usage_tasks: set = set()
+
+
+def _first_message(result):
+    """The first message of a ``ChatResult`` / ``LLMResult``, or ``None``.
+
+    ``ChatResult.generations`` is a flat list of ChatGeneration; an ``LLMResult``
+    nests them one list per prompt. Both shapes are accepted.
+    """
+    for gen in getattr(result, "generations", None) or []:
+        candidates = gen if isinstance(gen, (list, tuple)) else [gen]
+        for candidate in candidates:
+            msg = getattr(candidate, "message", None)
+            if msg is not None:
+                return msg
+    return None
+
 
 def _get_lock() -> asyncio.Lock:
     """Create the init lock lazily so it binds to the active event loop."""
@@ -139,18 +159,6 @@ class _GuardrailsLLMCompat(BaseChatModel):
             user_id, session_id = ids
             if not user_id:
                 return
-            # ``ChatResult.generations`` is a flat list of ChatGeneration (an
-            # ``LLMResult`` would nest them); accept both shapes.
-            response = None
-            for gen in getattr(result, "generations", None) or []:
-                candidates = gen if isinstance(gen, (list, tuple)) else [gen]
-                for candidate in candidates:
-                    msg = getattr(candidate, "message", None)
-                    if msg is not None:
-                        response = msg
-                        break
-                if response is not None:
-                    break
 
             from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
 
@@ -160,7 +168,7 @@ class _GuardrailsLLMCompat(BaseChatModel):
                 model_name=self.usage_model_name,
                 request_type=_USAGE_REQUEST_TYPE,
                 prompt=messages,
-                response=response,
+                response=_first_message(result),
                 start_time=start_time,
                 api_provider=self.usage_provider or "direct",
                 provider_mode=self.usage_provider or None,
@@ -257,9 +265,17 @@ class _GuardrailsLLMCompat(BaseChatModel):
             result = self._flatten(
                 await self.inner._agenerate(messages, stop=stop, **self._prepare(kwargs))
             )
-        # The usage row is a blocking DB write: keep it off the event loop.
+        # The usage row is a blocking DB write and tracking is best-effort: run it
+        # in a worker thread AND do not wait for it, so the rail verdict (and the
+        # main model call behind it) is never delayed by the database. The task
+        # copies the current context, so it still sees the ids ``check_input``
+        # published even though ``check_input`` resets them right after.
         if _usage_context.get() and self.usage_model_name:
-            await asyncio.to_thread(self._record_usage, messages, result, start_time)
+            task = asyncio.ensure_future(
+                asyncio.to_thread(self._record_usage, messages, result, start_time)
+            )
+            _background_usage_tasks.add(task)
+            task.add_done_callback(_background_usage_tasks.discard)
         return result
 
 

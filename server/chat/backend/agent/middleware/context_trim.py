@@ -17,7 +17,7 @@ from typing import Awaitable, Callable, List, Optional
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.messages.utils import count_tokens_approximately
 
 from ..utils.chat_context_manager import ChatContextManager
@@ -138,9 +138,12 @@ class ContextSafetyMiddleware(AgentMiddleware):
         The leading task block — every message before the first AIMessage, i.e. the
         alert / user request the run is about — is always kept, so the request still
         opens with the user turn the model is working on and never starts with an
-        assistant message (Bedrock Converse rejects such a conversation). The tail
-        is cut at an AIMessage boundary, so every ToolMessage keeps the tool call it
-        answers.
+        assistant message (Bedrock Converse rejects such a conversation). The most
+        recent HumanMessage — the question the model is answering now in an
+        interactive session with loaded history — is always inside the kept tail: the
+        cut may land on it but never after it, while the turns before it stay
+        trimmable. Otherwise the tail is cut at an AIMessage boundary, so every
+        ToolMessage keeps the tool call it answers.
 
         Hysteresis: a new cut drops enough of the oldest turns to land under the low
         watermark, and that cut (the id of the first kept tail message) is reused on
@@ -151,13 +154,21 @@ class ContextSafetyMiddleware(AgentMiddleware):
         if not rest:
             return messages
 
+        # The most recent user turn is the question the model is answering now: a cut
+        # may land ON it, never after it. Older turns before it stay trimmable (an
+        # interactive session with loaded history, or a background run that received
+        # correlated-alert updates as HumanMessages), so the budget is still enforced.
+        floor = _last_human_index(rest)
+
         if self._cut_message_id is not None:
-            pinned = _tail_from_message_id(rest, self._cut_message_id)
-            if pinned is not None and count_tokens_approximately(head + pinned) <= self.max_tokens:
-                return head + pinned
+            start = _index_of_message_id(rest, self._cut_message_id)
+            if start is not None and (floor is None or start <= floor):
+                pinned = head + rest[start:]
+                if count_tokens_approximately(pinned) <= self.max_tokens:
+                    return pinned
 
         target = int(self.max_tokens * _TRIM_LOW_WATERMARK_RATIO)
-        tail = _tail_within_budget(rest, target - count_tokens_approximately(head))
+        tail = _tail_within_budget(rest, target - count_tokens_approximately(head), floor=floor)
         self._cut_message_id = getattr(tail[0], "id", None)
         if self._cut_message_id is None:
             logger.debug("[ContextSafety] Kept tail starts with an id-less message; cut not pinned")
@@ -172,33 +183,47 @@ def _split_task_head(messages: List) -> tuple[List, List]:
     return list(messages), []
 
 
-def _tail_from_message_id(messages: List, message_id: str) -> Optional[List]:
-    """Suffix of ``messages`` starting at the message with ``message_id``, or ``None``."""
-    for i, msg in enumerate(messages):
-        if getattr(msg, "id", None) == message_id:
-            return list(messages[i:])
+def _last_human_index(messages: List) -> Optional[int]:
+    """Index of the most recent HumanMessage in ``messages``, or ``None``."""
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            return i
     return None
 
 
-def _tail_within_budget(messages: List, max_tokens: int) -> List:
-    """Longest suffix of ``messages`` that starts at an AIMessage and fits ``max_tokens``.
+def _index_of_message_id(messages: List, message_id: str) -> Optional[int]:
+    """Index of the message with ``message_id`` in ``messages``, or ``None``."""
+    for i, msg in enumerate(messages):
+        if getattr(msg, "id", None) == message_id:
+            return i
+    return None
 
-    When not even the most recent AIMessage block fits, that block is returned
-    anyway so the model always sees its latest tool call with its results.
+
+def _tail_within_budget(messages: List, max_tokens: int, floor: Optional[int] = None) -> List:
+    """Longest suffix of ``messages`` that starts at a cut boundary and fits ``max_tokens``.
+
+    A boundary is an AIMessage (so every ToolMessage keeps the tool call it answers)
+    or the message at ``floor`` — the most recent HumanMessage. The suffix always
+    reaches back at least to the latest AIMessage block (the model must see its latest
+    tool call with its results) and to ``floor`` (the question it is answering), even
+    when that minimum alone exceeds ``max_tokens``; beyond that minimum it grows
+    backwards boundary by boundary for as long as it fits.
     """
-    best: Optional[int] = None
-    last_boundary: Optional[int] = None
+    last_ai = next(
+        (i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], AIMessage)), None
+    )
+    anchors = [i for i in (last_ai, floor) if i is not None]
+    if not anchors:
+        return list(messages)
+    minimum = min(anchors)  # the shortest suffix we may return
+
+    start = minimum
     suffix_tokens = 0
     for i in range(len(messages) - 1, -1, -1):
         suffix_tokens += count_tokens_approximately([messages[i]])
-        if not isinstance(messages[i], AIMessage):
-            continue
-        if last_boundary is None:
-            last_boundary = i
+        if i > minimum or not (isinstance(messages[i], AIMessage) or i == floor):
+            continue  # inside the mandatory part, or not a cut boundary
         if suffix_tokens > max_tokens:
             break
-        best = i
-    start = best if best is not None else last_boundary
-    if start is None:
-        return list(messages)
+        start = i
     return list(messages[start:])

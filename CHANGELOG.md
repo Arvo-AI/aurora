@@ -101,6 +101,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Oversized tool outputs are summarized once per output on the cheap
   summarization model from a head + tail window (40K + 40K chars) with a 1.5K
   output cap, and the result is shared by the context store and the agent loop.
+  When the configured summarization model has no provider in the deployment
+  (for example a `SUMMARIZATION_MODEL=google/gemini-2.5-flash` kept from an older
+  install under `LLM_PROVIDER_MODE=bedrock` without Google credentials — the
+  value `TOOL_OUTPUT_SUMMARIZATION_MODEL` inherits), the shared summarizer logs
+  one warning per model and runs the summary on the cheap-tier default instead
+  of hard-truncating the tool output; network and model errors still fail the
+  summary as before. The provider registry raises a typed
+  `ProviderUnavailableError` (a `RuntimeError` subclass) for that case.
+- The cheap tier's Bedrock routability check applies in gateway mode too: a
+  Bedrock gateway configured with an `ap-*` region receives the same derived
+  `apac.` profile id as native mode (no Haiku 5.5 profile exists there), so the
+  auxiliary variables follow `MAIN_MODEL` in that case instead of handing the
+  fail-closed judge and input rail a model the gateway cannot serve.
 - Bedrock native clients use botocore `standard` retries (`BEDROCK_MAX_ATTEMPTS`,
   default 3), a 10 s connect timeout and a `BEDROCK_READ_TIMEOUT` read timeout
   (default 300 s); the gateway client retries twice. Non-streaming auxiliary

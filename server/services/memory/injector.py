@@ -211,6 +211,54 @@ def _track_selector_usage(
     )
 
 
+# Strong references to the in-flight usage writes, so the event loop cannot
+# garbage-collect a task before it finishes.
+_background_tracking: Set["asyncio.Task"] = set()
+
+
+def _schedule_selector_usage(
+    messages: List, response, start_time: float, user_id: str, session_id: Optional[str]
+) -> None:
+    """Record the selector call without holding up the per-turn critical path.
+
+    ``_track_selector_usage`` counts tokens and inserts a row with RLS set-up; the
+    prefetch that awaits this selector is bounded to a few seconds, and a slow DB
+    used to time it out and drop the memories the model had already picked. The
+    write runs in a worker thread as a retained background task instead.
+    """
+
+    async def _run() -> None:
+        try:
+            await asyncio.to_thread(
+                _track_selector_usage, messages, response, start_time, user_id, session_id
+            )
+        except Exception:
+            logger.debug("[MemoryInjector] Could not record selector usage", exc_info=True)
+
+    task = asyncio.create_task(_run())
+    _background_tracking.add(task)
+    task.add_done_callback(_background_tracking.discard)
+
+
+def _manifest_lines(entries: List[Dict]) -> List[str]:
+    """One index line per memory entry: category, title, last update, short description."""
+    lines = []
+    for entry in entries:
+        ts = entry["updated_at"].isoformat() if entry["updated_at"] else "unknown"
+        desc = entry["description"][:150] if entry["description"] else "(no description)"
+        lines.append(f"- [{entry['category']}] \"{entry['title']}\" | updated: {ts} | {desc}")
+    return lines
+
+
+def _strip_code_fence(text: str) -> str:
+    """Drop a ```json ... ``` fence some models wrap their JSON answer in."""
+    json_str = text.strip()
+    if json_str.startswith("```"):
+        json_str = json_str.split("\n", 1)[1] if "\n" in json_str else json_str
+        json_str = json_str.rsplit("```", 1)[0]
+    return json_str
+
+
 async def _select_relevant_memories_async(
     user_message: str,
     entries: List[Dict],
@@ -222,18 +270,13 @@ async def _select_relevant_memories_async(
 
     When ``user_id`` is known the call is recorded in ``llm_usage_tracking`` as
     ``memory_selector`` (it runs on every chat turn, so it must show up in the
-    cost picture); the DB write runs in a worker thread off the event loop.
+    cost picture); the DB write is scheduled in the background, off the event
+    loop and off this call's critical path.
     """
-
-    manifest_lines = []
-    for entry in entries:
-        ts = entry["updated_at"].isoformat() if entry["updated_at"] else "unknown"
-        desc = entry["description"][:150] if entry["description"] else "(no description)"
-        manifest_lines.append(f"- [{entry['category']}] \"{entry['title']}\" | updated: {ts} | {desc}")
 
     prompt = _SELECTOR_USER.format(
         user_message=user_message[:2000],
-        manifest="\n".join(manifest_lines),
+        manifest="\n".join(_manifest_lines(entries)),
     )
 
     try:
@@ -251,22 +294,12 @@ async def _select_relevant_memories_async(
         response = await llm.ainvoke(messages, config={"run_name": "memory_selector"})
 
         if user_id:
-            try:
-                await asyncio.to_thread(
-                    _track_selector_usage, messages, response, start_time, user_id, session_id
-                )
-            except Exception:
-                logger.debug("[MemoryInjector] Could not record selector usage", exc_info=True)
+            _schedule_selector_usage(messages, response, start_time, user_id, session_id)
 
         # Thinking-capable models return a list of content blocks, not a str —
         # extract_text_from_content normalizes both so .strip() can't blow up.
         content = extract_text_from_content(getattr(response, "content", response))
-        json_str = content.strip()
-        if json_str.startswith("```"):
-            json_str = json_str.split("\n", 1)[1] if "\n" in json_str else json_str
-            json_str = json_str.rsplit("```", 1)[0]
-
-        parsed = json.loads(json_str)
+        parsed = json.loads(_strip_code_fence(content))
         selected_raw = parsed.get("selected", [])
         if not isinstance(selected_raw, list):
             return []

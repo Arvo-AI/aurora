@@ -23,7 +23,7 @@ def _fresh_cache(monkeypatch):
     providers.clear_chat_model_cache()
 
 
-@pytest.fixture()
+@pytest.fixture
 def factory(monkeypatch):
     counter = {"n": 0}
 

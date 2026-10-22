@@ -28,7 +28,7 @@ def _clear_cache():
     tos.clear_summary_cache()
 
 
-@pytest.fixture()
+@pytest.fixture
 def fake_llm_module(monkeypatch):
     """Stub the lazy ``chat.backend.agent.llm`` import (summarize_text + ModelConfig)."""
     summarize_text = MagicMock(name="summarize_text", return_value="SUMMARY")

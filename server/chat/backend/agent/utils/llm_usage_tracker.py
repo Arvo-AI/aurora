@@ -321,7 +321,9 @@ class LLMUsageTracker:
         # way the Bedrock provider resolves it. An explicit global profile (region
         # "global", or a pinned ``bedrock/global.…`` id) bills at the direct rate.
         if mode == "bedrock":
-            if lowered.startswith("bedrock/global."):
+            # Bare ``global.anthropic.…`` ids (RCA_ORCHESTRATOR_MODEL style) are the
+            # same profile as the ``bedrock/``-prefixed spelling.
+            if lowered.removeprefix("bedrock/").startswith("global."):
                 return 1.0
             region = (
                 os.getenv("BEDROCK_REGION")
@@ -715,26 +717,13 @@ class LLMUsageTracker:
             cached_input_tokens = 0
             cache_write_tokens = 0
             if response:
-                # Try to extract from API response first
-                usage_data = cls.extract_usage_from_response(response)
+                # Provider-reported usage first; the response text is the fallback.
+                usage_data = cls._response_token_counts(response, model_name)
                 if usage_data["input_tokens"] > 0:
                     input_tokens = usage_data["input_tokens"]
                 cached_input_tokens = usage_data.get("cached_input_tokens", 0)
                 cache_write_tokens = usage_data.get("cache_write_tokens", 0)
-                if usage_data["output_tokens"] > 0:
-                    output_tokens = usage_data["output_tokens"]
-                else:
-                    # Fallback to counting response text
-                    if hasattr(response, "content"):
-                        output_tokens = cls.count_tokens(
-                            str(response.content), model_name
-                        )
-                    elif isinstance(response, dict) and "content" in response:
-                        output_tokens = cls.count_tokens(
-                            str(response["content"]), model_name
-                        )
-                    else:
-                        output_tokens = cls.count_tokens(str(response), model_name)
+                output_tokens = usage_data["output_tokens"]
 
             # Calculate cost
             estimated_cost = cls.calculate_cost(
@@ -776,6 +765,24 @@ class LLMUsageTracker:
         except Exception as e:
             logger.error(f"Error tracking LLM call: {e}")
             return False
+
+    @classmethod
+    def _response_token_counts(cls, response: Any, model_name: str) -> Dict[str, int]:
+        """``extract_usage_from_response`` with the output count filled in from the
+        response text when the provider reported none."""
+        usage_data = cls.extract_usage_from_response(response)
+        if usage_data["output_tokens"] <= 0:
+            usage_data["output_tokens"] = cls.count_tokens(cls._response_text(response), model_name)
+        return usage_data
+
+    @staticmethod
+    def _response_text(response: Any) -> str:
+        """The text an output-token count falls back to when no usage is reported."""
+        if hasattr(response, "content"):
+            return str(response.content)
+        if isinstance(response, dict) and "content" in response:
+            return str(response["content"])
+        return str(response)
 
     @classmethod
     def _has_image_content(cls, prompt: Any) -> bool:
@@ -1035,6 +1042,37 @@ class UsageTrackingCallback(BaseCallbackHandler):
         """Chat models emit this instead of on_llm_start."""
         self.on_llm_start(serialized, messages, run_id=run_id, **kwargs)
 
+    @staticmethod
+    def _counts_from_generations(response) -> Dict[str, int]:
+        """Provider ``usage_metadata`` counts from an ``LLMResult``'s generations.
+
+        Per candidate list the first message carrying ``usage_metadata`` is read; the
+        scan stops at the first list whose counts include a non-zero prompt. All
+        zeros when no generation reports usage.
+        """
+        counts = LLMUsageTracker.extract_token_counts(None)
+        for gen_list in getattr(response, "generations", None) or []:
+            for gen in gen_list:
+                msg = getattr(gen, "message", None)
+                if msg and getattr(msg, "usage_metadata", None):
+                    counts = LLMUsageTracker.extract_token_counts(msg.usage_metadata)
+                    break
+            if counts["input_tokens"] > 0:
+                break
+        return counts
+
+    @classmethod
+    def _counts_from_llm_result(cls, response) -> Dict[str, int]:
+        """Token counts of a finished model call: the generations' ``usage_metadata``
+        (whole prompt, with the cache read / write breakdown), else OpenAI-style
+        ``llm_output["token_usage"]``."""
+        counts = cls._counts_from_generations(response)
+        if counts["input_tokens"] == 0:
+            token_usage = (getattr(response, "llm_output", None) or {}).get("token_usage")
+            if isinstance(token_usage, dict) and token_usage:
+                counts = LLMUsageTracker.extract_token_counts(token_usage)
+        return counts
+
     def on_llm_end(self, response, run_id=None, **kwargs):
         """Track LLM call end using provider-reported usage_metadata."""
         try:
@@ -1043,31 +1081,7 @@ class UsageTrackingCallback(BaseCallbackHandler):
 
             call_info = self.current_calls.pop(run_id)
 
-            counts = {
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "cached_input_tokens": 0,
-                "cache_write_tokens": 0,
-            }
-
-            # Extract real token counts from provider usage_metadata (whole prompt,
-            # with the cache read / write breakdown)
-            if hasattr(response, "generations"):
-                for gen_list in response.generations:
-                    for gen in gen_list:
-                        msg = getattr(gen, "message", None)
-                        if msg and getattr(msg, "usage_metadata", None):
-                            counts = LLMUsageTracker.extract_token_counts(msg.usage_metadata)
-                            break
-                    if counts["input_tokens"] > 0:
-                        break
-
-            # Also check llm_output for OpenAI-style token_usage
-            if counts["input_tokens"] == 0 and hasattr(response, "llm_output") and response.llm_output:
-                token_usage = response.llm_output.get("token_usage", {})
-                if isinstance(token_usage, dict) and token_usage:
-                    counts = LLMUsageTracker.extract_token_counts(token_usage)
-
+            counts = self._counts_from_llm_result(response)
             input_tokens = counts["input_tokens"]
             output_tokens = counts["output_tokens"]
             cached_input_tokens = counts["cached_input_tokens"]

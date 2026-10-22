@@ -567,7 +567,8 @@ class TestBedrockRequestShape:
             {"text": DYNAMIC},
         ]
         tools = captured["toolConfig"]["tools"]
-        assert _is_cache_point(tools[-1]) and len(tools) == 3
+        assert _is_cache_point(tools[-1])
+        assert len(tools) == 3
         assert _is_cache_point(captured["messages"][-1]["content"][-1])
         assert bc._count_cache_points(captured["system"], captured["messages"], tools) == 3
         # cache_control itself never leaks into the request body.

@@ -155,28 +155,36 @@ def _aws_error_code(exc: BaseException) -> Optional[str]:
     return None
 
 
+def _status_int(value: object) -> Optional[int]:
+    """``value`` when it is a real int status code (``bool`` is an int subclass), else None."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _response_status(response: object) -> Optional[int]:
+    """Status carried by an exception's ``response``: httpx.Response /
+    requests.Response expose ``.status_code``; botocore's dict response carries
+    ``ResponseMetadata.HTTPStatusCode``."""
+    if response is None:
+        return None
+    if not isinstance(response, dict):
+        return _status_int(getattr(response, "status_code", None))
+    meta = response.get("ResponseMetadata")
+    if isinstance(meta, dict):
+        value = meta.get("HTTPStatusCode")
+        if isinstance(value, int):
+            return value
+    return None
+
+
 def _http_status(exc: BaseException) -> Optional[int]:
     """Status code carried by openai/anthropic/httpx-style exceptions, if any."""
     for attr in ("status_code", "http_status", "status"):
-        value = getattr(exc, attr, None)
-        if isinstance(value, bool):
-            continue
-        if isinstance(value, int):
+        value = _status_int(getattr(exc, attr, None))
+        if value is not None:
             return value
-    response = getattr(exc, "response", None)
-    # httpx.Response / requests.Response expose .status_code; botocore's dict
-    # response carries ResponseMetadata.HTTPStatusCode.
-    if response is not None and not isinstance(response, dict):
-        value = getattr(response, "status_code", None)
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
-    if isinstance(response, dict):
-        meta = response.get("ResponseMetadata")
-        if isinstance(meta, dict):
-            value = meta.get("HTTPStatusCode")
-            if isinstance(value, int):
-                return value
-    return None
+    return _response_status(getattr(exc, "response", None))
 
 
 def is_retryable_llm_error(exc: BaseException) -> bool:
@@ -199,8 +207,10 @@ def is_retryable_llm_error(exc: BaseException) -> bool:
     names = set(_class_names(exc))
     if names & _RETRYABLE_CLASS_NAMES:
         return True
-    text = str(exc)
-    return any(fragment in text for fragment in _MID_STREAM_MESSAGE_FRAGMENTS)
+    # The fragments are lower-case; match the message case-insensitively, exactly
+    # like is_mid_stream_transport_error ("Connection reset by peer" must count).
+    lowered = str(exc).lower()
+    return any(fragment in lowered for fragment in _MID_STREAM_MESSAGE_FRAGMENTS)
 
 
 def is_mid_stream_transport_error(exc: BaseException) -> bool:

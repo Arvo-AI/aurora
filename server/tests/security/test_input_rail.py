@@ -615,22 +615,55 @@ class TestGuardrailsLLMCompatUsageTracking:
         assert row["response"] is result.generations[0].message
         assert row["prompt"] == ["prompt"]
 
-    def test_agenerate_records_off_the_event_loop(self, monkeypatch):
+    def test_agenerate_records_off_the_event_loop_without_blocking_the_result(self, monkeypatch):
+        """The async path schedules the DB write as a retained background task: the
+        rail result is returned before the row is written (review on #740), the task
+        still carries the request ids ``check_input`` published, and it is dropped
+        from the retention set once done."""
         recorded = self._capture_tracker(monkeypatch)
         wrapper = self._wrapper(_RecordingInner("No"))
+        seen = {}
 
         async def _go():
             token = input_rail._usage_context.set(("u-2", None))
             try:
-                return await wrapper._agenerate(["p"], stop=None)
+                result = await wrapper._agenerate(["p"], stop=None)
             finally:
                 input_rail._usage_context.reset(token)
+            seen["pending"] = len(input_rail._background_usage_tasks)
+            seen["recorded_before_flush"] = len(recorded)
+            # Flush the fire-and-forget write so the assertions are deterministic.
+            await asyncio.gather(*input_rail._background_usage_tasks)
+            return result
 
         result = _run(_go())
+        assert seen["pending"] == 1
+        assert seen["recorded_before_flush"] == 0, "the result must not wait for the DB write"
         assert len(recorded) == 1
         assert recorded[0]["user_id"] == "u-2"
         assert recorded[0]["session_id"] is None
         assert recorded[0]["response"] is result.generations[0].message
+        assert input_rail._background_usage_tasks == set()
+
+    def test_agenerate_schedules_nothing_without_request_ids(self, monkeypatch):
+        recorded = self._capture_tracker(monkeypatch)
+        wrapper = self._wrapper(_RecordingInner("No"))
+
+        async def _go():
+            result = await wrapper._agenerate(["p"], stop=None)
+            return result, len(input_rail._background_usage_tasks)
+
+        _result, pending = _run(_go())
+        assert pending == 0
+        assert recorded == []
+
+    def test_first_message_accepts_flat_and_nested_generations(self):
+        msg = _ai_message_with("No")
+        assert input_rail._first_message(_chat_result_with(msg)) is msg
+        nested = SimpleNamespace(generations=[[SimpleNamespace(message=None), SimpleNamespace(message=msg)]])
+        assert input_rail._first_message(nested) is msg
+        assert input_rail._first_message(SimpleNamespace(generations=[])) is None
+        assert input_rail._first_message(SimpleNamespace()) is None
 
     def test_nothing_recorded_without_request_ids(self, monkeypatch):
         recorded = self._capture_tracker(monkeypatch)

@@ -126,7 +126,7 @@ def _stub_module(name: str, **attrs):
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def openai_provider(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     module = _load_provider(
@@ -178,7 +178,7 @@ class TestOpenAIDirect:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def anthropic_provider(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     module = _load_provider(
@@ -236,7 +236,7 @@ class TestAnthropicDirect:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def google_provider(monkeypatch):
     monkeypatch.setenv("GOOGLE_AI_API_KEY", "test-key")
     monkeypatch.delenv("GEMINI_DISABLE_THINKING", raising=False)
@@ -254,7 +254,7 @@ def google_provider(monkeypatch):
     return module.GoogleProvider()
 
 
-@pytest.fixture()
+@pytest.fixture
 def vertex_provider(monkeypatch):
     monkeypatch.setenv("VERTEX_AI_PROJECT", "test-project")
     monkeypatch.delenv("VERTEX_AI_SERVICE_ACCOUNT_JSON", raising=False)
@@ -322,7 +322,7 @@ class TestGemini:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def openrouter_provider(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     module = _load_provider(
@@ -365,7 +365,7 @@ class TestOpenRouter:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def ollama_provider(monkeypatch):
     module = _load_provider(
         monkeypatch,

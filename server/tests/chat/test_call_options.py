@@ -67,10 +67,14 @@ class TestCheapTierRoutable:
             {"LLM_PROVIDER_MODE": "bedrock", "BEDROCK_REGION": "eu-central-1"},
             {"LLM_PROVIDER_MODE": "bedrock", "BEDROCK_REGION": "us-west-2"},
             {"LLM_PROVIDER_MODE": "bedrock", "BEDROCK_REGION": "global"},
+            # Gateway without a region: the provider derives the `us.` profile id.
             {"LLM_PROVIDER_MODE": "bedrock", "BEDROCK_BASE_URL": "https://gw.internal/v1"},
-            # Gateway: the derived profile names go to the gateway exactly like MAIN's do.
+            # Gateway: the derived profile names go to the gateway exactly like MAIN's do,
+            # so a geo that publishes Haiku 5.5 is routable there too.
             {"LLM_PROVIDER_MODE": "bedrock", "BEDROCK_BASE_URL": "https://gw.internal/v1",
-             "BEDROCK_REGION": "ap-northeast-1"},
+             "BEDROCK_REGION": "eu-central-1"},
+            {"LLM_PROVIDER_MODE": "bedrock", "BEDROCK_BASE_URL": "https://gw.internal/v1",
+             "BEDROCK_REGION": "global"},
             {"LLM_PROVIDER_MODE": "bedrock", "AWS_REGION": "eu-west-1"},
             {"LLM_PROVIDER_MODE": "bedrock", "AWS_DEFAULT_REGION": "eu-west-1"},
             {"LLM_PROVIDER_MODE": "direct", "ANTHROPIC_API_KEY": "dummy"},
@@ -108,6 +112,12 @@ class TestCheapTierRoutable:
             {"LLM_PROVIDER_MODE": "bedrock", "BEDROCK_REGION": "ap-northeast-1"},
             {"LLM_PROVIDER_MODE": "bedrock", "BEDROCK_REGION": "ap-southeast-2", "ANTHROPIC_API_KEY": "dummy"},
             {"LLM_PROVIDER_MODE": "bedrock", "AWS_REGION": "ap-south-1"},
+            # Gateway mode in an ap-* region: get_native_model_name derives the same
+            # `apac.` id for the gateway, so a Bedrock-backed gateway 404s the same way.
+            {"LLM_PROVIDER_MODE": "bedrock", "BEDROCK_BASE_URL": "https://gw.internal/v1",
+             "BEDROCK_REGION": "ap-northeast-1"},
+            {"LLM_PROVIDER_MODE": "bedrock", "BEDROCK_BASE_URL": "https://gw.internal/v1",
+             "AWS_REGION": "ap-southeast-2", "ANTHROPIC_API_KEY": "dummy"},
             # Forced providers that cannot serve Claude, no Anthropic key.
             {"LLM_PROVIDER_MODE": "ollama", "OLLAMA_BASE_URL": "http://host:11434"},
             {"LLM_PROVIDER_MODE": "vertex", "VERTEX_AI_PROJECT": "demo"},

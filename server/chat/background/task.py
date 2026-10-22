@@ -1973,7 +1973,7 @@ def _determine_severity_from_rca(incident_id: str, session_id: str, user_id: str
     try:
         from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
     except ImportError as ie:
-        logger.error(f"[BackgroundChat] Failed to import the usage tracker: {ie}")
+        logger.exception(f"[BackgroundChat] Failed to import the usage tracker: {ie}")
         return
     
     try:

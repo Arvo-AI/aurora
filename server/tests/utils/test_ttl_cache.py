@@ -14,7 +14,7 @@ class _Clock:
         return self.now
 
 
-@pytest.fixture()
+@pytest.fixture
 def clock():
     return _Clock()
 
@@ -47,13 +47,37 @@ def test_per_entry_ttl_override(clock):
     assert cache.get("long") == 2
 
 
+def test_len_counts_only_live_entries_with_mixed_ttls(clock):
+    """Review on #740: a long-lived entry at the front must not hide expired entries
+    behind it from ``len`` (the front-only sweep stopped at the first live entry)."""
+    cache = TTLCache(maxsize=8, ttl=10, timer=clock)
+    cache.set("long", 1, ttl=100)
+    cache.set("short-a", 2, ttl=1)
+    cache.set("short-b", 3, ttl=1)
+    assert len(cache) == 3
+    clock.now += 5
+    assert len(cache) == 1
+    assert "long" in cache
+    assert cache.get("short-a") is None
+
+
+def test_discard_releases_an_added_key(clock):
+    cache = TTLCache(maxsize=4, ttl=10, timer=clock)
+    assert cache.add("k", 1) is True
+    cache.discard("k")
+    assert "k" not in cache
+    assert cache.add("k", 2) is True, "a discarded claim can be taken again"
+    cache.discard("never-set")  # absent keys are a no-op
+
+
 def test_lru_bound_evicts_oldest(clock):
     cache = TTLCache(maxsize=2, ttl=100, timer=clock)
     cache.set("a", 1)
     cache.set("b", 2)
     cache.set("c", 3)
     assert cache.get("a") is None
-    assert cache.get("b") == 2 and cache.get("c") == 3
+    assert cache.get("b") == 2
+    assert cache.get("c") == 3
     assert len(cache) == 2
 
 

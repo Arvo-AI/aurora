@@ -28,13 +28,20 @@ class TTLCache:
         self._data: "OrderedDict[Hashable, tuple[float, Any]]" = OrderedDict()
 
     def _purge_expired(self, now: float) -> None:
-        # Oldest insertions sit at the front; entries are refreshed on set only,
-        # so a linear sweep from the front stops at the first live entry.
+        # Fast path on every write: drop expired entries from the front, where the
+        # oldest insertions sit. With mixed per-entry TTLs an expired entry can hide
+        # behind a longer-lived one, so this is a best-effort sweep; ``_purge_all``
+        # is the exact one (used where the count must be right).
         while self._data:
-            key, (expires_at, _) = next(iter(self._data.items()))
+            _, (expires_at, _) = next(iter(self._data.items()))
             if expires_at > now:
                 break
             self._data.popitem(last=False)
+
+    def _purge_all(self, now: float) -> None:
+        # Full scan, bounded by maxsize: removes every expired entry wherever it sits.
+        for key in [k for k, (expires_at, _) in self._data.items() if expires_at <= now]:
+            del self._data[key]
 
     def get(self, key: Hashable, default: Any = None) -> Any:
         now = self._timer()
@@ -75,13 +82,20 @@ class TTLCache:
                 self._data.popitem(last=False)
             return True
 
+    def discard(self, key: Hashable) -> None:
+        """Remove ``key`` if present (no error when absent) — the in-process
+        equivalent of Redis ``DEL``, used to release a claim ``add`` made."""
+        with self._lock:
+            self._data.pop(key, None)
+
     def __contains__(self, key: Hashable) -> bool:
         return self.get(key, self._MISSING) is not self._MISSING
 
     def __len__(self) -> int:
+        """Number of live entries: every expired entry is purged first, wherever it sits."""
         now = self._timer()
         with self._lock:
-            self._purge_expired(now)
+            self._purge_all(now)
             return len(self._data)
 
     def clear(self) -> None:

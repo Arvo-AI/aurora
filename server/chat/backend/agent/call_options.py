@@ -96,13 +96,14 @@ def cheap_tier_routable(env: Optional[Mapping[str, str]] = None) -> bool:
 
     - ``LLM_PROVIDER_MODE=openrouter`` / ``anthropic``: that provider serves every Claude
       id. If its key is missing, ``MAIN_MODEL`` fails the same way, so nothing is lost.
-    - ``LLM_PROVIDER_MODE=bedrock`` with a gateway URL: the gateway receives the same
-      derived profile names as ``MAIN_MODEL``, so the cheap tier is as routable as MAIN.
-    - ``LLM_PROVIDER_MODE=bedrock`` with a region (native mode): Bedrock serves
-      ``anthropic/`` ids translated to the region's inference-profile id — but only when
+    - ``LLM_PROVIDER_MODE=bedrock`` with a gateway URL and/or a region: Bedrock serves
+      ``anthropic/`` ids translated to the region's inference-profile id
+      (``BedrockProvider.get_native_model_name`` derives the geo from the region in
+      native AND gateway mode; a gateway with no region derives ``us.``) — but only when
       AWS publishes a Haiku 5.5 profile for that geo (``CHEAP_MODEL_BEDROCK_GEOS``). An
       ``ap-*`` region derives ``apac.``, which does not exist for the 5.x generation, so
-      the cheap tier is NOT routable there and the variables follow ``MAIN_MODEL``.
+      the cheap tier is NOT routable there — a Bedrock-backed gateway would 404 on it
+      just like native mode — and the variables follow ``MAIN_MODEL``.
     - anything else — ``direct`` / ``auto`` (or unset), or a forced ``vertex`` /
       ``google`` / ``openai`` / ``ollama`` provider that cannot serve Claude and falls
       back to prefix routing — reaches Claude only through the Anthropic provider, which
@@ -113,10 +114,10 @@ def cheap_tier_routable(env: Optional[Mapping[str, str]] = None) -> bool:
     if mode in _CLAUDE_SERVING_MODES:
         return True
     if mode == "bedrock":
-        if env.get("BEDROCK_BASE_URL"):
-            return True
         region = _bedrock_region(env)
-        if region:
+        # Gateway and native mode both receive the region-derived geo id
+        # (get_native_model_name runs in both), so both need a published geo.
+        if env.get("BEDROCK_BASE_URL") or region:
             return bedrock_geo_for_region(region) in CHEAP_MODEL_BEDROCK_GEOS
         # Forced bedrock with nothing configured: the provider raises for every model;
         # fall through so the outcome matches direct routing.
