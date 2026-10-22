@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import time
 from typing import Dict, Optional, Any
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 from .openrouter_pricing_service import get_pricing_service
 from .provider_pricing_service import get_provider_pricing_service
+from .cache_control import claude_family
 from .usage_normalizer import normalize_usage
 
 logger = logging.getLogger(__name__)
@@ -208,6 +210,18 @@ class LLMUsageTracker:
         # Direct / OpenRouter / everything else: no cloud-reseller premium.
         return 1.0
 
+    @classmethod
+    def _claude_pricing(cls, model_name: str) -> Optional[Dict[str, float]]:
+        """Static row for any spelling of a Claude id, keyed as ``anthropic/<family>``."""
+        family = claude_family(model_name)
+        if not family.startswith("claude"):
+            return None
+        # Table keys use both spellings: claude-sonnet-4-5 and claude-sonnet-4.5
+        dotted = re.sub(r"-(\d)-(\d)$", r"-\1.\2", family)
+        return cls.MODEL_PRICING.get(f"anthropic/{family}") or cls.MODEL_PRICING.get(
+            f"anthropic/{dotted}"
+        )
+
     @staticmethod
     def _cache_write_multiplier(model_name: str) -> float:
         # Claude bills a 25% premium to write the prompt cache; OpenAI/Gemini don't
@@ -279,6 +293,11 @@ class LLMUsageTracker:
             if not pricing:
                 using_static_pricing = True
                 pricing = cls.MODEL_PRICING.get(model_name)
+
+                # Explicit Bedrock ids (bedrock/eu.anthropic.claude-...-v1:0) share the
+                # Anthropic list price; without this they fell to the default row
+                if not pricing:
+                    pricing = cls._claude_pricing(model_name)
 
                 if not pricing:
                     base_model = model_name.split(".")[0].split("-v")[0]

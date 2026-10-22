@@ -11,9 +11,13 @@ from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from .tools.cloud_tools import set_websocket_context
 from chat.backend.agent.utils.prefix_cache import PrefixCacheManager
-from chat.backend.agent.utils.cache_control import build_cached_system_prompt
+from chat.backend.agent.utils.cache_control import (
+    CACHE_STYLE_CACHE_POINT,
+    build_cached_system_prompt,
+    resolve_cache_style,
+)
 from chat.backend.agent.utils.usage_normalizer import NormalizedUsage, normalize_usage
-from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, assemble_system_prompt, register_prompt_cache_breakpoints
+from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, assemble_system_prompt_parts, register_prompt_cache_breakpoints
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker, LLMUsage
 from services.memory.injector import MemoryPrefetch
 import time
@@ -269,7 +273,7 @@ class Agent:
             from langchain.agents import create_agent
             from langchain_core.callbacks import BaseCallbackHandler
             from .tools.cloud_tools import get_cloud_tools, set_user_context, set_tool_capture
-            from .middleware import ContextTrimMiddleware, _ForceToolChoice
+            from .middleware import ContextTrimMiddleware, PromptCachePointMiddleware, _ForceToolChoice
 
             logging.info(f"agentic_tool_flow: State has user_id {state.user_id} and session_id {state.session_id}")
             # Set user context for tools
@@ -416,9 +420,12 @@ class Agent:
                 except Exception:
                     logging.debug("Memory prefetch result unavailable")
 
-            system_prompt_text = assemble_system_prompt(segments)
+            # Cross-session static prefix first, per-session suffix second; the
+            # prompt-cache breakpoint goes between them (utils/cache_control.py).
+            static_prompt_text, dynamic_prompt_text = assemble_system_prompt_parts(segments)
+            # A sub-agent's role brief is its whole prompt and is stable across its turns
             if system_prompt_override is not None:
-                system_prompt_text = system_prompt_override
+                static_prompt_text, dynamic_prompt_text = system_prompt_override, ""
             if tool_subset is not None:
                 tools = tool_subset
 
@@ -672,11 +679,17 @@ class Agent:
             # Mark the stable system prompt with a cache breakpoint in the dialect of
             # the provider actually serving the model (cache_control vs Bedrock
             # cachePoint). No-op for providers without a style and tiny prompts.
+            serving_provider = get_registry().get_provider(tool_choice_provider)
             system_prompt_for_agent = build_cached_system_prompt(
                 model_name,
-                system_prompt_text,
-                get_registry().get_provider(tool_choice_provider),
+                static_prompt_text,
+                dynamic_prompt_text,
+                provider=serving_provider,
             )
+            # Converse also needs explicit points after the tools and the last
+            # message; appended last so it marks the final request.
+            if resolve_cache_style(serving_provider, model_name) == CACHE_STYLE_CACHE_POINT:
+                middlewares.append(PromptCachePointMiddleware())
 
             agent_graph = create_agent(
                 model=streaming_llm,

@@ -9,7 +9,7 @@ import logging
 
 from pydantic import PrivateAttr
 
-from chat.backend.agent.utils.cache_control import strip_cache_markers
+from chat.backend.agent.utils.cache_control import strip_cache_markers, strip_tool_cache_points
 
 logger = logging.getLogger(__name__)
 
@@ -49,18 +49,20 @@ def make_cache_safe_cls(base_cls):
         def _generate(self, messages, *args, **kwargs):
             # Markers previously rejected by this provider: send clean from the start
             if self._cache_markers_disabled:
-                messages = strip_cache_markers(messages)
+                messages, kwargs = strip_cache_markers(messages), strip_tool_cache_points(kwargs)
             try:
                 return super()._generate(messages, *args, **kwargs)
             except Exception as err:  # noqa: BLE001
                 if not self._disable_markers(err):
                     raise
-                return super()._generate(strip_cache_markers(messages), *args, **kwargs)
+                return super()._generate(
+                    strip_cache_markers(messages), *args, **strip_tool_cache_points(kwargs)
+                )
 
         def _stream(self, messages, *args, **kwargs):
             # Markers previously rejected by this provider: send clean from the start
             if self._cache_markers_disabled:
-                messages = strip_cache_markers(messages)
+                messages, kwargs = strip_cache_markers(messages), strip_tool_cache_points(kwargs)
             yielded = False
             try:
                 for chunk in super()._stream(messages, *args, **kwargs):
@@ -69,7 +71,9 @@ def make_cache_safe_cls(base_cls):
             except Exception as err:  # noqa: BLE001
                 if yielded or not self._disable_markers(err):
                     raise
-                yield from super()._stream(strip_cache_markers(messages), *args, **kwargs)
+                yield from super()._stream(
+                    strip_cache_markers(messages), *args, **strip_tool_cache_points(kwargs)
+                )
 
     _CacheSafe.__name__ = f"_CacheSafe{base_cls.__name__}"
     _CacheSafe.__qualname__ = _CacheSafe.__name__

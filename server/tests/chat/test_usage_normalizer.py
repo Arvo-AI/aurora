@@ -128,3 +128,29 @@ class TestCalculateCostCacheWrites:
             100, 0, self.MODEL, cache_write_tokens=10_000, provider_mode="direct"
         )
         assert cost == pytest.approx(0.1 * 0.003 * 1.25)
+
+
+class TestExplicitBedrockIdPricing:
+    @pytest.mark.parametrize(
+        "model_id,row",
+        [
+            ("bedrock/eu.anthropic.claude-sonnet-4-5-20250929-v1:0", "anthropic/claude-sonnet-4-5"),
+            ("bedrock/global.anthropic.claude-opus-5-5", "anthropic/claude-opus-5-5"),
+            ("bedrock/us.anthropic.claude-sonnet-5", "anthropic/claude-sonnet-5"),
+        ],
+    )
+    def test_resolves_to_the_anthropic_row(self, model_id, row):
+        # They used to fall through to the "default" row and under-bill ~3x
+        assert LLMUsageTracker._claude_pricing(model_id) is LLMUsageTracker.MODEL_PRICING[row]
+        assert LLMUsageTracker.calculate_cost(
+            1000, 1000, model_id, use_dynamic_pricing=False, provider_mode="direct"
+        ) == LLMUsageTracker.calculate_cost(
+            1000, 1000, row, use_dynamic_pricing=False, provider_mode="direct"
+        )
+
+    def test_dotted_only_rows_are_found(self, monkeypatch):
+        monkeypatch.setitem(LLMUsageTracker.MODEL_PRICING, "anthropic/claude-test-9.1", {"input": 1, "output": 1})
+        assert LLMUsageTracker._claude_pricing("bedrock/eu.anthropic.claude-test-9-1-v1:0") == {"input": 1, "output": 1}
+
+    def test_non_claude_ids_are_not_matched(self):
+        assert LLMUsageTracker._claude_pricing("bedrock/amazon.nova-pro-v1:0") is None
