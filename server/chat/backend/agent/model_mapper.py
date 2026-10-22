@@ -217,6 +217,21 @@ MODEL_MAPPINGS = {
         "anthropic": "claude-opus-4-6",
         "provider": "anthropic",
     },
+    # Cheap tier (default for RCA and every auxiliary call). Explicit rows are needed:
+    # the dynamic fallback would hand the Anthropic API the dotted "claude-haiku-5.5",
+    # which it does not accept (Bedrock derives its own id from the dashed name).
+    "anthropic/claude-haiku-5.5": {
+        "openrouter": "anthropic/claude-haiku-5.5",
+        "anthropic": "claude-haiku-5-5",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-haiku-5-5": {
+        "openrouter": "anthropic/claude-haiku-5.5",
+        "anthropic": "claude-haiku-5-5",
+        "provider": "anthropic",
+    },
+    # Legacy alias — kept so existing RCA_MODEL / ENRICHMENT_MODEL values keep
+    # resolving; no default, example or picker entry points here any more.
     "anthropic/claude-haiku-4.5": {
         "openrouter": "anthropic/claude-haiku-4.5",
         "anthropic": "claude-haiku-4-5",

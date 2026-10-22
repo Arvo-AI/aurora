@@ -14,7 +14,6 @@ a suggestion. Aurora must have run it (or run it in the self-execution round).
 
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
@@ -49,7 +48,9 @@ _CODE_TOOLS = frozenset({
 
 _VALID_TYPES = frozenset({"mitigation", "diagnostic", "remediate", "prevent"})
 _VALID_RISKS = frozenset({"safe", "low", "medium", "high"})
-_ENRICHMENT_MODEL = os.environ.get("ENRICHMENT_MODEL", "anthropic/claude-haiku-4.5")
+# The enrichment model (ENRICHMENT_MODEL env var) is resolved by ModelConfig like every
+# other model variable: `or` semantics (Compose forwards an unset variable as "") and
+# the cheap tier only when the provider settings can route it.
 
 _TYPE_SORT_ORDER = {"mitigation": 0, "diagnostic": 1, "remediate": 2, "prevent": 3}
 
@@ -241,14 +242,20 @@ def _build_trace_context(
 # Hypothesis extraction — parse structured state from agent reasoning
 # ---------------------------------------------------------------------------
 
-def _extract_hypotheses(agent_reasoning: str) -> InvestigationState:
+def _extract_hypotheses(
+    agent_reasoning: str, *, user_id: str = "", session_id: str = ""
+) -> InvestigationState:
     """Extract hypothesis ledger from agent reasoning using an LLM call.
 
     This converts the unstructured agent thoughts into the structured
-    InvestigationState that the recommender prompt consumes.
+    InvestigationState that the recommender prompt consumes. The call is
+    recorded in ``llm_usage_tracking`` (``hypothesis_extraction``) when a
+    ``user_id`` is known.
     """
+    from chat.backend.agent.call_options import max_tokens_for
     from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.providers import create_chat_model
+    from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
 
     if not agent_reasoning or len(agent_reasoning.strip()) < 100:
         return InvestigationState()
@@ -287,8 +294,22 @@ If root cause is confirmed, there should be exactly one hypothesis with status="
 Return ONLY the JSON object."""
 
     try:
-        llm = create_chat_model(ModelConfig.SUGGESTION_MODEL, temperature=0.1)
-        response = llm.invoke([HumanMessage(content=prompt)])
+        llm = create_chat_model(
+            ModelConfig.SUGGESTION_MODEL, temperature=0.1, disable_thinking=True,
+            max_tokens=max_tokens_for("report"),
+        )
+        messages = [HumanMessage(content=prompt)]
+        if user_id:
+            response = tracked_invoke(
+                llm,
+                messages,
+                user_id=user_id,
+                session_id=session_id or None,
+                model_name=ModelConfig.SUGGESTION_MODEL,
+                request_type="hypothesis_extraction",
+            )
+        else:
+            response = llm.invoke(messages)
         text = _strip_code_fences(extract_text_from_content(response.content).strip())
 
         data = json.loads(text)
@@ -516,8 +537,10 @@ def _self_execute_safe_diagnostics(
     - Executable with Aurora's existing tooling
     - Not already run during the investigation
     """
+    from chat.backend.agent.call_options import max_tokens_for
     from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.providers import create_chat_model
+    from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
 
     # Build a compact list of what was already run
     executed_commands = set()
@@ -551,8 +574,20 @@ Return [] if the investigation is already thorough. Max {_MAX_SELF_EXEC_CALLS} c
 Return ONLY the JSON array."""
 
     try:
-        llm = create_chat_model(ModelConfig.SUGGESTION_MODEL, temperature=0.1)
-        response = llm.invoke([HumanMessage(content=prompt)])
+        llm = create_chat_model(
+            ModelConfig.SUGGESTION_MODEL, temperature=0.1, disable_thinking=True,
+            max_tokens=max_tokens_for("report"),
+        )
+        # Recorded as `diagnostics_plan` in llm_usage_tracking (this helper always
+        # runs with a user: the caller needs user_id/session_id to execute anything).
+        response = tracked_invoke(
+            llm,
+            [HumanMessage(content=prompt)],
+            user_id=user_id,
+            session_id=session_id or None,
+            model_name=ModelConfig.SUGGESTION_MODEL,
+            request_type="diagnostics_plan",
+        )
         commands_to_run = _parse_json_list_response(extract_text_from_content(response.content))
     except Exception as e:
         logger.warning("[Recommender] Self-exec planning failed: %s", e)
@@ -873,6 +908,8 @@ def _enrich_validated_fixes(
     if not suggestions:
         return
 
+    from chat.backend.agent.call_options import max_tokens_for
+    from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.providers import create_chat_model
     from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
 
@@ -905,13 +942,16 @@ Return in this exact format (one block per suggestion):
    SUMMARY: <text>"""
 
     try:
-        llm = create_chat_model(_ENRICHMENT_MODEL, temperature=0)
+        model_name = ModelConfig.ENRICHMENT_MODEL
+        llm = create_chat_model(
+            model_name, temperature=0, disable_thinking=True, max_tokens=max_tokens_for("report"),
+        )
         response = tracked_invoke(
             llm,
             [HumanMessage(content=prompt)],
             user_id=user_id,
             session_id=session_id or None,
-            model_name=_ENRICHMENT_MODEL,
+            model_name=model_name,
             request_type="suggestion_enrichment",
         )
         _apply_enrichment_response(extract_text_from_content(response.content).strip(), suggestions)
@@ -946,6 +986,8 @@ def _generate_summaries(suggestions: List[Suggestion], user_id: str, session_id:
     if not suggestions:
         return
 
+    from chat.backend.agent.call_options import max_tokens_for
+    from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.providers import create_chat_model
     from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
 
@@ -968,13 +1010,16 @@ Good examples (title → summary):
 Return one summary per line, numbered:"""
 
     try:
-        llm = create_chat_model(_ENRICHMENT_MODEL, temperature=0)
+        model_name = ModelConfig.ENRICHMENT_MODEL
+        llm = create_chat_model(
+            model_name, temperature=0, disable_thinking=True, max_tokens=max_tokens_for("report"),
+        )
         response = tracked_invoke(
             llm,
             [HumanMessage(content=prompt)],
             user_id=user_id,
             session_id=session_id or None,
-            model_name=_ENRICHMENT_MODEL,
+            model_name=model_name,
             request_type="suggestion_summary",
         )
         text = extract_text_from_content(response.content).strip()
@@ -1065,6 +1110,7 @@ def generate_recommendations(
     3. Generate suggestions for human-required actions only
     4. Dedup against existing fix suggestions from github_fix tool
     """
+    from chat.backend.agent.call_options import max_tokens_for
     from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.providers import create_chat_model
     from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
@@ -1077,7 +1123,9 @@ def generate_recommendations(
         return validated_fixes
 
     # Step 1: Extract hypothesis ledger
-    hypothesis_state = _extract_hypotheses(agent_reasoning)
+    hypothesis_state = _extract_hypotheses(
+        agent_reasoning, user_id=user_id, session_id=session_id
+    )
     hypothesis_ledger = _format_hypothesis_ledger(hypothesis_state)
 
     # Step 2: Self-execution round — run safe diagnostics before suggesting
@@ -1122,7 +1170,10 @@ def generate_recommendations(
     )
 
     try:
-        llm = create_chat_model(ModelConfig.SUGGESTION_MODEL, temperature=0.3)
+        llm = create_chat_model(
+            ModelConfig.SUGGESTION_MODEL, temperature=0.3, disable_thinking=True,
+            max_tokens=max_tokens_for("report"),
+        )
         response = tracked_invoke(
             llm,
             [HumanMessage(content=prompt)],

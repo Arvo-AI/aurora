@@ -15,23 +15,41 @@ Key differences from Claude Code:
 - Uses Celery instead of forked process (no prompt cache sharing)
 - DB-backed memory instead of filesystem
 - RLS context required for all DB operations
+
+Cost controls (one run per conversation turn):
+- Exactly one enqueue per workflow run (``Workflow.stream``); the background
+  RCA task no longer enqueues a second one.
+- Debounce: a run is skipped when the session has no new user message since
+  the last extraction (digest of the human messages, remembered for an hour
+  in Redis, or in-process when Redis is down).
+- Cheap tier (``MEMORY_AGENT_MODEL``), thinking off, output capped at
+  ``LLM_MAX_TOKENS_MEMORY_AGENT`` (default 2000), at most ``MAX_AGENT_TURNS``
+  model turns, and every model call recorded in ``llm_usage_tracking`` as
+  ``memory_extraction``.
 """
 
+import hashlib
 import logging
+import os
+import threading
 import time
-from typing import List
+from typing import List, Optional
 
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
 
 from celery_config import celery_app
+from chat.backend.agent.call_options import max_tokens_for
 from chat.backend.agent.llm import ModelConfig
-from chat.backend.agent.providers import create_chat_model
+from chat.backend.agent.providers import get_cached_chat_model, get_registry
 from chat.backend.agent.tools.memory_tool import build_memory_tools
 from chat.backend.agent.utils.llm_context_manager import LLMContextManager
 from chat.backend.agent.utils.chat_context_manager import ChatContextManager
+from chat.backend.agent.utils.llm_usage_tracker import UsageTrackingCallback
+from chat.backend.agent.utils.message_content import extract_text_from_content
 from services.memory.index_builder import build_memory_index
 from utils.auth.stateless_auth import get_org_id_for_user
+from utils.cache.ttl_cache import TTLCache
 from utils.hooks import get_hook
 
 logger = logging.getLogger(__name__)
@@ -40,7 +58,16 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_AGENT_TURNS = 30
+# Model turns per extraction run. Bookkeeping needs a handful of tool calls
+# (list, read, write/append), not an open-ended investigation; 30 turns let a
+# chatty run burn 30 full-context calls for one or two facts.
+MAX_AGENT_TURNS = 8
+
+# How long a conversation digest marks the session as "already extracted".
+_DEBOUNCE_TTL_SECONDS = 3600
+_DEBOUNCE_KEY_PREFIX = "mem:extract:done:"
+_fallback_debounce_cache = TTLCache(maxsize=4096, ttl=_DEBOUNCE_TTL_SECONDS)
+_fallback_debounce_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Agent system prompt
@@ -85,6 +112,76 @@ You MUST save at least one fact if the user mentioned anything concrete about th
 
 
 # ---------------------------------------------------------------------------
+# Debounce helpers
+# ---------------------------------------------------------------------------
+
+
+def _is_human(msg) -> bool:
+    if getattr(msg, "type", None) == "human":
+        return True
+    return isinstance(msg, dict) and msg.get("role") in ("user", "human")
+
+
+def _message_text(msg) -> str:
+    content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+    try:
+        return extract_text_from_content(content) or ""
+    except Exception:
+        return str(content or "")
+
+
+def conversation_digest(session_id: str, messages: List) -> Optional[str]:
+    """Digest of the *user* side of the conversation.
+
+    ``sha256(session_id : <number of human messages> : <last human text>)`` —
+    assistant and tool messages do not count, so a second extraction enqueued
+    for the same turn (or a retried workflow run with no new user input) maps to
+    the same digest and is skipped, while every new user message produces a new
+    one. ``None`` when the conversation holds no human message at all.
+    """
+    humans = [m for m in messages if _is_human(m)]
+    if not humans:
+        return None
+    last_text = _message_text(humans[-1])
+    payload = f"{session_id}:{len(humans)}:{last_text}"
+    return hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _redis_client():
+    try:
+        from utils.cache.redis_client import get_redis_client
+    except Exception:  # pragma: no cover - redis package missing
+        return None
+    try:
+        return get_redis_client()
+    except Exception:
+        return None
+
+
+def _claim_extraction(session_id: str, digest: str) -> bool:
+    """Atomically mark this conversation state as extracted. False = already done.
+
+    Redis ``SET NX EX`` when available, otherwise a process-local TTL cache (good
+    enough for a single worker; a second worker would at worst run once more).
+    """
+    key = f"{_DEBOUNCE_KEY_PREFIX}{session_id}:{digest}"
+    client = _redis_client()
+    if client is not None:
+        try:
+            return bool(client.set(key, "1", nx=True, ex=_DEBOUNCE_TTL_SECONDS))
+        except Exception:
+            logger.debug("[MemoryCollector] Redis debounce failed; using local cache", exc_info=True)
+    with _fallback_debounce_lock:
+        return _fallback_debounce_cache.add(key, "1", ttl=_DEBOUNCE_TTL_SECONDS)
+
+
+def _clear_debounce_cache() -> None:
+    """Drop the in-process debounce marks (tests)."""
+    with _fallback_debounce_lock:
+        _fallback_debounce_cache.clear()
+
+
+# ---------------------------------------------------------------------------
 # Celery Task
 # ---------------------------------------------------------------------------
 
@@ -118,16 +215,25 @@ def extract_memories_from_session(
             logger.debug("%s No messages to process", log_prefix)
             return {"status": "skipped", "reason": "no_messages"}
 
+        # Debounce: nothing new from the user since the last extraction.
+        digest = conversation_digest(session_id, messages)
+        if digest is None:
+            logger.debug("%s No user messages to extract from", log_prefix)
+            return {"status": "skipped", "reason": "no_user_messages"}
+        if not _claim_extraction(session_id, digest):
+            logger.info("%s Skipping: no new user messages since the last extraction", log_prefix)
+            return {"status": "skipped", "reason": "no_new_user_messages"}
+
         # Build memory index upfront so the agent has a map without wasting a turn
         memory_index = build_memory_index(user_id) or "(no existing memories)"
 
         # Run the extraction agent
         start_time = time.time()
-        _run_extraction_agent(messages, memory_index, user_id, session_id, log_prefix)
+        calls = _run_extraction_agent(messages, memory_index, user_id, session_id, log_prefix)
         elapsed_ms = int((time.time() - start_time) * 1000)
 
-        logger.info("%s Extraction completed in %dms", log_prefix, elapsed_ms)
-        return {"status": "ok", "elapsed_ms": elapsed_ms}
+        logger.info("%s Extraction completed in %dms (%d model calls)", log_prefix, elapsed_ms, calls)
+        return {"status": "ok", "elapsed_ms": elapsed_ms, "model_calls": calls}
 
     except Exception as e:
         logger.exception("%s Extraction failed", log_prefix)
@@ -139,17 +245,36 @@ def extract_memories_from_session(
 # ---------------------------------------------------------------------------
 
 
+def _serving_provider(model_name: str) -> str:
+    """Provider label for usage rows (what actually serves the model)."""
+    mode = os.getenv("LLM_PROVIDER_MODE") or "direct"
+    try:
+        return get_registry().resolve_provider_name(model_name, mode) or mode
+    except Exception:
+        return mode
+
+
 def _run_extraction_agent(
     conversation_messages: List,
     memory_index: str,
     user_id: str,
     session_id: str,
     log_prefix: str,
-):
-    """Multi-turn agent loop: browses existing memories, writes new ones."""
+) -> int:
+    """Multi-turn agent loop: browses existing memories, writes new ones.
+
+    Returns the number of model calls that were recorded."""
     tools = build_memory_tools(user_id, session_id=session_id)
 
-    llm = create_chat_model(ModelConfig.MAIN_MODEL, temperature=0.0, streaming=False)
+    # Memory extraction is bookkeeping, not reasoning: cheap tier, thinking off,
+    # small output cap, shared (cached) non-streaming instance.
+    model_name = ModelConfig.MEMORY_AGENT_MODEL
+    llm = get_cached_chat_model(
+        model_name,
+        temperature=0.0,
+        max_tokens=max_tokens_for("memory_agent"),
+        disable_thinking=True,
+    )
 
     agent = create_agent(
         model=llm,
@@ -164,8 +289,24 @@ def _run_extraction_agent(
 
     user_content = f"EXISTING MEMORY INDEX:\n{memory_index}\n\nCONVERSATION TO ANALYZE:\n\n{conversation_text}"
 
-    agent.invoke(
-        {"messages": [HumanMessage(content=user_content)]},
-        config={"recursion_limit": MAX_AGENT_TURNS * 2 + 2},
+    # Every model call of the run lands in llm_usage_tracking (RLS context is set
+    # by LLMUsageTracker.store_usage). Passed per invocation, not bound to the
+    # shared model instance.
+    usage_callback = UsageTrackingCallback(
+        user_id=user_id,
+        session_id=session_id,
+        model_name=model_name,
+        api_provider=_serving_provider(model_name),
+        request_type="memory_extraction",
+        request_metadata={"agent_executor": True, "memory_agent": True},
     )
 
+    agent.invoke(
+        {"messages": [HumanMessage(content=user_content)]},
+        config={
+            "callbacks": [usage_callback],
+            # Each turn = one model step + one tool step; +2 for the final answer.
+            "recursion_limit": MAX_AGENT_TURNS * 2 + 2,
+        },
+    )
+    return usage_callback.calls_tracked

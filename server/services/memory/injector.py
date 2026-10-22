@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from utils.cache.redis_client import get_redis_client
 from services.memory.queries import get_memory_entries, fetch_memory_content
-from chat.backend.agent.providers import create_chat_model
+from chat.backend.agent.providers import get_cached_chat_model
 from chat.backend.agent.utils.message_content import extract_text_from_content
 from langchain_core.messages import SystemMessage, HumanMessage
 from chat.backend.agent.llm import ModelConfig
@@ -33,7 +33,7 @@ MAX_SELECTED = 5
 MAX_MEMORY_BYTES_PER_ENTRY = 4096
 STALENESS_DAYS = 2
 
-SELECTOR_MODEL = ModelConfig.RCA_MODEL
+SELECTOR_MODEL = ModelConfig.MEMORY_SELECTOR_MODEL
 SELECTOR_TIMEOUT = 5.0
 
 _SURFACED_SET_TTL = 86400
@@ -144,7 +144,12 @@ class MemoryPrefetch:
             selected: List[Dict] = list(forced)
             if available:
                 # Single async LLM pass: select up to 5
-                llm_selected = await _select_relevant_memories_async(self.user_message, available)
+                llm_selected = await _select_relevant_memories_async(
+                    self.user_message,
+                    available,
+                    user_id=self.user_id,
+                    session_id=self.session_id,
+                )
                 selected.extend(llm_selected)
 
             if not selected:
@@ -178,8 +183,47 @@ class MemoryPrefetch:
 # ---------------------------------------------------------------------------
 
 
-async def _select_relevant_memories_async(user_message: str, entries: List[Dict]) -> List[Dict]:
-    """One strict async LLM call: select up to 5 from the index."""
+def _track_selector_usage(
+    messages: List, response, start_time: float, user_id: str, session_id: Optional[str]
+) -> None:
+    """Record one memory-selector call in ``llm_usage_tracking`` (blocking; run off-loop).
+
+    Labelled with the provider that actually serves the selector model (Bedrock for
+    the cheap tier under ``LLM_PROVIDER_MODE=bedrock``); the tracker sets the RLS
+    context before the insert.
+    """
+    from chat.backend.agent.utils.llm_usage_tracker import (
+        LLMUsageTracker,
+        resolve_serving_provider,
+    )
+
+    provider = resolve_serving_provider(SELECTOR_MODEL)
+    LLMUsageTracker.track_llm_call(
+        user_id=user_id,
+        session_id=session_id,
+        model_name=SELECTOR_MODEL,
+        request_type="memory_selector",
+        prompt=messages,
+        response=response,
+        start_time=start_time,
+        api_provider=provider,
+        provider_mode=provider,
+    )
+
+
+async def _select_relevant_memories_async(
+    user_message: str,
+    entries: List[Dict],
+    *,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> List[Dict]:
+    """One strict async LLM call: select up to 5 from the index.
+
+    When ``user_id`` is known the call is recorded in ``llm_usage_tracking`` as
+    ``memory_selector`` (it runs on every chat turn, so it must show up in the
+    cost picture); the DB write runs in a worker thread off the event loop.
+    """
 
     manifest_lines = []
     for entry in entries:
@@ -193,14 +237,26 @@ async def _select_relevant_memories_async(user_message: str, entries: List[Dict]
     )
 
     try:
-        llm = create_chat_model(SELECTOR_MODEL, temperature=0.0, streaming=False, max_tokens=256)
-        response = await llm.ainvoke(
-            [
-                SystemMessage(content=_SELECTOR_SYSTEM),
-                HumanMessage(content=prompt),
-            ],
-            config={"run_name": "memory_selector"},
+        # One shared non-streaming instance per process: this call runs on every
+        # chat turn, and building a fresh client each time was pure overhead.
+        # Output stays capped at 256 tokens (a short JSON list of titles).
+        llm = get_cached_chat_model(
+            SELECTOR_MODEL, temperature=0.0, max_tokens=256, disable_thinking=True
         )
+        messages = [
+            SystemMessage(content=_SELECTOR_SYSTEM),
+            HumanMessage(content=prompt),
+        ]
+        start_time = time.time()
+        response = await llm.ainvoke(messages, config={"run_name": "memory_selector"})
+
+        if user_id:
+            try:
+                await asyncio.to_thread(
+                    _track_selector_usage, messages, response, start_time, user_id, session_id
+                )
+            except Exception:
+                logger.debug("[MemoryInjector] Could not record selector usage", exc_info=True)
 
         # Thinking-capable models return a list of content blocks, not a str —
         # extract_text_from_content normalizes both so .strip() can't blow up.
@@ -241,7 +297,14 @@ async def _select_relevant_memories_async(user_message: str, entries: List[Dict]
 
 
 def _format_for_injection(memories: List[Dict]) -> Tuple[str, Set[str]]:
-    """Format memories with staleness headers and per-entry cap."""
+    """Format memories with staleness headers and per-entry cap.
+
+    The output is time-dependent ("Last updated Nd ago" changes every day) and
+    per-message (the selector picks different entries per user message), so
+    ``agent.py`` appends it to ``segments.knowledge_base_memory``, which the prompt
+    composer places in the DYNAMIC suffix after the prompt-cache breakpoint
+    (``assemble_system_prompt_parts``). Never move it into the static prefix.
+    """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     parts = []
     surfaced: Set[str] = set()

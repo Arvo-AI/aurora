@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 from services.change_gating.diff_utils import build_per_file_diff, format_changed_files
@@ -433,6 +434,7 @@ def _create_extraction_llm():
     from typing import Literal
     from pydantic import BaseModel, Field
 
+    from chat.backend.agent.call_options import max_tokens_for
     from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.providers import create_chat_model
 
@@ -459,18 +461,60 @@ def _create_extraction_llm():
         summary: str = Field(description="2-3 sentence overall assessment")
         findings: List[ReviewFinding] = Field(default_factory=list)
 
-    llm = create_chat_model(ModelConfig.MAIN_MODEL, temperature=0.0, streaming=False)
+    # Extraction, not reasoning: cheap tier with thinking off. (Opus 5.5 also cannot be
+    # forced to call the schema tool, which this structured-output call relies on.)
+    # The verdict carries a findings list, so it gets the "report" budget rather
+    # than the judge one: a truncated tool-call JSON would fail to parse.
+    llm = create_chat_model(
+        ModelConfig.SUGGESTION_MODEL, temperature=0.0, streaming=False, disable_thinking=True,
+        max_tokens=max_tokens_for("report"),
+    )
     return llm.with_structured_output(
         ReviewVerdict, include_raw=True, method="function_calling"
     )
 
 
-def extract_verdict_with_llm(text: Optional[str]) -> Optional[Dict[str, Any]]:
+def _track_extraction_usage(
+    prompt: str, raw_response: Any, start_time: float, user_id: str, session_id: Optional[str]
+) -> None:
+    """Record the verdict-extraction call in ``llm_usage_tracking`` (never raises)."""
+    try:
+        from chat.backend.agent.llm import ModelConfig
+        from chat.backend.agent.utils.llm_usage_tracker import (
+            LLMUsageTracker,
+            resolve_serving_provider,
+        )
+
+        model_name = ModelConfig.SUGGESTION_MODEL
+        provider = resolve_serving_provider(model_name)
+        LLMUsageTracker.track_llm_call(
+            user_id=user_id,
+            session_id=session_id,
+            model_name=model_name,
+            request_type="verdict_extraction",
+            prompt=prompt,
+            response=raw_response,
+            start_time=start_time,
+            api_provider=provider,
+            provider_mode=provider,
+        )
+    except Exception:  # noqa: BLE001 — tracking must never affect the verdict
+        logger.debug("[ChangeGating] Could not record verdict-extraction usage", exc_info=True)
+
+
+def extract_verdict_with_llm(
+    text: Optional[str],
+    *,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Fallback for :func:`parse_verdict`: one structured-output LLM call.
 
     Used when the agent's final message contains the verdict buried in
     free text that direct JSON parsing could not recover. Returns the
     same normalized dict shape as ``parse_verdict``, or None. Never raises.
+    When ``user_id`` is given the call is recorded in ``llm_usage_tracking``
+    as ``verdict_extraction`` (RLS context is set by the tracker).
     """
     try:
         if not text or not str(text).strip():
@@ -494,7 +538,11 @@ def extract_verdict_with_llm(text: Optional[str]) -> Optional[Dict[str, Any]]:
             "AGENT MESSAGE:\n"
             f"{message}"
         )
+        start_time = time.time()
         result = extractor.invoke(prompt)
+        if user_id:
+            raw = result.get("raw") if isinstance(result, dict) else None
+            _track_extraction_usage(prompt, raw, start_time, user_id, session_id)
         parsed = result.get("parsed") if isinstance(result, dict) else result
         if parsed is None:
             logger.warning(

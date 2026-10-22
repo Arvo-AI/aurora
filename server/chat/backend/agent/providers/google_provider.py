@@ -13,6 +13,8 @@ import os
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+from chat.backend.agent.call_options import effective_max_tokens, pop_call_options
+
 from .base_provider import BaseLLMProvider, apply_gemini_thinking_config
 from ..model_mapper import ModelMapper
 
@@ -112,7 +114,26 @@ class GoogleProvider(BaseLLMProvider):
         }
 
         apply_gemini_thinking_config(config, resolved_model)
-
+        # Provider-neutral call options -> Gemini fields: `max_tokens` is
+        # `max_output_tokens`, `request_timeout` is the constructor alias of `timeout`.
+        # `disable_thinking` is dropped here — Gemini thinking is governed globally by
+        # GEMINI_DISABLE_THINKING (see apply_gemini_thinking_config), and even that
+        # only hides the thoughts: a 2.5+/3/4 model still thinks server-side. So a
+        # `max_tokens` sized for a thinking-free answer is only forwarded to models
+        # that do not think by default (flash-lite, pre-2.5); on thinking models the
+        # cap is dropped and the model keeps its default output limit.
+        opts = pop_call_options(kwargs)
+        max_tokens = effective_max_tokens(opts, resolved_model)
+        if max_tokens is not None:
+            config["max_output_tokens"] = max_tokens
+        elif opts.max_tokens is not None:
+            logger.info(
+                "Dropping max_tokens=%s for thinking model %s: Gemini thinking cannot be "
+                "disabled per call, so the cap could truncate the answer.",
+                opts.max_tokens, resolved_model,
+            )
+        if opts.request_timeout is not None:
+            config["request_timeout"] = opts.request_timeout
         config.update(kwargs)
 
         return ChatGoogleGenerativeAI(**config)

@@ -280,6 +280,7 @@ def _summarize_action_result(action_name: str, bot_response: str, user_id: str) 
     """Summarize an action's output into key results using a lightweight LLM call."""
     try:
         from langchain_core.messages import HumanMessage
+        from chat.backend.agent.call_options import max_tokens_for
         from chat.backend.agent.providers import create_chat_model
         from chat.backend.agent.llm import ModelConfig
         from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
@@ -300,6 +301,8 @@ One-line summary:"""
             temperature=0.1,
             streaming=False,
             request_timeout=25,
+            disable_thinking=True,
+            max_tokens=max_tokens_for("summary"),
         )
 
         response = tracked_invoke(

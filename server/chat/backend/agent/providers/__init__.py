@@ -22,7 +22,9 @@ Environment Variables:
 
 import logging
 import os
-from typing import Dict, List, Optional
+import threading
+from collections import OrderedDict
+from typing import Any, Dict, Hashable, List, Optional, Tuple
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -247,7 +249,15 @@ def create_chat_model(
         model: Model name (in any format)
         temperature: Temperature setting (default 0.4)
         provider_mode: Provider selection mode (default from env LLM_PROVIDER_MODE)
-        **kwargs: Additional parameters to pass to the provider
+        **kwargs: Additional parameters to pass to the provider. Three of them are
+            provider-neutral and translated by every provider to its own client
+            fields (see ``chat.backend.agent.call_options``): ``max_tokens``,
+            ``request_timeout`` (seconds) and ``disable_thinking`` (switch extended
+            thinking off on Claude models that allow it; dropped elsewhere). When
+            ``disable_thinking`` is requested together with ``max_tokens`` but the
+            provider cannot switch thinking off for that model, the cap is dropped
+            too (``call_options.effective_max_tokens``) so reasoning tokens never
+            truncate a classifier or summary answer.
 
     Returns:
         Configured LangChain chat model instance
@@ -274,6 +284,93 @@ def create_chat_model(
 
     # Create and return the chat model
     return provider.get_chat_model(model, temperature=temperature, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Shared, bounded cache of non-streaming model instances
+# ---------------------------------------------------------------------------
+#
+# Every chat-model construction builds its own HTTP / boto3 clients
+# (ChatBedrockConverse creates two: bedrock-runtime and bedrock). Auxiliary
+# callers — the command-safety judge, tool-output summaries, the memory selector
+# and agent, severity — used to build a fresh instance per call, so a single RCA
+# could spin up dozens of clients. Instances with identical construction
+# arguments are interchangeable: the LangChain clients hold no per-request state
+# (`invoke` builds the request from its arguments; `with_structured_output` /
+# `bind_tools` return new runnables without mutating the base), and the
+# underlying boto3 / httpx / openai clients are documented as safe for
+# concurrent use from multiple threads. The one in-place mutation Aurora does —
+# the adaptive sampling guard clearing a rejected `temperature` — is idempotent
+# and desirable to share.
+#
+# Not cached: anything constructed with `callbacks` (per-request listeners) or
+# `streaming=True` (the agent path binds its own usage callback per turn).
+_MODEL_CACHE_MAXSIZE = 64
+_model_cache: "OrderedDict[Hashable, BaseChatModel]" = OrderedDict()
+_model_cache_lock = threading.Lock()
+_UNCACHEABLE_KWARGS = ("callbacks", "streaming")
+
+
+def _freeze(value: Any) -> Hashable:
+    """Hashable form of a kwarg value (dicts/lists become sorted tuples)."""
+    if isinstance(value, dict):
+        return tuple(sorted((str(k), _freeze(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return tuple(_freeze(v) for v in value)
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
+def _model_cache_key(model: str, temperature: float, provider_mode: Optional[str], kwargs: Dict[str, Any]) -> Tuple:
+    return (
+        model,
+        provider_mode or os.getenv("LLM_PROVIDER_MODE") or "",
+        float(temperature),
+        tuple(sorted((k, _freeze(v)) for k, v in kwargs.items())),
+    )
+
+
+def get_cached_chat_model(
+    model: str, temperature: float = 0.0, provider_mode: Optional[str] = None, **kwargs
+) -> BaseChatModel:
+    """Return a shared chat-model instance for non-streaming auxiliary calls.
+
+    Same signature as :func:`create_chat_model`; instances are keyed by
+    ``(model, provider mode, temperature, every remaining kwarg)`` — so
+    ``max_tokens`` / ``request_timeout`` / ``disable_thinking`` each get their own
+    instance — and kept in a bounded LRU (``_MODEL_CACHE_MAXSIZE``). Calls that
+    pass ``callbacks`` or ``streaming=True`` are never cached and fall through to
+    :func:`create_chat_model`.
+    """
+    if any(kwargs.get(name) for name in _UNCACHEABLE_KWARGS):
+        return create_chat_model(model, temperature=temperature, provider_mode=provider_mode, **kwargs)
+    key = _model_cache_key(model, temperature, provider_mode, kwargs)
+    with _model_cache_lock:
+        cached = _model_cache.get(key)
+        if cached is not None:
+            _model_cache.move_to_end(key)
+            return cached
+    # Construct outside the lock: provider construction may do credential /
+    # endpoint resolution. A rare duplicate build under contention is harmless.
+    instance = create_chat_model(model, temperature=temperature, provider_mode=provider_mode, **kwargs)
+    with _model_cache_lock:
+        existing = _model_cache.get(key)
+        if existing is not None:
+            _model_cache.move_to_end(key)
+            return existing
+        _model_cache[key] = instance
+        while len(_model_cache) > _MODEL_CACHE_MAXSIZE:
+            _model_cache.popitem(last=False)
+    return instance
+
+
+def clear_chat_model_cache() -> None:
+    """Drop every cached instance (tests, credential rotation)."""
+    with _model_cache_lock:
+        _model_cache.clear()
 
 
 def get_available_providers() -> Dict[str, bool]:
@@ -306,5 +403,7 @@ __all__ = [
     "ProviderRegistry",
     "get_registry",
     "create_chat_model",
+    "get_cached_chat_model",
+    "clear_chat_model_cache",
     "get_available_providers",
 ]

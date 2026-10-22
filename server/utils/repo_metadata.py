@@ -215,6 +215,7 @@ def _fetch_repo_context(provider: str, creds: dict, repo_full_name: str) -> tupl
 
 
 def _generate_summary(user_id: str, context: str) -> str:
+    from chat.backend.agent.call_options import max_tokens_for
     from chat.backend.agent.providers import create_chat_model
     from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
@@ -233,6 +234,8 @@ def _generate_summary(user_id: str, context: str) -> str:
         ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
         temperature=0.2,
         streaming=False,
+        disable_thinking=True,
+        max_tokens=max_tokens_for("summary"),
     )
     prompt = METADATA_PROMPT.format(context=context)
     response = tracked_invoke(

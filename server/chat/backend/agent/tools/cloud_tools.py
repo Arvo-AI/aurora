@@ -1265,10 +1265,22 @@ def get_cloud_tools():
                     # notification should still be sent even if backend tracking is lost
                 
                 # Cap tool output before returning to LangChain so the ReAct
-                # loop never accumulates oversized ToolMessages.
-                from chat.backend.agent.utils.tool_output_cap import cap_tool_output
+                # loop never accumulates oversized ToolMessages. Background RCA
+                # runs use the lower RCA_TOOL_OUTPUT_PASS_THROUGH_CHARS threshold
+                # (resolved from the live state, like the capture instance above);
+                # interactive chat keeps the default.
+                from chat.backend.agent.utils.tool_output_cap import (
+                    background_pass_through_chars,
+                    cap_tool_output,
+                )
                 result_str = json.dumps(result) if isinstance(result, dict) else str(result)
-                result = cap_tool_output(result_str, tool_name)
+                _live_state = get_state_context()
+                _cap_threshold = (
+                    background_pass_through_chars()
+                    if getattr(_live_state, "is_background", False)
+                    else None
+                )
+                result = cap_tool_output(result_str, tool_name, pass_through_chars=_cap_threshold)
 
                 return result
             except Exception as e:
@@ -3189,7 +3201,12 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     
     tools = ModeAccessController.filter_tools(mode, tools)
     
-    # Deduplicate tools by name to prevent "Tool names must be unique" errors with Claude
+    # Deduplicate tools by name to prevent "Tool names must be unique" errors with Claude.
+    # Order is preserved on purpose: the tool definitions are the first segment of the
+    # prompt-cache prefix (a Bedrock cachePoint follows them, see
+    # utils/cache_control.py), so the list must be deterministic for the same
+    # connected providers/mode — appends above happen in fixed code order and this
+    # pass keeps the first occurrence.
     seen_tool_names = set()
     deduplicated_tools = []
     for tool in tools:

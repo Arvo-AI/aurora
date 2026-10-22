@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from chat.backend.agent.call_options import max_tokens_for
 from chat.backend.agent.llm import ModelConfig
 from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
@@ -22,6 +23,8 @@ def generate_summary(
         ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
         temperature=0.2,
         streaming=False,
+        disable_thinking=True,
+        max_tokens=max_tokens_for("summary"),
     )
     prompt = render_metadata_prompt(platform_display, fields_hint, context_text)
     response = tracked_invoke(

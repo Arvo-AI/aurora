@@ -228,6 +228,7 @@ At least one LLM provider API key is required. See [LLM Providers](/docs/integra
 | `GOOGLE_AI_API_KEY` | - | Google AI API key |
 | `LLM_PROVIDER_MODE` | `openrouter` | Provider routing mode (see below) |
 | `AGENT_RECURSION_LIMIT` | `240` | Max agent reasoning steps |
+| `AGENT_STREAM_RESTART_ATTEMPTS` | `1` | Full agent-graph restarts allowed per run after a genuine mid-stream transport error (HTTP/2 stream reset, incomplete chunked read, peer closed the socket). Throttling, 5xx and timeouts are retried by the provider SDK and never restart the graph — a restart re-runs and re-bills every previous turn. `0` disables restarts. |
 
 ### LLM_PROVIDER_MODE
 
@@ -288,27 +289,36 @@ For native mode, set **`LLM_PROVIDER_MODE=bedrock`** to route clean model picks 
 |----------|---------|-------------|
 | `BEDROCK_BASE_URL` | - | Gateway mode: OpenAI-compatible base URL (e.g. `.../v1`). When set, Aurora uses gateway mode. |
 | `BEDROCK_API_KEY` | `not-needed` | Gateway mode only. Optional — many VPC gateways need no key. |
-| `BEDROCK_REGION` | - | Native mode AWS region. Falls back to `AWS_REGION` / `AWS_DEFAULT_REGION`. Set to `global` to use Bedrock's `global.` inference profiles, which bill at the direct list price instead of the ~10% cross-region premium. |
-| `BEDROCK_ACCESS_KEY_ID` | _(AWS_ACCESS_KEY_ID)_ | Native mode access key. Omit to use an IAM role / default credential chain. |
+| `BEDROCK_REGION` | - | Native mode AWS region (e.g. `eu-central-1`). Falls back to `AWS_REGION` / `AWS_DEFAULT_REGION`. The geo prefix of the inference profile (`eu.`/`us.`) is derived from it. `global` selects Bedrock's `global.` profiles (direct list price, no ~10% cross-region premium) — **data-residency warning:** global profiles may process requests in any commercial AWS Region, so never use `global` on EU/GDPR-bound deployments. |
+| `BEDROCK_ACCESS_KEY_ID` | _(AWS_ACCESS_KEY_ID)_ | Native mode access key. Omit to use an IAM role / default credential chain (recommended: EC2 instance profile, ECS task role or EKS IRSA). |
 | `BEDROCK_SECRET_ACCESS_KEY` | _(AWS_SECRET_ACCESS_KEY)_ | Native mode secret key. |
 | `BEDROCK_SESSION_TOKEN` | _(AWS_SESSION_TOKEN)_ | Native mode session token, used alongside `BEDROCK_ACCESS_KEY_ID` / `BEDROCK_SECRET_ACCESS_KEY` for temporary / STS credentials. Omit for long-lived keys, a profile, or an IAM role. |
-| `BEDROCK_PROFILE` | - | Native mode named AWS profile (alternative to explicit keys). |
+| `BEDROCK_PROFILE` | - | Native mode named AWS profile. Only works when `~/.aws` is mounted into the server, chatbot and celery containers — Compose and the Helm chart do not do this by default; prefer an IAM role. |
+| `BEDROCK_READ_TIMEOUT` | `300` | Native mode: botocore read timeout in seconds for the Bedrock runtime client. Sized for a streaming agent turn with thinking on; small classifier calls (judge, summaries, synopsis) shrink it per call. The connect timeout is fixed at 10 s. |
+| `BEDROCK_MAX_ATTEMPTS` | `3` | Native mode: total attempts (first try + retries) of botocore's `standard` retry mode — exponential backoff with jitter on throttling, 5xx and transient connection errors. Gateway mode retries twice through the OpenAI-compatible client. |
+| `BEDROCK_REGIONAL_PREMIUM` | `1.10` | Cost tracking only. Multiplier applied to the Anthropic list price for `llm_usage_tracking` rows served through a geo inference profile (`us.` / `eu.` / `apac.`), which Bedrock bills above the direct / `global.` price (AWS publishes ~10%). `1.0` disables it; `global.` profiles never carry it; values below 1.0 or non-numeric fall back to the default. Calibrate against Cost Explorer. |
 
 ```bash
 # Gateway mode (OpenAI-compatible endpoint, e.g. a Bedrock Access Gateway in your VPC)
 BEDROCK_BASE_URL=https://bedrock-gateway.internal.example.com/v1
 BEDROCK_API_KEY=                       # optional
 LLM_PROVIDER_MODE=direct
-MAIN_MODEL=bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+MAIN_MODEL=bedrock/eu.anthropic.claude-haiku-5-5   # the model name your gateway expects
 
 # Native mode (AWS SDK) — leave BEDROCK_BASE_URL unset
-BEDROCK_REGION=us-east-1
-BEDROCK_ACCESS_KEY_ID=AKIA...          # or use BEDROCK_PROFILE / an IAM role
-BEDROCK_SECRET_ACCESS_KEY=...
-BEDROCK_SESSION_TOKEN=                  # omit unless using temporary / STS credentials
+BEDROCK_REGION=eu-central-1             # EU region -> eu.* geo profiles, inference stays in the EU
+# No keys needed when the host/pod has an IAM role (recommended). Static keys are the fallback:
+# BEDROCK_ACCESS_KEY_ID=AKIA...
+# BEDROCK_SECRET_ACCESS_KEY=...
+# BEDROCK_SESSION_TOKEN=                # only with temporary / STS credentials
 LLM_PROVIDER_MODE=bedrock               # routes clean model picks through Bedrock
-MAIN_MODEL=anthropic/claude-sonnet-5    # auto-translated to us.anthropic.claude-sonnet-5
+MAIN_MODEL=anthropic/claude-opus-5.5    # auto-translated to eu.anthropic.claude-opus-5-5
+# RCA and auxiliary calls default to the cheap tier -> eu.anthropic.claude-haiku-5-5
 ```
+
+Under `LLM_PROVIDER_MODE=bedrock`, a model Bedrock cannot serve (`openai/`, `google/`, `vertex/`) falls back to its own provider only if that provider has credentials configured; leave the other provider keys empty to keep every call on Bedrock.
+
+The alert-correlation embedding model (`EMBEDDING_MODEL=bedrock/amazon.titan-embed-text-v2:0`) uses the same region and credential resolution as the chat provider — an IAM role is enough, static keys are optional — and Titan Text Embeddings V2 is addressed by its base in-region id (it has no `eu.` / `us.` inference profile).
 
 ### Web Search
 
@@ -319,15 +329,44 @@ MAIN_MODEL=anthropic/claude-sonnet-5    # auto-translated to us.anthropic.claude
 
 ### AI Features
 
+_(cheap tier)_ below means `anthropic/claude-haiku-5.5` **when your provider settings can route a Claude model** — `LLM_PROVIDER_MODE=openrouter`, `anthropic` or `bedrock`, or `ANTHROPIC_API_KEY` set under direct routing — and `MAIN_MODEL` otherwise. An OpenAI / Google / Vertex / Ollama-only install, or a Bedrock gateway pinned to explicit `bedrock/<id>` values, therefore keeps working without setting each variable by hand. With `MAIN_MODEL` pinned to an explicit `bedrock/<id>`, the cheap tier stays on that Bedrock route in every mode: `bedrock/<geo>.anthropic.claude-haiku-5-5` on the same geo in native mode (`us`/`eu`/`au`/`jp`/`global`, the geos AWS publishes Haiku 5.5 for), otherwise (gateway mode, `apac.`, non-Claude pins) `MAIN_MODEL` itself — never another provider, so a stray `ANTHROPIC_API_KEY` cannot pull background traffic off Bedrock. Under `LLM_PROVIDER_MODE=bedrock` in an `ap-*` region with clean ids the variables also follow `MAIN_MODEL` (no `apac.` Haiku 5.5 profile exists). An explicit value always wins.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RCA_MODEL` | - | Model for background RCA (format: `provider/model`). Overrides `RCA_OPTIMIZE_COSTS` when set. Default RCA path when `ORCHESTRATOR_ENABLED=false`. |
-| `JIRA_RCA_JUDGE_MODEL` | `RCA_MODEL` | Yes/no model for Jira automatic RCA. Unset uses the resolved `RCA_MODEL`. |
-| `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` = `anthropic/claude-haiku-4.5`, `false` = `anthropic/claude-opus-5.5` |
+| `JIRA_RCA_JUDGE_MODEL` | _(cheap tier)_ | Yes/no model for Jira automatic RCA. |
+| `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` (also unset or empty) = the cheap tier, `false` = `anthropic/claude-opus-5.5` |
+| `SUMMARIZATION_MODEL` | _(cheap tier)_ | Incident/initial summaries, synopses, repo and channel metadata. |
+| `TOOL_OUTPUT_SUMMARIZATION_MODEL` | `SUMMARIZATION_MODEL` | Compresses oversized tool outputs during an investigation. |
+| `SUGGESTION_MODEL` | _(cheap tier)_ | Hypotheses, diagnostics plan and recommendations extraction. |
+| `ENRICHMENT_MODEL` | _(cheap tier)_ | Next Steps suggestion descriptions/summaries. |
+| `EMAIL_REPORT_MODEL` | _(cheap tier)_ | RCA summary / email report generation. |
+| `SEVERITY_MODEL` | _(cheap tier)_ | One-word severity classification after a background RCA. |
+| `MEMORY_AGENT_MODEL` | _(cheap tier)_ | Memory extraction agent that runs after each investigation. |
+| `MEMORY_SELECTOR_MODEL` | _(cheap tier)_ | Per-message memory selector. |
+| `RECURRENCE_AGENT_MODEL` | _(cheap tier)_ | Root-cause recurrence detection agent. |
+| `VISUALIZATION_MODEL` | _(cheap tier)_ | Infrastructure visualization extraction (only when `VISUALIZATION_ENABLED=true`). |
 | `ORCHESTRATOR_ENABLED` | `false` | Multi-agent RCA orchestrator (opt-in). When `true`, a lead orchestrator triages each background RCA and may fan out parallel read-only sub-agents; `RCA_MODEL` is ignored. When `false` (default), RCA uses the single-agent path with `RCA_MODEL`. |
 | `RCA_ORCHESTRATOR_MODEL` | - | *Only when `ORCHESTRATOR_ENABLED=true`.* Brain model for triage + synthesis. Format: `provider/model`. |
 | `RCA_SUBAGENT_MODEL` | - | *Only when `ORCHESTRATOR_ENABLED=true`.* Sub-agent investigator model. Per-role overrides in `orchestrator/roles/*.md` frontmatter take precedence. Format: `provider/model`. |
+| `RCA_CONTEXT_TOKEN_BUDGET` | `200000` | Background RCA only. The context safety net trims the investigation's message history at this many tokens instead of 80% of the model window (~760K on a 1M-token model); every ReAct turn re-reads the whole history, so this bounds the per-turn input bill. The budget counts the conversation messages only — the system prompt and the tool definitions are sent on top of it. When the history outgrows the budget, the oldest tool turns are dropped down to 60% of it (the original alert / task message is always kept) and that cut is reused until the budget is exceeded again, so the prompt cache keeps hitting between cuts. On Haiku 5.5 a request whose whole prompt exceeds 100K tokens bills 5x per token: to stay on the base price tier the budget must leave room for the system prompt and tools under that threshold, at the cost of a shorter investigation memory. Interactive chat is unchanged. |
+| `RCA_TOOL_OUTPUT_PASS_THROUGH_CHARS` | `20000` | Background RCA only. Tool outputs longer than this many characters (~5K tokens) are summarized once by the cheap model before entering the agent loop; interactive chat keeps its 40,000-character threshold. |
 | `GEMINI_DISABLE_THINKING` | - | Disable Gemini thinking mode |
+
+#### Output-token caps
+
+Every model call carries a `max_tokens` cap chosen by call type, so a runaway answer is never billed up to the model's own maximum (128K output tokens on the Claude 5.x generation). Unset or empty means the default; a non-numeric or non-positive value also falls back to the default.
+
+| Variable | Default | Applies to |
+|----------|---------|------------|
+| `LLM_MAX_TOKENS_JUDGE` | `400` | Command-safety judge and Jira RCA judge (a short JSON verdict). |
+| `LLM_MAX_TOKENS_SEVERITY` | `32` | One-word severity classification after a background RCA. |
+| `LLM_MAX_TOKENS_SUMMARY` | `1500` | Tool-output summaries, conversation compression, initial alert summaries, incident-index synopses, action-result summaries, repo / channel metadata. |
+| `LLM_MAX_TOKENS_REPORT` | `4000` | RCA summary / email report, hypotheses, diagnostics plan, recommendations, Next Steps enrichment, visualization extraction, PR-review verdict extraction. |
+| `LLM_MAX_TOKENS_AGENT` | `16000` | One agent turn (interactive chat, background RCA, recurrence agent, orchestrator sub-agents). Applied when a Claude model is served by Bedrock or the Anthropic API — extended-thinking tokens count against it; other providers keep their own defaults. |
+| `LLM_MAX_TOKENS_MEMORY_AGENT` | `2000` | One turn of the memory extraction agent (at most 8 turns per run). |
+
+The judge, severity, summary, report and memory-agent caps are sized for answers with no chain-of-thought in them, and are only applied where thinking is actually off for the call: the Claude models that accept `thinking: disabled` (Haiku 5.5, Sonnet 5, Opus 5, Opus 4.7/4.8) on Bedrock native or the Anthropic API, and models that never think unless asked (Claude 4.x, gpt-4-class, Gemini flash-lite). When the auxiliary model keeps thinking — Opus 5.5 / Sonnet 5.5 (standing in for the cheap tier when it is not routable), OpenAI reasoning models (gpt-5.x, o-series, where the output budget includes reasoning tokens), Gemini 2.5+/3, any model through a Bedrock gateway or OpenRouter (no portable thinking switch), Ollama — the cap is dropped for that call and the model keeps its own default output limit, so reasoning tokens can never truncate a verdict or summary. `LLM_MAX_TOKENS_AGENT` is not subject to this rule.
 
 ### AI Safety Guardrails
 
@@ -336,8 +375,9 @@ Three-layer safety: input rail + signature matcher + LLM safety judge. See [Comm
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GUARDRAILS_ENABLED` | `true` | Master switch. When enabled (default), all three layers run and every LLM check fails closed on error. Set to `false` to disable all guardrails. |
-| `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Model used by the safety judge and input rail. Same format and routing as `MAIN_MODEL`. |
+| `GUARDRAILS_LLM_MODEL` | _(cheap tier)_ | Model used by the safety judge and input rail. Unset/empty = `google/gemini-2.5-flash-lite` under `LLM_PROVIDER_MODE=openrouter`; otherwise `anthropic/claude-haiku-5.5` when your provider settings can route it, else `MAIN_MODEL` (both checks fail closed, so they always get a model the deployment can serve — see [AI Features](#ai-features)). Same format and routing as `MAIN_MODEL`; extended thinking is switched off for these calls. |
 | `GUARDRAILS_SIGMA_ENABLED` | `true` | Gates the vendored SigmaHQ rule corpus inside the signature matcher. Requires `GUARDRAILS_ENABLED=true`. Set to `false` to run only hand-written rules. |
+| `COMMAND_SAFETY_VERDICT_TTL_SECONDS` | `900` | Seconds a safety-judge verdict is remembered for the same (session, user message, command) — an investigation re-runs the same read commands many times. Cache keys hold only SHA-256 digests; timeouts and errors (the fail-closed path) are never cached. Stored in Redis, with an in-process fallback. `0` disables the cache. |
 
 ## Cloud Providers
 

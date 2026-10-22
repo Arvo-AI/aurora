@@ -5,9 +5,11 @@ starts planning, so compromised inputs never reach tool selection. The judge's
 streaming path is untouched: NeMo only evaluates the input.
 
 The underlying LLM is the same one the command-safety judge uses
-(``GUARDRAILS_LLM_MODEL`` -> ``MAIN_MODEL`` fallback). It is built through the
-central ``create_chat_model()`` factory, so provider routing, API keys, and any
-future providers are inherited automatically.
+(``GUARDRAILS_LLM_MODEL`` -> ``ModelConfig.GUARDRAILS_MODEL``: the cheap tier when
+the provider settings can route it, otherwise ``MAIN_MODEL``; a ``MAIN_MODEL``
+pinned to a ``bedrock/<id>`` keeps it on that Bedrock geo or on ``MAIN_MODEL``).
+It is built through the central ``create_chat_model()`` factory, so provider
+routing, API keys, and any future providers are inherited automatically.
 
 Block detection uses NeMo's structured ``triggered_input_rail`` output variable
 rather than string-matching refusal text: it is the official signal and is
@@ -21,10 +23,12 @@ the request. Callers can detect this via ``InputRailResult.blocked`` and
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import threading
 import time
 from dataclasses import dataclass
+from typing import Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
 
@@ -38,6 +42,14 @@ _rails_lock: asyncio.Lock | None = None
 _rails_thread_lock = threading.Lock()
 _last_init_failure_ts: float = float("-inf")
 _INIT_FAILURE_BACKOFF_S = 30.0
+
+# (user_id, session_id) of the request whose message the rail is screening. NeMo owns
+# the model call, so ``check_input`` publishes the ids here and the LLM wrapper reads
+# them when it records usage; ``None`` (no ids known) means "do not record".
+_usage_context: contextvars.ContextVar[Optional[Tuple[str, Optional[str]]]] = contextvars.ContextVar(
+    "input_rail_usage_context", default=None
+)
+_USAGE_REQUEST_TYPE = "input_rail"
 
 _FAIL_CLOSED_REASON = "input rail unavailable"
 _FAIL_CLOSED_AUTH = "input rail auth error"
@@ -101,12 +113,60 @@ class _GuardrailsLLMCompat(BaseChatModel):
     # Flipped to True the first time the model rejects a sampling param, so later
     # calls skip the wasted round-trip. Not a constructor argument in practice.
     drop_sampling: bool = False
+    # Labels for the llm_usage_tracking rows: the Aurora model id the rail runs on
+    # and the provider that actually serves it. Empty = usage is not recorded.
+    usage_model_name: str = ""
+    usage_provider: str = ""
 
     model_config = {"arbitrary_types_allowed": True}
 
     @property
     def _llm_type(self) -> str:
         return self.inner._llm_type
+
+    def _record_usage(self, messages, result, start_time: float) -> None:
+        """Store one ``input_rail`` usage row for a finished self-check call.
+
+        Reads the request ids ``check_input`` published in ``_usage_context``; a
+        rail built outside a request (no ids) records nothing. The provider's
+        ``usage_metadata`` on the returned message carries the real token counts.
+        Never raises — tracking can never fail the rail.
+        """
+        try:
+            ids = _usage_context.get()
+            if not ids or not self.usage_model_name:
+                return
+            user_id, session_id = ids
+            if not user_id:
+                return
+            # ``ChatResult.generations`` is a flat list of ChatGeneration (an
+            # ``LLMResult`` would nest them); accept both shapes.
+            response = None
+            for gen in getattr(result, "generations", None) or []:
+                candidates = gen if isinstance(gen, (list, tuple)) else [gen]
+                for candidate in candidates:
+                    msg = getattr(candidate, "message", None)
+                    if msg is not None:
+                        response = msg
+                        break
+                if response is not None:
+                    break
+
+            from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
+
+            LLMUsageTracker.track_llm_call(
+                user_id=user_id,
+                session_id=session_id,
+                model_name=self.usage_model_name,
+                request_type=_USAGE_REQUEST_TYPE,
+                prompt=messages,
+                response=response,
+                start_time=start_time,
+                api_provider=self.usage_provider or "direct",
+                provider_mode=self.usage_provider or None,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("[Guardrails:InputRail] Could not record rail usage", exc_info=True)
 
     def _rename(self, kwargs: dict) -> dict:
         if self.rename_max_tokens and "max_tokens" in kwargs and "max_output_tokens" not in kwargs:
@@ -169,30 +229,38 @@ class _GuardrailsLLMCompat(BaseChatModel):
         return RunnableBinding(bound=self, kwargs=kwargs)
 
     def _generate(self, messages, stop=None, **kwargs):
+        start_time = time.time()
         try:
-            return self._flatten(
+            result = self._flatten(
                 self.inner._generate(messages, stop=stop, **self._prepare(kwargs))
             )
         except Exception as err:  # noqa: BLE001
             # Model removed temperature/top_p/top_k — drop them and retry once.
             if not self._note_sampling_rejection(err, kwargs):
                 raise
-            return self._flatten(
+            result = self._flatten(
                 self.inner._generate(messages, stop=stop, **self._prepare(kwargs))
             )
+        self._record_usage(messages, result, start_time)
+        return result
 
     async def _agenerate(self, messages, stop=None, **kwargs):
+        start_time = time.time()
         try:
-            return self._flatten(
+            result = self._flatten(
                 await self.inner._agenerate(messages, stop=stop, **self._prepare(kwargs))
             )
         except Exception as err:  # noqa: BLE001
             # Model removed temperature/top_p/top_k — drop them and retry once.
             if not self._note_sampling_rejection(err, kwargs):
                 raise
-            return self._flatten(
+            result = self._flatten(
                 await self.inner._agenerate(messages, stop=stop, **self._prepare(kwargs))
             )
+        # The usage row is a blocking DB write: keep it off the event loop.
+        if _usage_context.get() and self.usage_model_name:
+            await asyncio.to_thread(self._record_usage, messages, result, start_time)
+        return result
 
 
 def _build_llm() -> BaseChatModel:
@@ -211,8 +279,11 @@ def _build_llm() -> BaseChatModel:
     from chat.backend.agent.providers import create_chat_model
     from utils.security.config import config as gc
 
-    model_name = gc.llm_model or ModelConfig.MAIN_MODEL
-    llm = create_chat_model(model_name, temperature=0.0, streaming=False)
+    model_name = gc.llm_model or ModelConfig.GUARDRAILS_MODEL
+    # The rail is a classifier: extended thinking off where the model allows it.
+    llm = create_chat_model(
+        model_name, temperature=0.0, streaming=False, disable_thinking=True
+    )
 
     provider_mode = os.getenv("LLM_PROVIDER_MODE", "direct").lower()
 
@@ -220,9 +291,13 @@ def _build_llm() -> BaseChatModel:
     serving_provider = get_registry().resolve_provider_name(model_name, mode=provider_mode)
 
     # Gemini's GenerateContentConfig rejects the `max_tokens` alias NeMo sends.
+    # The usage labels make every self-check call show up in llm_usage_tracking
+    # (request_type "input_rail"), billed to the provider that serves the model.
     return _GuardrailsLLMCompat(
         inner=llm,
         rename_max_tokens=serving_provider in ("google", "vertex"),
+        usage_model_name=model_name,
+        usage_provider=serving_provider or provider_mode,
     )
 
 
@@ -312,11 +387,20 @@ def _classify_failure(exc: Exception) -> str:
     return _FAIL_CLOSED_REASON
 
 
-async def check_input(user_message: str) -> InputRailResult:
+async def check_input(
+    user_message: str,
+    *,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> InputRailResult:
     """Run the NeMo input rail. Returns ``blocked=True`` on unsafe input.
 
     Fails closed: if the rail itself errors (missing provider creds, model
     unavailable, etc.) the request is blocked with a diagnostic reason.
+
+    ``user_id`` / ``session_id`` label the ``llm_usage_tracking`` rows of the
+    self-check calls NeMo makes on this message; without a ``user_id`` nothing
+    is recorded (the rail itself behaves identically either way).
     """
     from utils.security.config import config
 
@@ -324,6 +408,7 @@ async def check_input(user_message: str) -> InputRailResult:
         return InputRailResult(blocked=False)
 
     t0 = time.perf_counter()
+    usage_token = _usage_context.set((user_id, session_id) if user_id else None)
     try:
         rails = await _get_rails()
         result = await rails.generate_async(
@@ -338,6 +423,8 @@ async def check_input(user_message: str) -> InputRailResult:
         logger.exception("[Guardrails:InputRail] Error running input rail; failing closed")
         reason = _classify_failure(exc)
         return InputRailResult(blocked=True, reason=reason, latency_ms=latency_ms)
+    finally:
+        _usage_context.reset(usage_token)
 
     latency_ms = (time.perf_counter() - t0) * 1000
     triggered = _triggered_rail_name(result)

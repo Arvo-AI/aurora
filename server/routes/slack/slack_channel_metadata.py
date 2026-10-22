@@ -295,6 +295,7 @@ def generate_channel_metadata(self, user_id: str, channel_id: str):
         from routes.slack.slack_channels import _classify_channel
         channel_type, platform = _classify_channel(info)
 
+        from chat.backend.agent.call_options import max_tokens_for
         from chat.backend.agent.providers import create_chat_model
         from chat.backend.agent.llm import ModelConfig
         from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
@@ -304,6 +305,8 @@ def generate_channel_metadata(self, user_id: str, channel_id: str):
             ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
             temperature=0.2,
             streaming=False,
+            disable_thinking=True,
+            max_tokens=max_tokens_for("summary"),
         )
         prompt = METADATA_PROMPT.format(context=context_text)
         response = tracked_invoke(

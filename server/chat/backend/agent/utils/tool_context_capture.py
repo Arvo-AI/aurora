@@ -16,7 +16,9 @@ Key Features:
 Architecture:
 - Tool decorators send full output to frontend via WebSocket
 - ToolContextCapture intercepts tool results for LLM context  
-- Content over 10k tokens triggers summarization via LLMManager.summarize()
+- Content over 10k tokens triggers one shared summarization via
+  tool_output_summary.summarize_tool_output_once() (cheap model, head + tail
+  window, result reused by cap_tool_output for the same output)
 - Summarized content marked as "internal" and hidden from UI
 - LLM gets concise summaries while users see complete data
 
@@ -31,8 +33,8 @@ import logging
 import threading
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
-from ..llm import LLMManager
 from .llm_usage_tracker import LLMUsageTracker
+from .tool_output_summary import summarize_tool_output_once
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 from chat.backend.agent.utils.tool_call_history import OUTPUT_EXCERPT_MAX_CHARS
@@ -318,18 +320,13 @@ class ToolContextCapture:
         if content_tokens > SUMMARIZATION_THRESHOLD_TOKENS:
             logger.info(f" Tool output length {content_tokens} tokens exceeds {SUMMARIZATION_THRESHOLD_TOKENS} token threshold, summarizing for LLM context")
             try:
-                from ..llm import ModelConfig
-                # Cap content before sending to summarization to prevent context overflow.
-                # LLMManager.summarize() also caps internally, but truncating here avoids
-                # passing multi-MB strings through the call stack unnecessarily.
-                MAX_SUMMARIZATION_INPUT_CHARS = 400_000  # ~100K tokens
-                content_to_summarize = original_content
-                if len(content_to_summarize) > MAX_SUMMARIZATION_INPUT_CHARS:
-                    logger.warning(f"Truncating tool output from {len(content_to_summarize)} to {MAX_SUMMARIZATION_INPUT_CHARS} chars before summarization")
-                    content_to_summarize = content_to_summarize[:MAX_SUMMARIZATION_INPUT_CHARS] + "\n\n[Truncated before summarization]"
-                llm = LLMManager()
-                summary = llm.summarize(
-                    content_to_summarize, model=ModelConfig.TOOL_OUTPUT_SUMMARIZATION_MODEL,
+                # One shared summarization per distinct output: the summarizer cuts
+                # the input at its redaction-scanned ceiling, keeps a head + tail
+                # window, runs the cheap model once and remembers the result, so
+                # cap_tool_output's call for the same text (right after this one)
+                # reuses it instead of paying for a second compression.
+                summary = summarize_tool_output_once(
+                    original_content, tool_name=tool_name,
                     user_id=self.user_id, session_id=self.session_id,
                 )
                 summarized_content = summary + '\n\n[Summarized from longer output]'

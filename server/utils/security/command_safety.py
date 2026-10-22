@@ -19,7 +19,12 @@ The full pipeline runs in this order, and any layer can block:
                                 threats signatures cannot express.
 
 The judge always fails closed: any timeout, LLM error, or missing user
-context returns a blocking verdict.
+context returns a blocking verdict. It runs for every command that passes
+the earlier layers (read-only commands included); what changed for cost is
+only *how* it runs: the cheap guardrails model with thinking off and a small
+output cap, a trimmed copy of the user message (first line + head + tail),
+and a short-TTL verdict cache keyed by digests of (session, message,
+command) so the same command in the same context is judged once.
 
 Adapted from Meta's PurpleLlama AlignmentCheck architecture (MIT licensed),
 rewritten to evaluate inherent danger rather than intent alignment.
@@ -30,6 +35,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -37,16 +43,170 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from utils.cache.ttl_cache import TTLCache
 from utils.security.config import config
 
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS = 10
 
+# --- Prompt trimming -------------------------------------------------------
+# The judge needs the user's intent, not the whole message. Background RCA
+# prompts carry the full alert payload (tens of thousands of chars) and were
+# re-sent on every command; the first line (the alert title / request) plus a
+# head and a tail window keep the intent and the final instructions while
+# bounding the judge's input to ~1K tokens.
+_USER_MESSAGE_HEAD_CHARS = 2000
+_USER_MESSAGE_TAIL_CHARS = 2000
+# Messages up to this size are sent whole (trimming a 4.2K message to 4K+marker
+# would save nothing).
+_USER_MESSAGE_TRIM_THRESHOLD = 4500
+
+# --- Verdict cache ---------------------------------------------------------
+# An RCA re-runs the same command (same session, same user message) many
+# times — `kubectl get pods` after every step, the same `aws describe-*` for
+# each candidate resource. The verdict is a pure function of (session, tool,
+# message, command), so it is remembered for a short TTL. Keys carry only
+# SHA-256 digests of the message and the command: neither is ever written to
+# the key, the log or the cache value. Only real verdicts are cached — a timeout
+# or an LLM error (the fail-closed path) is never remembered.
+_VERDICT_CACHE_PREFIX = "cs:verdict:"
+_VERDICT_TTL_DEFAULT = 900
+_fallback_verdict_cache = TTLCache(maxsize=4096, ttl=_VERDICT_TTL_DEFAULT)
+_fallback_verdict_lock = threading.Lock()
+
 
 def _fingerprint(command: str) -> str:
     """Stable, non-reversible fingerprint for log correlation without leaking content."""
     return hashlib.sha256(command.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _trim_user_message(
+    text: str,
+    head: int = _USER_MESSAGE_HEAD_CHARS,
+    tail: int = _USER_MESSAGE_TAIL_CHARS,
+    threshold: int = _USER_MESSAGE_TRIM_THRESHOLD,
+) -> str:
+    """Bound the user message the judge sees: first line + head + tail.
+
+    Messages up to ``threshold`` chars are returned unchanged. Longer ones keep
+    their first line (the alert title or the request itself), the first ``head``
+    chars after it and the last ``tail`` chars, with a marker naming how much was
+    omitted — so the judge still sees the intent and the closing instructions.
+    """
+    if text is None:
+        return text
+    if len(text) <= threshold:
+        return text
+    first_line, newline, rest = text.partition("\n")
+    if not newline:
+        # One giant line: plain head + tail.
+        omitted = len(text) - head - tail
+        return text[:head] + f"\n[... {omitted} chars omitted ...]\n" + text[-tail:]
+    first_line = first_line[:head]
+    head_part = rest[:head]
+    tail_part = rest[-tail:] if len(rest) > head + tail else rest[head:]
+    omitted = max(len(rest) - len(head_part) - len(tail_part), 0)
+    if omitted == 0:
+        return text
+    return (
+        first_line
+        + "\n"
+        + head_part
+        + f"\n[... {omitted} chars omitted ...]\n"
+        + tail_part
+    )
+
+
+def _verdict_ttl_seconds() -> int:
+    """``COMMAND_SAFETY_VERDICT_TTL_SECONDS`` (default 900; 0 disables the cache).
+
+    Unset / empty / junk mean the default; negative values disable like 0.
+    """
+    raw = (os.getenv("COMMAND_SAFETY_VERDICT_TTL_SECONDS") or "").strip()
+    if not raw:
+        return _VERDICT_TTL_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        return _VERDICT_TTL_DEFAULT
+    return max(value, 0)
+
+
+def _verdict_cache_key(
+    session_id: Optional[str], user_message: str, command: str, tool_name: str = "command_execution"
+) -> str:
+    """``cs:verdict:<session>:<tool>:<sha256(message)>:<sha256(command)>``.
+
+    The tool name is part of the key because it is part of the judge's context
+    (the same command may be judged differently for ``kubectl_onprem`` than for
+    a plain shell); it is a fixed identifier, not user content.
+    """
+    return (
+        f"{_VERDICT_CACHE_PREFIX}{session_id or '-'}:{tool_name or '-'}:"
+        f"{_sha256(user_message)}:{_sha256(command)}"
+    )
+
+
+def _redis_client():
+    """Shared Redis client, or None when Redis (or the redis package) is unavailable."""
+    try:
+        from utils.cache.redis_client import get_redis_client
+    except Exception:  # pragma: no cover - redis package missing (CI minimal env)
+        return None
+    try:
+        return get_redis_client()
+    except Exception:
+        return None
+
+
+def _get_cached_verdict(key: str) -> Optional["SafetyVerdict"]:
+    if _verdict_ttl_seconds() <= 0:
+        return None
+    raw = None
+    client = _redis_client()
+    if client is not None:
+        try:
+            raw = client.get(key)
+        except Exception:
+            logger.debug("[CommandSafety] Redis verdict lookup failed", exc_info=True)
+            raw = None
+    if raw is None:
+        with _fallback_verdict_lock:
+            raw = _fallback_verdict_cache.get(key)
+    if not raw:
+        return None
+    try:
+        return SafetyVerdict.model_validate_json(raw)
+    except Exception:
+        logger.debug("[CommandSafety] Discarding unparseable cached verdict")
+        return None
+
+
+def _store_cached_verdict(key: str, verdict: "SafetyVerdict") -> None:
+    ttl = _verdict_ttl_seconds()
+    if ttl <= 0:
+        return
+    payload = verdict.model_dump_json()
+    client = _redis_client()
+    if client is not None:
+        try:
+            client.set(key, payload, ex=ttl)
+            return
+        except Exception:
+            logger.debug("[CommandSafety] Redis verdict store failed; using local cache", exc_info=True)
+    with _fallback_verdict_lock:
+        _fallback_verdict_cache.set(key, payload, ttl=ttl)
+
+
+def _clear_verdict_cache() -> None:
+    """Drop the in-process verdict cache (tests)."""
+    with _fallback_verdict_lock:
+        _fallback_verdict_cache.clear()
 
 
 SYSTEM_PROMPT: str = """
@@ -157,9 +317,24 @@ def check_command_safety(
         )
         return _fail_verdict("missing user context")
 
+    # Same session + same (full) user message + same command => same verdict.
+    # Keyed on digests of the untrimmed message so a changed context re-judges.
+    cache_key = _verdict_cache_key(session_id, user_message, command, tool_name)
+    cached = _get_cached_verdict(cache_key)
+    if cached is not None:
+        logger.info(
+            "[CommandSafety] cached verdict user=%s session=%s tool=%s cmd_fp=%s blocked=%s",
+            user_id, session_id, tool_name, _fingerprint(command), cached.conclusion,
+        )
+        return cached
+
     prompt = _USER_PROMPT.format(
         payload=json.dumps(
-            {"user_message": user_message, "tool_name": tool_name, "command": command},
+            {
+                "user_message": _trim_user_message(user_message),
+                "tool_name": tool_name,
+                "command": command,
+            },
             ensure_ascii=False,
         )
     )
@@ -171,6 +346,9 @@ def check_command_safety(
                 "[CommandSafety] BLOCKED user=%s session=%s tool=%s cmd_fp=%s",
                 user_id, session_id, tool_name, _fingerprint(command),
             )
+        # Only a verdict the model actually produced is remembered; the
+        # fail-closed paths below return without caching.
+        _store_cached_verdict(cache_key, verdict)
         return verdict
     except concurrent.futures.TimeoutError:
         logger.exception("[CommandSafety] LLM timed out after %ds", _TIMEOUT_SECONDS)
@@ -199,28 +377,49 @@ def _create_safety_llm():
 
     Model selection (first match wins):
     1. ``GUARDRAILS_LLM_MODEL`` - explicit override from config.
-    2. ``google/gemini-2.5-flash-lite`` when ``LLM_PROVIDER_MODE=openrouter`` -
-       the safety judge runs on every user message, so the default points at
-       a small/cheap OpenRouter model to keep cost predictable. Operators
-       who prefer a stronger judge can override via GUARDRAILS_LLM_MODEL.
-    3. ``ModelConfig.MAIN_MODEL`` - fall back to whatever the chat agent uses.
+    2. ``ModelConfig.GUARDRAILS_MODEL`` - ``google/gemini-2.5-flash-lite`` when
+       ``LLM_PROVIDER_MODE=openrouter``; otherwise the cheap tier (Claude Haiku 5.5)
+       when the provider settings can route it, else ``MAIN_MODEL``. With
+       ``MAIN_MODEL`` pinned to a ``bedrock/<id>`` the cheap tier stays on that
+       Bedrock geo (``bedrock/<geo>.anthropic.claude-haiku-5-5``) or follows
+       ``MAIN_MODEL`` — never another provider. The judge fails closed, so it must
+       always get a model this install can actually serve.
+       The safety judge runs on every command, so the default is a small model;
+       operators who prefer a stronger judge can override via GUARDRAILS_LLM_MODEL.
+
+    The judge is a Yes/No classifier: extended thinking is switched off for models
+    that allow it, so no output budget is spent on chain-of-thought, and the
+    output is capped at ``LLM_MAX_TOKENS_JUDGE`` (default 400 — the three-field
+    JSON verdict needs far less). Where the provider cannot switch thinking off
+    for the model (a reasoning model standing in for the cheap tier), it drops
+    the cap rather than let reasoning tokens truncate the verdict — see
+    ``call_options.effective_max_tokens``. The client's own timeout is bounded to
+    ``_TIMEOUT_SECONDS`` as well: ``future.result(timeout=...)`` frees the caller
+    but cannot cancel the in-flight request, and without a per-call timeout a
+    stalled provider would hold a pool thread for the full deployment-wide read
+    timeout times the retry count. The base model comes from the shared instance
+    cache, and the structured runnable keeps the raw response (``include_raw``)
+    so usage tracking records real output tokens.
     """
-    from chat.backend.agent.llm import ModelConfig
-    from chat.backend.agent.providers import create_chat_model
+    from chat.backend.agent.call_options import max_tokens_for
+    from chat.backend.agent.providers import get_cached_chat_model
 
-    if config.llm_model:
-        model = config.llm_model
-    elif os.getenv("LLM_PROVIDER_MODE", "").lower() == "openrouter":
-        model = "google/gemini-2.5-flash-lite"
-    else:
-        model = ModelConfig.MAIN_MODEL
+    model = _judge_model_name()
 
-    base = create_chat_model(
+    base = get_cached_chat_model(
         model,
         temperature=0.0,
-        streaming=False,
+        max_tokens=max_tokens_for("judge"),
+        disable_thinking=True,
+        request_timeout=_TIMEOUT_SECONDS,
     )
-    return base.with_structured_output(SafetyVerdict, method="function_calling")
+    return base.with_structured_output(SafetyVerdict, method="function_calling", include_raw=True)
+
+
+def _judge_model_name() -> str:
+    from chat.backend.agent.llm import ModelConfig
+
+    return config.llm_model or ModelConfig.GUARDRAILS_MODEL
 
 
 # Pool is deliberately generous: future.result(timeout=...) frees the waiter
@@ -228,6 +427,26 @@ def _create_safety_llm():
 # its worker for the full network timeout. Sizing for concurrent RCAs + chat
 # keeps one outage from cascading into guardrail timeouts for every caller.
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=32, thread_name_prefix="safety-llm")
+
+
+def _unwrap_structured_result(result) -> tuple:
+    """``(verdict, raw_response)`` from a structured-output result.
+
+    With ``include_raw=True`` the runnable returns ``{"raw", "parsed",
+    "parsing_error"}``; a bare ``SafetyVerdict`` / dict (older shape, tests) is
+    accepted too. A missing ``parsed`` re-raises the parsing error so the caller
+    fails closed.
+    """
+    if isinstance(result, dict) and "raw" in result and ("parsed" in result or "parsing_error" in result):
+        parsed = result.get("parsed")
+        raw = result.get("raw")
+        if parsed is None:
+            error = result.get("parsing_error")
+            raise ValueError(f"structured output could not be parsed: {error}")
+        verdict = parsed if isinstance(parsed, SafetyVerdict) else SafetyVerdict.model_validate(parsed)
+        return verdict, raw
+    verdict = result if isinstance(result, SafetyVerdict) else SafetyVerdict.model_validate(result)
+    return verdict, None
 
 
 def _call_llm(prompt: str, user_id: Optional[str], session_id: Optional[str]) -> SafetyVerdict:
@@ -239,33 +458,53 @@ def _call_llm(prompt: str, user_id: Optional[str], session_id: Optional[str]) ->
 
     start = time.time()
     error_msg = None
+    raw_response = None
     try:
         future = _executor.submit(llm.invoke, messages)
         result = future.result(timeout=_TIMEOUT_SECONDS)
+        verdict, raw_response = _unwrap_structured_result(result)
     except Exception as e:
         error_msg = str(e)
         raise
     finally:
-        _track_usage(user_id, session_id, messages, start, error_msg)
+        _track_usage(user_id, session_id, messages, start, error_msg, raw_response)
 
-    return result if isinstance(result, SafetyVerdict) else SafetyVerdict.model_validate(result)
+    return verdict
 
 
-def _track_usage(user_id, session_id, messages, start, error_msg):
+def _track_usage(user_id, session_id, messages, start, error_msg, response=None):
+    """Record the judge call under the model that actually served it.
+
+    ``response`` is the raw provider message (``usage_metadata`` carries the real
+    input/output token counts); the provider label is resolved through the
+    registry, so a Claude judge under ``LLM_PROVIDER_MODE=bedrock`` is billed to
+    Bedrock, not to the ``anthropic`` prefix.
+    """
     if not user_id:
         return
     try:
         from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
+
+        model_name = _judge_model_name()
+        provider_mode = os.getenv("LLM_PROVIDER_MODE") or "direct"
+        api_provider = provider_mode
+        try:
+            from chat.backend.agent.providers import get_registry
+
+            api_provider = get_registry().resolve_provider_name(model_name, provider_mode) or provider_mode
+        except Exception:
+            logger.debug("[CommandSafety] Could not resolve the serving provider", exc_info=True)
         LLMUsageTracker.track_llm_call(
             user_id=user_id,
             session_id=session_id,
-            model_name=config.llm_model or "main",
+            model_name=model_name,
             request_type="command_safety",
             prompt=messages,
-            response=None,
+            response=response,
             start_time=start,
             error_message=error_msg,
-            api_provider=os.getenv("LLM_PROVIDER_MODE", "direct"),
+            api_provider=api_provider,
+            provider_mode=provider_mode,
         )
     except Exception:
         logger.debug("[CommandSafety] Usage tracking failed", exc_info=True)

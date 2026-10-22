@@ -11,6 +11,8 @@ import os
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
+from chat.backend.agent.call_options import effective_max_tokens, pop_call_options
+
 from .base_provider import BaseLLMProvider
 from ..model_mapper import ModelMapper
 
@@ -80,7 +82,26 @@ class OpenAIProvider(BaseLLMProvider):
                 f"Enabled reasoning=high+summary=auto + use_responses_api=True for {native_model}"
             )
 
-
+        # Provider-neutral call options: ChatOpenAI already spells them `max_tokens` /
+        # `request_timeout`; `disable_thinking` has no Chat Completions equivalent and
+        # is dropped (reasoning effort is governed by `reasoning` above). On a
+        # reasoning model the Responses API renames `max_tokens` to
+        # `max_output_tokens`, a budget that INCLUDES reasoning tokens — so a cap a
+        # caller sized for a thinking-free answer is dropped there (the model keeps
+        # its default output limit) instead of starving the reply; gpt-4-class
+        # models, which do not reason, keep the cap.
+        opts = pop_call_options(kwargs)
+        max_tokens = effective_max_tokens(opts, native_model)
+        if max_tokens is not None:
+            config["max_tokens"] = max_tokens
+        elif opts.max_tokens is not None:
+            logger.info(
+                "Dropping max_tokens=%s for reasoning model %s: the budget would include "
+                "reasoning tokens and could truncate the answer.",
+                opts.max_tokens, native_model,
+            )
+        if opts.request_timeout is not None:
+            config["request_timeout"] = opts.request_timeout
         config.update(kwargs)
 
         return ChatOpenAI(**config)

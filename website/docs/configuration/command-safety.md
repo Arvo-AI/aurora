@@ -19,6 +19,12 @@ Each user message and the commands derived from it pass through these checks, in
 
 The judge **always fails closed**: if the LLM call times out, errors, or cannot resolve the user's context, the command is blocked. The input rail behaves the same way.
 
+The judge runs for every command that passes the earlier layers — read-only commands included — but three cost controls bound what each run costs, none of which changes the verdict semantics:
+
+- **Trimmed context.** The judge receives the user's request as its first line plus a head and a tail window (~2K chars each) of the message, not the whole alert payload a background investigation carries (tens of thousands of characters, re-sent on every command).
+- **Verdict cache.** The same command, in the same session, for the same (untrimmed) user message is judged once and the verdict is remembered for `COMMAND_SAFETY_VERDICT_TTL_SECONDS` (default 900 s) in Redis, with an in-process fallback. Cache keys hold only SHA-256 digests — neither the message nor the command is stored or logged — and a timeout or error (the fail-closed path) is never cached. Set the TTL to `0` to disable the cache.
+- **Small output.** Extended thinking is off on models that allow it and the answer is capped at `LLM_MAX_TOKENS_JUDGE` tokens (default 400); the three-field JSON verdict needs far less. The cap is only applied when thinking is really off for the call — on a judge model that keeps thinking (Opus 5.5 standing in for the cheap tier, an OpenAI reasoning model, Gemini 2.5+, any model through a gateway) it is dropped so reasoning tokens can never cut the verdict short and fail the gate closed. The client's own request timeout is bounded to the judge's 10 s budget as well. Usage is recorded under the model and provider that actually served the call.
+
 ## Enabling
 
 Guardrails are **enabled by default**. To explicitly disable the input rail, signature matcher, and LLM judge (not recommended):
@@ -48,7 +54,8 @@ The safety judge and input rail share the same provider abstraction as the rest 
 When `GUARDRAILS_LLM_MODEL` is unset, Aurora picks a default based on `LLM_PROVIDER_MODE`:
 
 - `openrouter` -> `google/gemini-2.5-flash-lite` (small and cheap, keeps per-message cost predictable).
-- Anything else -> `MAIN_MODEL` (the same model the chat agent uses).
+- Anything else -> the cheap tier, `anthropic/claude-haiku-5.5` (extended thinking is switched off for the judge), **when your provider settings can route it** (`LLM_PROVIDER_MODE=anthropic` or `bedrock`, or `ANTHROPIC_API_KEY` set under direct routing); otherwise `MAIN_MODEL`, the model your deployment serves by definition. Because the judge and input rail fail closed, this fallback is what keeps an OpenAI / Google / Vertex / Ollama-only install (or a Bedrock gateway pinned to `bedrock/<id>` values) from blocking every command after an upgrade.
+- With `MAIN_MODEL` pinned to an explicit `bedrock/<id>`, the judge stays on that Bedrock route in every mode: `bedrock/<geo>.anthropic.claude-haiku-5-5` on the same geo in native mode (`us`/`eu`/`au`/`jp`/`global`), otherwise (gateway, `apac.`, non-Claude pins) `MAIN_MODEL` — never another provider and never a geo id AWS does not publish. Under `LLM_PROVIDER_MODE=bedrock` in an `ap-*` region with clean ids it also follows `MAIN_MODEL` (no `apac.` Haiku 5.5 profile exists).
 
 ```bash
 # Use a small, fast model (recommended, since the judge runs on every command)
@@ -60,7 +67,7 @@ Typical choices:
 | Model | Notes |
 |-------|-------|
 | `openai/gpt-4o-mini` | Good balance of speed and quality |
-| `anthropic/claude-haiku-4.5` | Strong reasoning at low cost |
+| `anthropic/claude-haiku-5.5` | Default outside OpenRouter — strong at low cost, thinking disabled by Aurora |
 | `google/gemini-2.5-flash-lite` | Lowest cost (OpenRouter default) |
 | `ollama/llama3.1:8b` | Free, local (requires `OLLAMA_BASE_URL`) |
 
@@ -73,7 +80,9 @@ The safety judge is a binary Yes/No classifier. **Reasoning models** (e.g. `gpt-
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GUARDRAILS_ENABLED` | `true` | Master switch for the input rail, signature matcher, and LLM judge. When enabled (default), all three run and every LLM check fails closed on error. Set to `false` to disable them. Does not affect the org command policy. |
-| `GUARDRAILS_LLM_MODEL` | _(provider-dependent)_ | Model used by the safety judge and input rail. When unset, defaults to `google/gemini-2.5-flash-lite` under `LLM_PROVIDER_MODE=openrouter`, otherwise falls back to `MAIN_MODEL`. Same format and routing as `MAIN_MODEL`. |
+| `GUARDRAILS_LLM_MODEL` | _(provider-dependent)_ | Model used by the safety judge and input rail. When unset, defaults to `google/gemini-2.5-flash-lite` under `LLM_PROVIDER_MODE=openrouter`; otherwise to the cheap tier `anthropic/claude-haiku-5.5` when routable, else `MAIN_MODEL` (see [Model selection](#model-selection)). Same format and routing as `MAIN_MODEL`. |
+| `COMMAND_SAFETY_VERDICT_TTL_SECONDS` | `900` | Seconds a judge verdict is remembered for the same (session, user message, command). Keys hold only digests; errors and timeouts are never cached. `0` disables the cache. |
+| `LLM_MAX_TOKENS_JUDGE` | `400` | Output-token cap of the judge's JSON verdict (see [Environment Variables](./environment.md#output-token-caps)). |
 | `GUARDRAILS_SIGMA_ENABLED` | `true` | Gates the SigmaHQ rule corpus on top of the hand-written signatures. Requires `GUARDRAILS_ENABLED=true`. Set to `false` to run only the hand-written rules. |
 
 ## Block responses

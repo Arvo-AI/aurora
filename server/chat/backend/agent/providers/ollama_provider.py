@@ -13,6 +13,8 @@ import time
 import requests
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from chat.backend.agent.call_options import effective_max_tokens, pop_call_options
+
 from .base_provider import BaseLLMProvider
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,22 @@ class OllamaProvider(BaseLLMProvider):
             "temperature": temperature,
             "base_url": self.base_url,
         }
+        # Provider-neutral call options: Ollama spells the output cap `num_predict`;
+        # it has no per-request timeout or thinking switch, so those are dropped.
+        # Local models are an open set (qwen3 / deepseek-r1 / gpt-oss think by
+        # default), so a cap that was sized for a thinking-free answer is dropped
+        # when the caller also asked for thinking off — reasoning tokens would count
+        # against `num_predict` and could truncate the reply.
+        opts = pop_call_options(kwargs)
+        max_tokens = effective_max_tokens(opts, native_model)
+        if max_tokens is not None:
+            config["num_predict"] = max_tokens
+        elif opts.max_tokens is not None:
+            logger.info(
+                "Dropping max_tokens=%s for Ollama model %s: thinking cannot be disabled "
+                "per call, so the cap could truncate the answer.",
+                opts.max_tokens, native_model,
+            )
 
         config.update(kwargs)
 

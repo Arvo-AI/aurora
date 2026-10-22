@@ -11,6 +11,12 @@ import os
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from chat.backend.agent.call_options import (
+    effective_max_tokens,
+    pop_call_options,
+    supports_thinking_disable,
+)
+
 from .base_provider import BaseLLMProvider
 from ._sampling_guard import make_adaptive_sampling_cls
 from ..model_mapper import ModelMapper
@@ -64,6 +70,31 @@ class AnthropicProvider(BaseLLMProvider):
             "max_retries": 3,
             "timeout": 30.0,
         }
+        # Provider-neutral call options -> ChatAnthropic fields. `request_timeout`
+        # becomes `timeout` (alias of default_request_timeout); `disable_thinking`
+        # becomes the Messages API `thinking={"type": "disabled"}` block, only for
+        # models that document disabling as supported (Opus 5.5 / Sonnet 5.5 / Fable
+        # reject it, so the flag is dropped for them). `max_tokens` is only sent when
+        # thinking is really off for the call: on a 5.x model that keeps thinking
+        # (Opus 5.5 as the MAIN_MODEL fallback for auxiliary calls) a cap sized for a
+        # thinking-free answer would be eaten by reasoning tokens, so it is dropped
+        # and ChatAnthropic's own default (the model profile, 4096 otherwise) applies
+        # — the pre-cap behaviour.
+        opts = pop_call_options(kwargs)
+        thinking_disabled = opts.disable_thinking and supports_thinking_disable(native_model)
+        max_tokens = effective_max_tokens(opts, native_model, thinking_disabled=thinking_disabled)
+        if max_tokens is not None:
+            config["max_tokens"] = max_tokens
+        elif opts.max_tokens is not None:
+            logger.info(
+                "Dropping max_tokens=%s for %s: thinking cannot be disabled, so a cap "
+                "sized for a thinking-free answer could truncate it.",
+                opts.max_tokens, native_model,
+            )
+        if opts.request_timeout is not None:
+            config["timeout"] = opts.request_timeout
+        if thinking_disabled:
+            config["thinking"] = {"type": "disabled"}
         config.update(kwargs)
 
         # Opus 4.7+ rejects the hardcoded temperature; the adaptive subclass strips

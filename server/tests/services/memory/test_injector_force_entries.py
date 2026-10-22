@@ -66,8 +66,10 @@ def test_forced_entry_not_duplicated_when_selector_also_picks_it():
     # so it can't double it. Assert the pool excludes it.
     captured = {}
 
-    async def fake_select(msg, entries):
+    async def fake_select(msg, entries, *, user_id=None, session_id=None):
         captured["pool"] = [f"{e['category']}/{e['title']}" for e in entries]
+        # The prefetch hands its ids to the selector so the call is usage-tracked.
+        captured["ids"] = (user_id, session_id)
         return []
 
     with patch("services.memory.injector._get_surfaced_set", return_value=set()), \
@@ -78,5 +80,6 @@ def test_forced_entry_not_duplicated_when_selector_also_picks_it():
         result = _run(pf._execute())
 
     assert "context/Slack" not in captured["pool"]
+    assert captured["ids"] == ("u1", "s1")
     # Appears exactly once.
     assert result.count("context/Slack") == 1

@@ -145,6 +145,7 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
             context_parts.append(f"README:\n{readme}")
         context_parts.append(f"Top-level files/directories:\n{file_list}")
 
+        from chat.backend.agent.call_options import max_tokens_for
         from chat.backend.agent.providers import create_chat_model
         from chat.backend.agent.llm import ModelConfig
         from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
@@ -154,6 +155,8 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
             ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
             temperature=0.2,
             streaming=False,
+            disable_thinking=True,
+            max_tokens=max_tokens_for("summary"),
         )
 
         prompt = METADATA_PROMPT.format(context="\n\n".join(context_parts))

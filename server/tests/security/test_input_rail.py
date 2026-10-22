@@ -565,3 +565,127 @@ class TestGuardrailsLLMCompatGenerate:
         wrapper = _GuardrailsLLMCompat.model_construct(inner=inner)
 
         assert wrapper._llm_type == "fake-gemini"
+
+
+# ---------------------------------------------------------------------------
+# Usage tracking (request_type "input_rail")
+# ---------------------------------------------------------------------------
+
+
+class TestGuardrailsLLMCompatUsageTracking:
+    """``check_input`` publishes the request ids in a ContextVar; the wrapper records
+    one ``input_rail`` usage row per self-check call with the provider-reported
+    ``usage_metadata`` — and records nothing when no ids are known."""
+
+    def _wrapper(self, inner):
+        return _GuardrailsLLMCompat.model_construct(
+            inner=inner, rename_max_tokens=False,
+            usage_model_name="anthropic/claude-haiku-5.5", usage_provider="bedrock",
+        )
+
+    def _capture_tracker(self, monkeypatch):
+        from chat.backend.agent.utils import llm_usage_tracker as tracker
+
+        recorded = []
+
+        def fake_track(cls, **kwargs):
+            recorded.append(kwargs)
+            return True
+
+        monkeypatch.setattr(tracker.LLMUsageTracker, "track_llm_call", classmethod(fake_track))
+        return recorded
+
+    def test_generate_records_the_message_under_the_request_ids(self, monkeypatch):
+        recorded = self._capture_tracker(monkeypatch)
+        inner = _RecordingInner("No")
+        wrapper = self._wrapper(inner)
+        token = input_rail._usage_context.set(("u-1", "s-1"))
+        try:
+            result = wrapper._generate(["prompt"], stop=None, max_tokens=4)
+        finally:
+            input_rail._usage_context.reset(token)
+
+        assert len(recorded) == 1
+        row = recorded[0]
+        assert (row["user_id"], row["session_id"]) == ("u-1", "s-1")
+        assert row["request_type"] == "input_rail"
+        assert row["model_name"] == "anthropic/claude-haiku-5.5"
+        assert row["api_provider"] == row["provider_mode"] == "bedrock"
+        # ChatResult.generations is a flat list: the real message must be found.
+        assert row["response"] is result.generations[0].message
+        assert row["prompt"] == ["prompt"]
+
+    def test_agenerate_records_off_the_event_loop(self, monkeypatch):
+        recorded = self._capture_tracker(monkeypatch)
+        wrapper = self._wrapper(_RecordingInner("No"))
+
+        async def _go():
+            token = input_rail._usage_context.set(("u-2", None))
+            try:
+                return await wrapper._agenerate(["p"], stop=None)
+            finally:
+                input_rail._usage_context.reset(token)
+
+        result = _run(_go())
+        assert len(recorded) == 1
+        assert recorded[0]["user_id"] == "u-2"
+        assert recorded[0]["session_id"] is None
+        assert recorded[0]["response"] is result.generations[0].message
+
+    def test_nothing_recorded_without_request_ids(self, monkeypatch):
+        recorded = self._capture_tracker(monkeypatch)
+        wrapper = self._wrapper(_RecordingInner("No"))
+        wrapper._generate(["p"], stop=None)
+        assert recorded == []
+
+    def test_nothing_recorded_for_a_wrapper_without_labels(self, monkeypatch):
+        recorded = self._capture_tracker(monkeypatch)
+        wrapper = _GuardrailsLLMCompat.model_construct(inner=_RecordingInner("No"))
+        token = input_rail._usage_context.set(("u-1", "s-1"))
+        try:
+            wrapper._generate(["p"], stop=None)
+        finally:
+            input_rail._usage_context.reset(token)
+        assert recorded == []
+
+    def test_tracking_failure_never_fails_the_rail(self, monkeypatch):
+        from chat.backend.agent.utils import llm_usage_tracker as tracker
+
+        def boom(cls, **kwargs):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(tracker.LLMUsageTracker, "track_llm_call", classmethod(boom))
+        wrapper = self._wrapper(_RecordingInner("No"))
+        token = input_rail._usage_context.set(("u-1", "s-1"))
+        try:
+            result = wrapper._generate(["p"], stop=None)
+        finally:
+            input_rail._usage_context.reset(token)
+        assert result.generations[0].message.content == "No"
+
+    def test_check_input_publishes_and_clears_the_ids(self, monkeypatch):
+        _patch_config(monkeypatch, enabled=True)
+        seen = {}
+
+        async def fake_generate(**kwargs):
+            seen["ids"] = input_rail._usage_context.get()
+            result = MagicMock(name="rails_result")
+            result.output_data = {}
+            return result
+
+        rails = MagicMock(name="rails")
+        rails.generate_async = fake_generate
+
+        async def fake_get_rails():
+            return rails
+
+        monkeypatch.setattr(input_rail, "_get_rails", fake_get_rails)
+
+        result = _run(check_input("hello", user_id="u-9", session_id="s-9"))
+        assert result.blocked is False
+        assert seen["ids"] == ("u-9", "s-9")
+        assert input_rail._usage_context.get() is None
+
+        result = _run(check_input("hello"))
+        assert result.blocked is False
+        assert seen["ids"] is None

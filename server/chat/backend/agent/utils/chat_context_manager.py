@@ -13,9 +13,10 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, Tool
 import tiktoken
 
 from .llm_context_manager import LLMContextManager
-from ..llm import LLMManager
+from ..llm import summarize_text
 from .llm_usage_tracker import LLMUsageTracker
 from utils.db.connection_pool import db_pool
+from chat.backend.agent.call_options import claude_catalog_ids
 from chat.backend.agent.model_mapper import ModelMapper
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,10 @@ class ChatContextManager:
         "openai/gpt-5.5": 1000000,  # 1.05M - 50K buffer
         "openai/gpt-5.2": 950000,  # 1M - 50K buffer
         "anthropic/claude-opus-5.5": 950000,  # 1M - 50K buffer
+        "anthropic/claude-sonnet-5.5": 950000,  # 1M - 50K buffer (pricing-only id, not in the picker)
         "anthropic/claude-sonnet-5": 950000,  # 1M - 50K buffer
+        "anthropic/claude-opus-5": 950000,  # 1M - 50K buffer (pricing-only id, not in the picker)
+        "anthropic/claude-haiku-5.5": 950000,  # 1M - 50K buffer (Bedrock model card: 1M window)
         "anthropic/claude-fable-5.1": 950000,  # 1M - 50K buffer
         "anthropic/claude-fable-5": 950000,  # 1M - 50K buffer
         "anthropic/claude-sonnet-4.6": 950000,  # 1M - 50K buffer
@@ -65,11 +69,20 @@ class ChatContextManager:
         # Bedrock-hosted Claude (same models/windows as the direct Anthropic entries above)
         "bedrock/us.anthropic.claude-opus-5-5": 950000,  # 1M - 50K buffer
         "bedrock/us.anthropic.claude-sonnet-5": 950000,  # 1M - 50K buffer
+        "bedrock/us.anthropic.claude-haiku-5-5": 950000,  # 1M - 50K buffer
         "bedrock/us.anthropic.claude-fable-5-1": 950000,  # 1M - 50K buffer
         "bedrock/us.anthropic.claude-fable-5": 950000,  # 1M - 50K buffer
         "bedrock/us.anthropic.claude-sonnet-4-6": 950000,  # 1M - 50K buffer
         "bedrock/us.anthropic.claude-opus-4-6-v1": 950000,  # 1M - 50K buffer
         "bedrock/us.anthropic.claude-opus-4-8": 950000,  # 1M - 50K buffer
+        # EU geo profiles (eu.anthropic.*) — same windows; explicit so an EU install
+        # pinned to a bedrock/ id does not fall to the 180K provider default.
+        "bedrock/eu.anthropic.claude-opus-5-5": 950000,  # 1M - 50K buffer
+        "bedrock/eu.anthropic.claude-sonnet-5": 950000,  # 1M - 50K buffer
+        "bedrock/eu.anthropic.claude-haiku-5-5": 950000,  # 1M - 50K buffer
+        "bedrock/eu.anthropic.claude-sonnet-4-6": 950000,  # 1M - 50K buffer
+        "bedrock/eu.anthropic.claude-opus-4-6-v1": 950000,  # 1M - 50K buffer
+        "bedrock/eu.anthropic.claude-opus-4-8": 950000,  # 1M - 50K buffer
         # Default fallback
         "default": 7000,  # Conservative 8K - 1K buffer
     }
@@ -96,6 +109,14 @@ class ChatContextManager:
         for name in (resolved, model_name):
             if name in cls.MODEL_CONTEXT_LIMITS:
                 return cls.MODEL_CONTEXT_LIMITS[name]
+
+        # Any spelling of a Claude id (bedrock/<geo>.anthropic.<model>, bare geo
+        # profile, dated Bedrock id) maps to the clean Anthropic row — the same
+        # normalization the usage tracker applies to its pricing keys — so an
+        # explicit Bedrock pin gets its real window, not the 180K provider default.
+        for candidate in claude_catalog_ids(model_name):
+            if candidate in cls.MODEL_CONTEXT_LIMITS:
+                return cls.MODEL_CONTEXT_LIMITS[candidate]
 
         # Try without version suffix
         base_model = model_name.split(".")[0].split("-v")[0]
@@ -167,14 +188,15 @@ Conversation to summarize:
 
 Provide a detailed summary that preserves essential context:"""
 
-            # Create isolated LLM instance for summarization
+            # Shared (cached) summarization model instance; labelled as context
+            # compression so usage reports separate it from tool-output summaries.
             from ..llm import ModelConfig
-            llm_manager = LLMManager()
             from utils.cloud.cloud_utils import get_user_context
             ctx = get_user_context()
-            summary = llm_manager.summarize(
+            summary = summarize_text(
                 conversation_text, model=ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
                 user_id=ctx.get("user_id"), session_id=ctx.get("session_id"),
+                request_type="context_compression",
             )
 
             logger.info(f"Generated conversation summary ({len(summary)} chars)")

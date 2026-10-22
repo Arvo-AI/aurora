@@ -7,6 +7,163 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Prompt caching that reaches Bedrock. In native mode every Claude call carries
+  Converse `cachePoint` checkpoints after the tool definitions, after the static
+  part of the system prompt and at the end of the last message (three per
+  request, under Bedrock's cap of four, default 5-minute TTL), including explicit
+  `bedrock/<geo>.anthropic.*` model ids. The system prompt is now assembled with
+  the static part first (core rules, provider constraints, regional rules) and the
+  per-org / per-incident / time-dependent content (command policy, rendered
+  skills, memories and their ages) after the checkpoint, so that prefix is shared
+  across sessions. The Anthropic API and OpenRouter keep per-block `cache_control`
+  markers, now on both the static and the dynamic block when the static part
+  reaches the model's cacheable minimum, and the previous single end-of-system
+  breakpoint otherwise (Haiku 4.5 / Opus 4.5–4.7 on background RCA). The Bedrock
+  gateway path is unchanged: markers only for `anthropic/` ids, a plain string for
+  explicit `bedrock/` ids.
+- Cost observability for prompt caching: `llm_usage_tracking` gains
+  `cache_read_input_tokens` and `cache_write_input_tokens` (added at startup by an
+  idempotent migration), `input_tokens` is the whole prompt (cache tokens
+  included) and `estimated_cost` prices non-cached input, cache reads and cache
+  writes at their own rates. Every Claude row now carries a 5-minute cache-write
+  rate, and Claude Sonnet 5.5, Opus 5 and Opus 4.8 are priced. The Bedrock
+  geo-profile premium applied to the static list prices is configurable with
+  `BEDROCK_REGIONAL_PREMIUM` (default 1.10; `global.` profiles never carry it).
+- Previously untracked model calls are recorded in `llm_usage_tracking`: the
+  prompt-injection input rail (`input_rail`), the per-turn memory selector
+  (`memory_selector`), the recommender's hypothesis extraction and diagnostics
+  plan (`hypothesis_extraction`, `diagnostics_plan`) and the PR-review verdict
+  extractor (`verdict_extraction`).
+- Background RCA cost knobs: `RCA_CONTEXT_TOKEN_BUDGET` (default 200000) trims an
+  investigation's conversation history at that many tokens instead of 80% of the
+  model window (the system prompt and tool definitions are sent on top), and
+  `RCA_TOOL_OUTPUT_PASS_THROUGH_CHARS` (default 20000) summarizes tool outputs
+  above that size during background runs. Interactive chat keeps its previous
+  thresholds.
+
+### Changed
+- The cheap model tier is now Claude Haiku 5.5 (`anthropic/claude-haiku-5.5`,
+  `eu.anthropic.claude-haiku-5-5` on Bedrock in EU regions). It is selectable in
+  the chat model picker and is the default for background RCA and for every
+  auxiliary call: the command-safety judge and input rail, summaries, the memory
+  agent and selector, severity, suggestions, email reports, visualization, the
+  recurrence agent, the Jira judge and Next Steps enrichment. The
+  `anthropic/claude-haiku-4.5` alias keeps resolving for existing configs.
+- Background RCA cost optimization (`RCA_OPTIMIZE_COSTS`) is on by default in
+  every deployment file; unset or empty now also mean "on".
+- Each auxiliary call has its own model variable with a cheap-tier default:
+  `TOOL_OUTPUT_SUMMARIZATION_MODEL`, `SUGGESTION_MODEL`, `EMAIL_REPORT_MODEL`,
+  `VISUALIZATION_MODEL`, `SEVERITY_MODEL`, `MEMORY_AGENT_MODEL` and
+  `MEMORY_SELECTOR_MODEL` are new; `SUMMARIZATION_MODEL`, `RECURRENCE_AGENT_MODEL`,
+  `JIRA_RCA_JUDGE_MODEL`, `ENRICHMENT_MODEL` and `GUARDRAILS_LLM_MODEL` default to
+  the cheap tier instead of `MAIN_MODEL` / `RCA_MODEL`. The cheap tier is only the
+  default when the provider settings can route a Claude model
+  (`LLM_PROVIDER_MODE` openrouter / anthropic / bedrock, or `ANTHROPIC_API_KEY`
+  under direct routing); otherwise these variables keep falling back to
+  `MAIN_MODEL`, so OpenAI / Google / Vertex / Ollama-only deployments and Bedrock
+  gateways pinned to `bedrock/<id>` values are unaffected by the upgrade. A
+  `MAIN_MODEL` pinned to an explicit `bedrock/<id>` keeps the cheap tier on that
+  Bedrock route in every mode (`bedrock/<geo>.anthropic.claude-haiku-5-5` on the
+  same geo in native mode for `us`/`eu`/`au`/`jp`/`global` pins, `MAIN_MODEL`
+  otherwise) — never another provider; under `LLM_PROVIDER_MODE=bedrock` in an
+  `ap-*` region with clean ids the variables follow `MAIN_MODEL`, since AWS
+  publishes no `apac.` Haiku 5.5 profile.
+- Extended thinking is switched off for classifier and summary calls on Claude
+  models that allow it (Haiku 5.5, Sonnet 5, Opus 5, Opus 4.7/4.8); agent loops
+  keep thinking on.
+- `langchain-aws` 1.3.1 → 1.9.0 (with `langchain-core` 1.6.13 and `boto3`
+  1.43.117): Claude Haiku 5.5 support on Bedrock, request-level prompt-cache
+  points, real `timeout` / `max_retries` fields and cache-aware usage metadata.
+- Bedrock docs and examples use EU inference profiles, IAM roles instead of
+  static keys, and carry a data-residency warning next to `BEDROCK_REGION=global`.
+- Every model call now carries an output-token cap by call type, configurable
+  with `LLM_MAX_TOKENS_JUDGE` (400), `LLM_MAX_TOKENS_SEVERITY` (32),
+  `LLM_MAX_TOKENS_SUMMARY` (1500), `LLM_MAX_TOKENS_REPORT` (4000),
+  `LLM_MAX_TOKENS_AGENT` (16000, Claude agent turns on Bedrock / Anthropic) and
+  `LLM_MAX_TOKENS_MEMORY_AGENT` (2000). The auxiliary caps apply only where
+  thinking is really off for the call (Claude models that accept `thinking:
+  disabled` on Bedrock native / the Anthropic API, and models that never think
+  unless asked); on a model that keeps thinking — Opus 5.5 / Sonnet 5.5, OpenAI
+  reasoning models, Gemini 2.5+, anything through a Bedrock gateway or
+  OpenRouter, Ollama — the cap is dropped and the model keeps its default output
+  limit, so reasoning tokens cannot truncate a verdict or summary.
+- The command-safety judge sends a trimmed copy of the user message (first line
+  plus a head and tail window instead of the whole alert payload), runs with a
+  small output cap and a client request timeout bounded to its 10 s budget, and
+  remembers its verdict per (session, message, command) for
+  `COMMAND_SAFETY_VERDICT_TTL_SECONDS` (default 900 s; keys hold only digests,
+  errors and timeouts are never cached). It still runs for every command that
+  passes the signature layer, and still fails closed.
+- The memory extraction agent runs on `MEMORY_AGENT_MODEL` with at most 8 turns,
+  a 2K output cap, and only when the session has a new user message since the
+  last extraction; its model calls are recorded as `memory_extraction`.
+- Oversized tool outputs are summarized once per output on the cheap
+  summarization model from a head + tail window (40K + 40K chars) with a 1.5K
+  output cap, and the result is shared by the context store and the agent loop.
+- Bedrock native clients use botocore `standard` retries (`BEDROCK_MAX_ATTEMPTS`,
+  default 3), a 10 s connect timeout and a `BEDROCK_READ_TIMEOUT` read timeout
+  (default 300 s); the gateway client retries twice. Non-streaming auxiliary
+  calls (judge, summaries, severity, memory selector and agent) share one model
+  instance per construction signature instead of building new clients per call.
+- Celery summarization tasks retry only on transient model / transport errors
+  (throttling, every 5xx except 501/505 — including Anthropic's 529 Overloaded —
+  and timeouts), and a retry of the post-RCA summary reuses the summary a
+  previous attempt already stored instead of calling the model again.
+- The agent restarts a whole run at most `AGENT_STREAM_RESTART_ATTEMPTS` times
+  (default 1) and only on a genuine mid-stream transport error; errors the SDK
+  already retried (`ModelTimeoutException`, `ThrottlingException`, 5xx) no
+  longer trigger a restart that re-bills every previous turn.
+
+### Fixed
+- `ENRICHMENT_MODEL` and `RCA_OPTIMIZE_COSTS` passed through Docker Compose as an
+  empty string were taken literally (an empty model id; cost optimization off).
+  Every model variable now treats empty as unset.
+- Per-call `request_timeout` / `timeout` kwargs reached Bedrock native mode as
+  unknown request-body fields (ValidationException). Call options are now
+  provider-neutral (`max_tokens`, `request_timeout`, `disable_thinking`) and each
+  provider translates them to its own client fields.
+- Claude Haiku 5.5 is priced with its two tiers (prompts up to 100K tokens vs.
+  above) instead of the generic default rate.
+- The memory extraction agent was enqueued twice per background RCA (once by the
+  workflow, once by the RCA task) and ran on `MAIN_MODEL` for up to 30 turns.
+- Large tool outputs were summarized twice per call (once for the context store,
+  once for the agent loop) by `MAIN_MODEL` with no output cap.
+- The command-safety judge recorded its usage as model `main` with zero output
+  tokens; it now records the resolved model, the serving provider and the real
+  token counts. Conversation compression is labelled `context_compression`
+  instead of `tool_output_summarization`.
+- A per-call `request_timeout` on Bedrock native mode would have switched the
+  retry policy off (langchain-aws merges its `timeout` field over the botocore
+  config with `retries=None`); the timeout now lives in the botocore config
+  itself.
+- Bedrock model ids (`bedrock/eu.anthropic.claude-opus-5-5`, bare geo profiles,
+  dated `…-20251001-v1:0` ids) were priced at the generic default rate and given
+  the conservative 180K context window; they now resolve to their Anthropic
+  pricing row and real window. Cache writes were ignored in the cost estimate and
+  cached tokens were subtracted from a prompt count that did not contain them on
+  Bedrock.
+- Usage rows of the orchestrator, the `LLMManager` fallback path and the
+  `tracked_invoke` helper were labelled with the model-id prefix (`anthropic`)
+  even when Bedrock served the call; they now carry the serving provider, which
+  also drives the regional premium for pinned `bedrock/` ids under
+  `LLM_PROVIDER_MODE=direct`. Jira judge rows were labelled `openrouter` and
+  visualization rows with the routing mode (`direct`); a call tracked without a
+  label now defaults to the serving provider as well.
+- The context safety net trimmed the history to its most recent messages, so a
+  trimmed request could open with an assistant turn (rejected by Bedrock) and
+  lose the alert / task message, and the cut slid by one tool turn per call,
+  invalidating the cached prompt prefix every turn. It now always keeps the
+  leading task message, cuts at a tool-call boundary, trims down to 60% of the
+  limit and reuses that cut until the limit is exceeded again.
+- The Bedrock embedding client (`EMBEDDING_MODEL=bedrock/amazon.titan-embed-text-v2:0`)
+  required static `BEDROCK_ACCESS_KEY_ID` / `BEDROCK_SECRET_ACCESS_KEY` (an IAM
+  role silently disabled embeddings), passed `BEDROCK_REGION=global` to boto3 as a
+  region, and re-embedded both titles on every comparison (up to 40 `InvokeModel`
+  calls per alert). It now shares the chat provider's region and credential
+  resolution (default credential chain, standard retries, short timeouts) and
+  caches embeddings per text, so an alert is embedded once per correlation run.
+
 ## [1.5.10] - 2026-10-16
 
 ### Added

@@ -761,7 +761,9 @@ def _run_investigation_core(
                         log_key, log_ctx,
                     )
                 else:
-                    verdict = extract_verdict_with_llm(final_text)
+                    verdict = extract_verdict_with_llm(
+                        final_text, user_id=user_id, session_id=session_id
+                    )
                     if verdict:
                         logger.warning(
                             "change_gating=%s %s verdict_source=llm_extraction_fallback",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 from .background import build_background_mode_segment
 from .context_fetchers import build_manual_vm_access_segment
@@ -172,35 +172,72 @@ def build_prompt_segments(
     )
 
 
-def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt builder
-    parts: List[str] = []
+_POLICY_REMINDER = (
+    "REMINDER: Commands that violate the organization policy will be rejected. "
+    "Do not attempt workarounds."
+)
 
-    # Ordered optional segments
-    for segment in (
-        segments.security_policy,
-        segments.background_mode,
-        segments.knowledge_base_memory,
-        segments.ephemeral_rules,
-        segments.model_overlay,
-        segments.provider_context,
-        segments.manual_vm_access,
-        segments.integration_index,
-        segments.prerequisite_checks,
-    ):
-        if segment:
-            parts.append(segment)
 
-    parts.append(segments.system_invariant)
-    parts.append(segments.provider_constraints)
-    parts.append(segments.regional_rules)
-    if segments.long_documents_note:
-        parts.append(segments.long_documents_note)
+def assemble_system_prompt_parts(segments: PromptSegments) -> Tuple[str, str]:
+    """Split the system prompt into a cacheable static prefix and a dynamic suffix.
+
+    Prompt caching (Bedrock ``cachePoint`` / Anthropic ``cache_control``) bills the
+    prefix up to a breakpoint at ~0.1x on a hit, but only if that prefix is
+    byte-identical to a previous request. ``agent.py`` therefore places the
+    breakpoint between the two strings returned here:
+
+    - **static** (first): ``system_invariant``, ``provider_constraints``,
+      ``regional_rules``. These depend only on the mode (interactive / background
+      RCA / action) and on the user's connected-provider list — nothing per
+      incident, per message or time-dependent. Shared across sessions, orgs and
+      users with the same providers. Nothing in here may read the clock, iterate
+      an unordered set/dict into text, or embed alert/incident data (see the
+      determinism test in ``tests/chat/test_bedrock_cache_points.py``).
+    - **dynamic** (second): everything else, in the relative order ``main`` already
+      used — org security policy, background/action mode (rendered skills carry the
+      alert's service/deployments), memory index + injected memories (whose
+      "Last updated Nd ago" ages change daily), mode rules, model overlay, provider
+      context, VM access hints, skills index, prerequisite checks, the long-document
+      note (depends on the current message), Terraform validation / failure
+      recovery (non-RCA) and the policy reminder.
+
+    ``assemble_system_prompt`` joins the two with ``"\\n"``, so every caller sees the
+    same order; the only behaviour change versus the pre-caching layout is that the
+    static trio now comes first instead of after the dynamic block.
+    """
+    static_parts: List[str] = [
+        part
+        for part in (
+            segments.system_invariant,
+            segments.provider_constraints,
+            segments.regional_rules,
+        )
+        if part
+    ]
 
     is_rca_background = segments.is_rca_background
-    if segments.terraform_validation and not is_rca_background:
-        parts.append(segments.terraform_validation)
-    if segments.failure_recovery and not is_rca_background:
-        parts.append(segments.failure_recovery)
-    if segments.security_policy:
-        parts.append("REMINDER: Commands that violate the organization policy will be rejected. Do not attempt workarounds.")
-    return "\n".join(parts)
+    dynamic_parts: List[str] = [
+        part
+        for part in (
+            segments.security_policy,
+            segments.background_mode,
+            segments.knowledge_base_memory,
+            segments.ephemeral_rules,
+            segments.model_overlay,
+            segments.provider_context,
+            segments.manual_vm_access,
+            segments.integration_index,
+            segments.prerequisite_checks,
+            segments.long_documents_note,
+            segments.terraform_validation if not is_rca_background else "",
+            segments.failure_recovery if not is_rca_background else "",
+            _POLICY_REMINDER if segments.security_policy else "",
+        )
+        if part
+    ]
+    return "\n".join(static_parts), "\n".join(dynamic_parts)
+
+
+def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt builder
+    """Full system prompt as one string: static prefix, then the dynamic suffix."""
+    return "\n".join(part for part in assemble_system_prompt_parts(segments) if part)

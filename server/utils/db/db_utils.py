@@ -538,6 +538,11 @@ def initialize_tables():
                         input_tokens INTEGER NOT NULL DEFAULT 0,
                         output_tokens INTEGER NOT NULL DEFAULT 0,
                         total_tokens INTEGER GENERATED ALWAYS AS (input_tokens + output_tokens) STORED,
+                        -- Prompt-cache breakdown of input_tokens (which is the whole prompt):
+                        -- tokens served from the cache (discounted read rate) and tokens
+                        -- written to it (write rate). The remainder billed at the input rate.
+                        cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+                        cache_write_input_tokens INTEGER NOT NULL DEFAULT 0,
                         estimated_cost DECIMAL(10,6) DEFAULT 0.00,
                         surcharge_rate DECIMAL(5,4) DEFAULT 0.0000,
                         surcharge_amount DECIMAL(10,6) GENERATED ALWAYS AS (estimated_cost * surcharge_rate) STORED,
@@ -2283,6 +2288,28 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(
                     f"Error adding surcharge fields to llm_usage_tracking: {e}"
+                )
+                conn.rollback()
+
+            # Migration: prompt-cache token columns on llm_usage_tracking. input_tokens is the
+            # whole prompt; these break out the tokens read from / written to the prompt cache
+            # so cache savings can be measured per model and request type (idempotent).
+            try:
+                cursor.execute("""
+                    ALTER TABLE llm_usage_tracking
+                    ADD COLUMN IF NOT EXISTS cache_read_input_tokens INTEGER NOT NULL DEFAULT 0;
+                """)
+                cursor.execute("""
+                    ALTER TABLE llm_usage_tracking
+                    ADD COLUMN IF NOT EXISTS cache_write_input_tokens INTEGER NOT NULL DEFAULT 0;
+                """)
+                logging.info(
+                    "Added prompt-cache token columns to llm_usage_tracking table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error adding prompt-cache token columns to llm_usage_tracking: {e}"
                 )
                 conn.rollback()
 

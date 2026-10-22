@@ -130,7 +130,7 @@ LLM_PROVIDER_MODE=openrouter   # for OPENROUTER_API_KEY (default)
 LLM_PROVIDER_MODE=direct       # for direct provider keys (Anthropic, OpenAI, Google, etc.)
 ```
 
-**Model selection** — when using `LLM_PROVIDER_MODE=direct`, all model env vars must use the same provider as your API key. If omitted, Aurora defaults to Anthropic models:
+**Model selection** — when using `LLM_PROVIDER_MODE=direct`, all model env vars must use the same provider as your API key. If omitted, `MAIN_MODEL` defaults to Anthropic; the background and classifier models (RCA, summaries, safety judge, ...) default to Claude Haiku 5.5 when an Anthropic route exists and otherwise follow `MAIN_MODEL` (a `MAIN_MODEL` pinned to a `bedrock/<id>` keeps them on that Bedrock geo, `bedrock/eu.anthropic.claude-haiku-5-5` for an `eu.` pin), so you only need to set the ones you want to differ:
 
 ```bash
 # Example: Google AI
@@ -140,7 +140,7 @@ SUMMARIZATION_MODEL=google/gemini-2.5-flash
 
 # Example: Anthropic (default, no need to set explicitly)
 MAIN_MODEL=anthropic/claude-opus-5.5
-RCA_MODEL=anthropic/claude-haiku-4.5
+RCA_MODEL=anthropic/claude-haiku-5.5
 ```
 
 See [LLM Providers](/docs/integrations/llm-providers#supported-models) for the full list of valid model names per provider. *Optional:* set `ORCHESTRATOR_ENABLED=true` to use the multi-agent RCA path — requires `RCA_ORCHESTRATOR_MODEL` and `RCA_SUBAGENT_MODEL` ([details](/docs/integrations/llm-providers#multi-agent-orchestrator)).

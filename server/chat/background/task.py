@@ -1670,15 +1670,10 @@ async def _execute_background_chat(
                 logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization")
                 _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
 
-            # Save durable learnings from this RCA to org memory
-            try:
-                from services.memory.collector import extract_memories_from_session
-                extract_memories_from_session.delay(
-                    session_id=session_id,
-                    user_id=user_id,
-                )
-            except Exception:
-                logger.debug("[BackgroundChat] Memory save enqueue failed")
+            # Durable learnings from this RCA are saved to org memory by the memory
+            # extraction task that Workflow.stream() enqueues at the end of every
+            # run (background included) — enqueuing it here again ran the memory
+            # agent twice per RCA.
 
         # Fallback: rebuild llm_context_history from UI messages if the save was lost.
         llm_context = _ensure_llm_context_history(session_id, user_id)
@@ -1976,10 +1971,9 @@ def _update_incident_status_and_aurora(
 def _determine_severity_from_rca(incident_id: str, session_id: str, user_id: str) -> None:
     """Determine severity from RCA chat if currently unknown."""
     try:
-        from chat.backend.agent.llm import LLMManager
         from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
     except ImportError as ie:
-        logger.error(f"[BackgroundChat] Failed to import LLMManager: {ie}")
+        logger.error(f"[BackgroundChat] Failed to import the usage tracker: {ie}")
         return
     
     try:
@@ -2001,18 +1995,22 @@ def _determine_severity_from_rca(incident_id: str, session_id: str, user_id: str
                 transcript = "\n".join([f"{m.get('sender', 'unknown')}: {m.get('text', '')[:200]}" for m in messages[:10] if m.get('text')])
                 
                 try:
-                    # Use LLMManager which creates ChatOpenAI instances successfully
-                    # This avoids the langchain.schema import issue by using the same code path as the rest of the app
+                    # One-word classification: dedicated cheap model, temperature 0 requested
+                    # at construction (no mutation of a shared instance), thinking off,
+                    # output capped at LLM_MAX_TOKENS_SEVERITY (default 32). The instance
+                    # comes from the shared cache so no client is built per incident.
+                    from chat.backend.agent.call_options import max_tokens_for
                     from chat.backend.agent.llm import ModelConfig
-                    severity_model = ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
-                    llm_manager = LLMManager()
-                    model = llm_manager._get_or_create_model(severity_model)
-                    
-                    original_temp = model.temperature
-                    model.temperature = 0
-                    
-                    try:
-                        prompt = f"""You are assessing the operational severity of an incident based on its investigation.
+                    from chat.backend.agent.providers import get_cached_chat_model
+                    severity_model = ModelConfig.SEVERITY_MODEL
+                    model = get_cached_chat_model(
+                        severity_model,
+                        temperature=0,
+                        max_tokens=max_tokens_for("severity"),
+                        disable_thinking=True,
+                    )
+
+                    prompt = f"""You are assessing the operational severity of an incident based on its investigation.
 
 Severity levels:
 - critical: Production outage, service unavailable, data loss, or security breach affecting customers
@@ -2026,19 +2024,16 @@ Investigation transcript:
 {transcript}
 
 Respond with ONLY ONE WORD: critical, high, medium, or low"""
-                        response = tracked_invoke(
-                            model,
-                            [HumanMessage(content=prompt)],
-                            user_id=user_id,
-                            session_id=session_id,
-                            model_name=severity_model,
-                            request_type="severity_determination",
-                        )
-                    finally:
-                        # Restore original temperature
-                        model.temperature = original_temp
+                    response = tracked_invoke(
+                        model,
+                        [HumanMessage(content=prompt)],
+                        user_id=user_id,
+                        session_id=session_id,
+                        model_name=severity_model,
+                        request_type="severity_determination",
+                    )
                 except (ImportError, ModuleNotFoundError) as ie:
-                    # Catch any import errors - should not happen with LLMManager but just in case
+                    # Catch any import errors - should not happen but just in case
                     error_msg = str(ie)
                     if 'langchain.schema' in error_msg or 'langchain_schema' in error_msg.lower():
                         logger.warning(

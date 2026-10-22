@@ -11,6 +11,8 @@ import os
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
+from chat.backend.agent.call_options import effective_max_tokens, pop_call_options
+
 from .base_provider import BaseLLMProvider
 from ..model_mapper import ModelMapper
 
@@ -61,6 +63,25 @@ class OpenRouterProvider(BaseLLMProvider):
             "max_retries": 3,
             "stream_usage": True,
         }
+        # Provider-neutral call options: ChatOpenAI already spells them `max_tokens` /
+        # `request_timeout`; `disable_thinking` has no portable spelling through
+        # OpenRouter and is dropped. Because it is dropped, a `max_tokens` sized for a
+        # thinking-free answer is only forwarded for models known not to reason by
+        # default (the Gemini flash-lite judge default, gpt-4-class, Claude 4.x);
+        # for Claude 5.x, GPT-5.x, Gemini 2.5+ and unknown models the cap is dropped
+        # so reasoning tokens cannot truncate the reply.
+        opts = pop_call_options(kwargs)
+        max_tokens = effective_max_tokens(opts, openrouter_model)
+        if max_tokens is not None:
+            config["max_tokens"] = max_tokens
+        elif opts.max_tokens is not None:
+            logger.info(
+                "Dropping max_tokens=%s for %s via OpenRouter: thinking cannot be disabled "
+                "through the gateway, so a cap sized for a thinking-free answer could truncate it.",
+                opts.max_tokens, openrouter_model,
+            )
+        if opts.request_timeout is not None:
+            config["request_timeout"] = opts.request_timeout
         config.update(kwargs)
 
         return ChatOpenAI(**config)

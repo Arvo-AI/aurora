@@ -1032,7 +1032,13 @@ class Workflow:
             # is awaited in agent.py (agentic_tool_flow) right before the LLM call.
             is_pr_review = getattr(input_state, "is_pr_review", False)
             if msg_text and not is_pr_review:
-                _guardrail_task_var.set(asyncio.create_task(check_input(msg_text)))
+                # The ids label the rail's llm_usage_tracking rows (request_type
+                # "input_rail"); the check itself does not depend on them.
+                _guardrail_task_var.set(asyncio.create_task(check_input(
+                    msg_text,
+                    user_id=getattr(input_state, "user_id", None),
+                    session_id=getattr(input_state, "session_id", None),
+                )))
 
             if input_state.session_id and input_state.user_id and not is_scaffold:
                 from chat.backend.agent.utils.immediate_save_handler import handle_immediate_save

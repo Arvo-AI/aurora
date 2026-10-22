@@ -109,7 +109,8 @@ x-common-env: &common-env
   GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY}
   LLM_PROVIDER_MODE: ${LLM_PROVIDER_MODE}
   SEARXNG_URL: ${SEARXNG_URL}
-  RCA_OPTIMIZE_COSTS: ${RCA_OPTIMIZE_COSTS}
+  # Background RCA on the cheap tier by default; empty/unset also means true
+  RCA_OPTIMIZE_COSTS: ${RCA_OPTIMIZE_COSTS:-true}
   ORCHESTRATOR_ENABLED: ${ORCHESTRATOR_ENABLED:-false}
   # Infrastructure visualization feature: gates periodic + final LLM extraction during RCA. Off by default for cost.
   VISUALIZATION_ENABLED: ${VISUALIZATION_ENABLED:-false}
@@ -120,8 +121,29 @@ x-common-env: &common-env
   RCA_SUBAGENT_MODEL: ${RCA_SUBAGENT_MODEL}
   VISION_MODEL: ${VISION_MODEL}
   SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL}
+  # Cheap-tier model variables (empty = anthropic/claude-haiku-5.5); see .env.example
+  TOOL_OUTPUT_SUMMARIZATION_MODEL: ${TOOL_OUTPUT_SUMMARIZATION_MODEL:-}
+  SUGGESTION_MODEL: ${SUGGESTION_MODEL:-}
+  EMAIL_REPORT_MODEL: ${EMAIL_REPORT_MODEL:-}
+  VISUALIZATION_MODEL: ${VISUALIZATION_MODEL:-}
+  SEVERITY_MODEL: ${SEVERITY_MODEL:-}
+  MEMORY_AGENT_MODEL: ${MEMORY_AGENT_MODEL:-}
+  MEMORY_SELECTOR_MODEL: ${MEMORY_SELECTOR_MODEL:-}
+  # Output-token caps per call type (empty = defaults 400/32/1500/4000/16000/2000); see .env.example
+  LLM_MAX_TOKENS_JUDGE: ${LLM_MAX_TOKENS_JUDGE:-}
+  LLM_MAX_TOKENS_SEVERITY: ${LLM_MAX_TOKENS_SEVERITY:-}
+  LLM_MAX_TOKENS_SUMMARY: ${LLM_MAX_TOKENS_SUMMARY:-}
+  LLM_MAX_TOKENS_REPORT: ${LLM_MAX_TOKENS_REPORT:-}
+  LLM_MAX_TOKENS_AGENT: ${LLM_MAX_TOKENS_AGENT:-}
+  LLM_MAX_TOKENS_MEMORY_AGENT: ${LLM_MAX_TOKENS_MEMORY_AGENT:-}
   ENRICHMENT_MODEL: ${ENRICHMENT_MODEL}
   AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
+  # Full agent restarts per run on a mid-stream transport error (default 1; 0 disables)
+  AGENT_STREAM_RESTART_ATTEMPTS: ${AGENT_STREAM_RESTART_ATTEMPTS:-1}
+  # Background RCA cost knobs: context trimmed at this many tokens (default 200000) and
+  # tool outputs summarized above this many chars (default 20000); interactive chat unchanged
+  RCA_CONTEXT_TOKEN_BUDGET: ${RCA_CONTEXT_TOKEN_BUDGET:-}
+  RCA_TOOL_OUTPUT_PASS_THROUGH_CHARS: ${RCA_TOOL_OUTPUT_PASS_THROUGH_CHARS:-}
   EMBEDDING_MODEL: ${EMBEDDING_MODEL}
 
   # Root-cause recurrence detection (dedup layer 1): off | shadow | live
@@ -133,6 +155,8 @@ x-common-env: &common-env
   GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}
   GUARDRAILS_SIGMA_ENABLED: ${GUARDRAILS_SIGMA_ENABLED:-true}
   GUARDRAILS_LLM_MODEL: ${GUARDRAILS_LLM_MODEL:-}
+  # Safety-judge verdict cache TTL in seconds (default 900; 0 disables)
+  COMMAND_SAFETY_VERDICT_TTL_SECONDS: ${COMMAND_SAFETY_VERDICT_TTL_SECONDS:-900}
 
   # Slack: keep editing the "Thinking…" placeholder with live progress while a
   # background investigation runs. Interval in seconds (min 10).
@@ -155,6 +179,11 @@ x-common-env: &common-env
   BEDROCK_SECRET_ACCESS_KEY: ${BEDROCK_SECRET_ACCESS_KEY:-}
   BEDROCK_SESSION_TOKEN: ${BEDROCK_SESSION_TOKEN:-}
   BEDROCK_PROFILE: ${BEDROCK_PROFILE:-}
+  # Native-mode botocore client: read timeout (s) and total retry attempts (standard mode)
+  BEDROCK_READ_TIMEOUT: ${BEDROCK_READ_TIMEOUT:-300}
+  BEDROCK_MAX_ATTEMPTS: ${BEDROCK_MAX_ATTEMPTS:-3}
+  # Cost-tracking multiplier for geo (us./eu./apac.) inference profiles over the list price (default 1.10)
+  BEDROCK_REGIONAL_PREMIUM: ${BEDROCK_REGIONAL_PREMIUM:-}
 
   # Pod Isolation (disabled for local)
   ENABLE_POD_ISOLATION: ${ENABLE_POD_ISOLATION}

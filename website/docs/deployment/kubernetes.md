@@ -59,6 +59,12 @@ config:
   # For non-OpenRouter providers, also set:
   # MAIN_MODEL: "vertex/gemini-3.6-flash"
   # RCA_MODEL: "vertex/gemini-3.6-flash"
+  # (every other model variable follows MAIN_MODEL when no Anthropic/Bedrock route exists for the cheap tier)
+  # Bedrock (native, IRSA role on the pods): LLM_PROVIDER_MODE: "bedrock" + BEDROCK_REGION: "eu-central-1";
+  # Claude picks are translated to eu.* inference profiles. Background RCA and the auxiliary
+  # calls stay on the cheap tier (RCA_OPTIMIZE_COSTS: "true", anthropic/claude-haiku-5.5) unless
+  # you override RCA_MODEL / SUMMARIZATION_MODEL / GUARDRAILS_LLM_MODEL etc. A MAIN_MODEL pinned
+  # to "bedrock/eu.anthropic.<model>" keeps them on bedrock/eu.anthropic.claude-haiku-5-5.
 secrets:
   llm:
     OPENROUTER_API_KEY: ""  # or OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
@@ -190,6 +196,8 @@ config:
   # For non-OpenRouter providers, uncomment and set:
   # MAIN_MODEL: "vertex/gemini-3.6-flash"
   # RCA_MODEL: "vertex/gemini-3.6-flash"
+  # Bedrock: LLM_PROVIDER_MODE: "bedrock", BEDROCK_REGION: "eu-central-1" (IRSA role, no keys)
+  RCA_OPTIMIZE_COSTS: "true"          # background RCA + auxiliary calls on the cheap tier (Claude Haiku 5.5)
 
 secrets:
   db:

@@ -39,13 +39,16 @@ class VisualizationExtractor:
     """Extracts infrastructure entities from RCA tool calls."""
     
     def __init__(self):
+        from chat.backend.agent.call_options import max_tokens_for
         from chat.backend.agent.providers import create_chat_model
         from chat.backend.agent.llm import ModelConfig
         
         self.llm = create_chat_model(
             ModelConfig.VISUALIZATION_MODEL,
             temperature=0.3,
-            streaming=False
+            streaming=False,
+            disable_thinking=True,
+            max_tokens=max_tokens_for("report"),
         )
     
     def extract_incremental(
@@ -100,7 +103,9 @@ class VisualizationExtractor:
         try:
             from chat.backend.agent.llm import ModelConfig
             from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
-            import os
+            # api_provider is left to the tracker: it resolves the provider that
+            # actually serves VISUALIZATION_MODEL (LLM_PROVIDER_MODE itself is a
+            # routing mode such as "direct", not a provider name).
             LLMUsageTracker.track_llm_call(
                 user_id=user_id,
                 session_id=session_id or None,
@@ -109,7 +114,6 @@ class VisualizationExtractor:
                 prompt=prompt,
                 response=response,
                 start_time=start_time,
-                api_provider=os.getenv("LLM_PROVIDER_MODE", "direct"),
             )
         except Exception as e:
             logger.warning(f"[VizExtractor] Failed to track usage: {e}")

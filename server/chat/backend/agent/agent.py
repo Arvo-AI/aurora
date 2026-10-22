@@ -11,10 +11,12 @@ from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from .tools.cloud_tools import set_websocket_context
 from chat.backend.agent.utils.prefix_cache import PrefixCacheManager
-from chat.backend.agent.utils.cache_control import build_cached_system_prompt
-from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, assemble_system_prompt, register_prompt_cache_breakpoints
-from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker, LLMUsage
+from chat.backend.agent.utils.cache_control import build_cached_system_prompt, is_claude_model
+from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, assemble_system_prompt_parts, register_prompt_cache_breakpoints
+from chat.backend.agent.call_options import max_tokens_for
+from chat.backend.agent.utils.llm_usage_tracker import UsageTrackingCallback
 from services.memory.injector import MemoryPrefetch
+from utils.llm_errors import is_mid_stream_transport_error
 import time
 import asyncio
 from datetime import datetime, timezone
@@ -23,6 +25,22 @@ from typing import Optional
 # Providers that must use their native SDKs even when LLM_PROVIDER_MODE=openrouter,
 # because features like Gemini thinking only work with their native SDK.
 _DIRECT_ONLY_PROVIDERS = frozenset({"vertex", "ollama", "bedrock"})
+
+# Full agent-graph restarts allowed per run on a mid-stream transport error.
+_DEFAULT_STREAM_RESTART_ATTEMPTS = 1
+
+
+def _agent_stream_restart_attempts() -> int:
+    """``AGENT_STREAM_RESTART_ATTEMPTS``: how many times one agent run may be
+    restarted from scratch after a mid-stream transport error (default 1; 0
+    disables restarts). Unset, empty or junk mean the default; negatives mean 0."""
+    raw = (os.getenv("AGENT_STREAM_RESTART_ATTEMPTS") or "").strip()
+    if not raw:
+        return _DEFAULT_STREAM_RESTART_ATTEMPTS
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        return _DEFAULT_STREAM_RESTART_ATTEMPTS
 
 
 def _extract_reasoning_from_delta(delta: dict) -> tuple:
@@ -266,9 +284,13 @@ class Agent:
         try:
             # Direct imports for LangChain 1.2.6+ - no fallbacks
             from langchain.agents import create_agent
-            from langchain_core.callbacks import BaseCallbackHandler
             from .tools.cloud_tools import get_cloud_tools, set_user_context, set_tool_capture
-            from .middleware import ContextTrimMiddleware, _ForceToolChoice
+            from .middleware import (
+                BedrockPromptCacheMiddleware,
+                ContextTrimMiddleware,
+                _ForceToolChoice,
+            )
+            from .middleware.context_trim import rca_context_token_budget
 
             logging.info(f"agentic_tool_flow: State has user_id {state.user_id} and session_id {state.session_id}")
             # Set user context for tools
@@ -408,9 +430,14 @@ class Agent:
                 except Exception:
                     logging.debug("Memory prefetch result unavailable")
 
-            system_prompt_text = assemble_system_prompt(segments)
+            # Static prefix (invariant, provider constraints, regional rules) first,
+            # dynamic suffix (policy, incident/skills data, memories with ages) second:
+            # the prompt-cache breakpoint goes between them (see cache_control.py).
+            # A sub-agent's role brief is the whole prompt and is stable across its
+            # turns, so it is treated as the static part.
+            static_prompt_text, dynamic_prompt_text = assemble_system_prompt_parts(segments)
             if system_prompt_override is not None:
-                system_prompt_text = system_prompt_override
+                static_prompt_text, dynamic_prompt_text = system_prompt_override, ""
             if tool_subset is not None:
                 tools = tool_subset
 
@@ -490,106 +517,12 @@ class Agent:
                 logging.info(f"Using default main model for agentic workflow: {model_name}")
             
             
-            # Create a custom callback for tracking LLM usage
-            class AgentLLMUsageCallback(BaseCallbackHandler):
-                """Tracks LLM usage using provider-reported usage_metadata."""
-                def __init__(self, user_id: str, session_id: str, model_name: str, api_provider: str):
-                    self.user_id = user_id
-                    self.session_id = session_id
-                    self.model_name = model_name
-                    self.api_provider = api_provider
-                    self.current_calls = {}
-                    
-                def on_llm_start(self, serialized, prompts, run_id=None, **kwargs):
-                    """Record call start time."""
-                    try:
-                        if run_id:
-                            self.current_calls[run_id] = {
-                                'start_time': time.time()
-                            }
-                    except Exception as e:
-                        logging.warning(f"Error tracking agent LLM start: {e}")
-                
-                def on_llm_end(self, response, run_id=None, **kwargs):
-                    """Track LLM call end using provider-reported usage_metadata."""
-                    try:
-                        if not run_id or run_id not in self.current_calls:
-                            return
-                        
-                        call_info = self.current_calls.pop(run_id)
-                        
-                        input_tokens = 0
-                        output_tokens = 0
-
-                        # Extract real token counts from provider usage_metadata
-                        cached_input_tokens = 0
-                        if hasattr(response, 'generations'):
-                            for gen_list in response.generations:
-                                for gen in gen_list:
-                                    msg = getattr(gen, 'message', None)
-                                    if msg and getattr(msg, 'usage_metadata', None):
-                                        um = msg.usage_metadata
-                                        input_tokens = um.get('input_tokens', 0)
-                                        output_tokens = um.get('output_tokens', 0)
-                                        details = um.get('input_token_details', {})
-                                        if isinstance(details, dict):
-                                            cached_input_tokens = details.get('cache_read', 0)
-                                        break
-                                if input_tokens > 0:
-                                    break
-
-                        # Also check llm_output for OpenAI-style token_usage
-                        if input_tokens == 0 and hasattr(response, 'llm_output') and response.llm_output:
-                            token_usage = response.llm_output.get('token_usage', {})
-                            input_tokens = token_usage.get('prompt_tokens', 0)
-                            output_tokens = token_usage.get('completion_tokens', 0)
-                            prompt_details = token_usage.get('prompt_tokens_details', {})
-                            if isinstance(prompt_details, dict):
-                                cached_input_tokens = prompt_details.get('cached_tokens', 0)
-
-                        if input_tokens == 0 and output_tokens == 0:
-                            logging.warning(f"No provider usage_metadata for {self.model_name} - tokens will be 0")
-
-                        estimated_cost = LLMUsageTracker.calculate_cost(
-                            input_tokens, output_tokens, self.model_name,
-                            cached_input_tokens=cached_input_tokens,
-                        )
-                        
-                        usage = LLMUsage(
-                            user_id=self.user_id,
-                            session_id=self.session_id,
-                            model_name=self.model_name,
-                            api_provider=self.api_provider,
-                            request_type="agent_workflow",
-                            input_tokens=input_tokens,
-                            output_tokens=output_tokens,
-                            estimated_cost=estimated_cost,
-                            response_time_ms=int((time.time() - call_info['start_time']) * 1000),
-                            error_message=None,
-                            request_metadata={'agent_executor': True}
-                        )
-                        
-                        if LLMUsageTracker.store_usage(usage):
-                            logging.info(f"Agent LLM Tracked: {self.model_name} - {input_tokens}+{output_tokens} tokens - ${estimated_cost:.6f}")
-                        else:
-                            logging.warning("Failed to store agent LLM usage")
-                    except Exception as e:
-                        logging.warning(f"Error tracking agent LLM end: {e}")
-            
             # Get provider mode from LLM manager
             provider_mode = self.llm_manager.provider_mode
             
             # Detect the actual provider from model prefix (e.g., "google/gemini-3.1-pro" → "google")
             detected_provider = ModelMapper.detect_provider(model_name)
             is_direct_only = detected_provider in _DIRECT_ONLY_PROVIDERS
-
-            # Create the usage tracking callback with correct provider
-            usage_callback = AgentLLMUsageCallback(
-                user_id=state.user_id,
-                session_id=state.session_id,
-                model_name=model_name,
-                api_provider=detected_provider
-            )
 
             # Route to native SDK when provider_mode is direct, or when the model's
             # provider requires its native SDK (e.g., Gemini thinking needs ChatGoogleGenerativeAI).
@@ -598,6 +531,36 @@ class Agent:
             logging.info(f"Provider routing: model={model_name}, detected={detected_provider}, mode={provider_mode}, use_direct={_use_direct}")
 
             effective_mode = "direct" if is_direct_only else provider_mode
+
+            # The provider that actually *serves* the model, not its id prefix: under
+            # LLM_PROVIDER_MODE=<provider> a clean anthropic/ model is served by e.g.
+            # Bedrock. Resolved before the model is built because it decides the
+            # per-turn output cap, the forced tool_choice format and the prompt-cache
+            # wire shape below. Resolution raises the same error model creation would.
+            serving_provider = (
+                get_registry().resolve_provider_name(model_name, effective_mode)
+                if _use_direct
+                else "openrouter"
+            )
+
+            # Usage rows are labelled by the serving provider as well (a Claude model
+            # under LLM_PROVIDER_MODE=bedrock is billed to Bedrock, not "anthropic").
+            usage_callback = UsageTrackingCallback(
+                user_id=state.user_id,
+                session_id=state.session_id,
+                model_name=model_name,
+                api_provider=serving_provider or detected_provider,
+                request_type="agent_workflow",
+            )
+
+            # Output cap per agent turn (LLM_MAX_TOKENS_AGENT, default 16K). Applied
+            # only to Claude-served turns (Bedrock / Anthropic), where thinking
+            # tokens also count against it and the model default is the 128K
+            # maximum; other providers keep their own defaults.
+            agent_call_options = {}
+            if serving_provider in ("bedrock", "anthropic") and is_claude_model(model_name):
+                agent_call_options["max_tokens"] = max_tokens_for("agent")
+
             if _use_direct:
                 streaming_llm = create_chat_model(
                     model=model_name,
@@ -605,6 +568,7 @@ class Agent:
                     provider_mode=effective_mode,
                     streaming=True,
                     callbacks=[usage_callback],
+                    **agent_call_options,
                 )
             else:
                 # Use OpenRouter mode
@@ -648,17 +612,16 @@ class Agent:
             # Create the agent using new LangChain 1.2.6+ API
             # Tool outputs are capped/summarized upstream (utils/tool_output_cap.py).
             # ContextSafetyMiddleware is a lightweight safety net that also injects
-            # correlated RCA context updates into background sessions.
-            middlewares = [ContextTrimMiddleware(model_name=model_name)]
-            # Label the forced tool_choice by the provider that actually *serves* the
-            # model, not its id prefix: under LLM_PROVIDER_MODE=<provider> a clean
-            # anthropic/ model is served by e.g. Bedrock, whose client needs a different
-            # tool_choice format than the Anthropic API.
-            tool_choice_provider = (
-                get_registry().resolve_provider_name(model_name, effective_mode)
-                if _use_direct
-                else "openrouter"
+            # correlated RCA context updates into background sessions. Background
+            # runs get a context budget (RCA_CONTEXT_TOKEN_BUDGET, default 200K)
+            # below the model window; interactive chat keeps the 80%-of-window rule.
+            context_budget = (
+                rca_context_token_budget() if getattr(state, "is_background", False) else None
             )
+            middlewares = [ContextTrimMiddleware(model_name=model_name, token_budget=context_budget)]
+            # The forced tool_choice format follows the serving provider (resolved
+            # above): Bedrock's client needs a different one than the Anthropic API.
+            tool_choice_provider = serving_provider
             if getattr(state, "trigger_action_id", None):
                 middlewares.insert(
                     0, _ForceToolChoice("trigger_action", provider=tool_choice_provider)
@@ -668,11 +631,26 @@ class Agent:
                     0, _ForceToolChoice("trigger_rca", provider=tool_choice_provider)
                 )
 
-            # Mark the stable system prompt with an Anthropic cache_control
-            # breakpoint so turns 2..N of a session bill the prefix as a 0.1x
-            # cache read. No-op for non-Anthropic models and tiny prompts.
+            # Prompt caching. Bedrock native (Converse SDK) gets real cachePoint
+            # blocks: a manual one after the static system prefix (below) plus the
+            # per-request tools / last-message points the middleware asks
+            # langchain-aws for — 3 points per request, under Bedrock's cap of 4.
+            # Anthropic direct / OpenRouter keep per-block cache_control markers;
+            # the Bedrock gateway keeps its pre-existing shape (markers only for
+            # anthropic/ ids, plain string for explicit bedrock/ ids). Non-Claude
+            # models and tiny prompts are untouched.
+            bedrock_native = False
+            if serving_provider == "bedrock":
+                bedrock_provider = get_registry().get_provider("bedrock")
+                bedrock_native = bool(getattr(bedrock_provider, "is_native_mode", False))
+            if bedrock_native and is_claude_model(model_name):
+                middlewares.append(BedrockPromptCacheMiddleware())
             system_prompt_for_agent = build_cached_system_prompt(
-                model_name, system_prompt_text
+                model_name,
+                static_prompt_text,
+                dynamic_prompt_text,
+                serving_provider=serving_provider,
+                bedrock_native=bedrock_native,
             )
 
             agent_graph = create_agent(
@@ -916,8 +894,16 @@ class Agent:
                 
                 # Execute the agent workflow using new API with streaming
                 try:
-                    # Retry logic for network errors
-                    for attempt in range(3):
+                    # Full-graph restart budget. A restart re-runs — and re-bills — every
+                    # previous turn of this run, so it is reserved for genuine mid-stream
+                    # transport failures (HTTP/2 stream reset, incomplete chunked read,
+                    # peer closed the socket) that the SDK cannot retry once the response
+                    # has started. Throttling, ModelTimeoutException, 5xx and connect /
+                    # read timeouts are already retried by the botocore / provider client
+                    # with backoff; restarting on those only repeats the same outcome.
+                    # AGENT_STREAM_RESTART_ATTEMPTS (default 1; 0 disables restarts).
+                    max_restarts = _agent_stream_restart_attempts()
+                    for attempt in range(1 + max_restarts):
                         try:
                             # --- Await the guardrails task that was fired concurrently ---
                             from chat.backend.agent.workflow import _guardrail_task_var
@@ -1076,21 +1062,21 @@ class Agent:
                             logging.info(f"Event types seen: {sorted(event_types_seen)}")
                             break # Break retry loop on success
                         except Exception as e:
-                            error_str = str(e)
-                            error_type = type(e).__name__
-                            # Check for network/protocol errors that should be retried
-                            is_network_error = any(kw in error_str for kw in [
-                                "ReadError", 
-                                "ConnectError", 
-                                "Timeout",
-                                "RemoteProtocolError",
-                                "incomplete chunked read",
-                                "peer closed connection"
-                            ]) or "RemoteProtocolError" in error_type
-                            if attempt < 2 and is_network_error:
-                                logging.warning(f"Network error (attempt {attempt+1}/3): {e}. Retrying...")
+                            restartable = is_mid_stream_transport_error(e)
+                            if attempt < max_restarts and restartable:
+                                logging.warning(
+                                    "Mid-stream transport error (%s) on agent run for session %s "
+                                    "(restart %d/%d): %s. Restarting the agent graph...",
+                                    type(e).__name__, state.session_id, attempt + 1, max_restarts, e,
+                                )
                                 await asyncio.sleep(2 * (attempt + 1))
                             else:
+                                if attempt < max_restarts:
+                                    logging.info(
+                                        "Agent run failed with %s (not a mid-stream transport error; "
+                                        "the SDK already retried what it could) — not restarting the graph.",
+                                        type(e).__name__,
+                                    )
                                 raise
                                 
                 except Exception as e:

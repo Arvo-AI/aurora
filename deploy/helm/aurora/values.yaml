@@ -303,8 +303,27 @@ config:
   AWS_SM_SECRET_ACCESS_KEY: ""  # Falls back to default boto3 chain if both are empty
   
   # --- LLM Configuration ---
-  LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
+  # Routing mode: openrouter | direct | auto | bedrock | vertex | anthropic | openai | google | ollama.
+  # A provider name routes every model it can serve through that provider (e.g. "bedrock"
+  # translates Claude picks to the region's inference-profile ids); see docs/integrations/llm-providers.
+  LLM_PROVIDER_MODE: "openrouter"
   AGENT_RECURSION_LIMIT: "240" #Maximum number of steps an agent can take
+  # Full agent-graph restarts allowed per run after a genuine mid-stream transport
+  # error (stream reset, incomplete chunked read). Throttling / 5xx / timeouts are
+  # retried by the provider SDK and never restart the graph (a restart re-bills every
+  # previous turn). "0" disables restarts.
+  AGENT_STREAM_RESTART_ATTEMPTS: "1"
+  # Background RCA cost knobs (interactive chat unchanged). Empty = defaults.
+  # RCA_CONTEXT_TOKEN_BUDGET: trim the investigation history at this many tokens instead of
+  # 80% of the model window (default 200000). Counts the conversation messages only — the
+  # system prompt and tool definitions are sent on top. Past the budget the oldest tool
+  # turns are dropped down to 60% of it (the alert / task message is always kept) and the
+  # cut is reused until the budget is exceeded again, so the prompt cache keeps hitting.
+  # On Haiku 5.5 a request whose whole prompt exceeds 100K tokens bills 5x per token.
+  # RCA_TOOL_OUTPUT_PASS_THROUGH_CHARS: summarize tool outputs longer than this many chars
+  # during background runs (default 20000; interactive chat uses 40000).
+  RCA_CONTEXT_TOKEN_BUDGET: ""
+  RCA_TOOL_OUTPUT_PASS_THROUGH_CHARS: ""
 
   # --- AI Safety Guardrails ---
   # Input rail + signature matcher + LLM safety judge. All three activate with
@@ -314,8 +333,13 @@ config:
   # Gate the vendored SigmaHQ rule corpus inside the signature matcher.
   # Requires GUARDRAILS_ENABLED=true. Set to "false" to run only hand-written rules.
   GUARDRAILS_SIGMA_ENABLED: "true"
-  # Safety judge / input rail model (provider/model format). Empty = use MAIN_MODEL.
+  # Safety judge / input rail model (provider/model format). Empty = google/gemini-2.5-flash-lite
+  # under openrouter mode; otherwise the cheap tier (anthropic/claude-haiku-5.5) when the
+  # provider settings can route it, else MAIN_MODEL (see "Cheap-tier model variables").
   GUARDRAILS_LLM_MODEL: ""
+  # Seconds a judge verdict is remembered for the same (session, user message, command);
+  # keys hold only digests, errors/timeouts are never cached. "0" disables the cache.
+  COMMAND_SAFETY_VERDICT_TTL_SECONDS: "900"
 
   # --- Slack live progress ---
   # Keep editing the "Thinking…" placeholder with elapsed time, the running tool
@@ -351,7 +375,10 @@ config:
   AURORA_SETUP_CACHE_ENABLED: "true"
   AURORA_SETUP_CACHE_TTL: "3600"
   AURORA_CACHE_TOKEN_IN_REDIS: "false"
-  RCA_OPTIMIZE_COSTS: "false"
+  # Background RCA on the cheap tier (anthropic/claude-haiku-5.5, or MAIN_MODEL when the
+  # cheap tier is not routable — see "Cheap-tier model variables") unless RCA_MODEL is set.
+  # Empty/unset also means true; "false" runs RCA on anthropic/claude-opus-5.5.
+  RCA_OPTIMIZE_COSTS: "true"
   GEMINI_DISABLE_THINKING: "false"
 
   # --- Embedding model for alert correlation (optional) ---
@@ -360,7 +387,10 @@ config:
   # If empty, uses Jaccard token similarity (works fine for most cases).
   # Format: provider/model-name
   # Examples: openai/text-embedding-3-small, google/text-embedding-004,
-  #           bedrock/amazon.titan-embed-text-v2:0
+  #           bedrock/amazon.titan-embed-text-v2:0 (same region + credential chain as the
+  #           Bedrock chat provider — BEDROCK_REGION and the pods' IRSA role are enough, no
+  #           static keys needed; base in-region id only, Titan has no eu./us. profile).
+  # Embeddings are cached per process, so each alert is embedded once per correlation run.
   EMBEDDING_MODEL: ""
 
   # --- Multi-agent RCA orchestrator (opt-in) ---
@@ -375,10 +405,44 @@ config:
   RCA_ORCHESTRATOR_MODEL: ""
   # * Only when ORCHESTRATOR_ENABLED=true — sub-agent investigator model.
   RCA_SUBAGENT_MODEL: ""
-  # Lightweight model for mechanical summarization (tool-output capping, alert/repo summaries). Empty = falls back to MAIN_MODEL.
+  # --- Cheap-tier model variables ---
+  # Every background / classifier call defaults to anthropic/claude-haiku-5.5 (Aurora
+  # switches extended thinking off for these). Empty = cheap tier. Override one at a time.
+  # The cheap tier is only the default when the provider settings can route a Claude
+  # model (LLM_PROVIDER_MODE openrouter / anthropic / bedrock, or ANTHROPIC_API_KEY set
+  # under direct routing); otherwise these all fall back to MAIN_MODEL, so a Vertex /
+  # OpenAI / Google / Ollama-only chart or a Bedrock gateway pinned to bedrock/<id>
+  # values keeps working without setting each one (the judge and input rail fail closed).
+  # With MAIN_MODEL pinned to an explicit bedrock/<id>, the cheap tier stays on that
+  # Bedrock route in every mode: bedrock/<geo>.anthropic.claude-haiku-5-5 on the same geo
+  # in native mode (us/eu/au/jp/global), otherwise (gateway, apac., non-Claude pins)
+  # MAIN_MODEL — never another provider. Under LLM_PROVIDER_MODE=bedrock in an ap-* region
+  # with clean ids they also follow MAIN_MODEL (AWS publishes no apac. Haiku 5.5 profile).
+  # Lightweight model for mechanical summarization (alert/repo/channel summaries, synopses). Empty = cheap tier.
   SUMMARIZATION_MODEL: ""
-  # Model used by the Next Steps enrichment pass (rationale, undo commands, safety labels). Empty = falls back to MAIN_MODEL.
+  # Compresses oversized tool outputs during an investigation. Empty = SUMMARIZATION_MODEL, then cheap tier.
+  TOOL_OUTPUT_SUMMARIZATION_MODEL: ""
+  # Model used by the Next Steps enrichment pass (rationale, undo commands, safety labels). Empty = cheap tier.
   ENRICHMENT_MODEL: ""
+  # Suggestion extraction (hypotheses, diagnostics plan, recommendations). Empty = cheap tier.
+  SUGGESTION_MODEL: ""
+  # RCA summary / email report generation. Empty = cheap tier.
+  EMAIL_REPORT_MODEL: ""
+  # Infrastructure visualization extraction (only when VISUALIZATION_ENABLED=true). Empty = cheap tier.
+  VISUALIZATION_MODEL: ""
+  # One-word severity classification after a background RCA. Empty = cheap tier.
+  SEVERITY_MODEL: ""
+  # Memory extraction agent (after each investigation) and per-message memory selector. Empty = cheap tier.
+  MEMORY_AGENT_MODEL: ""
+  MEMORY_SELECTOR_MODEL: ""
+  # --- Output-token caps (max_tokens) per call type; empty = default ---
+  # Without a cap a runaway answer is billed up to the model's maximum (128K on Claude 5.x).
+  LLM_MAX_TOKENS_JUDGE: ""         # command-safety + Jira judges (JSON verdict); default 400
+  LLM_MAX_TOKENS_SEVERITY: ""      # one-word severity classification; default 32
+  LLM_MAX_TOKENS_SUMMARY: ""       # tool-output / alert / synopsis / metadata summaries; default 1500
+  LLM_MAX_TOKENS_REPORT: ""        # RCA summary, hypotheses, recommendations, enrichment, visualization; default 4000
+  LLM_MAX_TOKENS_AGENT: ""         # one agent turn on Claude (Bedrock/Anthropic), thinking counts too; default 16000
+  LLM_MAX_TOKENS_MEMORY_AGENT: ""  # one turn of the memory extraction agent; default 2000
   # Root-cause recurrence detection (dedup layer 1): off | shadow | live.
   # Defaults to "live" (folding on). Set to "off" to disable, or "shadow" to
   # log verdicts without folding.
@@ -386,18 +450,33 @@ config:
   # Wall-clock budget (seconds) for one recurrence check; keep well under the
   # summarization task's soft time limit (330s) minus summary work.
   RECURRENCE_AGENT_TIMEOUT_SECONDS: "120"
-  # Model for the recurrence agent. Empty = falls back to MAIN_MODEL.
+  # Model for the recurrence agent. Empty = cheap tier (anthropic/claude-haiku-5.5).
   RECURRENCE_AGENT_MODEL: ""
-  # Yes/no model for Jira automatic RCA. Empty = falls back to the resolved RCA_MODEL.
+  # Yes/no model for Jira automatic RCA. Empty = cheap tier (anthropic/claude-haiku-5.5).
   JIRA_RCA_JUDGE_MODEL: ""
 
   # --- AWS Bedrock (non-secret config; credentials live in secrets.llm) ---
-  # Gateway mode: set BEDROCK_BASE_URL to an OpenAI-compatible endpoint in front of
-  # Bedrock. Native mode: leave it empty and set BEDROCK_REGION + AWS creds (or use
-  # an IRSA role on the pods). Route models with LLM_PROVIDER_MODE=bedrock.
+  # Native mode (recommended): leave BEDROCK_BASE_URL empty, set BEDROCK_REGION (e.g.
+  # eu-central-1) and give the pods an IRSA role with bedrock:InvokeModel* — no static
+  # keys needed. Gateway mode: set BEDROCK_BASE_URL to an OpenAI-compatible endpoint.
+  # Route models with LLM_PROVIDER_MODE=bedrock (Claude picks become the region's
+  # eu./us. inference-profile ids). BEDROCK_REGION=global routes through global.
+  # profiles (list price, but requests may be processed in any commercial AWS Region —
+  # not for EU/GDPR-bound deployments).
   BEDROCK_BASE_URL: ""   # gateway mode (OpenAI-compatible URL); empty = native AWS SDK
   BEDROCK_REGION: ""     # native mode AWS region; falls back to AWS_REGION
-  BEDROCK_PROFILE: ""    # native mode named AWS profile (alternative to keys)
+  BEDROCK_PROFILE: ""    # named ~/.aws profile; needs ~/.aws mounted into the pods (the chart does not do this)
+  # Native-mode botocore client: "standard" retries (exponential backoff on throttling /
+  # 5xx / connection errors) capped at BEDROCK_MAX_ATTEMPTS total attempts, 10 s connect
+  # timeout, BEDROCK_READ_TIMEOUT read timeout (sized for streaming agent turns; small
+  # classifier calls shrink it per call). Empty = defaults.
+  BEDROCK_READ_TIMEOUT: ""   # seconds; default 300
+  BEDROCK_MAX_ATTEMPTS: ""   # total attempts incl. the first; default 3
+  # Cost tracking: multiplier applied to the Anthropic list price for rows served through a
+  # geo inference profile (us./eu./apac.); default 1.10 (AWS's published ~10%), "1.0" disables
+  # it, global. profiles never carry it. Bedrock's own Anthropic price table could not be read
+  # automatically — calibrate against Cost Explorer.
+  BEDROCK_REGIONAL_PREMIUM: ""
 
   # --- Security ---
   RATE_LIMITING_ENABLED: "false"

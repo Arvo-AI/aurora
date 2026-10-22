@@ -16,6 +16,7 @@ from .cache_registration import (
 )
 from .composer import (
     assemble_system_prompt,
+    assemble_system_prompt_parts,
     build_prompt_segments,
     build_system_invariant,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "PREFIX_CACHE_EPHEMERAL_TTL",
     "PromptSegments",
     "assemble_system_prompt",
+    "assemble_system_prompt_parts",
     "build_action_mode_segment",
     "build_background_mode_segment",
     "build_ephemeral_rules",

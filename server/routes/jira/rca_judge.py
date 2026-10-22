@@ -79,6 +79,7 @@ def judge_ticket(user_id: str, policy: str, ticket: Dict[str, Any]) -> Optional[
     """Ask the model for a verdict. None means the call failed and nothing was decided."""
     from langchain_core.messages import HumanMessage, SystemMessage
 
+    from chat.backend.agent.call_options import max_tokens_for
     from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.providers import create_chat_model
     from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
@@ -89,7 +90,11 @@ def judge_ticket(user_id: str, policy: str, ticket: Dict[str, Any]) -> Optional[
         HumanMessage(content="TICKET (JSON):\n" + json.dumps(ticket, ensure_ascii=False)),
     ]
     start = time.time()
-    llm = create_chat_model(model=model, temperature=0, streaming=False)
+    # A two-field yes/no verdict: thinking off, output capped at LLM_MAX_TOKENS_JUDGE.
+    llm = create_chat_model(
+        model=model, temperature=0, streaming=False, disable_thinking=True,
+        max_tokens=max_tokens_for("judge"),
+    )
     structured = llm.with_structured_output(JudgeVerdict, include_raw=True, method="function_calling")
     result = structured.invoke(messages, config={"run_name": "jira_rca_judge"})
     parsed = result.get("parsed") if isinstance(result, dict) else result

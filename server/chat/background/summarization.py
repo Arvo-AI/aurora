@@ -11,12 +11,14 @@ from uuid import UUID
 from celery_config import celery_app
 from langchain_core.messages import HumanMessage
 
+from chat.backend.agent.call_options import max_tokens_for
 from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.llm import ModelConfig
 from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
 from chat.backend.agent.utils.message_content import extract_text_from_content
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
+from utils.llm_errors import is_retryable_llm_error
 
 
 from chat.background.citation_extractor import (
@@ -29,6 +31,61 @@ from chat.background.suggestion_extractor import save_incident_suggestions
 
 logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[IncidentSummary]"
+
+# Texts _update_incident_summary writes instead of a real summary. A stored
+# value equal to one of these never counts as "already summarized".
+_PLACEHOLDER_SUMMARIES = frozenset(
+    {
+        "No summary generated",
+        "Summary generation timed out. View raw alert for details.",
+        "Summary generation failed. View raw alert for details.",
+        "Summary generation timed out. View investigation chat for details.",
+        "Summary generation failed. View investigation chat for details.",
+    }
+)
+
+
+def _should_retry(task, exc: BaseException) -> bool:
+    """Retry a summarization task only for transient model/transport failures.
+
+    Throttling, 5xx / service-unavailable, model-not-ready and timeouts are worth
+    another attempt; a validation error, a bad model id or a programming error
+    would fail identically and only re-bill the model call.
+    """
+    return task.request.retries < task.max_retries and is_retryable_llm_error(exc)
+
+
+def _fetch_stored_rca_summary(incident_id: str, user_id: str) -> Optional[str]:
+    """The RCA summary a previous attempt of ``generate_incident_summary_from_chat``
+    already wrote, or None.
+
+    Only an incident whose ``aurora_status`` is ``complete`` qualifies: the task
+    sets that status together with the summary, while the initial alert summary
+    is written with the status untouched (``summarizing``), so it is never
+    mistaken for the RCA report. Placeholder texts never qualify either.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                    return None
+                cursor.execute(
+                    "SELECT aurora_summary, aurora_status FROM incidents WHERE id = %s",
+                    (incident_id,),
+                )
+                row = cursor.fetchone()
+    except Exception as e:
+        logger.warning(f"{_LOG_PREFIX} Could not read the stored summary for {incident_id}: {e}")
+        return None
+    if not row:
+        return None
+    summary, status = row
+    if status != "complete" or not summary:
+        return None
+    text = str(summary).strip()
+    if not text or text in _PLACEHOLDER_SUMMARIES:
+        return None
+    return text
 
 
 def _build_summary_prompt(
@@ -610,6 +667,8 @@ def generate_incident_summary(
             ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
             temperature=0.3,
             streaming=False,
+            disable_thinking=True,
+            max_tokens=max_tokens_for("summary"),
         )
 
         message = HumanMessage(content=prompt)
@@ -659,14 +718,14 @@ def generate_incident_summary(
             f"{_LOG_PREFIX} Failed to generate summary for incident {incident_id}: {e}"
         )
 
-        # Retry on transient errors
-        if self.request.retries < self.max_retries:
+        # Retry only transient model/transport errors (throttling, 5xx, timeouts)
+        if _should_retry(self, e):
             logger.info(
                 f"{_LOG_PREFIX} Retrying summary generation (attempt {self.request.retries + 1})"
             )
             raise self.retry(exc=e)
 
-        # After max retries, mark as failed
+        # Final (non-retryable error, or retries exhausted): mark as failed
         _update_incident_summary(
             incident_id,
             "Summary generation failed. View raw alert for details.",
@@ -740,130 +799,30 @@ def generate_incident_summary_from_chat(
             )
             return {"incident_id": incident_id, "status": "not_found"}
 
-        # Extract citations from the chat session (citations are simply tool calls and their outputs).
-        # Passing incident_id expands dispatch_subagent rollups into per-tool-call citations.
-        extractor = CitationExtractor()
-        all_citations = extractor.extract_citations_from_session(
-            session_id, user_id, incident_id=incident_id,
-        )
-
-        logger.info(
-            f"{_LOG_PREFIX} Extracted {len(all_citations)} potential citations for incident {incident_id}"
-        )
-
-        # Fetch transcript as fallback if no citations
-        transcript = None
-        if not all_citations:
-            transcript = _fetch_chat_transcript(user_id=user_id, session_id=session_id)
-
-        # Fetch pre-existing fix suggestions (created by github_fix during RCA)
-        fix_suggestions = _fetch_fix_suggestions(incident_id)
-        if fix_suggestions:
-            logger.info(
-                f"[IncidentSummary] Found {len(fix_suggestions)} fix suggestions for incident {incident_id}"
-            )
-
-        # Feed the same Thoughts-panel content the user sees back to the
-        # summarizer. Without it the LLM has only raw tool outputs and
-        # routinely promotes absence of evidence into a confident root cause.
-        # Same code path applies to both single-agent and orchestrator runs.
-        agent_reasoning = _fetch_agent_reasoning(user_id, incident_id)
-
-        # Build prompt - uses citations if available, otherwise falls back to transcript
-        prompt = _build_summary_prompt_with_chat(
-            source_type=basics["source_type"],
-            alert_title=basics["alert_title"],
-            severity=basics["severity"],
-            service=basics["service"],
-            triggered_at=basics.get("triggered_at"),
-            investigation_transcript=transcript,
-            citations=all_citations if all_citations else None,
-            correlated_alert_count=basics.get("correlated_alert_count", 0),
-            fix_suggestions=fix_suggestions if fix_suggestions else None,
-            agent_reasoning=agent_reasoning,
-        )
-
-        logger.info(
-            "%s incident_summary_prompt incident=%s citations=%d "
-            "agent_reasoning_chars=%d prompt_chars=%d transcript_fallback=%s",
-            _LOG_PREFIX, incident_id, len(all_citations),
-            len(agent_reasoning or ""), len(prompt),
-            "true" if transcript is not None else "false",
-        )
-
-        # Use centralized model config for email report generation
-        llm = create_chat_model(
-            ModelConfig.EMAIL_REPORT_MODEL,
-            temperature=0.3,
-            streaming=False,
-        )
-
-        message = HumanMessage(content=prompt)
-        response = tracked_invoke(
-            llm,
-            [message],
-            user_id=user_id,
-            session_id=session_id,
-            model_name=ModelConfig.EMAIL_REPORT_MODEL,
-            request_type="incident_rca_summary",
-        )
-        summary = extract_text_from_content(response.content).strip() or "No summary generated"
-
-        logger.info(
-            f"{_LOG_PREFIX} Generated chat-based summary for incident {incident_id} ({len(summary)} chars)"
-        )
-
-        # Parse used citations from the summary and save only those
-        # Handles both single [1] and multi-citations [6, 7]
-        used_citations = []
-        if all_citations:
-            # Find all citation blocks like [1], [6, 7], [4, 5, 6]
-            citation_blocks = re.findall(r"\[(\d+(?:,\s*\d+)*)\]", summary)
-            # Extract all individual numbers from the blocks
-            used_keys = set()
-            for block in citation_blocks:
-                keys = re.findall(r"\d+", block)
-                used_keys.update(keys)
-
-            used_citations = [c for c in all_citations if str(c.index) in used_keys]
-            if used_citations:
-                save_incident_citations(incident_id, used_citations)
+        # Idempotent re-run: a previous attempt may have generated and stored the
+        # summary (plus citations and suggestions) and failed only afterwards, in
+        # the recurrence check / index / notification steps. Reuse that summary
+        # instead of paying for the model call (and the recommender) again.
+        used_citations: List[Citation] = []
+        summary: Optional[str] = None
+        if self.request.retries > 0:
+            summary = _fetch_stored_rca_summary(incident_id, user_id)
+            if summary:
                 logger.info(
-                    f"{_LOG_PREFIX} Saved {len(used_citations)} used citations for incident {incident_id}"
+                    f"{_LOG_PREFIX} Retry {self.request.retries}: reusing the stored summary for "
+                    f"incident {incident_id} ({len(summary)} chars); skipping the model call"
                 )
+                summary_written = True
 
-        # Generate next steps from the investigation trace (v3 recommender).
-        # Falls back to summary-based extraction if the trace is empty.
-        try:
-            trace_citations = used_citations if used_citations else all_citations
-            if trace_citations:
-                suggestions = generate_recommendations(
-                    incident_id=incident_id,
-                    citations=trace_citations,
-                    agent_reasoning=agent_reasoning or "",
-                    service=basics["service"],
-                    alert_title=basics["alert_title"],
-                    severity=basics.get("severity", "unknown"),
-                    user_id=user_id,
-                    session_id=session_id,
-                    existing_fixes=fix_suggestions or [],
-                    rca_summary=summary or "",
-                )
-            else:
-                suggestions = []
-
-            if suggestions:
-                save_incident_suggestions(incident_id, suggestions)
-                logger.info(
-                    f"{_LOG_PREFIX} Saved {len(suggestions)} suggestions for incident {incident_id}"
-                )
-        except Exception as e:
-            logger.exception(
-                f"{_LOG_PREFIX} Failed to generate recommendations for incident {incident_id}: {e}"
+        if summary is None:
+            summary, used_citations = _generate_chat_summary(
+                incident_id=incident_id,
+                user_id=user_id,
+                session_id=session_id,
+                basics=basics,
             )
-
-        _update_incident_summary(incident_id, summary, user_id=user_id)
-        summary_written = True
+            _update_incident_summary(incident_id, summary, user_id=user_id)
+            summary_written = True
 
         # Root-cause recurrence check (dedup layer 1): runs post-summary-write,
         # pre-notification — fold-then-notify is the ordering that Slack threading
@@ -985,11 +944,25 @@ def generate_incident_summary_from_chat(
             f"{_LOG_PREFIX} Failed chat-based summary for incident {incident_id}: {e}"
         )
 
-        if self.request.retries < self.max_retries:
+        # Retry only transient model/transport errors (throttling, 5xx, timeouts);
+        # a retry reuses the stored summary when the model call already succeeded.
+        if _should_retry(self, e):
             logger.info(
                 f"{_LOG_PREFIX} Retrying chat-based summary (attempt {self.request.retries + 1})"
             )
             raise self.retry(exc=e)
+
+        if summary_written:
+            # The report is already stored; do not overwrite it with an error text
+            # because a post-summary step (recurrence / index / notify) failed.
+            logger.error(
+                f"{_LOG_PREFIX} Post-summary step failed for incident {incident_id}; summary kept"
+            )
+            return {
+                "incident_id": incident_id,
+                "status": "completed_with_errors",
+                "error": str(e),
+            }
 
         _update_incident_summary(
             incident_id,
@@ -1002,6 +975,145 @@ def generate_incident_summary_from_chat(
             "status": "failed",
             "error": str(e),
         }
+
+
+def _generate_chat_summary(
+    *,
+    incident_id: str,
+    user_id: str,
+    session_id: str,
+    basics: Dict[str, Any],
+) -> "tuple[str, List[Citation]]":
+    """Run the RCA-summary model call and its dependent steps (citations, Next Steps).
+
+    Returns ``(summary, used_citations)``. Split out of the task so a retry that
+    finds the summary already stored can skip all of it.
+    """
+    # Extract citations from the chat session (citations are simply tool calls and their outputs).
+    # Passing incident_id expands dispatch_subagent rollups into per-tool-call citations.
+    extractor = CitationExtractor()
+    all_citations = extractor.extract_citations_from_session(
+        session_id, user_id, incident_id=incident_id,
+    )
+
+    logger.info(
+        f"{_LOG_PREFIX} Extracted {len(all_citations)} potential citations for incident {incident_id}"
+    )
+
+    # Fetch transcript as fallback if no citations
+    transcript = None
+    if not all_citations:
+        transcript = _fetch_chat_transcript(user_id=user_id, session_id=session_id)
+
+    # Fetch pre-existing fix suggestions (created by github_fix during RCA)
+    fix_suggestions = _fetch_fix_suggestions(incident_id)
+    if fix_suggestions:
+        logger.info(
+            f"[IncidentSummary] Found {len(fix_suggestions)} fix suggestions for incident {incident_id}"
+        )
+
+    # Feed the same Thoughts-panel content the user sees back to the
+    # summarizer. Without it the LLM has only raw tool outputs and
+    # routinely promotes absence of evidence into a confident root cause.
+    # Same code path applies to both single-agent and orchestrator runs.
+    agent_reasoning = _fetch_agent_reasoning(user_id, incident_id)
+
+    # Build prompt - uses citations if available, otherwise falls back to transcript
+    prompt = _build_summary_prompt_with_chat(
+        source_type=basics["source_type"],
+        alert_title=basics["alert_title"],
+        severity=basics["severity"],
+        service=basics["service"],
+        triggered_at=basics.get("triggered_at"),
+        investigation_transcript=transcript,
+        citations=all_citations if all_citations else None,
+        correlated_alert_count=basics.get("correlated_alert_count", 0),
+        fix_suggestions=fix_suggestions if fix_suggestions else None,
+        agent_reasoning=agent_reasoning,
+    )
+
+    logger.info(
+        "%s incident_summary_prompt incident=%s citations=%d "
+        "agent_reasoning_chars=%d prompt_chars=%d transcript_fallback=%s",
+        _LOG_PREFIX, incident_id, len(all_citations),
+        len(agent_reasoning or ""), len(prompt),
+        "true" if transcript is not None else "false",
+    )
+
+    # Use centralized model config for email report generation
+    llm = create_chat_model(
+        ModelConfig.EMAIL_REPORT_MODEL,
+        temperature=0.3,
+        streaming=False,
+        disable_thinking=True,
+        max_tokens=max_tokens_for("report"),
+    )
+
+    message = HumanMessage(content=prompt)
+    response = tracked_invoke(
+        llm,
+        [message],
+        user_id=user_id,
+        session_id=session_id,
+        model_name=ModelConfig.EMAIL_REPORT_MODEL,
+        request_type="incident_rca_summary",
+    )
+    summary = extract_text_from_content(response.content).strip() or "No summary generated"
+
+    logger.info(
+        f"{_LOG_PREFIX} Generated chat-based summary for incident {incident_id} ({len(summary)} chars)"
+    )
+
+    # Parse used citations from the summary and save only those
+    # Handles both single [1] and multi-citations [6, 7]
+    used_citations: List[Citation] = []
+    if all_citations:
+        # Find all citation blocks like [1], [6, 7], [4, 5, 6]
+        citation_blocks = re.findall(r"\[(\d+(?:,\s*\d+)*)\]", summary)
+        # Extract all individual numbers from the blocks
+        used_keys = set()
+        for block in citation_blocks:
+            keys = re.findall(r"\d+", block)
+            used_keys.update(keys)
+
+        used_citations = [c for c in all_citations if str(c.index) in used_keys]
+        if used_citations:
+            save_incident_citations(incident_id, used_citations)
+            logger.info(
+                f"{_LOG_PREFIX} Saved {len(used_citations)} used citations for incident {incident_id}"
+            )
+
+    # Generate next steps from the investigation trace (v3 recommender).
+    # Falls back to summary-based extraction if the trace is empty.
+    try:
+        trace_citations = used_citations if used_citations else all_citations
+        if trace_citations:
+            suggestions = generate_recommendations(
+                incident_id=incident_id,
+                citations=trace_citations,
+                agent_reasoning=agent_reasoning or "",
+                service=basics["service"],
+                alert_title=basics["alert_title"],
+                severity=basics.get("severity", "unknown"),
+                user_id=user_id,
+                session_id=session_id,
+                existing_fixes=fix_suggestions or [],
+                rca_summary=summary or "",
+            )
+        else:
+            suggestions = []
+
+        if suggestions:
+            save_incident_suggestions(incident_id, suggestions)
+            logger.info(
+                f"{_LOG_PREFIX} Saved {len(suggestions)} suggestions for incident {incident_id}"
+            )
+    except Exception as e:
+        logger.exception(
+            f"{_LOG_PREFIX} Failed to generate recommendations for incident {incident_id}: {e}"
+        )
+
+    return summary, used_citations
 
 
 def _update_incident_summary(

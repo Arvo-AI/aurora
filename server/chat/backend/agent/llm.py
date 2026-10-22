@@ -7,12 +7,24 @@ from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel
 
-from chat.backend.agent.model_mapper import ModelMapper
-from chat.backend.agent.providers import create_chat_model
+from chat.backend.agent.call_options import CHEAP_MODEL, default_auxiliary_model, max_tokens_for
+from chat.backend.agent.providers import create_chat_model, get_cached_chat_model
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
 from chat.backend.agent.utils.message_content import extract_text_from_content
 
 logger = logging.getLogger(__name__)
+
+
+def _optimize_costs_enabled(raw: Optional[str]) -> bool:
+    """Interpret ``RCA_OPTIMIZE_COSTS``. Unset AND empty both mean the default (true):
+    Compose passes ``${RCA_OPTIMIZE_COSTS}`` through as an empty string when the
+    variable is missing from ``.env``, which ``os.getenv(name, "true")`` would have
+    read as "not true" and silently switched background RCA to the expensive model.
+    """
+    value = (raw or "").strip().lower()
+    if not value:
+        return True
+    return value in ("1", "true", "yes")
 
 
 def _model_label(model) -> str:
@@ -32,48 +44,110 @@ def _model_label(model) -> str:
 
 class ModelConfig:
     """Centralized model configuration for all Aurora LLM usage.
-    
+
     All model selections are defined here in one place for easy maintenance.
     Change these values to switch providers across the entire application.
+
+    Two tiers. ``MAIN_MODEL`` (interactive chat, default Opus 5.5) is the only
+    place quality is user-visible turn by turn. Everything that runs in the
+    background or as a classifier — RCA, the command-safety judge and input rail,
+    summaries, the memory agent/selector, severity, suggestions, email reports,
+    visualization, the recurrence agent, the Jira judge, enrichment — defaults to
+    the cheap tier (``CHEAP_MODEL`` = Claude Haiku 5.5) and has its own env var
+    so an operator can raise any single one without touching the others.
+
+    The cheap tier is only the default when the configured provider settings can
+    route it (``LLM_PROVIDER_MODE`` openrouter / anthropic / bedrock, or
+    ``ANTHROPIC_API_KEY`` under direct routing). Otherwise every auxiliary
+    variable falls back to ``MAIN_MODEL`` — the model this install serves by
+    definition — so an OpenAI / Google / Vertex / Ollama-only deployment, or a
+    Bedrock gateway pinned to explicit ``bedrock/`` ids, keeps working after an
+    upgrade instead of having the fail-closed judge and input rail block
+    everything. A ``MAIN_MODEL`` pinned to an explicit ``bedrock/<id>`` keeps the
+    cheap tier on that same Bedrock geo (``bedrock/<geo>.anthropic.claude-haiku-5-5``
+    in native mode, when the geo publishes Haiku 5.5) or follows ``MAIN_MODEL``
+    (gateway, ``apac.``, non-Claude pins) — never another provider. See
+    ``call_options.default_auxiliary_model``.
+
+    Every variable uses ``or`` semantics: unset AND empty string both mean "use
+    the default". Docker Compose forwards ``${VAR}`` as "" when the variable is
+    missing from ``.env``, so ``os.getenv(name, default)`` would return "" and
+    break model resolution.
     """
-    
+
     # Opus 5.5 rejects a forced tool_choice, which Trigger RCA and /action pin on their
     # first turn. ForceToolChoice detects that rejection and retries with tool_choice=auto
     # plus an explicit prompt directive, so both flows still reach their tool.
     _DEFAULT_MODEL = "anthropic/claude-opus-5.5"
+    # Cheap tier for background and auxiliary calls (see chat.backend.agent.call_options).
+    CHEAP_MODEL = CHEAP_MODEL
 
     # Primary models - configurable via env vars
     MAIN_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
     VISION_MODEL = os.getenv("VISION_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
-    # Background RCA model - configurable via RCA_MODEL env var, falls back to cost-based selection
+    # What "the cheap tier" resolves to in THIS deployment: CHEAP_MODEL when the
+    # provider settings can route an anthropic/ id, otherwise MAIN_MODEL. Every
+    # auxiliary variable below defaults to this; explicit env values always win.
+    AUXILIARY_DEFAULT_MODEL = default_auxiliary_model(MAIN_MODEL)
+
+    # Background RCA model. RCA_MODEL wins when set; otherwise RCA_OPTIMIZE_COSTS
+    # (default true, empty counts as true) picks the cheap tier over MAIN's default.
     RCA_MODEL = os.getenv("RCA_MODEL") or (
-        "anthropic/claude-haiku-4.5" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
+        AUXILIARY_DEFAULT_MODEL
+        if _optimize_costs_enabled(os.getenv("RCA_OPTIMIZE_COSTS"))
         else _DEFAULT_MODEL
     )
-    # Yes/no per Jira ticket. Unset uses the resolved RCA model, which is opus when cost optimization is off.
-    JIRA_RCA_JUDGE_MODEL = os.getenv("JIRA_RCA_JUDGE_MODEL") or RCA_MODEL
+    # Yes/no per Jira ticket — a classifier, so cheap tier regardless of RCA_MODEL.
+    JIRA_RCA_JUDGE_MODEL = os.getenv("JIRA_RCA_JUDGE_MODEL") or AUXILIARY_DEFAULT_MODEL
 
     # Multi-agent RCA orchestrator — required when ORCHESTRATOR_ENABLED=true.
     # No fallback to MAIN_MODEL/RCA_MODEL: must be set explicitly.
     RCA_ORCHESTRATOR_MODEL = os.getenv("RCA_ORCHESTRATOR_MODEL") or None  # triage + synthesis
     RCA_SUBAGENT_MODEL = os.getenv("RCA_SUBAGENT_MODEL") or None          # sub-agents
 
-    # Summarization models - configurable via env vars, fall back to MAIN_MODEL
-    INCIDENT_REPORT_SUMMARIZATION_MODEL = os.getenv("SUMMARIZATION_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
-    TOOL_OUTPUT_SUMMARIZATION_MODEL = os.getenv("SUMMARIZATION_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+    # Summarization models. SUMMARIZATION_MODEL covers incident/initial/metadata/synopsis
+    # summaries; TOOL_OUTPUT_SUMMARIZATION_MODEL (large tool-output capping) may be set
+    # separately and otherwise follows SUMMARIZATION_MODEL.
+    INCIDENT_REPORT_SUMMARIZATION_MODEL = os.getenv("SUMMARIZATION_MODEL") or AUXILIARY_DEFAULT_MODEL
+    TOOL_OUTPUT_SUMMARIZATION_MODEL = (
+        os.getenv("TOOL_OUTPUT_SUMMARIZATION_MODEL")
+        or os.getenv("SUMMARIZATION_MODEL")
+        or AUXILIARY_DEFAULT_MODEL
+    )
 
     # Visualization extraction model
-    VISUALIZATION_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+    VISUALIZATION_MODEL = os.getenv("VISUALIZATION_MODEL") or AUXILIARY_DEFAULT_MODEL
 
-    # Suggestion extraction
-    SUGGESTION_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+    # Suggestion extraction (hypotheses, diagnostics plan, recommendations)
+    SUGGESTION_MODEL = os.getenv("SUGGESTION_MODEL") or AUXILIARY_DEFAULT_MODEL
 
-    # Email report generation
-    EMAIL_REPORT_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+    # Next Steps enrichment (descriptions / one-line summaries of suggestions).
+    ENRICHMENT_MODEL = os.getenv("ENRICHMENT_MODEL") or AUXILIARY_DEFAULT_MODEL
 
-    # Root-cause recurrence detection agent — falls back to MAIN_MODEL
-    RECURRENCE_AGENT_MODEL = os.getenv("RECURRENCE_AGENT_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+    # Email report / RCA summary generation
+    EMAIL_REPORT_MODEL = os.getenv("EMAIL_REPORT_MODEL") or AUXILIARY_DEFAULT_MODEL
+
+    # Root-cause recurrence detection agent
+    RECURRENCE_AGENT_MODEL = os.getenv("RECURRENCE_AGENT_MODEL") or AUXILIARY_DEFAULT_MODEL
+
+    # Memory extraction agent (runs after each investigation) and the per-message
+    # memory selector (one small call per chat turn).
+    MEMORY_AGENT_MODEL = os.getenv("MEMORY_AGENT_MODEL") or AUXILIARY_DEFAULT_MODEL
+    MEMORY_SELECTOR_MODEL = os.getenv("MEMORY_SELECTOR_MODEL") or AUXILIARY_DEFAULT_MODEL
+
+    # One-word severity classification after a background RCA.
+    SEVERITY_MODEL = os.getenv("SEVERITY_MODEL") or AUXILIARY_DEFAULT_MODEL
+
+    # Command-safety judge + prompt-injection input rail. Under OpenRouter the historical
+    # default (a small Gemini) is kept; everywhere else the cheap tier (or MAIN_MODEL when
+    # the cheap tier is not routable — both fail closed, so they must get a model that
+    # this install can actually serve).
+    GUARDRAILS_MODEL = os.getenv("GUARDRAILS_LLM_MODEL") or (
+        "google/gemini-2.5-flash-lite"
+        if (os.getenv("LLM_PROVIDER_MODE") or "").strip().lower() == "openrouter"
+        else AUXILIARY_DEFAULT_MODEL
+    )
 
 
 class LLMManager:
@@ -285,17 +359,20 @@ class LLMManager:
                     input_tokens = 0
                     output_tokens = 0
                     cached_input_tokens = 0
+                    cache_write_tokens = 0
 
-                    # Prefer usage_metadata (standardized across all LangChain providers)
+                    # Prefer usage_metadata (standardized across all LangChain providers;
+                    # whole prompt plus the cache read / write breakdown)
                     if llm_response and getattr(llm_response, "usage_metadata", None):
-                        um = llm_response.usage_metadata
-                        input_tokens = um.get("input_tokens", 0)
-                        output_tokens = um.get("output_tokens", 0)
-                        input_details = um.get("input_token_details", {})
-                        cached_input_tokens = input_details.get("cache_read", 0) if isinstance(input_details, dict) else 0
+                        counts = LLMUsageTracker.extract_token_counts(llm_response.usage_metadata)
+                        input_tokens = counts["input_tokens"]
+                        output_tokens = counts["output_tokens"]
+                        cached_input_tokens = counts["cached_input_tokens"]
+                        cache_write_tokens = counts["cache_write_tokens"]
                         logger.info(
                             f"Provider usage_metadata: {input_tokens} + {output_tokens} tokens"
                             + (f" ({cached_input_tokens} cached)" if cached_input_tokens else "")
+                            + (f" ({cache_write_tokens} cache write)" if cache_write_tokens else "")
                         )
 
                     # Fallback: response_metadata.token_usage (OpenAI-style)
@@ -314,19 +391,22 @@ class LLMManager:
                     if input_tokens == 0 and output_tokens == 0:
                         logger.warning(f"No provider usage data for {model_label} - tokens will be 0")
 
+                    from chat.backend.agent.utils.llm_usage_tracker import (
+                        LLMUsage,
+                        resolve_serving_provider,
+                    )
+
+                    # Label the row with the provider that served the call (Bedrock for a
+                    # Claude model under LLM_PROVIDER_MODE=bedrock), not the id prefix.
+                    actual_provider = resolve_serving_provider(model_label, self.provider_mode)
+
                     estimated_cost = LLMUsageTracker.calculate_cost(
                         input_tokens, output_tokens, model_label,
-                        provider_mode=self.provider_mode,
+                        provider_mode=actual_provider or self.provider_mode,
                         cached_input_tokens=cached_input_tokens,
+                        cache_write_tokens=cache_write_tokens,
                     )
                     response_time_ms = int((time.time() - start_time) * 1000)
-
-                    from chat.backend.agent.utils.llm_usage_tracker import LLMUsage
-
-                    actual_provider = (
-                        ModelMapper.detect_provider(model_label)
-                        or self.provider_mode
-                    )
 
                     usage_record = LLMUsage(
                         user_id=user_id,
@@ -343,6 +423,8 @@ class LLMManager:
                             "has_images": has_images,
                             "provider_mode": self.provider_mode,
                         },
+                        cache_read_input_tokens=cached_input_tokens,
+                        cache_write_input_tokens=cache_write_tokens,
                     )
 
                     success = LLMUsageTracker.store_usage(usage_record)
@@ -363,37 +445,33 @@ class LLMManager:
         )
 
     def summarize(self, content: str, model: Optional[str] = None,
-                  user_id: Optional[str] = None, session_id: Optional[str] = None) -> str:
+                  user_id: Optional[str] = None, session_id: Optional[str] = None,
+                  request_type: str = "tool_output_summarization") -> str:
         """
         Summarize long content to reduce token usage in LLM context.
+
+        Thin wrapper over :func:`summarize_text` kept for existing callers; the
+        model instance comes from the shared cache, not from this manager.
 
         Args:
             content: The content to summarize
             model: Optional model to use for summarization (defaults to ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL)
+            request_type: Usage-tracking label for the call.
 
         Returns:
             Summarized content
         """
-        summarization_model = model or ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
+        return summarize_text(
+            content,
+            model=model,
+            user_id=user_id,
+            session_id=session_id,
+            request_type=request_type,
+            provider_mode=self.provider_mode,
+        )
 
-        try:
-            # Cap content to fit within the summarization model's context window.
-            # Without this, huge tool outputs (e.g. multi-MB log dumps) get embedded
-            # verbatim in the prompt and blow past the model's context limit.
-            from chat.backend.agent.utils.chat_context_manager import ChatContextManager
-            context_limit = ChatContextManager.get_context_limit(summarization_model)
-            # Leave room for the prompt template (~200 tokens) and response (~800 tokens)
-            max_content_chars = (context_limit - 1000) * 4  # ~4 chars per token
-            if len(content) > max_content_chars:
-                logger.warning(
-                    f"Truncating content from {len(content)} to {max_content_chars} chars "
-                    f"for summarization (model limit: {context_limit} tokens)"
-                )
-                content = content[:max_content_chars] + "\n\n[Content truncated to fit summarization model context window]"
 
-            logger.info(f"Summarizing {len(content)} chars using {summarization_model}")
-
-            summarization_prompt = f"""Please provide a concise summary of the following tool output.
+_SUMMARY_PROMPT = """Please provide a concise summary of the following tool output.
 Focus on the key information that would be useful for an AI assistant to understand the result.
 Keep the summary under 500 words while preserving important details and structure.
 
@@ -402,39 +480,90 @@ Content to summarize:
 
 Summary:"""
 
-            # Create an isolated model instance without callbacks or streaming
-            # to prevent the summary from being sent to WebSocket/frontend
-            isolated_summarizer = create_chat_model(
-                summarization_model,
-                temperature=0.4,
-                streaming=False,
-                callbacks=None,
-                provider_mode=self.provider_mode,
+
+def summarize_text(
+    content: str,
+    *,
+    model: Optional[str] = None,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    request_type: str = "tool_output_summarization",
+    provider_mode: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    raise_on_error: bool = False,
+) -> str:
+    """Summarize ``content`` with the (cheap) summarization model.
+
+    One shared, non-streaming, callback-free model instance per
+    ``(model, max_tokens)`` is reused across calls (``get_cached_chat_model``), so
+    the summarizer no longer builds a fresh client — let alone a whole
+    ``LLMManager`` with its main and vision models — for every oversized tool
+    output. Thinking is off and the output is capped at
+    ``LLM_MAX_TOKENS_SUMMARY`` (default 1500). ``request_type`` labels the usage
+    row: ``tool_output_summarization`` for tool outputs, ``context_compression``
+    for conversation compaction. By default never raises: on any failure the head
+    of the content is returned with a truncation marker; ``raise_on_error=True``
+    re-raises instead so a caller with its own fallback (and a result cache that
+    must not remember failures) can tell the two apart.
+    """
+    summarization_model = model or ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
+    output_cap = max_tokens if max_tokens is not None else max_tokens_for("summary")
+
+    try:
+        # Cap content to fit within the summarization model's context window.
+        # Without this, huge tool outputs (e.g. multi-MB log dumps) get embedded
+        # verbatim in the prompt and blow past the model's context limit.
+        from chat.backend.agent.utils.chat_context_manager import ChatContextManager
+        context_limit = ChatContextManager.get_context_limit(summarization_model)
+        # Leave room for the prompt template (~200 tokens) and the response.
+        max_content_chars = (context_limit - 200 - output_cap) * 4  # ~4 chars per token
+        if len(content) > max_content_chars:
+            logger.warning(
+                f"Truncating content from {len(content)} to {max_content_chars} chars "
+                f"for summarization (model limit: {context_limit} tokens)"
             )
+            content = content[:max_content_chars] + "\n\n[Content truncated to fit summarization model context window]"
 
-            if user_id:
-                from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
-                response = tracked_invoke(
-                    isolated_summarizer,
-                    summarization_prompt,
-                    user_id=user_id,
-                    session_id=session_id,
-                    model_name=summarization_model,
-                    request_type="tool_output_summarization",
-                )
-            else:
-                response = isolated_summarizer.invoke(summarization_prompt)
+        logger.info(f"Summarizing {len(content)} chars using {summarization_model}")
 
-            if hasattr(response, "content"):
-                # Gemini thinking models return a list of thinking/text blocks
-                summary = extract_text_from_content(response.content)
-            else:
-                summary = str(response)
+        summarization_prompt = _SUMMARY_PROMPT.format(content=content)
 
-            logger.info(f"Generated summary ({len(summary)} chars)")
-            return summary
+        # Shared non-streaming instance without callbacks, so the summary is never
+        # streamed to the WebSocket/frontend and no client is built per call.
+        summarizer = get_cached_chat_model(
+            summarization_model,
+            temperature=0.4,
+            provider_mode=provider_mode,
+            max_tokens=output_cap,
+            # Summaries are mechanical; extended thinking only adds output tokens.
+            disable_thinking=True,
+        )
 
-        except Exception as e:
-            logger.error(f"Error during summarization: {e}")
-            truncated = content[:2000] + "... [truncated due to summarization error]"
-            return truncated
+        if user_id:
+            from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
+            response = tracked_invoke(
+                summarizer,
+                summarization_prompt,
+                user_id=user_id,
+                session_id=session_id,
+                model_name=summarization_model,
+                request_type=request_type,
+            )
+        else:
+            response = summarizer.invoke(summarization_prompt)
+
+        if hasattr(response, "content"):
+            # Gemini thinking models return a list of thinking/text blocks
+            summary = extract_text_from_content(response.content)
+        else:
+            summary = str(response)
+
+        logger.info(f"Generated summary ({len(summary)} chars)")
+        return summary
+
+    except Exception as e:
+        logger.error(f"Error during summarization: {e}")
+        if raise_on_error:
+            raise
+        truncated = content[:2000] + "... [truncated due to summarization error]"
+        return truncated

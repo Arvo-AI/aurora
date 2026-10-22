@@ -36,6 +36,7 @@ Benefits:
   - Top-level orchestration:
     - `build_system_invariant()`
     - `build_prompt_segments()`
+    - `assemble_system_prompt_parts()` (static prefix / dynamic suffix, cache boundary)
     - `assemble_system_prompt()`
 - `provider_rules.py`
   - Provider/mode/rule segments and validation helpers:
@@ -101,7 +102,8 @@ Benefits:
    - DB context (`context_fetchers.py`)
    - skill index (`SkillRegistry.build_index`)
    - core prompt markdown (`skills/core/*.md`)
-3. `assemble_system_prompt(...)` concatenates segments in stable order.
+3. `assemble_system_prompt_parts(...)` splits the segments into a static prefix and a dynamic suffix
+   (see section 8); `assemble_system_prompt(...)` is the same text joined into one string.
 4. `cache_registration.py` registers cache boundaries for stable segments.
 5. Model can call `load_skill(...)` tool to fetch full integration guidance only when needed.
 
@@ -192,6 +194,39 @@ You can reason about all prompt content in these categories:
 No call sites need to change immediately.
 
 ## 8) Caching behavior
+
+### 8.1 Provider prompt cache (Bedrock `cachePoint` / Anthropic `cache_control`)
+
+`composer.assemble_system_prompt_parts(segments)` returns `(static, dynamic)` and `agent.py`
+places the provider cache breakpoint between the two
+(`utils/cache_control.build_cached_system_prompt`). Order of the final prompt:
+
+1. **Static prefix** — `system_invariant`, `provider_constraints`, `regional_rules`.
+   Depends only on the mode (interactive / RCA / action) and the connected-provider list.
+   Must stay byte-identical across requests: no timestamps, no incident/alert data, no
+   iteration over unordered sets/dicts into text. Ends with the cache breakpoint.
+2. **Dynamic suffix** — `security_policy`, `background_mode` (rendered skills with alert
+   data), `knowledge_base_memory` (index + injected memories with "Last updated Nd ago"),
+   `ephemeral_rules`, `model_overlay`, `provider_context`, `manual_vm_access`,
+   `integration_index`, `prerequisite_checks`, `long_documents_note`,
+   `terraform_validation` / `failure_recovery` (non-RCA), policy reminder.
+
+On Bedrock native (`ChatBedrockConverse`) a request carries three Converse cache points:
+after the tool definitions, after the static system prefix, and at the end of the last
+message (`middleware/prompt_cache.py` asks langchain-aws for the last two). Anthropic
+direct and OpenRouter get per-block `cache_control` markers instead (static block and
+dynamic block when the static prefix reaches the model's minimum; a single end-of-system
+breakpoint on one joined block when only the whole prompt does). The Bedrock gateway
+(`BEDROCK_BASE_URL`) keeps its pre-existing shape: markers only for `anthropic/` ids, a
+plain string for explicit `bedrock/` ids. Below the model's minimum cacheable prefix
+(512 tokens for Claude 5.x, 1,024 / 4,096 for older generations —
+`call_options.min_cacheable_tokens`) the static system checkpoint is omitted: native mode
+sends the plain string and langchain-aws still places its own system-end point.
+
+When adding a segment, decide which part it belongs to: anything that varies per user
+message, per incident or over time goes in the dynamic suffix.
+
+### 8.2 Internal prefix-cache registry
 
 Prefix-cache boundaries are registered by `cache_registration.py`.
 Stable sections are cached with long TTL behavior.

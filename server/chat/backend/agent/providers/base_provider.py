@@ -12,20 +12,15 @@ from typing import Any, Dict, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
+# The Gemini thinking-model list (2.5+, 3, 4; not flash-lite) and the ids that
+# accept `thinking_level` live in call_options, so this config and the output-cap
+# logic (`effective_max_tokens`) share one definition.
+from chat.backend.agent.call_options import (
+    GEMINI_THINKING_LEVEL_INDICATORS,
+    gemini_thinks_by_default,
+)
+
 logger = logging.getLogger(__name__)
-
-# Gemini model name fragments that indicate thinking support (2.5+, 3+)
-_GEMINI_THINKING_INDICATORS = (
-    "gemini-4", "gemini-3", "gemini-2.5",
-    "2.5-pro", "2.5-flash",
-    "3-pro", "3-flash",
-)
-
-# Models that accept the thinking_level parameter (preview/experimental only).
-# GA models like gemini-2.5-pro think by default but reject thinking_level.
-_GEMINI_THINKING_LEVEL_INDICATORS = (
-    "preview", "exp",
-)
 
 
 def apply_gemini_thinking_config(config: dict, model_name: str) -> None:
@@ -33,7 +28,8 @@ def apply_gemini_thinking_config(config: dict, model_name: str) -> None:
 
     Mutates the config dict in place to add `include_thoughts` and optionally
     `thinking_level` when the model supports thinking and it is not disabled
-    via env var.
+    via env var. Note that GEMINI_DISABLE_THINKING only stops the thoughts from
+    being requested back; a 2.5+/3/4 model still thinks by default server-side.
 
     Args:
         config: Model configuration dict to update.
@@ -47,16 +43,11 @@ def apply_gemini_thinking_config(config: dict, model_name: str) -> None:
         return
 
     name_lower = model_name.lower()
-    if "flash-lite" in name_lower:
-        return
-    is_thinking_model = any(
-        indicator in name_lower for indicator in _GEMINI_THINKING_INDICATORS
-    )
-    if is_thinking_model:
+    if gemini_thinks_by_default(name_lower):
         config["include_thoughts"] = True
         # Only set thinking_level for preview/experimental models.
         # GA models (e.g. gemini-2.5-pro) think by default but reject this param.
-        if any(ind in name_lower for ind in _GEMINI_THINKING_LEVEL_INDICATORS):
+        if any(ind in name_lower for ind in GEMINI_THINKING_LEVEL_INDICATORS):
             config["thinking_level"] = "high"
             logger.info(f"Enabled thinking mode (level=high) for {model_name}")
         else:

@@ -104,6 +104,7 @@ def generate_root_cause_synopsis(
         return fallback
 
     try:
+        from chat.backend.agent.call_options import max_tokens_for
         from chat.backend.agent.providers import create_chat_model
         from chat.backend.agent.llm import ModelConfig
         from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
@@ -121,7 +122,11 @@ def generate_root_cause_synopsis(
             ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
             temperature=0.0,
             streaming=False,
-            timeout=30,
+            # Provider-neutral spelling (translated per client by the provider);
+            # a raw `timeout=` kwarg is not portable across the chat-model classes.
+            request_timeout=30,
+            disable_thinking=True,
+            max_tokens=max_tokens_for("summary"),
         )
         response = tracked_invoke(
             llm,
