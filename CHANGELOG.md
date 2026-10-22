@@ -7,11 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.11] - 2026-10-22
+
+### Added
+- ServiceNow connector. Connect an instance with basic auth or OAuth client
+  credentials, and receive incident events on a per-user webhook. Filters
+  (priority, assignment group, category, state, optional encoded query) or an
+  Auto mode that reads an editable ServiceNow RCA policy decide which incidents
+  get an RCA. Work notes and resolving the ServiceNow incident are opt-in. The
+  agent can search and view incidents, and, when write-back is on, add a work
+  note, create or update an incident, and resolve it when the Aurora incident
+  resolves.
+- Slack: while a background investigation runs, the "Thinking…" placeholder is
+  edited with elapsed time, completed tool calls, the tool currently running,
+  and the agent's latest thought. Each edit is labelled as a progress note and
+  replaced by the final answer. On by default every 30 seconds;
+  `SLACK_PROGRESS_UPDATES_ENABLED=false` turns it off.
+
 ### Changed
 - GCP: `bq query` and `bq wait` run for 300 seconds unless `cloud_exec` is
   given a `timeout` (capped at 600 seconds). Queries get a 10 GB billed cap
   and a 100-row cap unless the command sets its own, up to 1 TiB and 1,000
   rows. When a query hits its timeout, Aurora tries to cancel the job.
+
+### Fixed
+- Teams: @mentions and direct messages resolve the tenant under each org's
+  row-level security context, so a connected tenant is no longer dropped as
+  unknown. Install and remove events use the same lookup.
+- Sessions: the session list counts messages in SQL instead of loading each
+  chat's history, and is limited to 240 requests per minute per user. Server
+  startup waits at most `DB_MIGRATION_LOCK_TIMEOUT` seconds (default 240) for
+  the migration lock. A failed auth refresh backs off instead of calling
+  `/api/auth/me` on every request.
+- Celery: the worker runs under tini so exited cloud-CLI subprocesses are
+  reaped. The API, chatbot, and beat are unchanged.
+- Teams install: download the app package with Chrome or Edge, or turn off
+  Safari's "Open safe files after downloading". Compressing the unzipped
+  folder in Finder nests `manifest.json`, and Teams rejects the upload.
 
 ## [1.5.10] - 2026-10-16
 
