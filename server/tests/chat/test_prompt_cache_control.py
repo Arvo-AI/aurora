@@ -27,6 +27,16 @@ from chat.backend.agent.utils.cache_control import (
     with_bedrock_tools_cache_point,
 )
 
+@pytest.fixture(autouse=True)
+def _clear_bedrock_cache_rejections():
+    # Rejections are remembered for the process; a test must not leak into the next
+    from chat.backend.agent.providers import _bedrock_cache_guard as guard
+
+    guard._rejected_models.clear()
+    yield
+    guard._rejected_models.clear()
+
+
 # Above the largest per-model minimum, so cacheable on every model
 BIG = "x" * (min_cacheable_chars("unknown-model") + 1)
 
@@ -491,6 +501,29 @@ class TestCacheGuardLogic:
         model.errors.append(Exception("prompt caching is not supported"))
         assert list(model._stream(_marked_messages())) == ["chunk"]
         assert _has_marker(model.attempts[0]) and not _has_marker(model.attempts[1])
+
+    def test_rejection_is_remembered_for_the_next_instance(self):
+        # A new client is built every turn, so the next one must start clean
+        from chat.backend.agent.providers._bedrock_cache_guard import make_bedrock_cache_safe_cls
+
+        class _Identified(_FakeChatModel):
+            model_id: str = "anthropic.claude-sonnet-4-5"
+            region_name: str = "us-east-1"
+
+        cls = make_bedrock_cache_safe_cls(_Identified)
+        first = cls()
+        first.errors.append(Exception("ValidationException: cachePoint not supported"))
+        assert first._generate(_marked_messages()) == "ok"
+
+        second = cls()
+        assert second._generate(_marked_messages()) == "ok"
+        assert len(second.attempts) == 1 and not _has_marker(second.attempts[0])
+
+        # A different region has not rejected anything
+        other_region = cls(region_name="eu-west-1")
+        other_region.errors.append(Exception("ValidationException: cachePoint not supported"))
+        assert other_region._generate(_marked_messages()) == "ok"
+        assert _has_marker(other_region.attempts[0]) and not _has_marker(other_region.attempts[1])
 
     def test_stream_error_after_output_is_not_retried(self, model):
         def boom_midstream(messages, *a, **k):

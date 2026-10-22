@@ -1,8 +1,8 @@
 """Retry once without cache markers when native Bedrock rejects them.
 
-Caching is an optimization, so a marker the model or region can't take must not fail
-the request. On a rejection naming the marker, strip every marker and retry, then
-keep them off for the life of the instance. Wrapped only around
+A new ``ChatBedrockConverse`` is built every turn, so remembering the rejection
+on the instance would pay for a failed call each turn. The model id and region
+are remembered for the process instead. Wrapped only around
 ``ChatBedrockConverse``. Mirrors ``_sampling_guard``.
 """
 
@@ -20,6 +20,20 @@ logger = logging.getLogger(__name__)
 _REJECTION_HINTS = ("cachepoint", "cache point", "cache_point", "prompt caching", "cache_control")
 
 _cache_safe_classes: dict = {}
+# "region:model_id" pairs Bedrock has already rejected cache markers for.
+_rejected_models: set[str] = set()
+
+
+def _rejection_key(model) -> str:
+    """Model id plus region, so one region's rejection does not disable another."""
+    model_id = getattr(model, "model_id", None)
+    # No id (tests, unexpected client): remember on the instance only
+    if not isinstance(model_id, str) or not model_id:
+        return ""
+    region = getattr(model, "region_name", None)
+    if not isinstance(region, str):
+        region = ""
+    return f"{region}:{model_id}"
 
 
 def is_bedrock_cache_rejection(err: BaseException) -> bool:
@@ -42,17 +56,27 @@ def make_bedrock_cache_safe_cls(base_cls):
     class _CacheSafe(base_cls):
         _cache_markers_disabled: bool = PrivateAttr(default=False)
 
+        def _markers_known_bad(self) -> bool:
+            if self._cache_markers_disabled:
+                return True
+            key = _rejection_key(self)
+            return bool(key) and key in _rejected_models
+
         def _disable_markers(self, err) -> bool:
-            # Already off, or the error isn't about caching: nothing new to retry with
-            if self._cache_markers_disabled or not is_bedrock_cache_rejection(err):
+            # Already known bad, or the error isn't about caching: nothing new to retry with
+            if self._markers_known_bad() or not is_bedrock_cache_rejection(err):
                 return False
             self._cache_markers_disabled = True
+            key = _rejection_key(self)
+            # Remembered for every later instance of this model in this region
+            if key:
+                _rejected_models.add(key)
             logger.warning("Bedrock rejected a prompt-cache marker; retrying without caching.")
             return True
 
         def _generate(self, messages, *args, **kwargs):
-            # Markers previously rejected by this model: send clean from the start
-            if self._cache_markers_disabled:
+            # This model already rejected markers: send clean from the start
+            if self._markers_known_bad():
                 messages, kwargs = strip_cache_markers(messages), strip_bedrock_tool_cache_points(kwargs)
             try:
                 return super()._generate(messages, *args, **kwargs)
@@ -64,8 +88,8 @@ def make_bedrock_cache_safe_cls(base_cls):
                 )
 
         def _stream(self, messages, *args, **kwargs):
-            # Markers previously rejected by this model: send clean from the start
-            if self._cache_markers_disabled:
+            # This model already rejected markers: send clean from the start
+            if self._markers_known_bad():
                 messages, kwargs = strip_cache_markers(messages), strip_bedrock_tool_cache_points(kwargs)
             yielded = False
             try:

@@ -47,7 +47,16 @@ def normalize_usage(usage: Optional[Mapping[str, Any]]) -> NormalizedUsage:
         # langchain-anthropic zeroes "cache_creation" when it reports the per-TTL
         # keys instead, so summing all three never double counts
         cache_write = sum(_as_int(input_details.get(k)) for k in _CACHE_WRITE_KEYS)
-    else:
+    # Bedrock's own breakdown. Prefer it over cache_creation when both are present
+    # so the same write is not counted twice.
+    cache_details = usage.get("cacheDetails")
+    if isinstance(cache_details, list) and cache_details:
+        cache_write = sum(
+            _as_int(entry.get("inputTokens"))
+            for entry in cache_details
+            if isinstance(entry, Mapping)
+        )
+    if not isinstance(input_details, Mapping):
         # OpenAI-style raw usage: cached tokens live under prompt_tokens_details
         prompt_details = usage.get("prompt_tokens_details")
         if isinstance(prompt_details, Mapping):

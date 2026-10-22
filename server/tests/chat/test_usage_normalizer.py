@@ -63,6 +63,28 @@ class TestNormalizeUsage:
         }
         assert normalize_usage(um).input_tokens == 1000
 
+    def test_live_bedrock_haiku_write_counts(self):
+        # Claude Haiku 4.5 on us-east-1: inputTokens 13 excluded a 6854-token cache
+        # write, and totalTokens was the sum (13 + 4 output + 6854).
+        um = {
+            "input_tokens": 13,
+            "output_tokens": 4,
+            "total_tokens": 6871,
+            "input_token_details": {"cache_read": 0, "cache_creation": 6854},
+        }
+        assert normalize_usage(um) == NormalizedUsage(6867, 4, 0, 6854)
+
+    def test_bedrock_cache_details_are_the_write_count(self):
+        # cacheDetails is Bedrock's own TTL breakdown; it replaces cache_creation
+        um = {
+            "input_tokens": 13,
+            "output_tokens": 4,
+            "total_tokens": 6871,
+            "input_token_details": {"cache_creation": 6854},
+            "cacheDetails": [{"ttl": "5m", "inputTokens": 6854}],
+        }
+        assert normalize_usage(um) == NormalizedUsage(6867, 4, 0, 6854)
+
     def test_openai_style_token_usage(self):
         usage = {
             "prompt_tokens": 500,
