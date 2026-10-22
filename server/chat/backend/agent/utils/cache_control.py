@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 # Marker styles a provider can declare. Defined here, not in providers/, so providers
 # can import them without a cycle (this module never imports the providers package).
 CACHE_STYLE_CACHE_CONTROL = "cache_control"  # Anthropic-style flag on a content block
-CACHE_STYLE_CACHE_POINT = "cache_point"  # Bedrock Converse standalone cachePoint block
+CACHE_STYLE_BEDROCK = "bedrock"  # Converse standalone cachePoint block
 
-CACHE_POINT_BLOCK = {"cachePoint": {"type": "default"}}
+BEDROCK_CACHE_POINT = {"cachePoint": {"type": "default"}}
 _EPHEMERAL = {"type": "ephemeral"}
 
 # Smallest cacheable prefix per Claude family, in tokens (Bedrock prompt-caching
@@ -107,9 +107,9 @@ def _system_blocks(style: str, static_text: str, dynamic_text: str) -> Optional[
         return blocks
 
     # Bedrock Converse drops cache_control; it only honors a standalone cachePoint
-    # block. The suffix is covered by the last-message point (PromptCachePointMiddleware).
-    if style == CACHE_STYLE_CACHE_POINT:
-        blocks = [{"type": "text", "text": static_text}, dict(CACHE_POINT_BLOCK)]
+    # block. The suffix is covered by the last-message point (BedrockPromptCacheMiddleware).
+    if style == CACHE_STYLE_BEDROCK:
+        blocks = [{"type": "text", "text": static_text}, dict(BEDROCK_CACHE_POINT)]
         if dynamic_text:
             blocks.append({"type": "text", "text": dynamic_text})
         return blocks
@@ -169,20 +169,20 @@ def build_cached_system_prompt(
         return plain
 
 
-def _is_cache_point(block: Any) -> bool:
+def _is_bedrock_cache_point(block: Any) -> bool:
     return isinstance(block, dict) and "cachePoint" in block
 
 
-def with_tools_cache_point(tools: List[Any]) -> List[Any]:
-    """``tools`` plus a trailing Converse cachePoint, so tool definitions are cached."""
+def with_bedrock_tools_cache_point(tools: List[Any]) -> List[Any]:
+    """``tools`` plus a trailing Bedrock cachePoint, so tool definitions are cached."""
     # No tools, or another layer already marked them
-    if not tools or any(_is_cache_point(t) for t in tools):
+    if not tools or any(_is_bedrock_cache_point(t) for t in tools):
         return tools
-    return [*tools, dict(CACHE_POINT_BLOCK)]
+    return [*tools, dict(BEDROCK_CACHE_POINT)]
 
 
-def with_last_message_cache_point(messages: List[BaseMessage]) -> List[BaseMessage]:
-    """Copy of ``messages`` whose last message ends with a Converse cachePoint.
+def with_bedrock_last_message_cache_point(messages: List[BaseMessage]) -> List[BaseMessage]:
+    """Copy of ``messages`` whose last message ends with a Bedrock cachePoint.
 
     The original message is left untouched so the marker never lands in graph state.
     """
@@ -198,9 +198,9 @@ def with_last_message_cache_point(messages: List[BaseMessage]) -> List[BaseMessa
     elif not isinstance(content, list) or not content:
         return messages
     # Already marked (e.g. a retry of the same request)
-    if any(_is_cache_point(b) for b in content):
+    if any(_is_bedrock_cache_point(b) for b in content):
         return messages
-    marked = last.model_copy(update={"content": [*content, dict(CACHE_POINT_BLOCK)]})
+    marked = last.model_copy(update={"content": [*content, dict(BEDROCK_CACHE_POINT)]})
     return [*messages[:-1], marked]
 
 
@@ -216,7 +216,7 @@ def strip_cache_markers(messages: List[BaseMessage]) -> List[BaseMessage]:
         blocks: List[Any] = []
         for block in content:
             # A standalone cachePoint block exists only to mark; drop it entirely
-            if _is_cache_point(block):
+            if _is_bedrock_cache_point(block):
                 continue
             # cache_control rides on a real block; keep the block, drop the flag
             if isinstance(block, dict) and "cache_control" in block:
@@ -226,8 +226,8 @@ def strip_cache_markers(messages: List[BaseMessage]) -> List[BaseMessage]:
     return cleaned
 
 
-def strip_tool_cache_points(kwargs: dict) -> dict:
-    """Copy of a model call's kwargs with cachePoint entries removed from bound tools."""
+def strip_bedrock_tool_cache_points(kwargs: dict) -> dict:
+    """Copy of a model call's kwargs with Bedrock cachePoint entries removed from bound tools."""
     tools = kwargs.get("tools")
     tool_config = kwargs.get("toolConfig")
     # Nothing bound, nothing to strip
@@ -235,11 +235,11 @@ def strip_tool_cache_points(kwargs: dict) -> dict:
         return kwargs
     cleaned = dict(kwargs)
     if tools:
-        cleaned["tools"] = [t for t in tools if not _is_cache_point(t)]
+        cleaned["tools"] = [t for t in tools if not _is_bedrock_cache_point(t)]
     # Nova system tools bind a prebuilt toolConfig instead of a tools list
     if isinstance(tool_config, dict) and tool_config.get("tools"):
         cleaned["toolConfig"] = {
             **tool_config,
-            "tools": [t for t in tool_config["tools"] if not _is_cache_point(t)],
+            "tools": [t for t in tool_config["tools"] if not _is_bedrock_cache_point(t)],
         }
     return cleaned

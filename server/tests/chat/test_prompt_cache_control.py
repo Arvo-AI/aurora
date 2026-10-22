@@ -15,16 +15,16 @@ from chat.backend.agent.providers.base_provider import BaseLLMProvider
 from chat.backend.agent.providers.bedrock_provider import BedrockProvider
 from chat.backend.agent.providers.openrouter_provider import OpenRouterProvider
 from chat.backend.agent.utils.cache_control import (
-    CACHE_POINT_BLOCK,
+    BEDROCK_CACHE_POINT,
     CACHE_STYLE_CACHE_CONTROL,
-    CACHE_STYLE_CACHE_POINT,
+    CACHE_STYLE_BEDROCK,
     build_cached_system_prompt,
     claude_family,
     min_cacheable_chars,
     strip_cache_markers,
-    strip_tool_cache_points,
-    with_last_message_cache_point,
-    with_tools_cache_point,
+    strip_bedrock_tool_cache_points,
+    with_bedrock_last_message_cache_point,
+    with_bedrock_tools_cache_point,
 )
 
 # Above the largest per-model minimum, so cacheable on every model
@@ -76,8 +76,8 @@ class TestProviderStyles:
 
     def test_bedrock_native_uses_cache_point(self):
         p = _bedrock()
-        assert p.prompt_cache_style("anthropic/claude-sonnet-5") == CACHE_STYLE_CACHE_POINT
-        assert p.prompt_cache_style("bedrock/us.anthropic.claude-sonnet-4-5-v1:0") == CACHE_STYLE_CACHE_POINT
+        assert p.prompt_cache_style("anthropic/claude-sonnet-5") == CACHE_STYLE_BEDROCK
+        assert p.prompt_cache_style("bedrock/us.anthropic.claude-sonnet-4-5-v1:0") == CACHE_STYLE_BEDROCK
 
     @pytest.mark.parametrize(
         "model",
@@ -172,7 +172,7 @@ class TestBuildCachedSystemPrompt:
         # ~12K chars is the background RCA static prefix; a flat 4096-token gate missed it
         static = "s" * 12_000
         msg = build_cached_system_prompt("anthropic/claude-sonnet-5", static, "alert data", provider=_bedrock())
-        assert msg.content[1] == CACHE_POINT_BLOCK
+        assert msg.content[1] == BEDROCK_CACHE_POINT
 
     def test_short_static_falls_back_to_one_breakpoint_on_the_whole_prompt(self):
         # Haiku 4.5 needs 4096 tokens: the static part alone can't cache, the whole can
@@ -192,33 +192,33 @@ class TestBuildCachedSystemPrompt:
 class TestRequestCachePoints:
     def test_tools_get_one_trailing_point(self):
         tools = [{"toolSpec": {"name": "a"}}]
-        marked = with_tools_cache_point(tools)
-        assert marked == [*tools, CACHE_POINT_BLOCK]
+        marked = with_bedrock_tools_cache_point(tools)
+        assert marked == [*tools, BEDROCK_CACHE_POINT]
         assert tools == [{"toolSpec": {"name": "a"}}]
         # Idempotent: a second pass never spends a fifth point
-        assert with_tools_cache_point(marked) == marked
-        assert with_tools_cache_point([]) == []
+        assert with_bedrock_tools_cache_point(marked) == marked
+        assert with_bedrock_tools_cache_point([]) == []
 
     def test_last_message_marked_on_a_copy(self):
         history = [HumanMessage("q"), AIMessage("a"), HumanMessage("follow-up")]
-        marked = with_last_message_cache_point(history)
-        assert marked[-1].content == [{"type": "text", "text": "follow-up"}, CACHE_POINT_BLOCK]
+        marked = with_bedrock_last_message_cache_point(history)
+        assert marked[-1].content == [{"type": "text", "text": "follow-up"}, BEDROCK_CACHE_POINT]
         assert marked[:-1] == history[:-1]
         # Graph state keeps the unmarked message
         assert history[-1].content == "follow-up"
-        assert with_last_message_cache_point(marked) == marked
+        assert with_bedrock_last_message_cache_point(marked) == marked
 
     def test_blank_last_message_left_alone(self):
         history = [HumanMessage("   ")]
-        assert with_last_message_cache_point(history) == history
+        assert with_bedrock_last_message_cache_point(history) == history
 
-    def test_strip_tool_cache_points(self):
-        kwargs = {"tools": [{"toolSpec": {"name": "a"}}, CACHE_POINT_BLOCK], "stop": None}
-        assert strip_tool_cache_points(kwargs) == {"tools": [{"toolSpec": {"name": "a"}}], "stop": None}
-        assert CACHE_POINT_BLOCK in kwargs["tools"]
-        cfg = {"toolConfig": {"tools": [CACHE_POINT_BLOCK], "toolChoice": {"auto": {}}}}
-        assert strip_tool_cache_points(cfg)["toolConfig"] == {"tools": [], "toolChoice": {"auto": {}}}
-        assert strip_tool_cache_points({"stop": None}) == {"stop": None}
+    def test_strip_bedrock_tool_cache_points(self):
+        kwargs = {"tools": [{"toolSpec": {"name": "a"}}, BEDROCK_CACHE_POINT], "stop": None}
+        assert strip_bedrock_tool_cache_points(kwargs) == {"tools": [{"toolSpec": {"name": "a"}}], "stop": None}
+        assert BEDROCK_CACHE_POINT in kwargs["tools"]
+        cfg = {"toolConfig": {"tools": [BEDROCK_CACHE_POINT], "toolChoice": {"auto": {}}}}
+        assert strip_bedrock_tool_cache_points(cfg)["toolConfig"] == {"tools": [], "toolChoice": {"auto": {}}}
+        assert strip_bedrock_tool_cache_points({"stop": None}) == {"stop": None}
 
 
 class TestMiddleware:
@@ -228,7 +228,7 @@ class TestMiddleware:
         # CI stubs langchain with MagicMock, which would make the class itself a mock
         if not isinstance(lc_middleware.AgentMiddleware, type):
             pytest.skip("langchain is stubbed in this environment")
-        from chat.backend.agent.middleware import PromptCachePointMiddleware
+        from chat.backend.agent.middleware import BedrockPromptCacheMiddleware
 
         seen = {}
         request = MagicMock()
@@ -236,9 +236,9 @@ class TestMiddleware:
         request.messages = [HumanMessage("hi")]
         request.override = lambda **kw: seen.update(kw) or "patched"
 
-        assert PromptCachePointMiddleware().wrap_model_call(request, lambda r: r) == "patched"
-        assert seen["tools"][-1] == CACHE_POINT_BLOCK
-        assert seen["messages"][-1].content[-1] == CACHE_POINT_BLOCK
+        assert BedrockPromptCacheMiddleware().wrap_model_call(request, lambda r: r) == "patched"
+        assert seen["tools"][-1] == BEDROCK_CACHE_POINT
+        assert seen["messages"][-1].content[-1] == BEDROCK_CACHE_POINT
 
 
 class TestStripCacheMarkers:
@@ -274,22 +274,22 @@ class TestBedrockConverseWire:
     def test_split_system_reaches_wire(self, converse):
         sys_msg = build_cached_system_prompt("anthropic/claude-sonnet-5", BIG, "dyn", provider=_bedrock())
         _, system = converse._messages_to_bedrock([sys_msg, HumanMessage("hi")])
-        assert system == [{"text": BIG}, CACHE_POINT_BLOCK, {"text": "dyn"}]
+        assert system == [{"text": BIG}, BEDROCK_CACHE_POINT, {"text": "dyn"}]
 
     def test_last_tool_result_point_lands_after_the_tool_result(self, converse):
-        history = with_last_message_cache_point([
+        history = with_bedrock_last_message_cache_point([
             HumanMessage("q"),
             AIMessage("", tool_calls=[{"name": "t", "args": {}, "id": "call-1"}]),
             ToolMessage("result", tool_call_id="call-1"),
         ])
         messages, _ = converse._messages_to_bedrock(history)
         last = messages[-1]["content"]
-        assert "toolResult" in last[0] and last[-1] == CACHE_POINT_BLOCK
-        assert CACHE_POINT_BLOCK not in last[0]["toolResult"]["content"]
+        assert "toolResult" in last[0] and last[-1] == BEDROCK_CACHE_POINT
+        assert BEDROCK_CACHE_POINT not in last[0]["toolResult"]["content"]
 
     def test_tools_point_reaches_tool_config(self, converse):
-        tools = with_tools_cache_point([{"toolSpec": {"name": "t", "inputSchema": {"json": {}}}}])
-        assert converse._format_tools(tools)[-1] == CACHE_POINT_BLOCK
+        tools = with_bedrock_tools_cache_point([{"toolSpec": {"name": "t", "inputSchema": {"json": {}}}}])
+        assert converse._format_tools(tools)[-1] == BEDROCK_CACHE_POINT
 
 
 def _converse_response(cache_read=0, cache_write=0):
@@ -315,9 +315,9 @@ class TestCacheSafeConverse:
         pytest.importorskip("langchain_aws.chat_models.bedrock_converse")
         from langchain_aws import ChatBedrockConverse
 
-        from chat.backend.agent.providers._cache_guard import make_cache_safe_cls
+        from chat.backend.agent.providers._bedrock_cache_guard import make_bedrock_cache_safe_cls
 
-        return make_cache_safe_cls(ChatBedrockConverse)
+        return make_bedrock_cache_safe_cls(ChatBedrockConverse)
 
     def _model(self, model_cls, client):
         return model_cls(
@@ -355,19 +355,19 @@ class TestCacheSafeConverse:
             _converse_response(),
         ]
         tool = {"toolSpec": {"name": "t", "description": "d", "inputSchema": {"json": {"type": "object"}}}}
-        bound = self._model(model_cls, client).bind_tools(with_tools_cache_point([tool]))
+        bound = self._model(model_cls, client).bind_tools(with_bedrock_tools_cache_point([tool]))
 
         assert bound.invoke(self._messages()).content == "ok"
         first, retry = (c.kwargs["toolConfig"]["tools"] for c in client.converse.call_args_list)
-        assert first[-1] == CACHE_POINT_BLOCK
-        assert CACHE_POINT_BLOCK not in retry and len(retry) == 1
+        assert first[-1] == BEDROCK_CACHE_POINT
+        assert BEDROCK_CACHE_POINT not in retry and len(retry) == 1
 
     def test_agent_request_carries_three_points(self, model_cls):
         # Whole path: create_agent -> middleware -> ChatBedrockConverse -> Converse call
         from langchain.agents import create_agent
         from langchain_core.tools import tool
 
-        from chat.backend.agent.middleware import PromptCachePointMiddleware
+        from chat.backend.agent.middleware import BedrockPromptCacheMiddleware
 
         @tool
         def lookup(q: str) -> str:
@@ -380,19 +380,19 @@ class TestCacheSafeConverse:
             model=self._model(model_cls, client),
             tools=[lookup],
             system_prompt=build_cached_system_prompt("anthropic/claude-sonnet-5", BIG, "dyn", provider=_bedrock()),
-            middleware=[PromptCachePointMiddleware()],
+            middleware=[BedrockPromptCacheMiddleware()],
         )
         result = agent.invoke({"messages": [HumanMessage("hi")]})
 
         call = client.converse.call_args.kwargs
         points = (
-            call["system"].count(CACHE_POINT_BLOCK)
-            + call["toolConfig"]["tools"].count(CACHE_POINT_BLOCK)
-            + sum(m["content"].count(CACHE_POINT_BLOCK) for m in call["messages"])
+            call["system"].count(BEDROCK_CACHE_POINT)
+            + call["toolConfig"]["tools"].count(BEDROCK_CACHE_POINT)
+            + sum(m["content"].count(BEDROCK_CACHE_POINT) for m in call["messages"])
         )
         assert points == 3
-        assert call["toolConfig"]["tools"][-1] == CACHE_POINT_BLOCK
-        assert call["messages"][-1]["content"][-1] == CACHE_POINT_BLOCK
+        assert call["toolConfig"]["tools"][-1] == BEDROCK_CACHE_POINT
+        assert call["messages"][-1]["content"][-1] == BEDROCK_CACHE_POINT
         # The marker is request-only; graph state keeps the plain message
         assert result["messages"][0].content == "hi"
 
@@ -453,9 +453,9 @@ class TestCacheGuardLogic:
 
     @pytest.fixture()
     def model(self):
-        from chat.backend.agent.providers._cache_guard import make_cache_safe_cls
+        from chat.backend.agent.providers._bedrock_cache_guard import make_bedrock_cache_safe_cls
 
-        return make_cache_safe_cls(_FakeChatModel)()
+        return make_bedrock_cache_safe_cls(_FakeChatModel)()
 
     def test_cache_rejection_retries_clean_then_stays_clean(self, model):
         model.errors.append(Exception("ValidationException: cachePoint not supported"))
@@ -468,7 +468,7 @@ class TestCacheGuardLogic:
 
     def test_rejection_also_strips_the_tools_point(self, model):
         model.errors.append(Exception("ValidationException: cachePoint not supported"))
-        tools = [{"toolSpec": {"name": "a"}}, CACHE_POINT_BLOCK]
+        tools = [{"toolSpec": {"name": "a"}}, BEDROCK_CACHE_POINT]
         model._generate(_marked_messages(), tools=tools)
         assert model.attempt_kwargs[0]["tools"] == tools
         assert model.attempt_kwargs[1]["tools"] == [{"toolSpec": {"name": "a"}}]

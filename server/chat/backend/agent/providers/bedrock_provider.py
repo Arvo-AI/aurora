@@ -33,7 +33,7 @@ from langchain_openai import ChatOpenAI
 
 from chat.backend.agent.utils.cache_control import (
     CACHE_STYLE_CACHE_CONTROL,
-    CACHE_STYLE_CACHE_POINT,
+    CACHE_STYLE_BEDROCK,
 )
 
 from .base_provider import BaseLLMProvider
@@ -116,10 +116,10 @@ def _adaptive_bedrock_converse():
     friendly RuntimeError there)."""
     from langchain_aws import ChatBedrockConverse
 
-    from ._cache_guard import make_cache_safe_cls
+    from ._bedrock_cache_guard import make_bedrock_cache_safe_cls
 
     # Cache guard outermost: it strips markers, the sampling guard strips sampling params
-    return make_cache_safe_cls(
+    return make_bedrock_cache_safe_cls(
         make_adaptive_sampling_cls(ChatBedrockConverse, wrap_async=False)
     )
 
@@ -238,7 +238,7 @@ class BedrockProvider(BaseLLMProvider):
         native = self.get_native_model_name(model).lower()
         if "anthropic.claude" not in native or any(p in native for p in _NO_CACHE_CLAUDE):
             return None
-        return CACHE_STYLE_CACHE_POINT
+        return CACHE_STYLE_BEDROCK
 
     def supports_model(self, model: str) -> bool:
         """Bedrock serves explicit ``bedrock/`` ids and Anthropic Claude models (so a

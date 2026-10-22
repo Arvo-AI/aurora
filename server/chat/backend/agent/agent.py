@@ -12,7 +12,7 @@ from langchain_openai import ChatOpenAI
 from .tools.cloud_tools import set_websocket_context
 from chat.backend.agent.utils.prefix_cache import PrefixCacheManager
 from chat.backend.agent.utils.cache_control import (
-    CACHE_STYLE_CACHE_POINT,
+    CACHE_STYLE_BEDROCK,
     build_cached_system_prompt,
     resolve_cache_style,
 )
@@ -273,7 +273,7 @@ class Agent:
             from langchain.agents import create_agent
             from langchain_core.callbacks import BaseCallbackHandler
             from .tools.cloud_tools import get_cloud_tools, set_user_context, set_tool_capture
-            from .middleware import ContextTrimMiddleware, PromptCachePointMiddleware, _ForceToolChoice
+            from .middleware import BedrockPromptCacheMiddleware, ContextTrimMiddleware, _ForceToolChoice
 
             logging.info(f"agentic_tool_flow: State has user_id {state.user_id} and session_id {state.session_id}")
             # Set user context for tools
@@ -686,10 +686,10 @@ class Agent:
                 dynamic_prompt_text,
                 provider=serving_provider,
             )
-            # Converse also needs explicit points after the tools and the last
+            # Native Bedrock also needs explicit points after the tools and the last
             # message; appended last so it marks the final request.
-            if resolve_cache_style(serving_provider, model_name) == CACHE_STYLE_CACHE_POINT:
-                middlewares.append(PromptCachePointMiddleware())
+            if resolve_cache_style(serving_provider, model_name) == CACHE_STYLE_BEDROCK:
+                middlewares.append(BedrockPromptCacheMiddleware())
 
             agent_graph = create_agent(
                 model=streaming_llm,

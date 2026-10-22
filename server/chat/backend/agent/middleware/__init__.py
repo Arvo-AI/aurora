@@ -1,6 +1,6 @@
 from .context_trim import ContextSafetyMiddleware
 from .force_tool import ForceToolChoice as _ForceToolChoice
-from .prompt_cache import PromptCachePointMiddleware
+from .bedrock_prompt_cache import BedrockPromptCacheMiddleware
 
 # Backward-compatible alias
 ContextTrimMiddleware = ContextSafetyMiddleware
@@ -8,6 +8,6 @@ ContextTrimMiddleware = ContextSafetyMiddleware
 __all__ = [
     "ContextSafetyMiddleware",
     "ContextTrimMiddleware",
-    "PromptCachePointMiddleware",
+    "BedrockPromptCacheMiddleware",
     "_ForceToolChoice",
 ]
