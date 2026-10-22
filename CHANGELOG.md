@@ -11,10 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - ServiceNow connector. Connect an instance with basic auth or OAuth client
-  credentials, and receive incident events on a per-user webhook. Filters
-  (priority, assignment group, category, state, optional encoded query) or an
-  Auto mode that reads an editable ServiceNow RCA policy decide which incidents
-  get an RCA. Work notes and resolving the ServiceNow incident are opt-in. The
+  credentials, and receive incident events on a per-user webhook. Saved filters
+  (priority, assignment group, category, state, optional encoded query) choose
+  which incidents get an RCA. Auto mode makes that choice from an editable
+  ServiceNow RCA policy. Work notes and resolving the ServiceNow incident are
+  opt-in. The
   agent can search and view incidents, and, when write-back is on, add a work
   note, create or update an incident, and resolve it when the Aurora incident
   resolves.
