@@ -33,6 +33,7 @@ from typing import Optional, Tuple
 from langchain_core.language_models import BaseChatModel
 
 from chat.backend.agent.providers._sampling_guard import SAMPLING_FIELDS
+from utils import usage_writer
 from utils.security.command_safety import _fingerprint
 
 logger = logging.getLogger(__name__)
@@ -55,11 +56,6 @@ _FAIL_CLOSED_REASON = "input rail unavailable"
 _FAIL_CLOSED_AUTH = "input rail auth error"
 _FAIL_CLOSED_CONNECTIVITY = "input rail connectivity error"
 _BLOCKED_REASON = "input flagged by safety policy"
-
-# Usage rows of the async path are written by fire-and-forget tasks (the DB write
-# must not sit between the rail verdict and the main model call). The set keeps a
-# strong reference until each task is done, so the loop cannot garbage-collect it.
-_background_usage_tasks: set = set()
 
 
 def _first_message(result):
@@ -265,17 +261,16 @@ class _GuardrailsLLMCompat(BaseChatModel):
             result = self._flatten(
                 await self.inner._agenerate(messages, stop=stop, **self._prepare(kwargs))
             )
-        # The usage row is a blocking DB write and tracking is best-effort: run it
-        # in a worker thread AND do not wait for it, so the rail verdict (and the
-        # main model call behind it) is never delayed by the database. The task
-        # copies the current context, so it still sees the ids ``check_input``
-        # published even though ``check_input`` resets them right after.
+        # The usage row is a blocking DB write and tracking is best-effort: hand it to
+        # the process-owned usage writer thread and do not wait for it, so the rail
+        # verdict (and the main model call behind it) is never delayed by the database.
+        # The writer runs the call under a snapshot of the current context, so it still
+        # sees the ids ``check_input`` published even though ``check_input`` resets them
+        # right after. Unlike an asyncio task, the write survives ``asyncio.run()``
+        # tearing the loop down at the end of a background RCA; that run drains the
+        # writer before it returns (see ``chat.background.task``).
         if _usage_context.get() and self.usage_model_name:
-            task = asyncio.ensure_future(
-                asyncio.to_thread(self._record_usage, messages, result, start_time)
-            )
-            _background_usage_tasks.add(task)
-            task.add_done_callback(_background_usage_tasks.discard)
+            usage_writer.submit(self._record_usage, messages, result, start_time)
         return result
 
 

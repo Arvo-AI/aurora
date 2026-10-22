@@ -497,6 +497,59 @@ def test_openrouter_pricing_keeps_the_haiku_5_5_long_context_tier(monkeypatch):
     assert "long_context" not in service.get_model_pricing("openai/gpt-4.1")
 
 
+def test_openrouter_prefix_matched_id_keeps_the_static_tiers(monkeypatch):
+    """Review on #740 (round 2): an id such as ``anthropic/claude-haiku-5.5:thinking`` has
+    no OpenRouter row of its own and resolves by longest-prefix match. The static
+    cache-read rate and long-context tier must follow the *matched* key; looking them up
+    by the raw name missed both and billed >100K-token prompts at the base rates (~5x
+    too low)."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)  # offline: fallback table only
+    service = OpenRouterPricingService()
+    variant = "anthropic/claude-haiku-5.5:thinking"
+    assert variant not in service.get_pricing(), "the id must resolve by prefix, not exactly"
+
+    row = service.get_model_pricing(variant)
+    matched = service.get_pricing()["anthropic/claude-haiku-5.5"]
+    static = LLMUsageTracker.MODEL_PRICING["anthropic/claude-haiku-5.5"]
+    assert row["input"] == matched["input"]
+    assert row["output"] == matched["output"]
+    assert row["cached_input"] == static["cached_input"]
+    assert row["long_context"] == static["long_context"]
+    assert row["long_context"] is not static["long_context"]
+
+    # ...and calculate_cost applies the tier to the variant id on the OpenRouter path.
+    monkeypatch.setattr(
+        "chat.backend.agent.utils.llm_usage_tracker.get_pricing_service", lambda: service
+    )
+    long = LLMUsageTracker.calculate_cost(200_000, 1_000, variant, provider_mode="openrouter")
+    assert long == pytest.approx(200 * 0.0005 + 1 * 0.0025)
+    short = LLMUsageTracker.calculate_cost(10_000, 1_000, variant, provider_mode="openrouter")
+    assert short == pytest.approx(10 * 0.0001 + 1 * 0.0005)
+
+
+def test_openrouter_default_fallback_does_not_pick_up_an_unrelated_static_row(monkeypatch):
+    """The default-fallback path has no matched row, so no static tier may be stacked on
+    the default rates even when ``MODEL_PRICING`` happens to hold an exact row for the
+    raw name (synthetic id: no OpenRouter row, no prefix of it in the table)."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    unlisted = "acme/unlisted-model"
+    monkeypatch.setitem(
+        LLMUsageTracker.MODEL_PRICING,
+        unlisted,
+        {
+            "input": 0.5, "output": 0.5, "cached_input": 0.25, "cache_write": 0.6,
+            "long_context": {"threshold_tokens": 1, "input": 9.0, "output": 9.0},
+        },
+    )
+    service = OpenRouterPricingService()
+    assert unlisted not in service.get_pricing()
+
+    row = service.get_model_pricing(unlisted)
+    assert row == service.get_pricing()["default"]
+    assert "cached_input" not in row
+    assert "long_context" not in row
+
+
 def test_two_tier_pricing_survives_the_bedrock_regional_premium(monkeypatch):
     """The regional premium multiplies every rate; it must skip the nested tier table
     instead of raising (which the outer try/except would turn into a silent $0)."""
@@ -927,7 +980,11 @@ def test_cutoff_matches_vendor_published_date(model_id, expected):
     """A cutoff that is later than reality makes needs_web_search() skip a search the
     model actually needs, so these must track the vendor pages exactly."""
     cutoff = ModelCutoffManager().models[model_id].knowledge_cutoff
-    assert (cutoff.year, cutoff.month, cutoff.day) == expected
+    # Bind the observed value to a name first: a tuple *literal* on the left of ``==``
+    # reads as the "expected" operand to SonarCloud's S3415 (assertion order) and would
+    # mix "expected first" into a file that is otherwise "actual == expected".
+    actual = (cutoff.year, cutoff.month, cutoff.day)
+    assert actual == expected
 
 
 def test_vertex_and_google_agree_on_cutoffs():

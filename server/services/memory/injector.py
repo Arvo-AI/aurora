@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 
+from utils import usage_writer
 from utils.cache.redis_client import get_redis_client
 from services.memory.queries import get_memory_entries, fetch_memory_content
 from chat.backend.agent.providers import get_cached_chat_model
@@ -211,9 +212,14 @@ def _track_selector_usage(
     )
 
 
-# Strong references to the in-flight usage writes, so the event loop cannot
-# garbage-collect a task before it finishes.
-_background_tracking: Set["asyncio.Task"] = set()
+def _record_selector_usage(
+    messages: List, response, start_time: float, user_id: str, session_id: Optional[str]
+) -> None:
+    """``_track_selector_usage`` that never raises (runs on the usage writer thread)."""
+    try:
+        _track_selector_usage(messages, response, start_time, user_id, session_id)
+    except Exception:
+        logger.debug("[MemoryInjector] Could not record selector usage", exc_info=True)
 
 
 def _schedule_selector_usage(
@@ -224,20 +230,15 @@ def _schedule_selector_usage(
     ``_track_selector_usage`` counts tokens and inserts a row with RLS set-up; the
     prefetch that awaits this selector is bounded to a few seconds, and a slow DB
     used to time it out and drop the memories the model had already picked. The
-    write runs in a worker thread as a retained background task instead.
+    write goes to the process-owned usage writer thread instead: it never waits on the
+    database and, unlike an asyncio task, survives ``asyncio.run()`` shutting the loop
+    down at the end of a background RCA (that run drains the writer before returning,
+    see ``chat.background.task``). A failed write is logged (debug) and dropped; it
+    can never fail the selection.
     """
-
-    async def _run() -> None:
-        try:
-            await asyncio.to_thread(
-                _track_selector_usage, messages, response, start_time, user_id, session_id
-            )
-        except Exception:
-            logger.debug("[MemoryInjector] Could not record selector usage", exc_info=True)
-
-    task = asyncio.create_task(_run())
-    _background_tracking.add(task)
-    task.add_done_callback(_background_tracking.discard)
+    usage_writer.submit(
+        _record_selector_usage, messages, response, start_time, user_id, session_id
+    )
 
 
 def _manifest_lines(entries: List[Dict]) -> List[str]:

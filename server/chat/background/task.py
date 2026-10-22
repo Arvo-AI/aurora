@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from celery_config import celery_app
 from langchain_core.messages import HumanMessage
+from utils import usage_writer
 from utils.cache.redis_client import get_redis_client
 from utils.log_sanitizer import sanitize
 from utils.auth.stateless_auth import set_rls_context, get_org_id_for_user
@@ -1407,6 +1408,32 @@ def _action_is_generate_postmortem(action_id: Optional[str], user_id: Optional[s
     return _action_has_system_key(action_id, "generate_postmortem", user_id)
 
 
+# How long the end of a background run waits for usage rows still queued in the usage
+# writer (input rail, memory selector). The rows are tiny inserts; this only bounds a
+# stuck database so it can never hold a finished RCA hostage.
+_USAGE_DRAIN_TIMEOUT_S = 5.0
+
+
+async def _drain_usage_writes() -> None:
+    """Wait (bounded) for queued usage rows before ``asyncio.run()`` tears the loop down.
+
+    The writer thread outlives the loop, so rows are not cancelled with it; this makes
+    sure they are stored before the run returns (and before a worker that exits during
+    event-loop teardown can take them with it). The wait happens in a thread so the
+    loop stays responsive. Never raises: a drain problem is logged and must not mask the
+    RCA result or the error that ended the run.
+    """
+    try:
+        finished = await asyncio.to_thread(usage_writer.drain, _USAGE_DRAIN_TIMEOUT_S)
+        if not finished:
+            logger.warning(
+                "[BackgroundChat] Usage writes still pending after %.0fs; continuing without them",
+                _USAGE_DRAIN_TIMEOUT_S,
+            )
+    except Exception:
+        logger.warning("[BackgroundChat] Could not drain pending usage writes", exc_info=True)
+
+
 async def _execute_background_chat(
     user_id: str,
     session_id: str,
@@ -1746,6 +1773,10 @@ async def _execute_background_chat(
         raise
         
     finally:
+        # Usage rows queued by the input rail / memory selector go through the usage
+        # writer thread; store them before asyncio.run() tears the loop down.
+        await _drain_usage_writes()
+
         # Clean up async save queue to allow asyncio.run() to return
         try:
             from chat.backend.agent.utils.persistence.context_manager import ContextManager

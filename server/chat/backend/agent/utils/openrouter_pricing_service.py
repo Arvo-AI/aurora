@@ -196,8 +196,13 @@ class OpenRouterPricingService:
         """
         pricing_data = self.get_pricing()
 
+        # ``pricing_key`` is the row ``base_pricing`` came from (exact or longest-prefix
+        # match). It stays None on the default-fallback path, where no model row applies.
+        pricing_key: Optional[str] = None
+
         # Try exact match first
         if model_name in pricing_data:
+            pricing_key = model_name
             base_pricing = pricing_data[model_name]
         else:
             # Try prefix matching: find the longest key that is a prefix of model_name
@@ -210,6 +215,7 @@ class OpenRouterPricingService:
                     best_match = key
                     best_len = len(key)
             if best_match:
+                pricing_key = best_match
                 base_pricing = pricing_data[best_match]
             else:
                 logger.warning(f"No pricing found for model {model_name}, using default")
@@ -222,9 +228,13 @@ class OpenRouterPricingService:
         # OpenRouter reports flat input/output rates only. The cache-read rate and
         # the long-context tier (Haiku 5.5: >100K-token prompts bill 5x) come from
         # the static table so an OpenRouter-served request is priced by the same
-        # request shape as a direct one.
+        # request shape as a direct one. The static row is looked up by the key that
+        # produced the base rates (so a variant id such as ``…:thinking`` that matched
+        # by prefix keeps the tiers of its family), never by the raw name: on the
+        # default-fallback path there is no matched row and nothing is merged, so an
+        # unrelated static row cannot be stacked on the default rates.
         from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
-        static = LLMUsageTracker.MODEL_PRICING.get(model_name, {})
+        static = LLMUsageTracker.MODEL_PRICING.get(pricing_key, {}) if pricing_key else {}
         if "cached_input" not in result and "cached_input" in static:
             result["cached_input"] = static["cached_input"]
         if "long_context" not in result and "long_context" in static:
