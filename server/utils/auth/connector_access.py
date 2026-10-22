@@ -6,6 +6,7 @@ rules for members of that team. A connector the team has not saved still follows
 
 from __future__ import annotations
 
+import contextvars
 import logging
 from dataclasses import dataclass
 from typing import Iterable, Optional
@@ -14,6 +15,12 @@ from utils.auth import ROLE_ADMIN, ROLE_EDITOR, ROLE_VIEWER
 from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
+
+# A background chat can pin this so every access_for() in the task uses it.
+# Slack senders with no Aurora account are checked as a general viewer.
+_ACCESS_OVERRIDE: contextvars.ContextVar[Optional["Access"]] = contextvars.ContextVar(
+    "connector_access_override", default=None,
+)
 
 # Stored when an admin limits a connector and then grants it to nobody.
 # A real role never matches it, so the connector stays closed.
@@ -285,7 +292,33 @@ def load_team_grants(user_id: str, team_id: str) -> list:
         return []
 
 
+def push_connector_access(access: "Access"):
+    """Use this Access for every check on the current task. Pair with pop."""
+    return _ACCESS_OVERRIDE.set(access)
+
+
+def pop_connector_access(token) -> None:
+    _ACCESS_OVERRIDE.reset(token)
+
+
+def connector_access_cache_token() -> str:
+    """Empty for a normal user. The override's revision when one is pinned."""
+    override = _ACCESS_OVERRIDE.get()
+    if override is None:
+        return ""
+    return override.revision()
+
+
+def general_viewer_access(user_id: str) -> "Access":
+    """Org-wide viewer grants and no team. The workspace user's org supplies the rows."""
+    return Access(load_grants(user_id), [ROLE_VIEWER])
+
+
 def access_for(user_id: str) -> Access:
+    # Pinned by a Slack chat for someone with no Aurora account.
+    override = _ACCESS_OVERRIDE.get()
+    if override is not None:
+        return override
     grants = load_grants(user_id)
     team_ids, team_rules = load_team_rules(user_id)
     # Role lookup only matters once an admin has limited something.

@@ -270,15 +270,10 @@ def _get_user_display_name(client, user_id: str) -> str:
 
 
 def get_workspace_member(client, slack_user_id: str, team_id: str) -> Optional[dict]:
-    """
-    Return {"display_name": ...} if slack_user_id is a full member of the Slack
-    workspace team_id, otherwise None.
+    """Full member as {"display_name", "email"}, or None.
 
-    "Full member" excludes deleted users, bots, Slack Connect users from other
-    workspaces (team_id mismatch / is_stranger) and guest accounts
-    (is_restricted / is_ultra_restricted). Used before answering an @mention
-    under the shared team identity so that only people who belong to the org
-    can get answers about its infrastructure.
+    Excludes deleted users, bots, Slack Connect, and guests. email is None
+    when the workspace did not share one.
     """
     if not slack_user_id or not team_id:
         return None
@@ -298,14 +293,128 @@ def get_workspace_member(client, slack_user_id: str, team_id: str) -> Optional[d
     if user.get("is_stranger") or user.get("is_restricted") or user.get("is_ultra_restricted"):
         return None  # external user or guest account
 
-    profile = user.get("profile", {})
+    profile = user.get("profile") or {}
     display_name = (
         profile.get("display_name")
         or profile.get("real_name")
         or user.get("name")
         or slack_user_id
     )
-    return {"display_name": display_name.strip()}
+    # users:read.email puts this on the profile. Hidden emails stay unset.
+    email = (profile.get("email") or "").strip() or None
+    return {"display_name": display_name.strip(), "email": email}
+
+
+# Org preference written from the Slack manage page.
+SLACK_ALLOW_UNREGISTERED_KEY = "slack_allow_unregistered"
+
+_NO_ACCOUNT = (
+    "Aurora couldn't match your Slack email to an account in this organization. "
+    "Sign in to Aurora with that email, or ask an admin to allow messages from people without an account."
+)
+_NOT_A_MEMBER = "Aurora is only available to members of this Slack workspace."
+
+
+def org_allows_unregistered_slack(org_id: str) -> bool:
+    """Missing preference keeps workspace members able to ask. No org does not."""
+    if not org_id:
+        return False
+    from utils.auth.stateless_auth import get_org_preference
+    from utils.auth.viewer_run import flag_enabled
+
+    # A workspace that has never touched the switch still lets members ask.
+    value = get_org_preference(org_id, SLACK_ALLOW_UNREGISTERED_KEY, default=True)
+    return flag_enabled(value, True)
+
+
+def find_aurora_user_in_org(email: str, org_id: str) -> Optional[str]:
+    """Aurora user in this org with this email. None when missing or ambiguous."""
+    if not email or "@" not in email or not org_id:
+        return None
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                # users is not RLS-protected. Two case-variants and no exact
+                # hit can be two people, so don't pick one.
+                cursor.execute(
+                    """SELECT id, email FROM users
+                        WHERE LOWER(email) = LOWER(%s) AND org_id = %s
+                        ORDER BY (email = %s) DESC, created_at ASC
+                        LIMIT 2""",
+                    (email, org_id, email),
+                )
+                rows = cursor.fetchall()
+        if not rows:
+            return None
+        # Exact case is unambiguous. A lone case-insensitive row is too.
+        if rows[0][1] != email and len(rows) > 1:
+            logger.warning(
+                "Ambiguous Aurora accounts for a Slack sender in org %s",
+                sanitize(org_id),
+            )
+            return None
+        return rows[0][0]
+    except Exception:
+        logger.warning("Slack email lookup failed for org %s", sanitize(org_id), exc_info=True)
+        return None
+
+
+def classify_slack_sender(
+    *,
+    matched_user_id: Optional[str],
+    installer_user_id: Optional[str],
+    is_full_member: bool,
+    workspace_user_id: Optional[str],
+    allow_unregistered: bool,
+) -> tuple:
+    """Who an @mention runs as: (user_id, as_general_viewer, refusal)."""
+    # Slack email is an account in this org, so that role and team apply.
+    if matched_user_id:
+        return matched_user_id, False, None
+    # The person who connected Slack, when the profile email doesn't match.
+    if installer_user_id:
+        return installer_user_id, False, None
+    # Guest, external, or users.info failed. Don't guess a viewer.
+    if not is_full_member or not workspace_user_id:
+        return None, False, _NOT_A_MEMBER
+    # No Aurora account. The manage-page toggle is the only way in.
+    if not allow_unregistered:
+        return None, False, _NO_ACCOUNT
+    return workspace_user_id, True, None
+
+
+def describe_slack_sender(slack_user_id: str, team_id: str) -> dict:
+    """Workspace owner, installer match, profile, and the Aurora user for this email."""
+    workspace_user_id = get_user_id_from_slack_team(team_id)
+    installer_user_id = get_user_id_from_slack_user(slack_user_id, team_id)
+    org_id = None
+    member = None
+    matched_user_id = None
+    if workspace_user_id:
+        from utils.auth.stateless_auth import get_org_id_for_user
+        from connectors.slack_connector.client import get_slack_client_for_user
+
+        org_id = get_org_id_for_user(workspace_user_id)
+        client = get_slack_client_for_user(workspace_user_id)
+        # Full members only. Guests and Slack Connect users stay None.
+        if client:
+            member = get_workspace_member(client, slack_user_id, team_id)
+        email = (member or {}).get("email")
+        if email and org_id:
+            matched_user_id = find_aurora_user_in_org(email, org_id)
+    return {
+        "workspace_user_id": workspace_user_id,
+        "installer_user_id": installer_user_id,
+        "org_id": org_id,
+        "member": member,
+        "matched_user_id": matched_user_id,
+    }
+
+
+def aurora_user_for_slack_sender(slack_user_id: str, team_id: str) -> Optional[str]:
+    """Aurora account for a button click. People without an account get none."""
+    sender = describe_slack_sender(slack_user_id, team_id)
+    return sender["matched_user_id"] or sender["installer_user_id"]
 
 
 def _resolve_user_display_name(client, user_id: str, is_bot: bool, user_name_cache: dict) -> str:
@@ -750,7 +859,9 @@ def _resolve_channel_label(user_id: str, channel_id: str) -> str:
 
 def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread_ts: str = None, 
                            incident_id: str = None, session_id: str = None, context_messages: list = None,
-                           channel_context: str | None = None, thinking_message_ts: str | None = None):
+                           channel_context: str | None = None, thinking_message_ts: str | None = None,
+                           label_user_id: str | None = None, access_as: str | None = None,
+                           slack_user_id: str | None = None):
     """
     Route a Slack message to Aurora's chat system.
     Uses background chat task to process the message.
@@ -770,12 +881,16 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
         if not session_id:
             title = slack_session_title(message_text)
             
-            # Trigger metadata for tracking
+            # Trigger metadata for tracking. access_as is how a guest is checked.
             trigger_metadata = {
                 "source": "slack",
                 "channel": channel,
                 "thread_ts": thread_ts,
             }
+            if access_as:
+                trigger_metadata["access_as"] = access_as
+            if slack_user_id:
+                trigger_metadata["slack_user_id"] = slack_user_id
             
             # Create the session in the database so it appears in chat history
             session_id = create_background_chat_session(
@@ -812,7 +927,8 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
         # Prepare the message with context. Lead with an explicit channel identity
         # so the agent can resolve references like "this channel" and scope any
         # directive it saves to the right channel (matches routing/descriptions).
-        channel_label = _resolve_channel_label(user_id, channel)
+        # Channel rows belong to whoever connected Slack, not whoever asked.
+        channel_label = _resolve_channel_label(label_user_id or user_id, channel)
         # Mention rules live in the Slack skill and system prompt, not this turn.
         channel_header = f"[Slack message from channel {channel_label}]\n\n"
         full_message = f"{channel_header}{message_text}{context_str}"
@@ -824,6 +940,10 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
             "thread_ts": thread_ts,
             "thinking_message_ts": thinking_message_ts,  # Store the thinking message timestamp
         }
+        if access_as:
+            trigger_metadata["access_as"] = access_as
+        if slack_user_id:
+            trigger_metadata["slack_user_id"] = slack_user_id
         
         # Launch background chat task
         # For Slack @mentions, link to incident but don't send "investigation started" notifications
