@@ -116,28 +116,39 @@ class TestStartRedirect:
 
 
 class TestAttribution:
-    def test_website_attribution_reaches_the_app_redirect(self, signup_app):
+    @pytest.mark.parametrize("db_rows, expected_prefix", [
+        ([("user-9",), ("org-9",)], "/sign-in?handoff="),          # returning GitHub user
+        ([None, ("existing-user",)], "/sign-in?error=account_exists"),  # email collision
+    ])
+    def test_website_attribution_reaches_the_app_redirect(self, signup_app, db_rows, expected_prefix):
         app, mod = signup_app
-        resp = app.test_client().get(
+        client = app.test_client()
+        start = client.get(
             "/github/app/signup/start?ph_did=0199a1b2-c3d4-7e5f&utm_source=aurorasre.ai"
             "&utm_medium=website&next=https://evil.example"
         )
-        state = resp.location.split("state=", 1)[1]
-        db_pool, _, _ = _mock_db(mod, [("user-9",), ("org-9",)])
-        with app.test_request_context(), patch.object(mod, "db_pool", db_pool), \
-             patch("utils.auth.tool_registry.seed_org_tool_permissions"):
-            response, *_ = mod._provision_and_handoff(
-                TestProvisioning._IDENTITY, _install_payload(), mod._signup_state_attribution(state)
-            )
-        assert response.location.endswith(
+        state = start.location.split("state=", 1)[1]
+        db_pool, _, _ = _mock_db(mod, db_rows)
+        with patch.object(mod, "_verify_installation", return_value=_install_payload()), \
+             patch.object(mod, "_exchange_code_for_identity",
+                          return_value=(TestProvisioning._IDENTITY, "gho_x")), \
+             patch.object(mod, "_user_authorized_for_installation", return_value=True), \
+             patch.object(mod, "db_pool", db_pool), \
+             patch("utils.auth.tool_registry.seed_org_tool_permissions"), \
+             patch("routes.github.github_repo_metadata.import_installation_repos"):
+            resp = client.get(f"/github/app/signup/callback?installation_id=777&state={state}&code=c")
+        assert resp.status_code == 302
+        assert resp.location.startswith(mod.FRONTEND_URL + expected_prefix)
+        assert resp.location.endswith(
             "&ph_did=0199a1b2-c3d4-7e5f&utm_source=aurorasre.ai&utm_medium=website"
         )
-        assert "evil" not in response.location
+        assert "evil" not in resp.location
 
     def test_malformed_attribution_is_dropped(self, signup_app):
         app, mod = signup_app
         resp = app.test_client().get(
             "/github/app/signup/start?ph_did=x%26handoff%3Dforged&utm_source=%3Cscript%3E"
+            "&utm_medium=site%0A"
         )
         state = resp.location.split("state=", 1)[1]
         with app.test_request_context():

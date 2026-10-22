@@ -105,7 +105,7 @@ _SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
 # UTMs). Carried inside the signed state and echoed onto the final app redirect
 # so the frontend can tie the signup to the site visit. Never used for auth.
 _ATTRIBUTION_KEYS = ("ph_did", "utm_source", "utm_medium", "utm_campaign", "utm_content")
-_ATTRIBUTION_VALUE_RE = re.compile(r"^[A-Za-z0-9._/-]{1,100}$")
+_ATTRIBUTION_VALUE_RE = re.compile(r"[A-Za-z0-9._/-]{1,100}")
 
 
 def is_hosted_signup_enabled() -> bool:
@@ -151,7 +151,7 @@ def _attribution_from(params) -> dict:
     """Allow-listed, format-checked attribution params; anything else is dropped."""
     return {
         k: v for k in _ATTRIBUTION_KEYS
-        if isinstance(v := params.get(k), str) and _ATTRIBUTION_VALUE_RE.match(v)
+        if isinstance(v := params.get(k), str) and _ATTRIBUTION_VALUE_RE.fullmatch(v)
     }
 
 
@@ -163,6 +163,14 @@ def _signup_state_attribution(state: str) -> dict:
         return {}
     attr = payload.get("attr") if isinstance(payload, dict) else None
     return _attribution_from(attr) if isinstance(attr, dict) else {}
+
+
+def _with_attribution(response: flask.Response, attribution: dict) -> flask.Response:
+    """Append attribution to a redirect into the app; other responses pass through."""
+    location = response.headers.get("Location") or ""
+    if attribution and response.status_code == 302 and location.startswith(f"{FRONTEND_URL}/"):
+        response.headers["Location"] = f"{location}&{urlencode(attribution)}"
+    return response
 
 
 def _verify_signup_state(state: str) -> bool:
@@ -482,7 +490,7 @@ def _validate_install_metadata(install_data: dict) -> bool:
     )
 
 
-def _provision_and_handoff(identity: dict, install_data: dict, attribution: dict | None = None):
+def _provision_and_handoff(identity: dict, install_data: dict):
     """Find-or-create the Aurora account, link the install, mint the handoff.
 
     Returns ``(redirect_response, user_id, installation_id, created)`` on
@@ -490,7 +498,6 @@ def _provision_and_handoff(identity: dict, install_data: dict, attribution: dict
     """
     gh_id, login = identity["id"], identity["login"]
     installation_id = install_data["id"]
-    attr_qs = f"&{urlencode(attribution)}" if attribution else ""
 
     conn = db_pool.get_admin_connection()
     try:
@@ -530,7 +537,7 @@ def _provision_and_handoff(identity: dict, install_data: dict, attribution: dict
                         )
                         return (
                             flask.redirect(
-                                f"{FRONTEND_URL}/sign-in?error=account_exists{attr_qs}",
+                                f"{FRONTEND_URL}/sign-in?error=account_exists",
                                 code=302,
                             ),
                             None,
@@ -630,7 +637,7 @@ def _provision_and_handoff(identity: dict, install_data: dict, attribution: dict
         )
 
     redirect = flask.redirect(
-        f"{FRONTEND_URL}/sign-in?handoff={handoff_token}{attr_qs}", code=302
+        f"{FRONTEND_URL}/sign-in?handoff={handoff_token}", code=302
     )
     return (redirect, user_id, installation_id, created)
 
@@ -707,8 +714,9 @@ def github_app_signup_callback():
         return _render_error(_ERROR_INSTALL_NOT_AUTHORIZED)
 
     response, user_id, linked_installation_id, created = _provision_and_handoff(
-        identity, install_data, _signup_state_attribution(state)
+        identity, install_data
     )
+    response = _with_attribution(response, _signup_state_attribution(state))
     if user_id is None:
         return response
 
