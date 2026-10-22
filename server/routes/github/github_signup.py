@@ -57,6 +57,7 @@ import os
 import re
 import secrets
 import uuid as uuid_mod
+from urllib.parse import urlencode
 
 import bcrypt
 import flask
@@ -100,6 +101,12 @@ _USER_INSTALLATIONS_MAX_PAGES = 10
 
 _SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
 
+# Marketing attribution the website appends to the CTA (analytics distinct id +
+# UTMs). Carried inside the signed state and echoed onto the final app redirect
+# so the frontend can tie the signup to the site visit. Never used for auth.
+_ATTRIBUTION_KEYS = ("ph_did", "utm_source", "utm_medium", "utm_campaign", "utm_content")
+_ATTRIBUTION_VALUE_RE = re.compile(r"[A-Za-z0-9._/-]{1,100}")
+
 
 def is_hosted_signup_enabled() -> bool:
     """One-click website signup — hosted deployments only, default OFF.
@@ -128,13 +135,42 @@ def _state_serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(secret, salt=_SIGNUP_STATE_SALT)
 
 
-def _sign_signup_state() -> str:
+def _sign_signup_state(attribution: dict | None = None) -> str:
     """Signed, expiring proof that the flow started at ``/signup/start``.
 
     No user is bound (none exists yet); the nonce keeps tokens unique so a
     leaked one can't be recognized by value.
     """
-    return _state_serializer().dumps({"flow": "signup", "nonce": secrets.token_urlsafe(8)})
+    payload = {"flow": "signup", "nonce": secrets.token_urlsafe(8)}
+    if attribution:
+        payload["attr"] = attribution
+    return _state_serializer().dumps(payload)
+
+
+def _attribution_from(params) -> dict:
+    """Allow-listed, format-checked attribution params; anything else is dropped."""
+    return {
+        k: v for k in _ATTRIBUTION_KEYS
+        if isinstance(v := params.get(k), str) and _ATTRIBUTION_VALUE_RE.fullmatch(v)
+    }
+
+
+def _signup_state_attribution(state: str) -> dict:
+    """Attribution carried by an already-verified signup state."""
+    try:
+        payload = _state_serializer().loads(state, max_age=_SIGNUP_STATE_TTL_SEC)
+    except Exception:
+        return {}
+    attr = payload.get("attr") if isinstance(payload, dict) else None
+    return _attribution_from(attr) if isinstance(attr, dict) else {}
+
+
+def _with_attribution(response: flask.Response, attribution: dict) -> flask.Response:
+    """Append attribution to a redirect into the app; other responses pass through."""
+    location = response.headers.get("Location") or ""
+    if attribution and response.status_code == 302 and location.startswith(f"{FRONTEND_URL}/"):
+        response.headers["Location"] = f"{location}&{urlencode(attribution)}"
+    return response
 
 
 def _verify_signup_state(state: str) -> bool:
@@ -178,7 +214,7 @@ def github_app_signup_start():
         return _render_error(_ERROR_NOT_AVAILABLE)
 
     try:
-        state = _sign_signup_state()
+        state = _sign_signup_state(_attribution_from(request.args))
     except RuntimeError:
         logger.exception("[GITHUB-SIGNUP] failed to sign signup state")
         return _render_error(_ERROR_INTERNAL)
@@ -680,6 +716,7 @@ def github_app_signup_callback():
     response, user_id, linked_installation_id, created = _provision_and_handoff(
         identity, install_data
     )
+    response = _with_attribution(response, _signup_state_attribution(state))
     if user_id is None:
         return response
 
