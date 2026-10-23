@@ -326,6 +326,14 @@ class LLMUsageTracker:
                     f"Applied {premium:.2f}x regional endpoint premium for {model_name} ({provider_mode})"
                 )
 
+            # Haiku 5.5 bills 5x past 100K prompt tokens: input, output, reads, and writes
+            if (
+                using_static_pricing
+                and input_tokens > 100_000
+                and claude_family(model_name) == "claude-haiku-5-5"
+            ):
+                pricing = {k: v * 5 for k, v in pricing.items()}
+
             # Writes are a subset of input_tokens, so cap them at what reads left over
             cache_write_tokens = min(
                 max(cache_write_tokens, 0), max(input_tokens - cached_input_tokens, 0)

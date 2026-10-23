@@ -153,6 +153,19 @@ class TestCalculateCostCacheWrites:
 
 
 class TestExplicitBedrockIdPricing:
+    def test_haiku_55_long_context_is_five_times_base(self):
+        # At 100K prompt tokens the base rate still applies; past it, every component is 5x
+        short = LLMUsageTracker.calculate_cost(
+            100_000, 0, "anthropic/claude-haiku-5.5",
+            use_dynamic_pricing=False, provider_mode="direct",
+        )
+        long = LLMUsageTracker.calculate_cost(
+            200_000, 0, "bedrock/jp.anthropic.claude-haiku-5-5",
+            use_dynamic_pricing=False, provider_mode="direct",
+        )
+        assert short == pytest.approx(0.01)
+        assert long == pytest.approx(0.1)
+
     @pytest.mark.parametrize(
         "model_id,row",
         [

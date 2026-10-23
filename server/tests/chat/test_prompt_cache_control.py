@@ -88,6 +88,10 @@ class TestProviderStyles:
         p = _bedrock()
         assert p.prompt_cache_style("anthropic/claude-sonnet-5") == CACHE_STYLE_BEDROCK
         assert p.prompt_cache_style("bedrock/us.anthropic.claude-sonnet-4-5-v1:0") == CACHE_STYLE_BEDROCK
+        # v2 supports explicit checkpoints; v1 is in the uncacheable list above
+        assert p.prompt_cache_style(
+            "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        ) == CACHE_STYLE_BEDROCK
 
     @pytest.mark.parametrize(
         "model",

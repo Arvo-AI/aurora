@@ -71,10 +71,11 @@ class BaseLLMProvider(ABC):
         self.provider_name = self.__class__.__name__.replace("Provider", "").lower()
 
     def prompt_cache_style(self, model: str) -> Optional[str]:
-        """Marker style this provider needs to cache a prompt prefix for ``model``.
+        """How ``model`` accepts a cache marker, or None when no marker should be sent.
 
-        Returns a ``CACHE_STYLE_*`` constant from ``utils.cache_control``. Default None:
-        no markers sent (OpenAI/Gemini cache implicitly, others not at all).
+        OpenAI and Gemini cache a repeated prefix on their own and can reject an
+        explicit marker, so they stay on this default. A provider that needs one
+        overrides this and returns a ``CACHE_STYLE_*`` constant.
         """
         return None
 

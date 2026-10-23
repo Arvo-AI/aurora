@@ -43,13 +43,14 @@ from ..model_mapper import ModelMapper
 logger = logging.getLogger(__name__)
 
 # Legacy Claude generations Bedrock has no prompt caching for; a cachePoint would 400.
+# 3.5 Sonnet v2 does cache, so only the v1 id is listed. A rejection is retried by the cache guard.
 _NO_CACHE_CLAUDE = (
     "claude-v2",
     "claude-instant",
     "claude-3-haiku",
     "claude-3-sonnet",
     "claude-3-opus",
-    "claude-3-5-sonnet",
+    "claude-3-5-sonnet-20240620-v1",
 )
 
 # Anthropic native model name (dashed) -> Bedrock inference-profile base (without the

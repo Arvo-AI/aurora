@@ -150,6 +150,9 @@ class TestInferenceProfileIds:
         assert provider.get_native_model_name("anthropic/claude-sonnet-4.5") == (
             "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
         )
+        assert provider.get_native_model_name("anthropic/claude-haiku-4.5") == (
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
 
     def test_haiku_55_has_no_date_suffix(self, bedrock_module):
         provider = _provider(bedrock_module, "us-east-1")
