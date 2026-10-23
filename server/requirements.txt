@@ -3,7 +3,7 @@ azure-mgmt-resource==23.0.1
 blinker==1.9.0
 boto3==1.43.117  # langchain-aws 1.9.0 requires boto3>=1.43.64
 cachetools==5.5.0
-certifi==2024.12.14
+certifi==2026.10.19
 charset-normalizer==3.4.0
 click==8.1.8
 Flask==3.1.3
