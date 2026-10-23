@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
@@ -299,6 +300,28 @@ def push_connector_access(access: "Access"):
 
 def pop_connector_access(token) -> None:
     _ACCESS_OVERRIDE.reset(token)
+
+
+def pinned_roles() -> list | None:
+    """Roles from a pinned Access, or None when this task uses the real user."""
+    override = _ACCESS_OVERRIDE.get()
+    if override is None:
+        return None
+    return list(override.roles)
+
+
+@contextmanager
+def pin_sender_access(user_id: str, access_as: str | None):
+    """Re-apply a Slack guest pin in a task that did not inherit it."""
+    # The collector is a new process, so the chat's pin is gone.
+    if access_as != "general_viewer":
+        yield
+        return
+    token = push_connector_access(general_viewer_access(user_id))
+    try:
+        yield
+    finally:
+        pop_connector_access(token)
 
 
 def connector_access_cache_token() -> str:

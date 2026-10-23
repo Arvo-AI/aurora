@@ -98,6 +98,46 @@ You MUST save at least one fact if the user mentioned anything concrete about th
 # ---------------------------------------------------------------------------
 
 
+def _extract_memories(session_id: str, user_id: str, access_as: str | None = None):
+    """Extract learnings from one turn. access_as is set for a Slack guest."""
+    from utils.auth.connector_access import pin_sender_access
+
+    log_prefix = f"[MemoryCollector:{session_id[:8]}]"
+
+    try:
+        # The session user is the connector owner. The pin makes this a viewer.
+        with pin_sender_access(user_id, access_as):
+            if not _caller_may_edit_memory(user_id):
+                logger.info("%s Skipping extraction; this user cannot modify memory", log_prefix)
+                return {"status": "skipped", "reason": "memory_edits_disabled"}
+
+            # Check before_llm_call hook (billing/entitlement gate)
+            hook_allowed, hook_message = get_hook("before_llm_call")(get_org_id_for_user(user_id), user_id)
+            if not hook_allowed:
+                logger.info("%s Hook blocked: %s", log_prefix, hook_message)
+                return {"status": "hook_blocked"}
+
+            # Load conversation
+            messages = LLMContextManager.load_context_history(session_id, user_id)
+            if not messages:
+                logger.debug("%s No messages to process", log_prefix)
+                return {"status": "skipped", "reason": "no_messages"}
+
+            # Build memory index upfront so the agent has a map without wasting a turn
+            memory_index = build_memory_index(user_id) or "(no existing memories)"
+
+            # Run the extraction agent
+            start_time = time.time()
+            _run_extraction_agent(messages, memory_index, user_id, session_id, log_prefix)
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.info("%s Extraction completed in %dms", log_prefix, elapsed_ms)
+            return {"status": "ok", "elapsed_ms": elapsed_ms}
+
+    except Exception as e:
+        logger.exception("%s Extraction failed", log_prefix)
+        return {"status": "error", "error": str(e)}
+
+
 @celery_app.task(
     name="services.memory.collector.extract_memories_from_session",
     bind=True,
@@ -110,42 +150,10 @@ def extract_memories_from_session(
     self,
     session_id: str,
     user_id: str,
+    access_as: str | None = None,
 ):
-    """Extract and persist learnings from a conversation turn. Should be enqueued after each meaningful turn completes."""
-    log_prefix = f"[MemoryCollector:{session_id[:8]}]"
-
-    try:
-        # This agent writes org memory as the person who had the conversation.
-        if not _caller_may_edit_memory(user_id):
-            logger.info("%s Skipping extraction; this user cannot modify memory", log_prefix)
-            return {"status": "skipped", "reason": "memory_edits_disabled"}
-
-        # Check before_llm_call hook (billing/entitlement gate)
-        hook_allowed, hook_message = get_hook("before_llm_call")(get_org_id_for_user(user_id), user_id)
-        if not hook_allowed:
-            logger.info("%s Hook blocked: %s", log_prefix, hook_message)
-            return {"status": "hook_blocked"}
-
-        # Load conversation
-        messages = LLMContextManager.load_context_history(session_id, user_id)
-        if not messages:
-            logger.debug("%s No messages to process", log_prefix)
-            return {"status": "skipped", "reason": "no_messages"}
-
-        # Build memory index upfront so the agent has a map without wasting a turn
-        memory_index = build_memory_index(user_id) or "(no existing memories)"
-
-        # Run the extraction agent
-        start_time = time.time()
-        _run_extraction_agent(messages, memory_index, user_id, session_id, log_prefix)
-        elapsed_ms = int((time.time() - start_time) * 1000)
-
-        logger.info("%s Extraction completed in %dms", log_prefix, elapsed_ms)
-        return {"status": "ok", "elapsed_ms": elapsed_ms}
-
-    except Exception as e:
-        logger.exception("%s Extraction failed", log_prefix)
-        return {"status": "error", "error": str(e)}
+    """Enqueue target. access_as is how a Slack guest is checked."""
+    return _extract_memories(session_id, user_id, access_as)
 
 
 # ---------------------------------------------------------------------------

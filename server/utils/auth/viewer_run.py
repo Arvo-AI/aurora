@@ -84,9 +84,16 @@ def viewer_may_run(user_id: str, org_id: str) -> bool:
 def viewer_may_edit_memory(user_id: str, org_id: str) -> bool:
     if not user_id or not org_id:
         return False
+    from utils.auth.connector_access import pinned_roles
     from utils.auth.enforcer import get_user_roles_in_org
 
-    names = {str(role) for role in get_user_roles_in_org(user_id, org_id) if role}
+    pinned = pinned_roles()
+    # A Slack guest keeps the connector owner's id. The pin is the role to check.
+    if pinned is not None:
+        roles = pinned
+    else:
+        roles = get_user_roles_in_org(user_id, org_id)
+    names = {str(role) for role in roles if role}
     # Admins stay allowed so an org cannot lock itself out of memory.
     if ROLE_ADMIN in names:
         return True
