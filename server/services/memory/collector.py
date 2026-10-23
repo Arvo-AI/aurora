@@ -42,6 +42,15 @@ logger = logging.getLogger(__name__)
 
 MAX_AGENT_TURNS = 30
 
+
+def _caller_may_edit_memory(user_id: str) -> bool:
+    """False when the Access tab does not let this person modify memory."""
+    from utils.auth.viewer_run import viewer_may_edit_memory
+
+    org_id = get_org_id_for_user(user_id)
+    return bool(org_id) and viewer_may_edit_memory(user_id, org_id)
+
+
 # ---------------------------------------------------------------------------
 # Agent system prompt
 # ---------------------------------------------------------------------------
@@ -106,6 +115,11 @@ def extract_memories_from_session(
     log_prefix = f"[MemoryCollector:{session_id[:8]}]"
 
     try:
+        # This agent writes org memory as the person who had the conversation.
+        if not _caller_may_edit_memory(user_id):
+            logger.info("%s Skipping extraction; this user cannot modify memory", log_prefix)
+            return {"status": "skipped", "reason": "memory_edits_disabled"}
+
         # Check before_llm_call hook (billing/entitlement gate)
         hook_allowed, hook_message = get_hook("before_llm_call")(get_org_id_for_user(user_id), user_id)
         if not hook_allowed:

@@ -43,7 +43,7 @@ interface Connector {
 }
 interface AudienceTeam { id: string; name: string }
 
-interface ViewerRun { chat: boolean; memory: boolean }
+interface ViewerRun { chat: boolean; memory: boolean; editorMemory: boolean }
 
 function isFlat(connector: Connector): boolean {
   return connector.scopes.length === 1
@@ -346,7 +346,7 @@ function ViewerRunTable({
   return (
     <div className="text-sm">
       <p className="mb-3 text-sm text-muted-foreground">
-        Editors and admins can always do these. Check Viewer to let that role do it too.
+        Admins can always do both. Editors can always run chats. Check a box to allow the rest.
       </p>
       <div className={`${GRID} px-1 pb-2 text-xs font-medium text-muted-foreground border-b border-border`}>
         <span />
@@ -383,7 +383,12 @@ function ViewerRunTable({
           label="Viewers can modify memories"
           onChange={(on) => onChange({ ...run, memory: on })}
         />
-        <LockedOn />
+        <AccessCheck
+          checked={run.editorMemory}
+          disabled={disabled}
+          label="Editors can modify memories"
+          onChange={(on) => onChange({ ...run, editorMemory: on })}
+        />
         <LockedOn />
       </div>
     </div>
@@ -394,7 +399,7 @@ export default function ConnectorAccess() {
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [teams, setTeams] = useState<AudienceTeam[]>([]);
   const [audience, setAudience] = useState(EVERYONE);
-  const [viewerRun, setViewerRun] = useState<ViewerRun>({ chat: false, memory: false });
+  const [viewerRun, setViewerRun] = useState<ViewerRun>({ chat: false, memory: false, editorMemory: true });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [savingRun, setSavingRun] = useState(false);
@@ -421,7 +426,12 @@ export default function ConnectorAccess() {
       if (runRes.ok) {
         const run = await runRes.json();
         if (!still()) return;
-        setViewerRun({ chat: Boolean(run.chat), memory: Boolean(run.memory) });
+        setViewerRun({
+          chat: Boolean(run.chat),
+          memory: Boolean(run.memory),
+          // Missing means editors can still edit, which is the stored default.
+          editorMemory: run.editorMemory !== false,
+        });
       }
       if (teamsRes.ok) {
         const teamData = await teamsRes.json();

@@ -1,20 +1,22 @@
-"""Org choices for what a viewer may do.
+"""Org choices for chats and for who may modify memory.
 
-Editors and admins are unaffected. A missing preference keeps viewers from
-starting a chat or modifying memory, which is how the app already treats them.
+A missing chat preference keeps viewers from starting a chat. Editors and
+admins can always chat. A missing memory preference keeps viewers from
+editing memory and still lets editors. Admins can always edit memory.
 """
 
 from __future__ import annotations
 
 import logging
 
-from utils.auth import ROLE_ADMIN, ROLE_EDITOR
+from utils.auth import ROLE_ADMIN, ROLE_EDITOR, ROLE_VIEWER
 from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
 _CHAT_KEY = "viewer_can_chat"
 _MEMORY_KEY = "viewer_can_edit_memory"
+_EDITOR_MEMORY_KEY = "editor_can_edit_memory"
 _DEFAULT = False
 
 
@@ -30,9 +32,9 @@ def viewer_only(roles: list) -> bool:
     return bool(names) and names.isdisjoint({ROLE_ADMIN, ROLE_EDITOR})
 
 
-def _org_flag(org_id: str, key: str) -> bool:
+def _org_flag(org_id: str, key: str, default: bool = _DEFAULT) -> bool:
     if not org_id:
-        return _DEFAULT
+        return default
     try:
         from utils.db.connection_pool import db_pool
 
@@ -44,10 +46,11 @@ def _org_flag(org_id: str, key: str) -> bool:
                     (org_id, key),
                 )
                 row = cur.fetchone()
-        return flag_enabled(row[0] if row else None, _DEFAULT)
+        return flag_enabled(row[0] if row else None, default)
     except Exception:
+        # A failed read must not grant an edit the org may have turned off.
         logger.exception("Could not read viewer preference %s for org %s", key, sanitize(org_id))
-        return _DEFAULT
+        return False
 
 
 def org_allows_viewers(org_id: str) -> bool:
@@ -56,6 +59,11 @@ def org_allows_viewers(org_id: str) -> bool:
 
 def org_allows_memory_edits(org_id: str) -> bool:
     return _org_flag(org_id, _MEMORY_KEY)
+
+
+def org_allows_editor_memory_edits(org_id: str) -> bool:
+    # Unset stays on, so existing editors do not lose memory edits.
+    return _org_flag(org_id, _EDITOR_MEMORY_KEY, True)
 
 
 def _viewer_allowed(user_id: str, org_id: str, org_flag) -> bool:
@@ -74,7 +82,20 @@ def viewer_may_run(user_id: str, org_id: str) -> bool:
 
 
 def viewer_may_edit_memory(user_id: str, org_id: str) -> bool:
-    return _viewer_allowed(user_id, org_id, org_allows_memory_edits)
+    if not user_id or not org_id:
+        return False
+    from utils.auth.enforcer import get_user_roles_in_org
+
+    names = {str(role) for role in get_user_roles_in_org(user_id, org_id) if role}
+    # Admins stay allowed so an org cannot lock itself out of memory.
+    if ROLE_ADMIN in names:
+        return True
+    # Editors follow their own switch. Viewers follow the other one.
+    if ROLE_EDITOR in names:
+        return org_allows_editor_memory_edits(org_id)
+    if ROLE_VIEWER in names:
+        return org_allows_memory_edits(org_id)
+    return False
 
 
 def message_starts_chat(question, data: dict) -> bool:
@@ -101,7 +122,13 @@ def _write_flag(cur, org_id: str, key: str, enabled: bool) -> None:
     )
 
 
-def save_viewer_run(org_id: str, user_id: str, chat: bool | None = None, memory: bool | None = None) -> None:
+def save_viewer_run(
+    org_id: str,
+    user_id: str,
+    chat: bool | None = None,
+    memory: bool | None = None,
+    editor_memory: bool | None = None,
+) -> None:
     from utils.auth.stateless_auth import set_rls_context
     from utils.db.connection_pool import db_pool
 
@@ -113,4 +140,6 @@ def save_viewer_run(org_id: str, user_id: str, chat: bool | None = None, memory:
                 _write_flag(cur, org_id, _CHAT_KEY, chat)
             if memory is not None:
                 _write_flag(cur, org_id, _MEMORY_KEY, memory)
+            if editor_memory is not None:
+                _write_flag(cur, org_id, _EDITOR_MEMORY_KEY, editor_memory)
         conn.commit()

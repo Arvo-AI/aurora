@@ -45,9 +45,25 @@ def test_viewers_modify_memory_only_when_the_org_allows(monkeypatch):
     assert viewer_may_edit_memory("uid", "org") is True
 
 
-def test_editors_always_modify_memory(monkeypatch):
+def test_editors_modify_memory_only_when_the_org_allows(monkeypatch):
     monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: ["editor"])
+    monkeypatch.setattr("utils.auth.viewer_run.org_allows_editor_memory_edits", lambda _org: False)
+    assert viewer_may_edit_memory("uid", "org") is False
+    monkeypatch.setattr("utils.auth.viewer_run.org_allows_editor_memory_edits", lambda _org: True)
+    assert viewer_may_edit_memory("uid", "org") is True
+
+
+def test_a_user_with_no_role_cannot_modify_memory(monkeypatch):
+    monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: [])
+    assert viewer_may_edit_memory("uid", "org") is False
+
+
+def test_admins_always_modify_memory(monkeypatch):
+    monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: ["admin"])
+
     def _unexpected(_org):
-        raise AssertionError("editor should not read the switch")
+        raise AssertionError("admin should not read a memory switch")
+
     monkeypatch.setattr("utils.auth.viewer_run.org_allows_memory_edits", _unexpected)
+    monkeypatch.setattr("utils.auth.viewer_run.org_allows_editor_memory_edits", _unexpected)
     assert viewer_may_edit_memory("uid", "org") is True

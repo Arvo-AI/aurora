@@ -412,7 +412,7 @@ export function MemorySettings() {
       {canEdit === false && (
         <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-3">
           <p className="text-sm text-blue-800 dark:text-blue-200">
-            You have read-only access to memory. An admin can allow viewers to modify it on the Access tab.
+            You have read-only access to memory. An admin can allow it on the Access tab.
           </p>
         </div>
       )}
