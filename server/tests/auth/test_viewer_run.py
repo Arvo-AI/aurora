@@ -18,8 +18,9 @@ def test_an_action_with_no_question_still_starts_a_chat():
     assert message_starts_chat("", {}) is False
 
 
-def test_unlinked_slack_member_is_not_gated_as_a_viewer():
-    assert slack_caller_may_run("org", "uid", unlinked=True) is True
+def test_unlinked_slack_member_is_not_treated_as_a_viewer_here():
+    # Guests are allowed only by the Slack manage toggle, before this check.
+    assert slack_caller_may_run("org", "uid", unlinked=True) is False
 
 
 def test_editor_and_admin_are_not_viewer_only():

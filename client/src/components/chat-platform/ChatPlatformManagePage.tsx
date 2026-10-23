@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, AlertCircle, Loader2, LogOut, Bell, RefreshCw, X, Pencil, ChevronDown, ChevronRight, Search, Plus, ChevronsUpDown, Check } from "lucide-react";
+import { ArrowLeft, AlertCircle, Loader2, LogOut, Bell, RefreshCw, X, Pencil, ChevronDown, ChevronRight, Search, Plus, ChevronsUpDown, Check, Users } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite as checkCanWrite } from "@/lib/roles";
@@ -14,6 +14,7 @@ import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dial
 import { queryClient, jsonFetcher } from "@/lib/query";
 import { apiErrorMessage } from "@/lib/services/api-client";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type {
   ChatPlatformChannel,
@@ -50,6 +51,23 @@ function booleansFromMode(mode: NotifyMode): { start: boolean; end: boolean } {
   return { start: mode === "start" || mode === "both", end: mode === "end" || mode === "both" };
 }
 
+function storedBoolean(val: unknown, fallback: boolean): boolean {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === "boolean") return val;
+  return val === "true";
+}
+
+function booleansFromPrefs(
+  defaults: Record<string, boolean>,
+  stored: Record<string, unknown> | undefined,
+): Record<string, boolean> {
+  const loaded: Record<string, boolean> = {};
+  for (const [key, defaultValue] of Object.entries(defaults)) {
+    loaded[key] = storedBoolean(stored?.[key], defaultValue);
+  }
+  return loaded;
+}
+
 export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageConfig }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -68,6 +86,10 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
   const [preferences, setPreferences] = useState<Record<PreferenceKey, boolean>>(
     () => ({ ...config.defaultPreferences }),
   );
+  const [allowUnregistered, setAllowUnregistered] = useState(
+    config.guestAccess?.defaultEnabled ?? true,
+  );
+  const [savingGuest, setSavingGuest] = useState(false);
   const [isLoadingPrefs, setIsLoadingPrefs] = useState(true);
   const [savingPrefs, setSavingPrefs] = useState<Record<string, boolean>>({});
 
@@ -210,22 +232,21 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
     try {
       const defaults = config.defaultPreferences;
       const keys = Object.keys(defaults);
+      if (config.guestAccess) keys.push(config.guestAccess.preferenceKey);
       const params = new URLSearchParams();
       keys.forEach((k) => params.append("keys", k));
 
       const response = await fetch(`/api/proxy/user-preferences/batch?${params.toString()}`);
-      if (response.ok) {
-        const data = await response.json();
-        const loaded: Record<string, boolean> = {};
-        for (const [key, defaultValue] of Object.entries(defaults)) {
-          const val = data.preferences?.[key];
-          if (val !== null && val !== undefined) {
-            loaded[key] = typeof val === "boolean" ? val : val === "true";
-          } else {
-            loaded[key] = defaultValue;
-          }
-        }
-        setPreferences((prev) => ({ ...prev, ...loaded } as Record<PreferenceKey, boolean>));
+      if (!response.ok) return;
+      const data = await response.json();
+      const stored = data.preferences as Record<string, unknown> | undefined;
+      setPreferences((prev) => ({ ...prev, ...booleansFromPrefs(defaults, stored) }));
+      if (config.guestAccess) {
+        // Never saved: keep the same default the backend uses.
+        setAllowUnregistered(storedBoolean(
+          stored?.[config.guestAccess.preferenceKey],
+          config.guestAccess.defaultEnabled,
+        ));
       }
     } catch (error) {
       console.error(`Error loading ${config.displayName} notification preferences:`, error);
@@ -414,7 +435,7 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
     });
   };
 
-  const persistPreference = async (key: PreferenceKey, enabled: boolean): Promise<boolean> => {
+  const persistPreference = async (key: string, enabled: boolean): Promise<boolean> => {
     try {
       const response = await fetch("/api/proxy/user-preferences", {
         method: "POST",
@@ -428,6 +449,23 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
       // per-key success info from the other concurrent write).
       return false;
     }
+  };
+
+  const handleGuestAccess = async (enabled: boolean) => {
+    if (!config.guestAccess) return;
+    const prev = allowUnregistered;
+    setAllowUnregistered(enabled);
+    setSavingGuest(true);
+    const ok = await persistPreference(config.guestAccess.preferenceKey, enabled);
+    if (!ok) {
+      setAllowUnregistered(prev);
+      toast({
+        title: "Error",
+        description: "Couldn't save who can message Aurora from Slack.",
+        variant: "destructive",
+      });
+    }
+    setSavingGuest(false);
   };
 
   const handleGroupModeChange = async (
@@ -723,6 +761,38 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
             )}
           </CardContent>
         </Card>
+
+        {config.guestAccess && (
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Users className="h-5 w-5" />
+                Who can message Aurora
+              </CardTitle>
+              <CardDescription>
+                Aurora matches the email on the Slack profile to an Aurora account
+                and answers with that person&apos;s role and team access.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className={`flex items-center justify-between gap-4 p-4 border rounded-lg ${canWrite ? "" : "opacity-50"}`}>
+                <div className="space-y-1">
+                  <h4 className="font-medium text-sm">Allow people without an Aurora account</h4>
+                  <p className="text-xs text-muted-foreground">
+                    When on, a Slack member whose email isn&apos;t an Aurora user can still @mention Aurora.
+                    Those questions run as a general viewer. When off, only people with an account can.
+                  </p>
+                </div>
+                <Switch
+                  checked={allowUnregistered}
+                  onCheckedChange={handleGuestAccess}
+                  disabled={isLoadingPrefs || savingGuest || !canWrite}
+                  aria-label="Allow people without an Aurora account"
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Incident Card & Notifications */}
         <Card className="mb-6">

@@ -25,6 +25,8 @@ ORG_SCOPED_PREFERENCE_KEYS = frozenset({
     'slack_investigation_complete_notifications',
     'slack_action_start_notifications',
     'slack_action_complete_notifications',
+    # Slack manage page: may a person with no Aurora account @mention Aurora.
+    'slack_allow_unregistered',
     'google_chat_investigation_notifications',
     'pagerduty_incident_notes',
 })

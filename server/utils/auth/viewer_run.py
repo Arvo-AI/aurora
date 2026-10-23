@@ -66,11 +66,11 @@ def message_starts_chat(question, data: dict) -> bool:
     return bool(question or data.get("direct_tool_call") or data.get("trigger_action"))
 
 
-def slack_caller_may_run(org_id: str, user_id: str, *, unlinked: bool) -> bool:
-    """A Slack mention starts a chat. Unlinked members run as the workspace."""
-    # No Aurora account: the existing workspace identity, not a viewer.
+def slack_caller_may_run(org_id: str, user_id: str, *, unlinked: bool = False) -> bool:
+    """An Aurora account mentioning Aurora. Guests are decided before this."""
+    # No account on this call. The Slack manage toggle is what lets them in.
     if unlinked:
-        return True
+        return False
     return viewer_may_run(user_id, org_id)
 
 
