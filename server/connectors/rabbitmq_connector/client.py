@@ -346,6 +346,18 @@ def as_page(data: Any, page: int, page_size: int) -> Dict[str, Any]:
     raise RabbitMQAPIError(_UNEXPECTED)
 
 
+def _read_limited(response: requests.Response) -> bytes:
+    """Copy at most MAX_RESPONSE_BYTES so a huge broker reply is not fully buffered."""
+    body = bytearray()
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        body.extend(chunk)
+        if len(body) > MAX_RESPONSE_BYTES:
+            raise RabbitMQAPIError("RabbitMQ management response was too large")
+    return bytes(body)
+
+
 class RabbitMQClient:
     """HTTP basic-auth client. Construct one per call and ``close()`` it."""
 
@@ -549,6 +561,8 @@ class RabbitMQClient:
         accept_error: bool = False,
     ) -> requests.Response:
         # Redirects would let a public host 302 into a metadata address.
+        # stream=True so an oversized body is dropped before it is fully buffered.
+        response = None
         try:
             response = self._session.request(
                 method,
@@ -556,7 +570,9 @@ class RabbitMQClient:
                 params=params,
                 timeout=self.timeout,
                 allow_redirects=False,
+                stream=True,
             )
+            body = _read_limited(response)
         except requests.exceptions.Timeout as exc:
             raise RabbitMQAPIError(
                 "Timed out reaching the RabbitMQ management API", kind="timeout",
@@ -570,9 +586,12 @@ class RabbitMQClient:
             raise RabbitMQAPIError("Unable to reach the RabbitMQ management API", kind="unreachable") from exc
         except requests.RequestException as exc:
             raise RabbitMQAPIError("Unable to reach the RabbitMQ management API", kind="unreachable") from exc
+        finally:
+            if response is not None:
+                response.close()
 
-        if len(response.content or b"") > MAX_RESPONSE_BYTES:
-            raise RabbitMQAPIError("RabbitMQ management response was too large")
+        response._content = body
+        response._content_consumed = True
         # A 3xx with redirects disabled is a failed call, not a success.
         if 300 <= response.status_code < 400:
             raise RabbitMQAPIError("RabbitMQ management API returned a redirect", response.status_code)

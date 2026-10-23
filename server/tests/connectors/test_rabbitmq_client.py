@@ -16,6 +16,7 @@ def _response(status, payload):
     response.ok = 200 <= status < 300
     response.content = body
     response.json.return_value = payload
+    response.iter_content.return_value = iter([body])
     return response
 
 
@@ -85,9 +86,20 @@ def test_auth_failure_does_not_echo_secrets():
     assert "s3cret-password" not in message
     assert "leaked" not in message
     assert session.request.call_args.kwargs["allow_redirects"] is False
+    assert session.request.call_args.kwargs["stream"] is True
     assert session.trust_env is False
     assert session.request.call_args.kwargs["timeout"] == rmq.TIMEOUT_SECONDS
     assert "s3cret-password" not in session.request.call_args.args[1]
+
+
+def test_oversized_response_is_rejected_before_it_is_kept():
+    session = MagicMock()
+    response = MagicMock()
+    response.iter_content.return_value = iter([b"x" * (rmq.MAX_RESPONSE_BYTES + 1)])
+    session.request.return_value = response
+    with pytest.raises(rmq.RabbitMQAPIError, match="too large"):
+        _client(session).whoami()
+    response.close.assert_called_once()
 
 
 def test_redirect_is_not_followed():
