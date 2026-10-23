@@ -108,6 +108,27 @@ from .incidentio_tool import (
     GetIncidentArgs,
     GetTimelineArgs,
 )
+from .rabbitmq_tool import (
+    rabbitmq_get_overview,
+    rabbitmq_list_nodes,
+    rabbitmq_list_queues,
+    rabbitmq_get_queue,
+    rabbitmq_list_exchanges,
+    rabbitmq_list_bindings,
+    rabbitmq_list_connections,
+    rabbitmq_list_consumers,
+    rabbitmq_health_checks,
+    is_rabbitmq_connected,
+    RabbitMQOverviewArgs,
+    RabbitMQNodesArgs,
+    RabbitMQListQueuesArgs,
+    RabbitMQGetQueueArgs,
+    RabbitMQListExchangesArgs,
+    RabbitMQListBindingsArgs,
+    RabbitMQListConnectionsArgs,
+    RabbitMQListConsumersArgs,
+    RabbitMQHealthArgs,
+)
 from .coroot_tool import (
     coroot_get_incidents,
     coroot_get_incident_detail,
@@ -1083,7 +1104,10 @@ def get_cloud_tools():
     # the next turn: without it the agent ran on a stale tool list for up to
     # LANGCHAIN_TOOLS_CACHE_DURATION after registration and insisted the tools
     # did not exist.
-    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}"
+    # RabbitMQ connect/disconnect happens in the API process. The chatbot and
+    # worker keep their own tool cache, so the credential bit has to be in the key.
+    rabbitmq_connected = is_rabbitmq_connected(user_id)
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}:rabbitmq={int(rabbitmq_connected)}"
     
     current_time = time.time()
     if (
@@ -3023,6 +3047,48 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             logging.debug(f"Coroot tools not added - user {user_id} not connected to Coroot")
     except Exception as e:
         logging.warning(f"Failed to add Coroot observability tools (treating as not connected): {e}")
+
+    # Add RabbitMQ management tools if connected
+    try:
+        if is_rabbitmq_connected(user_id):
+            _rabbitmq_tools = [
+                (rabbitmq_get_overview, "rabbitmq_get_overview", RabbitMQOverviewArgs,
+                 ("Read RabbitMQ cluster overview: version, queue totals, message rates, and listeners. "
+                  "Start here when a broker or consumer outage is suspected.")),
+                (rabbitmq_list_nodes, "rabbitmq_list_nodes", RabbitMQNodesArgs,
+                 "List RabbitMQ nodes with memory and disk alarms. A memory or disk alarm blocks publishers."),
+                (rabbitmq_list_queues, "rabbitmq_list_queues", RabbitMQListQueuesArgs,
+                 ("List RabbitMQ queues sorted by depth. Shows ready, unacked, consumers, and rates. "
+                  "Zero consumers with a growing ready count means the worker is down.")),
+                (rabbitmq_get_queue, "rabbitmq_get_queue", RabbitMQGetQueueArgs,
+                 "Get one RabbitMQ queue, including dead-letter arguments and publish/deliver rates."),
+                (rabbitmq_list_exchanges, "rabbitmq_list_exchanges", RabbitMQListExchangesArgs,
+                 "List RabbitMQ exchanges and their publish rates."),
+                (rabbitmq_list_bindings, "rabbitmq_list_bindings", RabbitMQListBindingsArgs,
+                 "List bindings into a RabbitMQ queue. An empty list does not prove the queue is unused: the default exchange routes by queue name with no binding row."),
+                (rabbitmq_list_connections, "rabbitmq_list_connections", RabbitMQListConnectionsArgs,
+                 "List open RabbitMQ connections: user, peer, channel count, and client library."),
+                (rabbitmq_list_consumers, "rabbitmq_list_consumers", RabbitMQListConsumersArgs,
+                 "List RabbitMQ consumers and whether they are active."),
+                (rabbitmq_health_checks, "rabbitmq_health_checks", RabbitMQHealthArgs,
+                 ("Run RabbitMQ health checks: alarms, vhosts, mirror sync, and AMQP listeners. "
+                  "A failed AMQP port check is normal when the broker only listens on the other port.")),
+            ]
+            for _func, _name, _schema, _desc in _rabbitmq_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+            logging.info(f"Added {len(_rabbitmq_tools)} RabbitMQ tools for user {user_id}")
+        else:
+            logging.debug(f"RabbitMQ tools not added - user {user_id} not connected to RabbitMQ")
+    except Exception as e:
+        logging.warning(f"Failed to add RabbitMQ tools (treating as not connected): {e}")
 
     # Add ThousandEyes network intelligence tools if connected
     try:

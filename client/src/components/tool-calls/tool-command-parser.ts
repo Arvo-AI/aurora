@@ -346,6 +346,52 @@ export function parseCorootCommand(toolName: string, toolInput: string): string 
   }
 }
 
+export function parseRabbitMQCommand(toolName: string, toolInput: string): string {
+  const args = (() => {
+    try {
+      const parsed = JSON.parse(toolInput)
+      return parsed?.kwargs || parsed || {}
+    } catch {
+      return {}
+    }
+  })()
+  const asText = (value: unknown): string => {
+    if (typeof value === "string") return value
+    if (typeof value === "number" || typeof value === "boolean") return String(value)
+    return ""
+  }
+  const vhost = asText(args.vhost)
+  const where = vhost ? ` (${vhost})` : ""
+
+  switch (toolName) {
+    case "rabbitmq_get_overview":
+      return "RabbitMQ: Cluster overview"
+    case "rabbitmq_list_nodes":
+      return "RabbitMQ: Nodes"
+    case "rabbitmq_list_queues": {
+      const match = asText(args.name)
+      const matching = match ? ` matching ${match}` : ""
+      return `RabbitMQ: Queues${matching}${where}`
+    }
+    case "rabbitmq_get_queue":
+      return `RabbitMQ: Queue ${asText(args.name) || "?"}${where}`
+    case "rabbitmq_list_exchanges":
+      return `RabbitMQ: Exchanges${where}`
+    case "rabbitmq_list_bindings":
+      return `RabbitMQ: Bindings for ${asText(args.queue) || "?"}${where}`
+    case "rabbitmq_list_connections":
+      return `RabbitMQ: Connections${where}`
+    case "rabbitmq_list_consumers":
+      return `RabbitMQ: Consumers${where}`
+    case "rabbitmq_health_checks":
+      return "RabbitMQ: Health checks"
+    default: {
+      const clean = toolName.replace("rabbitmq_", "").replace(/_/g, " ")
+      return `RabbitMQ: ${clean}`
+    }
+  }
+}
+
 export function parseGitHubRcaCommand(toolInput: string): string {
   try {
     const parsableCommand = toolInput.replace(/'/g, '"')

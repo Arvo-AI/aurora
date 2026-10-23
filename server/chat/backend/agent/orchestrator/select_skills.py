@@ -104,6 +104,16 @@ _TOOL_METADATA: dict = {
     "coroot_get_overview_logs": {"capability_tags": ["logs", "observability"], "mutates": False, "cacheable": True},
     "coroot_get_node_detail": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": True},
     "coroot_get_risks": {"capability_tags": ["observability"], "mutates": False, "cacheable": True},
+    # RabbitMQ — read-only management API
+    "rabbitmq_get_overview": {"capability_tags": ["runtime_state", "observability"], "mutates": False, "cacheable": True},
+    "rabbitmq_list_nodes": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": True},
+    "rabbitmq_list_queues": {"capability_tags": ["runtime_state", "observability"], "mutates": False, "cacheable": True},
+    "rabbitmq_get_queue": {"capability_tags": ["runtime_state", "observability"], "mutates": False, "cacheable": True},
+    "rabbitmq_list_exchanges": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": True},
+    "rabbitmq_list_bindings": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": True},
+    "rabbitmq_list_connections": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": True},
+    "rabbitmq_list_consumers": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": True},
+    "rabbitmq_health_checks": {"capability_tags": ["runtime_state", "observability"], "mutates": False, "cacheable": True},
     # Jira — ticket history (read) vs mutate (write)
     "jira_search_issues": {"capability_tags": ["ticket_history"], "mutates": False, "cacheable": True},
     "jira_get_issue": {"capability_tags": ["ticket_history"], "mutates": False, "cacheable": True},
