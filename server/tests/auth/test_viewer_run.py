@@ -1,4 +1,10 @@
-from utils.auth.viewer_run import flag_enabled, message_starts_chat, slack_caller_may_run, viewer_only
+from utils.auth.viewer_run import (
+    flag_enabled,
+    message_starts_chat,
+    slack_caller_may_run,
+    viewer_may_edit_memory,
+    viewer_only,
+)
 
 
 def test_missing_preference_uses_the_default():
@@ -29,3 +35,19 @@ def test_editor_and_admin_are_not_viewer_only():
     assert viewer_only(["admin"]) is False
     assert viewer_only(["viewer", "editor"]) is False
     assert viewer_only([]) is False
+
+
+def test_viewers_modify_memory_only_when_the_org_allows(monkeypatch):
+    monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: ["viewer"])
+    monkeypatch.setattr("utils.auth.viewer_run.org_allows_memory_edits", lambda _org: False)
+    assert viewer_may_edit_memory("uid", "org") is False
+    monkeypatch.setattr("utils.auth.viewer_run.org_allows_memory_edits", lambda _org: True)
+    assert viewer_may_edit_memory("uid", "org") is True
+
+
+def test_editors_always_modify_memory(monkeypatch):
+    monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: ["editor"])
+    def _unexpected(_org):
+        raise AssertionError("editor should not read the switch")
+    monkeypatch.setattr("utils.auth.viewer_run.org_allows_memory_edits", _unexpected)
+    assert viewer_may_edit_memory("uid", "org") is True

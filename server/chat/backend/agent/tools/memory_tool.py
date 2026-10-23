@@ -75,6 +75,22 @@ def _validate_title(title: str) -> str | None:
     return None
 
 
+def _reject_edit(user_id: str | None) -> str | None:
+    """JSON error when this person may not modify memory, else None."""
+    if not user_id:
+        return _NO_USER_CTX
+    from utils.auth.stateless_auth import get_org_id_for_user
+    from utils.auth.viewer_run import viewer_may_edit_memory
+
+    org_id = get_org_id_for_user(user_id)
+    # Missing org fails closed. Editors and admins are allowed inside the helper.
+    if not org_id or not viewer_may_edit_memory(user_id, org_id):
+        return json.dumps({
+            "error": "You cannot modify memories. An admin can allow it on the Access tab.",
+        })
+    return None
+
+
 def _error_response(e: ValueError) -> str:
     """Convert a ValueError from _memory_connection into a JSON response."""
     if str(e) == "no_user":
@@ -252,9 +268,13 @@ def write_memory(
     overwrite: bool = False,
     user_id: str | None = None,
     session_id: str | None = None,
+    system: bool = False,
     **kwargs,
 ) -> str:
     """Create a new memory entry, or overwrite an existing one (requires overwrite=true)."""
+    # system writes (the incident index) are not the user editing memory.
+    if not system and (err := _reject_edit(user_id)):
+        return err
     if err := _validate_category(category):
         return err
     if err := _validate_title(title):
@@ -347,6 +367,7 @@ def append_to_memory(
     user_id: str | None = None,
     session_id: str | None = None,
     skip_if_contains: str | None = None,
+    system: bool = False,
     **kwargs,
 ) -> str:
     """Append content to an existing memory entry. Creates the entry if it doesn't exist.
@@ -357,6 +378,8 @@ def append_to_memory(
     concurrent appends can't both pass a pre-lock existence check and duplicate
     a line. Internal callers only (not exposed in the tool schema).
     """
+    if not system and (err := _reject_edit(user_id)):
+        return err
     if err := _validate_category(category):
         return err
     if err := _validate_title(title):
@@ -463,9 +486,12 @@ def edit_memory(
     new_text: str,
     user_id: str | None = None,
     session_id: str | None = None,
+    system: bool = False,
     **kwargs,
 ) -> str:
     """Find and replace text within a memory entry. Like sed — surgical edits without rewriting."""
+    if not system and (err := _reject_edit(user_id)):
+        return err
     if err := _validate_category(category):
         return err
     if err := _validate_title(title):
@@ -686,9 +712,12 @@ def rename_memory(
     new_title: str = "",
     new_description: str = "",
     user_id: str | None = None,
+    system: bool = False,
     **kwargs,
 ) -> str:
     """Rename a memory entry's title and/or update its description without touching content."""
+    if not system and (err := _reject_edit(user_id)):
+        return err
     if err := _validate_category(category):
         return err
     if err := _validate_title(title):
@@ -757,9 +786,12 @@ def delete_memory(
     category: str,
     title: str,
     user_id: str | None = None,
+    system: bool = False,
     **kwargs,
 ) -> str:
     """Permanently delete a memory entry."""
+    if not system and (err := _reject_edit(user_id)):
+        return err
     if err := _validate_category(category):
         return err
     if err := _validate_title(title):

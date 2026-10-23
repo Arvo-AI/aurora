@@ -10,6 +10,7 @@ import { ArrowLeft, AlertCircle, Loader2, LogOut, Bell, RefreshCw, X, Pencil, Ch
 import { useToast } from "@/hooks/use-toast";
 import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite as checkCanWrite } from "@/lib/roles";
+import { useCanEditMemory } from "@/hooks/useCanEditMemory";
 import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
 import { queryClient, jsonFetcher } from "@/lib/query";
 import { apiErrorMessage } from "@/lib/services/api-client";
@@ -73,6 +74,7 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
   const { toast } = useToast();
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
+  const canEditMemory = useCanEditMemory() === true;
   const ChannelIcon = config.channelIcon;
   const MemoryCard = config.MemoryCard;
   const notificationGroups = config.notificationGroups;
@@ -1181,7 +1183,7 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
 
         {/* Slack Memory — the teammate policy that governs tone/routing, mirrored
             from the shared memory system so it's editable in context here. */}
-        <MemoryCard canWrite={canWrite} />
+        <MemoryCard canWrite={canEditMemory} />
 
         {/* Danger Zone */}
         <Card className="border-destructive/50">
