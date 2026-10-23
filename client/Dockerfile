@@ -9,10 +9,8 @@ RUN apk add --no-cache nodejs npm
 
 WORKDIR /app
 
-# Install dependencies first (will be overridden by volume mount in dev).
-# vendor/braces has to be here too: bun install resolves the file: override.
+# Install dependencies first (will be overridden by volume mount in dev)
 COPY package.json bun.lock ./
-COPY vendor/braces ./vendor/braces
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install
 
@@ -52,10 +50,8 @@ ENV NEXT_PUBLIC_ENABLE_SHAREPOINT=$NEXT_PUBLIC_ENABLE_SHAREPOINT
 
 WORKDIR /app
 
-# Optimize Docker layer caching by copying package files and installing dependencies first.
-# vendor/braces has to be here too: bun install resolves the file: override.
+# Optimize Docker layer caching by copying package files and installing dependencies first
 COPY package.json bun.lock ./
-COPY vendor/braces ./vendor/braces
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install
 
