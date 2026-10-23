@@ -104,7 +104,7 @@ function RequestRow({ request }: { request: RequestUsage }) {
         <span className="text-zinc-500">
           {formatTokens(request.input_tokens)}<span className="text-zinc-600">/</span>{formatTokens(request.output_tokens)}
         </span>
-        <span className="text-zinc-400 w-16 text-right">{formatCost(request.estimated_cost)}</span>
+        <span className="text-zinc-400 w-16 text-right" title="Estimated cost">{formatCost(request.estimated_cost)}</span>
         <span className="text-zinc-600 w-12 text-right">
           {request.response_time_ms >= 1000
             ? `${(request.response_time_ms / 1000).toFixed(1)}s`
@@ -194,7 +194,7 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
         {isDev && (
           <div className="flex items-center gap-3 font-mono tabular-nums text-zinc-400">
             <span>{formatTokens(totals.total_input_tokens + totals.total_output_tokens)} tok</span>
-            <span className="text-zinc-300">{formatCost(totals.total_cost)}</span>
+            <span className="text-zinc-300" title="Estimated cost">est. {formatCost(totals.total_cost)}</span>
             <span className="text-zinc-500 text-xs">{totals.request_count} req</span>
             <ChevronDown
               className={`h-3.5 w-3.5 text-zinc-500 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
