@@ -101,6 +101,8 @@ def memory_client(monkeypatch):
     monkeypatch.setattr(memory_routes, "get_org_id_from_request", lambda *a, **k: ORG_ID)
     monkeypatch.setattr(memory_routes, "set_rls_context", lambda *a, **k: ORG_ID)
     monkeypatch.setattr(memory_routes, "get_user_display_name", lambda *a, **k: "Tester")
+    # These tests cover the identity lock, not the viewer switch.
+    monkeypatch.setattr("utils.auth.viewer_run.viewer_may_edit_memory", lambda *a, **k: True)
 
     cursor = MagicMock()
     # Both guards SELECT (category, title) to identify the target entry.
@@ -206,6 +208,7 @@ def memory_tool(monkeypatch):
             return False
 
     monkeypatch.setattr(mod, "_memory_connection", lambda *a, **k: _Conn())
+    monkeypatch.setattr(mod, "_reject_edit", lambda user_id: None)
     mod.cursor = cursor
     return mod
 

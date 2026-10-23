@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
@@ -301,6 +302,28 @@ def pop_connector_access(token) -> None:
     _ACCESS_OVERRIDE.reset(token)
 
 
+def pinned_roles() -> list | None:
+    """Roles from a pinned Access, or None when this task uses the real user."""
+    override = _ACCESS_OVERRIDE.get()
+    if override is None:
+        return None
+    return list(override.roles)
+
+
+@contextmanager
+def pin_sender_access(user_id: str, access_as: str | None):
+    """Re-apply a Slack guest pin in a task that did not inherit it."""
+    # The collector is a new process, so the chat's pin is gone.
+    if access_as != "general_viewer":
+        yield
+        return
+    token = push_connector_access(general_viewer_access(user_id))
+    try:
+        yield
+    finally:
+        pop_connector_access(token)
+
+
 def connector_access_cache_token() -> str:
     """Empty for a normal user. The override's revision when one is pinned."""
     override = _ACCESS_OVERRIDE.get()
@@ -366,6 +389,50 @@ def _team_names(user_id: str, team_ids: set) -> dict:
     except Exception:
         logger.warning("Team name lookup failed during connector denial")
         return {}
+
+
+def _article(word: str) -> str:
+    return "an" if word[:1].lower() in "aeiou" else "a"
+
+
+def describe_caller(user_id: str) -> str:
+    """This person's Aurora level and team, for the prompt."""
+    override = _ACCESS_OVERRIDE.get()
+    # A Slack guest keeps the connector owner's id. The pin is who they are.
+    if override is not None:
+        level = _role_phrase(override.roles) or "viewer"
+        return _caller_line(level, [], guest=True)
+    if not user_id:
+        return ""
+    from utils.auth.enforcer import get_user_roles_in_org
+    from utils.auth.stateless_auth import get_org_id_for_user
+
+    org_id = get_org_id_for_user(user_id)
+    if not org_id:
+        return ""
+    level = _role_phrase(get_user_roles_in_org(user_id, org_id))
+    if not level:
+        return ""
+    team_ids, _rules = load_team_rules(user_id)
+    names = sorted(_team_names(user_id, team_ids).values()) if team_ids else []
+    return _caller_line(level, names, guest=False)
+
+
+def _caller_line(level: str, teams: list, *, guest: bool) -> str:
+    if guest:
+        place = f"a general {level} with no Aurora account and no team"
+    elif len(teams) == 1:
+        place = f"{_article(level)} {level} on the {teams[0]} team"
+    elif teams:
+        listed = ", ".join(teams[:-1]) + " and " + teams[-1]
+        place = f"{_article(level)} {level} on the {listed} teams"
+    else:
+        place = f"{_article(level)} {level} with no team"
+    return (
+        f"The person asking is {place}. "
+        "If they ask their role, answer with this level and team. "
+        "A job title in memory is not their role."
+    )
 
 
 def denial_text(user_id: str, connector: str) -> str:

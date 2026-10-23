@@ -320,9 +320,17 @@ def get_viewer_run(user_id: str):
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No org context"}), 400
-    from utils.auth.viewer_run import org_allows_viewers
+    from utils.auth.viewer_run import (
+        org_allows_editor_memory_edits,
+        org_allows_memory_edits,
+        org_allows_viewers,
+    )
 
-    return jsonify({"chat": org_allows_viewers(org_id)})
+    return jsonify({
+        "chat": org_allows_viewers(org_id),
+        "memory": org_allows_memory_edits(org_id),
+        "editorMemory": org_allows_editor_memory_edits(org_id),
+    })
 
 
 @connector_access_bp.route("/viewer-run", methods=["PUT"])
@@ -332,17 +340,36 @@ def put_viewer_run(user_id: str):
     if not org_id:
         return jsonify({"error": "No org context"}), 400
     body = request.get_json(silent=True) or {}
-    if not isinstance(body.get("chat"), bool):
+    chat = body.get("chat", None)
+    memory = body.get("memory", None)
+    editor_memory = body.get("editorMemory", None)
+    # A client may update one switch. A missing key leaves that switch stored.
+    if chat is not None and not isinstance(chat, bool):
         return jsonify({"error": "`chat` must be a boolean"}), 400
-    from utils.auth.viewer_run import save_viewer_run
+    if memory is not None and not isinstance(memory, bool):
+        return jsonify({"error": "`memory` must be a boolean"}), 400
+    if editor_memory is not None and not isinstance(editor_memory, bool):
+        return jsonify({"error": "`editorMemory` must be a boolean"}), 400
+    if chat is None and memory is None and editor_memory is None:
+        return jsonify({"error": "Nothing to update"}), 400
+    from utils.auth.viewer_run import (
+        org_allows_editor_memory_edits,
+        org_allows_memory_edits,
+        org_allows_viewers,
+        save_viewer_run,
+    )
 
     try:
-        save_viewer_run(org_id, user_id, body["chat"])
+        save_viewer_run(org_id, user_id, chat, memory, editor_memory)
     except Exception:
         logger.exception("Failed to save viewer run settings")
         return jsonify({"error": "Could not save"}), 500
-    logger.info("Viewer chat setting updated by user %s", sanitize(user_id))
-    return jsonify({"chat": body["chat"]})
+    logger.info("Viewer access settings updated by user %s", sanitize(user_id))
+    return jsonify({
+        "chat": org_allows_viewers(org_id) if chat is None else chat,
+        "memory": org_allows_memory_edits(org_id) if memory is None else memory,
+        "editorMemory": org_allows_editor_memory_edits(org_id) if editor_memory is None else editor_memory,
+    })
 
 
 @connector_access_bp.route("/connector-access", methods=["GET"])
