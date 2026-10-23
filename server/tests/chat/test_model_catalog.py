@@ -138,6 +138,7 @@ _CURRENT_GENERATION = {
     "anthropic/claude-fable-5",
     "anthropic/claude-opus-5.5",
     "anthropic/claude-sonnet-5",
+    "anthropic/claude-haiku-5.5",
     "openai/gpt-6-astra",
     "openai/gpt-5.6-sol",
     "openai/gpt-5.6-terra",
@@ -177,6 +178,13 @@ def test_models_that_reject_forcing_have_a_middleware_fallback():
     assert "_rejects_forced_tool_choice" in source
 
 
+def test_explicit_bedrock_haiku_55_uses_its_cutoff():
+    """A geo-prefixed Bedrock id must hit the Haiku 5.5 row, not the generic Claude fallback."""
+    info = ModelCutoffManager().get_model_info("bedrock/us.anthropic.claude-haiku-5-5")
+    cutoff = info.knowledge_cutoff
+    assert (cutoff.year, cutoff.month, cutoff.day) == (2026, 6, 1)
+
+
 def test_gpt56_cutoffs_match_openai_published_date():
     """OpenAI lists Feb 16, 2026 for Sol, Terra and Luna."""
     models = ModelCutoffManager().models
@@ -199,6 +207,7 @@ _PUBLISHED_CUTOFFS = {
     "anthropic/claude-fable-5.1": (2026, 6, 1),
     "anthropic/claude-opus-5.5": (2026, 6, 1),
     "anthropic/claude-sonnet-5": (2026, 1, 1),
+    "anthropic/claude-haiku-5.5": (2026, 6, 1),
     "anthropic/claude-fable-5": (2026, 1, 1),
     "anthropic/claude-opus-4.7": (2026, 1, 1),
     "anthropic/claude-opus-4.6": (2025, 5, 1),

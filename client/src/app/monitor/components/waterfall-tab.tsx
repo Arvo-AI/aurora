@@ -74,7 +74,7 @@ export default function WaterfallTab({ period }: { period: Period }) {
             <StatCard label="Total RCAs" value={String(rca.total_rcas)} icon={Timer} sub={`${rca.failed_rcas} failed`} />
             <StatCard label="Success Rate" value={successRateDisplay} icon={CheckCircle2} />
             <StatCard label="Avg Duration" value={formatDuration(rca.avg_rca_duration_seconds)} icon={Clock} sub={rca.avg_tool_calls_per_rca ? `~${Math.round(rca.avg_tool_calls_per_rca)} tool calls` : undefined} />
-            <StatCard label="Avg Cost / RCA" value={rca.avg_cost_per_rca ? formatCost(rca.avg_cost_per_rca) : '—'} icon={DollarSign} sub={rca.avg_tokens_per_rca ? `~${formatCompact(rca.avg_tokens_per_rca)} tokens` : undefined} />
+            <StatCard label="Estimated cost / RCA" value={rca.avg_cost_per_rca ? formatCost(rca.avg_cost_per_rca) : '—'} icon={DollarSign} sub={rca.avg_tokens_per_rca ? `~${formatCompact(rca.avg_tokens_per_rca)} tokens` : undefined} />
           </>
         ) : null}
       </div>

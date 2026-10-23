@@ -73,9 +73,9 @@ A clean pick like **Claude Opus 4.7** is then translated to that provider's nati
 | | `anthropic/claude-sonnet-4.6` | Previous generation balanced |
 | | `anthropic/claude-opus-4.5` | Previous generation flagship |
 | | `anthropic/claude-sonnet-4.5` | Balanced quality and speed |
-| | `anthropic/claude-haiku-4.5` | Fast, affordable |
+| | `anthropic/claude-haiku-5.5` | Fast, affordable |
 | | `anthropic/claude-3.5-sonnet` | Widely used, reliable |
-| | `anthropic/claude-3-haiku` | Cheapest (default RCA model) |
+| | `anthropic/claude-3-haiku` | Legacy Claude 3 |
 | **Google Gemini** | `google/gemini-4-argon` | Frontier model for hard coding and agent tasks |
 | | `google/gemini-3.5-flash` | Fast, cost-effective with thinking |
 | | `google/gemini-3.1-pro-preview` | Previous flagship with thinking |
@@ -92,7 +92,7 @@ A clean pick like **Claude Opus 4.7** is then translated to that provider's nati
 | | `ollama/qwen2.5` | Alibaba's Qwen 2.5 (various sizes) |
 | | Any model via `ollama pull` | |
 | **AWS Bedrock** | `bedrock/us.anthropic.claude-sonnet-4-5-v1:0` | Native mode: a Bedrock **inference-profile** id (region-prefixed `us.`/`eu.`/`apac.`) |
-| | `bedrock/us.anthropic.claude-haiku-4-5-v1:0` | Faster, cheaper Claude on Bedrock |
+| | `bedrock/us.anthropic.claude-haiku-5-5` | Faster, cheaper Claude on Bedrock |
 | | Gateway: the model name your gateway expects | Gateway mode passes the suffix through to your OpenAI-compatible endpoint |
 
 Model names use the `provider/model` format. New models from each provider are generally supported automatically — update the relevant env var (`MAIN_MODEL`, `RCA_MODEL`) or select chat models in the UI.
@@ -279,18 +279,18 @@ Background RCA uses the single-agent path by default (`ORCHESTRATOR_ENABLED=fals
 
 ### Single-agent RCA (default)
 
-By default, Aurora uses `anthropic/claude-haiku-4.5` for background Root Cause Analysis. You can change this to any supported provider/model.
+By default, Aurora uses `anthropic/claude-haiku-5.5` for background Root Cause Analysis. You can change this to any supported provider/model.
 
 ```bash
 # Format: provider/model-name
-RCA_MODEL=anthropic/claude-haiku-4.5
+RCA_MODEL=anthropic/claude-haiku-5.5
 ```
 
 **Examples:**
 
 ```bash
 # Anthropic (default)
-RCA_MODEL=anthropic/claude-haiku-4.5
+RCA_MODEL=anthropic/claude-haiku-5.5
 
 # OpenAI
 RCA_MODEL=openai/gpt-4o
@@ -305,11 +305,11 @@ RCA_MODEL=vertex/gemini-3.6-flash
 RCA_MODEL=ollama/llama3.1
 
 # AWS Bedrock (native — inference-profile id)
-RCA_MODEL=bedrock/us.anthropic.claude-haiku-4-5-v1:0
+RCA_MODEL=bedrock/us.anthropic.claude-haiku-5-5
 ```
 
 When `RCA_MODEL` is not set, the default depends on `RCA_OPTIMIZE_COSTS`:
-- `RCA_OPTIMIZE_COSTS=true` (default): Uses `anthropic/claude-haiku-4.5`
+- `RCA_OPTIMIZE_COSTS=true` (default): Uses `anthropic/claude-haiku-5.5`
 - `RCA_OPTIMIZE_COSTS=false`: Uses `anthropic/claude-opus-5.5`
 
 ### Multi-agent orchestrator
@@ -354,8 +354,8 @@ The safety judge model can be any provider supported above. A fast, cheap, **non
 The Next Steps recommender polishes suggestion descriptions and summaries with a separate, lightweight model.
 
 ```bash
-# Defaults to anthropic/claude-haiku-4.5 when unset.
-ENRICHMENT_MODEL=anthropic/claude-haiku-4.5
+# Defaults to anthropic/claude-haiku-5.5 when unset.
+ENRICHMENT_MODEL=anthropic/claude-haiku-5.5
 ```
 
 This is light text-formatting work (turning validated fixes into readable descriptions), so a small, cheap model is recommended. Same `provider/model` format as `MAIN_MODEL`.

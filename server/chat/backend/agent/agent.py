@@ -11,8 +11,13 @@ from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from .tools.cloud_tools import set_websocket_context
 from chat.backend.agent.utils.prefix_cache import PrefixCacheManager
-from chat.backend.agent.utils.cache_control import build_cached_system_prompt
-from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, assemble_system_prompt, register_prompt_cache_breakpoints
+from chat.backend.agent.utils.cache_control import (
+    CACHE_STYLE_BEDROCK,
+    build_cached_system_prompt,
+    resolve_cache_style,
+)
+from chat.backend.agent.utils.usage_normalizer import NormalizedUsage, normalize_usage
+from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, assemble_system_prompt_parts, register_prompt_cache_breakpoints
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker, LLMUsage
 from services.memory.injector import MemoryPrefetch
 import time
@@ -268,7 +273,7 @@ class Agent:
             from langchain.agents import create_agent
             from langchain_core.callbacks import BaseCallbackHandler
             from .tools.cloud_tools import get_cloud_tools, set_user_context, set_tool_capture
-            from .middleware import ContextTrimMiddleware, _ForceToolChoice
+            from .middleware import BedrockPromptCacheMiddleware, ContextTrimMiddleware, _ForceToolChoice
 
             logging.info(f"agentic_tool_flow: State has user_id {state.user_id} and session_id {state.session_id}")
             # Set user context for tools
@@ -415,9 +420,12 @@ class Agent:
                 except Exception:
                     logging.debug("Memory prefetch result unavailable")
 
-            system_prompt_text = assemble_system_prompt(segments)
+            # Cross-session static prefix first, per-session suffix second; the
+            # prompt-cache breakpoint goes between them (utils/cache_control.py).
+            static_prompt_text, dynamic_prompt_text = assemble_system_prompt_parts(segments)
+            # A sub-agent's role brief is its whole prompt and is stable across its turns
             if system_prompt_override is not None:
-                system_prompt_text = system_prompt_override
+                static_prompt_text, dynamic_prompt_text = system_prompt_override, ""
             if tool_subset is not None:
                 tools = tool_subset
 
@@ -525,41 +533,32 @@ class Agent:
                         
                         call_info = self.current_calls.pop(run_id)
                         
-                        input_tokens = 0
-                        output_tokens = 0
-
                         # Extract real token counts from provider usage_metadata
-                        cached_input_tokens = 0
+                        norm = NormalizedUsage()
                         if hasattr(response, 'generations'):
                             for gen_list in response.generations:
                                 for gen in gen_list:
                                     msg = getattr(gen, 'message', None)
                                     if msg and getattr(msg, 'usage_metadata', None):
-                                        um = msg.usage_metadata
-                                        input_tokens = um.get('input_tokens', 0)
-                                        output_tokens = um.get('output_tokens', 0)
-                                        details = um.get('input_token_details', {})
-                                        if isinstance(details, dict):
-                                            cached_input_tokens = details.get('cache_read', 0)
+                                        norm = normalize_usage(msg.usage_metadata)
                                         break
-                                if input_tokens > 0:
+                                if norm.input_tokens > 0:
                                     break
 
                         # Also check llm_output for OpenAI-style token_usage
-                        if input_tokens == 0 and hasattr(response, 'llm_output') and response.llm_output:
-                            token_usage = response.llm_output.get('token_usage', {})
-                            input_tokens = token_usage.get('prompt_tokens', 0)
-                            output_tokens = token_usage.get('completion_tokens', 0)
-                            prompt_details = token_usage.get('prompt_tokens_details', {})
-                            if isinstance(prompt_details, dict):
-                                cached_input_tokens = prompt_details.get('cached_tokens', 0)
+                        if norm.input_tokens == 0 and hasattr(response, 'llm_output') and response.llm_output:
+                            norm = normalize_usage(response.llm_output.get('token_usage', {}))
+
+                        input_tokens = norm.input_tokens
+                        output_tokens = norm.output_tokens
 
                         if input_tokens == 0 and output_tokens == 0:
                             logging.warning(f"No provider usage_metadata for {self.model_name} - tokens will be 0")
 
                         estimated_cost = LLMUsageTracker.calculate_cost(
                             input_tokens, output_tokens, self.model_name,
-                            cached_input_tokens=cached_input_tokens,
+                            cached_input_tokens=norm.cache_read_tokens,
+                            cache_write_tokens=norm.cache_write_tokens,
                         )
                         
                         usage = LLMUsage(
@@ -573,7 +572,9 @@ class Agent:
                             estimated_cost=estimated_cost,
                             response_time_ms=int((time.time() - call_info['start_time']) * 1000),
                             error_message=None,
-                            request_metadata={'agent_executor': True}
+                            request_metadata={'agent_executor': True},
+                            cache_read_tokens=norm.cache_read_tokens,
+                            cache_write_tokens=norm.cache_write_tokens,
                         )
                         
                         if LLMUsageTracker.store_usage(usage):
@@ -675,12 +676,20 @@ class Agent:
                     0, _ForceToolChoice("trigger_rca", provider=tool_choice_provider)
                 )
 
-            # Mark the stable system prompt with an Anthropic cache_control
-            # breakpoint so turns 2..N of a session bill the prefix as a 0.1x
-            # cache read. No-op for non-Anthropic models and tiny prompts.
+            # Mark the stable system prompt with a cache breakpoint in the dialect of
+            # the provider actually serving the model (cache_control vs Bedrock
+            # cachePoint). No-op for providers without a style and tiny prompts.
+            serving_provider = get_registry().get_provider(tool_choice_provider)
             system_prompt_for_agent = build_cached_system_prompt(
-                model_name, system_prompt_text
+                model_name,
+                static_prompt_text,
+                dynamic_prompt_text,
+                provider=serving_provider,
             )
+            # Native Bedrock also needs explicit points after the tools and the last
+            # message; appended last so it marks the final request.
+            if resolve_cache_style(serving_provider, model_name) == CACHE_STYLE_BEDROCK:
+                middlewares.append(BedrockPromptCacheMiddleware())
 
             agent_graph = create_agent(
                 model=streaming_llm,

@@ -56,6 +56,9 @@ class OpenRouterPricingService:
             "anthropic/claude-opus-5.5": {"input": 0.004, "output": 0.020},
             "anthropic/claude-opus-5-5": {"input": 0.004, "output": 0.020},
             "anthropic/claude-sonnet-5": {"input": 0.002, "output": 0.010},
+            # Haiku 5.5 base tier (prompts up to 100K tokens).
+            "anthropic/claude-haiku-5.5": {"input": 0.0001, "output": 0.0005},
+            "anthropic/claude-haiku-5-5": {"input": 0.0001, "output": 0.0005},
             "anthropic/claude-fable-5.1": {"input": 0.010, "output": 0.050},
             "anthropic/claude-fable-5-1": {"input": 0.010, "output": 0.050},
             "anthropic/claude-fable-5": {"input": 0.010, "output": 0.050},
