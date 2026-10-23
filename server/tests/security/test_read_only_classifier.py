@@ -656,6 +656,8 @@ def test_diagnostic_ssh_is_read_only(is_read_only, command):
     f"ssh {_HOST} 'journalctl --vacuum-time=1s'",
     f"ssh {_HOST} 'date -s 2020-01-01'",
     f"ssh {_HOST} 'hostname new-name'",
+    f"ssh {_HOST} 'hostname -F /tmp/name'",
+    f"ssh {_HOST} 'hostname --file /tmp/name'",
     f"ssh {_HOST} 'dmesg -c'",
     f"ssh {_HOST} 'sort -o /tmp/out /etc/passwd'",
 ])

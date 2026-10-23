@@ -266,17 +266,57 @@ def terminal_exec(
         split_segments,
     )
     ssh_clients = ("ssh", "scp", "sftp")
+    # `sh -c 'ssh host reboot'` hides the client in the -c script.
+    interpreters = frozenset({"sh", "bash", "dash", "ksh", "zsh", "ash"})
     program = command.lstrip().split(None, 1)[0].rsplit("/", 1)[-1].lower() if command.lstrip() else ""
     segments = split_segments(command)
 
-    def _segment_runs_ssh(segment):
+    def _interpreter_script(segment: list) -> str:
+        i = 0
+        while i < len(segment) and "=" in segment[i] and not segment[i].startswith("-"):
+            i += 1
+        if i >= len(segment):
+            return ""
+        exe = segment[i].rsplit("/", 1)[-1].lower()
+        if exe not in interpreters:
+            return ""
+        i += 1
+        while i < len(segment):
+            tok = segment[i]
+            # `-c` and `--command` take the script as the next token.
+            if tok in ("-c", "--command"):
+                return segment[i + 1] if i + 1 < len(segment) else ""
+            # `-lc` is login plus -c. A glued `-cCMD` keeps the script on this token.
+            if tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:]:
+                glued = tok.split("c", 1)[1]
+                if glued:
+                    return glued
+                return segment[i + 1] if i + 1 < len(segment) else ""
+            i += 1
+        return ""
+
+    def _segment_runs_ssh(segment: list, depth: int = 0) -> bool:
+        if depth > 4:
+            return False
         facts = analyze_segment(segment)
         if facts.executable in ssh_clients:
             return True
         # `sudo ssh` / `timeout 5 ssh` hide the client in the wrapper's arguments.
-        if facts.executable in COMMAND_WRAPPERS:
-            return any(tok.rsplit("/", 1)[-1] in ssh_clients for tok in segment)
-        return False
+        if facts.executable in COMMAND_WRAPPERS and any(
+            tok.rsplit("/", 1)[-1] in ssh_clients for tok in segment
+        ):
+            return True
+        script = _interpreter_script(segment)
+        if not script:
+            return False
+        nested = split_segments(script)
+        # Unbalanced quotes refuse to split. A bare token named ssh is still a client.
+        if nested is None:
+            return any(
+                tok.strip("\"'`").rsplit("/", 1)[-1].lower() in ssh_clients
+                for tok in script.split()
+            )
+        return any(_segment_runs_ssh(part, depth + 1) for part in nested)
 
     if segments is None:
         # A redirect refuses to split, which would hide `echo x > f && ssh`.

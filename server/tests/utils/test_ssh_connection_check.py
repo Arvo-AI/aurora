@@ -144,6 +144,13 @@ def test_rejected_exec_after_login_is_success():
     assert connected_as == "aurora-ro"
 
 
+def test_rejected_exec_on_a_dead_transport_fails():
+    success, error, connected_as = _reply(exec_rejected=True, active=False)
+    assert success is False
+    assert error == SESSION_DROPPED
+    assert connected_as is None
+
+
 def test_validate_and_test_ssh_accepts_rejected_exec():
     validate = _load_validate_and_test_ssh(_RejectedExecParamiko)
     success, error, connected_as = validate("198.51.100.1", "aurora-ro", "not-a-key")

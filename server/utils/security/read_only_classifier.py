@@ -488,6 +488,8 @@ _CONTAINER_READS = frozenset({
 # A binary in SHELL_READ_PROGRAMS can still mutate through a flag or a
 # positional (`journalctl --vacuum-time`, `ip route del`, `date -s`).
 _SHELL_MUTATING_EXACT = {
+    # GNU hostname -F / --file writes the hostname from a file.
+    'hostname': frozenset({'-F', '--file'}),
     'journalctl': frozenset({'--rotate', '--flush', '--sync', '--relinquish'}),
     'dmesg': frozenset({'-c', '--clear', '--read-clear', '-n', '--console'}),
     'date': frozenset({'-s', '--set'}),
@@ -640,7 +642,11 @@ def _is_shell_diagnostic(command: str) -> bool:
         return len(op) >= 2 and op[1] in _CONTAINER_READS
     for seg, fact in zip(segments, facts):
         exe = fact.executable or ''
-        flags = [t.lower().split('=', 1)[0] for t in seg if t.startswith('-')]
+        # Short options stay cased: `hostname -F` writes, `hostname -f` only prints.
+        flags = [
+            (t.split('=', 1)[0].lower() if t.startswith('--') else t.split('=', 1)[0])
+            for t in seg if t.startswith('-')
+        ]
         # `journalctl --vacuum-time` and `sort -o out` are writes with no write verb.
         if any(_shell_flag_mutates(exe, flag) for flag in flags):
             return False

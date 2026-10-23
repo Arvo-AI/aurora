@@ -16,8 +16,8 @@ def session_reply_result(
     exec_rejected: bool = False,
 ) -> Tuple[bool, Optional[str], Optional[str]]:
     # connect() already authenticated. A server may refuse the exec channel
-    # after that, and the login is still a passed check.
-    if exec_rejected and not result and not error_output:
+    # after that, and the login is still a passed check. A dead transport is not.
+    if exec_rejected and not result and not error_output and transport_active:
         return True, None, target_user
 
     # A timeout or a dropped read, with nothing in hand, is still a failed check.

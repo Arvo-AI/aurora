@@ -431,6 +431,19 @@ class TestTerminalExecInvokesHelpers:
         assert json.loads(chained)["code"] == "READ_ONLY_MODE"
         stubs.gate.assert_not_called()
 
+        # The client is inside an interpreter payload, not a segment executable.
+        for wrapped in (
+            "sh -c 'ssh admin@198.51.100.1 systemctl restart nginx'",
+            "bash -c 'ssh admin@198.51.100.1 reboot'",
+        ):
+            hidden = terminal_exec(
+                command=wrapped,
+                user_id="u-1",
+                session_id="s-1",
+            )
+            assert json.loads(hidden)["code"] == "READ_ONLY_MODE"
+            stubs.gate.assert_not_called()
+
         stubs.gate.reset_mock()
         stubs.terminal_run.reset_mock()
         terminal_exec(
