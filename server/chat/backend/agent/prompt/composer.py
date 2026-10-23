@@ -129,6 +129,13 @@ def build_prompt_segments(
     # The injector's full-content memories are appended in agent.py after this returns.
     memory_context = ""
     user_id = getattr(state, "user_id", None) if state else None
+    caller = ""
+    if user_id:
+        try:
+            from utils.auth.connector_access import describe_caller
+            caller = describe_caller(user_id)
+        except Exception:
+            logging.exception("Failed to describe the caller for the prompt")
     if user_id:
         try:
             memory_context = build_memory_index(user_id) or ""
@@ -168,6 +175,7 @@ def build_prompt_segments(
         knowledge_base_memory=memory_context,
         integration_index=integration_index,
         security_policy=security_policy,
+        caller=caller,
         is_rca_background=is_background and not is_action,
     )
 
@@ -177,6 +185,7 @@ def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt buil
 
     # Ordered optional segments
     for segment in (
+        segments.caller,
         segments.security_policy,
         segments.background_mode,
         segments.knowledge_base_memory,

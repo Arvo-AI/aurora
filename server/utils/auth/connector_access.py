@@ -391,6 +391,50 @@ def _team_names(user_id: str, team_ids: set) -> dict:
         return {}
 
 
+def _article(word: str) -> str:
+    return "an" if word[:1].lower() in "aeiou" else "a"
+
+
+def describe_caller(user_id: str) -> str:
+    """This person's Aurora level and team, for the prompt."""
+    override = _ACCESS_OVERRIDE.get()
+    # A Slack guest keeps the connector owner's id. The pin is who they are.
+    if override is not None:
+        level = _role_phrase(override.roles) or "viewer"
+        return _caller_line(level, [], guest=True)
+    if not user_id:
+        return ""
+    from utils.auth.enforcer import get_user_roles_in_org
+    from utils.auth.stateless_auth import get_org_id_for_user
+
+    org_id = get_org_id_for_user(user_id)
+    if not org_id:
+        return ""
+    level = _role_phrase(get_user_roles_in_org(user_id, org_id))
+    if not level:
+        return ""
+    team_ids, _rules = load_team_rules(user_id)
+    names = sorted(_team_names(user_id, team_ids).values()) if team_ids else []
+    return _caller_line(level, names, guest=False)
+
+
+def _caller_line(level: str, teams: list, *, guest: bool) -> str:
+    if guest:
+        place = f"a general {level} with no Aurora account and no team"
+    elif len(teams) == 1:
+        place = f"{_article(level)} {level} on the {teams[0]} team"
+    elif teams:
+        listed = ", ".join(teams[:-1]) + " and " + teams[-1]
+        place = f"{_article(level)} {level} on the {listed} teams"
+    else:
+        place = f"{_article(level)} {level} with no team"
+    return (
+        f"The person asking is {place}. "
+        "If they ask their role, answer with this level and team. "
+        "A job title in memory is not their role."
+    )
+
+
 def denial_text(user_id: str, connector: str) -> str:
     access = access_for(user_id)
     names = _team_names(user_id, access.team_ids) if access.team_ids else {}
