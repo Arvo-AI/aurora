@@ -355,9 +355,12 @@ export function parseRabbitMQCommand(toolName: string, toolInput: string): strin
       return {}
     }
   })()
-  const str = (value: unknown) =>
-    value != null && typeof value !== "object" ? String(value) : ""
-  const vhost = str(args.vhost)
+  const asText = (value: unknown): string => {
+    if (typeof value === "string") return value
+    if (typeof value === "number" || typeof value === "boolean") return String(value)
+    return ""
+  }
+  const vhost = asText(args.vhost)
   const where = vhost ? ` (${vhost})` : ""
 
   switch (toolName) {
@@ -365,14 +368,17 @@ export function parseRabbitMQCommand(toolName: string, toolInput: string): strin
       return "RabbitMQ: Cluster overview"
     case "rabbitmq_list_nodes":
       return "RabbitMQ: Nodes"
-    case "rabbitmq_list_queues":
-      return `RabbitMQ: Queues${args.name ? ` matching ${str(args.name)}` : ""}${where}`
+    case "rabbitmq_list_queues": {
+      const match = asText(args.name)
+      const matching = match ? ` matching ${match}` : ""
+      return `RabbitMQ: Queues${matching}${where}`
+    }
     case "rabbitmq_get_queue":
-      return `RabbitMQ: Queue ${str(args.name) || "?"}${where}`
+      return `RabbitMQ: Queue ${asText(args.name) || "?"}${where}`
     case "rabbitmq_list_exchanges":
       return `RabbitMQ: Exchanges${where}`
     case "rabbitmq_list_bindings":
-      return `RabbitMQ: Bindings for ${str(args.queue) || "?"}${where}`
+      return `RabbitMQ: Bindings for ${asText(args.queue) || "?"}${where}`
     case "rabbitmq_list_connections":
       return `RabbitMQ: Connections${where}`
     case "rabbitmq_list_consumers":

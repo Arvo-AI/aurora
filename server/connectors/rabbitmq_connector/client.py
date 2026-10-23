@@ -12,8 +12,6 @@ from urllib.parse import quote, urlparse
 
 import requests
 
-from utils.log_sanitizer import sanitize
-
 logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 20
@@ -59,12 +57,48 @@ _HEALTH_CHECKS = (
 )
 
 
+_UNEXPECTED = "RabbitMQ returned an unexpected response"
+
+
 class RabbitMQAPIError(Exception):
     """Safe, user-facing management API failure. Never carries a response body."""
 
-    def __init__(self, message: str, status_code: Optional[int] = None):
+    def __init__(self, message: str, status_code: Optional[int] = None, kind: str = "unreachable"):
         super().__init__(message)
         self.status_code = status_code
+        self.kind = kind
+
+
+def _origin(scheme: str, host: str, port: Optional[int]) -> str:
+    netloc = f"[{host}]" if ":" in host else host
+    if port is not None:
+        netloc = f"{netloc}:{port}"
+    return f"{scheme}://{netloc}"
+
+
+def _checked_port(parsed) -> Optional[int]:
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Management URL has an invalid port") from exc
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError("Management URL has an invalid port")
+    return port
+
+
+def _checked_host(parsed) -> str:
+    # Basic auth belongs in the vault payload, not the URL we store and log.
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("http", "https") or parsed.username or parsed.password:
+        raise ValueError("Management URL must be an http(s) URL without embedded credentials")
+    if parsed.query or parsed.fragment or parsed.params:
+        raise ValueError("Management URL must not include a query string")
+    if parsed.path not in ("", "/"):
+        raise ValueError("Management URL must not include a path")
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not host or host in _BLOCKED_HOSTS:
+        raise ValueError("Management URL points at an address Aurora will not connect to")
+    return host
 
 
 def normalize_management_url(raw: str) -> str:
@@ -79,34 +113,11 @@ def normalize_management_url(raw: str) -> str:
         raise ValueError("Management URL is required")
     if "://" not in value:
         value = "https://" + value
-
     parsed = urlparse(value)
-    scheme = (parsed.scheme or "").lower()
-    # Basic auth belongs in the vault payload, not the URL we store and log.
-    if scheme not in ("http", "https") or parsed.username or parsed.password:
-        raise ValueError("Management URL must be an http(s) URL without embedded credentials")
-    if parsed.query or parsed.fragment or parsed.params:
-        raise ValueError("Management URL must not include a query string")
-    if parsed.path not in ("", "/"):
-        raise ValueError("Management URL must not include a path")
-
-    host = (parsed.hostname or "").lower().rstrip(".")
-    if not host or host in _BLOCKED_HOSTS:
-        raise ValueError("Management URL points at an address Aurora will not connect to")
-
-    try:
-        port = parsed.port
-    except ValueError as exc:
-        raise ValueError("Management URL has an invalid port") from exc
-    if port is not None and not 1 <= port <= 65535:
-        raise ValueError("Management URL has an invalid port")
-
+    host = _checked_host(parsed)
+    port = _checked_port(parsed)
     _reject_host(host, port)
-
-    netloc = f"[{host}]" if ":" in host else host
-    if port is not None:
-        netloc = f"{netloc}:{port}"
-    return f"{scheme}://{netloc}"
+    return _origin((parsed.scheme or "").lower(), host, port)
 
 
 def _reject_host(host: str, port: Optional[int]) -> None:
@@ -330,7 +341,7 @@ def as_page(data: Any, page: int, page_size: int) -> Dict[str, Any]:
             "total_count": total,
             "filtered_count": total,
         }
-    raise RabbitMQAPIError("RabbitMQ returned an unexpected response")
+    raise RabbitMQAPIError(_UNEXPECTED)
 
 
 class RabbitMQClient:
@@ -366,19 +377,19 @@ class RabbitMQClient:
     def whoami(self) -> Dict[str, Any]:
         body = self._get_json("/api/whoami")
         if not isinstance(body, dict):
-            raise RabbitMQAPIError("RabbitMQ returned an unexpected response")
+            raise RabbitMQAPIError(_UNEXPECTED)
         return {"name": body.get("name"), "tags": normalize_tags(body.get("tags"))}
 
     def overview(self) -> Dict[str, Any]:
         body = self._get_json("/api/overview")
         if not isinstance(body, dict):
-            raise RabbitMQAPIError("RabbitMQ returned an unexpected response")
+            raise RabbitMQAPIError(_UNEXPECTED)
         return summarize_overview(body)
 
     def nodes(self) -> List[Dict[str, Any]]:
         body = self._get_json("/api/nodes")
         if not isinstance(body, list):
-            raise RabbitMQAPIError("RabbitMQ returned an unexpected response")
+            raise RabbitMQAPIError(_UNEXPECTED)
         return [summarize_node(node) for node in body if isinstance(node, dict)]
 
     def queues(
@@ -415,7 +426,7 @@ class RabbitMQClient:
     def queue(self, vhost: str, name: str) -> Dict[str, Any]:
         body = self._get_json(f"/api/queues/{path_segment(vhost)}/{path_segment(name)}")
         if not isinstance(body, dict):
-            raise RabbitMQAPIError("RabbitMQ returned an unexpected response")
+            raise RabbitMQAPIError(_UNEXPECTED)
         return summarize_queue(body)
 
     def exchanges(
@@ -444,7 +455,7 @@ class RabbitMQClient:
             f"/api/queues/{path_segment(vhost)}/{path_segment(queue)}/bindings"
         )
         if not isinstance(body, list):
-            raise RabbitMQAPIError("RabbitMQ returned an unexpected response")
+            raise RabbitMQAPIError(_UNEXPECTED)
         return [summarize_binding(item) for item in body if isinstance(item, dict)]
 
     def connections(
@@ -465,7 +476,7 @@ class RabbitMQClient:
         path = f"/api/consumers/{path_segment(vhost)}" if vhost else "/api/consumers"
         body = self._get_json(path)
         if not isinstance(body, list):
-            raise RabbitMQAPIError("RabbitMQ returned an unexpected response")
+            raise RabbitMQAPIError(_UNEXPECTED)
         return [summarize_consumer(item) for item in body[:MAX_PAGE_SIZE] if isinstance(item, dict)]
 
     def health_checks(self) -> Dict[str, Any]:
@@ -541,15 +552,18 @@ class RabbitMQClient:
                 allow_redirects=False,
             )
         except requests.exceptions.Timeout as exc:
-            raise RabbitMQAPIError("Timed out reaching the RabbitMQ management API") from exc
+            raise RabbitMQAPIError(
+                "Timed out reaching the RabbitMQ management API", kind="timeout",
+            ) from exc
         except requests.exceptions.SSLError as exc:
             raise RabbitMQAPIError(
-                "TLS verification failed. Reconnect with TLS verification disabled if the broker uses a private CA."
+                "TLS verification failed. Reconnect with TLS verification disabled if the broker uses a private CA.",
+                kind="tls",
             ) from exc
         except requests.exceptions.ConnectionError as exc:
-            raise RabbitMQAPIError("Unable to reach the RabbitMQ management API") from exc
+            raise RabbitMQAPIError("Unable to reach the RabbitMQ management API", kind="unreachable") from exc
         except requests.RequestException as exc:
-            raise RabbitMQAPIError("Unable to reach the RabbitMQ management API") from exc
+            raise RabbitMQAPIError("Unable to reach the RabbitMQ management API", kind="unreachable") from exc
 
         if len(response.content or b"") > MAX_RESPONSE_BYTES:
             raise RabbitMQAPIError("RabbitMQ management response was too large")
@@ -558,22 +572,19 @@ class RabbitMQClient:
             raise RabbitMQAPIError("RabbitMQ management API returned a redirect", response.status_code)
         if accept_error or response.ok:
             return response
-        logger.warning(
-            "[RABBITMQ] %s %s failed with HTTP %s",
-            method,
-            sanitize(path),
-            response.status_code,
-        )
+        # Do not log the path or the response: both are tainted by the credentialed call.
         if response.status_code == 401:
-            raise RabbitMQAPIError("RabbitMQ rejected the username or password", 401)
+            logger.warning("[RABBITMQ] management request was rejected")
+            raise RabbitMQAPIError("RabbitMQ rejected the username or password", 401, kind="auth")
         if response.status_code == 403:
+            logger.warning("[RABBITMQ] management request was forbidden")
             raise RabbitMQAPIError(
                 "This RabbitMQ user cannot read the management API. Grant the monitoring tag.",
                 403,
+                kind="forbidden",
             )
         if response.status_code == 404:
-            raise RabbitMQAPIError("RabbitMQ resource was not found", 404)
-        raise RabbitMQAPIError(
-            f"RabbitMQ management API returned HTTP {response.status_code}",
-            response.status_code,
-        )
+            logger.warning("[RABBITMQ] management resource was not found")
+            raise RabbitMQAPIError("RabbitMQ resource was not found", 404, kind="not_found")
+        logger.warning("[RABBITMQ] management request failed")
+        raise RabbitMQAPIError("RabbitMQ management API request failed", response.status_code)

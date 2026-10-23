@@ -34,7 +34,7 @@ export function RabbitMQConnectionStep({
   setSkipTls,
   loading,
   onConnect,
-}: RabbitMQConnectionStepProps) {
+}: Readonly<RabbitMQConnectionStepProps>) {
   return (
     <Card>
       <CardContent className="space-y-6 pt-6">

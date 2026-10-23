@@ -20,8 +20,8 @@ def _stored_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         data = get_token_data(user_id, "rabbitmq")
         return data or None
-    except Exception as exc:
-        logger.error("[RABBITMQ] Failed to retrieve credentials: %s", type(exc).__name__)
+    except Exception:
+        logger.exception("[RABBITMQ] Failed to retrieve credentials")
         return None
 
 
@@ -50,6 +50,19 @@ def _clean_vhost(raw: Any) -> str:
     return vhost
 
 
+def _public_connect_error(kind: str) -> str:
+    """Map a failure kind to a fixed sentence. The kind never reaches the client."""
+    if kind == "auth":
+        return "RabbitMQ rejected the username or password"
+    if kind == "forbidden":
+        return "This RabbitMQ user cannot read the management API. Grant the monitoring tag."
+    if kind == "tls":
+        return "TLS verification failed. Reconnect with TLS verification disabled if the broker uses a private CA."
+    if kind == "timeout":
+        return "Timed out reaching the RabbitMQ management API"
+    return "Unable to reach the RabbitMQ management API"
+
+
 def _client_from_payload(payload: Dict[str, Any]) -> RabbitMQClient:
     verify_tls = payload.get("verify_tls", True)
     if not isinstance(verify_tls, bool):
@@ -72,8 +85,9 @@ def connect(user_id):
     try:
         vhost = _clean_vhost(payload.get("vhost"))
         client = _client_from_payload(payload)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    except ValueError:
+        logger.warning("[RABBITMQ] Rejected connection details")
+        return jsonify({"error": "Invalid RabbitMQ connection details"}), 400
 
     # TLS bypass is an explicit opt-in for private CAs. Log the host only.
     if not client.verify_tls:
@@ -84,11 +98,8 @@ def connect(user_id):
         who = client.whoami()
         overview = client.overview()
     except RabbitMQAPIError as exc:
-        # Auth and permission failures are actionable; transport errors stay generic.
-        if exc.status_code in (401, 403):
-            return jsonify({"error": str(exc)}), 400
-        logger.warning("[RABBITMQ] Connect failed: %s", exc)
-        return jsonify({"error": str(exc)}), 400
+        logger.warning("[RABBITMQ] Connect failed")
+        return jsonify({"error": _public_connect_error(exc.kind)}), 400
     finally:
         client.close()
 
@@ -106,8 +117,8 @@ def connect(user_id):
 
     try:
         store_tokens_in_db(user_id, token_payload, "rabbitmq")
-    except Exception as exc:
-        logger.exception("[RABBITMQ] Failed to store credentials: %s", type(exc).__name__)
+    except Exception:
+        logger.exception("[RABBITMQ] Failed to store credentials")
         return jsonify({"error": "Failed to store RabbitMQ credentials"}), 500
 
     clear_credentials_cache(user_id)
@@ -137,16 +148,16 @@ def status(user_id):
             password=creds["password"],
             verify_tls=bool(creds.get("verify_tls", True)),
         )
-    except ValueError as exc:
-        logger.warning("[RABBITMQ] Stored management URL is not usable: %s", exc)
+    except ValueError:
+        logger.warning("[RABBITMQ] Stored management URL is not usable")
         return jsonify({"connected": False, "error": "Failed to validate RabbitMQ connection"})
 
     try:
         # whoami is enough to prove the credentials still work. Cluster name
         # and version were stored at connect time.
         who = client.whoami()
-    except (RabbitMQAPIError, ValueError) as exc:
-        logger.warning("[RABBITMQ] Status validation failed: %s", exc)
+    except (RabbitMQAPIError, ValueError):
+        logger.warning("[RABBITMQ] Status validation failed")
         return jsonify({"connected": False, "error": "Failed to validate RabbitMQ connection"})
     finally:
         client.close()
@@ -177,6 +188,6 @@ def disconnect(user_id):
             "message": "RabbitMQ disconnected successfully",
             "tokensDeleted": rows,
         })
-    except Exception as exc:
-        logger.exception("[RABBITMQ] Failed to disconnect: %s", type(exc).__name__)
+    except Exception:
+        logger.exception("[RABBITMQ] Failed to disconnect")
         return jsonify({"error": "Failed to disconnect RabbitMQ"}), 500

@@ -14,7 +14,7 @@ export function RabbitMQConnectedStatus({
   status,
   onDisconnect,
   loading,
-}: RabbitMQConnectedStatusProps) {
+}: Readonly<RabbitMQConnectedStatusProps>) {
   const tags = status.tags?.length ? status.tags.join(", ") : "none reported";
   return (
     <Card>

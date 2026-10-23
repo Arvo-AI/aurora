@@ -17,13 +17,14 @@ from utils.auth.token_management import get_token_data
 logger = logging.getLogger(__name__)
 
 MAX_OUTPUT_CHARS = 80_000
+_PAGE_HELP = "Page number, starting at 1."
 
 
 def _credentials(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         creds = get_token_data(user_id, "rabbitmq")
-    except Exception as exc:
-        logger.error("[RABBITMQ-TOOL] Failed to get credentials: %s", type(exc).__name__)
+    except Exception:
+        logger.exception("[RABBITMQ-TOOL] Failed to get credentials")
         return None
     if not creds or not creds.get("url") or not creds.get("username") or not creds.get("password"):
         return None
@@ -45,8 +46,8 @@ def _build_client(user_id: str) -> Optional[RabbitMQClient]:
             password=creds["password"],
             verify_tls=bool(creds.get("verify_tls", True)),
         )
-    except Exception as exc:
-        logger.error("[RABBITMQ-TOOL] Failed to build client: %s", type(exc).__name__)
+    except Exception:
+        logger.exception("[RABBITMQ-TOOL] Failed to build client")
         return None
 
 
@@ -94,7 +95,7 @@ def _rabbitmq_tool(fn: Callable[..., Any]) -> Callable[..., str]:
         except RabbitMQAPIError as exc:
             return json.dumps({"error": str(exc)})
         except Exception as exc:
-            logger.error("[RABBITMQ-TOOL] %s failed: %s", fn.__name__, type(exc).__name__)
+            logger.exception("[RABBITMQ-TOOL] %s failed", fn.__name__)
             return json.dumps({"error": "Unexpected error contacting RabbitMQ"})
         finally:
             client.close()
@@ -113,7 +114,7 @@ class RabbitMQNodesArgs(BaseModel):
 class RabbitMQListQueuesArgs(BaseModel):
     vhost: Optional[str] = Field(default=None, description="Limit to one vhost. Omit to scan every vhost.")
     name: Optional[str] = Field(default=None, description="Queue name substring. Not a regex.")
-    page: int = Field(default=1, description="Page number, starting at 1.")
+    page: int = Field(default=1, description=_PAGE_HELP)
     page_size: int = Field(default=50, description="Queues per page (max 100). Sorted by depth, deepest first.")
 
 
@@ -124,7 +125,7 @@ class RabbitMQGetQueueArgs(BaseModel):
 
 class RabbitMQListExchangesArgs(BaseModel):
     vhost: Optional[str] = Field(default=None, description="Limit to one vhost. Omit to list every vhost.")
-    page: int = Field(default=1, description="Page number, starting at 1.")
+    page: int = Field(default=1, description=_PAGE_HELP)
     page_size: int = Field(default=50, description="Exchanges per page (max 100).")
 
 
@@ -135,7 +136,7 @@ class RabbitMQListBindingsArgs(BaseModel):
 
 class RabbitMQListConnectionsArgs(BaseModel):
     vhost: Optional[str] = Field(default=None, description="Limit to one vhost. Omit to list every connection.")
-    page: int = Field(default=1, description="Page number, starting at 1.")
+    page: int = Field(default=1, description=_PAGE_HELP)
     page_size: int = Field(default=50, description="Connections per page (max 100).")
 
 

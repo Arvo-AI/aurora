@@ -52,7 +52,13 @@ export default function RabbitMQAuthPage() {
             updateLocalStorageConnection(parsed?.connected ?? false);
             if (isInitialLoad) {
               setIsInitialLoad(false);
-              fetchAndUpdateStatus();
+              void fetchAndUpdateStatus().catch(() => {
+                toast({
+                  title: "Error",
+                  description: "Unable to load RabbitMQ status",
+                  variant: "destructive",
+                });
+              });
               return;
             }
             return;
@@ -73,7 +79,7 @@ export default function RabbitMQAuthPage() {
   };
 
   useEffect(() => {
-    loadStatus();
+    void loadStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -183,7 +189,7 @@ export default function RabbitMQAuthPage() {
             Connect a broker so investigations can read queue depth, consumers, and node alarms.
           </p>
         </div>
-        {!isConnected ? (
+        {!isConnected && (
           <RabbitMQConnectionStep
             url={url}
             setUrl={setUrl}
@@ -198,13 +204,14 @@ export default function RabbitMQAuthPage() {
             loading={loading}
             onConnect={handleConnect}
           />
-        ) : status ? (
+        )}
+        {isConnected && status && (
           <RabbitMQConnectedStatus
             status={status}
             onDisconnect={handleDisconnect}
             loading={loading}
           />
-        ) : null}
+        )}
       </div>
     </ConnectorAuthGuard>
   );
