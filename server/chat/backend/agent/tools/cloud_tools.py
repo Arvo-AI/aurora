@@ -1091,9 +1091,8 @@ def get_cloud_tools():
         cache_key in _langchain_tools_cache_expiry and
         current_time < _langchain_tools_cache_expiry[cache_key]
     ):
-        logging.info(
-            f"Using fully cached LangChain tools for user {user_id} (cache key: {cache_key})"
-        )
+        # The cache key includes the MCP config, which is loaded from the secret store
+        logging.info("Using fully cached LangChain tools for user %s", user_id)
         cached_tools = _langchain_tools_cache[cache_key]
         return list(cached_tools)
     
@@ -3289,8 +3288,11 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     # Cache the fully processed LangChain tools
     _langchain_tools_cache[cache_key] = tools
     _langchain_tools_cache_expiry[cache_key] = time.time() + LANGCHAIN_TOOLS_CACHE_DURATION
+    # Same as the cache-hit log: the key is derived from the MCP secret
     logging.info(
-        f"Cached {len(tools)} fully processed LangChain tools for user {user_id} (key: {cache_key})"
+        "Cached %s fully processed LangChain tools for user %s",
+        len(tools),
+        user_id,
     )
     
     return tools 

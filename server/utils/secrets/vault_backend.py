@@ -311,13 +311,15 @@ class VaultSecretsBackend(SecretsBackend):
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             secret_ref = f"{VAULT_REF_PREFIX}{self.mount_point}/{path}"
 
-            logger.info("Stored secret '%s' in Vault (%.1fms)", secret_name, elapsed_ms)
+            # The name identifies the secret, so it stays out of the log
+            logger.info("Stored secret in Vault (%.1fms)", elapsed_ms)
 
             return secret_ref
 
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
-            logger.error("Failed to store secret '%s' (%.1fms): %s", secret_name, elapsed_ms, e)
+            # Same reason as the success path: don't log the secret name
+            logger.error("Failed to store secret (%.1fms): %s", elapsed_ms, e)
             self._invalidate_after_operation_failure(e, client)
             raise
 
@@ -378,12 +380,12 @@ class VaultSecretsBackend(SecretsBackend):
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             error_msg = str(e) if e else repr(e)
             error_type = type(e).__name__
+            # The Vault path identifies the secret, so it stays out of the log
             logger.error(
-                "Failed to retrieve secret (%.1fms): %s (%s), path: %s",
+                "Failed to retrieve secret (%.1fms): %s (%s)",
                 elapsed_ms,
                 error_msg or "Unknown error",
                 error_type,
-                path if 'path' in locals() else secret_ref,
             )
             self._invalidate_after_operation_failure(e, client)
             raise
@@ -432,7 +434,8 @@ class VaultSecretsBackend(SecretsBackend):
             )
 
             elapsed_ms = (time.perf_counter() - start_time) * 1000
-            logger.info("Deleted secret '%s' from Vault (%.1fms)", path, elapsed_ms)
+            # The path is the secret's location, so it stays out of the log
+            logger.info("Deleted secret from Vault (%.1fms)", elapsed_ms)
 
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
