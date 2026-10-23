@@ -432,9 +432,15 @@ class TestTerminalExecInvokesHelpers:
         stubs.gate.assert_not_called()
 
         # The client is inside an interpreter payload, not a segment executable.
+        nested = "ssh admin@198.51.100.1 reboot"
+        for _ in range(5):
+            nested = "sh -c " + shlex.quote(nested)
         for wrapped in (
             "sh -c 'ssh admin@198.51.100.1 systemctl restart nginx'",
             "bash -c 'ssh admin@198.51.100.1 reboot'",
+            "env sh -c 'ssh admin@198.51.100.1 reboot'",
+            "sudo sh -c 'ssh admin@198.51.100.1 reboot'",
+            nested,
         ):
             hidden = terminal_exec(
                 command=wrapped,

@@ -295,18 +295,28 @@ def terminal_exec(
             i += 1
         return ""
 
+    def _script_after_wrapper(segment: list) -> str:
+        for i, tok in enumerate(segment):
+            if tok.rsplit("/", 1)[-1].lower() in interpreters:
+                return _interpreter_script(segment[i:])
+        return ""
+
     def _segment_runs_ssh(segment: list, depth: int = 0) -> bool:
+        # Still uninspected past this cap, so it is not proof that no ssh runs.
         if depth > 4:
-            return False
+            return True
         facts = analyze_segment(segment)
         if facts.executable in ssh_clients:
             return True
         # `sudo ssh` / `timeout 5 ssh` hide the client in the wrapper's arguments.
         if facts.executable in COMMAND_WRAPPERS and any(
-            tok.rsplit("/", 1)[-1] in ssh_clients for tok in segment
+            tok.rsplit("/", 1)[-1].lower() in ssh_clients for tok in segment
         ):
             return True
         script = _interpreter_script(segment)
+        # `env sh -c 'ssh ...'` starts with the wrapper, not the shell.
+        if not script and facts.executable in COMMAND_WRAPPERS:
+            script = _script_after_wrapper(segment)
         if not script:
             return False
         nested = split_segments(script)
