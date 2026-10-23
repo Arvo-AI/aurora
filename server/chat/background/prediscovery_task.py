@@ -141,6 +141,7 @@ Before writing, check if a relevant entry already exists (use list_memories or g
    - Coroot: coroot_get_service_map() for eBPF-discovered service dependencies, coroot_get_applications() for app inventory
    - Dynatrace: query_dynatrace() for entities and topology
    - ThousandEyes: thousandeyes_list_tests() for network monitoring targets
+   - RabbitMQ: rabbitmq_list_queues() and rabbitmq_list_nodes() for broker backlog and node alarms
    - Map monitors/tests to the services and hosts discovered in earlier steps
 
 7. **Documentation** (if Confluence/SharePoint connected):

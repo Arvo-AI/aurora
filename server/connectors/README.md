@@ -32,6 +32,12 @@ Backend configuration guides for Aurora connectors.
 | **Splunk** | API Token (`search` capability) | [Setup](./splunk_connector/README.md) |
 | **Elastic Cloud** | Elasticsearch API key (read-only) | [Setup](./elastic_connector/README.md) |
 
+## Messaging
+
+| Connector | Auth Type | Guide |
+|-----------|-----------|-------|
+| **RabbitMQ** | Management API user (`monitoring` tag) | [Setup](./rabbitmq_connector/README.md) |
+
 ## CI/CD
 
 | Connector | Auth Type | Guide |

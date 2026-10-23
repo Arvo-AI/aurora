@@ -172,6 +172,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Coroot logo:', e)}
     />
   ),
+  rabbitmq: (
+    <img
+      src="/rabbitmq.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="RabbitMQ"
+      onError={(e) => console.error('Failed to load RabbitMQ logo:', e)}
+    />
+  ),
   dynatrace: (
     <img
       src="/dynatrace.svg"
@@ -479,6 +487,10 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Coroot tools
   if (tool.includes('coroot')) {
     return 'coroot'
+  }
+
+  if (tool.includes('rabbitmq')) {
+    return 'rabbitmq'
   }
 
   if (tool.includes('dynatrace') || tool === 'query_dynatrace') {
