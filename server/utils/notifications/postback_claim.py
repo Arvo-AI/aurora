@@ -96,4 +96,5 @@ class PostbackClaim:
             )
         except Exception:
             # The note is posted; the row stays 'pending', which still blocks a duplicate.
-            logger.exception("%s Failed to record %s on incident %s", self._log, remote_id, incident_id)
+            # remote_id comes from the provider response, which is tied to the credentials
+            logger.exception("%s Failed to record remote id on incident %s", self._log, incident_id)
