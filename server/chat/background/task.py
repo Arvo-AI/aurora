@@ -314,7 +314,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'elastic', 'slack', 'teams', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'jira', 'action'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'elastic', 'slack', 'teams', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'jira', 'servicenow', 'action'}
 
 _GUARDRAIL_BLOCKED_MSG = 'Action blocked by safety guardrails'
 _GUARDRAIL_USER_MSG = (
@@ -993,7 +993,6 @@ def run_background_chat(
         if _access_token is not None:
             from utils.auth.connector_access import pop_connector_access
             pop_connector_access(_access_token)
-            _access_token = None
         # Guarantee the chat "Thinking…" placeholder is always resolved. If the
         # happy-path send was skipped (task crash, cancellation, result
         # serialization failure), post a best-effort reply here so a Slack/

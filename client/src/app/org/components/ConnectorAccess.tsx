@@ -439,7 +439,11 @@ export default function ConnectorAccess() {
         setTeams((teamData.teams ?? []).map((team: AudienceTeam) => ({ id: team.id, name: team.name })));
       }
     } catch {
-      if (still()) toast({ title: "Could not load connector access", variant: "destructive" });
+      // A failed load must not leave the previous audience's grants on screen.
+      if (still()) {
+        setConnectors([]);
+        toast({ title: "Could not load connector access", variant: "destructive" });
+      }
     } finally {
       if (still()) setLoading(false);
     }

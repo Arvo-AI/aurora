@@ -326,8 +326,12 @@ def org_allows_unregistered_slack(org_id: str) -> bool:
     from utils.auth.stateless_auth import get_org_preference
     from utils.auth.viewer_run import flag_enabled
 
-    # A workspace that has never touched the switch still lets members ask.
-    value = get_org_preference(org_id, SLACK_ALLOW_UNREGISTERED_KEY, default=True)
+    try:
+        # A missing row still lets members ask. A failed read must not.
+        value = get_org_preference(org_id, SLACK_ALLOW_UNREGISTERED_KEY, default=True, strict=True)
+    except Exception:
+        logger.warning("Could not read whether unregistered Slack members may ask")
+        return False
     return flag_enabled(value, True)
 
 
@@ -780,22 +784,19 @@ def get_incident_by_slack_message(user_id: str, slack_message_ts: str):
         return None, None
 
 
-def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
-    """
-    Find the session_id associated with a Slack thread.
-    First checks if thread_ts matches an incident notification message; its
-    RCA session is reused only by the incident's owner. Otherwise looks up
-    this user's own earlier chat session in the thread (a plain Slack chat,
-    or their Q&A on someone else's incident).
-    Returns (session_id, incident_id), where incident_id is set only when
-    session_id is that incident's RCA session — so a non-owner's first
-    mention on an incident thread returns (None, incident_id) and the caller
-    starts a Q&A session about it. (None, None) if nothing matches.
-    """
+def get_session_from_thread(
+    user_id: str, channel_id: str, thread_ts: str, access_as: Optional[str] = None,
+):
+    """Session for this Slack thread. A guest never resumes the owner's RCA."""
+    # Guest and owner share a user id. The pin is what separates their sessions.
+    guest = access_as == "general_viewer"
     try:
         # First, check if this thread is from an incident notification
         incident_id, session_id = get_incident_by_slack_message(user_id, thread_ts)
-        if session_id:
+        # The owner's RCA session is not the guest's conversation.
+        if guest:
+            incident_id, session_id = None, None
+        elif session_id:
             return session_id, incident_id
         
         # Otherwise, look up by thread_ts in chat session metadata
@@ -811,10 +812,11 @@ def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
                     AND (ui_state->'triggerMetadata'->>'source') = 'slack'
                     AND (ui_state->'triggerMetadata'->>'channel') = %s
                     AND (ui_state->'triggerMetadata'->>'thread_ts') = %s
+                    AND COALESCE(ui_state->'triggerMetadata'->>'access_as', '') = %s
                     ORDER BY created_at DESC
                     LIMIT 1
                     """,
-                    (user_id, channel_id, str(thread_ts))
+                    (user_id, channel_id, str(thread_ts), access_as or "")
                 )
                 result = cursor.fetchone()
                 

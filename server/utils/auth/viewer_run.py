@@ -107,8 +107,14 @@ def viewer_may_edit_memory(user_id: str, org_id: str) -> bool:
 
 def message_starts_chat(question, data: dict) -> bool:
     """True when this websocket message starts work the viewer switch covers."""
-    # An action button sends no question text and still starts a chat.
-    return bool(question or data.get("direct_tool_call") or data.get("trigger_action"))
+    # An action, an RCA request, or a file with no question still starts a chat.
+    return bool(
+        question
+        or data.get("direct_tool_call")
+        or data.get("trigger_action")
+        or data.get("trigger_rca")
+        or data.get("attachments")
+    )
 
 
 def slack_caller_may_run(org_id: str, user_id: str, *, unlinked: bool = False) -> bool:

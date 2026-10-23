@@ -104,6 +104,21 @@ def _build_summary_prompt(
         if alert_metadata.get("viewInAppUrl"):
             key_details.append(f"View in Kibana: {alert_metadata['viewInAppUrl']}")
 
+    elif source_type == "servicenow":
+        if alert_metadata.get("number"):
+            key_details.append(f"Incident: {alert_metadata['number']}")
+        for label, key in (
+            ("Priority", "priority"), ("Impact", "impact"), ("Urgency", "urgency"),
+            ("State", "state"), ("Category", "category"), ("Assignment group", "assignmentGroup"),
+            ("Configuration item", "cmdbCi"), ("Caller", "caller"),
+        ):
+            if alert_metadata.get(key):
+                key_details.append(f"{label}: {alert_metadata[key]}")
+        if alert_metadata.get("description"):
+            key_details.append(f"Description: {alert_metadata['description']}")
+        if alert_metadata.get("incidentUrl"):
+            key_details.append(f"Incident URL: {alert_metadata['incidentUrl']}")
+
     elif source_type == "pagerduty":
         if alert_metadata.get("incidentId"):
             key_details.append(f"Incident ID: {alert_metadata['incidentId']}")

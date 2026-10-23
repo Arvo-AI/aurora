@@ -23,6 +23,8 @@ def test_an_action_with_no_question_still_starts_a_chat():
     assert message_starts_chat("", {"trigger_action": "act-1"}) is True
     assert message_starts_chat("", {"direct_tool_call": {"name": "cloud_exec"}}) is True
     assert message_starts_chat("", {}) is False
+    assert message_starts_chat("", {"trigger_rca": True}) is True
+    assert message_starts_chat("", {"attachments": [{"name": "log.txt"}]}) is True
 
 
 def test_unlinked_slack_member_is_not_treated_as_a_viewer_here():

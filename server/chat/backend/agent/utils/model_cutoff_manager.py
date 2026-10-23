@@ -13,6 +13,11 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+# Longer prefixes first: "us." is a prefix of "us-gov."
+_BEDROCK_PROFILE_GEOS = ("us-gov.", "global.", "apac.", "us.", "eu.", "jp.", "au.", "ca.")
+# Bedrock dated ids, e.g. ``-20251001-v1:0``, so they still match the family row
+_BEDROCK_VERSION_SUFFIX = re.compile(r"(-\d{8})?(-v\d+(:\d+)?)?$")
+
 
 @dataclass
 class ModelInfo:
@@ -40,12 +45,25 @@ class ModelCutoffManager:
 
     @staticmethod
     def _normalize(model_name: str) -> str:
-        """Collapse the dotted/dashed version spellings to one comparable form.
+        """Collapse provider spellings of one model to one comparable form.
 
-        ``anthropic/claude-opus-5.5`` (picker / OpenRouter) and
-        ``anthropic/claude-opus-5-5`` (native Anthropic / Bedrock) are the same model.
+        ``bedrock/jp.anthropic.claude-haiku-5-5`` and ``anthropic/claude-haiku-5.5``
+        both become ``anthropic/claude-haiku-5-5``.
         """
-        return model_name.replace(".", "-")
+        name = model_name
+        # An explicit Bedrock profile id otherwise keeps its geo prefix and misses the row
+        if name.startswith("bedrock/"):
+            rest = name[len("bedrock/"):]
+            for geo in _BEDROCK_PROFILE_GEOS:
+                prefix = f"{geo}anthropic."
+                if rest.startswith(prefix):
+                    name = f"anthropic/{rest[len(prefix):]}"
+                    break
+        name = name.replace(".", "-")
+        if name.startswith("anthropic/"):
+            vendor, _, model_id = name.partition("/")
+            name = f"{vendor}/{_BEDROCK_VERSION_SUFFIX.sub('', model_id)}"
+        return name
 
     def _initialize_model_mappings(self) -> Dict[str, ModelInfo]:
         """Initialize the comprehensive model mapping with knowledge cutoffs"""
@@ -100,6 +118,9 @@ class ModelCutoffManager:
             ),
             "anthropic/claude-sonnet-5": ModelInfo(
                 "claude-sonnet-5", "anthropic", cutoff_date(2026, 1, 1), True, True
+            ),
+            "anthropic/claude-haiku-5.5": ModelInfo(
+                "claude-haiku-5-5", "anthropic", cutoff_date(2026, 6, 1), True, True
             ),
             "anthropic/claude-fable-5.1": ModelInfo(
                 "claude-fable-5-1", "anthropic", cutoff_date(2026, 6, 1), True, True

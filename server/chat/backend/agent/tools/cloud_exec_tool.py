@@ -11,7 +11,7 @@ from utils.terminal.terminal_run import terminal_run
 import time
 import requests
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
-from typing import Dict, Any, Optional, Tuple
+from typing import Optional, Tuple
 from langchain_core.tools import StructuredTool
 from pathlib import Path
 
@@ -27,6 +27,7 @@ from utils.auth.cloud_auth import generate_contextual_access_token
 from utils.auth.cloud_auth import generate_azure_access_token
 from utils.cloud import azure_login_cache
 from utils.secrets.secret_ref_utils import get_user_token_data, get_token_owner_id
+from .bq_exec import bq_command_timeout, bq_query_location, bq_query_project, explain_bq_timeout, prepare_bq_exec
 from .output_sanitizer import sanitize_command_output, filter_error_messages, truncate_json_fields
 from .cloud_provider_utils import determine_target_provider_from_context
 from chat.backend.agent.prompt.prompt_builder import CLOUD_EXEC_PROVIDERS
@@ -1208,10 +1209,26 @@ def setup_flyio_environment_isolated(user_id: str, selected_org: str | None = No
         return False, None, None, None
 
 
+# The chat workflow and the RCA task both die at 1800s. A command that runs
+# until then is killed before a timed-out BigQuery job can be cancelled.
+_COMMAND_TIMEOUT_CEILING = 600
+
+
 def get_command_timeout(command: str, user_timeout: int = None) -> int:
-    """Determine timeout for a command. Use user_timeout if provided, else adapt based on command type."""
+    """Use a positive caller timeout. Otherwise pick one from the command."""
     if user_timeout is not None:
-        return user_timeout
+        try:
+            requested = int(user_timeout)
+        except (TypeError, ValueError):
+            requested = 0
+        # Zero or negative is not a wait, so the command default still applies
+        if requested > 0:
+            return min(requested, _COMMAND_TIMEOUT_CEILING)
+
+    # Match the bq verb, not the SQL, so "created_at" does not change the limit
+    bq_timeout = bq_command_timeout(command)
+    if bq_timeout is not None:
+        return bq_timeout
 
     # Very long-running operations (20 minutes) - based on typical cloud provider timings:
     # - Kubernetes clusters (GKE: 3-6min create/delete, EKS: 10-20min, AKS: 10-18min)
@@ -1588,6 +1605,14 @@ def _explicit_azure_subscriptions(command: str) -> Optional[list]:
     return found
 
 
+def _is_unscoped_azure_graph(command: str) -> bool:
+    """True for `az graph`, which is tenant-wide unless a subscription is named."""
+    cmd = command.strip()
+    if not cmd.startswith("az "):
+        cmd = f"az {cmd}"
+    return cmd.split()[1:2] == ["graph"]
+
+
 def _refuse_named_azure(user_id: str, command: str, connections: list) -> Optional[str]:
     """Deny a command that names a subscription this role was not granted.
 
@@ -1604,6 +1629,9 @@ def _refuse_named_azure(user_id: str, command: str, connections: list) -> Option
         return None
     # An unparseable command could hide a subscription flag.
     if named is None:
+        return connector_call_denied(user_id, "azure", None, command)
+    # `az graph` with no subscription is tenant-wide, and the pin step leaves it alone.
+    if not named and _is_unscoped_azure_graph(command):
         return connector_call_denied(user_id, "azure", None, command)
     by_id = {
         str(row.get("account_id") or "").lower(): str(row.get("account_id") or "")
@@ -1721,54 +1749,6 @@ def _cloud_exec_azure_multi_subscription(
         "provider": "azure",
         "results_by_subscription": results,
     })
-
-
-def _redact_oauth_access_token(argv: list) -> str:
-    """Join argv for logs. The access token never appears in the result."""
-    redacted = []
-    skip_value = False
-    for token in argv:
-        if skip_value:
-            redacted.append("[REDACTED]")
-            skip_value = False
-            continue
-        if token == "--oauth_access_token":
-            redacted.append(token)
-            skip_value = True
-            continue
-        if token.startswith("--oauth_access_token="):
-            redacted.append("--oauth_access_token=[REDACTED]")
-            continue
-        redacted.append(token)
-    return " ".join(shlex.quote(part) for part in redacted)
-
-
-def _argv_has_flag(argv: list, name: str) -> bool:
-    return any(token == name or token.startswith(name + "=") for token in argv)
-
-
-def prepare_bq_exec(
-    command: str,
-    access_token: Optional[str],
-    project_id: Optional[str],
-) -> Tuple[list, str]:
-    """Argv for `bq`, plus a log-safe rendering of that argv.
-
-    `bq` reads `--oauth_access_token` and does not read CLOUDSDK_AUTH_ACCESS_TOKEN.
-    The token is placed only on the argv. Callers must log the returned string,
-    not the argv. A project the command already sets is left alone.
-    """
-    argv = shlex.split(command)
-    if not argv or argv[0] != "bq":
-        return argv, _redact_oauth_access_token(argv)
-
-    insert_at = 1
-    if project_id and not _argv_has_flag(argv, "--project_id"):
-        argv.insert(insert_at, f"--project_id={project_id}")
-        insert_at += 1
-    if access_token and not _argv_has_flag(argv, "--oauth_access_token"):
-        argv.insert(insert_at, f"--oauth_access_token={access_token}")
-    return argv, _redact_oauth_access_token(argv)
 
 
 def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None, account_id: Optional[str] = None) -> str:
@@ -2443,6 +2423,9 @@ Security & Compliance
             exec_command = command_args
 
         bq_token = None
+        bq_job_id = None
+        bq_location = None
+        bq_project = None
         if cli_tool == "bq":
             bq_project = region_or_project
             if isinstance(isolated_env, dict):
@@ -2452,7 +2435,12 @@ Security & Compliance
                 )
                 bq_project = isolated_env.get("GOOGLE_CLOUD_PROJECT") or bq_project
             # Project only. The token is applied inside terminal_run, after the hash.
-            exec_command, _ = prepare_bq_exec(command, None, bq_project)
+            prepared = prepare_bq_exec(command, None, bq_project)
+            exec_command = prepared.argv
+            bq_job_id = prepared.job_id
+            bq_location = bq_query_location(prepared.argv)
+            # The command's --project_id can differ from the connected project
+            bq_project = bq_query_project(prepared.argv, bq_project)
 
         # Execute the command
         exec_start = time.perf_counter()
@@ -2485,6 +2473,16 @@ Security & Compliance
                         oauth_access_token=bq_token,
                     )
             logger.info(f"TIME: cloud command execution took {time.perf_counter() - exec_start:.2f}s")
+            if cli_tool == "bq":
+                explain_bq_timeout(
+                    result,
+                    job_id=bq_job_id,
+                    project_id=bq_project,
+                    location=bq_location,
+                    access_token=bq_token,
+                    env=isolated_env,
+                    timeout_s=effective_timeout,
+                )
             # Entra-integrated AKS writes a kubeconfig whose exec plugin defaults to
             # devicecode, which is interactive. Convert it to service-principal auth
             # so subsequent kubectl calls work headless. Non-Entra clusters get a

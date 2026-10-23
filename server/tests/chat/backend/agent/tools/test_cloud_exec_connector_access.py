@@ -69,6 +69,7 @@ def test_command_subscription_is_refused_when_not_granted(monkeypatch):
     assert _refuse_named_azure("uid", "az graph query --subscriptions sub-a,sub-b", connections) is not None
     assert _refuse_named_azure("uid", "az group list --subscription sub-a", connections) is None
     assert _refuse_named_azure("uid", "az group list -s SUB-A", connections) is None
+    assert _refuse_named_azure("uid", "az graph query -q Resources", connections) is not None
 
 
 def test_open_connector_is_not_refused(monkeypatch):

@@ -60,7 +60,7 @@ Typical choices:
 | Model | Notes |
 |-------|-------|
 | `openai/gpt-4o-mini` | Good balance of speed and quality |
-| `anthropic/claude-haiku-4.5` | Strong reasoning at low cost |
+| `anthropic/claude-haiku-5.5` | Strong reasoning at low cost |
 | `google/gemini-2.5-flash-lite` | Lowest cost (OpenRouter default) |
 | `ollama/llama3.1:8b` | Free, local (requires `OLLAMA_BASE_URL`) |
 

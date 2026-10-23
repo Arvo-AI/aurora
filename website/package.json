@@ -49,7 +49,7 @@
     "webpack": "5.104.1",
     "postcss": "^8.5.10",
     "uuid": "^14.0.0",
-    "follow-redirects": "^1.16.0",
+    "follow-redirects": "^1.16.1",
     "serialize-javascript": "^7.0.5",
     "lodash-es": "^4.18.1",
     "http-cache-semantics": "^4.3.0",

@@ -38,6 +38,27 @@ ENABLE_VIA_DEDICATED_ENDPOINT = {
 }
 
 EDITOR_ONLY_PREFERENCE_KEYS = ORG_SCOPED_PREFERENCE_KEYS
+# Letting people with no Aurora account mention Slack is an admin decision.
+ADMIN_ONLY_PREFERENCE_KEYS = frozenset({'slack_allow_unregistered'})
+
+
+def _org_pref_write_denied(user_id, keys):
+    """Error response when this user cannot write these org preferences."""
+    key_set = set(keys)
+    admin_keys = key_set & ADMIN_ONLY_PREFERENCE_KEYS
+    editor_keys = key_set & (EDITOR_ONLY_PREFERENCE_KEYS - ADMIN_ONLY_PREFERENCE_KEYS)
+    if not admin_keys and not editor_keys:
+        return None
+    org_id = get_org_id_from_request() or get_org_id_for_user(user_id)
+    if not org_id:
+        return jsonify({"error": "Could not resolve organization"}), 400
+    # Unlinked Slack members enter the org. Only an admin turns that on.
+    if admin_keys and not enforce_with_reload(user_id, org_id, "admin", "access"):
+        return jsonify({"error": "Forbidden - admin role required"}), 403
+    # The other org switches are notification settings, open to editors.
+    if editor_keys and not enforce_with_reload(user_id, org_id, "notification_settings", "write"):
+        return jsonify({"error": "Forbidden - editor or admin role required for notification settings"}), 403
+    return None
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +99,10 @@ def set_user_preferences(user_id):
         return jsonify({"error": ENABLE_VIA_DEDICATED_ENDPOINT[key]}), 400
 
     if key in ORG_SCOPED_PREFERENCE_KEYS:
+        denied = _org_pref_write_denied(user_id, [key])
+        if denied:
+            return denied
         org_id = get_org_id_from_request() or get_org_id_for_user(user_id)
-        if not org_id:
-            return jsonify({"error": "Could not resolve organization"}), 400
-        if not enforce_with_reload(user_id, org_id, "notification_settings", "write"):
-            return jsonify({"error": "Forbidden - editor or admin role required"}), 403
         store_org_preference(org_id, key, value)
         logger.info("Stored org preference %s", key)
     else:
@@ -216,13 +236,9 @@ def set_batch_preferences(user_id):
         if key in ENABLE_VIA_DEDICATED_ENDPOINT and value:
             return jsonify({"error": ENABLE_VIA_DEDICATED_ENDPOINT[key]}), 400
 
-    protected_keys = set(preferences.keys()) & EDITOR_ONLY_PREFERENCE_KEYS
-    if protected_keys:
-        org_id = get_org_id_from_request() or get_org_id_for_user(user_id)
-        if not org_id:
-            return jsonify({"error": "Could not resolve organization"}), 400
-        if not enforce_with_reload(user_id, org_id, "notification_settings", "write"):
-            return jsonify({"error": "Forbidden - editor or admin role required for notification settings"}), 403
+    denied = _org_pref_write_denied(user_id, preferences.keys())
+    if denied:
+        return denied
 
     try:
         org_id = None

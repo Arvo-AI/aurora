@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import time
 from typing import Dict, Optional, Any
 from dataclasses import dataclass
@@ -9,6 +10,8 @@ from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 from .openrouter_pricing_service import get_pricing_service
 from .provider_pricing_service import get_provider_pricing_service
+from .cache_control import claude_family
+from .usage_normalizer import normalize_usage
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,9 @@ class LLMUsage:
     org_id: Optional[str] = None
     error_message: Optional[str] = None
     request_metadata: Optional[Dict[str, Any]] = None
+    # Subsets of input_tokens served from / written to the provider prompt cache
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
 
 class LLMUsageTracker:
@@ -55,6 +61,9 @@ class LLMUsageTracker:
         "anthropic/claude-opus-5.5": {"input": 0.004, "output": 0.020, "cached_input": 0.0002},
         "anthropic/claude-opus-5-5": {"input": 0.004, "output": 0.020, "cached_input": 0.0002},
         "anthropic/claude-sonnet-5": {"input": 0.002, "output": 0.010, "cached_input": 0.0002},
+        # Haiku 5.5 base tier (prompts up to 100K tokens). Above that Anthropic bills 5x.
+        "anthropic/claude-haiku-5.5": {"input": 0.0001, "output": 0.0005, "cached_input": 0.00001},
+        "anthropic/claude-haiku-5-5": {"input": 0.0001, "output": 0.0005, "cached_input": 0.00001},
         "anthropic/claude-fable-5.1": {"input": 0.010, "output": 0.050, "cached_input": 0.00025},
         "anthropic/claude-fable-5-1": {"input": 0.010, "output": 0.050, "cached_input": 0.00025},
         "anthropic/claude-fable-5": {"input": 0.010, "output": 0.050, "cached_input": 0.001},
@@ -205,6 +214,23 @@ class LLMUsageTracker:
         return 1.0
 
     @classmethod
+    def _claude_pricing(cls, model_name: str) -> Optional[Dict[str, float]]:
+        """Static row for any spelling of a Claude id, keyed as ``anthropic/<family>``."""
+        family = claude_family(model_name)
+        if not family.startswith("claude"):
+            return None
+        # Table keys use both spellings: claude-sonnet-4-5 and claude-sonnet-4.5
+        dotted = re.sub(r"-(\d)-(\d)$", r"-\1.\2", family)
+        return cls.MODEL_PRICING.get(f"anthropic/{family}") or cls.MODEL_PRICING.get(
+            f"anthropic/{dotted}"
+        )
+
+    @staticmethod
+    def _cache_write_multiplier(model_name: str) -> float:
+        # Claude bills a 25% premium to write the prompt cache; OpenAI/Gemini don't
+        return 1.25 if "claude" in (model_name or "").lower() else 1.0
+
+    @classmethod
     def calculate_cost(
         cls,
         input_tokens: int,
@@ -213,6 +239,7 @@ class LLMUsageTracker:
         use_dynamic_pricing: bool = True,
         provider_mode: Optional[str] = None,
         cached_input_tokens: int = 0,
+        cache_write_tokens: int = 0,
     ) -> float:
         """Calculate estimated cost based on token usage and model pricing.
 
@@ -224,6 +251,8 @@ class LLMUsageTracker:
 
         When cached_input_tokens > 0, those tokens are charged at the
         discounted cached_input rate instead of the full input rate.
+        cache_write_tokens (subset of input_tokens) are charged at the cache-write
+        rate: 1.25x input for Claude, plain input for providers with free writes.
 
         Platform surcharge: Bedrock and Vertex resell Anthropic/Google models at
         the same rate as direct ONLY on their global endpoints. Aurora's Bedrock
@@ -268,6 +297,11 @@ class LLMUsageTracker:
                 using_static_pricing = True
                 pricing = cls.MODEL_PRICING.get(model_name)
 
+                # Explicit Bedrock ids (bedrock/eu.anthropic.claude-...-v1:0) share the
+                # Anthropic list price; without this they fell to the default row
+                if not pricing:
+                    pricing = cls._claude_pricing(model_name)
+
                 if not pricing:
                     base_model = model_name.split(".")[0].split("-v")[0]
                     pricing = cls.MODEL_PRICING.get(base_model)
@@ -292,12 +326,31 @@ class LLMUsageTracker:
                     f"Applied {premium:.2f}x regional endpoint premium for {model_name} ({provider_mode})"
                 )
 
-            non_cached_input = max(input_tokens - cached_input_tokens, 0)
+            # Haiku 5.5 bills 5x past 100K prompt tokens: input, output, reads, and writes
+            if (
+                using_static_pricing
+                and input_tokens > 100_000
+                and claude_family(model_name) == "claude-haiku-5-5"
+            ):
+                pricing = {k: v * 5 for k, v in pricing.items()}
+
+            # Writes are a subset of input_tokens, so cap them at what reads left over
+            cache_write_tokens = min(
+                max(cache_write_tokens, 0), max(input_tokens - cached_input_tokens, 0)
+            )
+            non_cached_input = max(
+                input_tokens - cached_input_tokens - cache_write_tokens, 0
+            )
             input_cost = (non_cached_input / 1000) * pricing["input"]
             if cached_input_tokens > 0 and "cached_input" in pricing:
                 input_cost += (cached_input_tokens / 1000) * pricing["cached_input"]
             elif cached_input_tokens > 0:
                 input_cost += (cached_input_tokens / 1000) * pricing["input"]
+            if cache_write_tokens > 0:
+                write_rate = pricing.get("cache_write")
+                if write_rate is None:
+                    write_rate = pricing["input"] * cls._cache_write_multiplier(model_name)
+                input_cost += (cache_write_tokens / 1000) * write_rate
             output_cost = (output_tokens / 1000) * pricing["output"]
 
             return round(input_cost + output_cost, 6)
@@ -310,21 +363,21 @@ class LLMUsageTracker:
     def extract_usage_from_response(cls, response: Any) -> Dict[str, int]:
         """Extract token usage from API response when available"""
         try:
-            usage = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
+            usage = {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cached_input_tokens": 0,
+                "cache_write_tokens": 0,
+            }
 
             # Try to extract from various response formats
             # 1 Newer OpenRouter / OpenAI style: usage_metadata dict
             if hasattr(response, "usage_metadata") and response.usage_metadata:
-                usage_data = response.usage_metadata
-                usage["input_tokens"] = usage_data.get(
-                    "prompt_tokens", usage_data.get("input_tokens", 0)
-                )
-                usage["output_tokens"] = usage_data.get(
-                    "completion_tokens", usage_data.get("output_tokens", 0)
-                )
-                input_details = usage_data.get("input_token_details", {})
-                if isinstance(input_details, dict):
-                    usage["cached_input_tokens"] = input_details.get("cache_read", 0)
+                norm = normalize_usage(response.usage_metadata)
+                usage["input_tokens"] = norm.input_tokens
+                usage["output_tokens"] = norm.output_tokens
+                usage["cached_input_tokens"] = norm.cache_read_tokens
+                usage["cache_write_tokens"] = norm.cache_write_tokens
 
             # 2 Traditional attribute-based usage object
             elif hasattr(response, "usage"):
@@ -341,16 +394,11 @@ class LLMUsageTracker:
             elif isinstance(response, dict):
                 # Prefer nested usage_metadata first
                 if "usage_metadata" in response and response["usage_metadata"]:
-                    usage_data = response["usage_metadata"]
-                    usage["input_tokens"] = usage_data.get(
-                        "prompt_tokens", usage_data.get("input_tokens", 0)
-                    )
-                    usage["output_tokens"] = usage_data.get(
-                        "completion_tokens", usage_data.get("output_tokens", 0)
-                    )
-                    input_details = usage_data.get("input_token_details", {})
-                    if isinstance(input_details, dict):
-                        usage["cached_input_tokens"] = input_details.get("cache_read", 0)
+                    norm = normalize_usage(response["usage_metadata"])
+                    usage["input_tokens"] = norm.input_tokens
+                    usage["output_tokens"] = norm.output_tokens
+                    usage["cached_input_tokens"] = norm.cache_read_tokens
+                    usage["cache_write_tokens"] = norm.cache_write_tokens
                 elif "usage" in response:
                     usage_data = response["usage"]
                     usage["input_tokens"] = usage_data.get("prompt_tokens", 0)
@@ -360,7 +408,12 @@ class LLMUsageTracker:
 
         except Exception as e:
             logger.warning(f"Error extracting usage from response: {e}")
-            return {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
+            return {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cached_input_tokens": 0,
+                "cache_write_tokens": 0,
+            }
 
     @classmethod
     def store_usage(cls, usage: LLMUsage) -> bool:
@@ -381,8 +434,9 @@ class LLMUsageTracker:
                     INSERT INTO llm_usage_tracking (
                         user_id, org_id, session_id, model_name, api_provider, request_type,
                         input_tokens, output_tokens, estimated_cost, response_time_ms,
-                        error_message, request_metadata
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        error_message, request_metadata,
+                        cache_read_tokens, cache_write_tokens
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                     (
                         usage.user_id,
@@ -399,11 +453,16 @@ class LLMUsageTracker:
                         json.dumps(usage.request_metadata)
                         if usage.request_metadata
                         else None,
+                        usage.cache_read_tokens,
+                        usage.cache_write_tokens,
                     ),
                 )
 
                 conn.commit()
-                logger.info(f"Stored LLM usage: {usage.model_name} - {usage.input_tokens}+{usage.output_tokens} tokens - ${usage.estimated_cost:.6f}")
+                logger.info(
+                    f"Stored LLM usage: {usage.model_name} - {usage.input_tokens}+{usage.output_tokens} tokens "
+                    f"(cache read={usage.cache_read_tokens}, write={usage.cache_write_tokens}) - ${usage.estimated_cost:.6f}"
+                )
                 
                 # Clear API cost cache for this user to force refresh on next cost check
                 try:
@@ -468,12 +527,14 @@ class LLMUsageTracker:
             # Count output tokens
             output_tokens = 0
             cached_input_tokens = 0
+            cache_write_tokens = 0
             if response:
                 # Try to extract from API response first
                 usage_data = cls.extract_usage_from_response(response)
                 if usage_data["input_tokens"] > 0:
                     input_tokens = usage_data["input_tokens"]
                 cached_input_tokens = usage_data.get("cached_input_tokens", 0)
+                cache_write_tokens = usage_data.get("cache_write_tokens", 0)
                 if usage_data["output_tokens"] > 0:
                     output_tokens = usage_data["output_tokens"]
                 else:
@@ -493,6 +554,7 @@ class LLMUsageTracker:
             estimated_cost = cls.calculate_cost(
                 input_tokens, output_tokens, model_name,
                 cached_input_tokens=cached_input_tokens,
+                cache_write_tokens=cache_write_tokens,
                 provider_mode=provider_mode,
             )
 
@@ -518,6 +580,8 @@ class LLMUsageTracker:
                     "has_images": cls._has_image_content(prompt),
                     "message_count": len(prompt) if isinstance(prompt, list) else 1,
                 },
+                cache_read_tokens=cached_input_tokens,
+                cache_write_tokens=cache_write_tokens,
             )
 
             # Store in database

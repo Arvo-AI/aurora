@@ -31,16 +31,32 @@ import os
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
+from chat.backend.agent.utils.cache_control import (
+    CACHE_STYLE_CACHE_CONTROL,
+    CACHE_STYLE_BEDROCK,
+)
+
 from .base_provider import BaseLLMProvider
 from ._sampling_guard import make_adaptive_sampling_cls
 from ..model_mapper import ModelMapper
 
 logger = logging.getLogger(__name__)
 
+# Legacy Claude generations Bedrock has no prompt caching for; a cachePoint would 400.
+# 3.5 Sonnet v2 does cache, so only the v1 id is listed. A rejection is retried by the cache guard.
+_NO_CACHE_CLAUDE = (
+    "claude-v2",
+    "claude-instant",
+    "claude-3-haiku",
+    "claude-3-sonnet",
+    "claude-3-opus",
+    "claude-3-5-sonnet-20240620-v1",
+)
+
 # Anthropic native model name (dashed) -> Bedrock inference-profile base (without the
 # region/geo prefix). Only models whose Bedrock id carries a version/date suffix that
 # can't be derived from the name are listed here; bare models (e.g. claude-opus-5-5,
-# claude-sonnet-5) derive `anthropic.<name>` automatically. The geo prefix (us./eu./apac.)
+# claude-sonnet-5, claude-haiku-5-5) derive `anthropic.<name>` automatically. The geo prefix (us./eu./apac.)
 # is prepended at runtime from the configured region, so this stays region-agnostic.
 _ANTHROPIC_TO_BEDROCK_BASE = {
     "claude-opus-4-6": "anthropic.claude-opus-4-6-v1",
@@ -101,7 +117,12 @@ def _adaptive_bedrock_converse():
     friendly RuntimeError there)."""
     from langchain_aws import ChatBedrockConverse
 
-    return make_adaptive_sampling_cls(ChatBedrockConverse, wrap_async=False)
+    from ._bedrock_cache_guard import make_bedrock_cache_safe_cls
+
+    # Cache guard outermost: it strips markers, the sampling guard strips sampling params
+    return make_bedrock_cache_safe_cls(
+        make_adaptive_sampling_cls(ChatBedrockConverse, wrap_async=False)
+    )
 
 
 class BedrockProvider(BaseLLMProvider):
@@ -172,9 +193,11 @@ class BedrockProvider(BaseLLMProvider):
                 "(pip install langchain-aws) or use gateway mode by setting BEDROCK_BASE_URL."
             ) from e
 
-        # ChatBedrockConverse forbids extra fields (no `streaming` param). Streaming
-        # still works via .astream() in the agent path. Mirrors the Vertex provider.
+        # ChatBedrockConverse forbids extra fields. `streaming` isn't one, and
+        # `request_timeout` is the OpenAI spelling — passed through, it used to land
+        # in the Converse body and 400. Streaming still works via .astream().
         kwargs.pop("streaming", None)
+        kwargs.pop("request_timeout", None)
 
         logger.info(f"Creating Bedrock (native) chat model: {native_model} (region={self.region})")
         config = {
@@ -182,6 +205,10 @@ class BedrockProvider(BaseLLMProvider):
             "temperature": temperature,
             # `global` is a profile geo, not an AWS region — boto3 needs a real one to sign against.
             "region_name": _resolve_client_region(self.region),
+            # Same budget as the gateway branch above. botocore counts max_attempts as
+            # total tries, so this is the first call plus two retries.
+            "timeout": 120,
+            "max_retries": 3,
         }
         # Pass explicit credentials only if set; otherwise rely on boto3's default
         # chain (env / shared config / IAM role).
@@ -199,6 +226,20 @@ class BedrockProvider(BaseLLMProvider):
     def is_available(self) -> bool:
         """Available when a gateway URL is set or a native region is resolvable."""
         return bool(self.base_url) or bool(self.region)
+
+    def prompt_cache_style(self, model: str) -> str | None:
+        # Gateway: marker passes through ChatOpenAI untouched; whether the gateway
+        # honors it is up to its translation layer, so keep the pre-existing behavior.
+        if self.base_url:
+            if model.split("/", 1)[0].lower() == "anthropic":
+                return CACHE_STYLE_CACHE_CONTROL
+            return None
+
+        # Native Converse: only Claude models that Bedrock lets you cache
+        native = self.get_native_model_name(model).lower()
+        if "anthropic.claude" not in native or any(p in native for p in _NO_CACHE_CLAUDE):
+            return None
+        return CACHE_STYLE_BEDROCK
 
     def supports_model(self, model: str) -> bool:
         """Bedrock serves explicit ``bedrock/`` ids and Anthropic Claude models (so a

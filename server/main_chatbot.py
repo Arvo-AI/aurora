@@ -1186,7 +1186,18 @@ async def handle_connection(websocket) -> None:
             from utils.auth.viewer_run import message_starts_chat
             if user_id and org_id and message_starts_chat(question, data):
                 from utils.auth.viewer_run import viewer_may_run
-                if not viewer_may_run(user_id, org_id):
+                try:
+                    viewer_allowed = viewer_may_run(user_id, org_id)
+                except Exception:
+                    # A failed lookup must not drop the websocket.
+                    logger.exception("Viewer chat check failed")
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "data": {"text": "Couldn't check whether chat is enabled. Try again."},
+                    }))
+                    continue
+                # Viewers only start a chat when the Access tab allows it.
+                if not viewer_allowed:
                     await websocket.send(json.dumps({
                         "type": "error",
                         "data": {"text": "Chat isn't enabled for viewers in this organization."},

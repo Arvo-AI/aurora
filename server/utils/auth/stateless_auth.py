@@ -437,7 +437,7 @@ def store_org_preference(org_id: str, key: str, value: Any, *, cursor=None) -> N
         logger.exception("Error storing org preference %s for org %s", sanitize(key), sanitize(org_id))
 
 
-def get_org_preference(org_id: str, key: str, default=None):
+def get_org_preference(org_id: str, key: str, default=None, *, strict: bool = False):
     """Read an org-scoped preference written via store_org_preference().
 
     Uses an admin connection with RLS configured from org_id directly, so it
@@ -463,6 +463,9 @@ def get_org_preference(org_id: str, key: str, default=None):
                 return _parse_preference_value(row[0], default)
     except Exception:
         logger.exception("Error reading org preference %s for org %s", sanitize(key), sanitize(org_id))
+        # Callers that must tell "never set" from "the read failed" opt in.
+        if strict:
+            raise
         return default
 
 def _parse_preference_value(raw, default=None):

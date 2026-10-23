@@ -235,7 +235,10 @@ def process_event_callback(data: dict) -> None:
                                         text=response_text, 
                                         thread_ts=thread_ts
                                     )
-                                    session_id, incident_id = get_session_from_thread(user_id, channel, msg_thread_ts)
+                                    session_id, incident_id = get_session_from_thread(
+                                        user_id, channel, msg_thread_ts,
+                                        access_as="general_viewer" if as_general_viewer else None,
+                                    )
                                     context_messages = get_thread_messages(client, channel, msg_thread_ts)
                                     final_thread_ts = msg_thread_ts
                                 else:
@@ -562,6 +565,33 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
                 except Exception as e:
                     logger.error(f"Failed to send unauthorized message to Slack user {sanitize(slack_user_id)}: {e}", exc_info=True)
             
+            return {"text": ""}
+
+        # A viewer with chat turned off must not start a background run.
+        from utils.auth.viewer_run import viewer_may_run
+        try:
+            may_run = viewer_may_run(clicker_user_id, clicker_org_id)
+        except Exception:
+            logger.exception("Viewer chat check failed for a Slack suggestion")
+            may_run = False
+        if not may_run:
+            client = get_slack_client_for_user(clicker_user_id)
+            if client:
+                try:
+                    client._make_request(
+                        "POST",
+                        "chat.postEphemeral",
+                        {
+                            "channel": channel_id,
+                            "user": slack_user_id,
+                            "text": "Starting a chat isn't enabled for your role. Ask an admin to turn it on.",
+                        },
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to send viewer refusal to Slack user %s: %s",
+                        sanitize(slack_user_id), e, exc_info=True,
+                    )
             return {"text": ""}
         
         # 5. EXECUTE: Run the command with the clicker's credentials

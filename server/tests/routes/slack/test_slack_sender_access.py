@@ -113,7 +113,7 @@ def test_slack_guest_is_not_a_workspace_member():
 def test_missing_guest_preference_allows_them(monkeypatch):
     monkeypatch.setattr(
         "utils.auth.stateless_auth.get_org_preference",
-        lambda org_id, key, default=None: default,
+        lambda org_id, key, default=None, strict=False: default,
     )
     assert org_allows_unregistered_slack("org-1") is True
 
@@ -121,8 +121,16 @@ def test_missing_guest_preference_allows_them(monkeypatch):
 def test_guest_preference_can_be_turned_off(monkeypatch):
     monkeypatch.setattr(
         "utils.auth.stateless_auth.get_org_preference",
-        lambda org_id, key, default=None: False,
+        lambda org_id, key, default=None, strict=False: False,
     )
+    assert org_allows_unregistered_slack("org-1") is False
+
+
+def test_guest_preference_read_error_denies(monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("utils.auth.stateless_auth.get_org_preference", boom)
     assert org_allows_unregistered_slack("org-1") is False
 
 

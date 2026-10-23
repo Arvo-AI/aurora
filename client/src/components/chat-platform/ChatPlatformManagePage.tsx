@@ -9,7 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ArrowLeft, AlertCircle, Loader2, LogOut, Bell, RefreshCw, X, Pencil, ChevronDown, ChevronRight, Search, Plus, ChevronsUpDown, Check, Users } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useUser } from "@/hooks/useAuthHooks";
-import { canWrite as checkCanWrite } from "@/lib/roles";
+import { canWrite as checkCanWrite, isAdmin as checkIsAdmin } from "@/lib/roles";
 import { useCanEditMemory } from "@/hooks/useCanEditMemory";
 import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
 import { queryClient, jsonFetcher } from "@/lib/query";
@@ -74,6 +74,7 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
   const { toast } = useToast();
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
+  const admin = checkIsAdmin(user?.role);
   const canEditMemory = useCanEditMemory() === true;
   const ChannelIcon = config.channelIcon;
   const MemoryCard = config.MemoryCard;
@@ -91,6 +92,9 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
   const [allowUnregistered, setAllowUnregistered] = useState(
     config.guestAccess?.defaultEnabled ?? true,
   );
+  // False until a successful read. A failed load must not look like the default.
+  const [guestPrefReady, setGuestPrefReady] = useState(false);
+  const [guestPrefError, setGuestPrefError] = useState<string | null>(null);
   const [savingGuest, setSavingGuest] = useState(false);
   const [isLoadingPrefs, setIsLoadingPrefs] = useState(true);
   const [savingPrefs, setSavingPrefs] = useState<Record<string, boolean>>({});
@@ -239,7 +243,11 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
       keys.forEach((k) => params.append("keys", k));
 
       const response = await fetch(`/api/proxy/user-preferences/batch?${params.toString()}`);
-      if (!response.ok) return;
+      // A failed read must not present the default as the saved setting.
+      if (!response.ok) {
+        setGuestPrefError("Couldn't load who can message Aurora.");
+        return;
+      }
       const data = await response.json();
       const stored = data.preferences as Record<string, unknown> | undefined;
       setPreferences((prev) => ({ ...prev, ...booleansFromPrefs(defaults, stored) }));
@@ -249,8 +257,11 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
           stored?.[config.guestAccess.preferenceKey],
           config.guestAccess.defaultEnabled,
         ));
+        setGuestPrefReady(true);
+        setGuestPrefError(null);
       }
     } catch (error) {
+      setGuestPrefError("Couldn't load who can message Aurora.");
       console.error(`Error loading ${config.displayName} notification preferences:`, error);
     } finally {
       setIsLoadingPrefs(false);
@@ -777,18 +788,21 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className={`flex items-center justify-between gap-4 p-4 border rounded-lg ${canWrite ? "" : "opacity-50"}`}>
+              <div className={`flex items-center justify-between gap-4 p-4 border rounded-lg ${admin && !guestPrefError ? "" : "opacity-50"}`}>
                 <div className="space-y-1">
                   <h4 className="font-medium text-sm">Allow people without an Aurora account</h4>
                   <p className="text-xs text-muted-foreground">
                     When on, a Slack member whose email isn&apos;t an Aurora user can still @mention Aurora.
                     Those questions run as a general viewer. When off, only people with an account can.
                   </p>
+                  {guestPrefError && (
+                    <p className="text-xs text-destructive">{guestPrefError}</p>
+                  )}
                 </div>
                 <Switch
-                  checked={allowUnregistered}
+                  checked={guestPrefReady ? allowUnregistered : false}
                   onCheckedChange={handleGuestAccess}
-                  disabled={isLoadingPrefs || savingGuest || !canWrite}
+                  disabled={isLoadingPrefs || savingGuest || !admin || !guestPrefReady}
                   aria-label="Allow people without an Aurora account"
                 />
               </div>

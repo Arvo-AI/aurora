@@ -149,11 +149,11 @@ class AlertCorrelator:
                 alert_received_at,
                 org_id=org_id,
             )
+            # Metadata also carries credential-derived URLs, so don't log fields from it
             logger.info(
-                "[CORRELATION] Found %d candidate incidents for user %s (alert_received_at=%s)",
+                "[CORRELATION] Found %d candidate incidents for user %s",
                 len(candidates),
                 user_id,
-                alert_received_at,
             )
             if not candidates:
                 logger.info("[CORRELATION] No candidate incidents found")
@@ -235,9 +235,9 @@ class AlertCorrelator:
                 try:
                     return datetime.fromisoformat(val.replace("Z", "+00:00"))
                 except ValueError:
+                    # Same metadata field as above — log that it was invalid, not the value
                     logger.warning(
-                        "[CORRELATION] Invalid received_at timestamp: %r, using now()",
-                        val,
+                        "[CORRELATION] Invalid received_at timestamp, using now()"
                     )
         return datetime.now(timezone.utc)
 

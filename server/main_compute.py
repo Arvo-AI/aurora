@@ -134,6 +134,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                            "Authorization", "X-Provider-Preference"],
                          "methods": ["GET", "POST", "DELETE", "OPTIONS", "PATCH"]},
+        r"/servicenow/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                           "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                             "Authorization", "X-Provider-Preference"],
+                           "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
         r"/opsgenie/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With",
                                            "X-User-ID", "Authorization", "X-Provider-Preference"],
@@ -257,6 +261,8 @@ _OPEN_PREFIXES = (
     "/spinnaker/webhook/",
     "/jira/webhook/",
     "/incidentio/alerts/webhook/",
+    # ServiceNow Business Rule webhook — verified via the per-user shared secret, not session.
+    "/servicenow/webhook/",
     "/ovh_api/ovh/oauth2/callback",
     "/azure/setup-script",
     "/azure/setup-script-ps1",
@@ -508,6 +514,11 @@ from routes.incidentio import bp as incidentio_bp  # noqa: F401
 import routes.incidentio.tasks  # noqa: F401
 app.register_blueprint(incidentio_bp, url_prefix="/incidentio")
 
+# --- ServiceNow Integration Routes ---
+from routes.servicenow import bp as servicenow_bp  # noqa: F401
+import routes.servicenow.tasks  # noqa: F401
+app.register_blueprint(servicenow_bp, url_prefix="/servicenow")
+
 # --- Coroot Integration Routes ---
 from routes.coroot import bp as coroot_bp  # noqa: F401
 app.register_blueprint(coroot_bp, url_prefix="/coroot")
@@ -754,21 +765,33 @@ def initialize_app():
     # Acquire a session-level advisory lock so that concurrent gunicorn workers
     # serialise DDL (CREATE TABLE / ALTER TABLE) instead of deadlocking.
     from utils.db.db_utils import connect_to_db_as_admin
+    from utils.db.migration_lock import (
+        MIGRATION_LOCK_KEY,
+        acquire_migration_lock,
+        reset_migration_session,
+        set_connection_autocommit,
+    )
     conn = connect_to_db_as_admin()
     try:
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_lock(42)")
-        conn.autocommit = False
+        # The pool wrapper swallows `conn.autocommit = ...`, so set it on the
+        # psycopg2 connection. Otherwise the wait sleeps inside a transaction.
+        set_connection_autocommit(conn, True)
+        acquire_migration_lock(conn)
         try:
+            set_connection_autocommit(conn, False)
             ensure_database_exists()
             initialize_tables()
         finally:
-            conn.autocommit = True
+            set_connection_autocommit(conn, True)
             with conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_unlock(42)")
+                cur.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK_KEY,))
     finally:
-        conn.close()
+        try:
+            reset_migration_session(conn)
+            # Next checkout expects a transactional connection
+            set_connection_autocommit(conn, False)
+        finally:
+            conn.close()
 
     # Initialize Casbin RBAC enforcer (seeds default policies on first run)
     try:

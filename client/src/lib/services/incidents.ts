@@ -8,7 +8,7 @@ import { apiGet, apiPost, apiRequest, type ApiError } from '@/lib/services/api-c
 // streaming thoughts, and copy-pasteable post-mortems
 // ============================================================================
 
-export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'elastic' | 'dynatrace' | 'coroot' | 'bigpanda' | 'cloudwatch' | 'chat';
+export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'elastic' | 'dynatrace' | 'coroot' | 'bigpanda' | 'servicenow' | 'cloudwatch' | 'chat';
 
 export function getSourceIconSrc(source: string): string | null {
   if (source === 'chat') return null;

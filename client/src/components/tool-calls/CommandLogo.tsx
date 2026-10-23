@@ -302,6 +302,14 @@ const logos = {
       onError={(e) => console.error('Failed to load incident.io logo:', e)}
     />
   ),
+  servicenow: (
+    <img
+      src="/servicenow.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain rounded-sm"
+      alt="ServiceNow"
+      onError={(e) => console.error('Failed to load ServiceNow logo:', e)}
+    />
+  ),
   web: (
     <svg
       className="w-4 h-4 min-w-4 min-h-4 text-blue-600 dark:text-blue-400"
@@ -535,6 +543,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // incident.io tools
   if (tool.includes('incidentio')) {
     return 'incidentio'
+  }
+
+  // ServiceNow tools
+  if (tool === 'list_servicenow_incidents' || tool === 'get_servicenow_incident' || tool.includes('servicenow')) {
+    return 'servicenow'
   }
 
   // Slack tools
