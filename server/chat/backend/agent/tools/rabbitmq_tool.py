@@ -39,22 +39,18 @@ def _build_client(user_id: str) -> Optional[RabbitMQClient]:
     creds = _credentials(user_id)
     if not creds:
         return None
+    vhost = creds.get("vhost")
     try:
         return RabbitMQClient(
             url=creds["url"],
             username=creds["username"],
             password=creds["password"],
             verify_tls=bool(creds.get("verify_tls", True)),
+            default_vhost=vhost if isinstance(vhost, str) and vhost else "/",
         )
     except Exception:
         logger.exception("[RABBITMQ-TOOL] Failed to build client")
         return None
-
-
-def _default_vhost(user_id: str) -> str:
-    creds = _credentials(user_id) or {}
-    vhost = creds.get("vhost")
-    return vhost if isinstance(vhost, str) and vhost else "/"
 
 
 def _clamp_page(page: int, page_size: int) -> tuple:
@@ -181,13 +177,12 @@ def rabbitmq_list_queues(
 def rabbitmq_get_queue(
     *,
     client: RabbitMQClient,
-    user_id: Optional[str] = None,
     name: str,
     vhost: Optional[str] = None,
     **kwargs: Any,
 ) -> Dict[str, Any]:
     """One queue, including dead-letter arguments and rates."""
-    chosen = vhost.strip() if isinstance(vhost, str) and vhost.strip() else _default_vhost(user_id or "")
+    chosen = vhost.strip() if isinstance(vhost, str) and vhost.strip() else client.default_vhost
     return client.queue(chosen, name)
 
 
@@ -210,13 +205,12 @@ def rabbitmq_list_exchanges(
 def rabbitmq_list_bindings(
     *,
     client: RabbitMQClient,
-    user_id: Optional[str] = None,
     queue: str,
     vhost: Optional[str] = None,
     **kwargs: Any,
 ) -> Dict[str, Any]:
-    """Bindings into a queue. An empty list means publishes to that queue's exchange are dropped."""
-    chosen = vhost.strip() if isinstance(vhost, str) and vhost.strip() else _default_vhost(user_id or "")
+    """Bindings into a queue. An empty list still allows the default exchange to route by queue name."""
+    chosen = vhost.strip() if isinstance(vhost, str) and vhost.strip() else client.default_vhost
     return {"vhost": chosen, "queue": queue, "bindings": client.bindings(chosen, queue)}
 
 

@@ -85,6 +85,7 @@ def test_auth_failure_does_not_echo_secrets():
     assert "s3cret-password" not in message
     assert "leaked" not in message
     assert session.request.call_args.kwargs["allow_redirects"] is False
+    assert session.trust_env is False
     assert session.request.call_args.kwargs["timeout"] == rmq.TIMEOUT_SECONDS
     assert "s3cret-password" not in session.request.call_args.args[1]
 

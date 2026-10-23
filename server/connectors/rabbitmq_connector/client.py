@@ -121,6 +121,8 @@ def normalize_management_url(raw: str) -> str:
 
 
 def _reject_host(host: str, port: Optional[int]) -> None:
+    # DNS is checked here and again by the HTTP client. Pinning the socket
+    # while keeping TLS SNI is the same open window as the MCP connector.
     literal = _parse_ip(host)
     if literal is not None:
         _reject_ip(literal)
@@ -354,15 +356,19 @@ class RabbitMQClient:
         password: str,
         verify_tls: bool = True,
         timeout: int = TIMEOUT_SECONDS,
+        default_vhost: str = "/",
         session: Optional[requests.Session] = None,
     ):
         self.url = normalize_management_url(url)
         self.username = username
         self.verify_tls = verify_tls
         self.timeout = timeout
+        self.default_vhost = default_vhost or "/"
         self._session = session or requests.Session()
         self._session.auth = (username, password)
         self._session.verify = verify_tls
+        # Ignore HTTP_PROXY so a process-wide proxy cannot re-resolve the host.
+        self._session.trust_env = False
         self._session.headers["Accept"] = "application/json"
         self._owns_session = session is None
 

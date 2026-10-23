@@ -180,6 +180,11 @@ def status(user_id):
 def disconnect(user_id):
     try:
         vault_ok, rows = delete_user_secret(user_id, "rabbitmq")
+        # (False, 0) means cleanup failed before the row was removed, so the credential is still live.
+        if not vault_ok and rows == 0:
+            logger.error("[RABBITMQ] Disconnect failed for user %s", hash_for_log(user_id))
+            return jsonify({"error": "Failed to disconnect RabbitMQ"}), 500
+        # The row is gone. A leftover Vault object is no longer reachable from the app.
         if not vault_ok:
             logger.warning("[RABBITMQ] Disconnected user %s but Vault delete failed", hash_for_log(user_id))
         clear_credentials_cache(user_id)

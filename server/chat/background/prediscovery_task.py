@@ -134,7 +134,7 @@ Before writing, check if a relevant entry already exists (use list_memories or g
    - For each deployment: what repo, what target environment, what K8s cluster/namespace
    - If CloudBees Operations Center OR a manually-registered controller fleet (Multiple Controllers mode) is connected: use cloudbees_rca(action='controller_list') to discover all controllers, then cloudbees_rca(action='cross_controller_deployments') to see what's deploying across the organization
 
-6. **Observability** (if Datadog/Splunk/Elastic/Coroot/Dynatrace/ThousandEyes connected):
+6. **Observability** (if Datadog/Splunk/Elastic/Coroot/Dynatrace/ThousandEyes/RabbitMQ connected):
    - Datadog: query_datadog(resource_type='monitors') and query_datadog(resource_type='hosts')
    - Splunk: list_splunk_indexes(), search_splunk() to discover log sources
    - Elastic: elastic_list_indices(), elastic_search_logs() to discover log data streams and services

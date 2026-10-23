@@ -1104,7 +1104,10 @@ def get_cloud_tools():
     # the next turn: without it the agent ran on a stale tool list for up to
     # LANGCHAIN_TOOLS_CACHE_DURATION after registration and insisted the tools
     # did not exist.
-    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}"
+    # RabbitMQ connect/disconnect happens in the API process. The chatbot and
+    # worker keep their own tool cache, so the credential bit has to be in the key.
+    rabbitmq_connected = is_rabbitmq_connected(user_id)
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}:rabbitmq={int(rabbitmq_connected)}"
     
     current_time = time.time()
     if (
@@ -3050,26 +3053,26 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         if is_rabbitmq_connected(user_id):
             _rabbitmq_tools = [
                 (rabbitmq_get_overview, "rabbitmq_get_overview", RabbitMQOverviewArgs,
-                 "Read RabbitMQ cluster overview: version, queue totals, message rates, and listeners. "
-                 "Start here when a broker or consumer outage is suspected."),
+                 ("Read RabbitMQ cluster overview: version, queue totals, message rates, and listeners. "
+                  "Start here when a broker or consumer outage is suspected.")),
                 (rabbitmq_list_nodes, "rabbitmq_list_nodes", RabbitMQNodesArgs,
                  "List RabbitMQ nodes with memory and disk alarms. A memory or disk alarm blocks publishers."),
                 (rabbitmq_list_queues, "rabbitmq_list_queues", RabbitMQListQueuesArgs,
-                 "List RabbitMQ queues sorted by depth. Shows ready, unacked, consumers, and rates. "
-                 "Zero consumers with a growing ready count means the worker is down."),
+                 ("List RabbitMQ queues sorted by depth. Shows ready, unacked, consumers, and rates. "
+                  "Zero consumers with a growing ready count means the worker is down.")),
                 (rabbitmq_get_queue, "rabbitmq_get_queue", RabbitMQGetQueueArgs,
                  "Get one RabbitMQ queue, including dead-letter arguments and publish/deliver rates."),
                 (rabbitmq_list_exchanges, "rabbitmq_list_exchanges", RabbitMQListExchangesArgs,
                  "List RabbitMQ exchanges and their publish rates."),
                 (rabbitmq_list_bindings, "rabbitmq_list_bindings", RabbitMQListBindingsArgs,
-                 "List bindings into a RabbitMQ queue. No bindings means publishes never reach that queue."),
+                 "List bindings into a RabbitMQ queue. An empty list does not prove the queue is unused: the default exchange routes by queue name with no binding row."),
                 (rabbitmq_list_connections, "rabbitmq_list_connections", RabbitMQListConnectionsArgs,
                  "List open RabbitMQ connections: user, peer, channel count, and client library."),
                 (rabbitmq_list_consumers, "rabbitmq_list_consumers", RabbitMQListConsumersArgs,
                  "List RabbitMQ consumers and whether they are active."),
                 (rabbitmq_health_checks, "rabbitmq_health_checks", RabbitMQHealthArgs,
-                 "Run RabbitMQ health checks: alarms, vhosts, mirror sync, and AMQP listeners. "
-                 "A failed AMQP port check is normal when the broker only listens on the other port."),
+                 ("Run RabbitMQ health checks: alarms, vhosts, mirror sync, and AMQP listeners. "
+                  "A failed AMQP port check is normal when the broker only listens on the other port.")),
             ]
             for _func, _name, _schema, _desc in _rabbitmq_tools:
                 _ctx = with_user_context(_func)
