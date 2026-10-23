@@ -26,22 +26,27 @@ CACHE_STYLE_BEDROCK = "bedrock"  # Converse standalone cachePoint block
 BEDROCK_CACHE_POINT = {"cachePoint": {"type": "default"}}
 _EPHEMERAL = {"type": "ephemeral"}
 
-# Smallest cacheable prefix per Claude family, in tokens (Bedrock prompt-caching
-# table; first prefix match wins, so longer names precede their shorter prefixes).
+# Smallest cacheable prefix per Claude family, in tokens (Bedrock explicit-caching
+# table). First prefix match wins, so a longer name has to precede the shorter one
+# it starts with (sonnet-5-5 before sonnet-5, fable-5-1 before fable-5).
 # A breakpoint on a shorter prefix is accepted but caches nothing.
 _MIN_CACHEABLE_TOKENS = (
     ("claude-haiku-5-5", 512),
-    ("claude-opus-5-5", 512),
     ("claude-sonnet-5-5", 512),
+    ("claude-opus-5-5", 512),
+    ("claude-fable-5-1", 512),
     ("claude-fable-5", 512),
     ("claude-opus-5", 512),
-    ("claude-sonnet-5", 1024),
     ("claude-opus-4-8", 1024),
+    ("claude-sonnet-5", 1024),
     ("claude-sonnet-4-6", 1024),
     ("claude-sonnet-4-5", 1024),
-    ("claude-opus-4-5", 4096),
-    ("claude-opus-4-6", 4096),
+    ("claude-3-7-sonnet", 1024),
+    ("claude-3-5-sonnet", 1024),
     ("claude-opus-4-7", 4096),
+    ("claude-opus-4-6", 4096),
+    ("claude-opus-4-5", 4096),
+    ("claude-haiku-4-5", 4096),
 )
 # Unknown families get the largest published minimum, so a write is never wasted
 _DEFAULT_MIN_CACHEABLE_TOKENS = 4096

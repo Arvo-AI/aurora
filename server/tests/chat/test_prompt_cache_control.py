@@ -133,10 +133,15 @@ class TestClaudeFamily:
 
     def test_minimum_is_per_model_with_safe_default(self):
         assert min_cacheable_chars("anthropic/claude-opus-5.5") == 512 * 4
+        assert min_cacheable_chars("anthropic/claude-fable-5.1") == 512 * 4
         assert min_cacheable_chars("bedrock/eu.anthropic.claude-sonnet-5") == 1024 * 4
         assert min_cacheable_chars("anthropic/claude-haiku-5.5") == 512 * 4
-        # sonnet-5-5 must not fall into the shorter sonnet-5 prefix
+        assert min_cacheable_chars("anthropic/claude-haiku-4.5") == 4096 * 4
+        # sonnet-5-5 and fable-5-1 must not fall into the shorter prefixes
         assert min_cacheable_chars("anthropic/claude-sonnet-5.5") == 512 * 4
+        assert min_cacheable_chars(
+            "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        ) == 1024 * 4
         assert min_cacheable_chars("unknown-model") == 4096 * 4
 
 
