@@ -165,6 +165,17 @@ def list_servers(user_id: str) -> List[Dict[str, Any]]:
     ]
 
 
+def servers_for_user(user_id: str) -> List[Dict[str, Any]]:
+    """Servers this user may call, after the org's connector access rules."""
+    from utils.auth.connector_access import access_for
+
+    servers = list_servers(user_id)
+    if not servers:
+        return []
+    access = access_for(user_id)
+    return [s for s in servers if access.may_use(f"mcp:{s['label']}")]
+
+
 def find_server(user_id: str, label: str) -> Optional[Dict[str, Any]]:
     """One server by label, or None."""
     target = slugify_label(label)
@@ -265,7 +276,7 @@ def mcp_servers_section(user_id: str) -> str:
     Lives here rather than beside the tool builder so ``SkillRegistry`` can
     import it without pulling in langchain.
     """
-    servers = list_servers(user_id)
+    servers = servers_for_user(user_id)
     if not servers:
         return "(no custom MCP servers registered)"
 

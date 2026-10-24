@@ -51,6 +51,12 @@ export interface ChatPlatformManageConfig {
     routingNote: string;
     disconnectBlurb: string;
   };
+  /** Org toggle. Absent on platforms that don't have one. */
+  guestAccess?: {
+    preferenceKey: NotificationPreferenceKey;
+    /** Used when the org has never saved the switch. */
+    defaultEnabled: boolean;
+  };
   /** Where to send users who open Manage before OAuth / Connect is done. */
   setupPath: string;
 }
@@ -93,6 +99,10 @@ export const slackManageConfig: ChatPlatformManageConfig = {
     disconnectBlurb: "Disconnect Slack from Aurora. You will stop receiving all Slack notifications.",
   },
   setupPath: "/connectors",
+  guestAccess: {
+    preferenceKey: "slack_allow_unregistered",
+    defaultEnabled: true,
+  },
 };
 
 export const teamsManageConfig: ChatPlatformManageConfig = {

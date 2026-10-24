@@ -133,6 +133,9 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   } = useConnectorOAuth(connector, userId);
 
   const isConnecting = isConnectingOAuth || isConnectingOAuthHandler;
+  // Slack Manage only opens the page, which viewers can already open by URL.
+  const slackManageOpen = connector.id === "slack" && isConnected;
+  const buttonLocked = !canWrite && !slackManageOpen;
 
   const handleDisconnect = async () => {
     if (connector.id === "google_chat") {
@@ -433,7 +436,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
                         onClick={handleConnect} 
                         className="w-full"
                         variant={isConnected ? "outline" : "default"}
-                        disabled={isConnecting || (!isConnected && !canWrite) || (isConnected && !canWrite)}
+                        disabled={isConnecting || buttonLocked}
                       >
                         {isConnecting ? (
                           <>
@@ -473,7 +476,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
                       </Button>
                     </span>
                   </TooltipTrigger>
-                  {!canWrite && (
+                  {buttonLocked && (
                     <TooltipContent>
                       <p>Editor or Admin role required</p>
                     </TooltipContent>

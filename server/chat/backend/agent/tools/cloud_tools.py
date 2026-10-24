@@ -1083,7 +1083,10 @@ def get_cloud_tools():
     # the next turn: without it the agent ran on a stale tool list for up to
     # LANGCHAIN_TOOLS_CACHE_DURATION after registration and insisted the tools
     # did not exist.
-    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}"
+    from utils.auth.connector_access import access_for
+    access = access_for(user_id)
+
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}:access={access.revision()}"
     
     current_time = time.time()
     if (
@@ -1374,6 +1377,11 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     from chat.backend.agent.tools.kubectl_onprem_tool import on_prem_kubectl, is_kubectl_onprem_connected
     from utils.auth.stateless_auth import get_connected_providers
 
+    def _open(connector_id: str) -> bool:
+        # A connector nobody has limited stays available. A limited one is
+        # offered only to roles that were granted it.
+        return access.may_use(connector_id)
+
     # List of (function, name) tuples — always-available tools
     tool_functions = [
         (terminal_exec, "terminal_exec"),
@@ -1383,7 +1391,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Cloud provider tools (only if at least one provider is connected)
     # PR review is read-only: exclude exec/write tools.
-    if get_connected_providers(user_id) and not is_pr_review:
+    if any(_open(p) for p in get_connected_providers(user_id)) and not is_pr_review:
         tool_functions.append((run_iac_tool, "iac_tool"))
         tool_functions.append((cloud_exec_wrapper, "cloud_exec"))
 
@@ -1407,7 +1415,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             )
             return False
 
-    if _safe_connected(is_github_connected, "GitHub"):
+    if _safe_connected(is_github_connected, "GitHub") and _open("github"):
         if not is_pr_review:
             tool_functions.append((github_commit, "github_commit"))
         tool_functions.append((get_connected_repos, "get_connected_repos"))
@@ -1420,11 +1428,11 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             tool_functions.append((github_fix, "github_fix"))
         logging.info(f"Added GitHub tools for user {user_id} (github_fix={'included' if is_rca_context else 'excluded (not RCA)'})")
 
-    if _safe_connected(is_tailscale_connected, "Tailscale") and not is_pr_review:
+    if _safe_connected(is_tailscale_connected, "Tailscale") and _open("tailscale") and not is_pr_review:
         tool_functions.append((tailscale_ssh, "tailscale_ssh"))
         logging.info(f"Added Tailscale SSH tool for user {user_id}")
 
-    if _safe_connected(is_kubectl_onprem_connected, "kubectl_onprem") and not is_pr_review:
+    if _safe_connected(is_kubectl_onprem_connected, "kubectl_onprem") and _open("onprem") and not is_pr_review:
         tool_functions.append((get_connected_clusters, "get_connected_clusters"))
         tool_functions.append((on_prem_kubectl, "on_prem_kubectl"))
         logging.info(f"Added on-prem kubectl tools for user {user_id}")
@@ -1440,7 +1448,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             post_slack_message,
             is_slack_connected,
         )
-        if _safe_connected(is_slack_connected, "Slack"):
+        if _safe_connected(is_slack_connected, "Slack") and _open("slack"):
             tool_functions.append((list_slack_channels, "list_slack_channels"))
             tool_functions.append((list_slack_users, "list_slack_users"))
             tool_functions.append((get_channel_history, "get_channel_history"))
@@ -1461,7 +1469,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             post_teams_message,
             is_teams_connected,
         )
-        if _safe_connected(is_teams_connected, "Microsoft Teams"):
+        if _safe_connected(is_teams_connected, "Microsoft Teams") and _open("teams"):
             tool_functions.append((get_teams_channel_history, "get_teams_channel_history"))
             tool_functions.append((list_teams_channels, "list_teams_channels"))
             tool_functions.append((get_teams_thread_replies, "get_teams_thread_replies"))
@@ -1471,13 +1479,13 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to add Microsoft Teams tools: {e}")
 
-    if _safe_connected(is_jenkins_connected, "Jenkins"):
+    if _safe_connected(is_jenkins_connected, "Jenkins") and _open("jenkins"):
         tool_functions.append((jenkins_rca, "jenkins_rca"))
         logging.info(f"Added Jenkins RCA tool for user {user_id}")
-    if _safe_connected(is_cloudbees_connected, "CloudBees"):
+    if _safe_connected(is_cloudbees_connected, "CloudBees") and _open("cloudbees"):
         tool_functions.append((cloudbees_rca, "cloudbees_rca"))
         logging.info(f"Added CloudBees RCA tool for user {user_id}")
-    if _safe_connected(is_spinnaker_connected, "Spinnaker"):
+    if _safe_connected(is_spinnaker_connected, "Spinnaker") and _open("spinnaker"):
         tool_functions.append((spinnaker_rca, "spinnaker_rca"))
         logging.info(f"Added Spinnaker RCA tool for user {user_id}")
 
@@ -2251,7 +2259,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             logging.warning(f"Failed to add introspection tools: {e}")
 
     # Add Splunk tools if connected
-    if is_splunk_connected(user_id):
+    if is_splunk_connected(user_id) and _open("splunk"):
         # search_splunk tool
         context_wrapped_splunk = with_user_context(search_splunk)
         notification_wrapped_splunk = with_completion_notification(context_wrapped_splunk)
@@ -2307,7 +2315,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.debug(f"Splunk tools not added - user {user_id} not connected to Splunk")
 
     # Add Elastic Cloud tools if connected
-    if is_elastic_connected(user_id):
+    if is_elastic_connected(user_id) and _open("elastic"):
         _elastic_tool_specs = [
             (
                 elastic_list_indices, "elastic_list_indices", ElasticListIndicesArgs,
@@ -2361,7 +2369,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Add ServiceNow tools if connected. The whole block is guarded so a registration
     # error cannot abort tool construction for every other connector.
-    if _safe_connected(is_servicenow_connected, "ServiceNow"):
+    # A team limit hides the tool the same way it hides the skill.
+    if _safe_connected(is_servicenow_connected, "ServiceNow") and _open("servicenow"):
         try:
             context_wrapped_sn_list = with_user_context(list_servicenow_incidents)
             notification_wrapped_sn_list = with_completion_notification(context_wrapped_sn_list)
@@ -2429,7 +2438,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.debug(f"ServiceNow tools not added - user {user_id} not connected to ServiceNow")
 
     # Add incident.io tools if connected
-    if is_incidentio_connected(user_id):
+    if is_incidentio_connected(user_id) and _open("incidentio"):
         context_wrapped_list = with_user_context(list_incidentio_incidents)
         notification_wrapped_list = with_completion_notification(context_wrapped_list)
         final_list_func = wrap_func_with_capture(notification_wrapped_list, "list_incidentio_incidents") if tool_capture else notification_wrapped_list
@@ -2481,7 +2490,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.debug(f"incident.io tools not added - user {user_id} not connected")
 
     # Add Dynatrace tool if connected
-    if is_dynatrace_connected(user_id):
+    if is_dynatrace_connected(user_id) and _open("dynatrace"):
         context_wrapped_dt = with_user_context(query_dynatrace)
         notification_wrapped_dt = with_completion_notification(context_wrapped_dt)
         final_dt_func = wrap_func_with_capture(notification_wrapped_dt, "query_dynatrace") if tool_capture else notification_wrapped_dt
@@ -2500,7 +2509,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added Dynatrace tool for user {user_id}")
 
     # Add Datadog tool if connected
-    if is_datadog_connected(user_id):
+    if is_datadog_connected(user_id) and _open("datadog"):
         context_wrapped_dd = with_user_context(query_datadog)
         notification_wrapped_dd = with_completion_notification(context_wrapped_dd)
         final_dd_func = wrap_func_with_capture(notification_wrapped_dd, "query_datadog") if tool_capture else notification_wrapped_dd
@@ -2527,7 +2536,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added Datadog tool for user {user_id}")
 
     # Add New Relic tool if connected
-    if is_newrelic_connected(user_id):
+    if is_newrelic_connected(user_id) and _open("newrelic"):
         context_wrapped_nr = with_user_context(query_newrelic)
         notification_wrapped_nr = with_completion_notification(context_wrapped_nr)
         final_nr_func = wrap_func_with_capture(notification_wrapped_nr, "query_newrelic") if tool_capture else notification_wrapped_nr
@@ -2550,7 +2559,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added New Relic tool for user {user_id}")
 
     # Add Sentry tool if connected
-    if is_sentry_connected(user_id):
+    if is_sentry_connected(user_id) and _open("sentry"):
         context_wrapped_sentry = with_user_context(query_sentry)
         notification_wrapped_sentry = with_completion_notification(context_wrapped_sentry)
         final_sentry_func = wrap_func_with_capture(notification_wrapped_sentry, "query_sentry") if tool_capture else notification_wrapped_sentry
@@ -2572,7 +2581,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added Sentry tool for user {user_id}")
 
     # Add GitLab tool if connected
-    if is_gitlab_connected(user_id):
+    if is_gitlab_connected(user_id) and _open("gitlab"):
         context_wrapped_gl = with_forced_context(gitlab_tool)
         context_wrapped_gl.__name__ = "gitlab"
         notification_wrapped_gl = with_completion_notification(context_wrapped_gl)
@@ -2591,7 +2600,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added GitLab tool for user {user_id}")
 
     # --- OpsGenie / JSM Operations tool ---
-    if is_opsgenie_connected(user_id):
+    if is_opsgenie_connected(user_id) and _open("opsgenie"):
         from routes.opsgenie.opsgenie_routes import _get_stored_opsgenie_credentials
         _og_creds = _get_stored_opsgenie_credentials(user_id)
         _og_is_jsm = _og_creds.get("auth_type") == "jsm_basic" if _og_creds else False
@@ -2616,7 +2625,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     try:
         from .bitbucket import is_bitbucket_connected
 
-        if is_bitbucket_connected(user_id):
+        if is_bitbucket_connected(user_id) and _open("bitbucket"):
             from .bitbucket import (
                 bitbucket_repos, BitbucketReposArgs,
                 bitbucket_branches, BitbucketBranchesArgs,
@@ -2739,7 +2748,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     # no Confluence credentials, breaking RCAs that mention runbook URLs.
     try:
         from utils.auth.token_management import get_token_data
-        if get_token_data(user_id, "confluence"):
+        # A team limit hides the tool the same way it hides the skill.
+        if get_token_data(user_id, "confluence") and _open("confluence"):
             _confluence_tools = [
                 (confluence_search_similar, "confluence_search_similar", ConfluenceSearchSimilarArgs,
                  "Search Confluence for pages related to an incident (postmortems, RCA docs). "
@@ -2788,7 +2798,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     }
     try:
         from .notion import NOTION_TOOL_SPECS, is_notion_connected
-        if is_notion_connected(user_id):
+        if is_notion_connected(user_id) and _open("notion"):
             is_background = getattr(state_context, 'is_background', False) if state_context else False
             specs = NOTION_TOOL_SPECS
             if is_background:
@@ -2883,7 +2893,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
         from utils.auth.token_management import get_token_data as _get_jira_creds
         _jira_creds = _get_jira_creds(user_id, "jira")
-        if _jira_creds:
+        # A team limit hides the tool the same way it hides the skill.
+        if _jira_creds and _open("jira"):
             from routes.jira.jira_routes import jira_comment_back_enabled
             from utils.auth.stateless_auth import get_user_preference
 
@@ -2929,7 +2940,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         from utils.flags.feature_flags import is_sharepoint_enabled
         from utils.secrets.secret_ref_utils import has_user_credentials
 
-        if is_sharepoint_enabled() and has_user_credentials(user_id, "sharepoint"):
+        # A team limit hides the tool the same way it hides the skill.
+        if is_sharepoint_enabled() and has_user_credentials(user_id, "sharepoint") and _open("sharepoint"):
             _sharepoint_tools = [
                 (sharepoint_search, "sharepoint_search", SharePointSearchArgs,
                  "Search SharePoint for pages, documents, and list items matching a query. "
@@ -2960,7 +2972,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Add Coroot observability tools if connected
     try:
-        if is_coroot_connected(user_id):
+        if is_coroot_connected(user_id) and _open("coroot"):
             _coroot_tools = [
                 (coroot_get_incidents, "coroot_get_incidents", CorootGetIncidentsArgs,
                  "List recent incidents from Coroot (eBPF-powered observability) with RCA summaries, severity, "
@@ -3026,7 +3038,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Add ThousandEyes network intelligence tools if connected
     try:
-        if is_thousandeyes_connected(user_id):
+        if is_thousandeyes_connected(user_id) and _open("thousandeyes"):
             _te_tools = [
                 (thousandeyes_list_tests, "thousandeyes_list_tests", ThousandEyesListTestsArgs,
                  "List all configured ThousandEyes tests (network, HTTP, DNS, BGP, page load, etc.). "
@@ -3082,7 +3094,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Add Cloudflare tools if connected
     try:
-        if is_cloudflare_connected(user_id):
+        if is_cloudflare_connected(user_id) and _open("cloudflare"):
             _cf_tools = [
                 (query_cloudflare, "query_cloudflare", CloudflareQueryArgs,
                  "Query Cloudflare for diagnostic data. Set resource_type to one of: "
@@ -3131,7 +3143,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Add Fly.io metrics tool if connected
     try:
-        if is_flyio_connected(user_id):
+        if is_flyio_connected(user_id) and _open("flyio"):
             _ctx = with_user_context(query_flyio_metrics)
             _notif = with_completion_notification(_ctx)
             _final = wrap_func_with_capture(_notif, "query_flyio_metrics") if tool_capture else _notif

@@ -15,6 +15,7 @@ import { JiraAutomaticRca, JiraRcaRule } from "@/components/connectors/JiraAutom
 import { PolicyMemoryCard } from "@/components/PolicyMemoryCard";
 import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite as checkCanWrite } from "@/lib/roles";
+import { useCanEditMemory } from "@/hooks/useCanEditMemory";
 
 type JiraRcaMode = "filters" | "auto";
 
@@ -48,6 +49,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const { toast } = useToast();
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
+  const canEditMemory = useCanEditMemory() === true;
   const [status, setStatus] = useState<AtlassianStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -217,7 +219,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
         </div>
         {rcaMode === "auto" ? (
           <PolicyMemoryCard
-            canWrite={canWrite}
+            canWrite={canEditMemory}
             endpoint="jira"
             name="Jira RCA"
             className="shadow-none"
