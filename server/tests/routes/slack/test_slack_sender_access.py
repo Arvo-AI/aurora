@@ -201,8 +201,13 @@ class _Pool:
         return _Conn(self._cursor)
 
 
+def _set(monkeypatch, name, value):
+    # Patch the module the function was defined on. sys.modules can point at a stub.
+    monkeypatch.setitem(find_aurora_user_in_org.__globals__, name, value)
+
+
 def _patch_pool(monkeypatch, cursor):
-    monkeypatch.setattr("routes.slack.slack_events_helpers.db_pool", _Pool(cursor))
+    _set(monkeypatch, "db_pool", _Pool(cursor))
 
 
 def test_exact_email_match_wins(monkeypatch):
@@ -234,28 +239,16 @@ def test_email_lookup_error_matches_nobody(monkeypatch):
 
 
 def test_guest_does_not_resume_the_owner_rca_session(monkeypatch):
-    monkeypatch.setattr(
-        "routes.slack.slack_events_helpers.get_incident_by_slack_message",
-        lambda user_id, thread_ts: ("inc-1", "sess-rca"),
-    )
-    monkeypatch.setattr(
-        "routes.slack.slack_events_helpers.set_rls_context",
-        lambda *args, **kwargs: False,
-    )
+    _set(monkeypatch, "get_incident_by_slack_message", lambda user_id, thread_ts: ("inc-1", "sess-rca"))
+    _set(monkeypatch, "set_rls_context", lambda *args, **kwargs: False)
     _patch_pool(monkeypatch, _Cursor())
     assert get_session_from_thread("uid", "C1", "1.2", access_as="general_viewer") == (None, None)
     assert get_session_from_thread("uid", "C1", "1.2") == ("sess-rca", "inc-1")
 
 
 def test_thread_lookup_keeps_guest_and_owner_sessions_apart(monkeypatch):
-    monkeypatch.setattr(
-        "routes.slack.slack_events_helpers.get_incident_by_slack_message",
-        lambda user_id, thread_ts: (None, None),
-    )
-    monkeypatch.setattr(
-        "routes.slack.slack_events_helpers.set_rls_context",
-        lambda *args, **kwargs: True,
-    )
+    _set(monkeypatch, "get_incident_by_slack_message", lambda user_id, thread_ts: (None, None))
+    _set(monkeypatch, "set_rls_context", lambda *args, **kwargs: True)
     cursor = _Cursor([("sess-guest", {}), None])
     _patch_pool(monkeypatch, cursor)
     assert get_session_from_thread("uid", "C1", "1.2", access_as="general_viewer") == ("sess-guest", None)
