@@ -38,14 +38,16 @@ def _org_flag(org_id: str, key: str, default: bool = _DEFAULT) -> bool:
     try:
         from utils.db.connection_pool import db_pool
 
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """SELECT preference_value FROM user_preferences
-                       WHERE user_id = '__org__' AND org_id = %s AND preference_key = %s""",
-                    (org_id, key),
-                )
-                row = cur.fetchone()
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            from utils.auth.stateless_auth import _set_org_rls
+            # Celery has no request, so the pool never sets the org on its own.
+            _set_org_rls(cur, org_id)
+            cur.execute(
+                """SELECT preference_value FROM user_preferences
+                   WHERE user_id = '__org__' AND org_id = %s AND preference_key = %s""",
+                (org_id, key),
+            )
+            row = cur.fetchone()
         return flag_enabled(row[0] if row else None, default)
     except Exception:
         # A failed read must not grant an edit the org may have turned off.

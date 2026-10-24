@@ -2369,7 +2369,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Add ServiceNow tools if connected. The whole block is guarded so a registration
     # error cannot abort tool construction for every other connector.
-    if _safe_connected(is_servicenow_connected, "ServiceNow"):
+    # A team limit hides the tool the same way it hides the skill.
+    if _safe_connected(is_servicenow_connected, "ServiceNow") and _open("servicenow"):
         try:
             context_wrapped_sn_list = with_user_context(list_servicenow_incidents)
             notification_wrapped_sn_list = with_completion_notification(context_wrapped_sn_list)
@@ -2747,7 +2748,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     # no Confluence credentials, breaking RCAs that mention runbook URLs.
     try:
         from utils.auth.token_management import get_token_data
-        if get_token_data(user_id, "confluence"):
+        # A team limit hides the tool the same way it hides the skill.
+        if get_token_data(user_id, "confluence") and _open("confluence"):
             _confluence_tools = [
                 (confluence_search_similar, "confluence_search_similar", ConfluenceSearchSimilarArgs,
                  "Search Confluence for pages related to an incident (postmortems, RCA docs). "
@@ -2891,7 +2893,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
         from utils.auth.token_management import get_token_data as _get_jira_creds
         _jira_creds = _get_jira_creds(user_id, "jira")
-        if _jira_creds:
+        # A team limit hides the tool the same way it hides the skill.
+        if _jira_creds and _open("jira"):
             from routes.jira.jira_routes import jira_comment_back_enabled
             from utils.auth.stateless_auth import get_user_preference
 
@@ -2937,7 +2940,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         from utils.flags.feature_flags import is_sharepoint_enabled
         from utils.secrets.secret_ref_utils import has_user_credentials
 
-        if is_sharepoint_enabled() and has_user_credentials(user_id, "sharepoint"):
+        # A team limit hides the tool the same way it hides the skill.
+        if is_sharepoint_enabled() and has_user_credentials(user_id, "sharepoint") and _open("sharepoint"):
             _sharepoint_tools = [
                 (sharepoint_search, "sharepoint_search", SharePointSearchArgs,
                  "Search SharePoint for pages, documents, and list items matching a query. "

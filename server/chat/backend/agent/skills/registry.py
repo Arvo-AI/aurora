@@ -301,11 +301,15 @@ class SkillRegistry:
 
     def get_connected_skills(self, user_id: str) -> List[SkillMetadata]:
         """Return metadata for all skills whose integration is connected."""
+        from utils.auth.connector_access import reuse_access_for_user
+
         connected = []
-        for skill_id, meta in self._skills.items():
-            is_connected, _ = self.check_connection(skill_id, user_id)
-            if is_connected:
-                connected.append(meta)
+        # Every skill asks the same access question. Load it once for the pass.
+        with reuse_access_for_user():
+            for skill_id, meta in self._skills.items():
+                is_connected, _ = self.check_connection(skill_id, user_id)
+                if is_connected:
+                    connected.append(meta)
         return connected
 
     def get_connected_skill_ids(self, user_id: str) -> List[str]:

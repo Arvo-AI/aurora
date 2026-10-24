@@ -337,16 +337,42 @@ def general_viewer_access(user_id: str) -> "Access":
     return Access(load_grants(user_id), [ROLE_VIEWER])
 
 
+_ACCESS_PASS: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "connector_access_pass", default=None
+)
+
+
+@contextmanager
+def reuse_access_for_user():
+    """Load Access once for the may_use calls inside this pass."""
+    # An outer pass already covers the nested call.
+    if _ACCESS_PASS.get() is not None:
+        yield
+        return
+    token = _ACCESS_PASS.set({})
+    try:
+        yield
+    finally:
+        _ACCESS_PASS.reset(token)
+
+
 def access_for(user_id: str) -> Access:
     # Pinned by a Slack chat for someone with no Aurora account.
     override = _ACCESS_OVERRIDE.get()
     if override is not None:
         return override
+    cache = _ACCESS_PASS.get()
+    # One skill pass asks for the same user many times.
+    if cache is not None and user_id in cache:
+        return cache[user_id]
     grants = load_grants(user_id)
     team_ids, team_rules = load_team_rules(user_id)
     # Role lookup only matters once an admin has limited something.
     roles = _roles_for(user_id) if grants or team_rules else []
-    return Access(grants, roles, team_rules, team_ids)
+    access = Access(grants, roles, team_rules, team_ids)
+    if cache is not None:
+        cache[user_id] = access
+    return access
 
 
 def _role_phrase(roles: Iterable[str]) -> str:

@@ -269,6 +269,11 @@ def _get_user_display_name(client, user_id: str) -> str:
         return user_id
 
 
+# Button clicks ack in about three seconds. A fresh users.info on each click can miss that.
+_MEMBER_TTL_S = 30.0
+_member_cache: dict[tuple[str, str], tuple[float, Optional[dict]]] = {}
+
+
 def get_workspace_member(client, slack_user_id: str, team_id: str) -> Optional[dict]:
     """Full member as {"display_name", "email"}, or None.
 
@@ -277,6 +282,12 @@ def get_workspace_member(client, slack_user_id: str, team_id: str) -> Optional[d
     """
     if not slack_user_id or not team_id:
         return None
+    key = (team_id, slack_user_id)
+    cached = _member_cache.get(key)
+    now = time.monotonic()
+    # A failed users.info is not cached, so a blip does not lock the sender out.
+    if cached is not None and now - cached[0] < _MEMBER_TTL_S:
+        return cached[1]
     try:
         result = client._make_request("GET", "users.info", {"user": slack_user_id}) or {}
     except Exception as e:
@@ -286,18 +297,23 @@ def get_workspace_member(client, slack_user_id: str, team_id: str) -> Optional[d
     user = result.get("user") or {}
     # Slack Connect, bots, and guests are not this workspace's members.
     if not result.get("ok") or not user or _not_full_member(user, team_id):
-        return None
-
-    profile = user.get("profile") or {}
-    display_name = (
-        profile.get("display_name")
-        or profile.get("real_name")
-        or user.get("name")
-        or slack_user_id
-    )
-    # users:read.email puts this on the profile. Hidden emails stay unset.
-    email = (profile.get("email") or "").strip() or None
-    return {"display_name": display_name.strip(), "email": email}
+        member = None
+    else:
+        profile = user.get("profile") or {}
+        display_name = (
+            profile.get("display_name")
+            or profile.get("real_name")
+            or user.get("name")
+            or slack_user_id
+        )
+        # users:read.email puts this on the profile. Hidden emails stay unset.
+        email = (profile.get("email") or "").strip() or None
+        member = {"display_name": display_name.strip(), "email": email}
+    _member_cache[key] = (now, member)
+    if len(_member_cache) > 512:
+        _member_cache.clear()
+        _member_cache[key] = (now, member)
+    return member
 
 
 def _not_full_member(user: dict, team_id: str) -> bool:

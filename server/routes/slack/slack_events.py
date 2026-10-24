@@ -587,10 +587,10 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
                             "text": "Starting a chat isn't enabled for your role. Ask an admin to turn it on.",
                         },
                     )
-                except Exception as e:
-                    logger.error(
-                        "Failed to send viewer refusal to Slack user %s: %s",
-                        sanitize(slack_user_id), e, exc_info=True,
+                except Exception:
+                    logger.exception(
+                        "Failed to send viewer refusal to Slack user %s",
+                        sanitize(slack_user_id),
                     )
             return {"text": ""}
         
