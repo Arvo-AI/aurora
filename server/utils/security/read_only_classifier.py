@@ -465,7 +465,322 @@ def _pipeline_rejection(facts: list) -> str:
     return ''
 
 
-def describe_rejection(command: str) -> str:
+# Host diagnostics the cloud verb list doesn't know. A write verb anywhere in
+# the remote command, or a redirect, still refuses them.
+SHELL_READ_PROGRAMS = frozenset({
+    'cat', 'head', 'tail', 'less', 'more', 'grep', 'egrep', 'fgrep', 'rg',
+    'df', 'du', 'free', 'ps', 'top', 'htop', 'uptime', 'w', 'who', 'whoami',
+    'hostname', 'uname', 'id', 'date', 'journalctl', 'dmesg', 'ls', 'wc',
+    'sort', 'uniq', 'cut', 'tr', 'stat', 'file', 'ss', 'netstat', 'lsof',
+    'ping', 'dig', 'nslookup', 'vmstat', 'iostat', 'mpstat', 'sar',
+    'lsblk', 'lscpu', 'lsmem', 'nproc', 'ip',
+    'last', 'lastlog', 'echo', 'printf',
+})
+
+# `docker pull` has no write verb, so the binary itself is not a read.
+# Only the inspection subcommands are.
+_CONTAINER_CLIS = frozenset({'docker', 'podman', 'crictl'})
+_CONTAINER_READS = frozenset({
+    'ps', 'logs', 'inspect', 'images', 'top', 'stats', 'version', 'info',
+    'port', 'diff', 'history',
+})
+
+# A binary in SHELL_READ_PROGRAMS can still mutate through a flag or a
+# positional (`journalctl --vacuum-time`, `ip route del`, `date -s`).
+_SHELL_MUTATING_EXACT = {
+    # GNU hostname -F / --file writes the hostname from a file.
+    'hostname': frozenset({'-F', '--file'}),
+    'journalctl': frozenset({'--rotate', '--flush', '--sync', '--relinquish'}),
+    'dmesg': frozenset({'-c', '--clear', '--read-clear', '-n', '--console'}),
+    'date': frozenset({'-s', '--set'}),
+    'sort': frozenset({'-o', '--output', '--compress-program'}),
+    'sar': frozenset({'-o'}),
+    'rg': frozenset({'--pre'}),
+    'ss': frozenset({'-k', '--kill'}),
+    'less': frozenset({'-o', '--log-file'}),
+}
+# `--vacuum` also covers `--vacuum-time` / `--vacuum-size` / `--vacuum-files`.
+_SHELL_MUTATING_PREFIX = {
+    'journalctl': ('--vacuum',),
+}
+# `del` / `change` / `append` are not write verbs, but they change routes.
+_IP_WRITE_ACTIONS = frozenset({
+    'del', 'delete', 'change', 'append', 'replace', 'save',
+})
+
+# These ssh options run local code, forward ports, or write a file. `-o` is
+# not in the set: its keys are allow-listed instead.
+_SSH_UNSAFE_VALUE_FLAGS = frozenset({
+    '-D', '-E', '-F', '-I', '-L', '-O', '-R', '-S', '-w',
+})
+_SSH_SAFE_OPTION_KEYS = frozenset({
+    'batchmode', 'stricthostkeychecking', 'userknownhostsfile', 'connecttimeout',
+    'connectionattempts', 'serveraliveinterval', 'serveralivecountmax', 'loglevel',
+    'port', 'user', 'identityfile', 'identitiesonly', 'preferredauthentications',
+})
+_SSH_UNSAFE_OPTION = (
+    'it passes an ssh option that can run local code, forward ports or write files'
+)
+
+# ssh options that consume the next argv token. Anything else starting with
+# '-' is a boolean switch (`-n`, `-tt`).
+_SSH_VALUE_FLAGS = frozenset({
+    '-B', '-b', '-c', '-D', '-E', '-e', '-F', '-I', '-i', '-J', '-L', '-l',
+    '-m', '-O', '-o', '-p', '-Q', '-R', '-S', '-W', '-w',
+})
+_SUDO_VALUE_FLAGS = frozenset({
+    '-u', '-g', '-C', '-p', '-r', '-t', '-h', '-T',
+})
+
+
+def _is_assignment(token: str) -> bool:
+    return '=' in token and not token.startswith('/') and not token.startswith('-')
+
+
+def _ssh_flag_kind(token: str) -> str:
+    """'separate' when the next token is the value, 'glued' when it's attached."""
+    if token in _SSH_VALUE_FLAGS:
+        return 'separate'
+    if len(token) > 2 and token[:2] in _SSH_VALUE_FLAGS:
+        return 'glued'
+    return ''
+
+
+def _is_ambiguous_ssh_bundle(token: str) -> bool:
+    """`-vo`: a value flag hidden behind a boolean letter shifts the destination."""
+    return (
+        len(token) > 2
+        and token[0] == '-'
+        and token[1] != '-'
+        and ('-' + token[1]) not in _SSH_VALUE_FLAGS
+        and any(('-' + char) in _SSH_VALUE_FLAGS for char in token[2:])
+    )
+
+
+def _ssh_o_rejection(value: str, depth: int) -> str:
+    """Why an `-o` value is unsafe, or '' when the key is on the allow list.
+
+    `ProxyCommand` is the jump-host rewrite. It is allowed only when the value
+    is itself `ssh ... -W`, checked with the same option rules.
+    """
+    parts = re.split(r'[=\s]+', value.strip(), maxsplit=1)
+    key = parts[0].lower()
+    if key == 'proxycommand':
+        nested = parts[1] if len(parts) > 1 else ''
+        try:
+            nested_tokens = shlex.split(nested)
+        except ValueError:
+            return _SSH_UNSAFE_OPTION
+        if _ssh_invocation_rejection(nested_tokens, depth + 1, jump_forward=True):
+            return _SSH_UNSAFE_OPTION
+        return ''
+    if key not in _SSH_SAFE_OPTION_KEYS:
+        return _SSH_UNSAFE_OPTION
+    return ''
+
+
+def _shell_flag_mutates(executable: str, flag: str) -> bool:
+    """Whether *flag* makes an otherwise read-only host tool write or exec."""
+    exact = _SHELL_MUTATING_EXACT.get(executable, ())
+    prefixes = _SHELL_MUTATING_PREFIX.get(executable, ())
+    if flag in exact or any(flag == p or flag.startswith(p + '-') for p in prefixes):
+        return True
+    # `sort -ofile` glues the path onto the short flag. `--` forms stay exact.
+    return any(
+        len(pattern) == 2 and flag.startswith(pattern) and not flag.startswith('--')
+        for pattern in exact
+    )
+
+
+def _unwrap_sudo(command: str) -> str:
+    """Drop one leading sudo/doas so the remote verb is what actually runs.
+
+    `sudo journalctl` is a read. `sudo reboot` is a write. A bare `sudo -i`
+    opens a shell and stays refused.
+    """
+    # Re-joining quotes `;`, `|` and `$(`, so the remote shell would still
+    # run them while this check saw one literal command.
+    if any(c in command for c in _CONTROL_CHARS + '\r\n'):
+        return command
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return command
+    if not argv or argv[0] not in ('sudo', 'doas'):
+        return command
+    i = 1
+    while i < len(argv):
+        tok = argv[i]
+        if tok == '--':
+            return shlex.join(argv[i + 1:])
+        if tok in _SUDO_VALUE_FLAGS:
+            i += 2
+            continue
+        # Boolean sudo switches (`-n`, `-E`). `-i` with nothing after it is a login shell.
+        if tok.startswith('-'):
+            i += 1
+            continue
+        return shlex.join(argv[i:])
+    return ''
+
+
+def _is_shell_diagnostic(command: str) -> bool:
+    """Whether every program in *command* only reads."""
+    segments, _reason = _split_segments_or_reason(command)
+    if not segments:
+        return False
+    facts = [analyze_segment(seg) for seg in segments]
+    if any(f.write_verb for f in facts):
+        return False
+    if facts[0].executable in COMMAND_WRAPPERS:
+        return False
+    if any(f.executable not in DOWNSTREAM_FILTERS for f in facts[1:]):
+        return False
+    # Container CLIs mutate with subcommands that are not write verbs (`pull`).
+    if facts[0].executable in _CONTAINER_CLIS:
+        op = facts[0].operation
+        return len(op) >= 2 and op[1] in _CONTAINER_READS
+    for seg, fact in zip(segments, facts):
+        exe = fact.executable or ''
+        # Short options stay cased: `hostname -F` writes, `hostname -f` only prints.
+        flags = [
+            (t.split('=', 1)[0].lower() if t.startswith('--') else t.split('=', 1)[0])
+            for t in seg if t.startswith('-')
+        ]
+        # `journalctl --vacuum-time` and `sort -o out` are writes with no write verb.
+        if any(_shell_flag_mutates(exe, flag) for flag in flags):
+            return False
+        # `hostname` with a name renames the host. A bare `hostname` only prints it.
+        if exe == 'hostname' and len(fact.operation) > 1:
+            return False
+        # `uniq in out` writes the second file. One operand is a read.
+        if exe == 'uniq' and len(fact.operation) > 2:
+            return False
+        # `ip route del` is not a write verb. Any mutating action blocks.
+        if exe == 'ip' and any(tok in _IP_WRITE_ACTIONS for tok in fact.operation[1:]):
+            return False
+    return facts[0].executable in SHELL_READ_PROGRAMS
+
+
+def _ssh_invocation_rejection(
+    tokens: list[str], depth: int, *, jump_forward: bool,
+) -> str:
+    """Why this ssh argv isn't allowed, or '' when it is.
+
+    *jump_forward* allows `ssh -W` (the jump rewrite) and rejects a remote
+    command. Otherwise `-W` is a tunnel and the remote command must be a read.
+    """
+    # A ProxyCommand that nests another ProxyCommand is how a local command hides.
+    if depth >= 2:
+        return _SSH_UNSAFE_OPTION
+
+    i = 0
+    while i < len(tokens) and _is_assignment(tokens[i]):
+        i += 1
+    if i >= len(tokens) or tokens[i].rsplit('/', 1)[-1].lower() != 'ssh':
+        return 'no recognised read verb was found in it'
+    i += 1
+
+    tunnel = False
+    saw_forward = False
+    saw_destination = False
+    remote_argv: list[str] = []
+    while i < len(tokens):
+        tok = tokens[i]
+        # `--` ends ssh's own options; the rest is the remote command.
+        if tok == '--':
+            remote_argv = tokens[i + 1:]
+            break
+        kind = _ssh_flag_kind(tok)
+        # `-vo` hides a value flag behind a boolean letter, so the next token
+        # would be read as the destination instead of the option value.
+        if _is_ambiguous_ssh_bundle(tok) or tok[:2] in _SSH_UNSAFE_VALUE_FLAGS:
+            return _SSH_UNSAFE_OPTION
+        # `-N` / `-s` never run a diagnostic. `-W` is a tunnel on the outer
+        # ssh and the stdio forward inside a jump ProxyCommand.
+        if tok in ('-N', '-s') or (kind == 'glued' and tok[:2] == '-s'):
+            tunnel = True
+        if tok == '-W' or tok[:2] == '-W':
+            forward_value = tokens[i + 1] if kind == 'separate' and i + 1 < len(tokens) else tok[2:]
+            if any(c in forward_value for c in _CONTROL_CHARS):
+                return _SSH_UNSAFE_OPTION
+            if jump_forward:
+                saw_forward = True
+            else:
+                tunnel = True
+        if kind == 'separate':
+            if i + 1 >= len(tokens):
+                return 'no recognised read verb was found in it'
+            if tok == '-o':
+                reason = _ssh_o_rejection(tokens[i + 1], depth)
+                if reason:
+                    return reason
+            i += 2
+            continue
+        if kind == 'glued':
+            if tok[:2] == '-o':
+                reason = _ssh_o_rejection(tok[2:], depth)
+                if reason:
+                    return reason
+            i += 1
+            continue
+        if tok.startswith('-') and tok != '-':
+            i += 1
+            continue
+        # First non-option is the destination. The jump rewrite puts `-p` after
+        # it, so keep scanning options; a second positional is a remote command.
+        if jump_forward and saw_destination:
+            return _SSH_UNSAFE_OPTION
+        if jump_forward:
+            saw_destination = True
+            i += 1
+            continue
+        remote_argv = tokens[i + 1:]
+        saw_destination = True
+        break
+    else:
+        remote_argv = []
+
+    if jump_forward:
+        # A jump ProxyCommand is `ssh -W %h:%p bastion`, not a remote shell.
+        if not saw_forward or not saw_destination or tunnel or remote_argv:
+            return _SSH_UNSAFE_OPTION
+        return ''
+
+    if tunnel:
+        return 'it does not run a read-only remote command'
+    if not saw_destination or not remote_argv:
+        return 'it opens an interactive shell'
+
+    # ssh joins the remote argv and hands it to the remote shell. A quoted
+    # pipeline (`ssh host "df | grep x"`) is one argv token and must be
+    # re-parsed as a shell command, not as a single literal.
+    remote = _unwrap_sudo(' '.join(remote_argv))
+    if not remote.strip():
+        return 'it opens an interactive shell'
+
+    # The outer `-i` is already gone. A key path here is the remote command
+    # reading it (`sort -i ~/.ssh/id_rsa`), not Aurora authenticating.
+    from utils.security.signature_match import ssh_key_material_exposed
+    if ssh_key_material_exposed(remote, allow_identity_option=False):
+        return 'it returns a credential, key, secret or token'
+
+    reason = describe_rejection(remote, _ssh_depth=depth + 1)
+    if not reason:
+        return ''
+    # `df` / `journalctl` aren't cloud verbs. They're reads unless a write
+    # verb or a redirect already produced a reason above.
+    if reason == 'no recognised read verb was found in it' and _is_shell_diagnostic(remote):
+        return ''
+    return reason
+
+
+def _ssh_remote_rejection(tokens: list[str], depth: int) -> str:
+    """Why an ssh invocation isn't a read, or '' when the remote command is."""
+    return _ssh_invocation_rejection(tokens, depth, jump_forward=False)
+
+
+def describe_rejection(command: str, _ssh_depth: int = 0) -> str:
     """Why *command* is not read-only, as a clause, or '' when it is read-only.
 
     The agent sees this in the blocked tool's error, so it says which token
@@ -477,6 +792,16 @@ def describe_rejection(command: str) -> str:
         return parse_reason
 
     facts = [analyze_segment(seg) for seg in segments]
+
+    # ssh has no read verb of its own. The remote command is what runs, and the
+    # destination must not be scanned (`ssh update.example` is a hostname).
+    if facts[0].executable == 'ssh':
+        if _ssh_depth >= 2:
+            return 'no recognised read verb was found in it'
+        chain = _pipeline_rejection(facts)
+        if chain:
+            return chain
+        return _ssh_remote_rejection(segments[0], _ssh_depth)
 
     # Flag names gate the command (`--with-decryption`, `--dry-run`) but must
     # never provide a read-only verb, so they are collected separately.
@@ -518,3 +843,13 @@ def is_read_only_command(command: str) -> bool:
     Defaults to False: anything unrecognised is not read-only.
     """
     return not describe_rejection(command)
+
+
+def is_diagnostic_ssh(command: str) -> bool:
+    """Whether *command* is ssh running a read-only remote command."""
+    segments, _reason = _split_segments_or_reason(command)
+    if not segments:
+        return False
+    if analyze_segment(segments[0]).executable != 'ssh':
+        return False
+    return describe_rejection(command) == ''

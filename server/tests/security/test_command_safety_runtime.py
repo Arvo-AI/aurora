@@ -329,6 +329,37 @@ class TestEvaluateCommandPipeline:
         assert result.layer == "llm_judge"
         assert result.reason == "destructive operation"
 
+    def test_diagnostic_ssh_skips_the_judge(self, monkeypatch):
+        _patch_config(monkeypatch, enabled=True)
+        spy = _forbid_llm(monkeypatch)
+        monkeypatch.setattr(command_safety, "check_command_safety", spy)
+
+        result = command_safety.evaluate_command(
+            "ssh -i ~/.ssh/id_provider_vm admin@198.51.100.1 'journalctl -u nginx -n 20'",
+            tool="terminal_exec",
+        )
+
+        assert result.blocked is False
+        spy.assert_not_called()
+
+    def test_mutating_ssh_still_reaches_the_judge(self, monkeypatch):
+        _patch_config(monkeypatch, enabled=True)
+        _silence_audit(monkeypatch)
+        bad = SafetyVerdict(
+            observation="restart", thought="mutates a service", conclusion=True,
+        )
+        spy = MagicMock(return_value=bad)
+        monkeypatch.setattr(command_safety, "check_command_safety", spy)
+
+        result = command_safety.evaluate_command(
+            "ssh admin@198.51.100.1 systemctl restart nginx",
+            tool="terminal_exec",
+        )
+
+        assert result.blocked is True
+        assert result.layer == "llm_judge"
+        spy.assert_called_once()
+
     def test_both_layers_pass_returns_not_blocked(self, monkeypatch):
         _patch_config(monkeypatch, enabled=True)
         safe = SafetyVerdict(
