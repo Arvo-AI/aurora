@@ -13,6 +13,7 @@ import { VALID_ROLES, ROLE_META, type UserRole } from "@/lib/roles";
 import type { OrgMember } from "@/components/OrgSettings";
 import { getEnv } from "@/lib/env";
 import UpgradeModal from "./UpgradeModal";
+import { NO_TEAM, TeamList, teamIdFor, useOrgTeams } from "./OrgTeams";
 
 const PERMISSION_TABLE: {
   category: string;
@@ -279,6 +280,7 @@ export default function OrgMembers({ org, currentUserId, isAdmin, planTier, onMe
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [cancellingInvite, setCancellingInvite] = useState<string | null>(null);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const { teams, busy: teamBusy, create: createTeam, remove: removeTeam, assign: assignTeam } = useOrgTeams();
 
   // Paywall is opt-in: only active when a deployment sets NEXT_PUBLIC_ENABLE_PAYWALL.
   // Plain OSS deployments leave it unset, so this is always false and the normal
@@ -390,9 +392,10 @@ export default function OrgMembers({ org, currentUserId, isAdmin, planTier, onMe
 
       {/* Clean table — no heavy borders, just rows */}
       <div className="text-sm">
-        <div className="grid grid-cols-[1fr_100px_100px_auto] gap-x-4 px-1 pb-2 text-xs text-muted-foreground font-medium border-b border-border">
+        <div className="grid grid-cols-[1fr_100px_8.5rem_100px_auto] gap-x-4 px-1 pb-2 text-xs text-muted-foreground font-medium border-b border-border">
           <span>Name</span>
           <span>Role</span>
+          <span>Team</span>
           <span>Joined</span>
           <span className="w-8" />
         </div>
@@ -400,7 +403,7 @@ export default function OrgMembers({ org, currentUserId, isAdmin, planTier, onMe
         {org.members.map((member) => (
           <div
             key={member.id}
-            className="grid grid-cols-[1fr_100px_100px_auto] gap-x-4 items-center px-1 py-3 border-b border-border/40 last:border-0 group"
+            className="grid grid-cols-[1fr_100px_8.5rem_100px_auto] gap-x-4 items-center px-1 py-3 border-b border-border/40 last:border-0 group"
           >
             {/* Name + email */}
             <div className="min-w-0">
@@ -437,6 +440,30 @@ export default function OrgMembers({ org, currentUserId, isAdmin, planTier, onMe
                 </Select>
               ) : (
                 <span className="text-xs text-muted-foreground capitalize">{member.role}</span>
+              )}
+            </div>
+
+            <div>
+              {isAdmin ? (
+                <Select
+                  value={teamIdFor(teams, member.id)}
+                  onValueChange={(val) => void assignTeam(member.id, val)}
+                  disabled={teamBusy === member.id}
+                >
+                  <SelectTrigger className="w-[8.5rem] h-7 text-xs border-transparent hover:border-border transition-colors">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_TEAM} className="text-xs">None</SelectItem>
+                    {teams.map((team) => (
+                      <SelectItem key={team.id} value={team.id} className="text-xs">{team.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <span className="text-xs text-muted-foreground">
+                  {teams.find((team) => team.memberIds.includes(member.id))?.name ?? "—"}
+                </span>
               )}
             </div>
 
@@ -541,6 +568,12 @@ export default function OrgMembers({ org, currentUserId, isAdmin, planTier, onMe
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {isAdmin && (
+        <div className="border-t border-border pt-6">
+          <TeamList teams={teams} busy={teamBusy} onCreate={createTeam} onRemove={removeTeam} />
         </div>
       )}
 
