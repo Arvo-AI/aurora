@@ -24,16 +24,17 @@ export async function GET(
     const offset = searchParams.get('offset') || '0';
     const count = searchParams.get('count') || '1000';
     const account = searchParams.get('account');
-    const accountQs = account ? `&account=${encodeURIComponent(account)}` : '';
+    const accountParam = account ? encodeURIComponent(account) : '';
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
-    let url: string;
+    let url = `${API_BASE_URL}/splunk/search/jobs/${sid}`;
     if (isResults) {
-      url = `${API_BASE_URL}/splunk/search/jobs/${sid}/results?offset=${offset}&count=${count}${accountQs}`;
-    } else {
-      url = `${API_BASE_URL}/splunk/search/jobs/${sid}${account ? `?account=${encodeURIComponent(account)}` : ''}`;
+      url += `?offset=${offset}&count=${count}`;
+      if (accountParam) url += `&account=${accountParam}`;
+    } else if (accountParam) {
+      url += `?account=${accountParam}`;
     }
 
     let response: Response;

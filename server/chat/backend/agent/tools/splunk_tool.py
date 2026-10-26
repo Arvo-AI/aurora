@@ -214,6 +214,39 @@ def search_splunk(
     return json.dumps(result)
 
 
+def _ensure_search_prefix(query: str) -> str:
+    # A generating command already starts with | or search.
+    search_query = query.strip()
+    if search_query.startswith("|") or search_query.lower().startswith("search"):
+        return search_query
+    return f"search {search_query}"
+
+
+def _export_results(text: str) -> list:
+    results = []
+    for line in text.strip().split("\n"):
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if "result" in obj:
+            results.append(obj["result"])
+        elif "results" in obj:
+            results.extend(obj["results"])
+    return results
+
+
+def _search_http_error(response: requests.Response) -> Optional[Dict[str, Any]]:
+    if response.status_code == 401:
+        return {"error": "Splunk authentication failed. Token may be expired."}
+    if response.status_code == 400:
+        error_msg = response.text[:200] if response.text else "Bad request"
+        return {"error": f"Invalid SPL query: {error_msg}"}
+    return None
+
+
 def _search_one(
     creds: Dict[str, Any],
     query: str,
@@ -221,12 +254,9 @@ def _search_one(
     latest_time: str,
     max_count: int,
 ) -> Dict[str, Any]:
-    # Ensure query starts with 'search' if needed
-    search_query = query.strip()
-    if not search_query.startswith("|") and not search_query.lower().startswith("search"):
-        search_query = f"search {search_query}"
-
-    logger.info("[SPLUNK-TOOL] Executing search on %s: %s", creds.get("account_id"), search_query[:100])
+    search_query = _ensure_search_prefix(query)
+    # The account id lives on the same dict as the token, so it is not logged.
+    logger.info("[SPLUNK-TOOL] Executing search")
 
     try:
         url = f"{creds['base_url']}/services/search/jobs/export"
@@ -246,35 +276,17 @@ def _search_one(
             verify=SPLUNK_SSL_VERIFY,
         )
 
-        if response.status_code == 401:
-            return {"error": "Splunk authentication failed. Token may be expired."}
-        elif response.status_code == 400:
-            error_msg = response.text[:200] if response.text else "Bad request"
-            return {"error": f"Invalid SPL query: {error_msg}"}
+        http_error = _search_http_error(response)
+        if http_error:
+            return http_error
 
         response.raise_for_status()
-
-        # Parse NDJSON response
-        results = []
-        for line in response.text.strip().split("\n"):
-            if line:
-                try:
-                    obj = json.loads(line)
-                    if "result" in obj:
-                        results.append(obj["result"])
-                    elif "results" in obj:
-                        results.extend(obj["results"])
-                except json.JSONDecodeError:
-                    continue
-
-        # Truncate results if too many
+        results = _export_results(response.text)
         if len(results) > max_count:
             results = results[:max_count]
 
-        # Truncate to fit output size limit
         original_count = len(results)
         results, was_truncated = _truncate_results(results)
-
         response_data = {
             "success": True,
             "query": search_query,
@@ -282,17 +294,15 @@ def _search_one(
             "result_count": len(results),
             "results": results,
         }
-
         if was_truncated:
             response_data["truncated"] = True
             response_data["note"] = f"Results truncated from {original_count} to {len(results)} due to size limit. Use more specific query or add '| head N' to limit results."
-
         return response_data
 
     except requests.exceptions.Timeout:
         return {"error": "Search timed out. Try a narrower time range or simpler query."}
-    except requests.exceptions.RequestException as exc:
-        logger.error("[SPLUNK-TOOL] Search failed: %s", type(exc).__name__)
+    except requests.exceptions.RequestException:
+        logger.exception("[SPLUNK-TOOL] Search failed")
         return {"error": "Search failed"}
 
 
@@ -367,8 +377,8 @@ def _list_indexes_one(creds: Dict[str, Any]) -> Dict[str, Any]:
             "indexes": indexes,
         }
 
-    except requests.exceptions.RequestException as exc:
-        logger.error("[SPLUNK-TOOL] Failed to list indexes: %s", type(exc).__name__)
+    except requests.exceptions.RequestException:
+        logger.exception("[SPLUNK-TOOL] Failed to list indexes")
         return {"error": "Failed to list indexes"}
 
 
@@ -466,6 +476,6 @@ def _list_sourcetypes_one(creds: Dict[str, Any], index: Optional[str]) -> Dict[s
             "sourcetypes": sourcetypes[:MAX_SOURCETYPES_RETURN],
         }
 
-    except requests.exceptions.RequestException as exc:
-        logger.error("[SPLUNK-TOOL] Failed to list sourcetypes: %s", type(exc).__name__)
+    except requests.exceptions.RequestException:
+        logger.exception("[SPLUNK-TOOL] Failed to list sourcetypes")
         return {"error": "Failed to list sourcetypes"}

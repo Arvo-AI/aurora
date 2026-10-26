@@ -35,6 +35,7 @@ function connectedAccounts(status: SplunkStatus): SplunkAccount[] {
 
 export function SplunkWebhookStep({ status, onDisconnect, loading }: SplunkWebhookStepProps) {
   const accounts = connectedAccounts(status);
+  const disconnectLabel = accounts.length > 1 ? "Disconnect all Splunk instances" : "Disconnect Splunk";
   const router = useRouter();
   const { toast } = useToast();
   const [webhookData, setWebhookData] = useState<SplunkWebhookUrlResponse | null>(null);
@@ -257,10 +258,8 @@ export function SplunkWebhookStep({ status, onDisconnect, loading }: SplunkWebho
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Disconnecting...
               </>
-            ) : accounts.length > 1 ? (
-              "Disconnect all Splunk instances"
             ) : (
-              "Disconnect Splunk"
+              disconnectLabel
             )}
           </Button>
         </div>

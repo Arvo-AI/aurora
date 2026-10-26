@@ -140,12 +140,12 @@ export default function SplunkSearchPage() {
 
   useEffect(() => {
     let cancelled = false;
-    splunkService.getStatus().then((status) => {
+    void splunkService.getStatus().then((status) => {
       if (cancelled || !status) return;
       const usable = (status.accounts ?? []).filter((account) => account.allowed !== false && account.accountId);
       setAccounts(usable);
       setAccountId((current) => current || usable[0]?.accountId || "");
-    });
+    }).catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -241,10 +241,10 @@ export default function SplunkSearchPage() {
       }
 
       pollingRef.current = setInterval(() => {
-        pollJobStatus(job.sid!, jobAccountId);
+        void pollJobStatus(job.sid!, jobAccountId);
       }, 1000);
 
-      pollJobStatus(job.sid, jobAccountId);
+      void pollJobStatus(job.sid, jobAccountId);
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "Failed to create search job";
       setError(errorMessage);

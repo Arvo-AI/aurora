@@ -149,12 +149,9 @@ def _status_summary(user_id: str, account: Dict[str, Any]) -> Dict[str, Any]:
     client = SplunkClient(account["base_url"], account["api_token"])
     try:
         server_info = client.get_server_info()
-    except SplunkAPIError as exc:
-        logger.warning(
-            "[SPLUNK] Status check failed for %s: %s",
-            sanitize(account.get("account_id")),
-            sanitize(exc),
-        )
+    except SplunkAPIError:
+        # account_id sits on the token dict, so it cannot be logged.
+        logger.exception("[SPLUNK] Status check failed")
         summary["valid"] = False
         summary["error"] = "Failed to validate stored Splunk credentials"
         return summary
@@ -261,9 +258,8 @@ def connect(user_id):
     try:
         store_splunk_accounts(user_id, accounts)
         logger.info(
-            "[SPLUNK] Stored credentials for user %s (account=%s, accounts=%d, replaced=%s)",
-            sanitize(user_id),
-            sanitize(incoming["account_id"]),
+            "[SPLUNK] Stored credentials for user %s (accounts=%d, replaced=%s)",
+            hash_for_log(user_id),
             len(accounts),
             replaced,
         )
@@ -294,11 +290,26 @@ def status(user_id):
     return jsonify(_connected_payload(user_id, accounts))
 
 
-@splunk_bp.route("/disconnect", methods=["POST", "DELETE"])
+def _selector_from_body() -> Optional[str]:
+    data = request.get_json(silent=True) or {}
+    return data.get("accountId") or data.get("account")
+
+
+@splunk_bp.route("/disconnect", methods=["POST"])
+@require_permission("connectors", "write")
+def disconnect_post(user_id):
+    # The instance name belongs in the body, not the query string.
+    return _disconnect(user_id, _selector_from_body())
+
+
+@splunk_bp.route("/disconnect", methods=["DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
-    """Remove one Splunk (?account=host:port) or every Splunk when omitted."""
-    selector = request.args.get("account") or (request.get_json(silent=True) or {}).get("accountId")
+    return _disconnect(user_id, request.args.get("account"))
+
+
+def _disconnect(user_id, selector: Optional[str]):
+    """Remove one Splunk, or every Splunk when no instance is named."""
     try:
         accounts = list_splunk_accounts(user_id)
         # One instance — leave the rest stored and drop only that connection row.
@@ -311,9 +322,8 @@ def disconnect(user_id):
             if remaining:
                 store_splunk_accounts(user_id, remaining)
                 logger.info(
-                    "[SPLUNK] Removed account %s for user %s (%d remaining)",
-                    sanitize(match["account_id"]),
-                    sanitize(user_id),
+                    "[SPLUNK] Removed one Splunk instance for user %s (%d remaining)",
+                    hash_for_log(user_id),
                     len(remaining),
                 )
                 payload = _stored_payload(user_id, remaining)

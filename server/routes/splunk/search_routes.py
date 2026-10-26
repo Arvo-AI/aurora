@@ -9,7 +9,7 @@ import requests
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from utils.auth.rbac_decorators import require_permission
-from utils.log_sanitizer import sanitize
+from utils.log_sanitizer import hash_for_log, sanitize
 from utils.splunk_accounts import SplunkAccessError, list_splunk_accounts, resolve_targets
 
 SPLUNK_TIMEOUT = 30
@@ -21,6 +21,8 @@ from utils.splunk_config import SPLUNK_SSL_VERIFY
 SID_PATTERN = re.compile(r"^[a-zA-Z0-9_.\-]+$")
 
 logger = logging.getLogger(__name__)
+
+_NOT_CONNECTED = "Splunk not connected"
 
 search_bp = Blueprint("splunk_search", __name__)
 
@@ -51,11 +53,11 @@ def _get_splunk_client_for_user(user_id: str):
     """Credentials for one granted instance, or a Flask error response."""
     try:
         accounts = list_splunk_accounts(user_id)
-    except Exception as exc:
-        logger.error("[SPLUNK-SEARCH] Failed to get credentials for user %s: %s", sanitize(user_id), sanitize(exc))
-        return None, (jsonify({"error": "Splunk not connected"}), 400)
+    except Exception:
+        logger.exception("[SPLUNK-SEARCH] Failed to get credentials for user %s", hash_for_log(user_id))
+        return None, (jsonify({"error": _NOT_CONNECTED}), 400)
     if not accounts:
-        return None, (jsonify({"error": "Splunk not connected"}), 400)
+        return None, (jsonify({"error": _NOT_CONNECTED}), 400)
     try:
         targets = resolve_targets(user_id, accounts, _selector_from_request())
     except SplunkAccessError as exc:
@@ -66,7 +68,7 @@ def _get_splunk_client_for_user(user_id: str):
             body["code"] = exc.code
         return None, (jsonify(body), status)
     if not targets:
-        return None, (jsonify({"error": "Splunk not connected"}), 400)
+        return None, (jsonify({"error": _NOT_CONNECTED}), 400)
     # Search jobs live on one Splunk. No selector uses the first granted instance.
     account = targets[0]
     return {"base_url": account["base_url"], "api_token": account["api_token"], "account_id": account["account_id"]}, None

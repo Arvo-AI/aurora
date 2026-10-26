@@ -103,7 +103,7 @@ export interface SplunkRcaSettings {
 function mapAccount(raw: unknown): SplunkAccount {
   const account = (raw ?? {}) as Record<string, unknown>;
   return {
-    accountId: String(account.accountId ?? ''),
+    accountId: typeof account.accountId === 'string' ? account.accountId : '',
     baseUrl: account.baseUrl as string | undefined,
     serverName: account.serverName as string | undefined,
     version: account.version as string | undefined,

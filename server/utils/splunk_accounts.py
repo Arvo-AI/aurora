@@ -10,7 +10,7 @@ import logging
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from utils.log_sanitizer import hash_for_log, sanitize
+from utils.log_sanitizer import hash_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -184,8 +184,8 @@ def list_splunk_accounts(user_id: str) -> List[Dict[str, Any]]:
 
     try:
         creds = get_token_data(user_id, "splunk")
-    except Exception as exc:
-        logger.error("Failed to load Splunk accounts for user %s: %s", hash_for_log(user_id), sanitize(exc))
+    except Exception:
+        logger.exception("Failed to load Splunk accounts for user %s", hash_for_log(user_id))
         return []
     if not isinstance(creds, dict):
         return []
