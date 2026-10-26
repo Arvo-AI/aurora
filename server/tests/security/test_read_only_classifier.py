@@ -613,6 +613,9 @@ _HOST = "admin@198.51.100.1"
     f"ssh {_HOST} 'ip route show'",
     f"ssh {_HOST} hostname",
     f"ssh {_HOST} date",
+    f"ssh {_HOST} 'date -Iseconds'",
+    # A bracketed IPv6 destination is a host. Shell syntax in that slot is not.
+    "ssh admin@[2001:db8::1] uptime",
     # A read inside `sh -c` is still a read. The shell itself is not the verb.
     f"ssh {_HOST} 'sh -c uptime'",
     # `./` is the same key file as the identity option, not a remote read.
@@ -684,6 +687,8 @@ def test_diagnostic_ssh_is_read_only(is_read_only, command):
     # A jump destination is not a local shell.
     f"ssh -o 'ProxyCommand=ssh -W %h:%p $(id>/tmp/ask-bypass)' {_HOST} uptime",
     f"ssh -J '$(id>/tmp/ask-bypass)' {_HOST} uptime",
+    # The destination is expanded by the local shell before ssh starts.
+    'ssh "$(id>/tmp/ask-bypass)" uptime',
 ])
 def test_ssh_writes_and_interactive_sessions_are_blocked(is_read_only, command):
     assert is_read_only(command) is False, command

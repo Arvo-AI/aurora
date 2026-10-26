@@ -110,8 +110,10 @@ def test_gcp_project_flag_is_refused_when_not_granted(monkeypatch):
     # No flag and more than one project: don't mint a root-project token.
     _Access.grants = [_Grant("proj-a"), _Grant("proj-b")]
     project, denied = gcp_login_project("uid", "gcloud compute instances list")
+    body = json.loads(denied)
     assert project is None
-    assert json.loads(denied)["code"] == "CONNECTOR_DENIED"
+    assert body["code"] == "CONNECTOR_DENIED"
+    assert "proj-a" in body["error"] and "proj-b" in body["error"]
 
 
 def test_gcp_single_grant_is_the_login_project_when_the_command_names_none(monkeypatch):
@@ -141,6 +143,9 @@ def test_gcp_single_grant_is_the_login_project_when_the_command_names_none(monke
 
     assert gcp_login_project("uid", "gcloud compute instances list") == ("proj-a", None)
     assert gcp_login_project("uid", "gcloud compute instances list", "proj-b")[0] is None
+    # A missing value or an unparseable command must not fall through to the grant.
+    assert gcp_login_project("uid", "gcloud compute instances list --project")[0] is None
+    assert gcp_login_project("uid", 'gcloud compute instances list "')[0] is None
 
 
 def test_open_connector_is_not_refused(monkeypatch):

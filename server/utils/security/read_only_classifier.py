@@ -504,6 +504,11 @@ _SHELL_MUTATING_EXACT = {
 _SHELL_MUTATING_PREFIX = {
     'journalctl': ('--vacuum',),
 }
+# The characters after these short options are a value, not more flags.
+# `date -Iseconds` prints a timestamp. The `s` is not `date -s`.
+_SHELL_ATTACHED_VALUE = {
+    'date': frozenset({'-I'}),
+}
 # `del` / `change` / `append` are not write verbs, but they change routes.
 _IP_WRITE_ACTIONS = frozenset({
     'del', 'delete', 'change', 'append', 'replace', 'save',
@@ -598,6 +603,10 @@ def _shell_flag_mutates(executable: str, flag: str) -> bool:
     prefixes = _SHELL_MUTATING_PREFIX.get(executable, ())
     if flag in exact or any(flag == p or flag.startswith(p + '-') for p in prefixes):
         return True
+    attached = _SHELL_ATTACHED_VALUE.get(executable, ())
+    # `date -Iseconds` is one option plus a format, not a bundle that contains `-s`.
+    if any(flag == prefix or flag.startswith(prefix) for prefix in attached):
+        return False
     # `sort -ofile` glues the path on. `sort -uo` hides the letter in a bundle.
     if flag.startswith('-') and not flag.startswith('--'):
         letters = flag[1:]
@@ -857,6 +866,9 @@ def _ssh_invocation_rejection(
             saw_destination = True
             i += 1
             continue
+        # The local shell expands this token before ssh starts. Only a host is safe.
+        if not jump_target_is_host(tok):
+            return _SSH_UNSAFE_OPTION
         remote_argv = tokens[i + 1:]
         saw_destination = True
         break

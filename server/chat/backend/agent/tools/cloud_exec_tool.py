@@ -1650,11 +1650,26 @@ def _gcp_granted_scopes(access) -> Optional[list]:
     return [g.scope_id for g in rows if g.role in roles]
 
 
-def _gcp_denied(user_id: str, project: Optional[str], command: str) -> str:
+def _gcp_denied(
+    user_id: str, project: Optional[str], command: str, granted: Optional[list] = None,
+) -> str:
     """Refusal for a GCP project. A blank scope still matches any grant, so say no here."""
     denied = connector_call_denied(user_id, "gcp", project or None, command)
     if denied:
         return denied
+    # Several grants and no --project. Name them so the next try can pick one.
+    if granted:
+        listed = ", ".join(str(item) for item in granted)
+        return json.dumps({
+            "success": False,
+            "error": (
+                "This command needs one project. Retry with --project set to one of "
+                f"these granted projects: {listed}."
+            ),
+            "code": "CONNECTOR_DENIED",
+            "final_command": command,
+            "provider": "gcp",
+        })
     from utils.auth.connector_access import denial_text
     return json.dumps({
         "success": False,
@@ -1701,6 +1716,9 @@ def gcp_login_project(user_id: str, command: str, context_project: Optional[str]
     # One granted project is the only place a command with no flag can run.
     if len(concrete) == 1:
         return concrete[0], None
+    # More than one grant. An empty scope would mint a token for the root project.
+    if len(concrete) > 1:
+        return None, _gcp_denied(user_id, None, command, granted=concrete)
     return None, _gcp_denied(user_id, None, command)
 
 
