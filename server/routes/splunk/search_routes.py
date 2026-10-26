@@ -8,9 +8,9 @@ from urllib.parse import quote
 import requests
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
-from utils.auth.token_management import get_token_data
 from utils.auth.rbac_decorators import require_permission
 from utils.log_sanitizer import sanitize
+from utils.splunk_accounts import SplunkAccessError, list_splunk_accounts, resolve_targets
 
 SPLUNK_TIMEOUT = 30
 SPLUNK_SEARCH_TIMEOUT = 120
@@ -36,20 +36,40 @@ def _validate_sid(sid: str) -> Tuple[bool, Optional[str]]:
     return True, None
 
 
-def _get_splunk_client_for_user(user_id: str) -> Optional[Dict[str, Any]]:
-    """Get Splunk credentials for the user."""
-    try:
-        creds = get_token_data(user_id, "splunk")
-        if not creds:
-            return None
-        api_token = creds.get("api_token")
-        base_url = creds.get("base_url")
-        if not api_token or not base_url:
-            return None
-        return {"base_url": base_url, "api_token": api_token}
-    except Exception as exc:
-        logger.error(f"[SPLUNK-SEARCH] Failed to get credentials for user {sanitize(user_id)}: {sanitize(exc)}")
+def _selector_from_request() -> Optional[str]:
+    selector = request.args.get("account")
+    if selector:
+        return selector
+    # GET has no body. A posted search names the instance as accountId.
+    if request.method == "GET":
         return None
+    data = request.get_json(silent=True) or {}
+    return data.get("accountId") or data.get("account")
+
+
+def _get_splunk_client_for_user(user_id: str):
+    """Credentials for one granted instance, or a Flask error response."""
+    try:
+        accounts = list_splunk_accounts(user_id)
+    except Exception as exc:
+        logger.error("[SPLUNK-SEARCH] Failed to get credentials for user %s: %s", sanitize(user_id), sanitize(exc))
+        return None, (jsonify({"error": "Splunk not connected"}), 400)
+    if not accounts:
+        return None, (jsonify({"error": "Splunk not connected"}), 400)
+    try:
+        targets = resolve_targets(user_id, accounts, _selector_from_request())
+    except SplunkAccessError as exc:
+        # Not granted — 403. An account id this org never connected — 400.
+        status = 403 if exc.code == "CONNECTOR_DENIED" else 400
+        body = {"error": exc.message}
+        if exc.code:
+            body["code"] = exc.code
+        return None, (jsonify(body), status)
+    if not targets:
+        return None, (jsonify({"error": "Splunk not connected"}), 400)
+    # Search jobs live on one Splunk. No selector uses the first granted instance.
+    account = targets[0]
+    return {"base_url": account["base_url"], "api_token": account["api_token"], "account_id": account["account_id"]}, None
 
 
 def _splunk_headers(api_token: str) -> Dict[str, str]:
@@ -65,9 +85,9 @@ def _splunk_headers(api_token: str) -> Dict[str, str]:
 @require_permission("connectors", "read")
 def search_sync(user_id):
     """Execute a synchronous SPL search (oneshot mode)."""
-    creds = _get_splunk_client_for_user(user_id)
-    if not creds:
-        return jsonify({"error": "Splunk not connected"}), 400
+    creds, error = _get_splunk_client_for_user(user_id)
+    if error:
+        return error
 
     data = request.get_json(silent=True) or {}
     search_query = data.get("query") or data.get("search")
@@ -153,9 +173,9 @@ def search_sync(user_id):
 @require_permission("connectors", "read")
 def create_search_job(user_id):
     """Create an asynchronous search job."""
-    creds = _get_splunk_client_for_user(user_id)
-    if not creds:
-        return jsonify({"error": "Splunk not connected"}), 400
+    creds, error = _get_splunk_client_for_user(user_id)
+    if error:
+        return error
 
     data = request.get_json(silent=True) or {}
     search_query = data.get("query") or data.get("search")
@@ -224,9 +244,9 @@ def get_job_status(user_id, sid: str):
     if not valid:
         return jsonify({"error": error}), 400
 
-    creds = _get_splunk_client_for_user(user_id)
-    if not creds:
-        return jsonify({"error": "Splunk not connected"}), 400
+    creds, error = _get_splunk_client_for_user(user_id)
+    if error:
+        return error
 
     try:
         url = f"{creds['base_url']}/services/search/v2/jobs/{quote(sid, safe='')}"
@@ -277,9 +297,9 @@ def get_job_results(user_id, sid: str):
     if not valid:
         return jsonify({"error": error}), 400
 
-    creds = _get_splunk_client_for_user(user_id)
-    if not creds:
-        return jsonify({"error": "Splunk not connected"}), 400
+    creds, error = _get_splunk_client_for_user(user_id)
+    if error:
+        return error
 
     offset = request.args.get("offset", 0, type=int)
     count = request.args.get("count", 1000, type=int)
@@ -331,9 +351,9 @@ def cancel_job(user_id, sid: str):
     if not valid:
         return jsonify({"error": error}), 400
 
-    creds = _get_splunk_client_for_user(user_id)
-    if not creds:
-        return jsonify({"error": "Splunk not connected"}), 400
+    creds, error = _get_splunk_client_for_user(user_id)
+    if error:
+        return error
 
     try:
         url = f"{creds['base_url']}/services/search/v2/jobs/{quote(sid, safe='')}/control"

@@ -219,7 +219,9 @@ export async function DELETE(
 
     // Special handling for Splunk
     if (provider === 'splunk') {
-      const response = await fetch(`${API_BASE_URL}/splunk/disconnect`, {
+      const account = request.nextUrl.searchParams.get('account')
+      const accountQs = account ? `?account=${encodeURIComponent(account)}` : ''
+      const response = await fetch(`${API_BASE_URL}/splunk/disconnect${accountQs}`, {
         method: 'DELETE',
         headers: authHeaders,
       })

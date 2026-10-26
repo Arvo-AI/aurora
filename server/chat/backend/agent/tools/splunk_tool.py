@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 import requests
 from pydantic import BaseModel, Field
 
-from utils.auth.token_management import get_token_data
+from utils.splunk_accounts import SplunkAccessError, list_splunk_accounts, resolve_targets
 
 logger = logging.getLogger(__name__)
 
@@ -85,33 +85,74 @@ class SplunkSearchArgs(BaseModel):
     earliest_time: str = Field(default="-1h", description="Start time (e.g., '-1h', '-24h', '-7d')")
     latest_time: str = Field(default="now", description="End time (default: 'now')")
     max_count: int = Field(default=100, description="Maximum results to return (default: 100)")
+    account_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Splunk to query, as host:port (for example prod.splunkcloud.com:8089). "
+            "Omit to query every Splunk this user can access."
+        ),
+    )
 
 
 class SplunkListIndexesArgs(BaseModel):
     """Arguments for list_splunk_indexes tool."""
-    pass
+    account_id: Optional[str] = Field(
+        default=None,
+        description="Splunk to list, as host:port. Omit to list indexes on every Splunk this user can access.",
+    )
 
 
 class SplunkListSourcetypesArgs(BaseModel):
     """Arguments for list_splunk_sourcetypes tool."""
     index: Optional[str] = Field(default=None, description="Optional: filter by specific index")
+    account_id: Optional[str] = Field(
+        default=None,
+        description="Splunk to list, as host:port. Omit to list sourcetypes on every Splunk this user can access.",
+    )
 
 
-def _get_splunk_credentials(user_id: str) -> Optional[Dict[str, Any]]:
-    """Get Splunk credentials for a user."""
+def _tool_targets(user_id: str, account_id: Optional[str]):
+    """Granted Splunks for this call, or a JSON error string."""
+    accounts = list_splunk_accounts(user_id)
+    if not accounts:
+        return None, json.dumps({"error": "Splunk not connected. Please connect Splunk first."})
     try:
-        creds = get_token_data(user_id, "splunk")
-        if not creds:
-            return None
-        api_token = creds.get("api_token") or creds.get("token") or creds.get("access_token")
-        base_url = creds.get("base_url") or creds.get("url") or creds.get("instance_url")
-        if not api_token or not base_url:
-            logger.warning("[SPLUNK-TOOL] Credentials exist but missing api_token or base_url")
-            return None
-        return {"base_url": base_url, "api_token": api_token}
-    except Exception as exc:
-        logger.error(f"[SPLUNK-TOOL] Failed to get credentials: {exc}")
-        return None
+        targets = resolve_targets(user_id, accounts, account_id)
+    except SplunkAccessError as exc:
+        body = {"error": exc.message}
+        if exc.code:
+            body["code"] = exc.code
+        return None, json.dumps(body)
+    if not targets:
+        return None, json.dumps({"error": "Splunk not connected. Please connect Splunk first."})
+    return targets, None
+
+
+def _account_fields(account: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "account_id": account.get("account_id"),
+        "server_name": account.get("server_name"),
+        "base_url": account.get("base_url"),
+    }
+
+
+def _by_account(targets: list, run) -> Dict[str, Any]:
+    """Run one call per granted Splunk. A slow instance does not block the others."""
+    import contextvars
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(account):
+        item = run(account)
+        item.update(_account_fields(account))
+        return account["account_id"], item
+
+    # A Context cannot be entered on two threads at once, so each worker copies it.
+    def guarded(account):
+        return contextvars.copy_context().run(one, account)
+
+    workers = min(4, len(targets))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return dict(pool.map(guarded, targets))
 
 
 def _splunk_headers(api_token: str) -> Dict[str, str]:
@@ -124,8 +165,9 @@ def _splunk_headers(api_token: str) -> Dict[str, str]:
 
 
 def is_splunk_connected(user_id: str) -> bool:
-    """Check if Splunk is connected for a user."""
-    return _get_splunk_credentials(user_id) is not None
+    """True when this user can query at least one connected Splunk."""
+    targets, error = _tool_targets(user_id, None)
+    return error is None and bool(targets)
 
 
 def search_splunk(
@@ -133,6 +175,7 @@ def search_splunk(
     earliest_time: str = "-1h",
     latest_time: str = "now",
     max_count: int = 100,
+    account_id: Optional[str] = None,
     user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
@@ -151,16 +194,39 @@ def search_splunk(
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
-    creds = _get_splunk_credentials(user_id)
-    if not creds:
-        return json.dumps({"error": "Splunk not connected. Please connect Splunk first."})
+    targets, error = _tool_targets(user_id, account_id)
+    if error:
+        return error
+    # Several granted Splunks — same shape as an AWS fan-out, keyed by account id.
+    if len(targets) > 1:
+        by_account = _by_account(
+            targets,
+            lambda account: _search_one(account, query, earliest_time, latest_time, max_count),
+        )
+        return json.dumps({
+            "success": any(item.get("success") for item in by_account.values()),
+            "results_by_account": by_account,
+            "note": "Queried every Splunk this user can access. Pass account_id to target one instance.",
+        })
 
+    result = _search_one(targets[0], query, earliest_time, latest_time, max_count)
+    result.update(_account_fields(targets[0]))
+    return json.dumps(result)
+
+
+def _search_one(
+    creds: Dict[str, Any],
+    query: str,
+    earliest_time: str,
+    latest_time: str,
+    max_count: int,
+) -> Dict[str, Any]:
     # Ensure query starts with 'search' if needed
     search_query = query.strip()
     if not search_query.startswith("|") and not search_query.lower().startswith("search"):
         search_query = f"search {search_query}"
 
-    logger.info(f"[SPLUNK-TOOL] Executing search for user {user_id}: {search_query[:100]}...")
+    logger.info("[SPLUNK-TOOL] Executing search on %s: %s", creds.get("account_id"), search_query[:100])
 
     try:
         url = f"{creds['base_url']}/services/search/jobs/export"
@@ -181,10 +247,10 @@ def search_splunk(
         )
 
         if response.status_code == 401:
-            return json.dumps({"error": "Splunk authentication failed. Token may be expired."})
+            return {"error": "Splunk authentication failed. Token may be expired."}
         elif response.status_code == 400:
             error_msg = response.text[:200] if response.text else "Bad request"
-            return json.dumps({"error": f"Invalid SPL query: {error_msg}"})
+            return {"error": f"Invalid SPL query: {error_msg}"}
 
         response.raise_for_status()
 
@@ -221,16 +287,16 @@ def search_splunk(
             response_data["truncated"] = True
             response_data["note"] = f"Results truncated from {original_count} to {len(results)} due to size limit. Use more specific query or add '| head N' to limit results."
 
-        return json.dumps(response_data)
+        return response_data
 
     except requests.exceptions.Timeout:
-        return json.dumps({"error": "Search timed out. Try a narrower time range or simpler query."})
+        return {"error": "Search timed out. Try a narrower time range or simpler query."}
     except requests.exceptions.RequestException as exc:
-        logger.error(f"[SPLUNK-TOOL] Search failed: {exc}")
-        return json.dumps({"error": f"Search failed: {str(exc)}"})
+        logger.error("[SPLUNK-TOOL] Search failed: %s", type(exc).__name__)
+        return {"error": "Search failed"}
 
 
-def list_splunk_indexes(user_id: Optional[str] = None, **kwargs) -> str:
+def list_splunk_indexes(account_id: Optional[str] = None, user_id: Optional[str] = None, **kwargs) -> str:
     """List available Splunk indexes.
 
     Args:
@@ -242,12 +308,24 @@ def list_splunk_indexes(user_id: Optional[str] = None, **kwargs) -> str:
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
-    creds = _get_splunk_credentials(user_id)
-    if not creds:
-        return json.dumps({"error": "Splunk not connected"})
+    targets, error = _tool_targets(user_id, account_id)
+    if error:
+        return error
+    # Several granted Splunks — list each one instead of mixing their indexes.
+    if len(targets) > 1:
+        by_account = _by_account(targets, _list_indexes_one)
+        return json.dumps({
+            "success": any(item.get("success") for item in by_account.values()),
+            "results_by_account": by_account,
+            "note": "Listed indexes on every Splunk this user can access. Pass account_id to target one instance.",
+        })
 
-    logger.info(f"[SPLUNK-TOOL] Listing indexes for user {user_id}")
+    result = _list_indexes_one(targets[0])
+    result.update(_account_fields(targets[0]))
+    return json.dumps(result)
 
+
+def _list_indexes_one(creds: Dict[str, Any]) -> Dict[str, Any]:
     try:
         url = f"{creds['base_url']}/services/data/indexes"
         headers = _splunk_headers(creds["api_token"])
@@ -262,7 +340,7 @@ def list_splunk_indexes(user_id: Optional[str] = None, **kwargs) -> str:
         )
 
         if response.status_code == 401:
-            return json.dumps({"error": "Authentication failed"})
+            return {"error": "Authentication failed"}
 
         response.raise_for_status()
         data = response.json()
@@ -283,19 +361,20 @@ def list_splunk_indexes(user_id: Optional[str] = None, **kwargs) -> str:
         # Sort by event count (most active first)
         indexes.sort(key=lambda x: x["totalEventCount"], reverse=True)
 
-        return json.dumps({
+        return {
             "success": True,
             "index_count": len(indexes),
             "indexes": indexes,
-        })
+        }
 
     except requests.exceptions.RequestException as exc:
-        logger.error(f"[SPLUNK-TOOL] Failed to list indexes: {exc}")
-        return json.dumps({"error": f"Failed to list indexes: {str(exc)}"})
+        logger.error("[SPLUNK-TOOL] Failed to list indexes: %s", type(exc).__name__)
+        return {"error": "Failed to list indexes"}
 
 
 def list_splunk_sourcetypes(
     index: Optional[str] = None,
+    account_id: Optional[str] = None,
     user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
@@ -311,19 +390,30 @@ def list_splunk_sourcetypes(
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
-    creds = _get_splunk_credentials(user_id)
-    if not creds:
-        return json.dumps({"error": "Splunk not connected"})
-
     # Validate index to prevent SPL injection
     if index:
         is_valid, error_msg = _validate_splunk_identifier(index, "index")
         if not is_valid:
-            logger.warning(f"[SPLUNK-TOOL] Invalid index parameter: {error_msg}")
+            logger.warning("[SPLUNK-TOOL] Invalid index parameter: %s", error_msg)
             return json.dumps({"error": error_msg})
 
-    logger.info(f"[SPLUNK-TOOL] Listing sourcetypes for user {user_id}, index={index}")
+    targets, error = _tool_targets(user_id, account_id)
+    if error:
+        return error
+    if len(targets) > 1:
+        by_account = _by_account(targets, lambda account: _list_sourcetypes_one(account, index))
+        return json.dumps({
+            "success": any(item.get("success") for item in by_account.values()),
+            "results_by_account": by_account,
+            "note": "Listed sourcetypes on every Splunk this user can access. Pass account_id to target one instance.",
+        })
 
+    result = _list_sourcetypes_one(targets[0], index)
+    result.update(_account_fields(targets[0]))
+    return json.dumps(result)
+
+
+def _list_sourcetypes_one(creds: Dict[str, Any], index: Optional[str]) -> Dict[str, Any]:
     try:
         # Use metadata search to get sourcetypes
         if index:
@@ -348,7 +438,7 @@ def list_splunk_sourcetypes(
         )
 
         if response.status_code == 401:
-            return json.dumps({"error": "Authentication failed"})
+            return {"error": "Authentication failed"}
 
         response.raise_for_status()
 
@@ -369,13 +459,13 @@ def list_splunk_sourcetypes(
         # Sort by count (most common first)
         sourcetypes.sort(key=lambda x: x["totalCount"], reverse=True)
 
-        return json.dumps({
+        return {
             "success": True,
             "sourcetype_count": len(sourcetypes),
             "index_filter": index,
             "sourcetypes": sourcetypes[:MAX_SOURCETYPES_RETURN],
-        })
+        }
 
     except requests.exceptions.RequestException as exc:
-        logger.error(f"[SPLUNK-TOOL] Failed to list sourcetypes: {exc}")
-        return json.dumps({"error": f"Failed to list sourcetypes: {str(exc)}"})
+        logger.error("[SPLUNK-TOOL] Failed to list sourcetypes: %s", type(exc).__name__)
+        return {"error": "Failed to list sourcetypes"}

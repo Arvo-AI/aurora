@@ -132,11 +132,22 @@ def _check_ci_provider(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
-def _check_splunk(creds: Dict[str, Any]) -> Dict[str, Any]:
-    api_token = creds.get("api_token")
-    base_url = creds.get("base_url")
-    if not api_token or not base_url:
-        return {"connected": False}
+def _splunk_candidates(creds: Dict[str, Any]) -> list:
+    """Every stored instance. A blob from before multi-account has just the top level."""
+    accounts = creds.get("accounts")
+    candidates = []
+    if isinstance(accounts, list):
+        for item in accounts:
+            if isinstance(item, dict) and item.get("api_token") and item.get("base_url"):
+                candidates.append(item)
+    if not candidates and creds.get("api_token") and creds.get("base_url"):
+        candidates.append(creds)
+    return candidates
+
+
+def _probe_splunk(item: Dict[str, Any]):
+    api_token = item.get("api_token")
+    base_url = item.get("base_url")
     try:
         r = requests.get(
             f"{base_url}/services/server/info?output_mode=json",
@@ -145,9 +156,24 @@ def _check_splunk(creds: Dict[str, Any]) -> Dict[str, Any]:
             verify=SPLUNK_SSL_VERIFY,
         )
         r.raise_for_status()
-        return {"connected": True, "baseUrl": base_url}
+        return base_url
     except Exception:
+        return None
+
+
+def _check_splunk(creds: Dict[str, Any]) -> Dict[str, Any]:
+    candidates = _splunk_candidates(creds)
+    if not candidates:
         return {"connected": False}
+    # Probe together so one dead instance does not add its timeout to the others.
+    workers = min(4, len(candidates))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        urls = list(pool.map(_probe_splunk, candidates))
+    # A revoked token on one instance must not flip the card off while another works.
+    for base_url in urls:
+        if base_url:
+            return {"connected": True, "baseUrl": base_url, "accountCount": len(candidates)}
+    return {"connected": False, "accountCount": len(candidates)}
 
 
 def _check_elastic(creds: Dict[str, Any]) -> Dict[str, Any]:

@@ -6,12 +6,25 @@ interface SplunkServer {
   instanceType?: string;
 }
 
+export interface SplunkAccount {
+  accountId: string;
+  baseUrl?: string;
+  serverName?: string;
+  version?: string;
+  instanceType?: string;
+  username?: string;
+  allowed?: boolean;
+  valid?: boolean;
+  error?: string;
+}
+
 export interface SplunkStatus {
   connected: boolean;
   baseUrl?: string;
   server?: SplunkServer | null;
   username?: string;
   error?: string;
+  accounts?: SplunkAccount[];
 }
 
 export interface SplunkConnectPayload {
@@ -50,6 +63,7 @@ export interface SplunkSearchPayload {
   earliestTime?: string;
   latestTime?: string;
   maxCount?: number;
+  accountId?: string;
 }
 
 export interface SplunkSearchResult {
@@ -86,6 +100,27 @@ export interface SplunkRcaSettings {
   rcaEnabled: boolean;
 }
 
+function mapAccount(raw: unknown): SplunkAccount {
+  const account = (raw ?? {}) as Record<string, unknown>;
+  return {
+    accountId: String(account.accountId ?? ''),
+    baseUrl: account.baseUrl as string | undefined,
+    serverName: account.serverName as string | undefined,
+    version: account.version as string | undefined,
+    instanceType: account.instanceType as string | undefined,
+    username: account.username as string | undefined,
+    allowed: account.allowed as boolean | undefined,
+    valid: account.valid as boolean | undefined,
+    error: account.error as string | undefined,
+  };
+}
+
+function withAccount(path: string, accountId?: string): string {
+  if (!accountId) return path;
+  const joiner = path.includes('?') ? '&' : '?';
+  return `${path}${joiner}account=${encodeURIComponent(accountId)}`;
+}
+
 const API_BASE = '/api/splunk';
 
 export const splunkService = {
@@ -103,6 +138,7 @@ export const splunkService = {
         server: raw.server as SplunkServer | null,
         username: raw.username as string | undefined,
         error: raw.error as string | undefined,
+        accounts: Array.isArray(raw.accounts) ? raw.accounts.map(mapAccount) : [],
       };
     } catch (error) {
       console.error('[splunkService] Failed to fetch status:', error);
@@ -117,10 +153,12 @@ export const splunkService = {
       cache: 'no-store',
     });
     return {
-      connected: Boolean(raw?.success),
+      connected: Boolean(raw?.success ?? raw?.connected),
       baseUrl: (raw?.baseUrl ?? payload.baseUrl) as string,
       server: raw?.server as SplunkServer | null,
       username: raw?.username as string | undefined,
+      accounts: Array.isArray(raw?.accounts) ? raw.accounts.map(mapAccount) : [],
+      error: raw?.error as string | undefined,
     };
   },
 
@@ -163,25 +201,28 @@ export const splunkService = {
     return raw ?? { success: false };
   },
 
-  async getJobStatus(sid: string): Promise<SplunkJobStatus> {
-    const raw = await apiRequest<SplunkJobStatus>(`${API_BASE}/search/jobs/${sid}`, {
+  async getJobStatus(sid: string, accountId?: string): Promise<SplunkJobStatus> {
+    const raw = await apiRequest<SplunkJobStatus>(withAccount(`${API_BASE}/search/jobs/${sid}`, accountId), {
       cache: 'no-store',
     });
     return raw ?? { sid, isDone: false, isFailed: true, resultCount: 0 };
   },
 
-  async getJobResults(sid: string, options?: { offset?: number; count?: number }): Promise<SplunkJobResultsResponse> {
+  async getJobResults(sid: string, options?: { offset?: number; count?: number; accountId?: string }): Promise<SplunkJobResultsResponse> {
     const offset = options?.offset ?? 0;
     const count = options?.count ?? 1000;
     const raw = await apiRequest<SplunkJobResultsResponse>(
-      `${API_BASE}/search/jobs/${sid}?results=true&offset=${offset}&count=${count}`,
+      withAccount(
+        `${API_BASE}/search/jobs/${sid}?results=true&offset=${offset}&count=${count}`,
+        options?.accountId,
+      ),
       { cache: 'no-store' },
     );
     return raw ?? { results: [], count: 0, offset };
   },
 
-  async cancelJob(sid: string): Promise<void> {
-    await apiRequest(`${API_BASE}/search/jobs/${sid}`, {
+  async cancelJob(sid: string, accountId?: string): Promise<void> {
+    await apiRequest(withAccount(`${API_BASE}/search/jobs/${sid}`, accountId), {
       method: 'DELETE',
       cache: 'no-store',
     });

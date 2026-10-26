@@ -26,6 +26,13 @@ Splunk integration for querying log data during Root Cause Analysis. Splunk is a
 
 ## Instructions
 
+### Several Splunk instances
+Each connected Splunk is its own account, identified by `host:port` (for example `prod.splunkcloud.com:8089`). A role or team may be allowed to use one instance and not another. Tools only see instances this user can access.
+
+- Omit `account_id` to query every allowed instance. The result is `results_by_account`, keyed by that id.
+- Pass `account_id='host:port'` on later calls to stay on one instance.
+- One allowed instance returns a single result and includes `account_id`.
+
 ### Tool Usage (use in this order)
 1. `list_splunk_indexes()` -- Discover available indexes. Always call first to understand what data is available.
 2. `list_splunk_sourcetypes(index='X')` -- Find log types within a specific index.

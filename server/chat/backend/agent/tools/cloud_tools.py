@@ -2267,6 +2267,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 "Execute SPL (Splunk Processing Language) queries to search logs in Splunk. "
                 "Use this to investigate issues by querying log data. "
                 "First use list_splunk_indexes to discover available indexes, then construct targeted queries. "
+                "When several Splunk instances are connected, omit account_id to query every instance this user "
+                "can access (results_by_account). Pass account_id='host:port' to target one. "
                 "Example: search_splunk(query='index=main error | stats count by host', earliest_time='-1h')"
             ),
             args_schema=SplunkSearchArgs,
@@ -2283,7 +2285,11 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         tools.append(StructuredTool.from_function(
             func=final_indexes_func,
             name="list_splunk_indexes",
-            description="List available Splunk indexes to discover what log data is available for searching.",
+            description=(
+                "List available Splunk indexes to discover what log data is available for searching. "
+                "Omit account_id to list indexes on every Splunk this user can access. "
+                "Pass account_id='host:port' to target one instance."
+            ),
             args_schema=SplunkListIndexesArgs,
         ))
 
@@ -2298,7 +2304,11 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         tools.append(StructuredTool.from_function(
             func=final_sourcetypes_func,
             name="list_splunk_sourcetypes",
-            description="List available Splunk sourcetypes. Optionally filter by index to see what log types exist.",
+            description=(
+                "List available Splunk sourcetypes. Optionally filter by index to see what log types exist. "
+                "Omit account_id to list sourcetypes on every Splunk this user can access. "
+                "Pass account_id='host:port' to target one instance."
+            ),
             args_schema=SplunkListSourcetypesArgs,
         ))
 

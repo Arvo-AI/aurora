@@ -136,7 +136,7 @@ Before writing, check if a relevant entry already exists (use list_memories or g
 
 6. **Observability** (if Datadog/Splunk/Elastic/Coroot/Dynatrace/ThousandEyes connected):
    - Datadog: query_datadog(resource_type='monitors') and query_datadog(resource_type='hosts')
-   - Splunk: list_splunk_indexes(), search_splunk() to discover log sources
+   - Splunk: list_splunk_indexes(), search_splunk() to discover log sources. Several instances return results_by_account; pass account_id (host:port) to stay on one. Only instances this user can access are included.
    - Elastic: elastic_list_indices(), elastic_search_logs() to discover log data streams and services
    - Coroot: coroot_get_service_map() for eBPF-discovered service dependencies, coroot_get_applications() for app inventory
    - Dynatrace: query_dynatrace() for entities and topology

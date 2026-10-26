@@ -87,6 +87,7 @@ export default function SplunkAuthPage() {
       const payload = { baseUrl, apiToken };
       const result = await splunkService.connect(payload);
       setStatus(result);
+      setBaseUrl("");
 
       if (typeof window !== "undefined") {
         localStorage.setItem(CACHE_KEY, JSON.stringify(result));
@@ -114,28 +115,24 @@ export default function SplunkAuthPage() {
     }
   };
 
-  const handleDisconnect = async () => {
+  const handleDisconnect = async (accountId?: string) => {
     setLoading(true);
 
     try {
-      const response = await fetch("/api/connected-accounts/splunk", {
+      const qs = accountId ? `?account=${encodeURIComponent(accountId)}` : "";
+      const response = await fetch(`/api/connected-accounts/splunk${qs}`, {
         method: "DELETE",
         credentials: "include",
       });
 
       if (response.ok || response.status === 204) {
-        setStatus({ connected: false });
         setBaseUrl("");
-
-        if (typeof window !== "undefined") {
-          localStorage.removeItem(CACHE_KEY);
-          localStorage.removeItem("isSplunkConnected");
-          window.dispatchEvent(new CustomEvent("providerStateChanged"));
-        }
+        setApiToken("");
+        await fetchAndUpdateStatus();
 
         toast({
           title: "Success",
-          description: "Splunk disconnected successfully",
+          description: accountId ? "Splunk instance removed" : "Splunk disconnected successfully",
         });
       } else {
         const text = await response.text();
@@ -160,7 +157,7 @@ export default function SplunkAuthPage() {
           <div className="mb-6">
             <h1 className="text-3xl font-bold">Splunk Integration</h1>
             <p className="text-muted-foreground mt-1">
-              Connect your Splunk Cloud or Enterprise instance
+              Connect one or more Splunk Cloud or Enterprise instances
             </p>
           </div>
           <Card>
@@ -179,7 +176,7 @@ export default function SplunkAuthPage() {
       <div className="mb-6">
         <h1 className="text-3xl font-bold">Splunk Integration</h1>
         <p className="text-muted-foreground mt-1">
-          Connect your Splunk Cloud or Enterprise instance
+          Connect one or more Splunk Cloud or Enterprise instances
         </p>
       </div>
 
@@ -272,11 +269,57 @@ export default function SplunkAuthPage() {
           </CardContent>
         </Card>
       ) : (
-        <SplunkWebhookStep
-          status={status}
-          onDisconnect={handleDisconnect}
-          loading={loading}
-        />
+        <div className="space-y-6">
+          <SplunkWebhookStep
+            status={status}
+            onDisconnect={handleDisconnect}
+            loading={loading}
+          />
+          <Card>
+            <CardHeader>
+              <CardTitle>Add another Splunk</CardTitle>
+              <CardDescription>
+                Connect a second instance. Connecting the same URL again replaces that instance&apos;s token.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleConnect} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="addBaseUrl">Instance URL</Label>
+                  <Input
+                    id="addBaseUrl"
+                    type="url"
+                    placeholder="https://your-other-splunk:8089"
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="addApiToken">API Token</Label>
+                  <Input
+                    id="addApiToken"
+                    type="password"
+                    placeholder="Enter your Splunk API token"
+                    value={apiToken}
+                    onChange={(e) => setApiToken(e.target.value)}
+                    required
+                  />
+                </div>
+                <Button type="submit" className="w-full" disabled={loading || !baseUrl || !apiToken}>
+                  {loading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Connecting...
+                    </>
+                  ) : (
+                    "Add Splunk"
+                  )}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
       )}
     </div>
     </ConnectorAuthGuard>

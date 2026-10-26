@@ -23,15 +23,17 @@ export async function GET(
     const isResults = searchParams.get('results') === 'true';
     const offset = searchParams.get('offset') || '0';
     const count = searchParams.get('count') || '1000';
+    const account = searchParams.get('account');
+    const accountQs = account ? `&account=${encodeURIComponent(account)}` : '';
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
     let url: string;
     if (isResults) {
-      url = `${API_BASE_URL}/splunk/search/jobs/${sid}/results?offset=${offset}&count=${count}`;
+      url = `${API_BASE_URL}/splunk/search/jobs/${sid}/results?offset=${offset}&count=${count}${accountQs}`;
     } else {
-      url = `${API_BASE_URL}/splunk/search/jobs/${sid}`;
+      url = `${API_BASE_URL}/splunk/search/jobs/${sid}${account ? `?account=${encodeURIComponent(account)}` : ''}`;
     }
 
     let response: Response;
@@ -77,13 +79,15 @@ export async function DELETE(
 
     const { headers: authHeaders } = authResult;
     const { sid } = await params;
+    const account = new URL(request.url).searchParams.get('account');
+    const accountQs = account ? `?account=${encodeURIComponent(account)}` : '';
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
     let response: Response;
     try {
-      response = await fetch(`${API_BASE_URL}/splunk/search/jobs/${sid}`, {
+      response = await fetch(`${API_BASE_URL}/splunk/search/jobs/${sid}${accountQs}`, {
         method: 'DELETE',
         headers: authHeaders,
         credentials: 'include',

@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ChevronDown, ChevronRight, ChevronLeft, Loader2 } from "lucide-react";
-import { splunkService, SplunkJobStatus } from "@/lib/services/splunk";
+import { splunkService, SplunkAccount, SplunkJobStatus } from "@/lib/services/splunk";
 import { useToast } from "@/hooks/use-toast";
 
 const TIME_RANGES = [
@@ -111,6 +111,8 @@ export default function SplunkSearchPage() {
   const router = useRouter();
   const { toast } = useToast();
   const [query, setQuery] = useState("");
+  const [accounts, setAccounts] = useState<SplunkAccount[]>([]);
+  const [accountId, setAccountId] = useState("");
   const [timeRange, setTimeRange] = useState("-24h");
   const [searchMode, setSearchMode] = useState<"sync" | "async">("sync");
   const [loading, setLoading] = useState(false);
@@ -136,6 +138,19 @@ export default function SplunkSearchPage() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    splunkService.getStatus().then((status) => {
+      if (cancelled || !status) return;
+      const usable = (status.accounts ?? []).filter((account) => account.allowed !== false && account.accountId);
+      setAccounts(usable);
+      setAccountId((current) => current || usable[0]?.accountId || "");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Reset to page 1 when results change
   useEffect(() => {
     setCurrentPage(1);
@@ -154,6 +169,7 @@ export default function SplunkSearchPage() {
         earliestTime: timeRange,
         latestTime: "now",
         maxCount: 10000, // Fetch more results for pagination
+        accountId: accountId || undefined,
       });
       setResults(result.results);
       setTotalCount(result.count);
@@ -170,9 +186,9 @@ export default function SplunkSearchPage() {
     }
   };
 
-  const pollJobStatus = async (sid: string) => {
+  const pollJobStatus = async (sid: string, jobAccountId?: string) => {
     try {
-      const status = await splunkService.getJobStatus(sid);
+      const status = await splunkService.getJobStatus(sid, jobAccountId);
       setJobStatus(status);
 
       if (status.isDone) {
@@ -187,7 +203,7 @@ export default function SplunkSearchPage() {
           return;
         }
 
-        const resultsData = await splunkService.getJobResults(sid, { count: 10000 });
+        const resultsData = await splunkService.getJobResults(sid, { count: 10000, accountId: jobAccountId });
         setResults(resultsData.results);
         setTotalCount(resultsData.count);
         setLoading(false);
@@ -212,10 +228,12 @@ export default function SplunkSearchPage() {
     setHasSearched(true);
 
     try {
+      const jobAccountId = accountId || undefined;
       const job = await splunkService.createSearchJob({
         query,
         earliestTime: timeRange,
         latestTime: "now",
+        accountId: jobAccountId,
       });
 
       if (!job.sid) {
@@ -223,10 +241,10 @@ export default function SplunkSearchPage() {
       }
 
       pollingRef.current = setInterval(() => {
-        pollJobStatus(job.sid!);
+        pollJobStatus(job.sid!, jobAccountId);
       }, 1000);
 
-      pollJobStatus(job.sid);
+      pollJobStatus(job.sid, jobAccountId);
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "Failed to create search job";
       setError(errorMessage);
@@ -264,7 +282,7 @@ export default function SplunkSearchPage() {
 
     if (jobStatus?.sid) {
       try {
-        await splunkService.cancelJob(jobStatus.sid);
+        await splunkService.cancelJob(jobStatus.sid, accountId || undefined);
       } catch {
         // Ignore cancel errors
       }
@@ -347,7 +365,9 @@ export default function SplunkSearchPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold">Splunk Search</h1>
-          <p className="text-muted-foreground mt-1">Run SPL queries against your Splunk instance</p>
+          <p className="text-muted-foreground mt-1">
+            {accounts.length > 1 ? "Run SPL queries against a connected Splunk instance" : "Run SPL queries against your Splunk instance"}
+          </p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => router.push("/splunk/alerts")}>
@@ -377,6 +397,24 @@ export default function SplunkSearchPage() {
               Enter your Splunk Processing Language (SPL) query
             </p>
           </div>
+
+          {accounts.length > 1 && (
+            <div>
+              <Label>Splunk instance</Label>
+              <Select value={accountId} onValueChange={setAccountId}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue placeholder="Select an instance" />
+                </SelectTrigger>
+                <SelectContent>
+                  {accounts.map((account) => (
+                    <SelectItem key={account.accountId} value={account.accountId}>
+                      {account.serverName ? `${account.serverName} (${account.accountId})` : account.accountId}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
