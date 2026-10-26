@@ -10,6 +10,7 @@ from utils.db.org_scope import resolve_org, org_read_predicate
 from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.auth.token_management import get_token_data
+from utils.ssh.session_reply import session_reply_result
 from utils.ssh.ssh_jump_parser import SSHJumpConfig, parse_ssh_jump_command
 
 logger = logging.getLogger(__name__)
@@ -368,21 +369,42 @@ def validate_and_test_ssh(
                 allow_agent=False,
             )
 
-        # Verify connection by running a command
-        stdin, stdout, stderr = ssh.exec_command("whoami", timeout=5)
-        result = stdout.read().decode().strip()
-        error_output = stderr.read().decode().strip()
+        # whoami proves the session can carry a command. Network OSes have no
+        # such command; their error text is still a live channel.
+        result = ""
+        error_output = ""
+        channel_error = None
+        exec_rejected = False
+        try:
+            _stdin, stdout, stderr = ssh.exec_command("whoami", timeout=5)
+        except paramiko.SSHException:
+            # connect() already authenticated. Some servers refuse the exec request.
+            exec_rejected = True
+        else:
+            try:
+                result = stdout.read().decode(errors="replace").strip()
+                error_output = stderr.read().decode(errors="replace").strip()
+            except (socket.timeout, paramiko.SSHException, OSError) as exc:
+                channel_error = exc
+
+        transport = ssh.get_transport()
+        success, error_msg, connected_as = session_reply_result(
+            result,
+            error_output,
+            target_user,
+            transport_active=transport is not None and transport.is_active(),
+            channel_error=channel_error is not None,
+            exec_rejected=exec_rejected,
+        )
+        # Timeout, or a dead transport with no reply
+        if not success:
+            detail = f" ({channel_error})" if channel_error else ""
+            logger.warning(f"{error_msg}{detail}")
+            return False, error_msg, None
 
         logger.info(f"SSH command result: '{result}', error: '{error_output}'")
-
-        # Compare against target_user which may differ from username when using jump commands
-        if result == target_user:
-            logger.info(f"SSH authentication successful! Connected as: {result}")
-            return True, None, result
-        else:
-            error_msg = f"SSH connection succeeded but unexpected user: {result} (expected {target_user})"
-            logger.warning(error_msg)
-            return False, error_msg, None
+        logger.info(f"SSH authentication successful! Connected as: {connected_as}")
+        return True, None, connected_as
 
     except socket.timeout:
         error_msg = "SSH connection timeout. The server may not be accessible or SSH port may be blocked by firewall."

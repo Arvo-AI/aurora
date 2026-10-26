@@ -586,3 +586,80 @@ def test_bq_reads_stay_allowed(is_read_only, command):
 ])
 def test_bq_writes_stay_blocked(is_read_only, command):
     assert is_read_only(command) is False, command
+
+
+# ---------------------------------------------------------------------------
+# ssh in Ask mode. The binary has no read verb; the remote command is what
+# runs. Slack is always Ask, so a diagnostic ssh has to classify as a read
+# or the org allow list is never consulted.
+# ---------------------------------------------------------------------------
+_HOST = "admin@198.51.100.1"
+
+
+@pytest.mark.parametrize("command", [
+    f"ssh {_HOST} uptime",
+    f"ssh {_HOST} 'df -h'",
+    f"ssh {_HOST} 'journalctl -u nginx --no-pager -n 50'",
+    f"ssh {_HOST} 'sudo journalctl -u nginx --no-pager -n 50'",
+    f"ssh {_HOST} 'kubectl get pods'",
+    f"ssh {_HOST} 'systemctl status nginx'",
+    f"ssh {_HOST} 'docker ps'",
+    f"ssh {_HOST} 'df -h | grep error'",
+    f"ssh -i ~/.ssh/id_provider_vm -o BatchMode=yes {_HOST} 'uptime'",
+    f"/usr/bin/ssh {_HOST} 'cat /var/log/syslog'",
+    # The destination is a hostname, not an operation.
+    "ssh update.example uptime",
+    "ssh secrets.example 'free -m'",
+    f"ssh {_HOST} 'ip route show'",
+    f"ssh {_HOST} hostname",
+    f"ssh {_HOST} date",
+    # Jump-host rewrite: ProxyCommand is ssh -W, not a local command.
+    (
+        'ssh -i /home/me/.ssh/key '
+        '-o ProxyCommand="ssh -i /home/me/.ssh/key '
+        '-o StrictHostKeyChecking=no '
+        '-o UserKnownHostsFile=/dev/null '
+        '-W %h:%p user@bastion -p 22" '
+        f'{_HOST} uptime'
+    ),
+])
+def test_diagnostic_ssh_is_read_only(is_read_only, command):
+    assert is_read_only(command) is True, describe_rejection(command)
+
+
+@pytest.mark.parametrize("command", [
+    f"ssh {_HOST}",
+    f"ssh -N -L 8080:localhost:80 {_HOST}",
+    f"ssh {_HOST} 'rm -rf /tmp/x'",
+    f"ssh {_HOST} 'systemctl restart nginx'",
+    f"ssh {_HOST} 'kubectl delete pod x'",
+    f"ssh {_HOST} 'sudo reboot'",
+    f"ssh {_HOST} 'docker pull nginx'",
+    f"ssh {_HOST} 'ip route add 10.0.0.0/8 via 198.51.100.2'",
+    f"ssh {_HOST} 'cat ~/.ssh/id_rsa'",
+    f"ssh {_HOST} 'kubectl get pods | bash'",
+    f"ssh {_HOST} uptime && rm -rf /",
+    # Option values and bundled flags must not hide a local command.
+    f"ssh -o 'ProxyCommand=touch /tmp/x' {_HOST} uptime",
+    "ssh -vo 'ProxyCommand=touch /tmp/x' uptime",
+    f"ssh -o 'LocalCommand=touch /tmp/x' -o PermitLocalCommand=yes {_HOST} uptime",
+    f"ssh -F /tmp/ssh_config {_HOST} uptime",
+    # sudo re-join must not turn shell syntax into literal arguments.
+    f"ssh {_HOST} 'sudo uptime ; shutdown -h now'",
+    f"ssh {_HOST} 'sudo uptime > /tmp/x'",
+    f"ssh {_HOST} 'sudo uptime $(reboot)'",
+    # `-i` on the remote program is a key read, not an identity option.
+    f"ssh {_HOST} 'sort -i ~/.ssh/id_rsa'",
+    f"ssh {_HOST} 'less -i ~/.ssh/id_rsa'",
+    # Host tools that mutate without a write verb.
+    f"ssh {_HOST} 'ip route del default'",
+    f"ssh {_HOST} 'journalctl --vacuum-time=1s'",
+    f"ssh {_HOST} 'date -s 2020-01-01'",
+    f"ssh {_HOST} 'hostname new-name'",
+    f"ssh {_HOST} 'hostname -F /tmp/name'",
+    f"ssh {_HOST} 'hostname --file /tmp/name'",
+    f"ssh {_HOST} 'dmesg -c'",
+    f"ssh {_HOST} 'sort -o /tmp/out /etc/passwd'",
+])
+def test_ssh_writes_and_interactive_sessions_are_blocked(is_read_only, command):
+    assert is_read_only(command) is False, command
