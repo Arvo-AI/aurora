@@ -13,7 +13,7 @@ from flask import Blueprint, jsonify, request
 
 from routes.connector_access import _catalog
 from utils.auth.connector_access import load_grants
-from utils.auth.rbac_decorators import require_auth_only, require_permission
+from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
@@ -85,7 +85,7 @@ def _replace(cur, org_id: str, team_id: str, member_ids: list, grants: list) -> 
 
 
 @org_teams_bp.route("/teams", methods=["GET"])
-@require_auth_only
+@require_permission("connectors", "read")
 def list_teams(user_id: str):
     org_id = get_org_id_from_request()
     if not org_id:

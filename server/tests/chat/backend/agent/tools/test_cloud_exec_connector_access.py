@@ -72,6 +72,77 @@ def test_command_subscription_is_refused_when_not_granted(monkeypatch):
     assert _refuse_named_azure("uid", "az graph query -q Resources", connections) is not None
 
 
+def test_gcp_project_flag_is_refused_when_not_granted(monkeypatch):
+    class _Access:
+        grants = []
+        roles = ["viewer"]
+        team_rules = []
+        team_ids = set()
+
+        def credentials(self, connector, scope_id=""):
+            if scope_id in ("", "proj-a"):
+                return frozenset({"read"})
+            return frozenset()
+
+        def may_use(self, connector, scope_id=""):
+            return scope_id in ("", "proj-a")
+
+        def checked_as(self, team_names=None):
+            return "viewer"
+
+    monkeypatch.setattr("utils.auth.connector_access.access_for", lambda user_id: _Access())
+    from chat.backend.agent.tools.cloud_exec_tool import _explicit_gcp_projects, gcp_login_project
+
+    assert _explicit_gcp_projects("gcloud compute instances list --project=proj-b") == ["proj-b"]
+    assert _explicit_gcp_projects("bq query --project_id proj-a") == ["proj-a"]
+    project, denied = gcp_login_project("uid", "gcloud compute instances list --project=proj-b")
+    assert project is None
+    assert json.loads(denied)["code"] == "CONNECTOR_DENIED"
+    project, denied = gcp_login_project("uid", "gcloud compute instances list --project=proj-a")
+    assert (project, denied) == ("proj-a", None)
+
+    class _Grant:
+        def __init__(self, scope_id):
+            self.connector = "gcp"
+            self.scope_id = scope_id
+            self.role = "viewer"
+
+    # No flag and more than one project: don't mint a root-project token.
+    _Access.grants = [_Grant("proj-a"), _Grant("proj-b")]
+    project, denied = gcp_login_project("uid", "gcloud compute instances list")
+    assert project is None
+    assert json.loads(denied)["code"] == "CONNECTOR_DENIED"
+
+
+def test_gcp_single_grant_is_the_login_project_when_the_command_names_none(monkeypatch):
+    class _Grant:
+        def __init__(self, scope_id):
+            self.connector = "gcp"
+            self.scope_id = scope_id
+            self.role = "viewer"
+
+    class _Access:
+        grants = [_Grant("proj-a")]
+        roles = ["viewer"]
+        team_rules = []
+        team_ids = set()
+
+        def credentials(self, connector, scope_id=""):
+            return frozenset({"read"})
+
+        def may_use(self, connector, scope_id=""):
+            return scope_id in ("", "proj-a")
+
+        def checked_as(self, team_names=None):
+            return "viewer"
+
+    monkeypatch.setattr("utils.auth.connector_access.access_for", lambda user_id: _Access())
+    from chat.backend.agent.tools.cloud_exec_tool import gcp_login_project
+
+    assert gcp_login_project("uid", "gcloud compute instances list") == ("proj-a", None)
+    assert gcp_login_project("uid", "gcloud compute instances list", "proj-b")[0] is None
+
+
 def test_open_connector_is_not_refused(monkeypatch):
     monkeypatch.setattr(
         "utils.auth.connector_access.may_use",

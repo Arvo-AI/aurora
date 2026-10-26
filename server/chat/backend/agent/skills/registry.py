@@ -453,14 +453,17 @@ class SkillRegistry:
             user_id, source, alert_details or {}, integrations
         )
 
-        # 1. Load connected integration skills, ordered by rca_priority
+        # 1. Load connected integration skills, ordered by rca_priority.
+        # One access load covers every skill. check_connection asks again per skill.
+        from utils.auth.connector_access import reuse_access_for_user
         connected: List[Tuple[SkillMetadata, Dict[str, Any]]] = []
-        for skill_id, meta in self._skills.items():
-            is_conn, ctx_data = self.check_connection(skill_id, user_id)
-            # The alert's integration list is not a grant. A denied skill stays out,
-            # including when it would otherwise be passed through as prevalidated.
-            if is_conn:
-                connected.append((meta, ctx_data))
+        with reuse_access_for_user():
+            for skill_id, meta in self._skills.items():
+                is_conn, ctx_data = self.check_connection(skill_id, user_id)
+                # The alert's integration list is not a grant. A denied skill stays out,
+                # including when it would otherwise be passed through as prevalidated.
+                if is_conn:
+                    connected.append((meta, ctx_data))
 
         connected.sort(key=lambda pair: pair[0].rca_priority)
 

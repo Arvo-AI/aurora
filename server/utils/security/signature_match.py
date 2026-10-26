@@ -294,8 +294,16 @@ def _ssh_dir_glob(command: str) -> bool:
 
 
 def _exposes_ssh_key(command: str) -> bool:
-    normalized = _normalize_ssh_text(command)
-    return _SSH_KEY_PATH.search(normalized) is not None or _ssh_dir_glob(normalized)
+    candidates = [command]
+    segments = _shell_segments(command)
+    # The shell strips quotes before the program sees the path (`~/.ssh/"id_rsa"`).
+    if segments:
+        candidates.append(" ".join(token for segment in segments for token in segment))
+    for candidate in candidates:
+        normalized = _normalize_ssh_text(candidate)
+        if _SSH_KEY_PATH.search(normalized) is not None or _ssh_dir_glob(normalized):
+            return True
+    return False
 
 
 def ssh_key_material_exposed(command: str, *, allow_identity_option: bool = True) -> bool:

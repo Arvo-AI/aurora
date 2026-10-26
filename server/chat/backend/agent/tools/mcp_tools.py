@@ -1009,7 +1009,8 @@ async def get_real_mcp_tools_for_user(user_id: str) -> List:
     try:
         # Check cache first
         current_time = time.time()
-        
+        from utils.auth.connector_access import may_use
+
         # Get user's cloud credentials FIRST to check for cache invalidation
         credentials = get_user_cloud_credentials(user_id)
         
@@ -1018,10 +1019,15 @@ async def get_real_mcp_tools_for_user(user_id: str) -> List:
             user_id in _mcp_tools_cache_expiry and 
             current_time < _mcp_tools_cache_expiry[user_id]):
             cached_tools = _mcp_tools_cache[user_id]
-            
+
             # IMPORTANT: If cache is empty but user now has credentials,
-            # invalidate cache and reload (handles cross-container cache issue)
-            has_github_creds = credentials and credentials.get("github", {}).get("access_token")
+            # invalidate cache and reload (handles cross-container cache issue).
+            # A denied connector is not a credential we will start a server for.
+            has_github_creds = (
+                credentials
+                and credentials.get("github", {}).get("access_token")
+                and may_use(user_id, "github")
+            )
             has_aws_creds = credentials and (credentials.get("aws", {}).get("aws_access_key_id") or credentials.get("aws", {}).get("aws_secret_access_key"))
             
             # Check if OVH is connected but Context7 is not in cache
@@ -1030,7 +1036,7 @@ async def get_real_mcp_tools_for_user(user_id: str) -> List:
             try:
                 from utils.secrets.secret_ref_utils import get_user_token_data
                 ovh_token_data = get_user_token_data(user_id, 'ovh')
-                has_ovh_creds = bool(ovh_token_data)
+                has_ovh_creds = bool(ovh_token_data) and may_use(user_id, "ovh")
             except Exception:
                 pass
             
@@ -1051,7 +1057,6 @@ async def get_real_mcp_tools_for_user(user_id: str) -> List:
         
         # Determine which MCP servers to start based on available credentials
         available_servers = []
-        from utils.auth.connector_access import may_use
 
         # Context7 MCP is only needed when OVH is connected (provides OVH CLI/Terraform docs)
         try:

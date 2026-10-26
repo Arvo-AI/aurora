@@ -32,14 +32,23 @@ def test_a_slack_guest_does_not_extract_as_the_admin(monkeypatch):
 
 def test_a_slack_guest_extracts_when_viewers_may_edit(monkeypatch):
     _guest(monkeypatch, viewers_may_edit=True)
+    seen = {}
+
+    def _run(*_a, **_k):
+        # The pin has to still be the viewer while the agent runs.
+        seen["roles"] = pinned_roles()
+
+    monkeypatch.setattr("services.memory.collector._run_extraction_agent", _run)
     monkeypatch.setattr(
         "services.memory.collector.get_hook",
         lambda _name: (lambda *_a, **_k: (True, "")),
     )
     monkeypatch.setattr(
         "services.memory.collector.LLMContextManager.load_context_history",
-        lambda *_a, **_k: [],
+        lambda *_a, **_k: [{"role": "user", "content": "we ship Friday"}],
     )
+    monkeypatch.setattr("services.memory.collector.build_memory_index", lambda *_a, **_k: "")
     result = _extract_memories("session-1", "admin-uid", access_as="general_viewer")
-    assert result == {"status": "skipped", "reason": "no_messages"}
+    assert result["status"] == "ok"
+    assert seen["roles"] == ["viewer"]
     assert pinned_roles() is None

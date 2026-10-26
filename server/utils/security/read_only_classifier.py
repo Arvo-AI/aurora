@@ -496,7 +496,8 @@ _SHELL_MUTATING_EXACT = {
     'sort': frozenset({'-o', '--output', '--compress-program'}),
     'sar': frozenset({'-o'}),
     'rg': frozenset({'--pre'}),
-    'ss': frozenset({'-k', '--kill'}),
+    # `-K` is the short form the man page documents. `-k` stays for the old spelling.
+    'ss': frozenset({'-k', '-K', '--kill'}),
     'less': frozenset({'-o', '--log-file'}),
 }
 # `--vacuum` also covers `--vacuum-time` / `--vacuum-size` / `--vacuum-files`.
@@ -521,6 +522,8 @@ _SSH_SAFE_OPTION_KEYS = frozenset({
 _SSH_UNSAFE_OPTION = (
     'it passes an ssh option that can run local code, forward ports or write files'
 )
+# ProxyCommand is a local shell. These characters run or redirect before ssh connects.
+_NESTED_SHELL_SYNTAX = re.compile(r'[$`\\;&|<>(){}*?\[\]!#\n\r]')
 
 # ssh options that consume the next argv token. Anything else starting with
 # '-' is a boolean switch (`-n`, `-tt`).
@@ -572,8 +575,11 @@ def _ssh_o_rejection(value: str, depth: int) -> str:
     """
     parts = re.split(r'[=\s]+', value.strip(), maxsplit=1)
     key = parts[0].lower()
+    nested = parts[1] if len(parts) > 1 else ''
+    # The value is not parsed as a shell except for ProxyCommand, and that one is.
+    if _NESTED_SHELL_SYNTAX.search(nested):
+        return _SSH_UNSAFE_OPTION
     if key == 'proxycommand':
-        nested = parts[1] if len(parts) > 1 else ''
         try:
             nested_tokens = shlex.split(nested)
         except ValueError:
@@ -592,11 +598,11 @@ def _shell_flag_mutates(executable: str, flag: str) -> bool:
     prefixes = _SHELL_MUTATING_PREFIX.get(executable, ())
     if flag in exact or any(flag == p or flag.startswith(p + '-') for p in prefixes):
         return True
-    # `sort -ofile` glues the path onto the short flag. `--` forms stay exact.
-    return any(
-        len(pattern) == 2 and flag.startswith(pattern) and not flag.startswith('--')
-        for pattern in exact
-    )
+    # `sort -ofile` glues the path on. `sort -uo` hides the letter in a bundle.
+    if flag.startswith('-') and not flag.startswith('--'):
+        letters = flag[1:]
+        return any(len(pattern) == 2 and pattern[1] in letters for pattern in exact)
+    return False
 
 
 def _unwrap_sudo(command: str) -> str:

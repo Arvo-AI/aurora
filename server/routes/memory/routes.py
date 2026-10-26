@@ -15,7 +15,7 @@ from flask import Blueprint, jsonify, request
 from pypdf import PdfReader
 
 from utils.db.connection_pool import db_pool
-from utils.auth.rbac_decorators import require_auth_only, require_permission
+from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context, get_user_display_name
 from services.memory import (
     MEMORY_CATEGORIES,
@@ -41,7 +41,8 @@ memory_bp = Blueprint("memory", __name__)
 
 def _require_memory_edit(fn):
     """Editors and admins may always modify memory. Viewers may when the org allows it."""
-    @require_auth_only
+    # Viewers hold memory read. The write permission would lock them out of the switch.
+    @require_permission("memory", "read")
     @wraps(fn)
     def wrapper(user_id, *args, **kwargs):
         from utils.auth.viewer_run import viewer_may_edit_memory

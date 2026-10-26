@@ -1605,6 +1605,105 @@ def _explicit_azure_subscriptions(command: str) -> Optional[list]:
     return found
 
 
+_GCP_PROJECT_FLAGS = {"--project", "--project_id"}
+
+
+def _explicit_gcp_projects(command: str) -> Optional[list]:
+    """Project ids the command names. None when the command can't be parsed."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    found: list = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        name = token.lower().split("=", 1)[0]
+        if name not in _GCP_PROJECT_FLAGS:
+            i += 1
+            continue
+        if "=" in token:
+            value = token.split("=", 1)[1]
+            i += 1
+        elif i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+            value = tokens[i + 1]
+            i += 2
+        else:
+            # A flag with no value can still hide the project the login would use.
+            found.append("")
+            i += 1
+            continue
+        found.append(value)
+    return found
+
+
+def _gcp_granted_scopes(access) -> Optional[list]:
+    """Scope ids this role holds, or None when GCP is not limited."""
+    if access.credentials("gcp") is None:
+        return None
+    override = [
+        g for g in access.team_rules
+        if g.connector == "gcp" and g.team_id in access.team_ids
+    ]
+    rows = override or [g for g in access.grants if g.connector == "gcp"]
+    roles = set(access.roles)
+    return [g.scope_id for g in rows if g.role in roles]
+
+
+def _gcp_denied(user_id: str, project: Optional[str], command: str) -> str:
+    """Refusal for a GCP project. A blank scope still matches any grant, so say no here."""
+    denied = connector_call_denied(user_id, "gcp", project or None, command)
+    if denied:
+        return denied
+    from utils.auth.connector_access import denial_text
+    return json.dumps({
+        "success": False,
+        "error": denial_text(user_id, "gcp"),
+        "code": "CONNECTOR_DENIED",
+        "final_command": command,
+        "provider": "gcp",
+    })
+
+
+def gcp_login_project(user_id: str, command: str, context_project: Optional[str] = None):
+    """Project for the token, and a denial when the command is out of scope.
+
+    A limited role never logs in with an empty scope: that merges every grant
+    and mints a token for the root project.
+    """
+    from utils.auth.connector_access import access_for
+
+    access = access_for(user_id)
+    scopes = _gcp_granted_scopes(access)
+    named = _explicit_gcp_projects(command)
+    # Not limited: keep the previous login, but still honor a project the command names.
+    if scopes is None:
+        if named:
+            return (named[-1] or context_project), None
+        return context_project or None, None
+    # An unparseable command could hide a project flag.
+    if named is None:
+        return None, _gcp_denied(user_id, None, command)
+    for project in named:
+        if not project or not access.may_use("gcp", project):
+            return None, _gcp_denied(user_id, project or None, command)
+    # gcloud keeps the last --project, so the token has to be for that one.
+    if named:
+        return named[-1], None
+    # A blank scope covers every project, so the root token stays valid.
+    if any(scope == "" for scope in scopes):
+        return context_project or None, None
+    if context_project:
+        if access.may_use("gcp", context_project):
+            return context_project, None
+        return None, _gcp_denied(user_id, context_project, command)
+    concrete = [scope for scope in scopes if scope]
+    # One granted project is the only place a command with no flag can run.
+    if len(concrete) == 1:
+        return concrete[0], None
+    return None, _gcp_denied(user_id, None, command)
+
+
 def _is_unscoped_azure_graph(command: str) -> bool:
     """True for `az graph`, which is tenant-wide unless a subscription is named."""
     cmd = command.strip()
@@ -2014,8 +2113,17 @@ Security & Compliance
                 "provider": normalized_provider,
             })
         else:
-            # GCP isolated setup (default)
-            success, project_id, auth_method, isolated_env = setup_gcp_environment_isolated(user_id, selected_project_id, provider_preference)
+            # GCP isolated setup (default). A grant on project A must not mint
+            # a root-project token that can also reach project B.
+            from utils.cloud.cloud_utils import get_selected_project_id
+            project_for_token, refused_gcp = gcp_login_project(
+                user_id, original_command, get_selected_project_id(),
+            ) if user_id else (None, None)
+            if refused_gcp:
+                return refused_gcp
+            success, project_id, auth_method, isolated_env = setup_gcp_environment_isolated(
+                user_id, project_for_token, provider_preference,
+            )
             if not success:
                 return _credential_setup_failure(f"Failed to setup GCP environment with {provider_preference} authentication", command)
             resource_id = project_id

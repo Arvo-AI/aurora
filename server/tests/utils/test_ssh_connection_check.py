@@ -61,6 +61,9 @@ class _RejectedExecParamiko:
     class SSHException(Exception):
         pass
 
+    class ChannelException(SSHException):
+        pass
+
     class AuthenticationException(Exception):
         pass
 
@@ -165,6 +168,22 @@ class _TimeoutExecParamiko(_RejectedExecParamiko):
             raise _RejectedExecParamiko.SSHException("Timeout opening channel")
 
     SSHClient = _Client
+
+
+class _ClosedChannelParamiko(_RejectedExecParamiko):
+    class _Client(_RejectedExecParamiko._Client):
+        def exec_command(self, _command, timeout=5):
+            raise _RejectedExecParamiko.ChannelException("Administratively prohibited")
+
+    SSHClient = _Client
+
+
+def test_channel_open_rejection_fails_the_check():
+    validate = _load_validate_and_test_ssh(_ClosedChannelParamiko)
+    success, error, connected_as = validate("198.51.100.1", "aurora-ro", "not-a-key")
+    assert success is False
+    assert error == CHANNEL_FAILED
+    assert connected_as is None
 
 
 def test_channel_open_timeout_fails_the_check():

@@ -1392,8 +1392,13 @@ async def handle_connection(websocket) -> None:
                             continue
                         from utils.auth.connector_access import denial_text, may_use
                         from utils.auth.stateless_auth import get_connected_providers
-                        # IaC is offered only when some connected cloud is granted.
-                        providers = get_connected_providers(user_id)
+                        # GitHub and Slack are connected too. They are not a cloud for IaC.
+                        cloud_providers = {"aws", "gcp", "azure", "ovh", "scaleway"}
+                        providers = [
+                            provider
+                            for provider in get_connected_providers(user_id)
+                            if provider.lower() in cloud_providers
+                        ]
                         if not any(may_use(user_id, provider) for provider in providers):
                             target = providers[0] if providers else "cloud"
                             await websocket.send(json.dumps({

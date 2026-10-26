@@ -664,6 +664,10 @@ def test_diagnostic_ssh_is_read_only(is_read_only, command):
     f"ssh {_HOST} 'hostname --file /tmp/name'",
     f"ssh {_HOST} 'dmesg -c'",
     f"ssh {_HOST} 'sort -o /tmp/out /etc/passwd'",
+    f"ssh {_HOST} 'sort -uo /tmp/marker /etc/hosts'",
+    f"ssh {_HOST} 'date -us 2020-01-01'",
+    f"ssh {_HOST} 'dmesg -Tc'",
+    f"ssh {_HOST} 'ss -K dst 198.51.100.1'",
     # A read verb must not clear a later write, locally or on the far side.
     f"ssh {_HOST} uptime && sort -o /tmp/marker /etc/hosts",
     f"ssh {_HOST} 'kubectl get pods && sort -o /tmp/marker /etc/hosts'",
@@ -672,6 +676,11 @@ def test_diagnostic_ssh_is_read_only(is_read_only, command):
     f"ssh {_HOST} 'cat ~/.ssh/./id_rsa'",
     f"ssh {_HOST} 'cat ~/.ssh/foo/../id_rsa'",
     f"ssh {_HOST} 'cat ~/.ssh/*'",
+    # Quotes and concatenation still name the key file.
+    f"ssh {_HOST} 'cat ~/.ssh/\"id_rsa\"'",
+    f"ssh -o 'ProxyCommand=ssh -i $(id>/tmp/ask-bypass) -W %h:%p host' {_HOST} uptime",
+    f"ssh -o 'ProxyCommand=ssh -p $(id>/tmp/ask-bypass) -W %h:%p host' {_HOST} uptime",
+    f"ssh -o 'StrictHostKeyChecking=$(id>/tmp/ask-bypass)' {_HOST} uptime",
     # A jump destination is not a local shell.
     f"ssh -o 'ProxyCommand=ssh -W %h:%p $(id>/tmp/ask-bypass)' {_HOST} uptime",
     f"ssh -J '$(id>/tmp/ask-bypass)' {_HOST} uptime",

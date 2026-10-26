@@ -380,6 +380,9 @@ def validate_and_test_ssh(
         except socket.timeout as exc:
             # The channel never opened. That is not a server refusing the command.
             channel_error = exc
+        except paramiko.ChannelException as exc:
+            # The session channel never opened. That is not an exec refusal.
+            channel_error = exc
         except paramiko.SSHException as exc:
             # Paramiko also reports a channel-open timeout as SSHException.
             if "timeout" in str(exc).lower():

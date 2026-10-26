@@ -1,5 +1,8 @@
 """Slack @mentions run as the Aurora user behind the sender's email."""
 
+import pytest
+
+from routes.slack import slack_events_helpers
 from routes.slack.slack_events_helpers import (
     SLACK_ALLOW_UNREGISTERED_KEY,
     classify_slack_sender,
@@ -20,6 +23,14 @@ from utils.auth.connector_access import (
 
 WORKSPACE = "uid-owner"
 ADMIN = "uid-admin"
+
+
+@pytest.fixture(autouse=True)
+def _clear_member_cache():
+    # The cache is process-wide, so one test's member must not answer another's.
+    slack_events_helpers._member_cache.clear()
+    yield
+    slack_events_helpers._member_cache.clear()
 
 
 def test_preference_key_is_stored_for_the_org():
@@ -101,6 +112,48 @@ def test_full_member_includes_the_profile_email():
         "T1",
     )
     assert member == {"display_name": "Ada", "email": "ada@example.com"}
+
+
+def test_workspace_member_is_served_from_cache():
+    calls = {"n": 0}
+
+    class _Counting(_Slack):
+        def _make_request(self, method, path, params):
+            calls["n"] += 1
+            return super()._make_request(method, path, params)
+
+    client = _Counting({"team_id": "T1", "profile": {"display_name": "Ada", "email": "ada@example.com"}})
+    assert get_workspace_member(client, "U1", "T1")["email"] == "ada@example.com"
+    assert get_workspace_member(client, "U1", "T1")["email"] == "ada@example.com"
+    assert calls["n"] == 1
+
+
+def test_users_info_failure_is_not_cached():
+    calls = {"n": 0}
+
+    class _Flaky:
+        def _make_request(self, method, path, params):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("blip")
+            return {"ok": True, "user": {"team_id": "T1", "profile": {"display_name": "Ada", "email": "ada@example.com"}}}
+
+    assert get_workspace_member(_Flaky(), "U9", "T1") is None
+    assert get_workspace_member(_Flaky(), "U9", "T1")["email"] == "ada@example.com"
+    assert calls["n"] == 2
+
+
+def test_member_cache_drops_entries_past_512(monkeypatch):
+    monkeypatch.setattr(slack_events_helpers.time, "monotonic", lambda: 1000.0)
+    for i in range(512):
+        slack_events_helpers._member_cache[("T", f"U{i}")] = (1000.0, None)
+    member = get_workspace_member(
+        _Slack({"team_id": "T-new", "profile": {"display_name": "Ada", "email": "ada@example.com"}}),
+        "U-new",
+        "T-new",
+    )
+    assert member["email"] == "ada@example.com"
+    assert list(slack_events_helpers._member_cache) == [("T-new", "U-new")]
 
 
 def test_slack_guest_is_not_a_workspace_member():

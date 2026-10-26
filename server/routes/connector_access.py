@@ -13,7 +13,7 @@ from flask import Blueprint, jsonify, request
 
 from utils.auth import VALID_ROLES
 from utils.auth.connector_access import RESTRICTED_MARKER, Grant, inherits_general
-from utils.auth.rbac_decorators import require_auth_only, require_permission
+from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
@@ -315,7 +315,7 @@ def _team_in_org(cur, org_id: str, team_id: str) -> bool:
 
 
 @connector_access_bp.route("/viewer-run", methods=["GET"])
-@require_auth_only
+@require_permission("chat", "read")
 def get_viewer_run(user_id: str):
     org_id = get_org_id_from_request()
     if not org_id:
