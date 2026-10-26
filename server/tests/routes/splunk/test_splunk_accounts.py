@@ -75,7 +75,7 @@ def test_find_account_accepts_a_url():
 
 
 def test_ungranted_instance_is_refused(monkeypatch):
-    import utils.splunk_accounts as accounts_mod
+    accounts_mod = sys.modules["utils.splunk_accounts"]
 
     monkeypatch.setattr(
         accounts_mod,
@@ -98,7 +98,7 @@ def test_ungranted_instance_is_refused(monkeypatch):
 
 
 def test_unknown_instance_does_not_list_hidden_ones(monkeypatch):
-    import utils.splunk_accounts as accounts_mod
+    accounts_mod = sys.modules["utils.splunk_accounts"]
 
     monkeypatch.setattr(
         accounts_mod,
