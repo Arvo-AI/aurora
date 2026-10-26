@@ -97,8 +97,9 @@ def test_oversized_response_is_rejected_before_it_is_kept():
     response = MagicMock()
     response.iter_content.return_value = iter([b"x" * (rmq.MAX_RESPONSE_BYTES + 1)])
     session.request.return_value = response
+    client = _client(session)
     with pytest.raises(rmq.RabbitMQAPIError, match="too large"):
-        _client(session).whoami()
+        client.whoami()
     response.close.assert_called_once()
 
 
