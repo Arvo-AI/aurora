@@ -67,8 +67,12 @@ def _client_from_payload(payload: Dict[str, Any]) -> RabbitMQClient:
     verify_tls = payload.get("verify_tls", True)
     if not isinstance(verify_tls, bool):
         raise ValueError("verify_tls must be a boolean")
+    url = payload.get("url")
+    # A number or object would raise AttributeError inside the URL parser and become a 500.
+    if url is not None and not isinstance(url, str):
+        raise ValueError("Management URL must be a string")
     return RabbitMQClient(
-        url=payload.get("url") or "",
+        url=url or "",
         username=_clean_username(payload.get("username")),
         password=_clean_password(payload.get("password")),
         verify_tls=verify_tls,

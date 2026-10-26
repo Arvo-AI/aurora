@@ -111,7 +111,12 @@ export default function RabbitMQAuthPage() {
           ? `Cluster ${result.clusterName} is reachable.`
           : "The management API accepted these credentials.",
       });
-      await fetchAndUpdateStatus();
+      // Connect already succeeded. A status refresh failure must not look like a failed connect.
+      try {
+        await fetchAndUpdateStatus();
+      } catch {
+        console.warn("[rabbitmq] Status refresh after connect failed");
+      }
       try {
         await fetch("/api/provider-preferences", {
           method: "POST",
