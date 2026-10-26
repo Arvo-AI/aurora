@@ -125,3 +125,12 @@ def test_denial_names_the_general_role_or_the_team_override():
         ["db"],
     )
     assert team.checked_as({"db": "Database"}) == "Database viewer"
+
+
+def test_a_failed_grant_read_denies_every_connector():
+    from utils.auth.connector_access import Access
+
+    denied = Access([], ["admin"], unavailable=True)
+    assert denied.may_use("aws") is False
+    assert denied.credentials("aws") == frozenset()
+    assert denied.revision() == "unavailable"

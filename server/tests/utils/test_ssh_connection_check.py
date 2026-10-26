@@ -157,3 +157,19 @@ def test_validate_and_test_ssh_accepts_rejected_exec():
     assert success is True
     assert error is None
     assert connected_as == "aurora-ro"
+
+
+class _TimeoutExecParamiko(_RejectedExecParamiko):
+    class _Client(_RejectedExecParamiko._Client):
+        def exec_command(self, _command, timeout=5):
+            raise _RejectedExecParamiko.SSHException("Timeout opening channel")
+
+    SSHClient = _Client
+
+
+def test_channel_open_timeout_fails_the_check():
+    validate = _load_validate_and_test_ssh(_TimeoutExecParamiko)
+    success, error, connected_as = validate("198.51.100.1", "aurora-ro", "not-a-key")
+    assert success is False
+    assert error == CHANNEL_FAILED
+    assert connected_as is None

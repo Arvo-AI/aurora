@@ -354,15 +354,8 @@ def evaluate_command(
             technique=sig.technique, rule_id=sig.rule_id,
         )
 
-    # Background Slack is Ask mode and has no one to approve a judge hit.
-    # A read-only ssh already cleared the signature matcher; the org allow
-    # list is what decides whether it may run.
-    head = command.strip().split(None, 1)[0].rsplit("/", 1)[-1] if command.strip() else ""
-    if head == "ssh":
-        from utils.security.read_only_classifier import is_diagnostic_ssh
-        if is_diagnostic_ssh(command):
-            return GuardrailDecision(blocked=False)
-
+    # Ask mode already refused a non-diagnostic ssh. A command that got here
+    # still goes to the judge: the classifier is a fast reject, not a bypass.
     verdict = check_command_safety(command, tool_name=tool, user_id=user_id, session_id=session_id)
     if verdict.conclusion:
         judge_latency_ms = (time.perf_counter() - t0) * 1000

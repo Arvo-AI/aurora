@@ -259,6 +259,11 @@ def delete_team(user_id: str, team_id: str):
                 row = cur.fetchone()
                 if not row:
                     return jsonify({"error": "Unknown team"}), 404
+                # No foreign key, so a deleted team would keep its overrides.
+                cur.execute(
+                    "DELETE FROM org_connector_access WHERE org_id = %s AND team_id = %s",
+                    (org_id, team_id),
+                )
             conn.commit()
         logger.info("Deleted team %s", sanitize(row[0]))
         return jsonify({"ok": True})

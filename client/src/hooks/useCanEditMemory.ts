@@ -25,7 +25,11 @@ export function useCanEditMemory(): boolean | null {
     }
     let cancelled = false;
     fetch("/api/org/viewer-run")
-      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => {
+        // A failed read is not a missing switch. Editors stay locked until it succeeds.
+        if (!res.ok) throw new Error("viewer-run unavailable");
+        return res.json();
+      })
       .then((data) => {
         if (cancelled) return;
         // Editors use their own switch. A missing value stays allowed.

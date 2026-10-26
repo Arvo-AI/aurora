@@ -984,6 +984,24 @@ def run_async_in_thread(coro, timeout=60):
             logging.error(f" Error in MCP operation: {str(e)}")
             return []
 
+def _mcp_tools_allowed(user_id: str, tools: List) -> List:
+    """Drop MCP tools for a connector this role cannot use.
+
+    Context7 exists only to document OVH, so it follows the OVH grant.
+    A tool with no server is not offered.
+    """
+    from utils.auth.connector_access import may_use
+
+    kept = []
+    for tool in tools:
+        server = tool.get("server_type") if isinstance(tool, dict) else None
+        # Context7 is the OVH docs server, not its own connector.
+        connector = "ovh" if server == "context7" else server
+        if connector and may_use(user_id, connector):
+            kept.append(tool)
+    return kept
+
+
 async def get_real_mcp_tools_for_user(user_id: str) -> List:
     """Get real MCP tools for a user based on their cloud credentials with caching."""
     import time
@@ -1029,16 +1047,17 @@ async def get_real_mcp_tools_for_user(user_id: str) -> List:
                 del _mcp_tools_cache_expiry[user_id]
             else:
                 logging.info(f"Using cached MCP tools for user {user_id} ({len(cached_tools)} tools)")
-                return cached_tools
+                return _mcp_tools_allowed(user_id, cached_tools)
         
         # Determine which MCP servers to start based on available credentials
         available_servers = []
-        
+        from utils.auth.connector_access import may_use
+
         # Context7 MCP is only needed when OVH is connected (provides OVH CLI/Terraform docs)
         try:
             from utils.secrets.secret_ref_utils import get_user_token_data
             ovh_token_data = get_user_token_data(user_id, 'ovh')
-            if ovh_token_data:
+            if ovh_token_data and may_use(user_id, "ovh"):
                 available_servers.append("context7")
                 logging.info(f"OVH connected for user {user_id}, enabling Context7 MCP")
         except Exception as e:
@@ -1050,14 +1069,14 @@ async def get_real_mcp_tools_for_user(user_id: str) -> List:
             #     available_servers.append("aws")
             # if credentials.get("azure", {}).get("client_id") or credentials.get("azure", {}).get("client_secret"):
             #     available_servers.append("azure")
-            if credentials.get("github", {}).get("access_token"):
+            if credentials.get("github", {}).get("access_token") and may_use(user_id, "github"):
                 available_servers.append("github")
 
         # App-only users have no OAuth row in user_tokens, but they do have
         # an active App installation. Probe the auth router so the github
         # MCP server still spins up — get_credentials_for_server will mint
         # an installation token via the App.
-        if "github" not in available_servers:
+        if "github" not in available_servers and may_use(user_id, "github"):
             try:
                 from utils.auth.github_auth_router import (
                     NoGitHubAuthError,
@@ -1118,9 +1137,10 @@ async def get_real_mcp_tools_for_user(user_id: str) -> List:
         # Cache the result
         _mcp_tools_cache[user_id] = all_tools
         _mcp_tools_cache_expiry[user_id] = current_time + MCP_TOOLS_CACHE_DURATION
-        logging.info(f"Cached {len(all_tools)} MCP tools for user {user_id} (expires in {MCP_TOOLS_CACHE_DURATION}s)")
-        
-        return all_tools
+        allowed = _mcp_tools_allowed(user_id, all_tools)
+        logging.info(f"Cached {len(allowed)} MCP tools for user {user_id} (expires in {MCP_TOOLS_CACHE_DURATION}s)")
+
+        return allowed
         
     except Exception as e:
         logging.error(f" Error getting real MCP tools for user {user_id}: {str(e)}")

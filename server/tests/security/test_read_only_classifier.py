@@ -613,6 +613,10 @@ _HOST = "admin@198.51.100.1"
     f"ssh {_HOST} 'ip route show'",
     f"ssh {_HOST} hostname",
     f"ssh {_HOST} date",
+    # A read inside `sh -c` is still a read. The shell itself is not the verb.
+    f"ssh {_HOST} 'sh -c uptime'",
+    # `./` is the same key file as the identity option, not a remote read.
+    f"ssh -i ~/.ssh/./id_provider_vm {_HOST} uptime",
     # Jump-host rewrite: ProxyCommand is ssh -W, not a local command.
     (
         'ssh -i /home/me/.ssh/key '
@@ -660,6 +664,17 @@ def test_diagnostic_ssh_is_read_only(is_read_only, command):
     f"ssh {_HOST} 'hostname --file /tmp/name'",
     f"ssh {_HOST} 'dmesg -c'",
     f"ssh {_HOST} 'sort -o /tmp/out /etc/passwd'",
+    # A read verb must not clear a later write, locally or on the far side.
+    f"ssh {_HOST} uptime && sort -o /tmp/marker /etc/hosts",
+    f"ssh {_HOST} 'kubectl get pods && sort -o /tmp/marker /etc/hosts'",
+    f"ssh {_HOST} 'sh -c \"rm /tmp/x\"'",
+    # Equivalent paths and globs are still a key read.
+    f"ssh {_HOST} 'cat ~/.ssh/./id_rsa'",
+    f"ssh {_HOST} 'cat ~/.ssh/foo/../id_rsa'",
+    f"ssh {_HOST} 'cat ~/.ssh/*'",
+    # A jump destination is not a local shell.
+    f"ssh -o 'ProxyCommand=ssh -W %h:%p $(id>/tmp/ask-bypass)' {_HOST} uptime",
+    f"ssh -J '$(id>/tmp/ask-bypass)' {_HOST} uptime",
 ])
 def test_ssh_writes_and_interactive_sessions_are_blocked(is_read_only, command):
     assert is_read_only(command) is False, command

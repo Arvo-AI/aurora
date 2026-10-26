@@ -77,6 +77,9 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
       setViewerChat(true);
       return;
     }
+    // Role just became viewer. The previous true would leave chat open
+    // until this request comes back.
+    setViewerChat(null);
     let cancelled = false;
     fetch("/api/org/viewer-run")
       .then((res) => (res.ok ? res.json() : null))
@@ -454,9 +457,12 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handleChatSessionSelect, handleNewChat, currentSessionId]);
 
+  // A viewer whose chat is off must not auto-send a link's initial message.
+  const viewerMaySend = role !== "viewer" || viewerChat === true;
+
   // Auto-send initial message from URL or sessionStorage (e.g., Next Steps execution)
   useEffect(() => {
-    if (initialMessage && chatWebSocket.isReady && userId && !isLoadingSessionMessages && !isSending && !initialMessageSentRef.current) {
+    if (initialMessage && chatWebSocket.isReady && userId && !isLoadingSessionMessages && !isSending && viewerMaySend && !initialMessageSentRef.current) {
       initialMessageSentRef.current = true;
       const timer = setTimeout(() => {
         handleSend(initialMessage, chatWebSocket).then((success) => {
@@ -473,7 +479,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
       return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMessage, chatWebSocket.isReady, userId, isLoadingSessionMessages, isSending]);
+  }, [initialMessage, chatWebSocket.isReady, userId, isLoadingSessionMessages, isSending, viewerMaySend]);
 
   // Memoized message list
   const memoizedMessages = useMemo(() => {

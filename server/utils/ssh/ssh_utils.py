@@ -377,9 +377,16 @@ def validate_and_test_ssh(
         exec_rejected = False
         try:
             _stdin, stdout, stderr = ssh.exec_command("whoami", timeout=5)
-        except paramiko.SSHException:
-            # connect() already authenticated. Some servers refuse the exec request.
-            exec_rejected = True
+        except socket.timeout as exc:
+            # The channel never opened. That is not a server refusing the command.
+            channel_error = exc
+        except paramiko.SSHException as exc:
+            # Paramiko also reports a channel-open timeout as SSHException.
+            if "timeout" in str(exc).lower():
+                channel_error = exc
+            else:
+                # connect() already authenticated. Some servers refuse the exec request.
+                exec_rejected = True
         else:
             try:
                 result = stdout.read().decode(errors="replace").strip()

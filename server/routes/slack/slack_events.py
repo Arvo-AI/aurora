@@ -575,23 +575,14 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
             logger.exception("Viewer chat check failed for a Slack suggestion")
             may_run = False
         if not may_run:
-            client = get_slack_client_for_user(clicker_user_id)
-            if client:
-                try:
-                    client._make_request(
-                        "POST",
-                        "chat.postEphemeral",
-                        {
-                            "channel": channel_id,
-                            "user": slack_user_id,
-                            "text": "Starting a chat isn't enabled for your role. Ask an admin to turn it on.",
-                        },
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to send viewer refusal to Slack user %s",
-                        sanitize(slack_user_id),
-                    )
+            # The clicker may have no personal Slack token. The workspace client
+            # can still tell them why the button did nothing.
+            _send_ephemeral(
+                _slack_client_for_feedback(clicker_user_id, team_id),
+                channel_id,
+                slack_user_id,
+                "Starting a chat isn't enabled for your role. Ask an admin to turn it on.",
+            )
             return {"text": ""}
         
         # 5. EXECUTE: Run the command with the clicker's credentials

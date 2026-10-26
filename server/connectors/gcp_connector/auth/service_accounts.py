@@ -575,6 +575,11 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
     # Service account branch: skip the per-user Aurora SA impersonation chain
     # entirely. The uploaded SA key IS the working identity, so we just refresh
     # it and return its own access token bound to the default project.
+    # A read-only grant has no separate identity on an uploaded key.
+    if override == "ask" and get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
+        raise ValueError(
+            "Your role can only use a read-only GCP identity. An uploaded key cannot be limited to read-only."
+        )
     if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
         sa_client_email = token_data.get("client_email")
         try:
@@ -652,21 +657,32 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
         user_suffix_readonly = _get_user_sa_suffix(user_id, 'readonly')
         user_sa_id_readonly = f"aurora-{user_suffix_readonly}"
         read_only_email = f"{user_sa_id_readonly}@{root_project_id}.iam.gserviceaccount.com"
+        read_only_found = False
         try:
-            if _service_account_exists(iam_service, root_project_id, read_only_email):
-                sa_email = read_only_email
-                logger.info("Using read-only runner service account for user %s", user_id)
-            else:
-                logger.warning(
-                    "Read-only service account %s missing in project %s; falling back to full-access runner",
-                    read_only_email,
-                    root_project_id,
-                )
+            read_only_found = _service_account_exists(iam_service, root_project_id, read_only_email)
         except ValueError as err:
+            # A grant that requires read-only cannot fall back to the modify runner.
+            if override == "ask":
+                raise ValueError(
+                    "Your role can only use the read-only GCP service account, and it could not be verified."
+                ) from err
             logger.warning(
                 "Unable to verify read-only service account for project %s: %s. Falling back to full-access runner.",
                 root_project_id,
                 err,
+            )
+        if read_only_found:
+            sa_email = read_only_email
+            logger.info("Using read-only runner service account for user %s", user_id)
+        elif override == "ask":
+            raise ValueError(
+                "Your role can only use the read-only GCP service account, and it is not set up."
+            )
+        else:
+            logger.warning(
+                "Read-only service account %s missing in project %s; falling back to full-access runner",
+                read_only_email,
+                root_project_id,
             )
     
     # Determine which project to return for queries

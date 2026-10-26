@@ -1,8 +1,8 @@
 """Org choices for chats and for who may modify memory.
 
-A missing chat preference keeps viewers from starting a chat. Editors and
-admins can always chat. A missing memory preference keeps viewers from
-editing memory and still lets editors. Admins can always edit memory.
+Unset viewer chat stays on so an upgrade does not lock viewers out. An
+explicit false turns it off. Editors and admins can always chat. Memory
+edits follow their own switches; admins can always edit memory.
 """
 
 from __future__ import annotations
@@ -56,7 +56,8 @@ def _org_flag(org_id: str, key: str, default: bool = _DEFAULT) -> bool:
 
 
 def org_allows_viewers(org_id: str) -> bool:
-    return _org_flag(org_id, _CHAT_KEY)
+    # Unset stays on, so existing viewers do not lose chat on upgrade.
+    return _org_flag(org_id, _CHAT_KEY, True)
 
 
 def org_allows_memory_edits(org_id: str) -> bool:
@@ -73,8 +74,12 @@ def _viewer_allowed(user_id: str, org_id: str, org_flag) -> bool:
         return _DEFAULT
     from utils.auth.enforcer import get_user_roles_in_org
 
+    roles = get_user_roles_in_org(user_id, org_id) or []
+    # No assigned role is not an editor. Chat and Slack have no other gate.
+    if not roles:
+        return False
     # Editors and admins are not viewers, so the org switch does not apply.
-    if not viewer_only(get_user_roles_in_org(user_id, org_id)):
+    if not viewer_only(roles):
         return True
     return org_flag(org_id)
 

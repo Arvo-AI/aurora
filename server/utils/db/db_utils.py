@@ -1726,31 +1726,6 @@ def initialize_tables():
             rls_tables.append("org_command_policies")
             rls_tables.append("org_tool_permissions")
             rls_tables.append("org_connector_access")
-
-            # Team overrides live in the same table. Existing installs predate team_id.
-            try:
-                cursor.execute(
-                    "ALTER TABLE org_connector_access "
-                    "ADD COLUMN IF NOT EXISTS team_id VARCHAR(255) NOT NULL DEFAULT '';"
-                )
-                cursor.execute(
-                    """SELECT pg_get_constraintdef(oid) FROM pg_constraint
-                        WHERE conrelid = 'org_connector_access'::regclass AND contype = 'p'"""
-                )
-                primary = cursor.fetchone()
-                # Old primary key has no team, so two audiences could not store the same role
-                if primary and "team_id" not in primary[0]:
-                    cursor.execute(
-                        "ALTER TABLE org_connector_access DROP CONSTRAINT org_connector_access_pkey"
-                    )
-                    cursor.execute(
-                        """ALTER TABLE org_connector_access
-                           ADD PRIMARY KEY (org_id, team_id, connector, scope_id, credential, role)"""
-                    )
-                conn.commit()
-            except Exception as e:
-                logging.warning(f"Error ensuring team_id on org_connector_access: {e}")
-                conn.rollback()
             rls_tables.append("org_teams")
             rls_tables.append("org_team_members")
             rls_tables.append("org_team_grants")
@@ -1854,6 +1829,32 @@ def initialize_tables():
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
+
+            # Existing installs predate team_id. The CREATE above includes it,
+            # so this only rewrites the primary key on a table that already existed.
+            try:
+                cursor.execute(
+                    "ALTER TABLE org_connector_access "
+                    "ADD COLUMN IF NOT EXISTS team_id VARCHAR(255) NOT NULL DEFAULT '';"
+                )
+                cursor.execute(
+                    """SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                        WHERE conrelid = 'org_connector_access'::regclass AND contype = 'p'"""
+                )
+                primary = cursor.fetchone()
+                # Old primary key has no team, so two audiences could not store the same role
+                if primary and "team_id" not in primary[0]:
+                    cursor.execute(
+                        "ALTER TABLE org_connector_access DROP CONSTRAINT org_connector_access_pkey"
+                    )
+                    cursor.execute(
+                        """ALTER TABLE org_connector_access
+                           ADD PRIMARY KEY (org_id, team_id, connector, scope_id, credential, role)"""
+                    )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error ensuring team_id on org_connector_access: {e}")
+                conn.rollback()
 
             # Migration: hpa_vpa_recommendations timestamp migration. The table
             # shipped with naive TIMESTAMPs but Python writes aware UTC and SQL

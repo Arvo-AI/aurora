@@ -294,9 +294,12 @@ def get_workspace_member(client, slack_user_id: str, team_id: str) -> Optional[d
         logger.warning(f"users.info failed for Slack user {sanitize(slack_user_id)}: {e}")
         return None
 
+    # ok:false is a failed call, not a missing member. Caching it locks the sender out.
+    if not result.get("ok"):
+        return None
     user = result.get("user") or {}
     # Slack Connect, bots, and guests are not this workspace's members.
-    if not result.get("ok") or not user or _not_full_member(user, team_id):
+    if not user or _not_full_member(user, team_id):
         member = None
     else:
         profile = user.get("profile") or {}

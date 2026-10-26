@@ -531,6 +531,13 @@ _SSH_VALUE_FLAGS = frozenset({
 _SUDO_VALUE_FLAGS = frozenset({
     '-u', '-g', '-C', '-p', '-r', '-t', '-h', '-T',
 })
+# `sh -c` is the command that runs. The shell binary itself is not a read.
+_SHELLS = frozenset({'sh', 'bash', 'dash', 'ksh', 'zsh', 'ash'})
+# One hop of `user@host`, `host`, `host:22`, or a bracketed IPv6. A comma
+# separates hops. Anything else (`$(id)`, spaces, quotes) is a local shell.
+_JUMP_HOP = re.compile(
+    r'^(?:[A-Za-z0-9._-]+@)?(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:]+\])(?::[0-9]{1,5})?$'
+)
 
 
 def _is_assignment(token: str) -> bool:
@@ -624,6 +631,64 @@ def _unwrap_sudo(command: str) -> str:
     return ''
 
 
+def jump_target_is_host(spec: str) -> bool:
+    """True when every `-J` hop is only a user, host, and port."""
+    hops = [hop for hop in spec.split(',') if hop]
+    return bool(hops) and all(_JUMP_HOP.match(hop) for hop in hops)
+
+
+def _segment_mutates(tokens: list[str]) -> bool:
+    """Whether a host tool writes through a flag or a positional, not a verb."""
+    fact = analyze_segment(tokens)
+    exe = fact.executable or ''
+    flags = [
+        (t.split('=', 1)[0].lower() if t.startswith('--') else t.split('=', 1)[0])
+        for t in tokens if t.startswith('-')
+    ]
+    if any(_shell_flag_mutates(exe, flag) for flag in flags):
+        return True
+    # `hostname` with a name renames the host. A bare `hostname` only prints it.
+    if exe == 'hostname' and len(fact.operation) > 1:
+        return True
+    # `uniq in out` writes the second file. One operand is a read.
+    if exe == 'uniq' and len(fact.operation) > 2:
+        return True
+    # `ip route del` is not a write verb. Any mutating action blocks.
+    if exe == 'ip' and any(tok in _IP_WRITE_ACTIONS for tok in fact.operation[1:]):
+        return True
+    return False
+
+
+def _shell_c_script(tokens: list[str]) -> Optional[str]:
+    """The script of `sh -c`, or None when this segment is not a shell.
+
+    An empty string means the shell runs something this check cannot see
+    (`sh script.sh`, or `-c` with no script).
+    """
+    i = 0
+    while i < len(tokens) and _is_assignment(tokens[i]):
+        i += 1
+    if i >= len(tokens):
+        return None
+    exe = tokens[i].rsplit('/', 1)[-1].lower()
+    if exe not in _SHELLS:
+        return None
+    i += 1
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in ('-c', '--command'):
+            return tokens[i + 1] if i + 1 < len(tokens) else ''
+        # `-lc` is login plus -c. A glued `-cCMD` keeps the script on this token.
+        if tok.startswith('-') and not tok.startswith('--') and 'c' in tok[1:]:
+            glued = tok.split('c', 1)[1]
+            return glued if glued else (tokens[i + 1] if i + 1 < len(tokens) else '')
+        if tok.startswith('-'):
+            i += 1
+            continue
+        return ''
+    return ''
+
+
 def _is_shell_diagnostic(command: str) -> bool:
     """Whether every program in *command* only reads."""
     segments, _reason = _split_segments_or_reason(command)
@@ -660,6 +725,49 @@ def _is_shell_diagnostic(command: str) -> bool:
         if exe == 'ip' and any(tok in _IP_WRITE_ACTIONS for tok in fact.operation[1:]):
             return False
     return facts[0].executable in SHELL_READ_PROGRAMS
+
+
+def _one_segment_rejection(tokens: list[str], depth: int) -> str:
+    """Why this one segment isn't a read, or '' when it is."""
+    one = shlex.join(tokens)
+    reason = describe_rejection(one, _ssh_depth=depth)
+    # A recognised read verb used to clear the rest of the line. `sort -o`
+    # is still a write, and it has no write verb for that check to see.
+    if _segment_mutates(tokens):
+        return reason or 'it does not run a read-only remote command'
+    if not reason:
+        return ''
+    fact = analyze_segment(tokens)
+    # Host tools and text filters have no cloud verb. Mutating flags already returned.
+    if reason == 'no recognised read verb was found in it' and (
+        _is_shell_diagnostic(one) or fact.executable in DOWNSTREAM_FILTERS
+    ):
+        return ''
+    return reason
+
+
+def _remote_command_rejection(remote: str, depth: int, shell_depth: int = 0) -> str:
+    """Why a command run on the far side of ssh isn't a read."""
+    # A nested `sh -c` can hide another `sh -c`. Stop rather than recurse forever.
+    if shell_depth > 4:
+        return 'it does not run a read-only remote command'
+    segments, parse_reason = _split_segments_or_reason(remote)
+    if not segments:
+        return parse_reason
+    for seg in segments:
+        script = _shell_c_script(seg)
+        # The script is what runs. The shell binary itself is not a read verb.
+        if script is not None:
+            if not script.strip():
+                return 'it does not run a read-only remote command'
+            reason = _remote_command_rejection(script, depth, shell_depth + 1)
+            if reason:
+                return reason
+            continue
+        reason = _one_segment_rejection(seg, depth)
+        if reason:
+            return reason
+    return ''
 
 
 def _ssh_invocation_rejection(
@@ -715,6 +823,9 @@ def _ssh_invocation_rejection(
                 reason = _ssh_o_rejection(tokens[i + 1], depth)
                 if reason:
                     return reason
+            # `-J` is copied into a shell-parsed ProxyCommand. Only a host is safe.
+            if tok == '-J' and not jump_target_is_host(tokens[i + 1]):
+                return _SSH_UNSAFE_OPTION
             i += 2
             continue
         if kind == 'glued':
@@ -722,6 +833,8 @@ def _ssh_invocation_rejection(
                 reason = _ssh_o_rejection(tok[2:], depth)
                 if reason:
                     return reason
+            if tok[:2] == '-J' and not jump_target_is_host(tok[2:]):
+                return _SSH_UNSAFE_OPTION
             i += 1
             continue
         if tok.startswith('-') and tok != '-':
@@ -732,6 +845,9 @@ def _ssh_invocation_rejection(
         if jump_forward and saw_destination:
             return _SSH_UNSAFE_OPTION
         if jump_forward:
+            # `$(id>/tmp/x)` is one token, and ProxyCommand runs it in a local shell.
+            if not jump_target_is_host(tok):
+                return _SSH_UNSAFE_OPTION
             saw_destination = True
             i += 1
             continue
@@ -765,14 +881,9 @@ def _ssh_invocation_rejection(
     if ssh_key_material_exposed(remote, allow_identity_option=False):
         return 'it returns a credential, key, secret or token'
 
-    reason = describe_rejection(remote, _ssh_depth=depth + 1)
-    if not reason:
-        return ''
-    # `df` / `journalctl` aren't cloud verbs. They're reads unless a write
-    # verb or a redirect already produced a reason above.
-    if reason == 'no recognised read verb was found in it' and _is_shell_diagnostic(remote):
-        return ''
-    return reason
+    # Every program in the remote command has to be a read, including a
+    # write that follows a recognised read verb and a script inside `sh -c`.
+    return _remote_command_rejection(remote, depth + 1)
 
 
 def _ssh_remote_rejection(tokens: list[str], depth: int) -> str:
@@ -801,6 +912,11 @@ def describe_rejection(command: str, _ssh_depth: int = 0) -> str:
         chain = _pipeline_rejection(facts)
         if chain:
             return chain
+        # `sort` is a text filter, and `sort -o` still writes a local file.
+        for seg in segments[1:]:
+            reason = _one_segment_rejection(seg, _ssh_depth)
+            if reason:
+                return reason
         return _ssh_remote_rejection(segments[0], _ssh_depth)
 
     # Flag names gate the command (`--with-decryption`, `--dry-run`) but must

@@ -2,8 +2,10 @@ from utils.auth.connector_access import Access, pin_sender_access
 from utils.auth.viewer_run import (
     flag_enabled,
     message_starts_chat,
+    org_allows_viewers,
     slack_caller_may_run,
     viewer_may_edit_memory,
+    viewer_may_run,
     viewer_only,
 )
 
@@ -59,6 +61,24 @@ def test_editors_modify_memory_only_when_the_org_allows(monkeypatch):
 def test_a_user_with_no_role_cannot_modify_memory(monkeypatch):
     monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: [])
     assert viewer_may_edit_memory("uid", "org") is False
+
+
+def test_unset_viewer_chat_stays_on(monkeypatch):
+    seen = {}
+
+    def _flag(_org, key, default=False):
+        seen["key"] = key
+        seen["default"] = default
+        return default
+
+    monkeypatch.setattr("utils.auth.viewer_run._org_flag", _flag)
+    assert org_allows_viewers("org") is True
+    assert seen == {"key": "viewer_can_chat", "default": True}
+
+
+def test_a_user_with_no_role_cannot_chat(monkeypatch):
+    monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: [])
+    assert viewer_may_run("uid", "org") is False
 
 
 def test_a_pinned_slack_guest_is_a_viewer_even_when_the_session_user_is_an_admin(monkeypatch):

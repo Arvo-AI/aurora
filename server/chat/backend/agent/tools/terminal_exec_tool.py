@@ -167,6 +167,12 @@ def _transform_ssh_jump_to_proxy(command: str) -> str:
     if ':' in jump_host:
         jump_host, jump_port = jump_host.rsplit(':', 1)
 
+    # `-J` is spliced into a shell-parsed ProxyCommand. A value that is not a
+    # host stays as `-J`, which OpenSSH does not pass through a shell.
+    from utils.security.read_only_classifier import jump_target_is_host
+    if not jump_target_is_host(jump_spec) or not jump_port.isdigit():
+        return command
+
     # Build ProxyCommand
     proxy_parts = ["ssh"]
     if identity_file:
@@ -174,11 +180,9 @@ def _transform_ssh_jump_to_proxy(command: str) -> str:
     proxy_parts.extend(["-o", "StrictHostKeyChecking=no"])
     proxy_parts.extend(["-o", "UserKnownHostsFile=/dev/null"])
     proxy_parts.append("-W %h:%p")
-    if jump_user:
-        proxy_parts.append(f"{jump_user}@{jump_host}")
-    else:
-        proxy_parts.append(jump_host)
-    proxy_parts.extend(["-p", jump_port])
+    dest = f"{jump_user}@{jump_host}" if jump_user else jump_host
+    proxy_parts.append(shlex.quote(dest))
+    proxy_parts.extend(["-p", shlex.quote(jump_port)])
 
     proxy_cmd = " ".join(proxy_parts)
 
@@ -308,14 +312,17 @@ def terminal_exec(
         facts = analyze_segment(segment)
         if facts.executable in ssh_clients:
             return True
+        # `command` is a shell builtin that runs its next argument. It hides
+        # `command ssh` the same way `sudo ssh` does.
+        wrappers = COMMAND_WRAPPERS | {"command"}
         # `sudo ssh` / `timeout 5 ssh` hide the client in the wrapper's arguments.
-        if facts.executable in COMMAND_WRAPPERS and any(
+        if facts.executable in wrappers and any(
             tok.rsplit("/", 1)[-1].lower() in ssh_clients for tok in segment
         ):
             return True
         script = _interpreter_script(segment)
         # `env sh -c 'ssh ...'` starts with the wrapper, not the shell.
-        if not script and facts.executable in COMMAND_WRAPPERS:
+        if not script and facts.executable in wrappers:
             script = _script_after_wrapper(segment)
         if not script:
             return False

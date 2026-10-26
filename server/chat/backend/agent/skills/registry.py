@@ -138,9 +138,12 @@ class SkillRegistry:
         self, skill_id: str, user_id: str
     ) -> Tuple[bool, Dict[str, Any]]:
         """(is_connected, context_data). Cached per user, skill, and any access override."""
-        from utils.auth.connector_access import connector_access_cache_token
-        # A guest Slack chat reuses the workspace user id, so the override must miss.
-        cache_key = (user_id, skill_id, connector_access_cache_token())
+        from utils.auth.connector_access import access_for, connector_access_cache_token
+        # A guest pin and a grant edit both have to miss. The pin token is empty
+        # for a normal user, so the grant revision is what drops a stale allow.
+        cache_key = (
+            user_id, skill_id, connector_access_cache_token(), access_for(user_id).revision(),
+        )
         cached = self._connection_cache.get(cache_key)
         if cached is not None:
             ts, is_conn, ctx = cached
@@ -453,13 +456,11 @@ class SkillRegistry:
         # 1. Load connected integration skills, ordered by rca_priority
         connected: List[Tuple[SkillMetadata, Dict[str, Any]]] = []
         for skill_id, meta in self._skills.items():
-            if integrations.get(skill_id, False):
-                _, ctx_data = self.check_connection(skill_id, user_id)
+            is_conn, ctx_data = self.check_connection(skill_id, user_id)
+            # The alert's integration list is not a grant. A denied skill stays out,
+            # including when it would otherwise be passed through as prevalidated.
+            if is_conn:
                 connected.append((meta, ctx_data))
-            else:
-                is_conn, ctx_data = self.check_connection(skill_id, user_id)
-                if is_conn:
-                    connected.append((meta, ctx_data))
 
         connected.sort(key=lambda pair: pair[0].rca_priority)
 

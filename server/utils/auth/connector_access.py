@@ -17,6 +17,25 @@ from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
+# Postgres undefined_table. A missing table is "no limits yet". Any other
+# read error must not look like that, because an empty grant list is unlimited.
+_UNDEFINED_TABLE = "42P01"
+
+
+class GrantLoadError(Exception):
+    """A grant read failed for a reason other than a missing table."""
+
+
+def _missing_relation(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen = 0
+    while current is not None and seen < 5:
+        if getattr(current, "pgcode", None) == _UNDEFINED_TABLE:
+            return True
+        current = current.__cause__
+        seen += 1
+    return False
+
 # A background chat can pin this so every access_for() in the task uses it.
 # Slack senders with no Aurora account are checked as a general viewer.
 _ACCESS_OVERRIDE: contextvars.ContextVar[Optional["Access"]] = contextvars.ContextVar(
@@ -160,10 +179,10 @@ def _roles_for(user_id: str) -> list:
 
 
 def load_grants(user_id: str) -> list:
-    """Grants for the caller's org. Empty when nothing is limited or the read fails.
+    """Grants for the caller's org. Empty when nothing is limited.
 
-    A failed read stays open so a missing table cannot take every connector
-    offline. Limiting only starts once rows exist.
+    A missing table stays open so a fresh database cannot take every connector
+    offline. Any other read error raises, and the caller denies access.
     """
     from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context
     from utils.db.connection_pool import db_pool
@@ -182,21 +201,37 @@ def load_grants(user_id: str) -> list:
                     (org_id,),
                 )
                 return [Grant(r[0], r[1] or "", r[2] or "", r[3]) for r in cur.fetchall()]
-    except Exception:
+    except GrantLoadError:
+        raise
+    except Exception as exc:
+        if _missing_relation(exc):
+            logger.warning("Connector access table is missing for user %s", sanitize(user_id))
+            return []
         logger.warning("Connector access load failed for user %s", sanitize(user_id))
-        return []
+        raise GrantLoadError("connector access load failed") from exc
 
 
 class Access:
     """One user's grants, loaded once per tool build."""
 
-    def __init__(self, grants: list, roles: list, team_rules: list | None = None, team_ids: Iterable[str] | None = None):
+    def __init__(
+        self,
+        grants: list,
+        roles: list,
+        team_rules: list | None = None,
+        team_ids: Iterable[str] | None = None,
+        unavailable: bool = False,
+    ):
         self.grants = grants
         self.roles = roles
         self.team_rules = list(team_rules or [])
         self.team_ids = set(team_ids or [])
+        # A failed read. Empty grants mean unlimited, so this has to be separate.
+        self.unavailable = unavailable
 
     def credentials(self, connector: str, scope_id: str = "") -> Optional[frozenset]:
+        if self.unavailable:
+            return frozenset()
         # Saved team rows replace the everyone rules for that connector.
         override = [g for g in self.team_rules if g.connector == connector and g.team_id in self.team_ids]
         if override:
@@ -223,6 +258,8 @@ class Access:
         return f"general {role}"
 
     def revision(self) -> str:
+        if self.unavailable:
+            return "unavailable"
         role_part = "open" if not self.grants else ",".join(sorted(
             f"{g.connector}/{g.scope_id}/{g.credential}/{g.role}" for g in self.grants
         ))
@@ -236,7 +273,8 @@ class Access:
 def load_team_rules(user_id: str) -> tuple:
     """(team ids this user belongs to, that team's connector rules).
 
-    A failed read returns nothing, so members keep the everyone rules.
+    A missing table means no team overrides. Any other failure raises so a
+    member of a stricter team does not fall back to the everyone rules.
     """
     from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context
     from utils.db.connection_pool import db_pool
@@ -264,9 +302,14 @@ def load_team_rules(user_id: str) -> tuple:
                 )
                 grants = [Grant(r[1], r[2] or "", r[3] or "", r[4], r[0]) for r in cur.fetchall()]
                 return mine, grants
-    except Exception:
+    except GrantLoadError:
+        raise
+    except Exception as exc:
+        if _missing_relation(exc):
+            logger.warning("Team access table is missing for user %s", sanitize(user_id))
+            return set(), []
         logger.warning("Team access load failed for user %s", sanitize(user_id))
-        return set(), []
+        raise GrantLoadError("team access load failed") from exc
 
 
 def load_team_grants(user_id: str, team_id: str) -> list:
@@ -288,9 +331,14 @@ def load_team_grants(user_id: str, team_id: str) -> list:
                     (org_id, team_id),
                 )
                 return [Grant(r[0], r[1] or "", r[2] or "", r[3], team_id) for r in cur.fetchall()]
-    except Exception:
+    except GrantLoadError:
+        raise
+    except Exception as exc:
+        if _missing_relation(exc):
+            logger.warning("Team grant table is missing for user %s", sanitize(user_id))
+            return []
         logger.warning("Team grant load failed for user %s", sanitize(user_id))
-        return []
+        raise GrantLoadError("team grant load failed") from exc
 
 
 def push_connector_access(access: "Access"):
@@ -334,7 +382,10 @@ def connector_access_cache_token() -> str:
 
 def general_viewer_access(user_id: str) -> "Access":
     """Org-wide viewer grants and no team. The workspace user's org supplies the rows."""
-    return Access(load_grants(user_id), [ROLE_VIEWER])
+    try:
+        return Access(load_grants(user_id), [ROLE_VIEWER])
+    except GrantLoadError:
+        return Access([], [ROLE_VIEWER], unavailable=True)
 
 
 _ACCESS_PASS: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
@@ -365,11 +416,17 @@ def access_for(user_id: str) -> Access:
     # One skill pass asks for the same user many times.
     if cache is not None and user_id in cache:
         return cache[user_id]
-    grants = load_grants(user_id)
-    team_ids, team_rules = load_team_rules(user_id)
-    # Role lookup only matters once an admin has limited something.
-    roles = _roles_for(user_id) if grants or team_rules else []
-    access = Access(grants, roles, team_rules, team_ids)
+    try:
+        grants = load_grants(user_id)
+        team_ids, team_rules = load_team_rules(user_id)
+    except GrantLoadError:
+        # Empty grants mean unlimited. A failed read has to deny instead.
+        logger.warning("Connector access unavailable; denying connectors for user %s", sanitize(user_id))
+        access = Access([], [], unavailable=True)
+    else:
+        # Role lookup only matters once an admin has limited something.
+        roles = _roles_for(user_id) if grants or team_rules else []
+        access = Access(grants, roles, team_rules, team_ids)
     if cache is not None:
         cache[user_id] = access
     return access
@@ -439,7 +496,10 @@ def describe_caller(user_id: str) -> str:
     level = _role_phrase(get_user_roles_in_org(user_id, org_id))
     if not level:
         return ""
-    team_ids, _rules = load_team_rules(user_id)
+    try:
+        team_ids, _rules = load_team_rules(user_id)
+    except GrantLoadError:
+        team_ids = set()
     names = sorted(_team_names(user_id, team_ids).values()) if team_ids else []
     return _caller_line(level, names, guest=False)
 

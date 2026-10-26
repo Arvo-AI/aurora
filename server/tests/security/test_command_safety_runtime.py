@@ -329,9 +329,12 @@ class TestEvaluateCommandPipeline:
         assert result.layer == "llm_judge"
         assert result.reason == "destructive operation"
 
-    def test_diagnostic_ssh_skips_the_judge(self, monkeypatch):
+    def test_diagnostic_ssh_still_reaches_the_judge(self, monkeypatch):
         _patch_config(monkeypatch, enabled=True)
-        spy = _forbid_llm(monkeypatch)
+        safe = SafetyVerdict(
+            observation="remote journal", thought="read-only diagnostic", conclusion=False,
+        )
+        spy = MagicMock(return_value=safe)
         monkeypatch.setattr(command_safety, "check_command_safety", spy)
 
         result = command_safety.evaluate_command(
@@ -340,7 +343,7 @@ class TestEvaluateCommandPipeline:
         )
 
         assert result.blocked is False
-        spy.assert_not_called()
+        spy.assert_called_once()
 
     def test_mutating_ssh_still_reaches_the_judge(self, monkeypatch):
         _patch_config(monkeypatch, enabled=True)

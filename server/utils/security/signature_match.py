@@ -10,6 +10,7 @@ hand-written rules when ``config.sigma_enabled`` is True.
 """
 
 import logging
+import os
 import re
 import shlex
 from dataclasses import dataclass
@@ -267,13 +268,43 @@ def _invokes_ssh_client(command: str) -> bool:
     return any(_segment_program(segment) in _SSH_CLIENTS for segment in segments)
 
 
+def _normalize_ssh_text(command: str) -> str:
+    """Collapse `.` and `..` in tokens that mention `.ssh`.
+
+    `~/.ssh/./id_rsa` and `~/.ssh/foo/../id_rsa` are the same key file. The
+    match runs on the collapsed text so those spellings are not a bypass.
+    """
+    normalized = []
+    for token in command.split():
+        if ".ssh" in token.lower():
+            normalized.append(os.path.normpath(token))
+        else:
+            normalized.append(token)
+    return " ".join(normalized)
+
+
+def _ssh_dir_glob(command: str) -> bool:
+    """True when a glob sits under `.ssh` and could expand to a key."""
+    for token in command.split():
+        lower = token.lower()
+        at = lower.find(".ssh")
+        if at >= 0 and re.search(r"[*?[]", token[at:]):
+            return True
+    return False
+
+
+def _exposes_ssh_key(command: str) -> bool:
+    normalized = _normalize_ssh_text(command)
+    return _SSH_KEY_PATH.search(normalized) is not None or _ssh_dir_glob(normalized)
+
+
 def ssh_key_material_exposed(command: str, *, allow_identity_option: bool = True) -> bool:
     """True when *command* reads or copies a private key or authorized_keys.
 
     `ssh -i` selects the key Aurora mounted. Any other reference, including
     `sort -i` of that path, is still exposure.
     """
-    if not command or not _SSH_KEY_PATH.search(command):
+    if not command or not _exposes_ssh_key(command):
         return False
     if not allow_identity_option:
         return True
@@ -282,7 +313,7 @@ def ssh_key_material_exposed(command: str, *, allow_identity_option: bool = True
     if not segments or not any(_segment_program(segment) in _SSH_CLIENTS for segment in segments):
         return True
     stripped = " ".join(_without_client_identity(segment) for segment in segments)
-    return _SSH_KEY_PATH.search(stripped) is not None
+    return _exposes_ssh_key(stripped)
 
 
 def check_signature(command: str) -> SignatureVerdict:

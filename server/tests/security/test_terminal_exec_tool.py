@@ -203,6 +203,10 @@ class TestDocumentedTransformations:
         )
         assert _transform_ssh_jump_to_proxy(cmd) == expected
 
+    def test_shell_jump_target_is_not_rewritten(self):
+        cmd = "ssh -J '$(id>/tmp/ask-bypass)' user@target uptime"
+        assert _transform_ssh_jump_to_proxy(cmd) == cmd
+
     def test_jump_spec_without_user_part(self):
         """`-J bastion` (no `user@`) keeps the bastion bare in ProxyCommand."""
         out = _transform_ssh_jump_to_proxy("ssh -J bastion u@target")
@@ -441,13 +445,15 @@ class TestTerminalExecInvokesHelpers:
             "env sh -c 'ssh admin@198.51.100.1 reboot'",
             "sudo sh -c 'ssh admin@198.51.100.1 reboot'",
             nested,
+            "command ssh admin@198.51.100.1 reboot",
+            "command sh -c 'ssh admin@198.51.100.1 reboot'",
         ):
             hidden = terminal_exec(
                 command=wrapped,
                 user_id="u-1",
                 session_id="s-1",
             )
-            assert json.loads(hidden)["code"] == "READ_ONLY_MODE"
+            assert json.loads(hidden)["code"] == "READ_ONLY_MODE", wrapped
             stubs.gate.assert_not_called()
 
         stubs.gate.reset_mock()
