@@ -3048,9 +3048,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to add Coroot observability tools (treating as not connected): {e}")
 
-    # Add RabbitMQ management tools if connected
+    # Same read as the cache key, so a later failure cannot store an empty list under rabbitmq=1.
     try:
-        if is_rabbitmq_connected(user_id):
+        if rabbitmq_connected:
             _rabbitmq_tools = [
                 (rabbitmq_get_overview, "rabbitmq_get_overview", RabbitMQOverviewArgs,
                  ("Read RabbitMQ cluster overview: version, queue totals, message rates, and listeners. "
@@ -3059,7 +3059,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                  "List RabbitMQ nodes with memory and disk alarms. A memory or disk alarm blocks publishers."),
                 (rabbitmq_list_queues, "rabbitmq_list_queues", RabbitMQListQueuesArgs,
                  ("List RabbitMQ queues sorted by depth. Shows ready, unacked, consumers, and rates. "
-                  "Zero consumers with a growing ready count means the worker is down.")),
+                  "Zero consumers with a growing ready count means nothing is subscribed to that queue. Check the worker connection and which queue it consumes.")),
                 (rabbitmq_get_queue, "rabbitmq_get_queue", RabbitMQGetQueueArgs,
                  "Get one RabbitMQ queue, including dead-letter arguments and publish/deliver rates."),
                 (rabbitmq_list_exchanges, "rabbitmq_list_exchanges", RabbitMQListExchangesArgs,

@@ -33,7 +33,7 @@ Read-only management API. The connected user should have the `monitoring` tag. D
 
 1. `rabbitmq_health_checks()` and `rabbitmq_list_nodes()` — memory or disk alarms block publishers cluster-wide.
 2. `rabbitmq_get_overview()` — version, listeners, and whether ready or unacked messages are growing.
-3. `rabbitmq_list_queues()` — deepest queues first. A queue with `consumers: 0` and a rising `messages_ready` has no worker. A high `messages_unacknowledged` means consumers are stuck or prefetch is too high.
+3. `rabbitmq_list_queues()` — deepest queues first. A queue with `consumers: 0` and a rising `messages_ready` has no subscriber on that queue. Confirm the worker connection before calling it down. A high `messages_unacknowledged` means consumers are stuck or prefetch is too high.
 4. `rabbitmq_get_queue(name='QUEUE')` — dead-letter arguments (`x-dead-letter-exchange`) and rates. Then inspect that dead-letter queue the same way.
 5. `rabbitmq_list_consumers(vhost='VHOST')` and `rabbitmq_list_connections()` — confirm the worker process is still connected.
 6. `rabbitmq_list_bindings(queue='QUEUE')` — custom bindings. An empty list is not proof of dropped publishes: the default exchange routes to a queue by its name and does not create a binding row.

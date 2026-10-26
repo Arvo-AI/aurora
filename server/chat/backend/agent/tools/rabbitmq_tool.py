@@ -166,7 +166,7 @@ def rabbitmq_list_queues(
     page_size: int = 50,
     **kwargs: Any,
 ) -> Dict[str, Any]:
-    """Queues sorted by depth. Zero consumers with a growing ready count means a stuck consumer."""
+    """Queues sorted by depth. Zero consumers means nothing is subscribed to that queue."""
     page, page_size = _clamp_page(page, page_size)
     name_filter = name.strip() if isinstance(name, str) and name.strip() else None
     vhost_filter = vhost.strip() if isinstance(vhost, str) and vhost.strip() else None
