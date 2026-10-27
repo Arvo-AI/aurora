@@ -1,10 +1,18 @@
 """Manual VMs must be org-scoped on write, and Save must not drop a good check."""
 
 import os
+import sys
 from datetime import datetime
 from unittest.mock import MagicMock
 
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+
+# The linter job does not install paramiko. The route imports it through
+# ssh_utils, and this file never opens a real SSH session.
+try:
+    import paramiko  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["paramiko"] = MagicMock()
 
 import pytest
 from flask import Flask
