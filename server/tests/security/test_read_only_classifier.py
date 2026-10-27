@@ -618,6 +618,10 @@ _HOST = "admin@198.51.100.1"
     "ssh admin@[2001:db8::1] uptime",
     # A read inside `sh -c` is still a read. The shell itself is not the verb.
     f"ssh {_HOST} 'sh -c uptime'",
+    # `command` is a utility allow rule, so the ssh behind it still has to be the read.
+    f"command ssh {_HOST} uptime",
+    f"command -p ssh {_HOST} 'journalctl -u nginx --no-pager -n 50'",
+    f"command -- ssh {_HOST} 'df -h'",
     # `./` is the same key file as the identity option, not a remote read.
     f"ssh -i ~/.ssh/./id_provider_vm {_HOST} uptime",
     # Jump-host rewrite: ProxyCommand is ssh -W, not a local command.
@@ -689,6 +693,9 @@ def test_diagnostic_ssh_is_read_only(is_read_only, command):
     f"ssh -J '$(id>/tmp/ask-bypass)' {_HOST} uptime",
     # The destination is expanded by the local shell before ssh starts.
     'ssh "$(id>/tmp/ask-bypass)" uptime',
+    f"command ssh {_HOST} 'systemctl restart nginx'",
+    f"command -p ssh {_HOST} reboot",
+    f"command ssh {_HOST} uptime && rm -rf /",
 ])
 def test_ssh_writes_and_interactive_sessions_are_blocked(is_read_only, command):
     assert is_read_only(command) is False, command

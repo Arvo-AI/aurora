@@ -787,6 +787,7 @@ def _remote_command_rejection(remote: str, depth: int, shell_depth: int = 0) -> 
 
 def _ssh_invocation_rejection(
     tokens: list[str], depth: int, *, jump_forward: bool,
+    remote_out: Optional[list] = None,
 ) -> str:
     """Why this ssh argv isn't allowed, or '' when it is.
 
@@ -890,6 +891,9 @@ def _ssh_invocation_rejection(
     # pipeline (`ssh host "df | grep x"`) is one argv token and must be
     # re-parsed as a shell command, not as a single literal.
     remote = _unwrap_sudo(' '.join(remote_argv))
+    # Callers that only need the far-side text still want it when the read check fails.
+    if remote_out is not None:
+        remote_out.append(remote)
     if not remote.strip():
         return 'it opens an interactive shell'
 
@@ -909,6 +913,94 @@ def _ssh_remote_rejection(tokens: list[str], depth: int) -> str:
     return _ssh_invocation_rejection(tokens, depth, jump_forward=False)
 
 
+_COMMAND_BUILTIN_FLAGS = frozenset({'-p', '-v', '-V'})
+
+
+def _peel_command_builtin(tokens: list[str]) -> Optional[tuple[str, list[str]]]:
+    """('lookup', []) or ('run', argv) when *tokens* start with the command builtin."""
+    i = 0
+    while i < len(tokens) and _is_assignment(tokens[i]):
+        i += 1
+    if i >= len(tokens) or tokens[i].rsplit('/', 1)[-1].lower() != 'command':
+        return None
+    i += 1
+    lookup = False
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == '--':
+            i += 1
+            break
+        # -p/-v/-V are the builtin. Anything else is the program name.
+        if len(tok) > 1 and tok[0] == '-' and not tok.startswith('--'):
+            letters = tok[1:]
+            if not letters or any(('-' + ch) not in _COMMAND_BUILTIN_FLAGS for ch in letters):
+                break
+            if 'v' in letters or 'V' in letters:
+                lookup = True
+            i += 1
+            continue
+        break
+    if lookup:
+        return ('lookup', [])
+    return ('run', tokens[i:])
+
+
+def _ssh_behind_command_builtin(segments: list[list[str]]) -> Optional[list[list[str]]]:
+    """Rewrite a leading `command ssh` so the ssh is the command that runs.
+
+    Other programs stay wrapped. `command aws ...` is not a read just because
+    aws would have been.
+    """
+    if not segments:
+        return None
+    current = segments
+    for _ in range(3):
+        peeled = _peel_command_builtin(current[0])
+        if peeled is None:
+            return None
+        kind, argv = peeled
+        # -v/-V prints a path. It does not run ssh.
+        if kind != 'run' or not argv:
+            return None
+        exe = argv[0].rsplit('/', 1)[-1].lower()
+        current = [argv, *current[1:]]
+        if exe == 'ssh':
+            return current
+        # `command command ssh` still has a builtin in front.
+        if exe != 'command':
+            return None
+    return None
+
+
+def command_builtin_ssh(command: str) -> Optional[str]:
+    """The ssh a leading `command` builtin runs, or None."""
+    segments, reason = _split_segments_or_reason(command)
+    if reason or len(segments) != 1:
+        return None
+    rewritten = _ssh_behind_command_builtin(segments)
+    if not rewritten:
+        return None
+    return shlex.join(rewritten[0])
+
+
+def ssh_remote_command(command: str) -> Optional[str]:
+    """Far-side command of one ssh invocation, or None.
+
+    None when ssh is interactive, a tunnel, or chained with a local command.
+    The text is not judged read vs write.
+    """
+    segments, reason = _split_segments_or_reason(command)
+    if reason or len(segments) != 1:
+        return None
+    if analyze_segment(segments[0]).executable != 'ssh':
+        return None
+    found: list[str] = []
+    _ssh_invocation_rejection(segments[0], 0, jump_forward=False, remote_out=found)
+    if not found or not found[0].strip():
+        return None
+    return found[0].strip()
+
+
 def describe_rejection(command: str, _ssh_depth: int = 0) -> str:
     """Why *command* is not read-only, as a clause, or '' when it is read-only.
 
@@ -919,6 +1011,11 @@ def describe_rejection(command: str, _ssh_depth: int = 0) -> str:
     segments, parse_reason = _split_segments_or_reason(command)
     if not segments:
         return parse_reason
+
+    # `command` is allowlisted as a utility, so `command ssh` never looks like ssh.
+    rewritten = _ssh_behind_command_builtin(segments)
+    if rewritten is not None:
+        segments = rewritten
 
     facts = [analyze_segment(seg) for seg in segments]
 
@@ -981,9 +1078,11 @@ def is_read_only_command(command: str) -> bool:
 
 def is_diagnostic_ssh(command: str) -> bool:
     """Whether *command* is ssh running a read-only remote command."""
-    segments, _reason = _split_segments_or_reason(command)
-    if not segments:
+    segments, reason = _split_segments_or_reason(command)
+    if reason or not segments:
         return False
-    if analyze_segment(segments[0]).executable != 'ssh':
+    rewritten = _ssh_behind_command_builtin(segments)
+    head = (rewritten or segments)[0]
+    if analyze_segment(head).executable != 'ssh':
         return False
     return describe_rejection(command) == ''
