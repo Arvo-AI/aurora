@@ -280,6 +280,25 @@ export default function VMConfig() {
     }
   };
 
+  const publishManualList = (manualList: VM[]) => {
+    seedManualDrafts(manualList);
+    syncVms(autoVms, manualList);
+    saveCache(autoVms, manualList, sshKeys);
+    window.dispatchEvent(new CustomEvent("providerStateChanged"));
+  };
+
+  const reloadManualList = async (failure: { title: string; description: string }) => {
+    loadGeneration.current += 1;
+    const manualList = await fetchManualVms();
+    // [] is a real empty list; null is a failed reload
+    if (manualList === null) {
+      toast({ ...failure, variant: "destructive" });
+      return false;
+    }
+    publishManualList(manualList);
+    return true;
+  };
+
   const syncVms = (autoList: VM[], manualList: VM[]) => {
     manualVmsRef.current = manualList;
     setAutoVms(autoList);
@@ -588,21 +607,11 @@ export default function VMConfig() {
         sshKeyId: "",
         sshUsername: "",
       });
-      loadGeneration.current += 1;
-      const manualList = await fetchManualVms();
-      // [] is a real empty list; null is a failed reload
-      if (manualList === null) {
-        toast({
-          title: "Manual VM saved",
-          description: "Saved, but the list could not be refreshed.",
-          variant: "destructive",
-        });
-        return;
-      }
-      seedManualDrafts(manualList);
-      syncVms(autoVms, manualList);
-      saveCache(autoVms, manualList, sshKeys);
-      window.dispatchEvent(new CustomEvent("providerStateChanged"));
+      const refreshed = await reloadManualList({
+        title: "Manual VM saved",
+        description: "Saved, but the list could not be refreshed.",
+      });
+      if (!refreshed) return;
       toast({
         title: "Manual VM saved",
         description: `${data.name || "VM"} saved successfully.`,
@@ -643,20 +652,11 @@ export default function VMConfig() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to update manual VM");
-      loadGeneration.current += 1;
-      const manualList = await fetchManualVms();
-      if (manualList === null) {
-        toast({
-          title: "Manual VM updated",
-          description: "Saved, but the list could not be refreshed.",
-          variant: "destructive",
-        });
-        return;
-      }
-      seedManualDrafts(manualList);
-      syncVms(autoVms, manualList);
-      saveCache(autoVms, manualList, sshKeys);
-      window.dispatchEvent(new CustomEvent("providerStateChanged"));
+      const refreshed = await reloadManualList({
+        title: "Manual VM updated",
+        description: "Saved, but the list could not be refreshed.",
+      });
+      if (!refreshed) return;
       toast({
         title: "Manual VM updated",
         description: `${draft.name} saved.`,
@@ -684,20 +684,11 @@ export default function VMConfig() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to delete manual VM");
-      loadGeneration.current += 1;
-      const manualList = await fetchManualVms();
-      if (manualList === null) {
-        toast({
-          title: "Manual VM deleted",
-          description: "Deleted, but the list could not be refreshed.",
-          variant: "destructive",
-        });
-        return;
-      }
-      seedManualDrafts(manualList);
-      syncVms(autoVms, manualList);
-      saveCache(autoVms, manualList, sshKeys);
-      window.dispatchEvent(new CustomEvent("providerStateChanged"));
+      const refreshed = await reloadManualList({
+        title: "Manual VM deleted",
+        description: "Deleted, but the list could not be refreshed.",
+      });
+      if (!refreshed) return;
       setExpandedVMs((prev) => {
         const next = new Set(prev);
         next.delete(vm.id);
