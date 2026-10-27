@@ -916,6 +916,21 @@ def _ssh_remote_rejection(tokens: list[str], depth: int) -> str:
 _COMMAND_BUILTIN_FLAGS = frozenset({'-p', '-v', '-V'})
 
 
+def _command_builtin_flag(tok: str) -> str:
+    """'end', 'lookup', 'skip', or 'stop' for one command-builtin argument."""
+    if tok == '--':
+        return 'end'
+    # A short cluster of only -p/-v/-V. Anything else is the program name.
+    if len(tok) <= 1 or tok[0] != '-' or tok.startswith('--'):
+        return 'stop'
+    letters = tok[1:]
+    if not letters or any(('-' + ch) not in _COMMAND_BUILTIN_FLAGS for ch in letters):
+        return 'stop'
+    if 'v' in letters or 'V' in letters:
+        return 'lookup'
+    return 'skip'
+
+
 def _peel_command_builtin(tokens: list[str]) -> Optional[tuple[str, list[str]]]:
     """('lookup', []) or ('run', argv) when *tokens* start with the command builtin."""
     i = 0
@@ -926,20 +941,18 @@ def _peel_command_builtin(tokens: list[str]) -> Optional[tuple[str, list[str]]]:
     i += 1
     lookup = False
     while i < len(tokens):
-        tok = tokens[i]
-        if tok == '--':
+        kind = _command_builtin_flag(tokens[i])
+        # `--` ends the flags. The next token is the program.
+        if kind == 'end':
             i += 1
             break
-        # -p/-v/-V are the builtin. Anything else is the program name.
-        if len(tok) > 1 and tok[0] == '-' and not tok.startswith('--'):
-            letters = tok[1:]
-            if not letters or any(('-' + ch) not in _COMMAND_BUILTIN_FLAGS for ch in letters):
-                break
-            if 'v' in letters or 'V' in letters:
-                lookup = True
-            i += 1
-            continue
-        break
+        # An unknown flag is the program name, not a builtin switch.
+        if kind == 'stop':
+            break
+        # -v/-V prints a path. It does not run the program.
+        if kind == 'lookup':
+            lookup = True
+        i += 1
     if lookup:
         return ('lookup', [])
     return ('run', tokens[i:])

@@ -288,6 +288,15 @@ def _read_ssh_permitted(
     )
 
 
+def _known_program_ssh_failed(command: str, remote: str) -> bool:
+    """A recognised shell read whose diagnostic check failed (`date -s`)."""
+    from utils.security.read_only_classifier import SHELL_READ_PROGRAMS
+
+    remote_exe = remote.split(None, 1)[0].rsplit("/", 1)[-1]
+    # `cat ~/.ssh/id_rsa` matches `^cat` even though the ssh path rejects it.
+    return remote_exe in SHELL_READ_PROGRAMS or _remote_is_write(command)
+
+
 def _ssh_policy_verdict(
     org_id: str,
     command: str,
@@ -299,11 +308,7 @@ def _ssh_policy_verdict(
 
     None means the normal deny-then-allow path, which still blocks writes.
     """
-    from utils.security.read_only_classifier import (
-        SHELL_READ_PROGRAMS,
-        is_diagnostic_ssh,
-        ssh_remote_command,
-    )
+    from utils.security.read_only_classifier import is_diagnostic_ssh, ssh_remote_command
 
     # Rewritten `command ssh` is already `ssh` by the time this runs.
     head = command.lstrip().split(None, 1)
@@ -327,11 +332,9 @@ def _ssh_policy_verdict(
         )
 
     diagnostic = is_diagnostic_ssh(command)
-    if not diagnostic:
-        remote_exe = remote.split(None, 1)[0].rsplit("/", 1)[-1]
-        # `date -s` still matches the `date` allow rule. The read check already failed.
-        if remote_exe in SHELL_READ_PROGRAMS or _remote_is_write(command):
-            return None
+    # `date -s` still matches the `date` allow rule. The read check already failed.
+    if not diagnostic and _known_program_ssh_failed(command, remote):
+        return None
 
     # Allow rules name `journalctl` or a custom program, not the ssh wrapper.
     if states.allowlist_enabled:
@@ -344,41 +347,17 @@ def _ssh_policy_verdict(
     return None
 
 
-def evaluate_command(
-    org_id: Optional[str], command: str, *, _ssh_depth: int = 0,
+def _lists_verdict(
+    command: str,
+    allow_rules: List[PolicyRule],
+    deny_rules: List[PolicyRule],
+    states: ListStates,
 ) -> CommandVerdict:
-    """Core gate. Returns whether *command* is allowed for *org_id*.
-
-    Both lists are evaluated independently so the verdict carries the full
-    picture: a deny-list hit still reports whether the allowlist would have
-    matched, which is what the Yes-Always planner needs to decide whether
-    clicking ``Always`` should also add an allow rule alongside disabling
-    the deny rule.
-    """
-    if not org_id:
-        logger.info("policy_check_skipped reason=no_org_context func=evaluate_command")
-        return CommandVerdict(allowed=True)
-
-    # `command ssh host reboot` matches the utility allow rule and misses the ssh deny.
-    if _ssh_depth == 0:
-        from utils.security.read_only_classifier import command_builtin_ssh
-        rewritten = command_builtin_ssh(command)
-        if rewritten and rewritten != command:
-            return evaluate_command(org_id, rewritten, _ssh_depth=1)
-
-    allow_rules, deny_rules, states = _get_cached(org_id)
-
-    if not states.denylist_enabled and not states.allowlist_enabled:
-        return CommandVerdict(allowed=True, rule_description="Policy lists are disabled")
-
-    if _ssh_depth < 2:
-        ssh_verdict = _ssh_policy_verdict(org_id, command, allow_rules, deny_rules, states)
-        if ssh_verdict is not None:
-            return ssh_verdict
-
+    """Deny wins. The ssh read-only allow rule does not cover a write."""
     bq_write = _bq_is_write(command)
 
     from utils.security.read_only_classifier import is_diagnostic_ssh
+    # `^ssh` is only an allow once the remote command is a read.
     diagnostic_ssh = (
         is_diagnostic_ssh(command)
         if any(rule.pattern == _SSH_READ_ALLOW_PATTERN for rule in allow_rules)
@@ -426,6 +405,41 @@ def evaluate_command(
         allowed=True,
         rule_description=allow_hit.description if allow_hit else None,
     )
+
+
+def evaluate_command(
+    org_id: Optional[str], command: str, *, _ssh_depth: int = 0,
+) -> CommandVerdict:
+    """Core gate. Returns whether *command* is allowed for *org_id*.
+
+    Both lists are evaluated independently so the verdict carries the full
+    picture: a deny-list hit still reports whether the allowlist would have
+    matched, which is what the Yes-Always planner needs to decide whether
+    clicking ``Always`` should also add an allow rule alongside disabling
+    the deny rule.
+    """
+    if not org_id:
+        logger.info("policy_check_skipped reason=no_org_context func=evaluate_command")
+        return CommandVerdict(allowed=True)
+
+    # `command ssh host reboot` matches the utility allow rule and misses the ssh deny.
+    if _ssh_depth == 0:
+        from utils.security.read_only_classifier import command_builtin_ssh
+        rewritten = command_builtin_ssh(command)
+        if rewritten and rewritten != command:
+            return evaluate_command(org_id, rewritten, _ssh_depth=1)
+
+    allow_rules, deny_rules, states = _get_cached(org_id)
+
+    if not states.denylist_enabled and not states.allowlist_enabled:
+        return CommandVerdict(allowed=True, rule_description="Policy lists are disabled")
+
+    if _ssh_depth < 2:
+        ssh_verdict = _ssh_policy_verdict(org_id, command, allow_rules, deny_rules, states)
+        if ssh_verdict is not None:
+            return ssh_verdict
+
+    return _lists_verdict(command, allow_rules, deny_rules, states)
 
 
 _UNSPLITTABLE_SHELL_RE = re.compile(r"<<-?\s*\w+|<\(|>\(")
@@ -849,8 +863,9 @@ _UNIVERSAL_DENY_RULES: list = [
      "description": "Network configuration changes"},
 ]
 
-# Observability denies every ssh. evaluate_command ignores that deny when the
-# remote command is a read, and ignores this allow rule when it is a write.
+# Same wrapper for the observability deny and the broader templates' allow.
+# evaluate_command ignores that deny when the remote command is a read, and
+# ignores the `^ssh` allow rule when it is a write.
 _SSH_BLOCK_PATTERN = r"^(ssh|scp|sftp)\s"
 _SSH_READ_ALLOW_PATTERN = r"^ssh\s"
 
@@ -1002,7 +1017,7 @@ def get_policy_templates() -> List[dict]:
                 {"priority": 139, "pattern": r"^(fly|flyctl)\s+(apps\s+list|status|machine\s+(list|status|restart|stop|start)|logs|checks|releases|certs\s+list|ips\s+list|volumes?\s+list|scale\s+(show|count)|platform|ssh|proxy|config\s+show|secrets\s+list|services)\b",
                  "description": "Fly.io standard operations"},
                 # SSH access
-                {"priority": 135, "pattern": r"^(ssh|scp|sftp)\s",
+                {"priority": 135, "pattern": _SSH_BLOCK_PATTERN,
                  "description": "SSH, SCP, and SFTP access"},
                 # Terraform / IaC read-only
                 {"priority": 130, "pattern": r"^(terraform|tofu)\s+(init|plan|validate|fmt|output|show|state\s+(list|show|pull)|version)\b",
@@ -1068,7 +1083,7 @@ def get_policy_templates() -> List[dict]:
                 {"priority": 139, "pattern": r"^(fly|flyctl)\s+\w",
                  "description": "All Fly.io operations"},
                 # SSH
-                {"priority": 135, "pattern": r"^(ssh|scp|sftp)\s",
+                {"priority": 135, "pattern": _SSH_BLOCK_PATTERN,
                  "description": "SSH, SCP, and SFTP access"},
                 # Terraform -- full
                 {"priority": 130, "pattern": r"^(terraform|tofu|pulumi)\s+\w",
