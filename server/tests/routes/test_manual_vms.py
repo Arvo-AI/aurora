@@ -204,7 +204,9 @@ def test_connection_check_stamps_org_id_when_it_marks_ready(routes):
         response, status = _call(handler, USER)
 
     assert status == 200
-    assert response.get_json()["success"] is True
+    body = response.get_json()
+    assert body["success"] is True
+    assert body["connectionVerified"] is True
     updates = [
         _sql_text(call.args[0])
         for call in routes.execute.call_args_list
@@ -219,3 +221,26 @@ def test_connection_check_stamps_org_id_when_it_marks_ready(routes):
         if "UPDATE" in _sql_text(call.args[0])
     )
     assert verify_params[0] == ORG
+
+
+def test_check_with_a_different_user_does_not_mark_the_saved_vm_ready(routes):
+    routes.fetchone.return_value = ("203.0.113.10", 22, None, 7, "ubuntu", USER)
+    app = Flask(__name__)
+    handler = _unwrap(vms.check_manual_vm_connection)
+    with app.test_request_context(
+        "/api/vms/check-connection",
+        method="POST",
+        json={"vmId": 1, "username": "root", "sshKeyId": 7},
+    ):
+        response, status = _call(handler, USER)
+
+    assert status == 200
+    body = response.get_json()
+    assert body["success"] is True
+    assert body["connectionVerified"] is False
+    updates = [
+        _sql_text(call.args[0])
+        for call in routes.execute.call_args_list
+        if "UPDATE" in _sql_text(call.args[0])
+    ]
+    assert updates == []

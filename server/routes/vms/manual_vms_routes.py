@@ -371,6 +371,7 @@ def check_manual_vm_connection(user_id):
     ).strip() or None
 
     # If vmId provided, load defaults from DB
+    stored_target = None
     if vm_id is not None:
         try:
             vm_id = int(vm_id)
@@ -393,6 +394,13 @@ def check_manual_vm_connection(user_id):
         if vm_row[5] != user_id:
             return jsonify({"error": "Cannot run connection check on a shared VM"}), 403
 
+        stored_target = {
+            "ip_address": vm_row[0],
+            "port": vm_row[1],
+            "ssh_jump_command": vm_row[2],
+            "ssh_key_id": vm_row[3],
+            "ssh_username": vm_row[4],
+        }
         ip_address = ip_address or vm_row[0]
         port = port or vm_row[1]
         ssh_jump_command = ssh_jump_command or vm_row[2]
@@ -427,7 +435,19 @@ def check_manual_vm_connection(user_id):
         )
         if not success:
             return jsonify({"success": False, "error": error_msg}), 400
-        if vm_id is not None:
+        tested_target = {
+            "ip_address": ip_address,
+            "port": port_val,
+            "ssh_jump_command": ssh_jump_command,
+            "ssh_key_id": ssh_key_id,
+            "ssh_username": username,
+        }
+        # A one-off user, key, or host must not mark the saved VM Ready
+        matches_stored = stored_target is not None and not connection_fields_changed(
+            stored_target, tested_target
+        )
+        verified = False
+        if vm_id is not None and matches_stored:
             try:
                 with db_pool.get_user_connection() as conn:
                     with conn.cursor() as cur:
@@ -453,12 +473,17 @@ def check_manual_vm_connection(user_id):
                                 (vm_id, user_id),
                             )
                         conn.commit()
+                verified = True
                 logger.info(f"Connection verified for VM {sanitize(vm_id)}, user {sanitize(user_id)}")
             except Exception as db_exc:
                 logger.error(
                     f"Failed to update connection_verified for VM {sanitize(vm_id)}: {db_exc}"
                 )
-        return jsonify({"success": True, "connectedAs": connected_as})
+        return jsonify({
+            "success": True,
+            "connectedAs": connected_as,
+            "connectionVerified": verified,
+        })
     except Exception as exc:
         logger.error("SSH validation failed unexpectedly: %s", exc, exc_info=True)
         return jsonify(

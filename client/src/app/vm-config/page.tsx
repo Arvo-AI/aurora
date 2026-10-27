@@ -728,16 +728,18 @@ export default function VMConfig() {
       const data = await res.json();
       if (!res.ok || data.success === false)
         throw new Error(data.error || "SSH connection failed");
-      // The check already stored connection_verified; show Ready without a reload
-      loadGeneration.current += 1;
-      const applyReady = (item: VM): VM =>
-        item.id === vm.id
-          ? { ...item, sshKeyConfigured: true, connectionVerified: true }
-          : item;
-      const nextManual = manualVms.map(applyReady);
-      setManualVms(nextManual);
-      setVms((prev) => prev.map(applyReady));
-      saveCache(autoVms, nextManual, sshKeys);
+      // Only the saved target was checked — a one-off user or key stays Not configured
+      if (data.connectionVerified) {
+        loadGeneration.current += 1;
+        const applyReady = (item: VM): VM =>
+          item.id === vm.id
+            ? { ...item, sshKeyConfigured: true, connectionVerified: true }
+            : item;
+        const nextManual = manualVms.map(applyReady);
+        setManualVms(nextManual);
+        setVms((prev) => prev.map(applyReady));
+        saveCache(autoVms, nextManual, sshKeys);
+      }
       window.dispatchEvent(new CustomEvent("providerStateChanged"));
       toast({
         title: "Connection successful",
