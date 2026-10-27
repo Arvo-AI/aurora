@@ -10,7 +10,7 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 # The linter job does not install paramiko. The route imports it through
 # ssh_utils, and this file never opens a real SSH session.
 try:
-    import paramiko  # noqa: F401
+    __import__("paramiko")
 except ModuleNotFoundError:
     sys.modules["paramiko"] = MagicMock()
 
@@ -61,6 +61,7 @@ def _row(verified=True):
 @pytest.fixture
 def routes(monkeypatch):
     cursor = MagicMock()
+    cursor.rowcount = 1
     monkeypatch.setattr(vms, "db_pool", _pool(cursor))
     monkeypatch.setattr(vms, "get_org_id_from_request", lambda: ORG)
     monkeypatch.setattr(vms, "set_rls_context", lambda *a, **k: k.get("org_id") or ORG)
@@ -215,6 +216,7 @@ def test_connection_check_stamps_org_id_when_it_marks_ready(routes):
     assert len(updates) == 1
     assert "connection_verified = TRUE" in updates[0]
     assert "org_id = %s" in updates[0]
+    assert "IS NOT DISTINCT FROM" in updates[0]
     verify_params = next(
         call.args[1]
         for call in routes.execute.call_args_list

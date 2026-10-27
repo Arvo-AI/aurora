@@ -114,6 +114,7 @@ export default function VMConfig() {
   const cacheLoaded = useRef(false);
   // Bumped after a save or check so an older load cannot paint over Ready
   const loadGeneration = useRef(0);
+  const manualVmsRef = useRef<VM[]>([]);
 
   const seedManualDrafts = (manualList: VM[]) => {
     const drafts: Record<string, ManualVMDraft> = {};
@@ -255,7 +256,7 @@ export default function VMConfig() {
       const data = await res.json();
       if (!res.ok) {
         console.error("Failed to load manual VMs:", data.error || res.status);
-        return [];
+        return null;
       }
       const manualList: VM[] = (data.vms || []).map((vm: any) => ({
         id: `manual-${vm.id}`,
@@ -272,16 +273,15 @@ export default function VMConfig() {
         source: "manual",
         status: "Manual",
       }));
-      // Seed drafts for edits
-      seedManualDrafts(manualList);
       return manualList;
     } catch (err) {
       console.error("Error fetching manual VMs:", err);
-      return [];
+      return null;
     }
   };
 
   const syncVms = (autoList: VM[], manualList: VM[]) => {
+    manualVmsRef.current = manualList;
     setAutoVms(autoList);
     setManualVms(manualList);
     // Keep manual first so they're easy to spot
@@ -305,14 +305,18 @@ export default function VMConfig() {
       if (generation !== loadGeneration.current) return;
 
       const autoList = autoRes.status === "fulfilled" ? autoRes.value : [];
-      const manualList =
-        manualRes.status === "fulfilled" ? manualRes.value : [];
+      // null means the GET failed; [] is a real empty list
+      const manualLoaded =
+        manualRes.status === "fulfilled" ? manualRes.value : null;
+      const manualList = manualLoaded ?? manualVmsRef.current;
       const keysList = keysRes.status === "fulfilled" ? keysRes.value : sshKeys;
+      // Drafts are seeded only for a load we are actually applying
+      if (manualLoaded) seedManualDrafts(manualLoaded);
       syncVms(autoList, manualList);
 
       const canCache =
         autoRes.status === "fulfilled" &&
-        manualRes.status === "fulfilled" &&
+        manualLoaded !== null &&
         keysRes.status === "fulfilled";
       if (keysRes.status === "rejected") {
         console.error("Failed to refresh keys:", keysRes.reason);
@@ -338,6 +342,7 @@ export default function VMConfig() {
     const cached = loadCache();
     if (cached) {
       cacheLoaded.current = true;
+      manualVmsRef.current = cached.manualVms || [];
       setAutoVms(cached.autoVms || []);
       setManualVms(cached.manualVms || []);
       setVms([...(cached.manualVms || []), ...(cached.autoVms || [])]);
@@ -585,6 +590,16 @@ export default function VMConfig() {
       });
       loadGeneration.current += 1;
       const manualList = await fetchManualVms();
+      // [] is a real empty list; null is a failed reload
+      if (manualList === null) {
+        toast({
+          title: "Manual VM saved",
+          description: "Saved, but the list could not be refreshed.",
+          variant: "destructive",
+        });
+        return;
+      }
+      seedManualDrafts(manualList);
       syncVms(autoVms, manualList);
       saveCache(autoVms, manualList, sshKeys);
       window.dispatchEvent(new CustomEvent("providerStateChanged"));
@@ -630,6 +645,15 @@ export default function VMConfig() {
       if (!res.ok) throw new Error(data.error || "Failed to update manual VM");
       loadGeneration.current += 1;
       const manualList = await fetchManualVms();
+      if (manualList === null) {
+        toast({
+          title: "Manual VM updated",
+          description: "Saved, but the list could not be refreshed.",
+          variant: "destructive",
+        });
+        return;
+      }
+      seedManualDrafts(manualList);
       syncVms(autoVms, manualList);
       saveCache(autoVms, manualList, sshKeys);
       window.dispatchEvent(new CustomEvent("providerStateChanged"));
@@ -662,6 +686,15 @@ export default function VMConfig() {
       if (!res.ok) throw new Error(data.error || "Failed to delete manual VM");
       loadGeneration.current += 1;
       const manualList = await fetchManualVms();
+      if (manualList === null) {
+        toast({
+          title: "Manual VM deleted",
+          description: "Deleted, but the list could not be refreshed.",
+          variant: "destructive",
+        });
+        return;
+      }
+      seedManualDrafts(manualList);
       syncVms(autoVms, manualList);
       saveCache(autoVms, manualList, sshKeys);
       window.dispatchEvent(new CustomEvent("providerStateChanged"));
@@ -735,7 +768,8 @@ export default function VMConfig() {
           item.id === vm.id
             ? { ...item, sshKeyConfigured: true, connectionVerified: true }
             : item;
-        const nextManual = manualVms.map(applyReady);
+        const nextManual = manualVmsRef.current.map(applyReady);
+        manualVmsRef.current = nextManual;
         setManualVms(nextManual);
         setVms((prev) => prev.map(applyReady));
         saveCache(autoVms, nextManual, sshKeys);

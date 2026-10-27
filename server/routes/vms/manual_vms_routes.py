@@ -452,6 +452,13 @@ def check_manual_vm_connection(user_id):
                 with db_pool.get_user_connection() as conn:
                     with conn.cursor() as cur:
                         org_id = _org_for_write(cur, conn, user_id, "[VMs:check-verify]")
+                        match_params = (
+                            ip_address,
+                            port_val,
+                            ssh_key_id,
+                            ssh_jump_command,
+                            username,
+                        )
                         # A verified row with a null org_id stays hidden until the next boot backfill
                         if org_id:
                             cur.execute(
@@ -459,22 +466,42 @@ def check_manual_vm_connection(user_id):
                                 UPDATE user_manual_vms
                                 SET connection_verified = TRUE, org_id = %s, updated_at = NOW()
                                 WHERE id = %s AND user_id = %s
+                                  AND ip_address IS NOT DISTINCT FROM %s
+                                  AND port IS NOT DISTINCT FROM %s
+                                  AND ssh_key_id IS NOT DISTINCT FROM %s
+                                  AND NULLIF(BTRIM(ssh_jump_command), '')
+                                      IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
+                                  AND NULLIF(BTRIM(ssh_username), '')
+                                      IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
                                 """,
-                                (org_id, vm_id, user_id),
+                                (org_id, vm_id, user_id, *match_params),
                             )
-                        # No org to stamp — still record the check for the owning user
+                        # No org to stamp — still record the check when the saved target is unchanged
                         else:
                             cur.execute(
                                 """
                                 UPDATE user_manual_vms
                                 SET connection_verified = TRUE, updated_at = NOW()
                                 WHERE id = %s AND user_id = %s
+                                  AND ip_address IS NOT DISTINCT FROM %s
+                                  AND port IS NOT DISTINCT FROM %s
+                                  AND ssh_key_id IS NOT DISTINCT FROM %s
+                                  AND NULLIF(BTRIM(ssh_jump_command), '')
+                                      IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
+                                  AND NULLIF(BTRIM(ssh_username), '')
+                                      IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
                                 """,
-                                (vm_id, user_id),
+                                (vm_id, user_id, *match_params),
                             )
+                        # Zero rows means the saved target changed before this write
+                        verified = cur.rowcount > 0
                         conn.commit()
-                verified = True
-                logger.info(f"Connection verified for VM {sanitize(vm_id)}, user {sanitize(user_id)}")
+                if verified:
+                    logger.info(
+                        "Connection verified for VM %s, user %s",
+                        sanitize(vm_id),
+                        sanitize(user_id),
+                    )
             except Exception as db_exc:
                 logger.error(
                     f"Failed to update connection_verified for VM {sanitize(vm_id)}: {db_exc}"
