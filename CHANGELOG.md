@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.12] - 2026-10-27
+
+### Added
+- Access: admins limit which role may use each connector, and for AWS and GCP
+  which account and credential that role gets. Teams are created on Members
+  and teams. Each person belongs to one team, and a team can override the
+  org rules. A connector the team has not saved still follows everyone.
+  `cloud_exec` checks the caller after the command guardrail and refuses
+  before any cloud login. The tool error names the role and team.
+- Access: an org switch can stop viewers from starting a chat in Aurora or
+  from Slack. Separate switches control whether viewers and editors may edit
+  memory. Editors and admins can always chat, and admins can always edit
+  memory. Until a switch is saved, viewers can still chat and editors can
+  still edit memory.
+- Models: Claude Haiku 5.5 is in the catalog. Usage tracking records cache
+  read and write tokens.
+
+### Changed
+- Models: prompt caching follows the provider. Native Bedrock sends Converse
+  cache points; the Anthropic `cache_control` flag was dropped before it
+  reached the wire. A rejected cache marker is retried once without markers.
+  With cost optimization on and `RCA_MODEL` unset, background RCA uses
+  Claude Haiku 5.5 instead of Haiku 4.5.
+- SSH: Ask mode allows a remote read (`journalctl`, `kubectl get`, `uptime`)
+  when SSH is on the allow list. Remote writes, interactive SSH, and
+  private-key reads stay blocked.
+
+### Fixed
+- SSH: Check Connection passes after a completed login. Firewalls and
+  switches have no `whoami`, so a successful login was reported as a failure.
+- Sidebar: nav icons stay visible when the sidebar is collapsed.
+
 ## [1.5.11] - 2026-10-22
 
 ### Added
