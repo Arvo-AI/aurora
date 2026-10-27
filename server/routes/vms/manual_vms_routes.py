@@ -452,47 +452,40 @@ def check_manual_vm_connection(user_id):
                 with db_pool.get_user_connection() as conn:
                     with conn.cursor() as cur:
                         org_id = _org_for_write(cur, conn, user_id, "[VMs:check-verify]")
-                        match_params = (
-                            ip_address,
-                            port_val,
-                            ssh_key_id,
-                            ssh_jump_command,
-                            username,
-                        )
+                        sets = [sql.SQL("connection_verified = TRUE")]
+                        params = []
                         # A verified row with a null org_id stays hidden until the next boot backfill
                         if org_id:
-                            cur.execute(
-                                """
-                                UPDATE user_manual_vms
-                                SET connection_verified = TRUE, org_id = %s, updated_at = NOW()
-                                WHERE id = %s AND user_id = %s
-                                  AND ip_address IS NOT DISTINCT FROM %s
-                                  AND port IS NOT DISTINCT FROM %s
-                                  AND ssh_key_id IS NOT DISTINCT FROM %s
-                                  AND NULLIF(BTRIM(ssh_jump_command), '')
-                                      IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
-                                  AND NULLIF(BTRIM(ssh_username), '')
-                                      IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
-                                """,
-                                (org_id, vm_id, user_id, *match_params),
+                            sets.append(sql.SQL("org_id = %s"))
+                            params.append(org_id)
+                        sets.append(sql.SQL("updated_at = NOW()"))
+                        params.extend(
+                            (
+                                vm_id,
+                                user_id,
+                                ip_address,
+                                port_val,
+                                ssh_key_id,
+                                ssh_jump_command,
+                                username,
                             )
-                        # No org to stamp — still record the check when the saved target is unchanged
-                        else:
-                            cur.execute(
-                                """
-                                UPDATE user_manual_vms
-                                SET connection_verified = TRUE, updated_at = NOW()
-                                WHERE id = %s AND user_id = %s
-                                  AND ip_address IS NOT DISTINCT FROM %s
-                                  AND port IS NOT DISTINCT FROM %s
-                                  AND ssh_key_id IS NOT DISTINCT FROM %s
-                                  AND NULLIF(BTRIM(ssh_jump_command), '')
-                                      IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
-                                  AND NULLIF(BTRIM(ssh_username), '')
-                                      IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
-                                """,
-                                (vm_id, user_id, *match_params),
-                            )
+                        )
+                        # The WHERE re-checks the saved target in case it changed during the SSH attempt
+                        verify_query = sql.SQL(
+                            """
+                            UPDATE user_manual_vms
+                            SET {sets}
+                            WHERE id = %s AND user_id = %s
+                              AND ip_address IS NOT DISTINCT FROM %s
+                              AND port IS NOT DISTINCT FROM %s
+                              AND ssh_key_id IS NOT DISTINCT FROM %s
+                              AND NULLIF(BTRIM(ssh_jump_command), '')
+                                  IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
+                              AND NULLIF(BTRIM(ssh_username), '')
+                                  IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
+                            """
+                        ).format(sets=sql.SQL(", ").join(sets))
+                        cur.execute(verify_query, params)
                         # Zero rows means the saved target changed before this write
                         verified = cur.rowcount > 0
                         conn.commit()
