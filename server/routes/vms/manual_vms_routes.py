@@ -79,6 +79,20 @@ def _org_for_write(cur, conn, user_id: str, log_prefix: str) -> Optional[str]:
     )
 
 
+def _load_owned_key(user_id: str, ssh_key_id: Any):
+    """Return (key_id, private_key, error). No key id means nothing to load."""
+    # A VM can be saved before a key is chosen
+    if ssh_key_id is None:
+        return None, None, None
+    parsed_id, error_msg = parse_ssh_key_id(ssh_key_id)
+    if error_msg:
+        return None, None, (jsonify({"error": error_msg}), 400)
+    private_key, error_msg = load_user_private_key_safe(user_id, parsed_id)
+    if error_msg:
+        return None, None, (jsonify({"error": error_msg}), 400)
+    return parsed_id, private_key, None
+
+
 def _serialize_vm_row(row: tuple, is_shared: bool = False) -> Dict[str, Any]:
     (
         vm_id,
@@ -154,13 +168,9 @@ def create_manual_vm(user_id):
     try:
         _validate_required({"name": name, "ipAddress": ip_address})
         port = _parse_port(data.get("port"), default=22)
-        if ssh_key_id is not None:
-            ssh_key_id, error_msg = parse_ssh_key_id(ssh_key_id)
-            if error_msg:
-                return jsonify({"error": error_msg}), 400
-            _, error_msg = load_user_private_key_safe(user_id, ssh_key_id)
-            if error_msg:
-                return jsonify({"error": error_msg}), 400
+        ssh_key_id, _, key_error = _load_owned_key(user_id, ssh_key_id)
+        if key_error:
+            return key_error
     except ValueError as exc:
         return jsonify({"error": "Invalid input parameters"}), 400
 
@@ -230,13 +240,9 @@ def update_manual_vm(user_id, vm_id: int):
 
     try:
         port_val = _parse_port(port, default=None) if port is not None else None
-        if ssh_key_id is not None:
-            ssh_key_id, error_msg = parse_ssh_key_id(ssh_key_id)
-            if error_msg:
-                return jsonify({"error": error_msg}), 400
-            _, error_msg = load_user_private_key_safe(user_id, ssh_key_id)
-            if error_msg:
-                return jsonify({"error": error_msg}), 400
+        ssh_key_id, _, key_error = _load_owned_key(user_id, ssh_key_id)
+        if key_error:
+            return key_error
     except ValueError as exc:
         return jsonify({"error": "Invalid input parameters"}), 400
 
@@ -415,12 +421,9 @@ def check_manual_vm_connection(user_id):
             {"ipAddress": ip_address, "username": username, "sshKeyId": ssh_key_id}
         )
         port_val = _parse_port(port, default=22)
-        ssh_key_id, error_msg = parse_ssh_key_id(ssh_key_id)
-        if error_msg:
-            return jsonify({"error": error_msg}), 400
-        private_key, error_msg = load_user_private_key_safe(user_id, ssh_key_id)
-        if error_msg:
-            return jsonify({"error": error_msg}), 400
+        ssh_key_id, private_key, key_error = _load_owned_key(user_id, ssh_key_id)
+        if key_error:
+            return key_error
     except ValueError as exc:
         return jsonify({"error": "Invalid input parameters"}), 400
 
