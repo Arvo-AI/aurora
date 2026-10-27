@@ -39,10 +39,9 @@ import {
   Pencil,
   Eye,
 } from "lucide-react";
-import { useUser } from "@/hooks/useAuthHooks";
 import { DiscoverySettings } from "@/components/DiscoverySettings";
 import { MemoryEditDialog } from "@/components/MemoryEditDialog";
-import { canWrite as checkCanWrite } from "@/lib/roles";
+import { useCanEditMemory } from "@/hooks/useCanEditMemory";
 import {
   type MemoryCategory,
   type MemoryEntry,
@@ -55,8 +54,8 @@ import {
 
 export function MemorySettings() {
   const { userId, isLoading: userLoading } = useUserId();
-  const { user } = useUser();
-  const canWrite = checkCanWrite(user?.role);
+  const canEdit = useCanEditMemory();
+  const canWrite = canEdit === true;
   const { toast } = useToast();
 
   // Memory entries state
@@ -410,10 +409,10 @@ export function MemorySettings() {
         </p>
       </div>
 
-      {!canWrite && (
+      {canEdit === false && (
         <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-3">
           <p className="text-sm text-blue-800 dark:text-blue-200">
-            You have read-only access. Contact an admin to get Editor or Admin role to manage memory.
+            You have read-only access to memory. An admin can allow it on the Access tab.
           </p>
         </div>
       )}

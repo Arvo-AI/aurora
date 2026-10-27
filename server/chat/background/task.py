@@ -552,10 +552,21 @@ def run_background_chat(
     # finally block can guarantee the "Thinking…" placeholder is never orphaned
     # if the happy-path send is skipped (task crash, cancellation, serialization).
     _chat_reply_sent = False
-    
+    _access_token = None
+
     try:
-        # Link session and Celery task ID to incident if provided
         is_action_source = (trigger_metadata or {}).get('source') == 'action'
+        # A Slack sender with no Aurora account keeps this user for credentials
+        # and the session. Connector and memory checks use a general viewer.
+        if (trigger_metadata or {}).get("access_as") == "general_viewer":
+            from utils.auth.connector_access import general_viewer_access, push_connector_access
+            _access_token = push_connector_access(general_viewer_access(user_id))
+            logger.info(
+                "[BackgroundChat] Connector access forced to general viewer for session %s",
+                session_id,
+            )
+
+        # Link session and Celery task ID to incident if provided
 
         if incident_id:
             _should_notify_investigation_started = False
@@ -979,6 +990,9 @@ def run_background_chat(
         }
     
     finally:
+        if _access_token is not None:
+            from utils.auth.connector_access import pop_connector_access
+            pop_connector_access(_access_token)
         # Guarantee the chat "Thinking…" placeholder is always resolved. If the
         # happy-path send was skipped (task crash, cancellation, result
         # serialization failure), post a best-effort reply here so a Slack/
@@ -1676,6 +1690,7 @@ async def _execute_background_chat(
                 extract_memories_from_session.delay(
                     session_id=session_id,
                     user_id=user_id,
+                    access_as=(trigger_metadata or {}).get("access_as"),
                 )
             except Exception:
                 logger.debug("[BackgroundChat] Memory save enqueue failed")

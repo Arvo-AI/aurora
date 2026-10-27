@@ -70,6 +70,23 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   const lastLoadedSessionRef = useRef<string | null>(null);
   const initialMessageSentRef = useRef<boolean>(false);
   const [activeIncidentContext, setActiveIncidentContext] = useState<string | undefined>(incidentContext);
+  // Null until the org setting loads. Viewers stay read-only during that gap.
+  const [viewerChat, setViewerChat] = useState<boolean | null>(role === "viewer" ? null : true);
+  useEffect(() => {
+    if (role !== "viewer") {
+      setViewerChat(true);
+      return;
+    }
+    // Role just became viewer. The previous true would leave chat open
+    // until this request comes back.
+    setViewerChat(null);
+    let cancelled = false;
+    fetch("/api/org/viewer-run")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (!cancelled) setViewerChat(Boolean(data?.chat)); })
+      .catch(() => { if (!cancelled) setViewerChat(false); });
+    return () => { cancelled = true; };
+  }, [role]);
 
   // Multi-agent dispatch panel state
   const [selectedSubAgent, setSelectedSubAgent] = useState<{
@@ -440,9 +457,12 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handleChatSessionSelect, handleNewChat, currentSessionId]);
 
+  // A viewer whose chat is off must not auto-send a link's initial message.
+  const viewerMaySend = role !== "viewer" || viewerChat === true;
+
   // Auto-send initial message from URL or sessionStorage (e.g., Next Steps execution)
   useEffect(() => {
-    if (initialMessage && chatWebSocket.isReady && userId && !isLoadingSessionMessages && !isSending && !initialMessageSentRef.current) {
+    if (initialMessage && chatWebSocket.isReady && userId && !isLoadingSessionMessages && !isSending && viewerMaySend && !initialMessageSentRef.current) {
       initialMessageSentRef.current = true;
       const timer = setTimeout(() => {
         handleSend(initialMessage, chatWebSocket).then((success) => {
@@ -459,7 +479,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
       return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMessage, chatWebSocket.isReady, userId, isLoadingSessionMessages, isSending]);
+  }, [initialMessage, chatWebSocket.isReady, userId, isLoadingSessionMessages, isSending, viewerMaySend]);
 
   // Memoized message list
   const memoizedMessages = useMemo(() => {
@@ -489,8 +509,10 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   // Show empty state when no messages, otherwise show chat interface
   const hasMessages = memoizedMessages.length > 0;
 
-  // Viewers cannot interact with chat
-  const isReadOnly = !canWrite(role);
+  const isReadOnly = role === "viewer" ? viewerChat !== true : !canWrite(role);
+  const readOnlyNote = role === "viewer"
+    ? "Chat isn't enabled for viewers in this organization."
+    : "Read-only access. Editors and admins can interact with infrastructure.";
 
   if (hasMessages) {
     // Standard chat interface with messages
@@ -547,7 +569,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
           <div className="max-w-4xl mx-auto space-y-2">
             <SessionUsagePanel sessionUsage={sessionUsage} isSending={isSending} />
             {isReadOnly ? (
-              <p className="text-sm text-muted-foreground py-2">Read-only access. Editors and admins can interact with infrastructure.</p>
+              <p className="text-sm text-muted-foreground py-2">{readOnlyNote}</p>
             ) : (
             <EnhancedChatInput
               input={input}
@@ -600,7 +622,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
           <EmptyStateHeader />
           
           {isReadOnly ? (
-            <p className="text-sm text-muted-foreground py-4">Read-only access. Editors and admins can interact with infrastructure.</p>
+            <p className="text-sm text-muted-foreground py-4">{readOnlyNote}</p>
           ) : (
           <>
           <EnhancedChatInput

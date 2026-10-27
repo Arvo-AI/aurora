@@ -399,13 +399,17 @@ class Agent:
             # Build prompt segments in background while getting tools on main thread
             # (get_cloud_tools needs thread-local context for tool_capture/user resolution)
             from concurrent.futures import ThreadPoolExecutor as _TPE
+            import contextvars
+            # The worker starts with an empty context. A Slack guest's pin must come along.
+            _prompt_ctx = contextvars.copy_context()
             with _TPE(max_workers=1) as _pool:
                 _prompt_future = _pool.submit(
+                    _prompt_ctx.run,
                     build_prompt_segments,
-                    provider_preference=provider_preference,
-                    mode=getattr(state, "mode", None),
-                    has_zip_reference=has_zip_ref,
-                    state=state,
+                    provider_preference,
+                    getattr(state, "mode", None),
+                    has_zip_ref,
+                    state,
                 )
                 tools = get_cloud_tools()
                 segments = _prompt_future.result()

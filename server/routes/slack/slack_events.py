@@ -11,16 +11,18 @@ from connectors.slack_connector.client import get_slack_client_for_user, SlackCl
 from utils.db.connection_pool import db_pool
 from routes.slack.slack_events_helpers import (
     verify_slack_signature,
-    get_user_id_from_slack_user,
     get_user_id_from_slack_team,
     get_thread_messages,
     get_channel_context_with_threads,
     get_session_from_thread,
     send_message_to_aurora,
-    get_workspace_member,
     format_asked_by,
     mention_bot_ids,
     strip_bot_mentions,
+    describe_slack_sender,
+    classify_slack_sender,
+    org_allows_unregistered_slack,
+    aurora_user_for_slack_sender,
 )
 from utils.secrets.secret_ref_utils import get_user_token_data
 from chat.background.task import run_background_chat
@@ -125,49 +127,60 @@ def process_event_callback(data: dict) -> None:
             client = None
             response_text = None
             trigger_background = False
-            user_id = None # Aurora user ID
-            asked_by = None  # Slack display name of the sender when using the team identity
+            user_id = None  # Aurora user the chat runs as
+            asked_by = None  # Slack display name, when users.info returned one
+            as_general_viewer = False
+            label_user_id = None  # Who connected Slack; channel names live on their rows
 
             try:
                 # 1. Resolve Identity and Client
-                user_id = get_user_id_from_slack_user(slack_user_id, team_id)
-                
-                if user_id:
-                    # User is connected and verified
-                    client = get_slack_client_for_user(user_id)
-                    if not client:
-                        logger.error(f"Failed to create client for user {user_id}")
-                elif event.get('bot_id') or event.get('subtype') == 'bot_message':
-                    # Never answer other bots (prevents bot-to-bot loops)
+                # Bots first so a mention loop never calls users.info.
+                if event.get('bot_id') or event.get('subtype') == 'bot_message':
                     logger.info("Ignoring @mention from a bot in team %s", sanitize(team_id))
+                elif not slack_user_id or not team_id:
+                    logger.info("Ignoring @mention with no Slack user or team")
                 else:
-                    # Sender has no Aurora account linked to this Slack ID. Fall back to
-                    # the Aurora user who connected this workspace as a shared, read-only
-                    # "team identity" so anyone in the workspace can ask questions.
-                    # Mentions run background chats in "ask" (read-only) mode; button
-                    # actions below keep their own per-user authentication.
-                    workspace_user_id = get_user_id_from_slack_team(team_id)
+                    sender = describe_slack_sender(slack_user_id, team_id)
+                    workspace_user_id = sender["workspace_user_id"]
+                    label_user_id = workspace_user_id
+                    # Replies use the workspace bot token. The chat still runs as the sender.
                     if workspace_user_id:
                         client = get_slack_client_for_user(workspace_user_id)
-                        if not client:
-                            logger.error(f"Failed to create client for workspace user {workspace_user_id}")
+                    if not client:
+                        logger.error("Failed to create Slack client for workspace %s", sanitize(team_id))
+                    else:
+                        # Read the toggle only when this person has no account to run as.
+                        allow_unregistered = False
+                        if not sender["matched_user_id"] and not sender["installer_user_id"]:
+                            if sender["member"] and sender["org_id"]:
+                                allow_unregistered = org_allows_unregistered_slack(sender["org_id"])
+                        user_id, as_general_viewer, refusal = classify_slack_sender(
+                            matched_user_id=sender["matched_user_id"],
+                            installer_user_id=sender["installer_user_id"],
+                            is_full_member=sender["member"] is not None,
+                            workspace_user_id=workspace_user_id,
+                            allow_unregistered=allow_unregistered,
+                        )
+                        if refusal:
+                            logger.info(
+                                "Refusing Slack user %s in workspace %s",
+                                sanitize(slack_user_id), sanitize(team_id),
+                            )
+                            response_text = refusal
                         else:
-                            # Only full members of this workspace may use the team identity.
-                            # Guests, Slack Connect users from other workspaces and bots are refused.
-                            member = get_workspace_member(client, slack_user_id, team_id)
-                            if member:
-                                user_id = workspace_user_id
-                                asked_by = member["display_name"]
+                            member = sender["member"] or {}
+                            asked_by = member.get("display_name")
+                            # Guest questions are checked as a general viewer, not the connector owner.
+                            if as_general_viewer:
                                 logger.info(
-                                    "Slack user %s has no linked Aurora account; answering read-only via workspace team identity",
+                                    "Slack user %s has no Aurora account; answering as a general viewer",
                                     sanitize(slack_user_id),
                                 )
                             else:
                                 logger.info(
-                                    "Slack user %s is not a full member of workspace %s; refusing",
-                                    sanitize(slack_user_id), sanitize(team_id),
+                                    "Slack user %s resolved to Aurora user %s",
+                                    sanitize(slack_user_id), sanitize(user_id),
                                 )
-                                response_text = "Aurora is only available to members of this Slack workspace."
                 
                 # 2. Logic processing (if no errors yet and client exists)
                 if client and not response_text:
@@ -187,10 +200,19 @@ def process_event_callback(data: dict) -> None:
                             "For example: \"@Aurora my pods are failing in my production cluster. What's going on?\""
                         )
                     else:
-                        response_text = "Thinking..."
-                        trigger_background = True
-                        # <@USERID> is the only form Slack will notify on.
-                        text = format_asked_by(slack_user_id, asked_by, clean_msg)
+                        from utils.auth.stateless_auth import get_org_id_for_user
+                        from utils.auth.viewer_run import viewer_may_run
+
+                        org_id = get_org_id_for_user(user_id)
+                        # Guests were already allowed by the manage-page toggle.
+                        # An Aurora viewer still follows the Access tab switch.
+                        if not as_general_viewer and org_id and not viewer_may_run(user_id, org_id):
+                            response_text = "Starting a chat isn't enabled for your role. Ask an admin to turn it on."
+                        else:
+                            response_text = "Thinking..."
+                            trigger_background = True
+                            # <@USERID> is the only form Slack will notify on.
+                            text = format_asked_by(slack_user_id, asked_by, clean_msg)
 
                 # 3. Execution
                 if client:
@@ -213,7 +235,10 @@ def process_event_callback(data: dict) -> None:
                                         text=response_text, 
                                         thread_ts=thread_ts
                                     )
-                                    session_id, incident_id = get_session_from_thread(user_id, channel, msg_thread_ts)
+                                    session_id, incident_id = get_session_from_thread(
+                                        user_id, channel, msg_thread_ts,
+                                        access_as="general_viewer" if as_general_viewer else None,
+                                    )
                                     context_messages = get_thread_messages(client, channel, msg_thread_ts)
                                     final_thread_ts = msg_thread_ts
                                 else:
@@ -255,6 +280,9 @@ def process_event_callback(data: dict) -> None:
                                     context_messages=context_messages,
                                     channel_context=channel_context,
                                     thinking_message_ts=thinking_ts,
+                                    label_user_id=label_user_id,
+                                    access_as="general_viewer" if as_general_viewer else None,
+                                    slack_user_id=slack_user_id,
                                 )
                         except Exception as e:
                             logger.error(f"Failed to send message to Slack: {e}")
@@ -457,7 +485,7 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
     """
     try:
         # 1. AUTHENTICATE: Who clicked the button?
-        clicker_user_id = get_user_id_from_slack_user(slack_user_id, team_id)
+        clicker_user_id = aurora_user_for_slack_sender(slack_user_id, team_id)
         
         if not clicker_user_id:
             logger.warning(f"Unauthenticated Slack user {sanitize(slack_user_id)} (team {sanitize(team_id)}) tried to run suggestion")
@@ -538,6 +566,24 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
                     logger.error(f"Failed to send unauthorized message to Slack user {sanitize(slack_user_id)}: {e}", exc_info=True)
             
             return {"text": ""}
+
+        # A viewer with chat turned off must not start a background run.
+        from utils.auth.viewer_run import viewer_may_run
+        try:
+            may_run = viewer_may_run(clicker_user_id, clicker_org_id)
+        except Exception:
+            logger.exception("Viewer chat check failed for a Slack suggestion")
+            may_run = False
+        if not may_run:
+            # The clicker may have no personal Slack token. The workspace client
+            # can still tell them why the button did nothing.
+            _send_ephemeral(
+                _slack_client_for_feedback(clicker_user_id, team_id),
+                channel_id,
+                slack_user_id,
+                "Starting a chat isn't enabled for your role. Ask an admin to turn it on.",
+            )
+            return {"text": ""}
         
         # 5. EXECUTE: Run the command with the clicker's credentials
         logger.info(f"User {clicker_user_id} executing suggestion: {title} ({risk} risk)")
@@ -612,7 +658,7 @@ def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, 
     """
     try:
         # 1. AUTHENTICATE: Who clicked?
-        clicker_user_id = get_user_id_from_slack_user(slack_user_id, team_id)
+        clicker_user_id = aurora_user_for_slack_sender(slack_user_id, team_id)
         
         if not clicker_user_id:
             logger.warning(f"Unauthenticated Slack user {sanitize(slack_user_id)} (team {sanitize(team_id)}) tried to view suggestion details")
@@ -816,7 +862,7 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
 
     try:
         # 1. AUTHENTICATE: who clicked?
-        clicker_user_id = get_user_id_from_slack_user(slack_user_id, team_id)
+        clicker_user_id = aurora_user_for_slack_sender(slack_user_id, team_id)
         if not clicker_user_id:
             _warn_unauthenticated_clicker(slack_user_id, team_id, channel_id)
             return {"text": ""}

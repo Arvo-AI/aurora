@@ -1314,12 +1314,15 @@ class Workflow:
                 else:
                     logger.warning(f"[WORKFLOW FINAL] Failed to save final context for session {session_id}")
 
-                # Save durable learnings from this conversation to org memory (non-blocking)
+                # Save durable learnings from this conversation to org memory (non-blocking).
+                # The collector is a new task, so a Slack guest pin does not follow it.
                 try:
                     from services.memory.collector import extract_memories_from_session
+                    access_as = (getattr(self, "_trigger_metadata", None) or {}).get("access_as")
                     extract_memories_from_session.delay(
                         session_id=session_id,
                         user_id=user_id,
+                        access_as=access_as,
                     )
                 except Exception:
                     logger.debug("[WORKFLOW FINAL] Memory save enqueue failed")

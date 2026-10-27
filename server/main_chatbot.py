@@ -1182,6 +1182,28 @@ async def handle_connection(websocket) -> None:
             # Resolve org for tenant-scoped DB queries
             org_id = get_org_id_for_user(user_id) if user_id else None
 
+            # A tool call or action with no question is still a chat the viewer switch covers.
+            from utils.auth.viewer_run import message_starts_chat
+            if user_id and org_id and message_starts_chat(question, data):
+                from utils.auth.viewer_run import viewer_may_run
+                try:
+                    viewer_allowed = viewer_may_run(user_id, org_id)
+                except Exception:
+                    # A failed lookup must not drop the websocket.
+                    logger.exception("Viewer chat check failed")
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "data": {"text": "Couldn't check whether chat is enabled. Try again."},
+                    }))
+                    continue
+                # Viewers only start a chat when the Access tab allows it.
+                if not viewer_allowed:
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "data": {"text": "Chat isn't enabled for viewers in this organization."},
+                    }))
+                    continue
+
             # RBAC: block viewers from sending messages in incident-linked sessions
             _rbac_incident_id = None
             if session_id and user_id and org_id:
@@ -1279,7 +1301,19 @@ async def handle_connection(websocket) -> None:
                             }
                         }))
                         continue
-                    
+                    from utils.auth.connector_access import denial_text, may_use
+                    # Ask mode is not the only gate. A role without GitHub must not push.
+                    if not may_use(user_id, "github"):
+                        await websocket.send(json.dumps({
+                            "type": "error",
+                            "data": {
+                                "text": denial_text(user_id, "github"),
+                                "session_id": session_id,
+                                "code": "CONNECTOR_DENIED",
+                            },
+                        }))
+                        continue
+
                     # Import and execute the tool
                     try:
                         from chat.backend.agent.tools.github_commit_tool import github_commit
@@ -1354,6 +1388,26 @@ async def handle_connection(websocket) -> None:
                                     "session_id": session_id,
                                     "code": "READ_ONLY_MODE"
                                 }
+                            }))
+                            continue
+                        from utils.auth.connector_access import denial_text, may_use
+                        from utils.auth.stateless_auth import get_connected_providers
+                        # GitHub and Slack are connected too. They are not a cloud for IaC.
+                        cloud_providers = {"aws", "gcp", "azure", "ovh", "scaleway"}
+                        providers = [
+                            provider
+                            for provider in get_connected_providers(user_id)
+                            if provider.lower() in cloud_providers
+                        ]
+                        if not any(may_use(user_id, provider) for provider in providers):
+                            target = providers[0] if providers else "cloud"
+                            await websocket.send(json.dumps({
+                                "type": "error",
+                                "data": {
+                                    "text": denial_text(user_id, target),
+                                    "session_id": session_id,
+                                    "code": "CONNECTOR_DENIED",
+                                },
                             }))
                             continue
 

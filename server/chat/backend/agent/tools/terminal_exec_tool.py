@@ -167,6 +167,12 @@ def _transform_ssh_jump_to_proxy(command: str) -> str:
     if ':' in jump_host:
         jump_host, jump_port = jump_host.rsplit(':', 1)
 
+    # `-J` is spliced into a shell-parsed ProxyCommand. A value that is not a
+    # host stays as `-J`, which OpenSSH does not pass through a shell.
+    from utils.security.read_only_classifier import jump_target_is_host
+    if not jump_target_is_host(jump_spec) or not jump_port.isdigit():
+        return command
+
     # Build ProxyCommand
     proxy_parts = ["ssh"]
     if identity_file:
@@ -174,11 +180,9 @@ def _transform_ssh_jump_to_proxy(command: str) -> str:
     proxy_parts.extend(["-o", "StrictHostKeyChecking=no"])
     proxy_parts.extend(["-o", "UserKnownHostsFile=/dev/null"])
     proxy_parts.append("-W %h:%p")
-    if jump_user:
-        proxy_parts.append(f"{jump_user}@{jump_host}")
-    else:
-        proxy_parts.append(jump_host)
-    proxy_parts.extend(["-p", jump_port])
+    dest = f"{jump_user}@{jump_host}" if jump_user else jump_host
+    proxy_parts.append(shlex.quote(dest))
+    proxy_parts.extend(["-p", shlex.quote(jump_port)])
 
     proxy_cmd = " ".join(proxy_parts)
 
@@ -253,6 +257,109 @@ def terminal_exec(
         command = _transform_ssh_jump_to_proxy(command)
         if command != original_command:
             logger.info(f"[SSH] Transformed -J to ProxyCommand: {command[:150]}")
+
+    # Ask mode ignores the allow list. Slack is always Ask, so only a
+    # read-only ssh may proceed; scp/sftp copy files and stay refused.
+    # A client later in the line (`true && ssh host reboot`, `sudo ssh`)
+    # has to hit the same check as one in the first token.
+    from utils.security.read_only_classifier import (
+        COMMAND_WRAPPERS,
+        analyze_segment,
+        describe_rejection,
+        is_read_only_command,
+        split_segments,
+    )
+    ssh_clients = ("ssh", "scp", "sftp")
+    # `sh -c 'ssh host reboot'` hides the client in the -c script.
+    interpreters = frozenset({"sh", "bash", "dash", "ksh", "zsh", "ash"})
+    program = command.lstrip().split(None, 1)[0].rsplit("/", 1)[-1].lower() if command.lstrip() else ""
+    segments = split_segments(command)
+
+    def _interpreter_script(segment: list) -> str:
+        i = 0
+        while i < len(segment) and "=" in segment[i] and not segment[i].startswith("-"):
+            i += 1
+        if i >= len(segment):
+            return ""
+        exe = segment[i].rsplit("/", 1)[-1].lower()
+        if exe not in interpreters:
+            return ""
+        i += 1
+        while i < len(segment):
+            tok = segment[i]
+            # `-c` and `--command` take the script as the next token.
+            if tok in ("-c", "--command"):
+                return segment[i + 1] if i + 1 < len(segment) else ""
+            # `-lc` is login plus -c. A glued `-cCMD` keeps the script on this token.
+            if tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:]:
+                glued = tok.split("c", 1)[1]
+                if glued:
+                    return glued
+                return segment[i + 1] if i + 1 < len(segment) else ""
+            i += 1
+        return ""
+
+    def _script_after_wrapper(segment: list) -> str:
+        for i, tok in enumerate(segment):
+            if tok.rsplit("/", 1)[-1].lower() in interpreters:
+                return _interpreter_script(segment[i:])
+        return ""
+
+    def _segment_runs_ssh(segment: list, depth: int = 0) -> bool:
+        # Still uninspected past this cap, so it is not proof that no ssh runs.
+        if depth > 4:
+            return True
+        facts = analyze_segment(segment)
+        if facts.executable in ssh_clients:
+            return True
+        # `command` is a shell builtin that runs its next argument. It hides
+        # `command ssh` the same way `sudo ssh` does.
+        wrappers = COMMAND_WRAPPERS | {"command"}
+        # `sudo ssh` / `timeout 5 ssh` hide the client in the wrapper's arguments.
+        if facts.executable in wrappers and any(
+            tok.rsplit("/", 1)[-1].lower() in ssh_clients for tok in segment
+        ):
+            return True
+        script = _interpreter_script(segment)
+        # `env sh -c 'ssh ...'` starts with the wrapper, not the shell.
+        if not script and facts.executable in wrappers:
+            script = _script_after_wrapper(segment)
+        if not script:
+            return False
+        nested = split_segments(script)
+        # Unbalanced quotes refuse to split. A bare token named ssh is still a client.
+        if nested is None:
+            return any(
+                tok.strip("\"'`").rsplit("/", 1)[-1].lower() in ssh_clients
+                for tok in script.split()
+            )
+        return any(_segment_runs_ssh(part, depth + 1) for part in nested)
+
+    if segments is None:
+        # A redirect refuses to split, which would hide `echo x > f && ssh`.
+        has_ssh_client = program in ssh_clients or any(
+            tok.strip("\"'`").rsplit("/", 1)[-1].lower() in ssh_clients
+            for tok in command.split()
+        )
+    else:
+        has_ssh_client = program in ssh_clients or any(
+            _segment_runs_ssh(segment) for segment in segments
+        )
+    if has_ssh_client:
+        from utils.cloud.cloud_utils import get_mode_from_context
+        mode = get_mode_from_context()
+        if (mode or "").strip().lower() == "ask":
+            from chat.backend.agent.access.mode_access_controller import ModeAccessController
+            allowed, message = ModeAccessController.ensure_cloud_command_allowed(
+                mode, is_read_only_command(command), command, describe_rejection(command),
+            )
+            if not allowed:
+                logger.info("Ask mode refused ssh client because it is not a read")
+                return json.dumps({
+                    "success": False,
+                    "error": message,
+                    "code": "READ_ONLY_MODE",
+                })
 
     # ROUTING: Check if command should be handled by specialized tools
     cmd_lower = command.lower().strip()
