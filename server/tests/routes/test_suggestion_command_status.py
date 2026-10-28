@@ -10,7 +10,7 @@ Verifies:
 
 import json
 import uuid
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 from flask import Flask
@@ -23,74 +23,139 @@ from chat.background.task import (
 import routes.incidents_routes as incidents_routes
 
 
-def test_parse_command_output_success_json():
-    payload = json.dumps({
-        "success": True,
-        "command": "kubectl rollout restart deployment/api",
-        "return_code": 0,
-        "chat_output": "deployment.apps/api restarted",
-    })
-    res = _parse_command_output(payload)
-    assert res["success"] is True
-    assert res["exit_code"] == 0
-    assert res["output"] == "deployment.apps/api restarted"
-    assert res["error"] is None
-
-
-def test_parse_command_output_failure_json():
-    payload = json.dumps({
-        "success": False,
-        "command": "kubectl rollout restart deployment/nonexistent",
-        "return_code": 1,
-        "error": "Error from server (NotFound): deployments.apps \"nonexistent\" not found",
-    })
-    res = _parse_command_output(payload)
-    assert res["success"] is False
-    assert res["exit_code"] == 1
-    assert "NotFound" in res["error"]
-
-
-def test_parse_command_output_nonzero_code_overrides_success_flag():
-    # If a tool outputs success=True but return_code=2, exit code must force failure
-    payload = {
-        "success": True,
-        "return_code": 2,
-        "chat_output": "syntax error",
-    }
-    res = _parse_command_output(payload)
-    assert res["success"] is False
-    assert res["exit_code"] == 2
-    assert res["error"] == "syntax error"
-
-
-def test_parse_command_output_is_error_flag_forces_failure():
-    res = _parse_command_output("unexpected exception", is_error=True)
-    assert res["success"] is False
-    assert res["exit_code"] == 1
-    assert res["error"] == "unexpected exception"
-
-
-def test_record_suggestion_command_result_success(monkeypatch):
-    session_id = str(uuid.uuid4())
-    incident_id = str(uuid.uuid4())
-
+@pytest.fixture
+def mock_task_db(monkeypatch):
+    """Provide a mock DB connection and cursor for chat.background.task functions."""
     cursor = MagicMock()
-    # UPDATE incident_suggestions RETURNING incident_id
-    cursor.fetchall.return_value = [(incident_id,)]
-
     conn = MagicMock()
     conn.cursor.return_value.__enter__.return_value = cursor
-
     monkeypatch.setattr(
         "chat.background.task.db_pool.get_admin_connection",
         MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=conn))),
     )
+    return cursor, conn
+
+
+@pytest.fixture
+def mock_routes_db(monkeypatch):
+    """Provide a mock DB connection and cursor for incidents_routes endpoints."""
+    cursor = MagicMock()
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cursor
+    monkeypatch.setattr(
+        incidents_routes.db_pool,
+        "get_admin_connection",
+        MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=conn))),
+    )
+    monkeypatch.setattr(incidents_routes, "set_rls_context", lambda *a, **k: None)
+    monkeypatch.setattr(incidents_routes, "get_org_id_from_request", lambda: "org-test")
+    return cursor, conn
+
+
+@pytest.fixture
+def route_client():
+    """Unwrap mark_suggestion_executed route handler and return a test request runner."""
+    handler = incidents_routes.mark_suggestion_executed
+    while hasattr(handler, "__wrapped__"):
+        handler = handler.__wrapped__
+
+    app = Flask(__name__)
+
+    def _call(suggestion_id: str, payload: dict):
+        with app.test_request_context(
+            f"/api/incidents/suggestions/{suggestion_id}/mark-executed",
+            method="POST",
+            json=payload,
+        ):
+            return handler("user-1", suggestion_id)
+
+    return _call
+
+
+@pytest.mark.parametrize(
+    "raw_input, is_err, expected_success, expected_code, expected_out, expected_err",
+    [
+        (
+            json.dumps({
+                "success": True,
+                "command": "kubectl rollout restart deployment/api",
+                "return_code": 0,
+                "chat_output": "deployment.apps/api restarted",
+            }),
+            False,
+            True,
+            0,
+            "deployment.apps/api restarted",
+            None,
+        ),
+        (
+            json.dumps({
+                "success": False,
+                "command": "kubectl rollout restart deployment/nonexistent",
+                "return_code": 1,
+                "error": 'Error from server (NotFound): deployments.apps "nonexistent" not found',
+            }),
+            False,
+            False,
+            1,
+            None,
+            'Error from server (NotFound): deployments.apps "nonexistent" not found',
+        ),
+        (
+            {"success": True, "return_code": 2, "chat_output": "syntax error"},
+            False,
+            False,
+            2,
+            None,
+            "syntax error",
+        ),
+        (
+            "unexpected exception",
+            True,
+            False,
+            1,
+            None,
+            "unexpected exception",
+        ),
+    ],
+)
+def test_parse_command_output_variations(
+    raw_input, is_err, expected_success, expected_code, expected_out, expected_err
+):
+    """Verify command output parsing across exit codes, JSON formats, and error overrides."""
+    res = _parse_command_output(raw_input, is_error=is_err)
+    assert res["success"] is expected_success
+    assert res["exit_code"] == expected_code
+    if expected_out is not None:
+        assert res["output"] == expected_out
+    if expected_err is not None:
+        assert expected_err in (res["error"] or "")
+
+
+def test_parse_command_output_truncates_large_payload():
+    """Verify stdout strings exceeding MAX_SUGGESTION_OUTPUT_CHARS are truncated to 10 KiB."""
+    large_stdout = "x" * 20000
+    payload = json.dumps({
+        "success": True,
+        "return_code": 0,
+        "chat_output": large_stdout,
+    })
+    res = _parse_command_output(payload)
+    assert res["success"] is True
+    assert len(res["output"]) == 10240
+    assert res["output"] == "x" * 10240
+
+
+def test_record_suggestion_command_result_success(mock_task_db):
+    """Verify recording a successful command updates status to completed with exit code 0."""
+    cursor, _ = mock_task_db
+    session_id, incident_id = str(uuid.uuid4()), str(uuid.uuid4())
+    cursor.fetchall.return_value = [(incident_id,)]
 
     cmd_output = json.dumps({"success": True, "return_code": 0, "chat_output": "all good"})
     updated = _record_suggestion_command_result(session_id, "terminal_exec", cmd_output)
 
     assert updated is True
-    # Verify suggestions update call
     update_call = cursor.execute.call_args_list[0]
     sql, params = update_call.args[0], update_call.args[1]
     assert "UPDATE incident_suggestions" in sql
@@ -100,27 +165,16 @@ def test_record_suggestion_command_result_success(monkeypatch):
     assert params[3] == 0
     assert session_id in params
 
-    # Verify incident updated_at touched
     touch_call = cursor.execute.call_args_list[1]
-    touch_sql = touch_call.args[0]
-    assert "UPDATE incidents" in touch_sql
-    assert "updated_at = NOW()" in touch_sql
+    assert "UPDATE incidents" in touch_call.args[0]
+    assert "updated_at = NOW()" in touch_call.args[0]
 
 
-def test_record_suggestion_command_result_failure(monkeypatch):
-    session_id = str(uuid.uuid4())
-    incident_id = str(uuid.uuid4())
-
-    cursor = MagicMock()
+def test_record_suggestion_command_result_failure(mock_task_db):
+    """Verify recording a failing command updates status to failed with non-zero exit code."""
+    cursor, _ = mock_task_db
+    session_id, incident_id = str(uuid.uuid4()), str(uuid.uuid4())
     cursor.fetchall.return_value = [(incident_id,)]
-
-    conn = MagicMock()
-    conn.cursor.return_value.__enter__.return_value = cursor
-
-    monkeypatch.setattr(
-        "chat.background.task.db_pool.get_admin_connection",
-        MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=conn))),
-    )
 
     cmd_output = json.dumps({"success": False, "return_code": 137, "error": "Process killed"})
     updated = _record_suggestion_command_result(session_id, "terminal_exec", cmd_output)
@@ -133,106 +187,82 @@ def test_record_suggestion_command_result_failure(monkeypatch):
     assert params[3] == 137
 
 
-def test_propagate_suggestion_status_preserves_existing_command_result(monkeypatch):
-    """Crucial fix for #566:
-
-    If command output was already recorded, session termination (e.g. failed
-    due to worker timeout) must NEVER overwrite the command's status.
-    """
+def test_record_suggestion_command_result_ignores_non_command_tools():
+    """Verify non-command tools (e.g. memory_tool, artifact_tool) are skipped."""
     session_id = str(uuid.uuid4())
+    assert _record_suggestion_command_result(session_id, "memory_tool", {"status": "saved"}) is False
+    assert _record_suggestion_command_result(session_id, "artifact_tool", "saved to disk") is False
 
-    cursor = MagicMock()
-    # WHERE execution_result IS NULL finds 0 rows because result was already recorded
+
+def test_record_suggestion_command_result_status_guard(mock_task_db):
+    """Verify status guard only updates suggestions still in in_progress or executed state."""
+    cursor, _ = mock_task_db
+    session_id, incident_id = str(uuid.uuid4()), str(uuid.uuid4())
+    cursor.fetchall.return_value = [(incident_id,)]
+
+    cmd_output = json.dumps({"success": True, "return_code": 0, "chat_output": "restarted"})
+    _record_suggestion_command_result(session_id, "terminal_exec", cmd_output)
+
+    update_sql = cursor.execute.call_args_list[0].args[0]
+    assert "execution_status IN ('in_progress', 'executed')" in update_sql
+
+
+def test_propagate_suggestion_status_preserves_existing_command_result(mock_task_db):
+    """Verify background session termination NEVER overwrites an already-recorded command result."""
+    cursor, _ = mock_task_db
+    session_id = str(uuid.uuid4())
     cursor.fetchall.return_value = []
 
-    conn = MagicMock()
-    conn.cursor.return_value.__enter__.return_value = cursor
-
-    monkeypatch.setattr(
-        "chat.background.task.db_pool.get_admin_connection",
-        MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=conn))),
-    )
-
-    # Background session failed
     _propagate_suggestion_status(session_id, "failed")
 
-    # Only the initial SELECT ran; NO UPDATE should be executed
     assert len(cursor.execute.call_args_list) == 1
-    assert "SELECT id, incident_id, execution_status" in cursor.execute.call_args_list[0].args[0]
-    assert "execution_result IS NULL" in cursor.execute.call_args_list[0].args[0]
+    select_sql = cursor.execute.call_args_list[0].args[0]
+    assert "SELECT id, incident_id, execution_status" in select_sql
+    assert "execution_result IS NULL" in select_sql
 
 
-def test_propagate_suggestion_status_recovers_tool_result_from_messages(monkeypatch):
-    session_id = str(uuid.uuid4())
-    incident_id = str(uuid.uuid4())
+def test_propagate_suggestion_status_recovers_tool_result_from_messages(mock_task_db):
+    """Verify tool output is recovered from chat_sessions messages if execution_result was NULL."""
+    cursor, _ = mock_task_db
+    session_id, incident_id = str(uuid.uuid4()), str(uuid.uuid4())
 
-    cursor = MagicMock()
-    # 1. Pending suggestion found with NULL execution_result
     cursor.fetchall.side_effect = [
-        [(1, incident_id, "in_progress")],  # pending suggestions
-        [(incident_id,)],                    # returned from _record_suggestion_command_result UPDATE
+        [(1, incident_id, "in_progress")],
+        [(incident_id,)],
     ]
-    # 2. SELECT messages from chat_sessions
     tool_output = json.dumps({"return_code": 0, "chat_output": "success from history"})
     cursor.fetchone.return_value = ([
         {"type": "human", "content": "run command"},
         {"type": "tool", "name": "terminal_exec", "content": tool_output},
     ],)
 
-    conn = MagicMock()
-    conn.cursor.return_value.__enter__.return_value = cursor
-
-    monkeypatch.setattr(
-        "chat.background.task.db_pool.get_admin_connection",
-        MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=conn))),
-    )
-
     _propagate_suggestion_status(session_id, "completed")
 
-    # Must update execution_status to 'completed' with exit code 0
     sql_calls = [c.args[0] for c in cursor.execute.call_args_list]
     assert any("UPDATE incident_suggestions" in s for s in sql_calls)
 
 
-def test_mark_suggestion_executed_endpoint(monkeypatch):
+def test_mark_suggestion_executed_endpoint(mock_routes_db, route_client):
+    """Verify mark_suggestion_executed updates suggestion status, incident timestamp, and links chat."""
+    cursor, _ = mock_routes_db
     suggestion_id = 42
     incident_id = str(uuid.uuid4())
     exec_session_id = str(uuid.uuid4())
 
-    cursor = MagicMock()
     cursor.fetchone.return_value = (suggestion_id, incident_id)
     cursor.rowcount = 1
 
-    conn = MagicMock()
-    conn.cursor.return_value.__enter__.return_value = cursor
-
-    monkeypatch.setattr(
-        incidents_routes.db_pool,
-        "get_admin_connection",
-        MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=conn))),
-    )
-    monkeypatch.setattr(incidents_routes, "set_rls_context", lambda *a, **k: None)
-    monkeypatch.setattr(incidents_routes, "get_org_id_from_request", lambda: "org-test")
-
-    handler = incidents_routes.mark_suggestion_executed
-    while hasattr(handler, "__wrapped__"):
-        handler = handler.__wrapped__
-
-    app = Flask(__name__)
-    with app.test_request_context(
-        f"/api/incidents/suggestions/{suggestion_id}/mark-executed",
-        method="POST",
-        json={
+    res, status = route_client(
+        str(suggestion_id),
+        {
             "chatSessionId": exec_session_id,
             "executionStatus": "in_progress",
         },
-    ):
-        res, status = handler("user-1", str(suggestion_id))
+    )
 
     assert status == 200
     assert res.get_json()["success"] is True
 
-    # Check SQL calls
     update_sugg_call = None
     touch_incident_call = None
     link_chat_call = None
@@ -257,131 +287,39 @@ def test_mark_suggestion_executed_endpoint(monkeypatch):
     assert "incident_id = %s" in link_chat_call.args[0]
 
 
-def test_parse_command_output_truncates_large_payload():
-    large_stdout = "x" * 20000
-    payload = json.dumps({
-        "success": True,
-        "return_code": 0,
-        "chat_output": large_stdout,
-    })
-    res = _parse_command_output(payload)
-    assert res["success"] is True
-    assert len(res["output"]) == 10240
-    assert res["output"] == "x" * 10240
+@pytest.mark.parametrize(
+    "payload, expected_err",
+    [
+        ({"executionStatus": "hacked"}, "Invalid executionStatus"),
+        ({"executionExitCode": "not-an-int"}, "Invalid executionExitCode"),
+        ({"executionResult": ["not", "a", "dict"]}, "Invalid executionResult"),
+        ({"chatSessionId": "not-a-valid-uuid"}, "Invalid chatSessionId"),
+    ],
+)
+def test_mark_suggestion_executed_validation_errors(route_client, payload, expected_err):
+    """Verify mark_suggestion_executed rejects invalid input params with 400 Bad Request."""
+    res, status = route_client("42", payload)
+    assert status == 400
+    assert expected_err in res.get_json()["error"]
 
 
-def test_record_suggestion_command_result_ignores_non_command_tools():
-    session_id = str(uuid.uuid4())
-    # memory_tool is not a command tool and output contains no exit codes
-    assert _record_suggestion_command_result(session_id, "memory_tool", {"status": "saved"}) is False
-    assert _record_suggestion_command_result(session_id, "artifact_tool", "saved to disk") is False
-
-
-def test_record_suggestion_command_result_status_guard(monkeypatch):
-    session_id = str(uuid.uuid4())
-    incident_id = str(uuid.uuid4())
-
-    cursor = MagicMock()
-    cursor.fetchall.return_value = [(incident_id,)]
-
-    conn = MagicMock()
-    conn.cursor.return_value.__enter__.return_value = cursor
-
-    monkeypatch.setattr(
-        "chat.background.task.db_pool.get_admin_connection",
-        MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=conn))),
-    )
-
-    cmd_output = json.dumps({"success": True, "return_code": 0, "chat_output": "restarted"})
-    _record_suggestion_command_result(session_id, "terminal_exec", cmd_output)
-
-    update_sql = cursor.execute.call_args_list[0].args[0]
-    assert "execution_status IN ('in_progress', 'executed')" in update_sql
-
-
-def test_mark_suggestion_executed_validation_errors():
-    handler = incidents_routes.mark_suggestion_executed
-    while hasattr(handler, "__wrapped__"):
-        handler = handler.__wrapped__
-
-    app = Flask(__name__)
-
-    # 1. Invalid executionStatus
-    with app.test_request_context(
-        "/api/incidents/suggestions/42/mark-executed",
-        method="POST",
-        json={"executionStatus": "hacked"},
-    ):
-        res, status = handler("user-1", "42")
-        assert status == 400
-        assert "Invalid executionStatus" in res.get_json()["error"]
-
-    # 2. Invalid executionExitCode
-    with app.test_request_context(
-        "/api/incidents/suggestions/42/mark-executed",
-        method="POST",
-        json={"executionExitCode": "not-an-int"},
-    ):
-        res, status = handler("user-1", "42")
-        assert status == 400
-        assert "Invalid executionExitCode" in res.get_json()["error"]
-
-    # 3. Invalid executionResult (must be dict)
-    with app.test_request_context(
-        "/api/incidents/suggestions/42/mark-executed",
-        method="POST",
-        json={"executionResult": ["not", "a", "dict"]},
-    ):
-        res, status = handler("user-1", "42")
-        assert status == 400
-        assert "Invalid executionResult" in res.get_json()["error"]
-
-    # 4. Invalid chatSessionId (must be UUID)
-    with app.test_request_context(
-        "/api/incidents/suggestions/42/mark-executed",
-        method="POST",
-        json={"chatSessionId": "not-a-valid-uuid"},
-    ):
-        res, status = handler("user-1", "42")
-        assert status == 400
-        assert "Invalid chatSessionId" in res.get_json()["error"]
-
-
-def test_mark_suggestion_executed_reexecution_resets_prior_outputs(monkeypatch):
+def test_mark_suggestion_executed_reexecution_resets_prior_outputs(mock_routes_db, route_client):
+    """Verify re-executing a suggestion clears prior execution output, error, exit code, and result."""
+    cursor, _ = mock_routes_db
     suggestion_id = 99
     incident_id = str(uuid.uuid4())
     exec_session_id = str(uuid.uuid4())
 
-    cursor = MagicMock()
     cursor.fetchone.return_value = (suggestion_id, incident_id)
     cursor.rowcount = 1
 
-    conn = MagicMock()
-    conn.cursor.return_value.__enter__.return_value = cursor
-
-    monkeypatch.setattr(
-        incidents_routes.db_pool,
-        "get_admin_connection",
-        MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=conn))),
-    )
-    monkeypatch.setattr(incidents_routes, "set_rls_context", lambda *a, **k: None)
-    monkeypatch.setattr(incidents_routes, "get_org_id_from_request", lambda: "org-test")
-
-    handler = incidents_routes.mark_suggestion_executed
-    while hasattr(handler, "__wrapped__"):
-        handler = handler.__wrapped__
-
-    app = Flask(__name__)
-    # Re-executing suggestion with executionStatus="in_progress" and no output fields
-    with app.test_request_context(
-        f"/api/incidents/suggestions/{suggestion_id}/mark-executed",
-        method="POST",
-        json={
+    res, status = route_client(
+        str(suggestion_id),
+        {
             "chatSessionId": exec_session_id,
             "executionStatus": "in_progress",
         },
-    ):
-        res, status = handler("user-1", str(suggestion_id))
+    )
 
     assert status == 200
     update_sugg_sql = None

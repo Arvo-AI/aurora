@@ -571,6 +571,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
     
     # Helper to send END status - called on completion or timeout
     async def send_end_status(reason="completed"):
+        """Send final workflow status to websocket and propagate outcome to linked suggestions."""
         # Propagate terminal status to any linked suggestions (#566)
         if session_id:
             try:
