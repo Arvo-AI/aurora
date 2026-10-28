@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.13] - 2026-10-28
+
+### Added
+- Models: `MEMORY_SELECTOR_MODEL` pins the model that chooses memories for a
+  turn. Unset, Aurora uses a small model the active provider can already call:
+  Gemini 3.5 Flash-Lite, Claude Haiku 5.5, or GPT-5.6 Luna.
+
+### Fixed
+- Memory: the selector was the RCA model, so on a large bank it missed the
+  prefetch window and injected nothing. It now reads up to 2000 memories,
+  ranks them down to 100, and asks that small model. Haiku on Bedrock and
+  the Anthropic API is told not to think. A reply cut off mid-list still
+  injects the entries that finished. If
+  the call does not finish, the agent is told to use the memory index and
+  `read_memory` rather than treat the miss as "nothing relevant."
+
 ## [1.5.12] - 2026-10-27
 
 ### Added
