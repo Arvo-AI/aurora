@@ -362,7 +362,7 @@ This is light text-formatting work (turning validated fixes into readable descri
 
 ## Memory Selector Model
 
-On every turn Aurora asks a small model which memories to inject. That call has about six seconds. `RCA_MODEL` does not finish once an org has hundreds of memories, so the prefetch is cancelled and nothing is injected.
+On every turn Aurora asks a model which memories to inject. That call has about six seconds. The loader used to return only the newest 200 memories, so anything older in a large bank never reached the model. Unset, the selector uses a small model the active provider can already call.
 
 ```bash
 # Optional. Same provider/model format as MAIN_MODEL.

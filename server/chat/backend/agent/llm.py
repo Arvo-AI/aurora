@@ -76,8 +76,8 @@ class ModelConfig:
     # Root-cause recurrence detection agent — falls back to MAIN_MODEL
     RECURRENCE_AGENT_MODEL = os.getenv("RECURRENCE_AGENT_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
-    # Current small models. RCA_MODEL is often opus, which misses the ~6s
-    # prefetch on a large bank, so the task is cancelled and nothing is injected.
+    # Small models the active provider can call. The selector used to read
+    # only the newest 200 memories, so the rest of a large bank never reached it.
     _SELECTOR_FLASH_LITE = "google/gemini-3.5-flash-lite"
     _SELECTOR_VERTEX_FLASH_LITE = "vertex/gemini-3.5-flash-lite"
     _SELECTOR_HAIKU = "anthropic/claude-haiku-5.5"
