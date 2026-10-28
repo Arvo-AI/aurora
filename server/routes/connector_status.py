@@ -211,6 +211,33 @@ def _check_coroot(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_rabbitmq(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Mirrors /rabbitmq/status — validates with the management whoami endpoint."""
+    url = creds.get("url")
+    username = creds.get("username")
+    password = creds.get("password")
+    if not url or not username or not password:
+        return {"connected": False}
+    try:
+        from connectors.rabbitmq_connector.client import RabbitMQClient
+
+        client = RabbitMQClient(
+            url=url,
+            username=username,
+            password=password,
+            verify_tls=bool(creds.get("verify_tls", True)),
+            # The batch status call gives up at LIVE_CHECK_TIMEOUT.
+            timeout=4,
+        )
+        try:
+            who = client.whoami()
+        finally:
+            client.close()
+        return {"connected": True, "url": url, "username": who.get("name") or username}
+    except Exception:
+        return {"connected": False}
+
+
 def _check_confluence(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Mirrors /confluence/status — validates via Atlassian API + OAuth refresh."""
     from connectors.confluence_connector.client import ConfluenceClient
@@ -879,6 +906,7 @@ PROVIDER_CHECKERS = {
     "splunk": _check_splunk,
     "elastic": _check_elastic,
     "coroot": _check_coroot,
+    "rabbitmq": _check_rabbitmq,
     "confluence": _check_confluence,
     "jira": _check_jira,
     "slack": _check_slack,

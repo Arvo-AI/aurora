@@ -24,6 +24,7 @@ import {
   parseAwsMcpCommand,
   parseAwsSuggestCommand,
   parseCorootCommand,
+  parseRabbitMQCommand,
   parseNewRelicCommand,
   parseCloudflareCommand,
   parseElasticCommand,
@@ -191,6 +192,9 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   // Coroot tools parsing
   else if (tool.tool_name.startsWith("coroot_")) {
     command = parseCorootCommand(tool.tool_name, normalizedInput)
+  }
+  else if (tool.tool_name.startsWith("rabbitmq_")) {
+    command = parseRabbitMQCommand(tool.tool_name, normalizedInput)
   }
   // New Relic tools parsing
   else if (tool.tool_name === "query_newrelic" && typeof command === "string" && command.trim().startsWith("{")) {

@@ -113,6 +113,15 @@ _TOOL_NAME_MAPPING: Dict[str, str] = {
     "coroot_get_node_detail": "Coroot Node Detail",
     "coroot_get_costs": "Coroot Costs",
     "coroot_get_risks": "Coroot Risks",
+    "rabbitmq_get_overview": "RabbitMQ Overview",
+    "rabbitmq_list_nodes": "RabbitMQ Nodes",
+    "rabbitmq_list_queues": "RabbitMQ Queues",
+    "rabbitmq_get_queue": "RabbitMQ Queue",
+    "rabbitmq_list_exchanges": "RabbitMQ Exchanges",
+    "rabbitmq_list_bindings": "RabbitMQ Bindings",
+    "rabbitmq_list_connections": "RabbitMQ Connections",
+    "rabbitmq_list_consumers": "RabbitMQ Consumers",
+    "rabbitmq_health_checks": "RabbitMQ Health",
 }
 
 # Internal coordination tools that show up as tool messages but aren't real

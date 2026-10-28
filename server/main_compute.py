@@ -146,6 +146,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                           "Authorization", "X-Provider-Preference"],
                         "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/rabbitmq/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                           "Authorization", "X-Provider-Preference"],
+                         "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/spinnaker/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                           "Authorization", "X-Provider-Preference"],
@@ -522,6 +526,10 @@ app.register_blueprint(servicenow_bp, url_prefix="/servicenow")
 # --- Coroot Integration Routes ---
 from routes.coroot import bp as coroot_bp  # noqa: F401
 app.register_blueprint(coroot_bp, url_prefix="/coroot")
+
+# --- RabbitMQ Integration Routes ---
+from routes.rabbitmq import bp as rabbitmq_bp  # noqa: F401
+app.register_blueprint(rabbitmq_bp, url_prefix="/rabbitmq")
 
 # --- ThousandEyes Integration Routes ---
 from routes.thousandeyes import bp as thousandeyes_bp  # noqa: F401
