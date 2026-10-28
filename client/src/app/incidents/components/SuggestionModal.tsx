@@ -40,6 +40,46 @@ const typeBadgeStyles = {
   communication: 'bg-pink-500/20 text-pink-400 border-pink-500/30',
 };
 
+interface ExecutionStatusStyle {
+  containerClass: string;
+  icon: React.ReactNode;
+  textClass: string;
+  badgeLabel: string;
+  detailMessage: string;
+}
+
+function getExecutionStatusConfig(
+  status: string | undefined,
+  exitCode: number | null | undefined
+): ExecutionStatusStyle {
+  if (status === 'failed') {
+    const codeText = exitCode !== undefined && exitCode !== null ? ` (exit code ${exitCode})` : '';
+    return {
+      containerClass: 'bg-rose-500/10 border-rose-500/30',
+      icon: <AlertCircle className="w-4 h-4 text-rose-400 mt-0.5 flex-shrink-0" />,
+      textClass: 'text-rose-300',
+      badgeLabel: 'Executed',
+      detailMessage: ` — failed${codeText}`,
+    };
+  }
+  if (status === 'in_progress') {
+    return {
+      containerClass: 'bg-amber-500/10 border-amber-500/30',
+      icon: <Loader2 className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0 animate-spin" />,
+      textClass: 'text-amber-300',
+      badgeLabel: 'Running',
+      detailMessage: ' — command in progress...',
+    };
+  }
+  return {
+    containerClass: 'bg-green-500/10 border-green-500/30',
+    icon: <Check className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />,
+    textClass: 'text-green-300',
+    badgeLabel: 'Executed',
+    detailMessage: ' — completed successfully (exit code 0)',
+  };
+}
+
 export default function SuggestionModal({
   suggestion,
   incidentId,
@@ -111,13 +151,14 @@ export default function SuggestionModal({
 
     // Mark suggestion as executed, linked to its dedicated session (non-blocking
     // — don't let this prevent navigation).
+    const linkedSessionId = execSessionId ?? chatSessionId;
     try {
       const res = await fetch(`/api/incidents/suggestions/${suggestion.id}/mark-executed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          chatSessionId: execSessionId ?? chatSessionId,
-          executionStatus: 'in_progress',
+          chatSessionId: linkedSessionId,
+          ...(linkedSessionId ? { executionStatus: 'in_progress' } : {}),
         }),
       });
       if (!res.ok) {
@@ -155,7 +196,7 @@ export default function SuggestionModal({
 
   const requiresConfirmation = ['medium', 'high'].includes(suggestion.risk);
   const isConfirmed = !requiresConfirmation || confirmText === 'CONFIRM';
-  const isAlreadyExecuted = Boolean(suggestion.executedAt);
+  const isAlreadyExecuted = Boolean(suggestion.executedAt || suggestion.executionStatus);
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -218,50 +259,28 @@ export default function SuggestionModal({
             </div>
           )}
 
-          {isAlreadyExecuted && (
-            <div
-              className={`flex items-start gap-2 p-3 rounded-lg border ${
-                suggestion.executionStatus === 'failed'
-                  ? 'bg-rose-500/10 border-rose-500/30'
-                  : suggestion.executionStatus === 'in_progress'
-                  ? 'bg-amber-500/10 border-amber-500/30'
-                  : 'bg-green-500/10 border-green-500/30'
-              }`}
-            >
-              {suggestion.executionStatus === 'failed' ? (
-                <AlertCircle className="w-4 h-4 text-rose-400 mt-0.5 flex-shrink-0" />
-              ) : suggestion.executionStatus === 'in_progress' ? (
-                <Loader2 className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0 animate-spin" />
-              ) : (
-                <Check className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />
-              )}
+          {isAlreadyExecuted && (() => {
+            const statusConfig = getExecutionStatusConfig(
+              suggestion.executionStatus,
+              suggestion.executionExitCode
+            );
+            return (
               <div
-                className={`text-xs ${
-                  suggestion.executionStatus === 'failed'
-                    ? 'text-rose-300'
-                    : suggestion.executionStatus === 'in_progress'
-                    ? 'text-amber-300'
-                    : 'text-green-300'
-                }`}
+                className={`flex items-start gap-2 p-3 rounded-lg border ${statusConfig.containerClass}`}
               >
-                <span className="font-medium">
-                  {suggestion.executionStatus === 'in_progress' ? 'Running' : 'Executed'}
-                </span>
-                {suggestion.executionStatus === 'completed' && ' — completed successfully (exit code 0)'}
-                {suggestion.executionStatus === 'failed' && (
-                  suggestion.executionExitCode !== undefined && suggestion.executionExitCode !== null
-                    ? ` — failed (exit code ${suggestion.executionExitCode})`
-                    : ' — execution failed'
-                )}
-                {suggestion.executionStatus === 'in_progress' && ' — command in progress...'}
-                {suggestion.executionError && (
-                  <p className="mt-1 font-mono text-[11px] text-rose-400 whitespace-pre-wrap break-all">
-                    {suggestion.executionError.slice(0, 300)}
-                  </p>
-                )}
+                {statusConfig.icon}
+                <div className={`text-xs ${statusConfig.textClass}`}>
+                  <span className="font-medium">{statusConfig.badgeLabel}</span>
+                  {statusConfig.detailMessage}
+                  {suggestion.executionError && (
+                    <p className="mt-1 font-mono text-[11px] text-rose-400 whitespace-pre-wrap break-all">
+                      {suggestion.executionError.slice(0, 300)}
+                    </p>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
 
         <DialogFooter className="flex gap-2 sm:gap-2">

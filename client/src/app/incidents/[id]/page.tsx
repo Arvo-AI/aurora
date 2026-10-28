@@ -65,7 +65,7 @@ export default function IncidentDetailPage() {
         if (seq === fetchSeqRef.current) applyIncidentData(data);
 
         const hasRunningSuggestions = data.suggestions?.some(
-          s => s.executedAt && (s.executionStatus === 'in_progress' || s.executionStatus === 'executed')
+          s => s.executionStatus === 'in_progress' || (s.executionStatus === 'executed' && Boolean(s.executionSessionId))
         );
         const needsPoll = data.status === 'investigating' || data.auroraStatus === 'summarizing' || Boolean(hasRunningSuggestions);
         if (!needsPoll || !active) { pollStartRef.current = 0; return; }

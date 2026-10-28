@@ -12,7 +12,7 @@ import os
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from celery_config import celery_app
 from langchain_core.messages import HumanMessage
@@ -1849,10 +1849,92 @@ def _update_session_status(session_id: str, status: str, user_id: str) -> None:
         _propagate_suggestion_status(session_id, status)
 
 
+MAX_SUGGESTION_OUTPUT_CHARS = 10240
+
+COMMAND_EXECUTION_TOOLS = frozenset({
+    "terminal_exec",
+    "cloud_exec",
+    "on_prem_kubectl",
+    "tailscale_ssh",
+    "iac_commands_tool",
+    "kubectl_exec",
+    "command_exec",
+})
+
+
+def _extract_exit_code(raw_dict: Dict[str, Any]) -> Optional[int]:
+    """Extract an integer exit code from common return/exit code field names."""
+    for key in ("return_code", "exit_code", "returncode", "exitCode", "code", "status_code"):
+        if key in raw_dict and raw_dict[key] is not None:
+            try:
+                return int(raw_dict[key])
+            except (ValueError, TypeError):
+                pass
+    return None
+
+
+def _determine_success(
+    raw_dict: Dict[str, Any],
+    ret_code: Optional[int],
+    is_error: bool,
+) -> bool:
+    """Determine boolean success from a raw dictionary and exit code."""
+    if is_error:
+        return False
+    if ret_code is not None and ret_code != 0:
+        return False
+    if "success" in raw_dict and raw_dict["success"] is not None:
+        return bool(raw_dict["success"])
+    if ret_code is not None:
+        return ret_code == 0
+    if raw_dict.get("status") in ("error", "failed") or "error" in raw_dict or "errors" in raw_dict:
+        return False
+    return True
+
+
+def _extract_streams(
+    raw_dict: Dict[str, Any],
+    success: bool,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Extract stdout and stderr streams from a command output dict, capped to 10 KiB."""
+    stdout = raw_dict.get("chat_output") or raw_dict.get("output") or raw_dict.get("stdout")
+    stderr = raw_dict.get("error") or raw_dict.get("stderr") or raw_dict.get("error_message")
+
+    if not success and not stderr and stdout:
+        stderr = str(stdout)
+
+    out_str = str(stdout)[:MAX_SUGGESTION_OUTPUT_CHARS] if stdout is not None else None
+    err_str = str(stderr)[:MAX_SUGGESTION_OUTPUT_CHARS] if stderr is not None else None
+    return out_str, err_str
+
+
+def _parse_plain_text_output(output: Any, is_error: bool) -> Dict[str, Any]:
+    """Parse plain string/fallback command output, capped to 10 KiB."""
+    text = str(output)[:MAX_SUGGESTION_OUTPUT_CHARS] if output is not None else ""
+    has_err = is_error
+    if not has_err and text:
+        try:
+            from chat.backend.agent.tools.stderr_error_detector import detect_errors_in_stderr
+            has_err, _ = detect_errors_in_stderr(text)
+        except Exception:
+            pass
+
+    success = not has_err
+    exit_code = 0 if success else 1
+    return {
+        "success": success,
+        "exit_code": exit_code,
+        "output": text if success else None,
+        "error": text if not success else None,
+        "raw": {"text": text},
+    }
+
+
 def _parse_command_output(output: Any, is_error: bool = False) -> Dict[str, Any]:
     """Parse tool output into a structured dict with exit_code, success, stdout, stderr.
 
     Handles JSON output from terminal_exec, cloud_exec, or plain string outputs.
+    All stream strings are capped to 10 KiB.
     """
     raw_dict: Optional[Dict[str, Any]] = None
     if isinstance(output, dict):
@@ -1869,68 +1951,47 @@ def _parse_command_output(output: Any, is_error: bool = False) -> Dict[str, Any]
             except Exception:
                 pass
 
-    if raw_dict is not None:
-        ret_code = None
-        for key in ("return_code", "exit_code", "code"):
-            if key in raw_dict and raw_dict[key] is not None:
-                try:
-                    ret_code = int(raw_dict[key])
-                    break
-                except (ValueError, TypeError):
-                    pass
+    if raw_dict is None:
+        return _parse_plain_text_output(output, is_error=is_error)
 
-        if "success" in raw_dict and raw_dict["success"] is not None:
-            success = bool(raw_dict["success"])
-        elif ret_code is not None:
-            success = (ret_code == 0)
-        elif raw_dict.get("status") in ("error", "failed") or "error" in raw_dict or "errors" in raw_dict:
-            success = False
-        else:
-            success = not is_error
+    ret_code = _extract_exit_code(raw_dict)
+    success = _determine_success(raw_dict, ret_code, is_error)
+    if ret_code is None:
+        ret_code = 0 if success else 1
 
-        if ret_code is not None and ret_code != 0:
-            success = False
-
-        if is_error:
-            success = False
-
-        if ret_code is None:
-            ret_code = 0 if success else 1
-
-        stdout = raw_dict.get("chat_output") or raw_dict.get("output") or raw_dict.get("stdout")
-        stderr = raw_dict.get("error") or raw_dict.get("stderr") or raw_dict.get("error_message")
-
-        if not success and not stderr and stdout:
-            stderr = str(stdout)
-
-        return {
-            "success": success,
-            "exit_code": ret_code,
-            "output": str(stdout) if stdout is not None else None,
-            "error": str(stderr) if stderr is not None else None,
-            "raw": raw_dict,
-        }
-
-    # Plain text / fallback
-    text = str(output) if output is not None else ""
-    has_err = is_error
-    if not has_err and text:
-        try:
-            from chat.backend.agent.tools.stderr_error_detector import detect_errors_in_stderr
-            has_err, _ = detect_errors_in_stderr(text)
-        except Exception:
-            pass
-
-    success = not has_err
-    exit_code = 0 if success else 1
-
+    stdout_str, stderr_str = _extract_streams(raw_dict, success)
     return {
         "success": success,
-        "exit_code": exit_code,
-        "output": text if success else None,
-        "error": text if not success else None,
-        "raw": {"text": text},
+        "exit_code": ret_code,
+        "output": stdout_str,
+        "error": stderr_str,
+        "raw": raw_dict,
     }
+
+
+def _is_command_tool(tool_name: str, output: Any) -> bool:
+    """Return True if tool_name or output payload represents a command execution."""
+    if not tool_name:
+        return False
+    if tool_name in COMMAND_EXECUTION_TOOLS or tool_name.endswith("_exec") or tool_name in ("exec", "bash", "sh", "terminal"):
+        return True
+    if isinstance(output, dict):
+        return any(k in output for k in ("return_code", "exit_code", "returncode", "exitCode"))
+    if isinstance(output, str) and ("return_code" in output or "exit_code" in output):
+        return True
+    return False
+
+
+def _touch_incidents(cursor, incident_ids: List[Any]) -> None:
+    """Touch incidents.updated_at = NOW() for active UI pollers."""
+    unique_ids = list({str(iid) for iid in incident_ids if iid})
+    if unique_ids:
+        cursor.execute(
+            """UPDATE incidents
+               SET updated_at = NOW()
+               WHERE id = ANY(%s::uuid[])""",
+            (unique_ids,),
+        )
 
 
 def _record_suggestion_command_result(
@@ -1945,12 +2006,13 @@ def _record_suggestion_command_result(
     - Exit code 0 / success: execution_status = 'completed'
     - Non-zero / failure: execution_status = 'failed'
     - Persists stdout (execution_output), stderr (execution_error),
-      execution_exit_code, and execution_result JSONB.
+      execution_exit_code, and execution_result JSONB (capped at 10 KiB).
+    - Status guard: only updates rows still in 'in_progress' or 'executed'.
     - Touches incidents.updated_at so active pollers on /incidents/[id] update immediately.
 
     Returns True if at least one suggestion row was updated, False otherwise.
     """
-    if not session_id:
+    if not session_id or not _is_command_tool(tool_name, output):
         return False
     try:
         parsed = _parse_command_output(output, is_error=is_error)
@@ -1964,48 +2026,57 @@ def _record_suggestion_command_result(
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """UPDATE incident_suggestions
-                       SET execution_status = %s,
-                           execution_output = %s,
-                           execution_error = %s,
-                           execution_exit_code = %s,
-                           execution_result = %s::jsonb
-                       WHERE execution_session_id = %s::uuid
-                       RETURNING incident_id""",
-                    (
-                        new_status,
-                        parsed["output"],
-                        parsed["error"],
-                        parsed["exit_code"],
-                        json.dumps(result_payload),
-                        session_id,
-                    ),
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """UPDATE incident_suggestions
+                   SET execution_status = %s,
+                       execution_output = %s,
+                       execution_error = %s,
+                       execution_exit_code = %s,
+                       execution_result = %s::jsonb
+                   WHERE execution_session_id = %s::uuid
+                     AND execution_status IN ('in_progress', 'executed')
+                   RETURNING incident_id""",
+                (
+                    new_status,
+                    parsed["output"],
+                    parsed["error"],
+                    parsed["exit_code"],
+                    json.dumps(result_payload),
+                    session_id,
+                ),
+            )
+            rows = cursor.fetchall()
+            if rows:
+                _touch_incidents(cursor, [row[0] for row in rows])
+                conn.commit()
+                logger.info(
+                    f"[BackgroundChat] Recorded command result for suggestion in session {session_id}: "
+                    f"status={new_status}, exit_code={parsed['exit_code']}, tool={tool_name}"
                 )
-                rows = cursor.fetchall()
-                if rows:
-                    incident_ids = list({row[0] for row in rows if row[0]})
-                    if incident_ids:
-                        cursor.execute(
-                            """UPDATE incidents
-                               SET updated_at = NOW()
-                               WHERE id = ANY(%s::uuid[])""",
-                            (incident_ids,),
-                        )
-                    conn.commit()
-                    logger.info(
-                        f"[BackgroundChat] Recorded command result for suggestion in session {session_id}: "
-                        f"status={new_status}, exit_code={parsed['exit_code']}, tool={tool_name}"
-                    )
-                    return True
+                return True
         return False
     except Exception as e:
         logger.warning(
             f"[BackgroundChat] Failed to record suggestion command result for session {session_id}: {e}"
         )
         return False
+
+
+def _find_last_tool_message(messages: Any) -> Optional[Dict[str, Any]]:
+    """Scan chat_sessions messages backwards for the last executed tool output."""
+    if not isinstance(messages, list):
+        return None
+    for msg in reversed(messages):
+        if not isinstance(msg, dict):
+            continue
+        msg_type = msg.get("type") or msg.get("role")
+        if msg_type in ("tool", "function"):
+            return msg
+        kwargs = msg.get("kwargs", {})
+        if isinstance(kwargs, dict) and kwargs.get("tool_call_id"):
+            return kwargs
+    return None
 
 
 def _propagate_suggestion_status(session_id: str, status: str) -> None:
@@ -2021,94 +2092,73 @@ def _propagate_suggestion_status(session_id: str, status: str) -> None:
     if not session_id:
         return
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                # Find pending suggestions that do NOT yet have an execution_result
-                cursor.execute(
-                    """SELECT id, incident_id, execution_status
-                       FROM incident_suggestions
-                       WHERE execution_session_id = %s::uuid
-                         AND execution_result IS NULL
-                         AND execution_status IN ('in_progress', 'executed')""",
-                    (session_id,),
-                )
-                pending_rows = cursor.fetchall()
-                if not pending_rows:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            # Find pending suggestions that do NOT yet have an execution_result
+            cursor.execute(
+                """SELECT id, incident_id, execution_status
+                   FROM incident_suggestions
+                   WHERE execution_session_id = %s::uuid
+                     AND execution_result IS NULL
+                     AND execution_status IN ('in_progress', 'executed')""",
+                (session_id,),
+            )
+            pending_rows = cursor.fetchall()
+            if not pending_rows:
+                return
+
+            # Attempt to extract tool execution output from chat_sessions messages
+            cursor.execute(
+                """SELECT messages FROM chat_sessions WHERE id = %s""",
+                (session_id,),
+            )
+            srow = cursor.fetchone()
+            messages = srow[0] if srow and srow[0] else []
+
+            extracted_tool = _find_last_tool_message(messages)
+            if extracted_tool is not None:
+                tool_name = extracted_tool.get("name") or extracted_tool.get("tool_name") or "command_exec"
+                content = extracted_tool.get("content") or ""
+                if _record_suggestion_command_result(session_id, tool_name, content):
                     return
 
-                # Attempt to extract tool execution output from chat_sessions messages
-                cursor.execute(
-                    """SELECT messages FROM chat_sessions WHERE id = %s""",
-                    (session_id,),
+            is_failed_session = status in ("failed", "cancelled", "timeout", "error")
+            exec_status = "failed" if is_failed_session else "completed"
+            exit_code = 1 if is_failed_session else 0
+            error_msg = f"Session {status}" if is_failed_session else None
+            result_payload = {
+                "source": "session_propagation",
+                "session_status": status,
+                "success": not is_failed_session,
+                "exit_code": exit_code,
+                "error": error_msg,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            cursor.execute(
+                """UPDATE incident_suggestions
+                   SET execution_status = %s,
+                       execution_error = %s,
+                       execution_exit_code = %s,
+                       execution_result = %s::jsonb
+                   WHERE execution_session_id = %s::uuid
+                     AND execution_result IS NULL
+                     AND execution_status IN ('in_progress', 'executed')
+                   RETURNING incident_id""",
+                (
+                    exec_status,
+                    error_msg,
+                    exit_code,
+                    json.dumps(result_payload),
+                    session_id,
+                ),
+            )
+            rows = cursor.fetchall()
+            if rows:
+                _touch_incidents(cursor, [row[0] for row in rows])
+                conn.commit()
+                logger.info(
+                    f"[BackgroundChat] Propagated session status '{exec_status}' to suggestions for session {session_id}"
                 )
-                srow = cursor.fetchone()
-                messages = srow[0] if srow and srow[0] else []
-
-                extracted_tool = None
-                if isinstance(messages, list):
-                    for msg in reversed(messages):
-                        if not isinstance(msg, dict):
-                            continue
-                        msg_type = msg.get("type") or msg.get("role")
-                        if msg_type in ("tool", "function"):
-                            extracted_tool = msg
-                            break
-                        kwargs = msg.get("kwargs", {})
-                        if isinstance(kwargs, dict) and kwargs.get("tool_call_id"):
-                            extracted_tool = kwargs
-                            break
-
-                if extracted_tool is not None:
-                    tool_name = extracted_tool.get("name") or extracted_tool.get("tool_name") or "command_exec"
-                    content = extracted_tool.get("content") or ""
-                    if _record_suggestion_command_result(session_id, tool_name, content):
-                        return
-
-                is_failed_session = status in ("failed", "cancelled", "timeout", "error")
-                exec_status = "failed" if is_failed_session else "completed"
-                exit_code = 1 if is_failed_session else 0
-                error_msg = f"Session {status}" if is_failed_session else None
-                result_payload = {
-                    "source": "session_propagation",
-                    "session_status": status,
-                    "success": not is_failed_session,
-                    "exit_code": exit_code,
-                    "error": error_msg,
-                    "recorded_at": datetime.now(timezone.utc).isoformat(),
-                }
-
-                cursor.execute(
-                    """UPDATE incident_suggestions
-                       SET execution_status = %s,
-                           execution_error = %s,
-                           execution_exit_code = %s,
-                           execution_result = %s::jsonb
-                       WHERE execution_session_id = %s::uuid
-                         AND execution_result IS NULL
-                         AND execution_status IN ('in_progress', 'executed')
-                       RETURNING incident_id""",
-                    (
-                        exec_status,
-                        error_msg,
-                        exit_code,
-                        json.dumps(result_payload),
-                        session_id,
-                    ),
-                )
-                rows = cursor.fetchall()
-                if rows:
-                    incident_ids = list({row[0] for row in rows if row[0]})
-                    if incident_ids:
-                        cursor.execute(
-                            """UPDATE incidents
-                               SET updated_at = NOW()
-                               WHERE id = ANY(%s::uuid[])""",
-                            (incident_ids,),
-                        )
-                    conn.commit()
-                    logger.info(
-                        f"[BackgroundChat] Propagated session status '{exec_status}' to suggestions for session {session_id}"
-                    )
     except Exception as e:
         logger.warning(
             f"[BackgroundChat] Failed to propagate suggestion status for session {session_id}: {e}"
@@ -2893,40 +2943,39 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
     cleaned = 0
     threshold = datetime.now() - timedelta(minutes=threshold_minutes)
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                for uid in _affected_users(cursor):
-                    if not set_rls_context(cursor, conn, uid, log_prefix="[StartupCleanup]"):
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            for uid in _affected_users(cursor):
+                if not set_rls_context(cursor, conn, uid, log_prefix="[StartupCleanup]"):
+                    continue
+                cursor.execute("""
+                    SELECT id, rca_celery_task_id,
+                           COALESCE((SELECT cs.updated_at FROM chat_sessions cs
+                                     WHERE cs.id::text = i.aurora_chat_session_id::text), i.updated_at)
+                    FROM incidents i
+                    WHERE aurora_status = 'running' AND updated_at < %s AND user_id = %s
+                """, (threshold, uid))
+                for inc_id, task_id, last_activity in cursor.fetchall():
+                    if task_id and not _is_task_dead(task_id, last_activity, threshold,
+                                                     cursor=cursor, incident_id=inc_id):
                         continue
                     cursor.execute("""
-                        SELECT id, rca_celery_task_id,
-                               COALESCE((SELECT cs.updated_at FROM chat_sessions cs
-                                         WHERE cs.id::text = i.aurora_chat_session_id::text), i.updated_at)
-                        FROM incidents i
-                        WHERE aurora_status = 'running' AND updated_at < %s AND user_id = %s
-                    """, (threshold, uid))
-                    for inc_id, task_id, last_activity in cursor.fetchall():
-                        if task_id and not _is_task_dead(task_id, last_activity, threshold,
-                                                         cursor=cursor, incident_id=inc_id):
-                            continue
-                        cursor.execute("""
-                            UPDATE incidents SET aurora_status = 'error', status = 'analyzed',
-                                   analyzed_at = COALESCE(analyzed_at, NOW()),
-                                   rca_celery_task_id = NULL, updated_at = NOW()
-                            WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id
-                        """, (inc_id,))
-                        if cursor.fetchone():
-                            _record_rca_error(cursor, str(inc_id), uid)
-                            cleaned += 1
-                        conn.commit()
-                    cursor.execute("""
-                        UPDATE chat_sessions SET status = 'failed', updated_at = NOW()
-                        WHERE status = 'in_progress' AND updated_at < %s AND user_id = %s
-                        RETURNING id
-                    """, (threshold, uid))
-                    for (sid,) in cursor.fetchall():
-                        _propagate_suggestion_status(str(sid), 'failed')
+                        UPDATE incidents SET aurora_status = 'error', status = 'analyzed',
+                               analyzed_at = COALESCE(analyzed_at, NOW()),
+                               rca_celery_task_id = NULL, updated_at = NOW()
+                        WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id
+                    """, (inc_id,))
+                    if cursor.fetchone():
+                        _record_rca_error(cursor, str(inc_id), uid)
+                        cleaned += 1
                     conn.commit()
+                cursor.execute("""
+                    UPDATE chat_sessions SET status = 'failed', updated_at = NOW()
+                    WHERE status = 'in_progress' AND updated_at < %s AND user_id = %s
+                    RETURNING id
+                """, (threshold, uid))
+                for (sid,) in cursor.fetchall():
+                    _propagate_suggestion_status(str(sid), 'failed')
+                conn.commit()
 
         if cleaned:
             logger.info(f"[StartupCleanup] Marked {cleaned} orphaned investigations as error")

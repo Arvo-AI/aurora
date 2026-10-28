@@ -2824,10 +2824,14 @@ def initialize_tables():
                     ADD COLUMN IF NOT EXISTS execution_error TEXT,
                     ADD COLUMN IF NOT EXISTS execution_exit_code INTEGER,
                     ADD COLUMN IF NOT EXISTS execution_result JSONB;
+
+                    CREATE INDEX IF NOT EXISTS idx_incident_suggestions_exec_session_id
+                    ON incident_suggestions(execution_session_id)
+                    WHERE execution_session_id IS NOT NULL;
                     """
                 )
                 logging.info(
-                    "Added execution result columns to incident_suggestions table (if not exists)."
+                    "Added execution result columns and partial index to incident_suggestions table."
                 )
                 conn.commit()
             except Exception as e:

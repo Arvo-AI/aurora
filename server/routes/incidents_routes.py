@@ -11,8 +11,8 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.log_sanitizer import hash_for_log, sanitize
 from chat.background.task import run_background_chat
-from typing import Any, Optional
-from utils.validation import is_valid_uuid
+from typing import Any, Dict, Optional, Tuple
+from utils.validation import is_valid_uuid, strip_nul
 from chat.background.task import create_background_chat_session, run_background_chat
 
 logger = logging.getLogger(__name__)
@@ -1657,6 +1657,51 @@ def update_suggestion(user_id, suggestion_id: str):
         return jsonify({"error": "Failed to update suggestion"}), 500
 
 
+ALLOWED_EXECUTION_STATUSES = frozenset(
+    {"in_progress", "executed", "completed", "failed", "pending"}
+)
+
+
+def _validate_execution_params(data: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Validate and normalize execution parameters for mark_suggestion_executed."""
+    exec_status = data.get("executionStatus") or "executed"
+    if exec_status not in ALLOWED_EXECUTION_STATUSES:
+        return None, f"Invalid executionStatus: must be one of {sorted(ALLOWED_EXECUTION_STATUSES)}"
+
+    chat_session_id = data.get("chatSessionId")
+    if chat_session_id is not None and not is_valid_uuid(str(chat_session_id)):
+        return None, "Invalid chatSessionId: must be a valid UUID"
+
+    exit_code = data.get("executionExitCode")
+    exit_code_int = None
+    if exit_code is not None:
+        try:
+            exit_code_int = int(exit_code)
+        except (ValueError, TypeError):
+            return None, "Invalid executionExitCode: must be an integer"
+
+    raw_result = data.get("executionResult")
+    if raw_result is not None and not isinstance(raw_result, dict):
+        return None, "Invalid executionResult: must be a JSON object (dict)"
+
+    serialized_result = json.dumps(raw_result) if isinstance(raw_result, dict) else None
+
+    raw_output = data.get("executionOutput")
+    output_val = strip_nul(str(raw_output))[:10240] if raw_output is not None else None
+
+    raw_error = data.get("executionError")
+    error_val = strip_nul(str(raw_error))[:10240] if raw_error is not None else None
+
+    return {
+        "chat_session_id": str(chat_session_id) if chat_session_id is not None else None,
+        "execution_status": exec_status,
+        "execution_output": output_val,
+        "execution_error": error_val,
+        "execution_exit_code": exit_code_int,
+        "execution_result": serialized_result,
+    }, None
+
+
 @incidents_bp.route("/api/incidents/suggestions/<suggestion_id>/mark-executed", methods=["POST"])
 @require_permission("incidents", "write")
 def mark_suggestion_executed(user_id, suggestion_id: str):
@@ -1675,15 +1720,19 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
     if suggestion_id_int is None:
         return jsonify({"error": "Invalid suggestion ID"}), 400
 
-    org_id = get_org_id_from_request()
-
     data = request.get_json(silent=True) or {}
-    chat_session_id = data.get("chatSessionId")
-    execution_status = data.get("executionStatus") or "executed"
-    execution_output = data.get("executionOutput")
-    execution_error = data.get("executionError")
-    execution_exit_code = data.get("executionExitCode")
-    execution_result = data.get("executionResult")
+    params, val_error = _validate_execution_params(data)
+    if val_error:
+        return jsonify({"error": val_error}), 400
+
+    chat_session_id = params["chat_session_id"]
+    execution_status = params["execution_status"]
+    execution_output = params["execution_output"]
+    execution_error = params["execution_error"]
+    execution_exit_code = params["execution_exit_code"]
+    execution_result = params["execution_result"]
+
+    org_id = get_org_id_from_request()
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -1701,6 +1750,7 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
                     return jsonify({"error": "Suggestion not found"}), 404
 
                 incident_id = row[1]
+                is_new_run = execution_status in ("in_progress", "executed")
 
                 update_fields = [
                     "executed_at = NOW()",
@@ -1715,20 +1765,26 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
                 if execution_output is not None:
                     update_fields.append("execution_output = %s")
                     params_list.append(execution_output)
+                elif is_new_run:
+                    update_fields.append("execution_output = NULL")
 
                 if execution_error is not None:
                     update_fields.append("execution_error = %s")
                     params_list.append(execution_error)
+                elif is_new_run:
+                    update_fields.append("execution_error = NULL")
 
                 if execution_exit_code is not None:
                     update_fields.append("execution_exit_code = %s")
-                    params_list.append(int(execution_exit_code))
+                    params_list.append(execution_exit_code)
+                elif is_new_run:
+                    update_fields.append("execution_exit_code = NULL")
 
                 if execution_result is not None:
                     update_fields.append("execution_result = %s::jsonb")
-                    params_list.append(
-                        json.dumps(execution_result) if isinstance(execution_result, dict) else str(execution_result)
-                    )
+                    params_list.append(execution_result)
+                elif is_new_run:
+                    update_fields.append("execution_result = NULL")
 
                 params_list.append(suggestion_id_int)
 
