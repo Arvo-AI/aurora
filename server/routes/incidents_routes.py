@@ -799,7 +799,8 @@ def get_incident(user_id, incident_id: str):
                            file_path, original_content, suggested_content, user_edited_content,
                            repository, pr_url, pr_number, created_branch, applied_at,
                            executed_at, execution_session_id, execution_status,
-                           rationale, undo, summary
+                           rationale, undo, summary,
+                           execution_output, execution_error, execution_exit_code, execution_result
                     FROM incident_suggestions
                     WHERE incident_id = %s
                     ORDER BY created_at ASC
@@ -816,6 +817,7 @@ def get_incident(user_id, incident_id: str):
                 S_EXECUTED_AT, S_EXEC_SESSION, S_EXEC_STATUS = 17, 18, 19
                 S_RATIONALE, S_UNDO = 20, 21
                 S_SUMMARY = 22
+                S_EXEC_OUTPUT, S_EXEC_ERROR, S_EXEC_EXIT_CODE, S_EXEC_RESULT = 23, 24, 25, 26
 
                 suggestions = []
                 for srow in suggestion_rows:
@@ -834,6 +836,10 @@ def get_incident(user_id, incident_id: str):
                         "executedAt": iso_utc(srow[S_EXECUTED_AT]),
                         "executionSessionId": str(srow[S_EXEC_SESSION]) if srow[S_EXEC_SESSION] else None,
                         "executionStatus": srow[S_EXEC_STATUS],
+                        "executionOutput": srow[S_EXEC_OUTPUT],
+                        "executionError": srow[S_EXEC_ERROR],
+                        "executionExitCode": srow[S_EXEC_EXIT_CODE],
+                        "executionResult": srow[S_EXEC_RESULT] if isinstance(srow[S_EXEC_RESULT], dict) else None,
                     }
                     # Add fix-type fields if present
                     if srow[S_TYPE] == "fix":
@@ -1673,6 +1679,11 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
 
     data = request.get_json(silent=True) or {}
     chat_session_id = data.get("chatSessionId")
+    execution_status = data.get("executionStatus") or "executed"
+    execution_output = data.get("executionOutput")
+    execution_error = data.get("executionError")
+    execution_exit_code = data.get("executionExitCode")
+    execution_result = data.get("executionResult")
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -1689,15 +1700,35 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
                 if not row:
                     return jsonify({"error": "Suggestion not found"}), 404
 
+                incident_id = row[1]
+
                 update_fields = [
                     "executed_at = NOW()",
-                    "execution_status = 'executed'",
+                    "execution_status = %s",
                 ]
-                params_list: list = []
+                params_list: list = [execution_status]
 
                 if chat_session_id:
                     update_fields.append("execution_session_id = %s::uuid")
                     params_list.append(chat_session_id)
+
+                if execution_output is not None:
+                    update_fields.append("execution_output = %s")
+                    params_list.append(execution_output)
+
+                if execution_error is not None:
+                    update_fields.append("execution_error = %s")
+                    params_list.append(execution_error)
+
+                if execution_exit_code is not None:
+                    update_fields.append("execution_exit_code = %s")
+                    params_list.append(int(execution_exit_code))
+
+                if execution_result is not None:
+                    update_fields.append("execution_result = %s::jsonb")
+                    params_list.append(
+                        json.dumps(execution_result) if isinstance(execution_result, dict) else str(execution_result)
+                    )
 
                 params_list.append(suggestion_id_int)
 
@@ -1710,6 +1741,25 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
                 if cursor.rowcount == 0:
                     conn.rollback()
                     return jsonify({"error": "Suggestion update failed — row not found"}), 404
+
+                # Ensure chat session is linked to this incident if provided
+                if chat_session_id and incident_id:
+                    cursor.execute(
+                        """UPDATE chat_sessions
+                           SET incident_id = %s
+                           WHERE id = %s AND incident_id IS NULL""",
+                        (incident_id, chat_session_id),
+                    )
+
+                # Touch incident updated_at so polling frontends see state change
+                if incident_id:
+                    cursor.execute(
+                        """UPDATE incidents
+                           SET updated_at = NOW()
+                           WHERE id = %s""",
+                        (incident_id,),
+                    )
+
                 conn.commit()
 
         logger.info("[INCIDENTS] Marked suggestion %s as executed", sanitize(suggestion_id))

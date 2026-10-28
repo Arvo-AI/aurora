@@ -11,7 +11,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Copy, Check, Play, Terminal, AlertTriangle, Shield, MessageSquare, Loader2 } from 'lucide-react';
+import { Copy, Check, Play, Terminal, AlertTriangle, Shield, MessageSquare, Loader2, AlertCircle } from 'lucide-react';
 import { copyToClipboard } from '@/lib/utils';
 
 interface SuggestionModalProps {
@@ -115,7 +115,10 @@ export default function SuggestionModal({
       const res = await fetch(`/api/incidents/suggestions/${suggestion.id}/mark-executed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatSessionId: execSessionId ?? chatSessionId }),
+        body: JSON.stringify({
+          chatSessionId: execSessionId ?? chatSessionId,
+          executionStatus: 'in_progress',
+        }),
       });
       if (!res.ok) {
         console.error('Failed to mark suggestion as executed:', res.status);
@@ -216,13 +219,46 @@ export default function SuggestionModal({
           )}
 
           {isAlreadyExecuted && (
-            <div className="flex items-start gap-2 p-3 rounded-lg bg-green-500/10 border border-green-500/30">
-              <Check className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />
-              <div className="text-xs text-green-300">
-                <span className="font-medium">Already executed</span>
-                {suggestion.executionStatus === 'completed' && ' — completed successfully'}
-                {suggestion.executionStatus === 'failed' && ' — execution failed'}
-                {suggestion.executionStatus === 'in_progress' && ' — still running...'}
+            <div
+              className={`flex items-start gap-2 p-3 rounded-lg border ${
+                suggestion.executionStatus === 'failed'
+                  ? 'bg-rose-500/10 border-rose-500/30'
+                  : suggestion.executionStatus === 'in_progress'
+                  ? 'bg-amber-500/10 border-amber-500/30'
+                  : 'bg-green-500/10 border-green-500/30'
+              }`}
+            >
+              {suggestion.executionStatus === 'failed' ? (
+                <AlertCircle className="w-4 h-4 text-rose-400 mt-0.5 flex-shrink-0" />
+              ) : suggestion.executionStatus === 'in_progress' ? (
+                <Loader2 className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0 animate-spin" />
+              ) : (
+                <Check className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />
+              )}
+              <div
+                className={`text-xs ${
+                  suggestion.executionStatus === 'failed'
+                    ? 'text-rose-300'
+                    : suggestion.executionStatus === 'in_progress'
+                    ? 'text-amber-300'
+                    : 'text-green-300'
+                }`}
+              >
+                <span className="font-medium">
+                  {suggestion.executionStatus === 'in_progress' ? 'Running' : 'Executed'}
+                </span>
+                {suggestion.executionStatus === 'completed' && ' — completed successfully (exit code 0)'}
+                {suggestion.executionStatus === 'failed' && (
+                  suggestion.executionExitCode !== undefined && suggestion.executionExitCode !== null
+                    ? ` — failed (exit code ${suggestion.executionExitCode})`
+                    : ' — execution failed'
+                )}
+                {suggestion.executionStatus === 'in_progress' && ' — command in progress...'}
+                {suggestion.executionError && (
+                  <p className="mt-1 font-mono text-[11px] text-rose-400 whitespace-pre-wrap break-all">
+                    {suggestion.executionError.slice(0, 300)}
+                  </p>
+                )}
               </div>
             </div>
           )}

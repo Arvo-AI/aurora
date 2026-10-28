@@ -1849,29 +1849,270 @@ def _update_session_status(session_id: str, status: str, user_id: str) -> None:
         _propagate_suggestion_status(session_id, status)
 
 
-def _propagate_suggestion_status(session_id: str, status: str) -> None:
-    """Propagate a terminal session status to any linked incident_suggestions rows.
+def _parse_command_output(output: Any, is_error: bool = False) -> Dict[str, Any]:
+    """Parse tool output into a structured dict with exit_code, success, stdout, stderr.
 
-    This ensures suggestions whose execution was kicked off via *session_id*
-    get their ``execution_status`` moved out of ``in_progress`` (or ``executed``)
-    when the session finishes or is cleaned up.
+    Handles JSON output from terminal_exec, cloud_exec, or plain string outputs.
     """
+    raw_dict: Optional[Dict[str, Any]] = None
+    if isinstance(output, dict):
+        raw_dict = output
+    elif isinstance(output, str):
+        output_str = output.strip()
+        if (output_str.startswith("{") and output_str.endswith("}")) or (
+            output_str.startswith("[") and output_str.endswith("]")
+        ):
+            try:
+                parsed = json.loads(output_str)
+                if isinstance(parsed, dict):
+                    raw_dict = parsed
+            except Exception:
+                pass
+
+    if raw_dict is not None:
+        ret_code = None
+        for key in ("return_code", "exit_code", "code"):
+            if key in raw_dict and raw_dict[key] is not None:
+                try:
+                    ret_code = int(raw_dict[key])
+                    break
+                except (ValueError, TypeError):
+                    pass
+
+        if "success" in raw_dict and raw_dict["success"] is not None:
+            success = bool(raw_dict["success"])
+        elif ret_code is not None:
+            success = (ret_code == 0)
+        elif raw_dict.get("status") in ("error", "failed") or "error" in raw_dict or "errors" in raw_dict:
+            success = False
+        else:
+            success = not is_error
+
+        if ret_code is not None and ret_code != 0:
+            success = False
+
+        if is_error:
+            success = False
+
+        if ret_code is None:
+            ret_code = 0 if success else 1
+
+        stdout = raw_dict.get("chat_output") or raw_dict.get("output") or raw_dict.get("stdout")
+        stderr = raw_dict.get("error") or raw_dict.get("stderr") or raw_dict.get("error_message")
+
+        if not success and not stderr and stdout:
+            stderr = str(stdout)
+
+        return {
+            "success": success,
+            "exit_code": ret_code,
+            "output": str(stdout) if stdout is not None else None,
+            "error": str(stderr) if stderr is not None else None,
+            "raw": raw_dict,
+        }
+
+    # Plain text / fallback
+    text = str(output) if output is not None else ""
+    has_err = is_error
+    if not has_err and text:
+        try:
+            from chat.backend.agent.tools.stderr_error_detector import detect_errors_in_stderr
+            has_err, _ = detect_errors_in_stderr(text)
+        except Exception:
+            pass
+
+    success = not has_err
+    exit_code = 0 if success else 1
+
+    return {
+        "success": success,
+        "exit_code": exit_code,
+        "output": text if success else None,
+        "error": text if not success else None,
+        "raw": {"text": text},
+    }
+
+
+def _record_suggestion_command_result(
+    session_id: str,
+    tool_name: str,
+    output: Any,
+    is_error: bool = False,
+) -> bool:
+    """Record a structured per-command execution result on incident_suggestions (#566).
+
+    Binds the command's outcome directly to the suggestion linked to session_id:
+    - Exit code 0 / success: execution_status = 'completed'
+    - Non-zero / failure: execution_status = 'failed'
+    - Persists stdout (execution_output), stderr (execution_error),
+      execution_exit_code, and execution_result JSONB.
+    - Touches incidents.updated_at so active pollers on /incidents/[id] update immediately.
+
+    Returns True if at least one suggestion row was updated, False otherwise.
+    """
+    if not session_id:
+        return False
+    try:
+        parsed = _parse_command_output(output, is_error=is_error)
+        new_status = "completed" if parsed["success"] else "failed"
+        result_payload = {
+            "tool_name": tool_name,
+            "success": parsed["success"],
+            "exit_code": parsed["exit_code"],
+            "output": parsed["output"],
+            "error": parsed["error"],
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """UPDATE incident_suggestions
+                       SET execution_status = %s,
+                           execution_output = %s,
+                           execution_error = %s,
+                           execution_exit_code = %s,
+                           execution_result = %s::jsonb
+                       WHERE execution_session_id = %s::uuid
+                       RETURNING incident_id""",
+                    (
+                        new_status,
+                        parsed["output"],
+                        parsed["error"],
+                        parsed["exit_code"],
+                        json.dumps(result_payload),
+                        session_id,
+                    ),
+                )
+                rows = cursor.fetchall()
+                if rows:
+                    incident_ids = list({row[0] for row in rows if row[0]})
+                    if incident_ids:
+                        cursor.execute(
+                            """UPDATE incidents
+                               SET updated_at = NOW()
+                               WHERE id = ANY(%s::uuid[])""",
+                            (incident_ids,),
+                        )
+                    conn.commit()
+                    logger.info(
+                        f"[BackgroundChat] Recorded command result for suggestion in session {session_id}: "
+                        f"status={new_status}, exit_code={parsed['exit_code']}, tool={tool_name}"
+                    )
+                    return True
+        return False
+    except Exception as e:
+        logger.warning(
+            f"[BackgroundChat] Failed to record suggestion command result for session {session_id}: {e}"
+        )
+        return False
+
+
+def _propagate_suggestion_status(session_id: str, status: str) -> None:
+    """Propagate a terminal session status to linked incident_suggestions rows.
+
+    Critical fix for #566:
+    - Never overwrite a suggestion that already has an execution_result recorded!
+      Its execution_status reflects the command's actual result, not the chat session.
+    - If execution_result IS NULL, first inspect chat_sessions.messages for any
+      executed tool output to derive the real result.
+    - If no command was executed, set terminal status based on session outcome.
+    """
+    if not session_id:
+        return
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # No RLS needed — incident_suggestions not RLS-protected
+                # Find pending suggestions that do NOT yet have an execution_result
+                cursor.execute(
+                    """SELECT id, incident_id, execution_status
+                       FROM incident_suggestions
+                       WHERE execution_session_id = %s::uuid
+                         AND execution_result IS NULL
+                         AND execution_status IN ('in_progress', 'executed')""",
+                    (session_id,),
+                )
+                pending_rows = cursor.fetchall()
+                if not pending_rows:
+                    return
+
+                # Attempt to extract tool execution output from chat_sessions messages
+                cursor.execute(
+                    """SELECT messages FROM chat_sessions WHERE id = %s""",
+                    (session_id,),
+                )
+                srow = cursor.fetchone()
+                messages = srow[0] if srow and srow[0] else []
+
+                extracted_tool = None
+                if isinstance(messages, list):
+                    for msg in reversed(messages):
+                        if not isinstance(msg, dict):
+                            continue
+                        msg_type = msg.get("type") or msg.get("role")
+                        if msg_type in ("tool", "function"):
+                            extracted_tool = msg
+                            break
+                        kwargs = msg.get("kwargs", {})
+                        if isinstance(kwargs, dict) and kwargs.get("tool_call_id"):
+                            extracted_tool = kwargs
+                            break
+
+                if extracted_tool is not None:
+                    tool_name = extracted_tool.get("name") or extracted_tool.get("tool_name") or "command_exec"
+                    content = extracted_tool.get("content") or ""
+                    if _record_suggestion_command_result(session_id, tool_name, content):
+                        return
+
+                is_failed_session = status in ("failed", "cancelled", "timeout", "error")
+                exec_status = "failed" if is_failed_session else "completed"
+                exit_code = 1 if is_failed_session else 0
+                error_msg = f"Session {status}" if is_failed_session else None
+                result_payload = {
+                    "source": "session_propagation",
+                    "session_status": status,
+                    "success": not is_failed_session,
+                    "exit_code": exit_code,
+                    "error": error_msg,
+                    "recorded_at": datetime.now(timezone.utc).isoformat(),
+                }
+
                 cursor.execute(
                     """UPDATE incident_suggestions
-                       SET execution_status = %s
+                       SET execution_status = %s,
+                           execution_error = %s,
+                           execution_exit_code = %s,
+                           execution_result = %s::jsonb
                        WHERE execution_session_id = %s::uuid
-                         AND execution_status IN ('in_progress', 'executed')""",
-                    (status, session_id),
+                         AND execution_result IS NULL
+                         AND execution_status IN ('in_progress', 'executed')
+                       RETURNING incident_id""",
+                    (
+                        exec_status,
+                        error_msg,
+                        exit_code,
+                        json.dumps(result_payload),
+                        session_id,
+                    ),
                 )
-                if cursor.rowcount > 0:
+                rows = cursor.fetchall()
+                if rows:
+                    incident_ids = list({row[0] for row in rows if row[0]})
+                    if incident_ids:
+                        cursor.execute(
+                            """UPDATE incidents
+                               SET updated_at = NOW()
+                               WHERE id = ANY(%s::uuid[])""",
+                            (incident_ids,),
+                        )
                     conn.commit()
-                    logger.info(f"[BackgroundChat] Updated suggestion execution_status to '{status}' for session {session_id}")
+                    logger.info(
+                        f"[BackgroundChat] Propagated session status '{exec_status}' to suggestions for session {session_id}"
+                    )
     except Exception as e:
-        logger.warning(f"[BackgroundChat] Failed to update suggestion execution_status for session {session_id}: {e}")
+        logger.warning(
+            f"[BackgroundChat] Failed to propagate suggestion status for session {session_id}: {e}"
+        )
 
 
 def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id: str) -> None:

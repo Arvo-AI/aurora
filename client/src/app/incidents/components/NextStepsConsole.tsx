@@ -8,6 +8,7 @@ import {
   Play,
   GitBranch,
   Copy,
+  Loader2,
 } from 'lucide-react';
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -64,6 +65,7 @@ function getSevColor(s: Suggestion): string {
 function getActionLabel(s: Suggestion, isFixType: boolean, wasExecuted: boolean, execStatus: string | undefined, canExec: boolean): string | null {
   if (isFixType) return s.prUrl ? 'View PR' : 'Create PR';
   if (wasExecuted) {
+    if (execStatus === 'in_progress' || execStatus === 'executed') return 'Running...';
     if (execStatus === 'completed') return 'Done';
     if (execStatus === 'failed') return 'Failed';
     return 'View output';
@@ -237,6 +239,7 @@ export default function NextStepsConsole({ suggestions, citations, canWrite, exe
                       }}
                       className={`inline-flex items-center gap-[7px] px-3.5 py-2 rounded-[9px] text-[12.5px] font-semibold tracking-[.005em] whitespace-nowrap transition-all active:translate-y-px ${
                         (() => {
+                          if (wasExecuted && (execStatus === 'in_progress' || execStatus === 'executed')) return 'bg-[#14171C] text-amber-300 border border-amber-500/30';
                           if (wasExecuted && execStatus === 'completed') return 'bg-[#14171C] text-emerald-400 border border-white/[.07]';
                           if (wasExecuted && execStatus === 'failed') return 'bg-[#14171C] text-rose-400 border border-white/[.07]';
                           if (isPrimary) return 'bg-gradient-to-b from-emerald-300 to-emerald-400 text-[#04140F] border border-transparent shadow-[0_1px_0_rgba(255,255,255,.25)_inset,0_6px_18px_-8px_rgba(63,224,182,.7)] hover:shadow-[0_1px_0_rgba(255,255,255,.3)_inset,0_8px_22px_-8px_rgba(63,224,182,.9)]';
@@ -246,6 +249,7 @@ export default function NextStepsConsole({ suggestions, citations, canWrite, exe
                     >
                       {(() => {
                         if (isFixType) return <GitBranch className="w-[13px] h-[13px]" />;
+                        if (wasExecuted && (execStatus === 'in_progress' || execStatus === 'executed')) return <Loader2 className="w-[13px] h-[13px] animate-spin text-amber-400" />;
                         if (wasExecuted && execStatus === 'completed') return <CheckCircle2 className="w-[13px] h-[13px]" />;
                         if (wasExecuted && execStatus === 'failed') return <AlertCircle className="w-[13px] h-[13px]" />;
                         if (wasExecuted) return <Play className="w-[13px] h-[13px]" />;

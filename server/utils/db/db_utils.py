@@ -861,6 +861,16 @@ def initialize_tables():
                         pr_number INTEGER,
                         created_branch TEXT,
                         applied_at TIMESTAMP,
+                        executed_at TIMESTAMP,
+                        execution_session_id UUID,
+                        execution_status VARCHAR(20),
+                        execution_output TEXT,
+                        execution_error TEXT,
+                        execution_exit_code INTEGER,
+                        execution_result JSONB,
+                        rationale TEXT,
+                        undo TEXT,
+                        summary TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
 
@@ -2803,6 +2813,27 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error adding summary column to incident_suggestions: {e}")
+                conn.rollback()
+
+            # Migration: Add execution result columns to incident_suggestions (#566)
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incident_suggestions
+                    ADD COLUMN IF NOT EXISTS execution_output TEXT,
+                    ADD COLUMN IF NOT EXISTS execution_error TEXT,
+                    ADD COLUMN IF NOT EXISTS execution_exit_code INTEGER,
+                    ADD COLUMN IF NOT EXISTS execution_result JSONB;
+                    """
+                )
+                logging.info(
+                    "Added execution result columns to incident_suggestions table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error adding execution result columns to incident_suggestions: {e}"
+                )
                 conn.rollback()
 
             # Migration: Create postmortems table if it doesn't exist

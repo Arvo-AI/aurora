@@ -288,6 +288,14 @@ class ToolContextCapture:
         run_id = tool_info.get("run_id")  # Get the run_id from the tool info
         
         self._record_step_end(tool_info.get("step_id"), output, is_error)
+
+        # Record command result on linked incident suggestion if session is executing a suggestion (#566)
+        if self.session_id:
+            try:
+                from chat.background.task import _record_suggestion_command_result
+                _record_suggestion_command_result(self.session_id, tool_name, output, is_error=is_error)
+            except Exception as e:
+                logger.debug(f"Failed to record suggestion command result in capture_tool_end: {e}")
         
         logger.debug(f"Tool info: {tool_name}, input: {tool_input}, run_id: {run_id}")
         
