@@ -426,7 +426,7 @@ Regardless of controller, ensure these are configured:
 
 | Setting | Value | Why |
 |---------|-------|-----|
-| Read/send timeout | `3600s` | RCA analysis can run 30+ minutes |
+| Read/send timeout | `7200s` | Must cover `INVESTIGATION_TIMEOUT_SECONDS` (default one hour). The chart raises the nginx proxy timeouts to at least that value. |
 | HTTP version | `1.1` | Required for WebSocket upgrade |
 | Max body size | `50m` | File uploads |
 

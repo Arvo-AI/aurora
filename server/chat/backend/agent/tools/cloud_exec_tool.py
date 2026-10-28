@@ -1209,8 +1209,9 @@ def setup_flyio_environment_isolated(user_id: str, selected_org: str | None = No
         return False, None, None, None
 
 
-# The chat workflow and the RCA task both die at 1800s. A command that runs
-# until then is killed before a timed-out BigQuery job can be cancelled.
+# The chat workflow and the RCA task both die at INVESTIGATION_TIMEOUT_SECONDS
+# (default 3600). A command that runs until then is killed before a timed-out
+# BigQuery job can be cancelled.
 _COMMAND_TIMEOUT_CEILING = 600
 
 

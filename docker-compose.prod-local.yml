@@ -120,6 +120,8 @@ x-common-env: &common-env
   ENRICHMENT_MODEL: ${ENRICHMENT_MODEL}
   MEMORY_SELECTOR_MODEL: ${MEMORY_SELECTOR_MODEL}
   AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
+  # Wall-clock limit for one investigation, in seconds. Default is one hour.
+  INVESTIGATION_TIMEOUT_SECONDS: ${INVESTIGATION_TIMEOUT_SECONDS:-3600}
   GEMINI_DISABLE_THINKING: ${GEMINI_DISABLE_THINKING}
   EMBEDDING_MODEL: ${EMBEDDING_MODEL}
 
@@ -328,6 +330,8 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - terraform-workdir:/app/terraform_workdir
+    # Idle workers exit on SIGTERM immediately. This only waits while a task is running.
+    stop_grace_period: 3660s
     command: >
       celery -A celery_config worker
         --loglevel=info

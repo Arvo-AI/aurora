@@ -332,7 +332,9 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
     curr_node = "START"
     sent_message_count = 0
     websocket_connected = True
-    workflow_timeout = 1800  # 30 minutes max for any workflow
+    # Same wall as the background Celery task (INVESTIGATION_TIMEOUT_SECONDS).
+    from chat.investigation_timeout import investigation_timeout_seconds
+    workflow_timeout = investigation_timeout_seconds()
     session_id = getattr(state, 'session_id', 'unknown')
 
     # Helper to save incident thoughts for background chats

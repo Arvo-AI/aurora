@@ -212,8 +212,9 @@ extraEnv: []
 # Celery worker pod settings
 # ------------------------------------------------------------------------------
 celeryWorker:
-  # Must exceed run_background_chat's time_limit (1800s) to avoid SIGKILL mid-task
-  terminationGracePeriodSeconds: 1860
+  # Floor is INVESTIGATION_TIMEOUT_SECONDS + 60s. A lower value is raised
+  # in the template so a rolling update does not SIGKILL a running investigation.
+  terminationGracePeriodSeconds: 3660
 
 # ------------------------------------------------------------------------------
 # Replica counts per service
@@ -305,6 +306,9 @@ config:
   # --- LLM Configuration ---
   LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
   AGENT_RECURSION_LIMIT: "240" #Maximum number of steps an agent can take
+  # Wall-clock limit for one investigation, in seconds. Default is one hour.
+  # Clamped to 120–10800. Worker grace and nginx proxy timeouts follow this.
+  INVESTIGATION_TIMEOUT_SECONDS: "3600"
 
   # --- AI Safety Guardrails ---
   # Input rail + signature matcher + LLM safety judge. All three activate with
@@ -885,13 +889,13 @@ ingress:
   # Controller-specific annotations (auto-applied based on className)
   # ----------------------------------------------------------------
   # These are critical for Aurora's functionality:
-  #   - proxy-read-timeout: 3600s - Required for long-running RCA analysis (240 agent iterations can take 30+ minutes)
+  #   - proxy-read-timeout: 7200s - Must cover INVESTIGATION_TIMEOUT_SECONDS (default one hour)
   #   - proxy-http-version: 1.1 - Required for WebSocket upgrade
   #   - proxy-body-size: 50m - Required for file uploads
   #
   # WARNING: Regardless of which controller you use, you MUST ensure these
   # settings are configured (via annotations, IngressClass params, or controller config):
-  #   - Read and send timeout: 3600s - Required for long-running RCA analysis
+  #   - Read and send timeout: at least INVESTIGATION_TIMEOUT_SECONDS (default 3600; chart default 7200)
   #   - HTTP version: 1.1 - Required for WebSocket upgrade
   #   - Max body size: 50m - Required for file uploads
   # Without these, you'll experience WebSocket disconnects, failed upgrades,
@@ -904,8 +908,8 @@ ingress:
   nginx:
     # Auto-apply nginx annotations when className is "nginx"
     enabled: true  # Set to false to disable nginx defaults even when className is nginx
-    proxyReadTimeout: "3600"
-    proxySendTimeout: "3600"
+    proxyReadTimeout: "7200"
+    proxySendTimeout: "7200"
     proxyBodySize: "50m"
     proxyHttpVersion: "1.1"
     # Cookie-based session affinity for WebSocket connections
@@ -913,7 +917,7 @@ ingress:
     sessionAffinity:
       enabled: true
       cookieName: "aurora-ws-affinity"
-      cookieMaxAge: "3600"
+      cookieMaxAge: "7200"
   
   # TLS/HTTPS Configuration
   # ------------------------

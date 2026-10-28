@@ -228,6 +228,7 @@ At least one LLM provider API key is required. See [LLM Providers](/docs/integra
 | `GOOGLE_AI_API_KEY` | - | Google AI API key |
 | `LLM_PROVIDER_MODE` | `openrouter` | Provider routing mode (see below) |
 | `AGENT_RECURSION_LIMIT` | `240` | Max agent reasoning steps |
+| `INVESTIGATION_TIMEOUT_SECONDS` | `3600` | Wall-clock limit for one investigation, in seconds. Default is one hour. Clamped to 120–10800. Requires a process restart. On Kubernetes the chart raises the worker termination grace and the nginx proxy timeouts to at least this value. |
 
 ### LLM_PROVIDER_MODE
 
@@ -251,6 +252,7 @@ GOOGLE_AI_API_KEY=your-key
 
 LLM_PROVIDER_MODE=openrouter   # or: direct
 AGENT_RECURSION_LIMIT=240
+INVESTIGATION_TIMEOUT_SECONDS=3600
 ```
 
 ### Vertex AI (Google Cloud)

@@ -190,3 +190,53 @@ If existingSecret is set, use the user-provided name; otherwise use the chart-ma
 {{- include "aurora.fullname" . -}}-secrets-llm
 {{- end -}}
 {{- end -}}
+
+{{/*
+Investigation hard limit in seconds. Same clamp as chat/investigation_timeout.py
+(default 3600, range 120–10800). Non-numeric values use 3600.
+*/}}
+{{- define "aurora.investigationTimeoutSeconds" -}}
+{{- $raw := .Values.config.INVESTIGATION_TIMEOUT_SECONDS | default "3600" | toString | trim -}}
+{{- if not (regexMatch "^[0-9]+$" $raw) -}}
+3600
+{{- else -}}
+{{- $n := int $raw -}}
+{{- if lt $n 120 -}}
+120
+{{- else if gt $n 10800 -}}
+10800
+{{- else -}}
+{{ $n }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Celery worker grace. At least the investigation timeout plus 60s, so a
+rolling update does not SIGKILL a task that just started. A higher
+explicit value is kept.
+*/}}
+{{- define "aurora.celeryTerminationGraceSeconds" -}}
+{{- $timeout := include "aurora.investigationTimeoutSeconds" . | trim | int -}}
+{{- $minGrace := add $timeout 60 -}}
+{{- $configured := .Values.celeryWorker.terminationGracePeriodSeconds | default 0 | int -}}
+{{- if lt $configured $minGrace -}}
+{{ $minGrace }}
+{{- else -}}
+{{ $configured }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Floor a duration at the investigation timeout. Pass
+(dict "root" $ "value" <configured seconds>).
+*/}}
+{{- define "aurora.atLeastInvestigationTimeout" -}}
+{{- $timeout := include "aurora.investigationTimeoutSeconds" .root | trim | int -}}
+{{- $configured := .value | default $timeout | int -}}
+{{- if lt $configured $timeout -}}
+{{ $timeout }}
+{{- else -}}
+{{ $configured }}
+{{- end -}}
+{{- end -}}

@@ -38,7 +38,7 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/part-of: aurora
     spec:
-      terminationGracePeriodSeconds: {{ if kindIs "invalid" .Values.celeryWorker.terminationGracePeriodSeconds }}1800{{ else }}{{ .Values.celeryWorker.terminationGracePeriodSeconds }}{{ end }}
+      terminationGracePeriodSeconds: {{ include "aurora.celeryTerminationGraceSeconds" . | trim }}
       serviceAccountName: {{ include "aurora.fullname" . }}-celery-worker
       automountServiceAccountToken: false
       securityContext:

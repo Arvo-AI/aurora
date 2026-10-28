@@ -22,6 +22,11 @@ from utils.auth.stateless_auth import set_rls_context, get_org_id_for_user
 from connectors.google_chat_connector.client import get_chat_app_client
 from connectors.slack_connector.client import get_slack_client_for_user
 from utils.db.connection_pool import db_pool
+from chat.investigation_timeout import (
+    investigation_soft_timeout_seconds,
+    investigation_timeout_label,
+    investigation_timeout_seconds,
+)
 from chat.background.visualization_generator import update_visualization
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 from chat.backend.agent.utils.message_content import extract_text_from_content
@@ -439,11 +444,17 @@ def _build_rca_context(
     }
 
 
+# Captured at import, after celery_config has loaded dotenv. Celery bakes
+# these into the task and will not re-read the env later.
+_INVESTIGATION_HARD_TIMEOUT = investigation_timeout_seconds()
+_INVESTIGATION_SOFT_TIMEOUT = investigation_soft_timeout_seconds()
+
+
 @celery_app.task(
     bind=True,
     name="chat.background.run_background_chat",
-    time_limit=1800,  # Hard timeout: 30 minutes (task killed)
-    soft_time_limit=1740,  # Soft timeout: 29 minutes (exception raised, 60s grace for cleanup before hard kill)
+    time_limit=_INVESTIGATION_HARD_TIMEOUT,  # Hard kill. Default is one hour.
+    soft_time_limit=_INVESTIGATION_SOFT_TIMEOUT,  # Raises a minute earlier so the incident can be marked failed.
     acks_late=True,
     reject_on_worker_lost=True,
 )
@@ -466,7 +477,7 @@ def run_background_chat(
     - Sets is_background=True to skip confirmations and user questions
     - Saves all messages to the database (same as regular chats)
     - Appears in the frontend chat history
-    - Times out after 30 minutes to prevent hanging indefinitely
+    - Times out at INVESTIGATION_TIMEOUT_SECONDS (default one hour)
 
     Args:
         user_id: The user ID to run the chat for
@@ -495,7 +506,7 @@ def run_background_chat(
     _dedup_acquired = False
     try:
         _dedup_redis = celery_app.backend.client
-        _acquired = _dedup_redis.set(_dedup_key, "1", nx=True, ex=1800)
+        _acquired = _dedup_redis.set(_dedup_key, "1", nx=True, ex=_INVESTIGATION_HARD_TIMEOUT)
         if not _acquired:
             logger.warning(f"[BackgroundChat] DEDUP: Task {self.request.id} already running, skipping duplicate execution")
             return {"session_id": session_id, "status": "deduplicated", "error": None}
@@ -930,33 +941,39 @@ def run_background_chat(
         return _json_safe_result(result)
     
     except SoftTimeLimitExceeded:
-        logger.error(f"[BackgroundChat] Timeout after 30 minutes for session {session_id}")
+        timed_out_after = investigation_timeout_label()
+        timeout_error = f"Background chat exceeded {timed_out_after} timeout"
+        logger.error("[BackgroundChat] Timeout after %s for session %s", timed_out_after, session_id)
         _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id and not is_action_source:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
-            _mark_inflight_findings_failed(incident_id, user_id, "parent task timed out after 30 minutes")
+            _mark_inflight_findings_failed(incident_id, user_id, f"parent task timed out after {timed_out_after}")
             if send_notifications:  # a follow-up chat failing is not the investigation failing
                 try:
                     from utils.notifications.dispatcher import notify_investigation_failed
-                    notify_investigation_failed(user_id, incident_id, error_message="Investigation timed out after 30 minutes")
+                    notify_investigation_failed(
+                        user_id,
+                        incident_id,
+                        error_message=f"Investigation timed out after {timed_out_after}",
+                    )
                 except Exception:
                     logger.debug("[BackgroundChat] Failed to send investigation failed notification after timeout")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
                 update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
-                                         error_message='Background chat exceeded 30 minute timeout', user_id=user_id)
+                                         error_message=timeout_error, user_id=user_id)
             except Exception:
                 logger.debug("Failed to update action run status after timeout")
             try:
                 from utils.notifications.dispatcher import notify_action_completed
-                notify_action_completed(user_id, trigger_metadata, session_id, status='error', error_message='Background chat exceeded 30 minute timeout')
+                notify_action_completed(user_id, trigger_metadata, session_id, status='error', error_message=timeout_error)
             except Exception:
                 logger.debug("[BackgroundChat] Failed to send action completed notification after timeout")
         return {
             "session_id": session_id,
             "status": "failed",
-            "error": "Background chat exceeded 30 minute timeout",
+            "error": timeout_error,
         }
 
     except Exception as e:
