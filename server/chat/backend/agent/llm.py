@@ -76,6 +76,53 @@ class ModelConfig:
     # Root-cause recurrence detection agent — falls back to MAIN_MODEL
     RECURRENCE_AGENT_MODEL = os.getenv("RECURRENCE_AGENT_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
+    # Small models the active provider can call. The selector used to read
+    # only the newest 200 memories, so the rest of a large bank never reached it.
+    _SELECTOR_FLASH_LITE = "google/gemini-3.5-flash-lite"
+    _SELECTOR_VERTEX_FLASH_LITE = "vertex/gemini-3.5-flash-lite"
+    _SELECTOR_HAIKU = "anthropic/claude-haiku-5.5"
+    _SELECTOR_OPENAI = "openai/gpt-5.6-luna"
+
+    @staticmethod
+    def memory_selector_model() -> str:
+        """Fast model for the memory selector."""
+        override = (os.getenv("MEMORY_SELECTOR_MODEL") or "").strip()
+        # Operator pin wins, including a Bedrock gateway id only they have enabled.
+        if override:
+            return override
+
+        mode = (os.getenv("LLM_PROVIDER_MODE") or "direct").strip().lower()
+        # Flash-lite is the current small Gemini, and both of these providers can call it.
+        if mode in ("openrouter", "google"):
+            return ModelConfig._SELECTOR_FLASH_LITE
+        # Vertex ids use a different prefix.
+        if mode == "vertex":
+            return ModelConfig._SELECTOR_VERTEX_FLASH_LITE
+        # Luna is the current low-cost OpenAI model.
+        if mode == "openai":
+            return ModelConfig._SELECTOR_OPENAI
+        # Gemini would leave this provider. Haiku 5.5 is the current fast Claude.
+        if mode in ("bedrock", "anthropic"):
+            return ModelConfig._SELECTOR_HAIKU
+
+        # direct/auto: follow MAIN_MODEL's provider so a second API key isn't required.
+        main = (os.getenv("MAIN_MODEL") or "").strip()
+        # Ollama only serves a model the operator installed. Haiku is not one of them.
+        if mode == "ollama" or main.startswith("ollama/"):
+            return main
+        # direct + bedrock/<id> is gateway mode. An anthropic/ id would hit Anthropic.
+        if main.startswith("bedrock/"):
+            return main
+
+        prefix = main.split("/", 1)[0] if "/" in main else ""
+        if prefix == "google":
+            return ModelConfig._SELECTOR_FLASH_LITE
+        if prefix == "vertex":
+            return ModelConfig._SELECTOR_VERTEX_FLASH_LITE
+        if prefix == "openai":
+            return ModelConfig._SELECTOR_OPENAI
+        return ModelConfig._SELECTOR_HAIKU
+
 
 class LLMManager:
     def __init__(

@@ -165,6 +165,8 @@ class BedrockProvider(BaseLLMProvider):
         # Gateway mode is auto-selected by the presence of BEDROCK_BASE_URL; otherwise
         # native mode (AWS SDK). is_available() above guarantees one of the two is set.
         if self.base_url:
+            # Gateway ChatOpenAI has no Converse field. Drop it so the call still builds.
+            kwargs.pop("additional_model_request_fields", None)
             logger.info(f"Creating Bedrock (gateway) chat model: {native_model} (base_url={self.base_url})")
             config = {
                 "model": native_model,
