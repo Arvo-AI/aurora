@@ -2,15 +2,16 @@
 Memory Injector — Async Prefetch + Single-Pass LLM Selection
 
 Runs as a non-blocking prefetch in parallel with prompt building.
-One fast LLM call selects up to 5 relevant memories from the index
-(title + description). Whatever it selects gets injected into the system prompt. 
-- Hard caps: 5 entries max, 4KB per entry.
+One fast, non-thinking LLM call selects up to 5 relevant memories from the
+index (title + description). Whatever it selects gets injected into the system prompt.
+- Hard caps: 5 entries max, 4KB per entry, 60 candidates in the selector prompt.
 - Dedup: never re-surface a memory already shown this session.
 """
 
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Set, Tuple
@@ -33,8 +34,18 @@ MAX_SELECTED = 5
 MAX_MEMORY_BYTES_PER_ENTRY = 4096
 STALENESS_DAYS = 2
 
-SELECTOR_MODEL = ModelConfig.RCA_MODEL
+# The TOC index stops at 200. The selector has to read past that, or a memory
+# outside the newest slice can never be injected (a 420-entry bank hid ~220).
+_SELECTOR_FETCH_LIMIT = 2000
+# Past this, even a small model misses the ~6s prefetch and nothing is injected.
+_MAX_SELECTOR_CANDIDATES = 60
 SELECTOR_TIMEOUT = 5.0
+
+_TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
+_STOPWORDS = frozenset({
+    "an", "the", "and", "or", "to", "of", "in", "on", "for", "is", "it",
+    "be", "as", "at", "by", "with", "from", "this", "that", "our", "we", "my",
+})
 
 _SURFACED_SET_TTL = 86400
 
@@ -121,7 +132,9 @@ class MemoryPrefetch:
         try:
             already_surfaced = await asyncio.to_thread(_get_surfaced_set, self.session_id)
 
-            entries = await asyncio.to_thread(get_memory_entries, self.user_id)
+            entries = await asyncio.to_thread(
+                get_memory_entries, self.user_id, _SELECTOR_FETCH_LIMIT,
+            )
             if not entries:
                 return ""
 
@@ -178,11 +191,54 @@ class MemoryPrefetch:
 # ---------------------------------------------------------------------------
 
 
+def _tokens(text: str) -> Set[str]:
+    return {t for t in _TOKEN_RE.findall((text or "").lower()) if t not in _STOPWORDS}
+
+
+def _as_naive(ts) -> datetime:
+    # Missing timestamps sort last, behind any real updated_at.
+    if ts is None:
+        return datetime.min
+    # Aware DB timestamps can't be ordered against datetime.min.
+    if getattr(ts, "tzinfo", None) is not None:
+        return ts.replace(tzinfo=None)
+    return ts
+
+
+def _shortlist_entries(user_message: str, entries: List[Dict], limit: int) -> List[Dict]:
+    """Keep the entries most likely to matter so the selector prompt stays small."""
+    query_tokens = _tokens(user_message[:2000])
+
+    def rank(entry: Dict):
+        title = _tokens(entry.get("title") or "")
+        category = _tokens(entry.get("category") or "")
+        desc = _tokens((entry.get("description") or "")[:150])
+        overlap = (
+            3 * len(query_tokens & title)
+            + 2 * len(query_tokens & category)
+            + len(query_tokens & desc)
+        )
+        # Recency breaks ties, and is the only signal when nothing overlaps.
+        return (overlap, _as_naive(entry.get("updated_at")))
+
+    ranked = sorted(entries, key=rank, reverse=True)
+    return ranked[:limit]
+
+
 async def _select_relevant_memories_async(user_message: str, entries: List[Dict]) -> List[Dict]:
     """One strict async LLM call: select up to 5 from the index."""
 
+    # A few hundred full descriptions blow the prefetch budget. Rank first.
+    pool = entries
+    if len(entries) > _MAX_SELECTOR_CANDIDATES:
+        pool = _shortlist_entries(user_message, entries, _MAX_SELECTOR_CANDIDATES)
+        logger.info(
+            "[MemoryInjector] Shortlisted %d/%d memories before selection",
+            len(pool), len(entries),
+        )
+
     manifest_lines = []
-    for entry in entries:
+    for entry in pool:
         ts = entry["updated_at"].isoformat() if entry["updated_at"] else "unknown"
         desc = entry["description"][:150] if entry["description"] else "(no description)"
         manifest_lines.append(f"- [{entry['category']}] \"{entry['title']}\" | updated: {ts} | {desc}")
@@ -192,8 +248,9 @@ async def _select_relevant_memories_async(user_message: str, entries: List[Dict]
         manifest="\n".join(manifest_lines),
     )
 
+    model = ModelConfig.memory_selector_model()
     try:
-        llm = create_chat_model(SELECTOR_MODEL, temperature=0.0, streaming=False, max_tokens=256)
+        llm = create_chat_model(model, temperature=0.0, streaming=False, max_tokens=256)
         response = await llm.ainvoke(
             [
                 SystemMessage(content=_SELECTOR_SYSTEM),
@@ -212,11 +269,12 @@ async def _select_relevant_memories_async(user_message: str, entries: List[Dict]
 
         parsed = json.loads(json_str)
         selected_raw = parsed.get("selected", [])
+        # A non-list "selected" is a malformed reply, not an empty selection.
         if not isinstance(selected_raw, list):
             return []
 
-        # Validate against actual entries
-        entry_lookup = {_entry_key(e): e for e in entries}
+        # Validate against the candidates we actually showed the model.
+        entry_lookup = {_entry_key(e): e for e in pool}
         validated = []
         for sel in selected_raw[:MAX_SELECTED]:
             title = sel.get("title", "").strip().strip('"')
@@ -224,14 +282,17 @@ async def _select_relevant_memories_async(user_message: str, entries: List[Dict]
             if key in entry_lookup:
                 validated.append(entry_lookup[key])
 
-        logger.info("[MemoryInjector] Selected %d/%d entries", len(validated), len(entries))
+        logger.info(
+            "[MemoryInjector] Selected %d/%d entries with %s",
+            len(validated), len(entries), model,
+        )
         return validated
 
     except json.JSONDecodeError as e:
         logger.warning("[MemoryInjector] Selector returned invalid JSON: %s", e)
         return []
     except Exception as e:
-        logger.warning("[MemoryInjector] Selector failed: %s", e)
+        logger.warning("[MemoryInjector] Selector failed (%s): %s", model, e)
         return []
 
 

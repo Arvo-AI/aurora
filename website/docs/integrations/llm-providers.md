@@ -360,6 +360,19 @@ ENRICHMENT_MODEL=anthropic/claude-haiku-5.5
 
 This is light text-formatting work (turning validated fixes into readable descriptions), so a small, cheap model is recommended. Same `provider/model` format as `MAIN_MODEL`.
 
+## Memory Selector Model
+
+On every turn Aurora asks a small model which memories to inject. That call has about six seconds. `RCA_MODEL` does not finish once an org has hundreds of memories, so the prefetch is cancelled and nothing is injected.
+
+```bash
+# Optional. Same provider/model format as MAIN_MODEL.
+# Unset: flash-lite on Google/OpenRouter/Vertex, haiku-4.5 on Anthropic/Bedrock,
+# gpt-4o-mini on OpenAI.
+MEMORY_SELECTOR_MODEL=google/gemini-3.5-flash-lite
+```
+
+Use a non-thinking model. The selector also ranks the bank down to 60 candidates before the call, so a few hundred memories still fit in the window.
+
 ## Troubleshooting
 
 ### "Invalid API key"

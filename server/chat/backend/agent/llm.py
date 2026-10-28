@@ -76,6 +76,48 @@ class ModelConfig:
     # Root-cause recurrence detection agent — falls back to MAIN_MODEL
     RECURRENCE_AGENT_MODEL = os.getenv("RECURRENCE_AGENT_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
+    # Memory selector. Non-thinking on purpose: RCA_MODEL (haiku-5.5 or opus)
+    # does not finish inside the ~6s prefetch once an org has hundreds of
+    # memories, so the task is cancelled and nothing is injected.
+    _SELECTOR_FLASH_LITE = "google/gemini-3.5-flash-lite"
+    _SELECTOR_VERTEX_FLASH_LITE = "vertex/gemini-3.5-flash-lite"
+    _SELECTOR_HAIKU = "anthropic/claude-haiku-4.5"
+    _SELECTOR_OPENAI = "openai/gpt-4o-mini"
+
+    @staticmethod
+    def memory_selector_model() -> str:
+        """Fast model for the memory selector."""
+        override = (os.getenv("MEMORY_SELECTOR_MODEL") or "").strip()
+        # Operator pin wins, including a Bedrock gateway id only they have enabled.
+        if override:
+            return override
+
+        mode = (os.getenv("LLM_PROVIDER_MODE") or "direct").strip().lower()
+        # Flash-lite does not think, and both of these providers can call it.
+        if mode in ("openrouter", "google"):
+            return ModelConfig._SELECTOR_FLASH_LITE
+        # Vertex ids use a different prefix; flash-lite still skips thinking.
+        if mode == "vertex":
+            return ModelConfig._SELECTOR_VERTEX_FLASH_LITE
+        # gpt-4o-mini does not reason; newer OpenAI ids spend the budget thinking.
+        if mode == "openai":
+            return ModelConfig._SELECTOR_OPENAI
+        # Gemini would leave this provider. Haiku 4.5 stays on it and does not think.
+        if mode in ("bedrock", "anthropic"):
+            return ModelConfig._SELECTOR_HAIKU
+
+        # direct/auto: follow MAIN_MODEL's provider so a second API key isn't required.
+        main = (os.getenv("MAIN_MODEL") or "").strip() or ModelConfig._DEFAULT_MODEL
+        prefix = main.split("/", 1)[0] if "/" in main else ""
+        if prefix == "google":
+            return ModelConfig._SELECTOR_FLASH_LITE
+        if prefix == "vertex":
+            return ModelConfig._SELECTOR_VERTEX_FLASH_LITE
+        if prefix == "openai":
+            return ModelConfig._SELECTOR_OPENAI
+        # Anthropic is the default install, and the one Bedrock gateways can serve.
+        return ModelConfig._SELECTOR_HAIKU
+
 
 class LLMManager:
     def __init__(

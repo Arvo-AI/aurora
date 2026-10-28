@@ -379,6 +379,9 @@ config:
   SUMMARIZATION_MODEL: ""
   # Model used by the Next Steps enrichment pass (rationale, undo commands, safety labels). Empty = falls back to MAIN_MODEL.
   ENRICHMENT_MODEL: ""
+  # Memory selector. Empty = a small non-thinking model for the active provider.
+  # RCA_MODEL misses the prefetch deadline once an org has hundreds of memories.
+  MEMORY_SELECTOR_MODEL: ""
   # Root-cause recurrence detection (dedup layer 1): off | shadow | live.
   # Defaults to "live" (folding on). Set to "off" to disable, or "shadow" to
   # log verdicts without folding.
