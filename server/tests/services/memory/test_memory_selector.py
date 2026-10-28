@@ -168,7 +168,7 @@ def test_selector_prompt_is_capped(monkeypatch):
             captured["run_name"] = (config or {}).get("run_name")
             return _Response()
 
-    def _fake_create(model, temperature=0.0, streaming=False, max_tokens=256):
+    def _fake_create(model, temperature=0.0, streaming=False, max_tokens=256, **kwargs):
         captured["model"] = model
         return _LLM()
 
@@ -213,6 +213,63 @@ def _capture_selector_kwargs(monkeypatch, model: str):
         )
     )
     return captured["kwargs"]
+
+
+def test_cut_off_json_keeps_the_closed_entry(monkeypatch):
+    monkeypatch.setenv("MEMORY_SELECTOR_MODEL", "anthropic/claude-haiku-5.5")
+    monkeypatch.setenv("LLM_PROVIDER_MODE", "bedrock")
+    stale = datetime(2024, 1, 1)
+    entries = [
+        {"category": "runbook", "title": "Redis failover", "description": "redis", "updated_at": stale},
+        {"category": "learned", "title": "Alert validation", "description": "mock", "updated_at": stale},
+    ]
+    cut = (
+        '{"selected": [{"category": "runbook", "title": "Redis failover"}, '
+        '{"category": "learned", "title": "Alert val'
+    )
+
+    class _Response:
+        content = cut
+
+    class _LLM:
+        async def ainvoke(self, messages, config=None):
+            return _Response()
+
+    def _fake_create(model, temperature=0.0, streaming=False, max_tokens=256, **kwargs):
+        return _LLM()
+
+    monkeypatch.setattr("services.memory.injector.create_chat_model", _fake_create)
+    selected = asyncio.run(_select_relevant_memories_async("redis is down", entries))
+    assert [e["title"] for e in selected] == ["Redis failover"]
+
+
+def test_selector_timeout_tells_the_agent_to_check(monkeypatch):
+    from services.memory.injector import MemoryPrefetch, _SELECTOR_MISSED
+
+    async def _slow():
+        await asyncio.sleep(5)
+        return ""
+
+    async def _run():
+        pf = MemoryPrefetch(user_id="u", session_id="s", user_message="redis is down")
+        pf._started_at = 0
+        pf._task = asyncio.create_task(_slow())
+        return await pf.get_result_async(timeout=0.05)
+
+    assert asyncio.run(_run()) == _SELECTOR_MISSED
+
+
+def test_haiku_on_bedrock_disables_thinking(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER_MODE", "bedrock")
+    kwargs = _capture_selector_kwargs(monkeypatch, "anthropic/claude-haiku-5.5")
+    assert kwargs["additional_model_request_fields"]["thinking"]["type"] == "disabled"
+
+
+def test_opus_55_does_not_send_thinking_disabled(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER_MODE", "bedrock")
+    kwargs = _capture_selector_kwargs(monkeypatch, "anthropic/claude-opus-5.5")
+    assert "additional_model_request_fields" not in kwargs
+    assert "thinking" not in kwargs
 
 
 def test_gpt4_pin_does_not_send_reasoning_effort(monkeypatch):
