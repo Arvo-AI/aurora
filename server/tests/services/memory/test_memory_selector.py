@@ -25,7 +25,7 @@ def test_bedrock_selector_is_haiku_not_rca(monkeypatch):
     _clear_selector_env(monkeypatch)
     monkeypatch.setenv("LLM_PROVIDER_MODE", "bedrock")
     chosen = ModelConfig.memory_selector_model()
-    assert chosen == "anthropic/claude-haiku-4.5"
+    assert chosen == "anthropic/claude-haiku-5.5"
     assert chosen != "anthropic/claude-opus-5.5"
 
 
@@ -42,10 +42,10 @@ def test_direct_mode_follows_main_provider(monkeypatch):
     assert ModelConfig.memory_selector_model() == "google/gemini-3.5-flash-lite"
 
     monkeypatch.setenv("MAIN_MODEL", "openai/gpt-5.6-sol")
-    assert ModelConfig.memory_selector_model() == "openai/gpt-4o-mini"
+    assert ModelConfig.memory_selector_model() == "openai/gpt-5.6-luna"
 
     monkeypatch.setenv("MAIN_MODEL", "anthropic/claude-opus-5.5")
-    assert ModelConfig.memory_selector_model() == "anthropic/claude-haiku-4.5"
+    assert ModelConfig.memory_selector_model() == "anthropic/claude-haiku-5.5"
 
 
 def test_shortlist_keeps_the_overlapping_memory():
@@ -137,3 +137,28 @@ def test_selector_prompt_is_capped(monkeypatch):
     assert 'note-99' not in captured["prompt"]
     assert captured["prompt"].count("\n- [") <= _MAX_SELECTOR_CANDIDATES
     assert [e["title"] for e in selected] == ["Redis failover"]
+
+
+def test_openai_selector_asks_for_low_reasoning(monkeypatch):
+    monkeypatch.setenv("MEMORY_SELECTOR_MODEL", "openai/gpt-5.6-luna")
+    captured = {}
+
+    class _Response:
+        content = '{"selected": []}'
+
+    class _LLM:
+        async def ainvoke(self, messages, config=None):
+            return _Response()
+
+    def _fake_create(model, temperature=0.0, streaming=False, max_tokens=256, **kwargs):
+        captured["kwargs"] = kwargs
+        return _LLM()
+
+    monkeypatch.setattr("services.memory.injector.create_chat_model", _fake_create)
+    asyncio.run(
+        _select_relevant_memories_async(
+            "hello",
+            [{"category": "context", "title": "Note", "description": "x", "updated_at": datetime(2024, 1, 1)}],
+        )
+    )
+    assert captured["kwargs"]["reasoning"] == {"effort": "low"}

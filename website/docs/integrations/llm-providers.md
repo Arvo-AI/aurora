@@ -366,8 +366,8 @@ On every turn Aurora asks a small model which memories to inject. That call has 
 
 ```bash
 # Optional. Same provider/model format as MAIN_MODEL.
-# Unset: flash-lite on Google/OpenRouter/Vertex, haiku-4.5 on Anthropic/Bedrock,
-# gpt-4o-mini on OpenAI.
+# Unset: Gemini 3.5 Flash-Lite on Google/OpenRouter/Vertex, Haiku 5.5 on
+# Anthropic/Bedrock, GPT-5.6 Luna on OpenAI.
 MEMORY_SELECTOR_MODEL=google/gemini-3.5-flash-lite
 ```
 

@@ -76,13 +76,12 @@ class ModelConfig:
     # Root-cause recurrence detection agent — falls back to MAIN_MODEL
     RECURRENCE_AGENT_MODEL = os.getenv("RECURRENCE_AGENT_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
 
-    # Memory selector. Non-thinking on purpose: RCA_MODEL (haiku-5.5 or opus)
-    # does not finish inside the ~6s prefetch once an org has hundreds of
-    # memories, so the task is cancelled and nothing is injected.
+    # Current small models. RCA_MODEL is often opus, which misses the ~6s
+    # prefetch on a large bank, so the task is cancelled and nothing is injected.
     _SELECTOR_FLASH_LITE = "google/gemini-3.5-flash-lite"
     _SELECTOR_VERTEX_FLASH_LITE = "vertex/gemini-3.5-flash-lite"
-    _SELECTOR_HAIKU = "anthropic/claude-haiku-4.5"
-    _SELECTOR_OPENAI = "openai/gpt-4o-mini"
+    _SELECTOR_HAIKU = "anthropic/claude-haiku-5.5"
+    _SELECTOR_OPENAI = "openai/gpt-5.6-luna"
 
     @staticmethod
     def memory_selector_model() -> str:
@@ -99,10 +98,10 @@ class ModelConfig:
         # Vertex ids use a different prefix; flash-lite still skips thinking.
         if mode == "vertex":
             return ModelConfig._SELECTOR_VERTEX_FLASH_LITE
-        # gpt-4o-mini does not reason; newer OpenAI ids spend the budget thinking.
+        # Luna is the current low-cost OpenAI model.
         if mode == "openai":
             return ModelConfig._SELECTOR_OPENAI
-        # Gemini would leave this provider. Haiku 4.5 stays on it and does not think.
+        # Gemini would leave this provider. Haiku 5.5 is the current fast Claude.
         if mode in ("bedrock", "anthropic"):
             return ModelConfig._SELECTOR_HAIKU
 

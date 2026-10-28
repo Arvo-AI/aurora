@@ -249,8 +249,13 @@ async def _select_relevant_memories_async(user_message: str, entries: List[Dict]
     )
 
     model = ModelConfig.memory_selector_model()
+    # The OpenAI provider pins gpt-5+ to reasoning effort=high. That spends
+    # the prefetch window, so this call asks for the lowest effort instead.
+    extra = {"reasoning": {"effort": "low"}} if model.startswith("openai/") else {}
     try:
-        llm = create_chat_model(model, temperature=0.0, streaming=False, max_tokens=256)
+        llm = create_chat_model(
+            model, temperature=0.0, streaming=False, max_tokens=256, **extra,
+        )
         response = await llm.ainvoke(
             [
                 SystemMessage(content=_SELECTOR_SYSTEM),
