@@ -32,6 +32,7 @@ Each connected Splunk is its own account, identified by `host:port` (for example
 - Omit `account_id` to query every allowed instance. The result is `results_by_account`, keyed by that id.
 - Pass `account_id='host:port'` on later calls to stay on one instance.
 - One allowed instance returns a single result and includes `account_id`.
+- Every result includes `instances`: the Splunks that call talked to (`server_name` and `account_id`). Say which instance a finding came from.
 
 ### Tool Usage (use in this order)
 1. `list_splunk_indexes()` -- Discover available indexes. Always call first to understand what data is available.

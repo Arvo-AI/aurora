@@ -136,6 +136,21 @@ def _account_fields(account: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _instances(targets: list) -> list:
+    """Instances this call actually talked to, in target order."""
+    return [_account_fields(account) for account in targets]
+
+
+def _annotate(result: Dict[str, Any], targets: list) -> Dict[str, Any]:
+    """Put the instance list first so a truncated tool excerpt still names it."""
+    annotated: Dict[str, Any] = {"instances": _instances(targets)}
+    # One target also carries the flat fields older readers already expect.
+    if len(targets) == 1:
+        annotated.update(_account_fields(targets[0]))
+    annotated.update(result)
+    return annotated
+
+
 def _by_account(targets: list, run) -> Dict[str, Any]:
     """Run one call per granted Splunk. A slow instance does not block the others."""
     import contextvars
@@ -205,13 +220,13 @@ def search_splunk(
         )
         return json.dumps({
             "success": any(item.get("success") for item in by_account.values()),
+            "instances": _instances(targets),
             "results_by_account": by_account,
             "note": "Queried every Splunk this user can access. Pass account_id to target one instance.",
         })
 
     result = _search_one(targets[0], query, earliest_time, latest_time, max_count)
-    result.update(_account_fields(targets[0]))
-    return json.dumps(result)
+    return json.dumps(_annotate(result, targets))
 
 
 def _ensure_search_prefix(query: str) -> str:
@@ -326,13 +341,13 @@ def list_splunk_indexes(account_id: Optional[str] = None, user_id: Optional[str]
         by_account = _by_account(targets, _list_indexes_one)
         return json.dumps({
             "success": any(item.get("success") for item in by_account.values()),
+            "instances": _instances(targets),
             "results_by_account": by_account,
             "note": "Listed indexes on every Splunk this user can access. Pass account_id to target one instance.",
         })
 
     result = _list_indexes_one(targets[0])
-    result.update(_account_fields(targets[0]))
-    return json.dumps(result)
+    return json.dumps(_annotate(result, targets))
 
 
 def _list_indexes_one(creds: Dict[str, Any]) -> Dict[str, Any]:
@@ -414,13 +429,13 @@ def list_splunk_sourcetypes(
         by_account = _by_account(targets, lambda account: _list_sourcetypes_one(account, index))
         return json.dumps({
             "success": any(item.get("success") for item in by_account.values()),
+            "instances": _instances(targets),
             "results_by_account": by_account,
             "note": "Listed sourcetypes on every Splunk this user can access. Pass account_id to target one instance.",
         })
 
     result = _list_sourcetypes_one(targets[0], index)
-    result.update(_account_fields(targets[0]))
-    return json.dumps(result)
+    return json.dumps(_annotate(result, targets))
 
 
 def _list_sourcetypes_one(creds: Dict[str, Any], index: Optional[str]) -> Dict[str, Any]:
