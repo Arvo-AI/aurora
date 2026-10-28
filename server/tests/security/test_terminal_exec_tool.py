@@ -203,6 +203,10 @@ class TestDocumentedTransformations:
         )
         assert _transform_ssh_jump_to_proxy(cmd) == expected
 
+    def test_shell_jump_target_is_not_rewritten(self):
+        cmd = "ssh -J '$(id>/tmp/ask-bypass)' user@target uptime"
+        assert _transform_ssh_jump_to_proxy(cmd) == cmd
+
     def test_jump_spec_without_user_part(self):
         """`-J bastion` (no `user@`) keeps the bastion bare in ProxyCommand."""
         out = _transform_ssh_jump_to_proxy("ssh -J bastion u@target")
@@ -299,6 +303,8 @@ def _load_terminal_exec_with_spies(transform_spy, metachar_spy):
 
     cloud_utils_module = types.ModuleType("utils.cloud.cloud_utils")
     cloud_utils_module.get_provider_preference = provider_pref_stub
+    # None is Agent mode: the ask-mode ssh check must not run in these tests.
+    cloud_utils_module.get_mode_from_context = MagicMock(return_value=None)
     sys.modules["utils.cloud.cloud_utils"] = cloud_utils_module
 
     func = _load_function(
@@ -386,6 +392,79 @@ class TestTerminalExecInvokesHelpers:
 
         metachar_spy.assert_called()
         assert "ls -la" in metachar_spy.call_args.args
+
+    def test_ask_mode_runs_a_read_only_ssh_and_blocks_a_write(self, cleanup_lazy_module_stubs):
+        transform_spy = MagicMock(side_effect=_transform_ssh_jump_to_proxy)
+        metachar_spy = MagicMock(side_effect=_has_shell_metacharacters)
+        terminal_exec, stubs = _load_terminal_exec_with_spies(transform_spy, metachar_spy)
+        sys.modules["utils.cloud.cloud_utils"].get_mode_from_context.return_value = "ask"
+
+        terminal_exec(
+            command="ssh admin@198.51.100.1 uptime",
+            user_id="u-1",
+            session_id="s-1",
+        )
+        stubs.gate.assert_called()
+        stubs.terminal_run.assert_called()
+
+        stubs.gate.reset_mock()
+        stubs.terminal_run.reset_mock()
+        blocked = terminal_exec(
+            command="ssh admin@198.51.100.1 systemctl restart nginx",
+            user_id="u-1",
+            session_id="s-1",
+        )
+        body = json.loads(blocked)
+        assert body["code"] == "READ_ONLY_MODE"
+        stubs.gate.assert_not_called()
+        stubs.terminal_run.assert_not_called()
+
+        copied = terminal_exec(
+            command="scp -i ~/.ssh/id_provider_vm ./notes.txt admin@198.51.100.1:/tmp/notes.txt",
+            user_id="u-1",
+            session_id="s-1",
+        )
+        assert json.loads(copied)["code"] == "READ_ONLY_MODE"
+
+        # The client is not the first token. Ask mode still has to refuse it.
+        chained = terminal_exec(
+            command="true && ssh admin@198.51.100.1 reboot",
+            user_id="u-1",
+            session_id="s-1",
+        )
+        assert json.loads(chained)["code"] == "READ_ONLY_MODE"
+        stubs.gate.assert_not_called()
+
+        # The client is inside an interpreter payload, not a segment executable.
+        nested = "ssh admin@198.51.100.1 reboot"
+        for _ in range(5):
+            nested = "sh -c " + shlex.quote(nested)
+        for wrapped in (
+            "sh -c 'ssh admin@198.51.100.1 systemctl restart nginx'",
+            "bash -c 'ssh admin@198.51.100.1 reboot'",
+            "env sh -c 'ssh admin@198.51.100.1 reboot'",
+            "sudo sh -c 'ssh admin@198.51.100.1 reboot'",
+            nested,
+            "command ssh admin@198.51.100.1 reboot",
+            "command sh -c 'ssh admin@198.51.100.1 reboot'",
+        ):
+            hidden = terminal_exec(
+                command=wrapped,
+                user_id="u-1",
+                session_id="s-1",
+            )
+            assert json.loads(hidden)["code"] == "READ_ONLY_MODE", wrapped
+            stubs.gate.assert_not_called()
+
+        stubs.gate.reset_mock()
+        stubs.terminal_run.reset_mock()
+        terminal_exec(
+            command="ssh -J user@bastion admin@198.51.100.1 uptime",
+            user_id="u-1",
+            session_id="s-1",
+        )
+        stubs.gate.assert_called()
+        stubs.terminal_run.assert_called()
 
     def test_non_ssh_command_skips_ssh_rewrite_helper(self, cleanup_lazy_module_stubs):
         transform_spy = MagicMock(side_effect=_transform_ssh_jump_to_proxy)

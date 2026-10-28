@@ -137,14 +137,13 @@ class SkillRegistry:
     def check_connection(
         self, skill_id: str, user_id: str
     ) -> Tuple[bool, Dict[str, Any]]:
-        """
-        Check if an integration is connected for a user.
-
-        Returns (is_connected, context_data).
-        context_data contains template variables (e.g. username).
-        Results are cached per (user_id, skill_id) for up to _CONNECTION_CACHE_TTL seconds.
-        """
-        cache_key = (user_id, skill_id)
+        """(is_connected, context_data). Cached per user, skill, and any access override."""
+        from utils.auth.connector_access import access_for, connector_access_cache_token
+        # A guest pin and a grant edit both have to miss. The pin token is empty
+        # for a normal user, so the grant revision is what drops a stale allow.
+        cache_key = (
+            user_id, skill_id, connector_access_cache_token(), access_for(user_id).revision(),
+        )
         cached = self._connection_cache.get(cache_key)
         if cached is not None:
             ts, is_conn, ctx = cached
@@ -169,6 +168,14 @@ class SkillRegistry:
 
         try:
             is_connected, ctx_data = self._dispatch_check(skill_id, method, check, user_id)
+            # Per-server MCP limits are applied when the server list is rendered.
+            # Every other skill is one connector, so a role without a grant
+            # looks disconnected.
+            gate = check.get("provider_key") or skill_id
+            if is_connected and skill_id != "mcp" and gate:
+                from utils.auth.connector_access import may_use
+                if not may_use(user_id, gate):
+                    is_connected, ctx_data = False, {}
             self._connection_cache[cache_key] = (time.monotonic(), is_connected, ctx_data)
             return is_connected, ctx_data
         except Exception as e:
@@ -297,11 +304,15 @@ class SkillRegistry:
 
     def get_connected_skills(self, user_id: str) -> List[SkillMetadata]:
         """Return metadata for all skills whose integration is connected."""
+        from utils.auth.connector_access import reuse_access_for_user
+
         connected = []
-        for skill_id, meta in self._skills.items():
-            is_connected, _ = self.check_connection(skill_id, user_id)
-            if is_connected:
-                connected.append(meta)
+        # Every skill asks the same access question. Load it once for the pass.
+        with reuse_access_for_user():
+            for skill_id, meta in self._skills.items():
+                is_connected, _ = self.check_connection(skill_id, user_id)
+                if is_connected:
+                    connected.append(meta)
         return connected
 
     def get_connected_skill_ids(self, user_id: str) -> List[str]:
@@ -442,14 +453,15 @@ class SkillRegistry:
             user_id, source, alert_details or {}, integrations
         )
 
-        # 1. Load connected integration skills, ordered by rca_priority
+        # 1. Load connected integration skills, ordered by rca_priority.
+        # One access load covers every skill. check_connection asks again per skill.
+        from utils.auth.connector_access import reuse_access_for_user
         connected: List[Tuple[SkillMetadata, Dict[str, Any]]] = []
-        for skill_id, meta in self._skills.items():
-            if integrations.get(skill_id, False):
-                _, ctx_data = self.check_connection(skill_id, user_id)
-                connected.append((meta, ctx_data))
-            else:
+        with reuse_access_for_user():
+            for skill_id, meta in self._skills.items():
                 is_conn, ctx_data = self.check_connection(skill_id, user_id)
+                # The alert's integration list is not a grant. A denied skill stays out,
+                # including when it would otherwise be passed through as prevalidated.
                 if is_conn:
                     connected.append((meta, ctx_data))
 

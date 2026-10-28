@@ -27,13 +27,15 @@ from chat.backend.agent.access.mode_access_controller import ModeAccessControlle
 from chat.backend.agent.utils.tool_output_cap import cap_tool_output
 from connectors.mcp_connector.client import MCPConnectionError, call
 from connectors.mcp_connector.store import (
+    find_server,
     is_read_tool,
-    list_servers,
     qualified_tool_name,
+    servers_for_user,
     slugify_label,
     tool_mode,
     update_auth,
 )
+from utils.auth.connector_access import may_use
 from utils.auth.command_gate import gate_action
 from utils.cloud.cloud_utils import get_user_context
 from utils.log_sanitizer import sanitize
@@ -76,7 +78,7 @@ def is_mcp_connected(user_id: str) -> bool:
 
     Resolved by name from the ``mcp`` SKILL.md frontmatter, not called directly.
     """
-    return bool(list_servers(user_id))
+    return bool(servers_for_user(user_id))
 
 
 def _tool_allowed(
@@ -231,9 +233,17 @@ def _call_tool(
 
     match = next((p for p in pairs if p[0]["label"] == target and p[1]["name"] == tool), None)
     if match is None:
+        # Restricted servers are absent from _visible. Say so before the
+        # unknown-tool path, which would invite the agent to retry.
+        stored = find_server(user_id, target)
+        if stored is not None and not may_use(user_id, f"mcp:{stored['label']}"):
+            return json.dumps({
+                "error": "not_permitted",
+                "detail": f"The '{stored['label']}' connector is not available to this role.",
+            })
         # Distinguish "does not exist" from "exists but is not available to you
         # right now" -- otherwise the agent retries a tool that will never work.
-        for s in list_servers(user_id):
+        for s in servers_for_user(user_id):
             if s["label"] != target:
                 continue
             found = next((t for t in s.get("tools") or [] if t.get("name") == tool), None)
@@ -302,7 +312,7 @@ def _visible(
     the agent would retry, burn turns, and report a capability that is not real.
     """
     out: List[tuple] = []
-    for server in list_servers(user_id):
+    for server in servers_for_user(user_id):
         for tool_def in server.get("tools") or []:
             if not tool_def.get("name"):
                 continue
@@ -382,6 +392,13 @@ def _list_tools(
         target = slugify_label(server)
         pairs = [(s, t) for s, t in pairs if s["label"] == target]
         if not pairs:
+            stored = find_server(user_id, target)
+            # Same refusal as a call, so listing a locked server does not look like a typo.
+            if stored is not None and not may_use(user_id, f"mcp:{stored['label']}"):
+                return json.dumps({
+                    "error": "not_permitted",
+                    "detail": f"The '{stored['label']}' connector is not available to this role.",
+                })
             known = sorted({s["label"] for s, _ in _visible(user_id, is_background, is_pr_review, mode)})
             return json.dumps({"error": f"Unknown MCP server '{server}'", "known_servers": known})
 
@@ -453,7 +470,8 @@ def get_custom_mcp_tools(
     to be enforced by *not building* a tool is enforced by refusing the call --
     see ``_call_tool``.
     """
-    if not list_servers(user_id):
+    visible = servers_for_user(user_id)
+    if not visible:
         return []
 
     def _list(server: Optional[str] = None, tool: Optional[str] = None,
@@ -477,7 +495,7 @@ def get_custom_mcp_tools(
         _list = wrap_func_with_capture(_list, "mcp_list_tools")
         _call = wrap_func_with_capture(_call, "mcp_call_tool")
 
-    labels = ", ".join(s["label"] for s in list_servers(user_id))
+    labels = ", ".join(s["label"] for s in visible)
     # metadata keeps both tools past ModeAccessController's blanket `mcp_` block;
     # Ask mode is then enforced per tool inside _visible/_call_tool.
     return [

@@ -8,6 +8,7 @@ Supports markdown and PDF upload (PDF → text extraction → markdown).
 
 import logging
 import io
+from functools import wraps
 
 import psycopg2
 from flask import Blueprint, jsonify, request
@@ -36,6 +37,22 @@ from utils.validation import strip_nul
 logger = logging.getLogger(__name__)
 
 memory_bp = Blueprint("memory", __name__)
+
+
+def _require_memory_edit(fn):
+    """Editors and admins may always modify memory. Viewers may when the org allows it."""
+    # Viewers hold memory read. The write permission would lock them out of the switch.
+    @require_permission("memory", "read")
+    @wraps(fn)
+    def wrapper(user_id, *args, **kwargs):
+        from utils.auth.viewer_run import viewer_may_edit_memory
+
+        org_id = get_org_id_from_request()
+        if not org_id or not viewer_may_edit_memory(user_id, org_id):
+            return jsonify({"error": "Forbidden"}), 403
+        return fn(user_id, *args, **kwargs)
+    return wrapper
+
 
 ALLOWED_EXTENSIONS = {"md", "txt", "pdf"}
 MAX_CONTENT_LENGTH = 500_000  # 500KB per manually-created entry
@@ -106,7 +123,7 @@ def list_entries(user_id):
 
 
 @memory_bp.route("/entries", methods=["POST"])
-@require_permission("memory", "write")
+@_require_memory_edit
 def create_entry(user_id):
     """Create a new memory entry (JSON body with category, title, content)."""
     org_id = get_org_id_from_request()
@@ -212,7 +229,7 @@ def get_entry(user_id, entry_id):
 
 
 @memory_bp.route("/entries/<entry_id>", methods=["DELETE"])
-@require_permission("memory", "write")
+@_require_memory_edit
 def delete_entry(user_id, entry_id):
     """Delete a memory entry."""
     org_id = get_org_id_from_request()
@@ -264,7 +281,7 @@ def delete_entry(user_id, entry_id):
 
 
 @memory_bp.route("/entries/<entry_id>", methods=["PUT"])
-@require_permission("memory", "write")
+@_require_memory_edit
 def update_entry(user_id, entry_id):
     """Update a memory entry's editable fields (category, title, description, content).
 
@@ -481,7 +498,7 @@ def get_servicenow_memory(user_id):
 
 
 @memory_bp.route("/upload", methods=["POST"])
-@require_permission("memory", "write")
+@_require_memory_edit
 def upload_file(user_id):
     """Upload a .md, .txt, or .pdf file as a memory entry."""
     org_id = get_org_id_from_request()

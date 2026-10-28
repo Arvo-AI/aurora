@@ -78,7 +78,7 @@ const nextConfig: NextConfig = {
       // Note: Don't alias lodash globally as it breaks recharts dependencies
     }
 
-    // Handle JSZip and other modules that need node polyfills disabled
+    // Browser bundles must not pull Node builtins.
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,

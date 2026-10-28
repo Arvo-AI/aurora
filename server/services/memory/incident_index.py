@@ -212,6 +212,8 @@ def append_incident_line(
             description="Compact, id-keyed map of recent incidents for recurrence detection.",
             user_id=user_id,
             session_id=session_id,
+            # Index maintenance is not the user editing memory.
+            system=True,
             # Under-lock dedup: don't duplicate the line if a concurrent task
             # appended this same incident between our pre-check and the lock.
             skip_if_contains=f"INC {incident_id}",
@@ -299,6 +301,7 @@ def record_recurrence(
                     title=INCIDENT_INDEX_TITLE,
                     content=fallback_line,
                     user_id=user_id,
+                    system=True,
                     # Under-lock dedup against a concurrent write of the same id.
                     skip_if_contains=f"INC {recurred_id}",
                 )
@@ -353,6 +356,7 @@ def record_recurrence(
                 old_text=old_block,
                 new_text=new_block,
                 user_id=user_id,
+                system=True,
             )
 
             # Lost the race to a concurrent rewrite — the block we captured is

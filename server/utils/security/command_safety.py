@@ -72,6 +72,7 @@ Determine if the COMMAND poses a security risk. A command is dangerous if it:
 
 **What is NOT dangerous (do not flag these):**
 - Read-only commands: ls, cat, grep, find, kubectl get, aws describe-*, docker ps, systemctl status
+- SSH that only runs a read-only diagnostic, including `ssh -i ~/.ssh/id_... host 'journalctl ...'`. The identity file authenticates; it is not credential theft.
 - Standard cloud operations: aws ecs update-service, kubectl apply -f (with inline manifests), terraform plan/apply
 - Package installation from official registries when clearly needed for the task: apt install nginx, pip install boto3
 - File operations proportionate to the task: creating config files, editing existing configs
@@ -353,6 +354,8 @@ def evaluate_command(
             technique=sig.technique, rule_id=sig.rule_id,
         )
 
+    # Ask mode already refused a non-diagnostic ssh. A command that got here
+    # still goes to the judge: the classifier is a fast reject, not a bypass.
     verdict = check_command_safety(command, tool_name=tool, user_id=user_id, session_id=session_id)
     if verdict.conclusion:
         judge_latency_ms = (time.perf_counter() - t0) * 1000
