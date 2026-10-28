@@ -375,7 +375,7 @@ On every turn Aurora asks a small model which memories to inject. That call has 
 MEMORY_SELECTOR_MODEL=google/gemini-3.5-flash-lite
 ```
 
-Use a small model. Flash-Lite still thinks at its minimum setting, so the selector leaves room in the output cap for those tokens plus the JSON. The selector also ranks the bank down to 60 candidates before the call, so a few hundred memories still fit in the window.
+Use a small model. Flash-Lite still thinks at its minimum setting, so the selector leaves room in the output cap for those tokens plus the JSON. The selector also ranks the bank down to 100 candidates before the call, so a few hundred memories still fit in the window.
 
 ## Troubleshooting
 

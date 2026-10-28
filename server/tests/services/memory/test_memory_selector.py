@@ -126,7 +126,7 @@ def test_shortlist_with_no_overlap_keeps_the_newest():
     new = datetime(2026, 6, 1, tzinfo=timezone.utc)
     entries = [
         {"category": "context", "title": f"note-{i}", "description": "alpha", "updated_at": old}
-        for i in range(80)
+        for i in range(150)
     ]
     entries.append(
         {"category": "context", "title": "just-added", "description": "beta", "updated_at": new}
@@ -208,3 +208,47 @@ def test_openai_selector_asks_for_low_reasoning(monkeypatch):
         )
     )
     assert captured["kwargs"]["reasoning"] == {"effort": "low"}
+
+
+def _capture_selector_kwargs(monkeypatch, model: str):
+    monkeypatch.setenv("MEMORY_SELECTOR_MODEL", model)
+    captured = {}
+
+    class _Response:
+        content = '{"selected": []}'
+
+    class _LLM:
+        async def ainvoke(self, messages, config=None):
+            return _Response()
+
+    def _fake_create(model, temperature=0.0, streaming=False, max_tokens=256, **kwargs):
+        captured["kwargs"] = kwargs
+        return _LLM()
+
+    monkeypatch.setattr("services.memory.injector.create_chat_model", _fake_create)
+    asyncio.run(
+        _select_relevant_memories_async(
+            "hello",
+            [{"category": "context", "title": "Note", "description": "x", "updated_at": datetime(2024, 1, 1)}],
+        )
+    )
+    return captured["kwargs"]
+
+
+def test_gpt4_pin_does_not_send_reasoning_effort(monkeypatch):
+    kwargs = _capture_selector_kwargs(monkeypatch, "openai/gpt-4.1")
+    assert "reasoning" not in kwargs
+
+
+def test_gemini_25_flash_lite_does_not_send_thinking_level(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER_MODE", "google")
+    monkeypatch.delenv("GEMINI_DISABLE_THINKING", raising=False)
+    kwargs = _capture_selector_kwargs(monkeypatch, "google/gemini-2.5-flash-lite")
+    assert "thinking_level" not in kwargs
+
+
+def test_gemini_35_flash_lite_pins_minimal_thinking(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER_MODE", "google")
+    monkeypatch.delenv("GEMINI_DISABLE_THINKING", raising=False)
+    kwargs = _capture_selector_kwargs(monkeypatch, "google/gemini-3.5-flash-lite")
+    assert kwargs["thinking_level"] == "minimal"

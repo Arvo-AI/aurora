@@ -4,7 +4,7 @@ Memory Injector — Async Prefetch + Single-Pass LLM Selection
 Runs as a non-blocking prefetch in parallel with prompt building.
 One fast, non-thinking LLM call selects up to 5 relevant memories from the
 index (title + description). Whatever it selects gets injected into the system prompt.
-- Hard caps: 5 entries max, 4KB per entry, 60 candidates in the selector prompt.
+- Hard caps: 5 entries max, 4KB per entry, 100 candidates in the selector prompt.
 - Dedup: never re-surface a memory already shown this session.
 """
 
@@ -38,8 +38,9 @@ STALENESS_DAYS = 2
 # The TOC index stops at 200. The selector has to read past that, or a memory
 # outside the newest slice can never be injected (a 420-entry bank hid ~220).
 _SELECTOR_FETCH_LIMIT = 2000
-# Past this, even a small model misses the ~6s prefetch and nothing is injected.
-_MAX_SELECTOR_CANDIDATES = 60
+# Lexical rank misses a paraphrase. 100 keeps more of those in the prompt
+# than 60 did, without sending the whole bank.
+_MAX_SELECTOR_CANDIDATES = 100
 # Flash-lite thinks at "minimal" by default, and thought tokens count against
 # this cap. 256 can be spent before the JSON is written.
 SELECTOR_MAX_TOKENS = 1024
@@ -265,15 +266,17 @@ async def _select_relevant_memories_async(user_message: str, entries: List[Dict]
 
     model = ModelConfig.memory_selector_model()
     extra: Dict = {}
+    native = model.split("/", 1)[-1].lower()
     # The OpenAI provider pins gpt-5+ to reasoning effort=high. That spends
-    # the prefetch window, so this call asks for the lowest effort instead.
-    if model.startswith("openai/"):
+    # the prefetch window. gpt-4 and older reject the field entirely.
+    if model.startswith("openai/") and not native.startswith(("gpt-3", "gpt-4")):
         extra["reasoning"] = {"effort": "low"}
-    # Native Gemini counts minimal thoughts against max_tokens. OpenRouter
-    # rejects thinking_level, and GEMINI_DISABLE_THINKING means leave it off.
+    # Gemini 3+ flash-lite counts minimal thoughts against max_tokens.
+    # 2.5 flash-lite rejects thinking_level, and OpenRouter rejects the field.
     thinking_off = os.getenv("GEMINI_DISABLE_THINKING", "").lower() in ("true", "1", "yes")
     provider_mode = (os.getenv("LLM_PROVIDER_MODE") or "direct").lower()
-    if "flash-lite" in model and provider_mode != "openrouter" and not thinking_off:
+    gemini3_flash_lite = "flash-lite" in native and ("gemini-3" in native or "gemini-4" in native)
+    if gemini3_flash_lite and provider_mode != "openrouter" and not thinking_off:
         extra["thinking_level"] = "minimal"
     try:
         llm = create_chat_model(
