@@ -322,7 +322,7 @@ MAIN_MODEL=anthropic/claude-sonnet-5    # auto-translated to us.anthropic.claude
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RCA_MODEL` | - | Model for background RCA (format: `provider/model`). Overrides `RCA_OPTIMIZE_COSTS` when set. Default RCA path when `ORCHESTRATOR_ENABLED=false`. |
-| `MEMORY_SELECTOR_MODEL` | _(provider fast model)_ | Model that picks which memories to inject. It has about 6 seconds, and `RCA_MODEL` (often opus) does not finish on a large memory bank. Unset uses Gemini 3.5 Flash-Lite (Google/OpenRouter/Vertex), Haiku 5.5 (Anthropic/Bedrock), or GPT-5.6 Luna (OpenAI). |
+| `MEMORY_SELECTOR_MODEL` | _(provider fast model)_ | Model that picks which memories to inject. It has about 6 seconds, and `RCA_MODEL` (often opus) does not finish on a large memory bank. Unset uses Gemini 3.5 Flash-Lite (Google/OpenRouter/Vertex), Haiku 5.5 (Anthropic and `LLM_PROVIDER_MODE=bedrock`), or GPT-5.6 Luna (OpenAI). Ollama uses `MAIN_MODEL` when that id is `ollama/...`. A Bedrock gateway (`direct` mode, `MAIN_MODEL=bedrock/<id>`) stays on that id; pin a fast one with `bedrock/<id>`. |
 | `JIRA_RCA_JUDGE_MODEL` | `RCA_MODEL` | Yes/no model for Jira automatic RCA. Unset uses the resolved `RCA_MODEL`. |
 | `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` = `anthropic/claude-haiku-5.5`, `false` = `anthropic/claude-opus-5.5` |
 | `ORCHESTRATOR_ENABLED` | `false` | Multi-agent RCA orchestrator (opt-in). When `true`, a lead orchestrator triages each background RCA and may fan out parallel read-only sub-agents; `RCA_MODEL` is ignored. When `false` (default), RCA uses the single-agent path with `RCA_MODEL`. |

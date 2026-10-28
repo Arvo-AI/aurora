@@ -367,11 +367,15 @@ On every turn Aurora asks a small model which memories to inject. That call has 
 ```bash
 # Optional. Same provider/model format as MAIN_MODEL.
 # Unset: Gemini 3.5 Flash-Lite on Google/OpenRouter/Vertex, Haiku 5.5 on
-# Anthropic/Bedrock, GPT-5.6 Luna on OpenAI.
+# Anthropic and on LLM_PROVIDER_MODE=bedrock, GPT-5.6 Luna on OpenAI.
+# Ollama uses MAIN_MODEL when that id is ollama/<installed-model>.
+# Bedrock gateway (LLM_PROVIDER_MODE=direct and MAIN_MODEL=bedrock/<id>)
+# stays on that gateway id. Pin a fast one explicitly:
+# MEMORY_SELECTOR_MODEL=bedrock/us.anthropic.claude-haiku-5-5
 MEMORY_SELECTOR_MODEL=google/gemini-3.5-flash-lite
 ```
 
-Use a non-thinking model. The selector also ranks the bank down to 60 candidates before the call, so a few hundred memories still fit in the window.
+Use a small model. Flash-Lite still thinks at its minimum setting, so the selector leaves room in the output cap for those tokens plus the JSON. The selector also ranks the bank down to 60 candidates before the call, so a few hundred memories still fit in the window.
 
 ## Troubleshooting
 

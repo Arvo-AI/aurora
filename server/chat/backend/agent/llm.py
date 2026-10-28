@@ -92,10 +92,10 @@ class ModelConfig:
             return override
 
         mode = (os.getenv("LLM_PROVIDER_MODE") or "direct").strip().lower()
-        # Flash-lite does not think, and both of these providers can call it.
+        # Flash-lite is the current small Gemini, and both of these providers can call it.
         if mode in ("openrouter", "google"):
             return ModelConfig._SELECTOR_FLASH_LITE
-        # Vertex ids use a different prefix; flash-lite still skips thinking.
+        # Vertex ids use a different prefix.
         if mode == "vertex":
             return ModelConfig._SELECTOR_VERTEX_FLASH_LITE
         # Luna is the current low-cost OpenAI model.
@@ -106,7 +106,14 @@ class ModelConfig:
             return ModelConfig._SELECTOR_HAIKU
 
         # direct/auto: follow MAIN_MODEL's provider so a second API key isn't required.
-        main = (os.getenv("MAIN_MODEL") or "").strip() or ModelConfig._DEFAULT_MODEL
+        main = (os.getenv("MAIN_MODEL") or "").strip()
+        # Ollama only serves a model the operator installed. Haiku is not one of them.
+        if mode == "ollama" or main.startswith("ollama/"):
+            return main
+        # direct + bedrock/<id> is gateway mode. An anthropic/ id would hit Anthropic.
+        if main.startswith("bedrock/"):
+            return main
+
         prefix = main.split("/", 1)[0] if "/" in main else ""
         if prefix == "google":
             return ModelConfig._SELECTOR_FLASH_LITE
@@ -114,7 +121,6 @@ class ModelConfig:
             return ModelConfig._SELECTOR_VERTEX_FLASH_LITE
         if prefix == "openai":
             return ModelConfig._SELECTOR_OPENAI
-        # Anthropic is the default install, and the one Bedrock gateways can serve.
         return ModelConfig._SELECTOR_HAIKU
 
 

@@ -11,6 +11,7 @@ index (title + description). Whatever it selects gets injected into the system p
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime, timezone, timedelta
@@ -39,9 +40,15 @@ STALENESS_DAYS = 2
 _SELECTOR_FETCH_LIMIT = 2000
 # Past this, even a small model misses the ~6s prefetch and nothing is injected.
 _MAX_SELECTOR_CANDIDATES = 60
+# Flash-lite thinks at "minimal" by default, and thought tokens count against
+# this cap. 256 can be spent before the JSON is written.
+SELECTOR_MAX_TOKENS = 1024
 SELECTOR_TIMEOUT = 5.0
 
-_TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
+# Letters and digits. CJK, kana, and Hangul have no spaces, so a whole
+# sentence would be one token and never overlap a shorter title.
+_WORD_RE = re.compile(r"[^\W_]{2,}", re.UNICODE)
+_UNSPACED_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+")
 _STOPWORDS = frozenset({
     "an", "the", "and", "or", "to", "of", "in", "on", "for", "is", "it",
     "be", "as", "at", "by", "with", "from", "this", "that", "our", "we", "my",
@@ -192,7 +199,15 @@ class MemoryPrefetch:
 
 
 def _tokens(text: str) -> Set[str]:
-    return {t for t in _TOKEN_RE.findall((text or "").lower()) if t not in _STOPWORDS}
+    raw = text or ""
+    tokens = {t for t in _WORD_RE.findall(raw.lower()) if t not in _STOPWORDS}
+    # Bigrams, so "数据库故障" overlaps a query that says "数据库" without sharing the whole string.
+    for run in _UNSPACED_RE.findall(raw):
+        if len(run) == 1:
+            tokens.add(run)
+        else:
+            tokens.update(run[i:i + 2] for i in range(len(run) - 1))
+    return tokens
 
 
 def _as_naive(ts) -> datetime:
@@ -249,12 +264,20 @@ async def _select_relevant_memories_async(user_message: str, entries: List[Dict]
     )
 
     model = ModelConfig.memory_selector_model()
+    extra: Dict = {}
     # The OpenAI provider pins gpt-5+ to reasoning effort=high. That spends
     # the prefetch window, so this call asks for the lowest effort instead.
-    extra = {"reasoning": {"effort": "low"}} if model.startswith("openai/") else {}
+    if model.startswith("openai/"):
+        extra["reasoning"] = {"effort": "low"}
+    # Native Gemini counts minimal thoughts against max_tokens. OpenRouter
+    # rejects thinking_level, and GEMINI_DISABLE_THINKING means leave it off.
+    thinking_off = os.getenv("GEMINI_DISABLE_THINKING", "").lower() in ("true", "1", "yes")
+    provider_mode = (os.getenv("LLM_PROVIDER_MODE") or "direct").lower()
+    if "flash-lite" in model and provider_mode != "openrouter" and not thinking_off:
+        extra["thinking_level"] = "minimal"
     try:
         llm = create_chat_model(
-            model, temperature=0.0, streaming=False, max_tokens=256, **extra,
+            model, temperature=0.0, streaming=False, max_tokens=SELECTOR_MAX_TOKENS, **extra,
         )
         response = await llm.ainvoke(
             [

@@ -48,6 +48,28 @@ def test_direct_mode_follows_main_provider(monkeypatch):
     assert ModelConfig.memory_selector_model() == "anthropic/claude-haiku-5.5"
 
 
+def test_ollama_selector_stays_on_the_installed_model(monkeypatch):
+    _clear_selector_env(monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER_MODE", "ollama")
+    monkeypatch.setenv("MAIN_MODEL", "ollama/llama3.1")
+    assert ModelConfig.memory_selector_model() == "ollama/llama3.1"
+
+
+def test_ollama_without_a_local_id_does_not_call_claude(monkeypatch):
+    _clear_selector_env(monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER_MODE", "ollama")
+    monkeypatch.delenv("MAIN_MODEL", raising=False)
+    chosen = ModelConfig.memory_selector_model()
+    assert not chosen.startswith("anthropic/")
+
+
+def test_bedrock_gateway_id_stays_on_bedrock(monkeypatch):
+    _clear_selector_env(monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER_MODE", "direct")
+    monkeypatch.setenv("MAIN_MODEL", "bedrock/us.anthropic.claude-haiku-5-5")
+    assert ModelConfig.memory_selector_model() == "bedrock/us.anthropic.claude-haiku-5-5"
+
+
 def test_shortlist_keeps_the_overlapping_memory():
     stale = datetime(2020, 1, 1)
     entries = [
@@ -73,6 +95,30 @@ def test_shortlist_keeps_the_overlapping_memory():
     assert len(kept) == _MAX_SELECTOR_CANDIDATES
     assert titles[0] == "Redis failover"
     assert "note-119" not in titles
+
+
+def test_shortlist_matches_unspaced_cjk():
+    stale = datetime(2020, 1, 1)
+    entries = [
+        {
+            "category": "context",
+            "title": f"笔记{i}",
+            "description": "无关内容",
+            "updated_at": stale,
+        }
+        for i in range(80)
+    ]
+    entries.append(
+        {
+            "category": "runbook",
+            "title": "数据库故障处理",
+            "description": "主节点宕机时切换副本",
+            "updated_at": stale,
+        }
+    )
+
+    kept = _shortlist_entries("数据库主节点宕机", entries, _MAX_SELECTOR_CANDIDATES)
+    assert kept[0]["title"] == "数据库故障处理"
 
 
 def test_shortlist_with_no_overlap_keeps_the_newest():
