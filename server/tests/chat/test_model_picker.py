@@ -6,6 +6,10 @@ def test_openrouter_shows_all():
     assert picker_prefixes("openrouter", {"OPENAI_API_KEY": "sk", "VERTEX_AI_PROJECT": "p"}) is None
 
 
+def test_requesty_shows_all():
+    assert picker_prefixes("requesty", {"OPENAI_API_KEY": "sk", "VERTEX_AI_PROJECT": "p"}) is None
+
+
 def test_ollama_shows_all():
     assert picker_prefixes("ollama", {"OLLAMA_BASE_URL": "http://localhost:11434"}) is None
 
