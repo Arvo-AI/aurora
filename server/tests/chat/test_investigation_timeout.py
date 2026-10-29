@@ -5,6 +5,7 @@ from chat.investigation_timeout import (
     MAX_INVESTIGATION_TIMEOUT_SECONDS,
     MIN_INVESTIGATION_TIMEOUT_SECONDS,
     investigation_soft_timeout_seconds,
+    investigation_stale_after_seconds,
     investigation_timeout_label,
     investigation_timeout_seconds,
 )
@@ -50,3 +51,15 @@ def test_above_maximum_is_clamped(monkeypatch):
 def test_odd_duration_stays_in_seconds(monkeypatch):
     monkeypatch.setenv("INVESTIGATION_TIMEOUT_SECONDS", "150")
     assert investigation_timeout_label() == "150 seconds"
+
+
+def test_python_int_syntax(monkeypatch):
+    monkeypatch.setenv("INVESTIGATION_TIMEOUT_SECONDS", "+7200")
+    assert investigation_timeout_seconds() == 7200
+    monkeypatch.setenv("INVESTIGATION_TIMEOUT_SECONDS", "9_000")
+    assert investigation_timeout_seconds() == 9000
+
+
+def test_stale_sweeper_waits_past_the_hard_kill(monkeypatch):
+    monkeypatch.setenv("INVESTIGATION_TIMEOUT_SECONDS", "3600")
+    assert investigation_stale_after_seconds() == 3900

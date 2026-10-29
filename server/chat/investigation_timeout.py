@@ -66,6 +66,12 @@ def investigation_soft_timeout_seconds() -> int:
     return investigation_timeout_seconds() - CLEANUP_GRACE_SECONDS
 
 
+def investigation_stale_after_seconds() -> int:
+    # Five minutes past the hard kill. The soft-limit handler fails the run
+    # first; this is only for a worker that died before it could.
+    return investigation_timeout_seconds() + 5 * 60
+
+
 def investigation_timeout_label() -> str:
     """Human duration for the failure card, e.g. '60 minutes'."""
     seconds = investigation_timeout_seconds()

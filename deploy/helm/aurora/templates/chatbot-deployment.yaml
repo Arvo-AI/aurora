@@ -1,3 +1,4 @@
+{{- include "aurora.rejectInvestigationTimeoutOverride" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

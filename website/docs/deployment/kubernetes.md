@@ -426,7 +426,7 @@ Regardless of controller, ensure these are configured:
 
 | Setting | Value | Why |
 |---------|-------|-----|
-| Read/send timeout | `7200s` | Must cover `INVESTIGATION_TIMEOUT_SECONDS` (default one hour). The chart raises the nginx proxy timeouts to at least that value. |
+| Read/send timeout | at least `INVESTIGATION_TIMEOUT_SECONDS` (chart default `7200s`) | The chart sets the nginx annotations only when `className` is `nginx` and nginx defaults are enabled. Other controllers must set this themselves. |
 | HTTP version | `1.1` | Required for WebSocket upgrade |
 | Max body size | `50m` | File uploads |
 

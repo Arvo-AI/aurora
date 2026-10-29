@@ -378,6 +378,7 @@ services:
       # Google Chat (service account needed to send responses)
       GOOGLE_CHAT_SERVICE_ACCOUNT_KEY: ${GOOGLE_CHAT_SERVICE_ACCOUNT_KEY}
     depends_on:
+      - postgres
       - redis
       - vault
       - memgraph

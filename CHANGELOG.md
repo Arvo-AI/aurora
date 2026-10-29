@@ -10,11 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.5.14] - 2026-10-28
 
 ### Changed
+
 - Investigations: the wall-clock limit is `INVESTIGATION_TIMEOUT_SECONDS`,
   defaulting to one hour (was a hardcoded 30 minutes). Values outside
   120–10800 seconds are clamped. A restart is required. On Kubernetes the
   worker termination grace and the nginx proxy timeouts rise with it, so a
   longer limit is not cut off by the pod or the ingress.
+
+### Fixed
+
+- Actions: the stale-run sweeper waits until five minutes after that limit,
+  so a run still inside its hour is not marked failed.
 
 ## [1.5.13] - 2026-10-28
 

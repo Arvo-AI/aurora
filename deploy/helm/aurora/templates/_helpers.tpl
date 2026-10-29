@@ -192,12 +192,31 @@ If existingSecret is set, use the user-provided name; otherwise use the chart-ma
 {{- end -}}
 
 {{/*
+extraEnv wins over the ConfigMap. A timeout set there would outlive the
+grace period and proxy limits, which only read config.
+*/}}
+{{- define "aurora.rejectInvestigationTimeoutOverride" -}}
+{{- range .Values.extraEnv }}
+{{- if eq .name "INVESTIGATION_TIMEOUT_SECONDS" }}
+{{- fail "Set config.INVESTIGATION_TIMEOUT_SECONDS, not extraEnv. extraEnv overrides the ConfigMap, so worker grace and proxy timeouts would not match the pod." }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
 Investigation hard limit in seconds. Same clamp as chat/investigation_timeout.py
-(default 3600, range 120–10800). Non-numeric values use 3600.
+(default 3600, range 120–10800). Accepts Python int forms (+9000, 9_000).
+Anything else uses 3600.
 */}}
 {{- define "aurora.investigationTimeoutSeconds" -}}
-{{- $raw := .Values.config.INVESTIGATION_TIMEOUT_SECONDS | default "3600" | toString | trim -}}
-{{- if not (regexMatch "^[0-9]+$" $raw) -}}
+{{- include "aurora.rejectInvestigationTimeoutOverride" . }}
+{{- $raw := .Values.config.INVESTIGATION_TIMEOUT_SECONDS | default "3600" | toString | trim | replace "_" "" -}}
+{{- if regexMatch "^[+][0-9]+$" $raw -}}
+{{- $raw = trimPrefix "+" $raw -}}
+{{- end -}}
+{{- if regexMatch "^-[0-9]+$" $raw -}}
+120
+{{- else if not (regexMatch "^[0-9]+$" $raw) -}}
 3600
 {{- else -}}
 {{- $n := int $raw -}}

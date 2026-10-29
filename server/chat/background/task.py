@@ -24,6 +24,7 @@ from connectors.slack_connector.client import get_slack_client_for_user
 from utils.db.connection_pool import db_pool
 from chat.investigation_timeout import (
     investigation_soft_timeout_seconds,
+    investigation_stale_after_seconds,
     investigation_timeout_label,
     investigation_timeout_seconds,
 )
@@ -2718,7 +2719,8 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
     """
     stale_threshold = datetime.now() - timedelta(minutes=20)
     dead_task_threshold = datetime.now() - timedelta(minutes=3)
-    # Per-role timeout caps at 600s; 35 min is safely past any legitimate run.
+    # Sub-agent rows are capped at 600s and mark themselves terminal.
+    # 35 min is the net for a row that never got that update, not the parent wall clock.
     findings_threshold = datetime.now() - timedelta(minutes=35)
 
     try:
@@ -2860,7 +2862,9 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
 
             # --- 5. Stale action runs (per-org, action_runs is RLS-protected) ---
             stale_actions_count = 0
-            stale_action_threshold = datetime.now() - timedelta(minutes=35)
+            # A run still inside the investigation limit is working. Only fail
+            # one that outlived the hard kill and never got the timeout handler.
+            stale_action_threshold = datetime.now() - timedelta(seconds=investigation_stale_after_seconds())
             with conn.cursor() as cursor:
                 cursor.execute("SELECT DISTINCT org_id FROM users WHERE org_id IS NOT NULL")
                 org_ids = [r[0] for r in cursor.fetchall()]
