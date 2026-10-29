@@ -421,6 +421,7 @@ def evaluate_command(
     tool: str,
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
+    skip_judge: bool = False,
 ) -> GuardrailDecision:
     """Run the signature matcher then the LLM judge against a command.
 
@@ -457,6 +458,10 @@ def evaluate_command(
             reason=sig.description, description=sig.description,
             technique=sig.technique, rule_id=sig.rule_id,
         )
+
+    # The org named this command as read-only. The signature floor still ran.
+    if skip_judge:
+        return GuardrailDecision(blocked=False)
 
     # Ask mode already refused a non-diagnostic ssh. A command that got here
     # still goes to the judge: the classifier is a fast reject, not a bypass.

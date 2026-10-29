@@ -11,6 +11,7 @@ export interface CommandPolicyRule {
   updated_at?: string;
   updated_by?: string;
   source?: "template" | "custom";
+  scope?: "agent" | "read_only";
 }
 
 export interface PoliciesResponse {
@@ -23,6 +24,7 @@ export interface PoliciesResponse {
 
 export interface TestResult {
   allowed: boolean;
+  ask_allowed?: boolean;
   rule_description: string | null;
   command: string;
 }
@@ -46,7 +48,7 @@ export interface PolicyTemplate {
 export const commandPolicyService = {
   getPolicies: () => apiGet<PoliciesResponse>("/api/org/command-policies"),
 
-  createPolicy: (rule: Pick<CommandPolicyRule, "mode" | "pattern" | "description" | "priority">) =>
+  createPolicy: (rule: Pick<CommandPolicyRule, "mode" | "pattern" | "description" | "priority"> & { scope?: "agent" | "read_only" }) =>
     apiPost<{ id: number }>("/api/org/command-policies", rule),
 
   updatePolicy: (id: number, fields: Partial<CommandPolicyRule>) =>

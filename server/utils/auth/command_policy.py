@@ -60,6 +60,8 @@ class PolicyRule:
     description: str
     priority: int
     compiled: re.Pattern = field(repr=False)
+    # "agent" is the org allowlist only. "read_only" also runs in Ask mode.
+    scope: str = "agent"
 
 
 @dataclass(frozen=True)
@@ -92,7 +94,7 @@ def _fetch(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListStates]
                 cur.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
                 cur.execute(
-                    "SELECT id, mode, pattern, description, priority "
+                    "SELECT id, mode, pattern, description, priority, scope "
                     "FROM org_command_policies "
                     "WHERE org_id = %s AND enabled = true "
                     "ORDER BY priority DESC",
@@ -106,6 +108,7 @@ def _fetch(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListStates]
                         id=row[0], mode=row[1], pattern=row[2],
                         description=row[3] or "", priority=row[4],
                         compiled=compiled,
+                        scope=(row[5] if len(row) > 5 and row[5] else "agent"),
                     )
                     if rule.mode == "allow":
                         allow_rules.append(rule)
@@ -430,6 +433,100 @@ def evaluate_compound_command(
         last_verdict = verdict
 
     return last_verdict
+
+
+# A customer read-only allow cannot turn these off. Matched as the program
+# being run, or as a shell shape, so a word like SQL "as" is not a compiler.
+_COMPILERS = frozenset({"gcc", "g++", "cc", "make", "as", "ld"})
+_PIPE_TO_SHELL = re.compile(r"\|\s*(sh|bash|dash|zsh|ksh)\b")
+_RM_ROOT = re.compile(r"\brm\s+-rf\s+/")
+_REVERSE_SHELL = re.compile(r"\b(nc|ncat|netcat|socat)\b.*\s-[ec]\b")
+_SSH_OPTION_TAKES_ARG = frozenset({"-i", "-p", "-o", "-J", "-l", "-F", "-W", "-c"})
+
+
+def _remote_ssh_program(tokens: list[str]) -> str:
+    """The program ssh will run on the host, or '' when ssh only opens a shell."""
+    saw_host = False
+    i = 1
+    while i < len(tokens):
+        tok = tokens[i]
+        # Flags are not the remote program. Some of them consume the next token.
+        if tok.startswith("-") and tok != "-":
+            if tok in _SSH_OPTION_TAKES_ARG and "=" not in tok:
+                i += 2
+                continue
+            i += 1
+            continue
+        if not saw_host:
+            saw_host = True
+            i += 1
+            continue
+        return tok.rsplit("/", 1)[-1]
+    return ""
+
+
+def _platform_denied(part: str) -> bool:
+    """True when this segment is on the floor an allow rule cannot lift."""
+    if _RM_ROOT.search(part) or _PIPE_TO_SHELL.search(part) or _REVERSE_SHELL.search(part):
+        return True
+    try:
+        tokens = shlex.split(part)
+    except ValueError:
+        # An allow rule must not cover a command we cannot parse.
+        return True
+    if not tokens:
+        return True
+    program = tokens[0].rsplit("/", 1)[-1]
+    if program in _COMPILERS:
+        return True
+    # gcc after the host is the remote program, not a word in a query.
+    if program == "ssh" and _remote_ssh_program(tokens) in _COMPILERS:
+        return True
+    return False
+
+
+def read_only_allow_covers(org_id: str, command: str) -> bool:
+    """A read-only allow rule names this command, and the floor does not."""
+    allow_rules, deny_rules, states = _get_cached(org_id)
+    read_rules = [rule for rule in allow_rules if rule.scope == "read_only" and rule.compiled]
+    if not read_rules:
+        return False
+    # The splitter removes the pipe, so the shell-shape checks have to see the
+    # original command. A quoted `| bash` is still a pipe into a shell.
+    if _PIPE_TO_SHELL.search(command) or _RM_ROOT.search(command) or _REVERSE_SHELL.search(command):
+        return False
+    parts = _split_compound_command(command) or [command]
+    from utils.security.read_only_classifier import is_read_only_command
+    for part in parts:
+        # The floor and an org deny both win over a customer allow.
+        if _platform_denied(part):
+            return False
+        if states.denylist_enabled and any(rule.compiled.search(part) for rule in deny_rules):
+            return False
+        if is_read_only_command(part):
+            continue
+        if any(rule.compiled.search(part) for rule in read_rules):
+            continue
+        return False
+    return True
+
+
+def ask_mode_permits(user_id: Optional[str], command: str) -> bool:
+    """Ask mode runs a recognised read, or a command the org marked read-only."""
+    from utils.security.read_only_classifier import is_read_only_command
+    if is_read_only_command(command):
+        return True
+    if not user_id:
+        return False
+    try:
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id)
+    except Exception:
+        logger.debug("ask-mode allow lookup failed", exc_info=True)
+        return False
+    if not org_id:
+        return False
+    return read_only_allow_covers(org_id, command)
 
 
 _PATTERN_MAX_LEN = 500

@@ -65,6 +65,9 @@ function RuleList({
           {rule.source === "template" && (
             <span className="text-[10px] text-muted-foreground/60 shrink-0">tpl</span>
           )}
+          {rule.scope === "read_only" && (
+            <span className="text-[10px] text-primary shrink-0">Ask</span>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -84,13 +87,16 @@ function AddRuleForm({
   mode,
   onAdd,
   onCancel,
+  lockAsk = false,
 }: {
   mode: "allow" | "deny";
-  onAdd: (pattern: string, description: string) => void;
+  onAdd: (pattern: string, description: string, scope: "agent" | "read_only") => void;
   onCancel: () => void;
+  lockAsk?: boolean;
 }) {
   const [pattern, setPattern] = useState("");
   const [desc, setDesc] = useState("");
+  const [ask, setAsk] = useState(lockAsk);
 
   return (
     <div className="border-t p-3 space-y-2 bg-muted/20">
@@ -100,7 +106,7 @@ function AddRuleForm({
           <Input
             value={pattern}
             onChange={(e) => setPattern(e.target.value)}
-            placeholder={mode === "deny" ? "\\bsudo\\b" : "^ls\\b"}
+            placeholder={mode === "deny" ? "\\bsudo\\b" : "check-disk"}
             className="font-mono text-xs bg-background h-7"
           />
         </div>
@@ -109,17 +115,30 @@ function AddRuleForm({
           <Input
             value={desc}
             onChange={(e) => setDesc(e.target.value)}
-            placeholder={mode === "deny" ? "Block sudo" : "Allow ls"}
+            placeholder={mode === "deny" ? "Block sudo" : "Custom SSH health check"}
             className="bg-background h-7 text-xs"
           />
         </div>
       </div>
+      {mode === "allow" && (
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={ask}
+            disabled={lockAsk}
+            onChange={(e) => setAsk(e.target.checked)}
+          />
+          Also allow in Ask mode
+        </label>
+      )}
       <div className="flex gap-2">
         <Button
           size="sm"
           className="h-6 text-xs"
           disabled={!pattern.trim() || !desc.trim()}
-          onClick={() => { if (pattern.trim() && desc.trim()) onAdd(pattern.trim(), desc.trim()); }}
+          onClick={() => {
+            if (pattern.trim() && desc.trim()) onAdd(pattern.trim(), desc.trim(), ask ? "read_only" : "agent");
+          }}
         >
           Add
         </Button>
@@ -286,10 +305,11 @@ export function SecuritySettings() {
   const [loading, setLoading] = useState(true);
 
   const [showAddAllow, setShowAddAllow] = useState(false);
+  const [showAddAsk, setShowAddAsk] = useState(false);
   const [showAddDeny, setShowAddDeny] = useState(false);
 
   const [testCmd, setTestCmd] = useState("");
-  const [testResult, setTestResult] = useState<{ allowed: boolean; rule_description: string | null } | null>(null);
+  const [testResult, setTestResult] = useState<{ allowed: boolean; ask_allowed?: boolean; rule_description: string | null } | null>(null);
   const [testLoading, setTestLoading] = useState(false);
 
   const [templates, setTemplates] = useState<PolicyTemplate[]>([]);
@@ -366,10 +386,20 @@ export function SecuritySettings() {
     }
   };
 
-  const handleAddRule = async (mode: "allow" | "deny", pattern: string, description: string) => {
+  const handleAddRule = async (
+    mode: "allow" | "deny",
+    pattern: string,
+    description: string,
+    scope: "agent" | "read_only" = "agent",
+  ) => {
     try {
-      await commandPolicyService.createPolicy({ mode, pattern, description, priority: 50 });
-      mode === "allow" ? setShowAddAllow(false) : setShowAddDeny(false);
+      await commandPolicyService.createPolicy({
+        mode, pattern, description, priority: 50,
+        scope: mode === "allow" ? scope : "agent",
+      });
+      setShowAddAllow(false);
+      setShowAddAsk(false);
+      setShowAddDeny(false);
       await fetchPolicies();
       toast({ title: "Rule added" });
     } catch (e) {
@@ -673,6 +703,35 @@ export function SecuritySettings() {
         )}
       </div>
 
+      {/* Ask mode exceptions. Visible with the allowlist off, because turning
+          that list on would refuse every command that is not already listed. */}
+      <div className="rounded-lg border bg-card overflow-hidden">
+        <div className="flex items-center justify-between px-3.5 py-2.5 border-b">
+          <div>
+            <h3 className="text-sm font-medium">Ask mode</h3>
+            <p className="text-[11px] text-muted-foreground">
+              Unrecognized SSH commands are blocked in Ask mode. Add a pattern such as check-disk to allow that command during a read-only investigation.
+            </p>
+          </div>
+          <Button size="sm" variant="ghost" className="h-6 text-xs gap-1 shrink-0 ml-3" onClick={() => setShowAddAsk(!showAddAsk)}>
+            <Plus className="h-3 w-3" /> Add
+          </Button>
+        </div>
+        <RuleList
+          rules={allowRules.filter((rule) => rule.scope === "read_only")}
+          onToggle={handleToggleRule}
+          onDelete={handleDeleteRule}
+        />
+        {showAddAsk && (
+          <AddRuleForm
+            mode="allow"
+            lockAsk
+            onAdd={(p, d, scope) => handleAddRule("allow", p, d, scope)}
+            onCancel={() => setShowAddAsk(false)}
+          />
+        )}
+      </div>
+
       {/* Allowlist */}
       <div className="rounded-lg border bg-card overflow-hidden">
         <div className="flex items-center justify-between px-3.5 py-2.5 border-b">
@@ -709,7 +768,7 @@ export function SecuritySettings() {
             {showAddAllow && (
               <AddRuleForm
                 mode="allow"
-                onAdd={(p, d) => handleAddRule("allow", p, d)}
+                onAdd={(p, d, scope) => handleAddRule("allow", p, d, scope)}
                 onCancel={() => setShowAddAllow(false)}
               />
             )}
@@ -762,6 +821,8 @@ export function SecuritySettings() {
                 </p>
                 <p className="text-[11px] text-muted-foreground truncate">
                   {testResult.rule_description || "No matching rule"}
+                  {testResult.allowed && testResult.ask_allowed === false ? " · blocked in Ask mode" : ""}
+                  {testResult.allowed && testResult.ask_allowed ? " · allowed in Ask mode" : ""}
                 </p>
               </div>
             </div>

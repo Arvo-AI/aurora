@@ -301,6 +301,7 @@ def mark_session_tainted(session_id: Optional[str], user_id: Optional[str]) -> N
 def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> GateDecision:
     from utils.auth.command_policy import (
         evaluate_compound_command, CommandVerdict, plan_yes_always,
+        read_only_allow_covers as _read_only_allow_covers,
     )
     from utils.auth.stateless_auth import get_org_id_for_user
     from utils.security.command_safety import evaluate_command as safety_evaluate
@@ -314,6 +315,7 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
     # would have also fired.
     safety_decision = safety_evaluate(
         command, tool=tool_name, user_id=user_id, session_id=session_id,
+        skip_judge=bool(org_id and _read_only_allow_covers(org_id, command)),
     )
     policy_verdict: CommandVerdict = evaluate_compound_command(org_id, command)
 

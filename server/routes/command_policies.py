@@ -21,6 +21,7 @@ from utils.auth.command_policy import (
     get_policy_templates,
     get_seed_rules,
     invalidate_cache,
+    read_only_allow_covers,
     validate_pattern,
 )
 
@@ -54,7 +55,7 @@ def list_policies(user_id):
             set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:list]")
             cur.execute(
                 "SELECT id, mode, pattern, description, priority, enabled, "
-                "created_at, updated_at, updated_by, source "
+                "created_at, updated_at, updated_by, source, scope "
                 "FROM org_command_policies WHERE org_id = %s ORDER BY priority DESC",
                 (org_id,),
             )
@@ -71,6 +72,7 @@ def list_policies(user_id):
             "updated_at": r[7].isoformat() if r[7] else None,
             "updated_by": r[8],
             "source": r[9] or "custom",
+            "scope": r[10] or "agent",
         }
         (allow_rules if r[1] == "allow" else deny_rules).append(rule)
 
@@ -100,6 +102,12 @@ def create_policy(user_id):
 
     if mode not in ("allow", "deny"):
         return jsonify({"error": "mode must be 'allow' or 'deny'"}), 400
+    scope = data.get("scope") or "agent"
+    # A deny rule has no Ask-mode meaning. Only an allow rule can open Ask mode.
+    if mode != "allow":
+        scope = "agent"
+    if scope not in ("agent", "read_only"):
+        return jsonify({"error": "scope must be 'agent' or 'read_only'"}), 400
     if not pattern:
         return jsonify({"error": "pattern is required"}), 400
     if not description:
@@ -116,9 +124,9 @@ def create_policy(user_id):
                 set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:create]")
                 cur.execute(
                     "INSERT INTO org_command_policies "
-                    "(org_id, mode, pattern, description, priority, updated_by) "
-                    "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-                    (org_id, mode, pattern, description, priority, user_id),
+                    "(org_id, mode, pattern, description, priority, updated_by, scope) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    (org_id, mode, pattern, description, priority, user_id, scope),
                 )
                 new_id = cur.fetchone()[0]
             conn.commit()
@@ -144,10 +152,12 @@ def update_policy(user_id, rule_id):
 
     for field, col in [("mode", "mode"), ("pattern", "pattern"),
                        ("description", "description"), ("priority", "priority"),
-                       ("enabled", "enabled")]:
+                       ("enabled", "enabled"), ("scope", "scope")]:
         if field in data:
             if field == "mode" and data[field] not in ("allow", "deny"):
                 return jsonify({"error": "mode must be 'allow' or 'deny'"}), 400
+            if field == "scope" and data[field] not in ("agent", "read_only"):
+                return jsonify({"error": "scope must be 'agent' or 'read_only'"}), 400
             if field == "pattern":
                 err = validate_pattern(data[field])
                 if err:
@@ -221,8 +231,13 @@ def test_command(user_id):
         return jsonify({"error": "command is required"}), 400
 
     verdict = evaluate_compound_command(org_id, command)
+    from utils.security.read_only_classifier import is_read_only_command
+    ask_allowed = verdict.allowed and (
+        is_read_only_command(command) or read_only_allow_covers(org_id, command)
+    )
     return jsonify({
         "allowed": verdict.allowed,
+        "ask_allowed": ask_allowed,
         "rule_description": verdict.rule_description,
         "command": command,
     })

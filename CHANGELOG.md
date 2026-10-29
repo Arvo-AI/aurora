@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Command policy: an allow rule can be marked read-only, so a custom SSH
+  command the Ask-mode classifier does not recognize can still run. Agent-only
+  rules stay out of Ask mode. `rm -rf /`, a pipe into a shell, a reverse shell,
+  and a compiler as the program still cannot be allowed.
 - Datadog metrics: a comma-separated query is fetched as one expression each,
   and a formula is rejected instead of Datadog's "exactly one expression" error.
 - Confluence fetch accepts a page URL, and a v2 pages 404 retries the v1
