@@ -2740,7 +2740,8 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                     if not set_rls_context(cursor, conn, uid, log_prefix="[BackgroundChat:Cleanup]"):
                         continue
 
-                    # --- 1. Stale sessions (>20 min with no update) ---
+                    # --- 1. Stale sessions (no heartbeat for 20 min) ---
+                    # A live worker touches updated_at every minute. Silence means it is gone.
                     cursor.execute("""
                         SELECT cs.id, i.id as incident_id
                         FROM chat_sessions cs
