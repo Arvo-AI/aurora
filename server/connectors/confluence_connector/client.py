@@ -73,11 +73,12 @@ def parse_confluence_page_id(page_url: str) -> Optional[str]:
         if idx + 1 < len(path_parts):
             return path_parts[idx + 1]
 
-    # Blog URLs are /blog/YYYY/MM/DD/<id>/title. The id is the last number.
+    # Blog URLs are /blog/YYYY/MM/DD/<id>/title. A numeric title is not the id.
     if "blog" in path_parts:
-        for part in reversed(path_parts):
-            if part.isdigit():
-                return part
+        rest = path_parts[path_parts.index("blog") + 1:]
+        if len(rest) >= 4 and all(part.isdigit() for part in rest[:3]) and rest[3].isdigit():
+            return rest[3]
+        return None
 
     return None
 
@@ -311,7 +312,7 @@ class ConfluenceClient:
         return self._request("GET", "/user/current")
 
     def get_page(self, page_id: str, expand: str = DEFAULT_EXPAND) -> Dict[str, Any]:
-        """Fetch a page. A URL is reduced to its id. v2 404 falls back to v1."""
+        """Fetch a page. A URL is reduced to its id. A pages 404 tries blog posts."""
         resolved = parse_confluence_page_id(page_id) or str(page_id or "").strip()
         if not resolved:
             raise ValueError("Confluence page id is required")
@@ -322,11 +323,13 @@ class ConfluenceClient:
                     "GET", f"/pages/{resolved}", params={"body-format": "storage"}
                 )
             except requests.HTTPError as exc:
-                # v2 /pages is pages only. Search also returns blog posts.
+                # v2 /pages is pages only. Blog posts are /blogposts, inside the OAuth scopes.
                 status = exc.response.status_code if exc.response is not None else None
                 if status != 404:
                     raise
-            return self._request("GET", f"/content/{resolved}", params=params)
+            return self._request_v2(
+                "GET", f"/blogposts/{resolved}", params={"body-format": "storage"}
+            )
         return self._request("GET", f"/content/{resolved}", params=params)
 
     def search_content(

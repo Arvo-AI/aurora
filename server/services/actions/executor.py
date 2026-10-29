@@ -231,6 +231,8 @@ def mark_action_run_started(run_id: str, user_id: str) -> None:
                 conn.commit()
     except Exception:
         logger.exception("[Actions] Failed to mark run %s started", run_id)
+        # The task's error path marks the run failed. Swallowing this leaves it pending.
+        raise
 
 
 def update_action_run_status(

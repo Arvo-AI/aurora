@@ -79,11 +79,20 @@ def guardrails_llm_timeout_seconds() -> int:
     return value
 
 
+def _lowest_openai_effort(native: str) -> str:
+    # gpt-5-pro accepts only high. Later pro models accept medium.
+    if native.startswith("gpt-5-pro"):
+        return "high"
+    if "-pro" in native or "chat-latest" in native:
+        return "medium"
+    return "low"
+
+
 def safety_judge_thinking_overrides(model_name: str) -> dict:
     """Kwargs that shorten the judge. On unless GUARDRAILS_DISABLE_THINKING=false.
 
     Each family gets the shortest setting its API accepts. Gemini 3.8 Flash,
-    2.5 Pro, and gpt-5.5-pro reject the shorter values the others take.
+    2.5 Pro, and OpenAI pro models reject the shorter values the others take.
     """
     if not _thinking_disabled():
         return {}
@@ -105,9 +114,7 @@ def safety_judge_thinking_overrides(model_name: str) -> dict:
     # The OpenAI provider sets effort=high, then applies kwargs, so this
     # replaces that default. gpt-4 has no reasoning parameter.
     if prefix == "openai" and not native.startswith(("gpt-3", "gpt-4")):
-        # gpt-5.5-pro rejects low. medium is the lowest it accepts.
-        effort = "medium" if "5.5-pro" in native else "low"
-        return {"reasoning": {"effort": effort}}
+        return {"reasoning": {"effort": _lowest_openai_effort(native)}}
     # Haiku 4.5 and 5.5 think by default and accept off. Opus returns 400 for
     # thinking.type=disabled, so it is not included. The Bedrock gateway drops
     # additional_model_request_fields; native Converse keeps it.

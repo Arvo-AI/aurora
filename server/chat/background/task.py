@@ -520,11 +520,6 @@ def run_background_chat(
     _prewarm_ready.wait(timeout=30)
 
     logger.info(f"[BackgroundChat] Starting for user {user_id}, session {session_id}")
-    # started_at was the enqueue time. The stale sweep measures from here.
-    _run_id = (trigger_metadata or {}).get("run_id")
-    if _run_id:
-        from services.actions.executor import mark_action_run_started
-        mark_action_run_started(_run_id, user_id)
     logger.info(f"[BackgroundChat] Trigger: {trigger_metadata}")
 
     # Eagerly persist the initial user message so it's visible in the UI immediately (opt-in)
@@ -573,6 +568,11 @@ def run_background_chat(
 
     try:
         is_action_source = (trigger_metadata or {}).get('source') == 'action'
+        # A failed start update has to raise so the error path marks the run failed.
+        _run_id = (trigger_metadata or {}).get("run_id")
+        if _run_id:
+            from services.actions.executor import mark_action_run_started
+            mark_action_run_started(_run_id, user_id)
         # A Slack sender with no Aurora account keeps this user for credentials
         # and the session. Connector and memory checks use a general viewer.
         if (trigger_metadata or {}).get("access_as") == "general_viewer":

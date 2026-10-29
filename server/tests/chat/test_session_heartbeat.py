@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 def test_touch_only_moves_an_in_progress_session(monkeypatch):
     import utils.cache.redis_client as redis_client
 
-    monkeypatch.setattr(redis_client, "get_redis_client", lambda: MagicMock())
+    monkeypatch.setattr(redis_client, "get_redis_client", MagicMock)
     from chat.backend.agent.workflow import _touch_in_progress_session
 
     executed = {}

@@ -76,6 +76,10 @@ def test_gpt55_pro_effort_is_medium_not_low():
         "reasoning": {"effort": "medium"},
     }
     assert safety_judge_thinking_overrides("openai/gpt-5.5-pro-2026-04-23")["reasoning"]["effort"] == "medium"
+    assert safety_judge_thinking_overrides("openai/gpt-5.2-pro")["reasoning"]["effort"] == "medium"
+    assert safety_judge_thinking_overrides("openai/gpt-5.4-pro")["reasoning"]["effort"] == "medium"
+    assert safety_judge_thinking_overrides("openai/gpt-5-pro")["reasoning"]["effort"] == "high"
+    assert safety_judge_thinking_overrides("openai/gpt-5.2-chat-latest")["reasoning"]["effort"] == "medium"
 
 
 def test_openrouter_does_not_send_thinking_level(monkeypatch):

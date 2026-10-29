@@ -18,6 +18,13 @@ def test_parse_page_id_from_page_and_blog_urls():
     assert parse_confluence_page_id(
         "https://acme.atlassian.net/wiki/spaces/OPS/blog/2026/01/02/77/Post"
     ) == "77"
+    # A numeric title is not the id, and a date with no id is not a page.
+    assert parse_confluence_page_id(
+        "https://acme.atlassian.net/wiki/spaces/OPS/blog/2026/01/02/77/123"
+    ) == "77"
+    assert parse_confluence_page_id(
+        "https://acme.atlassian.net/wiki/spaces/OPS/blog/2026/01/02"
+    ) is None
     assert parse_confluence_page_id("12345") is None
 
 
@@ -44,28 +51,29 @@ def test_v2_hit_does_not_call_v1(monkeypatch):
     assert "v1" not in called
 
 
-def test_v2_404_falls_back_to_v1_content(monkeypatch):
+def test_v2_404_falls_back_to_v2_blogpost(monkeypatch):
     client = _oauth_client()
     err = requests.HTTPError("missing")
     err.response = type("Resp", (), {"status_code": 404})()
+    seen = []
 
-    def _v2(*_a, **_k):
-        raise err
-
-    seen = {}
-
-    def _v1(method, path, params=None):
-        seen["method"] = method
-        seen["path"] = path
+    def _v2(_method, path, params=None):
+        seen.append(path)
+        # Pages 404. Blog posts are the other v2 route, still inside the OAuth scopes.
+        if path.startswith("/pages/"):
+            raise err
         return {"id": "77", "title": "Post", "body": {"storage": {"value": "<p>x</p>"}}}
+
+    def _v1(*_a, **_k):
+        raise AssertionError("v1 content is outside the granular scopes")
 
     monkeypatch.setattr(client, "_request_v2", _v2)
     monkeypatch.setattr(client, "_request", _v1)
     page = client.get_page(
-        "https://acme.atlassian.net/wiki/spaces/OPS/blog/2026/01/02/77/Post"
+        "https://acme.atlassian.net/wiki/spaces/OPS/blog/2026/01/02/77/123"
     )
     assert page["id"] == "77"
-    assert seen == {"method": "GET", "path": "/content/77"}
+    assert seen == ["/pages/77", "/blogposts/77"]
 
 
 def test_v2_error_other_than_404_is_not_retried(monkeypatch):

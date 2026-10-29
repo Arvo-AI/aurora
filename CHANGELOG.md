@@ -25,19 +25,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rm -rf /` are refused in both modes, and an allow rule cannot lift them.
 - Datadog metrics: a comma-separated query is fetched as one expression each,
   and a formula is rejected instead of Datadog's "exactly one expression" error.
-- Confluence fetch accepts a page URL, and a v2 pages 404 retries the v1
-  content API so a blog post returned by search can still be read.
+- Confluence fetch accepts a page URL. A v2 pages 404 retries the v2 blog
+  post route, which needs `read:blogpost:confluence`. Existing OAuth
+  connections have to reconnect before a blog post can be read.
 - Background investigations touch the session timestamp every 5 minutes, so the
   20-minute stall sweep no longer treats a live run as dead.
 - Actions: a running run is stale five minutes after the investigation limit,
-  measured from worker start. A run still queued keeps a 35-minute allowance,
-  so queue time is not counted as execution.
+  measured from worker start. A queued run is stale after the greater of 35
+  minutes and the investigation limit plus five minutes, so queue time is not
+  counted as execution.
 - Safety judge: thinking is shortened by default (`GUARDRAILS_DISABLE_THINKING`,
   set `false` to keep the model default). Gemini 3.6 Flash uses minimal.
   Gemini 3.8 Flash, Pro, and Argon use low. Gemini 2.5 Flash uses a budget of 0
-  and 2.5 Pro uses 128. GPT-5 and the o-series use reasoning effort low;
-  gpt-5.5-pro uses medium. Haiku 4.5 and 5.5 get thinking disabled on Anthropic
-  and native Bedrock.
+  and 2.5 Pro uses 128. GPT-5 and the o-series use reasoning effort low.
+  gpt-5-pro uses high. Later pro models and chat-latest use medium. Haiku 4.5
+  and 5.5 get thinking disabled on Anthropic, native Bedrock, and OpenRouter.
   Ollama and OpenRouter only for weights with a think switch (Qwen3, DeepSeek-R1,
   QwQ, gpt-oss, Magistral). Opus and a plain Llama are left alone.
   `GUARDRAILS_LLM_TIMEOUT_SECONDS` sets the call cap (default 10, clamped to 5–60).
