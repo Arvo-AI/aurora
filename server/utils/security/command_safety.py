@@ -83,15 +83,16 @@ def safety_judge_thinking_overrides(model_name: str) -> dict:
     """Kwargs that shorten the judge. On unless GUARDRAILS_DISABLE_THINKING=false.
 
     Gemini 3 Flash gets minimal; Pro and Argon get low; 2.5 gets budget 0.
-    GPT-5 gets reasoning effort low. gpt-4, OpenRouter Gemini, and Bedrock stay as they are.
+    GPT-5 gets effort low. Haiku gets thinking disabled. Ollama and OpenRouter
+    only for models that advertise a thinking switch.
     """
     if not _thinking_disabled():
         return {}
     native = (model_name or "").split("/", 1)[-1].lower()
     prefix = model_name.split("/", 1)[0].lower() if "/" in (model_name or "") else ""
+    mode = (os.getenv("LLM_PROVIDER_MODE") or "").strip().lower()
     # OpenRouter's Gemini route returns 400 for thinking_level. Direct Gemini does not.
-    openrouter = (os.getenv("LLM_PROVIDER_MODE") or "").strip().lower() == "openrouter"
-    if "gemini" in native and not openrouter:
+    if "gemini" in native and mode != "openrouter":
         # 2.5 disables with a budget. It rejects thinking_level.
         if "2.5" in native:
             return {"thinking_budget": 0, "include_thoughts": False}
@@ -104,7 +105,33 @@ def safety_judge_thinking_overrides(model_name: str) -> dict:
     # replaces that default. gpt-4 has no reasoning parameter.
     if prefix == "openai" and not native.startswith(("gpt-3", "gpt-4")):
         return {"reasoning": {"effort": "low"}}
+    # Haiku 4.5 and 5.5 think by default and accept off. Opus returns 400 for
+    # thinking.type=disabled, so it is not included. The Bedrock gateway drops
+    # additional_model_request_fields; native Converse keeps it.
+    if "haiku-4" in native or "haiku-5" in native:
+        if prefix == "bedrock" or mode == "bedrock":
+            return {"additional_model_request_fields": {"thinking": {"type": "disabled"}}}
+        # Direct Anthropic. OpenRouter would forward `thinking` and 400.
+        if mode != "openrouter" and (prefix == "anthropic" or native.startswith("claude")):
+            return {"thinking": {"type": "disabled"}}
+    # Ollama returns 400 if `reasoning` is sent to a model with no think switch.
+    if prefix == "ollama" and _advertises_thinking(native):
+        return {"reasoning": False}
+    # OpenRouter's unified reasoning flag. Gemini's thinking_level 400s there,
+    # so Haiku and the open weights use this instead.
+    if mode == "openrouter" and (
+        "haiku-4" in native or "haiku-5" in native or _advertises_thinking(native)
+    ):
+        return {"extra_body": {"reasoning": {"enabled": False}}}
     return {}
+
+
+# Name fragments for weights that ship a think switch. A plain Llama does not.
+_THINKING_WEIGHTS = ("qwen3", "deepseek-r1", "qwq", "gpt-oss", "magistral")
+
+
+def _advertises_thinking(native: str) -> bool:
+    return any(token in native for token in _THINKING_WEIGHTS)
 
 
 def _fingerprint(command: str) -> str:

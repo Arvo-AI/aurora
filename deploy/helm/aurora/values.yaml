@@ -322,7 +322,8 @@ config:
   GUARDRAILS_LLM_MODEL: ""
   # On by default. Gemini 3 Flash uses minimal, Pro/Argon use low, Gemini 2.5
   # uses budget 0, and GPT-5 uses reasoning effort low. Set false to leave the
-  # model on its own default. OpenRouter and Bedrock ignore it. Restart required.
+  # model on its own default. Haiku, and Ollama/OpenRouter weights that think,
+  # get an off switch. Restart required.
   GUARDRAILS_DISABLE_THINKING: "true"
   # Seconds the judge may run before the command is blocked. Default 10.
   # Clamped to 5–60. A restart is not required.

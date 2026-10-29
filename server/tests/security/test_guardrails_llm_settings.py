@@ -82,5 +82,40 @@ def test_gpt5_reasoning_drops_to_low():
     assert safety_judge_thinking_overrides("openai/o3")["reasoning"]["effort"] == "low"
 
 
-def test_bedrock_is_left_alone():
-    assert safety_judge_thinking_overrides("bedrock/anthropic.claude-haiku-4-5") == {}
+def test_haiku_thinking_is_disabled_on_bedrock_and_anthropic():
+    assert safety_judge_thinking_overrides(
+        "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
+    ) == {"additional_model_request_fields": {"thinking": {"type": "disabled"}}}
+    assert safety_judge_thinking_overrides("anthropic/claude-haiku-4-5") == {
+        "thinking": {"type": "disabled"},
+    }
+
+
+def test_haiku_routed_through_bedrock_uses_the_converse_field(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER_MODE", "bedrock")
+    assert safety_judge_thinking_overrides("anthropic/claude-haiku-5-5") == {
+        "additional_model_request_fields": {"thinking": {"type": "disabled"}},
+    }
+
+
+def test_opus_and_old_haiku_are_not_sent_a_thinking_field():
+    # Opus 400s on thinking.type=disabled. Claude 3 Haiku does not think.
+    assert safety_judge_thinking_overrides("bedrock/anthropic.claude-opus-4-5") == {}
+    assert safety_judge_thinking_overrides("anthropic/claude-3-haiku-20240307") == {}
+
+
+def test_ollama_thinking_models_are_turned_off_and_plain_llama_is_not():
+    assert safety_judge_thinking_overrides("ollama/qwen3:8b") == {"reasoning": False}
+    assert safety_judge_thinking_overrides("ollama/deepseek-r1:8b") == {"reasoning": False}
+    assert safety_judge_thinking_overrides("ollama/llama3.1:8b") == {}
+
+
+def test_openrouter_only_disables_weights_that_advertise_thinking(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER_MODE", "openrouter")
+    assert safety_judge_thinking_overrides("qwen/qwen3-32b") == {
+        "extra_body": {"reasoning": {"enabled": False}},
+    }
+    assert safety_judge_thinking_overrides("anthropic/claude-haiku-4-5") == {
+        "extra_body": {"reasoning": {"enabled": False}},
+    }
+    assert safety_judge_thinking_overrides("meta-llama/llama-3.1-8b-instruct") == {}

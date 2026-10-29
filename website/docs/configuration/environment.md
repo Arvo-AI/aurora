@@ -340,7 +340,7 @@ Three-layer safety: input rail + signature matcher + LLM safety judge. See [Comm
 |----------|---------|-------------|
 | `GUARDRAILS_ENABLED` | `true` | Master switch. When enabled (default), all three layers run and every LLM check fails closed on error. Set to `false` to disable all guardrails. |
 | `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Model used by the safety judge and input rail. Same format and routing as `MAIN_MODEL`. |
-| `GUARDRAILS_DISABLE_THINKING` | `true` | Shorten the safety judge. Gemini 3 Flash uses `minimal`, Pro and Argon use `low`, Gemini 2.5 uses a budget of 0, and GPT-5 uses reasoning effort `low`. gpt-4, OpenRouter, and Bedrock are unchanged. Set to `false` to leave the model on its default. Requires a restart. |
+| `GUARDRAILS_DISABLE_THINKING` | `true` | Shorten the safety judge. Gemini 3 Flash uses `minimal`, Pro and Argon use `low`, Gemini 2.5 uses a budget of 0, and GPT-5 uses reasoning effort `low`. Haiku 4.5 and 5.5 get thinking disabled (Opus rejects that field). Ollama and OpenRouter only get it for weights that advertise a think switch (`qwen3`, `deepseek-r1`, `qwq`, `gpt-oss`, `magistral`); a plain Llama is left alone because Ollama returns 400 otherwise. Set to `false` to leave the model on its default. Requires a restart. |
 | `GUARDRAILS_LLM_TIMEOUT_SECONDS` | `10` | Seconds the safety judge may run before the command is blocked. Clamped to 5–60. |
 | `GUARDRAILS_SIGMA_ENABLED` | `true` | Gates the vendored SigmaHQ rule corpus inside the signature matcher. Requires `GUARDRAILS_ENABLED=true`. Set to `false` to run only hand-written rules. |
 
