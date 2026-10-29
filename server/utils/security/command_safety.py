@@ -275,13 +275,23 @@ def check_command_safety(
 # Internals
 # ---------------------------------------------------------------------------
 
+# Shown on the tool result and the approval prompt. The chat user usually
+# cannot change Helm values, so the sentence names what an admin should do.
+_TIMEOUT_USER_MESSAGE = (
+    "Safety judge timed out, so this command was blocked. "
+    "Ask an admin to raise GUARDRAILS_LLM_TIMEOUT_SECONDS (5–60 seconds; "
+    "applies on the next call) or set GUARDRAILS_LLM_MODEL to a faster model "
+    "and restart the chatbot and celery worker."
+)
+
+
 def _fail_verdict(detail: str) -> SafetyVerdict:
     logger.warning("[CommandSafety] Failing closed: %s", detail)
-    return SafetyVerdict(
-        observation="error",
-        thought=f"Safety check unavailable ({detail}); failing closed",
-        conclusion=True,
+    # A timeout looks like a dangerous command unless the text says otherwise.
+    thought = _TIMEOUT_USER_MESSAGE if detail == "timeout" else (
+        f"Safety check unavailable ({detail}); failing closed"
     )
+    return SafetyVerdict(observation="error", thought=thought, conclusion=True)
 
 
 @lru_cache(maxsize=1)

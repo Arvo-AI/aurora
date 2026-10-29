@@ -115,8 +115,9 @@ class TestTimeoutBlocks:
 
         assert v.conclusion is True
         assert v.observation == "error"
-        assert "timeout" in v.thought.lower()
-        assert "failing closed" in v.thought.lower()
+        assert "GUARDRAILS_LLM_TIMEOUT_SECONDS" in v.thought
+        assert "GUARDRAILS_LLM_MODEL" in v.thought
+        assert "admin" in v.thought.lower()
 
 
 class TestLlmRaisesBlocks:

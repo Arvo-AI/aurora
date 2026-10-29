@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Ollama and OpenRouter only for weights with a think switch (Qwen3, DeepSeek-R1,
   QwQ, gpt-oss, Magistral). Opus and a plain Llama are left alone.
   `GUARDRAILS_LLM_TIMEOUT_SECONDS` sets the call cap (default 10, clamped to 5–60).
+  A timeout tells the tool caller to ask an admin to raise that cap or switch
+  `GUARDRAILS_LLM_MODEL` to a faster model.
 
 ## [1.5.13] - 2026-10-28
 
