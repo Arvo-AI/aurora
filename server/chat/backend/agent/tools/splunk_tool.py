@@ -212,11 +212,15 @@ def search_splunk(
     targets, error = _tool_targets(user_id, account_id)
     if error:
         return error
+    # Fan-out shares one cap so four instances cannot return four times 2MB.
+    budget = max(1, MAX_OUTPUT_SIZE // len(targets))
     # Several granted Splunks — same shape as an AWS fan-out, keyed by account id.
     if len(targets) > 1:
         by_account = _by_account(
             targets,
-            lambda account: _search_one(account, query, earliest_time, latest_time, max_count),
+            lambda account: _search_one(
+                account, query, earliest_time, latest_time, max_count, budget
+            ),
         )
         return json.dumps({
             "success": any(item.get("success") for item in by_account.values()),
@@ -225,7 +229,7 @@ def search_splunk(
             "note": "Queried every Splunk this user can access. Pass account_id to target one instance.",
         })
 
-    result = _search_one(targets[0], query, earliest_time, latest_time, max_count)
+    result = _search_one(targets[0], query, earliest_time, latest_time, max_count, budget)
     return json.dumps(_annotate(result, targets))
 
 
@@ -268,6 +272,7 @@ def _search_one(
     earliest_time: str,
     latest_time: str,
     max_count: int,
+    output_budget: int = MAX_OUTPUT_SIZE,
 ) -> Dict[str, Any]:
     search_query = _ensure_search_prefix(query)
     # The account id lives on the same dict as the token, so it is not logged.
@@ -301,7 +306,7 @@ def _search_one(
             results = results[:max_count]
 
         original_count = len(results)
-        results, was_truncated = _truncate_results(results)
+        results, was_truncated = _truncate_results(results, output_budget)
         response_data = {
             "success": True,
             "query": search_query,

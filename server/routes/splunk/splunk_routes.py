@@ -252,7 +252,15 @@ def connect(user_id):
     if not incoming.get("account_id"):
         return jsonify({"error": "A valid Splunk instance URL is required (e.g., https://your-instance.splunkcloud.com:8089)"}), 400
 
-    existing = list_splunk_accounts(user_id)
+    # A Vault error looks like "nothing stored". Saving then would drop the other instances.
+    try:
+        existing = list_splunk_accounts(user_id, raise_on_error=True)
+    except Exception:
+        logger.exception(
+            "[SPLUNK] Failed to load existing accounts for user %s",
+            hash_for_log(user_id),
+        )
+        return jsonify({"error": "Failed to load existing Splunk credentials"}), 500
     accounts, replaced = upsert_account(existing, incoming)
 
     try:
@@ -311,7 +319,8 @@ def disconnect(user_id):
 def _disconnect(user_id, selector: Optional[str]):
     """Remove one Splunk, or every Splunk when no instance is named."""
     try:
-        accounts = list_splunk_accounts(user_id)
+        # A failed read is not "no instances" — that path deletes every Splunk.
+        accounts = list_splunk_accounts(user_id, raise_on_error=True)
         # One instance — leave the rest stored and drop only that connection row.
         if selector and str(selector).strip():
             match = find_account(accounts, str(selector))

@@ -213,7 +213,9 @@ class SecretRefManager:
             if conn:
                 conn.close()
 
-    def get_user_token_data(self, user_id: str, provider: str) -> Optional[Dict[str, Any]]:
+    def get_user_token_data(
+        self, user_id: str, provider: str, *, raise_on_error: bool = False
+    ) -> Optional[Dict[str, Any]]:
         """Get user token data from Vault."""
         provider_base = provider.lower().split('_')[0]
         if provider_base not in SUPPORTED_SECRET_PROVIDERS:
@@ -275,13 +277,17 @@ class SecretRefManager:
             )
 
             error_str = error_msg.lower()
+            # A missing secret is "not connected", not a failed read of the others.
             if "not found" in error_str or "no versions" in error_str or "invalidpath" in error_str:
                 logger.info(
                     "Secret not found in Vault for provider %s. Clearing stale secret_ref.",
                     provider,
                 )
                 self._clear_secret_ref(user_id, provider)
-
+                return None
+            # Callers that merge into the stored blob must not treat this as empty.
+            if raise_on_error:
+                raise
             return None
         finally:
             if cursor:
@@ -435,9 +441,11 @@ def has_user_credentials(user_id: str, provider: str) -> bool:
     return secret_manager.has_user_credentials(user_id, provider)
 
 
-def get_user_token_data(user_id: str, provider: str) -> Optional[Dict[str, Any]]:
+def get_user_token_data(
+    user_id: str, provider: str, *, raise_on_error: bool = False
+) -> Optional[Dict[str, Any]]:
     """Get user token data, automatically handling secret references."""
-    return secret_manager.get_user_token_data(user_id, provider)
+    return secret_manager.get_user_token_data(user_id, provider, raise_on_error=raise_on_error)
 
 
 def get_token_owner_id(user_id: str, provider: str) -> str:

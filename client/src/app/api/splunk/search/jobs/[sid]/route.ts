@@ -30,8 +30,9 @@ export async function GET(
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
     let url = `${API_BASE_URL}/splunk/search/jobs/${sid}`;
+    // results=true is the results endpoint. The job URL only returns status.
     if (isResults) {
-      url += `?offset=${offset}&count=${count}`;
+      url += `/results?offset=${offset}&count=${count}`;
       if (accountParam) url += `&account=${accountParam}`;
     } else if (accountParam) {
       url += `?account=${accountParam}`;

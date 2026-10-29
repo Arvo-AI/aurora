@@ -123,20 +123,18 @@ def _selector_keys(selector: str) -> set:
 
 
 def account_allowed(user_id: str, account_id: str) -> bool:
-    """Whether this caller's role and team may use this Splunk.
-
-    No connector-access module means nothing is limited yet. A failed check
-    stays open so a missing table cannot take every Splunk offline.
-    """
+    """Whether this caller's role and team may use this Splunk."""
     try:
         from utils.auth.connector_access import may_use
+    # Access control is not deployed yet — nothing is limited.
     except ImportError:
         return True
     try:
         return bool(may_use(user_id, "splunk", account_id))
+    # A failed lookup must not open an instance this team was never granted.
     except Exception:
         logger.warning("Splunk access check failed for user %s", hash_for_log(user_id))
-        return True
+        return False
 
 
 def splunk_denial(user_id: str) -> str:
@@ -179,12 +177,15 @@ def resolve_targets(
     return permitted
 
 
-def list_splunk_accounts(user_id: str) -> List[Dict[str, Any]]:
+def list_splunk_accounts(user_id: str, *, raise_on_error: bool = False) -> List[Dict[str, Any]]:
     from utils.auth.token_management import get_token_data
 
     try:
-        creds = get_token_data(user_id, "splunk")
+        creds = get_token_data(user_id, "splunk", raise_on_error=raise_on_error)
     except Exception:
+        # Callers that write the blob back cannot treat a Vault error as "none connected".
+        if raise_on_error:
+            raise
         logger.exception("Failed to load Splunk accounts for user %s", hash_for_log(user_id))
         return []
     if not isinstance(creds, dict):

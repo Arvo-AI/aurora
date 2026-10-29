@@ -124,6 +124,8 @@ export default function SplunkSearchPage() {
   const [pageSize, setPageSize] = useState(20);
   const [hasSearched, setHasSearched] = useState(false);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  // The instance that owns the running job. The picker can change while it runs.
+  const jobAccountIdRef = useRef<string | undefined>(undefined);
 
   const totalPages = Math.ceil(totalCount / pageSize);
   const startIndex = (currentPage - 1) * pageSize;
@@ -229,6 +231,7 @@ export default function SplunkSearchPage() {
 
     try {
       const jobAccountId = accountId || undefined;
+      jobAccountIdRef.current = jobAccountId;
       const job = await splunkService.createSearchJob({
         query,
         earliestTime: timeRange,
@@ -282,7 +285,7 @@ export default function SplunkSearchPage() {
 
     if (jobStatus?.sid) {
       try {
-        await splunkService.cancelJob(jobStatus.sid, accountId || undefined);
+        await splunkService.cancelJob(jobStatus.sid, jobAccountIdRef.current);
       } catch {
         // Ignore cancel errors
       }
