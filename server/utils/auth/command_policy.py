@@ -52,6 +52,8 @@ class CommandVerdict:
     allowlist_exhausted: bool = False
     # Set when a deny rule blocked a command an allow rule also matched.
     overlapped_allow: Optional[str] = None
+    # Host compromise. An allow rule and a Yes click cannot lift it.
+    platform_blocked: bool = False
 
 
 @dataclass(frozen=True)
@@ -260,6 +262,13 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
     clicking ``Always`` should also add an allow rule alongside disabling
     the deny rule.
     """
+    # Checked before the org lists so a disabled denylist cannot lift it.
+    platform = _platform_block_reason(command)
+    if platform:
+        return CommandVerdict(
+            allowed=False, rule_description=platform, platform_blocked=True,
+        )
+
     if not org_id:
         logger.info("policy_check_skipped reason=no_org_context func=evaluate_command")
         return CommandVerdict(allowed=True)
@@ -426,6 +435,13 @@ def evaluate_compound_command(
     independently.  ALL sub-commands must pass policy; the first denial is
     returned immediately.
     """
+    # The splitter drops the pipe, so the shell shape has to be seen here.
+    platform = _platform_block_reason(command)
+    if platform:
+        return CommandVerdict(
+            allowed=False, rule_description=platform, platform_blocked=True,
+        )
+
     if not org_id:
         logger.info("policy_check_skipped reason=no_org_context func=evaluate_compound_command")
         return CommandVerdict(allowed=True)
@@ -444,54 +460,22 @@ def evaluate_compound_command(
     return last_verdict
 
 
-# A customer read-only allow cannot turn these off. Matched as the program
-# being run, or as a shell shape, so a word like SQL "as" is not a compiler.
-_COMPILERS = frozenset({"gcc", "g++", "cc", "make", "as", "ld"})
+# These run on the Aurora host. Both modes refuse them, and no allow rule lifts them.
+# `rm -rf /tmp` is a customer path and stays on the org denylist, which they can turn off.
 _PIPE_TO_SHELL = re.compile(r"\|\s*(sh|bash|dash|zsh|ksh)\b")
-_RM_ROOT = re.compile(r"\brm\s+-rf\s+/")
+_RM_ROOT = re.compile(r"\brm\s+-(?:rf|fr)\s+/(?:home\b|\s|$|['\"])")
 _REVERSE_SHELL = re.compile(r"\b(nc|ncat|netcat|socat)\b.*\s-[ec]\b")
-_SSH_OPTION_TAKES_ARG = frozenset({"-i", "-p", "-o", "-J", "-l", "-F", "-W", "-c"})
 
 
-def _remote_ssh_program(tokens: list[str]) -> str:
-    """The program ssh will run on the host, or '' when ssh only opens a shell."""
-    saw_host = False
-    i = 1
-    while i < len(tokens):
-        tok = tokens[i]
-        # Flags are not the remote program. Some of them consume the next token.
-        if tok.startswith("-") and tok != "-":
-            if tok in _SSH_OPTION_TAKES_ARG and "=" not in tok:
-                i += 2
-                continue
-            i += 1
-            continue
-        if not saw_host:
-            saw_host = True
-            i += 1
-            continue
-        return tok.rsplit("/", 1)[-1]
-    return ""
-
-
-def _platform_denied(part: str) -> bool:
-    """True when this segment is on the floor an allow rule cannot lift."""
-    if _RM_ROOT.search(part) or _PIPE_TO_SHELL.search(part) or _REVERSE_SHELL.search(part):
-        return True
-    try:
-        tokens = shlex.split(part)
-    except ValueError:
-        # An allow rule must not cover a command we cannot parse.
-        return True
-    if not tokens:
-        return True
-    program = tokens[0].rsplit("/", 1)[-1]
-    if program in _COMPILERS:
-        return True
-    # gcc after the host is the remote program, not a word in a query.
-    if program == "ssh" and _remote_ssh_program(tokens) in _COMPILERS:
-        return True
-    return False
+def _platform_block_reason(command: str) -> Optional[str]:
+    """Why this command can compromise the host, or None."""
+    if _PIPE_TO_SHELL.search(command):
+        return "Pipe into a shell"
+    if _REVERSE_SHELL.search(command):
+        return "Reverse shell"
+    if _RM_ROOT.search(command):
+        return "Recursive deletion of the root filesystem"
+    return None
 
 
 def read_only_allow_covers(org_id: str, command: str) -> bool:
@@ -502,14 +486,12 @@ def read_only_allow_covers(org_id: str, command: str) -> bool:
         return False
     # The splitter removes the pipe, so the shell-shape checks have to see the
     # original command. A quoted `| bash` is still a pipe into a shell.
-    if _PIPE_TO_SHELL.search(command) or _RM_ROOT.search(command) or _REVERSE_SHELL.search(command):
+    if _platform_block_reason(command):
         return False
     parts = _split_compound_command(command) or [command]
     from utils.security.read_only_classifier import is_read_only_command
     for part in parts:
-        # The floor and an org deny both win over a customer allow.
-        if _platform_denied(part):
-            return False
+        # An org deny still wins over a customer allow.
         if states.denylist_enabled and any(rule.compiled.search(part) for rule in deny_rules):
             return False
         if is_read_only_command(part):

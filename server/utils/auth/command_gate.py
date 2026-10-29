@@ -318,6 +318,13 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
         skip_judge=bool(org_id and _read_only_allow_covers(org_id, command)),
     )
     policy_verdict: CommandVerdict = evaluate_compound_command(org_id, command)
+    # A Yes click must not run a command that compromises the Aurora host.
+    if policy_verdict.platform_blocked:
+        return _block(
+            "POLICY_DENIED",
+            "Command blocked by platform policy: "
+            + (policy_verdict.rule_description or "not permitted"),
+        )
 
     safety_blocked = safety_decision.blocked
     policy_blocked = not policy_verdict.allowed
