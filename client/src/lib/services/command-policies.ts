@@ -48,7 +48,7 @@ export interface PolicyTemplate {
 export const commandPolicyService = {
   getPolicies: () => apiGet<PoliciesResponse>("/api/org/command-policies"),
 
-  createPolicy: (rule: Pick<CommandPolicyRule, "mode" | "pattern" | "description" | "priority"> & { scope?: "agent" | "read_only" }) =>
+  createPolicy: (rule: Pick<CommandPolicyRule, "mode" | "pattern" | "description" | "priority"> & { scope?: "agent" | "read_only"; enabled?: boolean }) =>
     apiPost<{ id: number }>("/api/org/command-policies", rule),
 
   updatePolicy: (id: number, fields: Partial<CommandPolicyRule>) =>

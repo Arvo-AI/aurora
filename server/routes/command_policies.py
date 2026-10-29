@@ -108,6 +108,9 @@ def create_policy(user_id):
         scope = "agent"
     if scope not in ("agent", "read_only"):
         return jsonify({"error": "scope must be 'agent' or 'read_only'"}), 400
+    enabled = data.get("enabled", True)
+    if not isinstance(enabled, bool):
+        return jsonify({"error": "enabled must be a boolean"}), 400
     if not pattern:
         return jsonify({"error": "pattern is required"}), 400
     if not description:
@@ -124,9 +127,9 @@ def create_policy(user_id):
                 set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:create]")
                 cur.execute(
                     "INSERT INTO org_command_policies "
-                    "(org_id, mode, pattern, description, priority, updated_by, scope) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-                    (org_id, mode, pattern, description, priority, user_id, scope),
+                    "(org_id, mode, pattern, description, priority, updated_by, scope, enabled) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    (org_id, mode, pattern, description, priority, user_id, scope, enabled),
                 )
                 new_id = cur.fetchone()[0]
             conn.commit()

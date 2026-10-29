@@ -28,11 +28,11 @@ const CONNECTOR_ICONS: Record<string, string> = {
 
 const ALWAYS_SHOW_CONNECTORS = new Set(["terraform"]);
 
-type AllowAccess = "read_only" | "off" | "both";
+type AllowAccess = "off" | "agent" | "always";
 
 function allowAccess(rule: CommandPolicyRule): AllowAccess {
   if (!rule.enabled) return "off";
-  return rule.scope === "read_only" ? "read_only" : "both";
+  return rule.scope === "read_only" ? "always" : "agent";
 }
 
 function RuleList({
@@ -65,13 +65,13 @@ function RuleList({
               value={allowAccess(rule)}
               onValueChange={(value) => onAccess(rule, value as AllowAccess)}
             >
-              <SelectTrigger className="h-7 w-[9.5rem] shrink-0 text-xs" aria-label={`Access for ${rule.pattern}`}>
+              <SelectTrigger className="h-7 w-[11rem] shrink-0 text-xs" aria-label={`Access for ${rule.pattern}`}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="read_only">Read only</SelectItem>
                 <SelectItem value="off">Deactivated</SelectItem>
-                <SelectItem value="both">Read and write</SelectItem>
+                <SelectItem value="agent">Agent mode only</SelectItem>
+                <SelectItem value="always">Always allowed</SelectItem>
               </SelectContent>
             </Select>
           ) : (
@@ -112,12 +112,12 @@ function AddRuleForm({
   onCancel,
 }: {
   mode: "allow" | "deny";
-  onAdd: (pattern: string, description: string, scope: "agent" | "read_only") => void;
+  onAdd: (pattern: string, description: string, access: AllowAccess) => void;
   onCancel: () => void;
 }) {
   const [pattern, setPattern] = useState("");
   const [desc, setDesc] = useState("");
-  const [access, setAccess] = useState<AllowAccess>("read_only");
+  const [access, setAccess] = useState<AllowAccess>("always");
 
   return (
     <div className="border-t p-3 space-y-2 bg-muted/20">
@@ -143,12 +143,13 @@ function AddRuleForm({
       </div>
       {mode === "allow" && (
         <Select value={access} onValueChange={(value) => setAccess(value as AllowAccess)}>
-          <SelectTrigger className="h-7 w-[9.5rem] text-xs" aria-label="Access for the new command">
+          <SelectTrigger className="h-7 w-[11rem] text-xs" aria-label="Access for the new command">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="read_only">Read only</SelectItem>
-            <SelectItem value="both">Read and write</SelectItem>
+            <SelectItem value="off">Deactivated</SelectItem>
+            <SelectItem value="agent">Agent mode only</SelectItem>
+            <SelectItem value="always">Always allowed</SelectItem>
           </SelectContent>
         </Select>
       )}
@@ -159,7 +160,7 @@ function AddRuleForm({
           disabled={!pattern.trim() || !desc.trim()}
           onClick={() => {
             if (pattern.trim() && desc.trim()) {
-              onAdd(pattern.trim(), desc.trim(), access === "both" ? "agent" : "read_only");
+              onAdd(pattern.trim(), desc.trim(), mode === "allow" ? access : "agent");
             }
           }}
         >
@@ -412,12 +413,13 @@ export function SecuritySettings() {
     mode: "allow" | "deny",
     pattern: string,
     description: string,
-    scope: "agent" | "read_only" = "agent",
+    access: AllowAccess = "agent",
   ) => {
     try {
       await commandPolicyService.createPolicy({
         mode, pattern, description, priority: 50,
-        scope: mode === "allow" ? scope : "agent",
+        scope: mode === "allow" && access === "always" ? "read_only" : "agent",
+        enabled: mode === "deny" || access !== "off",
       });
       setShowAddAllow(false);
       setShowAddDeny(false);
@@ -432,7 +434,7 @@ export function SecuritySettings() {
     try {
       await commandPolicyService.updatePolicy(rule.id, access === "off"
         ? { enabled: false }
-        : { enabled: true, scope: access === "read_only" ? "read_only" : "agent" });
+        : { enabled: true, scope: access === "always" ? "read_only" : "agent" });
       await fetchPolicies();
     } catch {
       toast({ title: "Failed to update rule", variant: "destructive" });
@@ -748,8 +750,8 @@ export function SecuritySettings() {
               <h3 className="text-sm font-medium">Allowlist</h3>
               <p className="text-[11px] text-muted-foreground">
                 {allowlistEnabled
-                  ? "Read only runs in Ask mode. Read and write runs in Agent mode."
-                  : "Read only still runs in Ask mode. Turn this on to make the table the only commands Agent mode may run."}
+                  ? "Agent mode only runs in Agent mode. Always allowed also runs in Ask mode."
+                  : "Always allowed still runs in Ask mode. Turn this on to make the table the only commands Agent mode may run."}
               </p>
             </div>
           </div>
@@ -769,7 +771,7 @@ export function SecuritySettings() {
         {showAddAllow && (
           <AddRuleForm
             mode="allow"
-            onAdd={(p, d, scope) => handleAddRule("allow", p, d, scope)}
+            onAdd={(p, d, access) => handleAddRule("allow", p, d, access)}
             onCancel={() => setShowAddAllow(false)}
           />
         )}
