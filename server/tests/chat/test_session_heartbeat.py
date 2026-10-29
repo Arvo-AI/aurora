@@ -1,13 +1,24 @@
 """The stall sweep reads chat_sessions.updated_at, so a live run has to move it."""
+import re
+from pathlib import Path
 from unittest.mock import MagicMock
 
 
+def _load_touch():
+    # Importing workflow pulls the agent, which the test job does not install.
+    text = (Path(__file__).resolve().parents[2] / "chat/backend/agent/workflow.py").read_text()
+    match = re.search(
+        r"^def _touch_in_progress_session\(.*?\n(?=# |\ndef )",
+        text,
+        re.S | re.M,
+    )
+    ns = {"logger": MagicMock(), "set_rls_context": lambda *_a, **_k: True}
+    exec(match.group(0), ns)
+    return ns["_touch_in_progress_session"]
+
+
 def test_touch_only_moves_an_in_progress_session(monkeypatch):
-    import utils.cache.redis_client as redis_client
-
-    monkeypatch.setattr(redis_client, "get_redis_client", MagicMock)
-    from chat.backend.agent.workflow import _touch_in_progress_session
-
+    touch = _load_touch()
     executed = {}
 
     class _Cursor:
@@ -40,10 +51,7 @@ def test_touch_only_moves_an_in_progress_session(monkeypatch):
             return _Ctx()
 
     monkeypatch.setattr("utils.db.connection_pool.db_pool", _Pool())
-    monkeypatch.setattr(
-        "chat.backend.agent.workflow.set_rls_context", lambda *a, **k: True,
-    )
-    _touch_in_progress_session("sess-1", "uid-1")
+    touch("sess-1", "uid-1")
     assert "status = 'in_progress'" in executed["sql"]
     assert "updated_at = NOW()" in executed["sql"]
     assert executed["params"] == ("sess-1",)
