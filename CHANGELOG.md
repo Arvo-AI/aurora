@@ -21,10 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Actions: the stale-run sweeper waits until five minutes after that limit,
   so a run still inside its hour is not marked failed.
-- Safety judge: `GUARDRAILS_DISABLE_THINKING` turns Gemini thinking down for
-  that judge only (Flash uses minimal, Pro and Argon use low, Gemini 2.5 uses
-  a budget of 0). `GUARDRAILS_LLM_TIMEOUT_SECONDS` sets the call cap (default
-  10, clamped to 5–60). A slow judge was failing closed and blocking the command.
+- Safety judge: thinking is shortened by default (`GUARDRAILS_DISABLE_THINKING`,
+  set `false` to keep the model default). Gemini 3 Flash uses minimal, Pro and
+  Argon use low, Gemini 2.5 uses a budget of 0, and GPT-5 uses reasoning effort
+  low. OpenRouter and Bedrock are unchanged. `GUARDRAILS_LLM_TIMEOUT_SECONDS`
+  sets the call cap (default 10, clamped to 5–60).
 
 ## [1.5.13] - 2026-10-28
 

@@ -50,8 +50,12 @@ _MAX_TIMEOUT_SECONDS = 60
 _DISABLE_THINKING_ENV = "GUARDRAILS_DISABLE_THINKING"
 
 
-def _env_flag(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in ("true", "1", "yes")
+def _thinking_disabled() -> bool:
+    """Unset means off. A client sets the env var to false to let the judge think."""
+    raw = os.getenv(_DISABLE_THINKING_ENV)
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() in ("true", "1", "yes")
 
 
 def guardrails_llm_timeout_seconds() -> int:
@@ -76,28 +80,30 @@ def guardrails_llm_timeout_seconds() -> int:
 
 
 def safety_judge_thinking_overrides(model_name: str) -> dict:
-    """Kwargs that shorten the judge. Empty unless GUARDRAILS_DISABLE_THINKING is set.
+    """Kwargs that shorten the judge. On unless GUARDRAILS_DISABLE_THINKING=false.
 
-    Gemini 3 cannot turn thinking off: Flash gets minimal, Pro and Argon get
-    low. Gemini 2.5 uses a budget of 0. OpenRouter rejects the field.
+    Gemini 3 Flash gets minimal; Pro and Argon get low; 2.5 gets budget 0.
+    GPT-5 gets reasoning effort low. gpt-4, OpenRouter Gemini, and Bedrock stay as they are.
     """
-    if not _env_flag(_DISABLE_THINKING_ENV):
-        return {}
-    # OpenRouter's Gemini route returns 400 for thinking_level.
-    if (os.getenv("LLM_PROVIDER_MODE") or "").strip().lower() == "openrouter":
-        logger.warning("%s is set but LLM_PROVIDER_MODE=openrouter; thinking is unchanged", _DISABLE_THINKING_ENV)
+    if not _thinking_disabled():
         return {}
     native = (model_name or "").split("/", 1)[-1].lower()
-    if "gemini" not in native:
-        return {}
-    # 2.5 disables with a budget. It rejects thinking_level.
-    if "2.5" in native:
-        return {"thinking_budget": 0, "include_thoughts": False}
-    # 3+ and 4 think at high unless a level is sent. include_thoughts only
-    # returns the trace; it does not shorten it.
-    if "gemini-3" in native or "gemini-4" in native:
-        level = "low" if ("pro" in native or "argon" in native) else "minimal"
-        return {"thinking_level": level, "include_thoughts": False}
+    prefix = model_name.split("/", 1)[0].lower() if "/" in (model_name or "") else ""
+    # OpenRouter's Gemini route returns 400 for thinking_level. Direct Gemini does not.
+    openrouter = (os.getenv("LLM_PROVIDER_MODE") or "").strip().lower() == "openrouter"
+    if "gemini" in native and not openrouter:
+        # 2.5 disables with a budget. It rejects thinking_level.
+        if "2.5" in native:
+            return {"thinking_budget": 0, "include_thoughts": False}
+        # 3+ and 4 think at high unless a level is sent. include_thoughts only
+        # returns the trace; it does not shorten it.
+        if "gemini-3" in native or "gemini-4" in native:
+            level = "low" if ("pro" in native or "argon" in native) else "minimal"
+            return {"thinking_level": level, "include_thoughts": False}
+    # The OpenAI provider sets effort=high, then applies kwargs, so this
+    # replaces that default. gpt-4 has no reasoning parameter.
+    if prefix == "openai" and not native.startswith(("gpt-3", "gpt-4")):
+        return {"reasoning": {"effort": "low"}}
     return {}
 
 

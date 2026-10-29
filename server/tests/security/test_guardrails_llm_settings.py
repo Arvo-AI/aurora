@@ -32,8 +32,14 @@ def test_timeout_clamps_and_rejects_garbage(monkeypatch):
     assert guardrails_llm_timeout_seconds() == 10
 
 
-def test_thinking_stays_on_the_model_default_until_the_client_asks():
+def test_thinking_is_shortened_unless_the_client_opts_out():
+    assert safety_judge_thinking_overrides("vertex/gemini-3.6-flash")["thinking_level"] == "minimal"
+
+
+def test_client_can_leave_the_judge_on_the_model_default(monkeypatch):
+    monkeypatch.setenv("GUARDRAILS_DISABLE_THINKING", "false")
     assert safety_judge_thinking_overrides("vertex/gemini-3.6-flash") == {}
+    assert safety_judge_thinking_overrides("openai/gpt-5") == {}
 
 
 def test_flash_thinking_drops_to_minimal(monkeypatch):
@@ -64,6 +70,17 @@ def test_openrouter_does_not_send_thinking_level(monkeypatch):
     assert safety_judge_thinking_overrides("google/gemini-3.6-flash") == {}
 
 
-def test_non_gemini_judge_is_unchanged(monkeypatch):
+def test_gpt4_has_no_reasoning_parameter(monkeypatch):
     monkeypatch.setenv("GUARDRAILS_DISABLE_THINKING", "true")
     assert safety_judge_thinking_overrides("openai/gpt-4o-mini") == {}
+
+
+def test_gpt5_reasoning_drops_to_low():
+    assert safety_judge_thinking_overrides("openai/gpt-5.4-mini") == {
+        "reasoning": {"effort": "low"},
+    }
+    assert safety_judge_thinking_overrides("openai/o3")["reasoning"]["effort"] == "low"
+
+
+def test_bedrock_is_left_alone():
+    assert safety_judge_thinking_overrides("bedrock/anthropic.claude-haiku-4-5") == {}
