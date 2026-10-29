@@ -520,6 +520,11 @@ def run_background_chat(
     _prewarm_ready.wait(timeout=30)
 
     logger.info(f"[BackgroundChat] Starting for user {user_id}, session {session_id}")
+    # started_at was the enqueue time. The stale sweep measures from here.
+    _run_id = (trigger_metadata or {}).get("run_id")
+    if _run_id:
+        from services.actions.executor import mark_action_run_started
+        mark_action_run_started(_run_id, user_id)
     logger.info(f"[BackgroundChat] Trigger: {trigger_metadata}")
 
     # Eagerly persist the initial user message so it's visible in the UI immediately (opt-in)
@@ -2862,9 +2867,12 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
 
             # --- 5. Stale action runs (per-org, action_runs is RLS-protected) ---
             stale_actions_count = 0
-            # A run still inside the investigation limit is working. Only fail
-            # one that outlived the hard kill and never got the timeout handler.
-            stale_action_threshold = datetime.now() - timedelta(seconds=investigation_stale_after_seconds())
+            # Running rows are stamped at worker start. Pending rows are still
+            # queued, so they keep the old 35-minute allowance instead of a
+            # short investigation limit.
+            now = datetime.now(timezone.utc)
+            running_before = now - timedelta(seconds=investigation_stale_after_seconds())
+            pending_before = now - timedelta(seconds=max(investigation_stale_after_seconds(), 35 * 60))
             with conn.cursor() as cursor:
                 cursor.execute("SELECT DISTINCT org_id FROM users WHERE org_id IS NOT NULL")
                 org_ids = [r[0] for r in cursor.fetchall()]
@@ -2873,8 +2881,9 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                     cursor.execute("""
                         UPDATE action_runs SET status = 'error', completed_at = NOW(),
                                error = 'Stale: background chat did not complete'
-                        WHERE status IN ('running', 'pending') AND started_at < %s
-                    """, (stale_action_threshold,))
+                        WHERE (status = 'running' AND started_at < %s)
+                           OR (status = 'pending' AND started_at < %s)
+                    """, (running_before, pending_before))
                     stale_actions_count += cursor.rowcount
                 if stale_actions_count > 0:
                     conn.commit()

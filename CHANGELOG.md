@@ -19,12 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Actions: the stale-run sweeper waits until five minutes after that limit,
-  so a run still inside its hour is not marked failed.
+- Actions: a running run is stale five minutes after the investigation limit,
+  measured from worker start. A run still queued keeps a 35-minute allowance,
+  so queue time is not counted as execution.
 - Safety judge: thinking is shortened by default (`GUARDRAILS_DISABLE_THINKING`,
-  set `false` to keep the model default). Gemini 3 Flash uses minimal, Pro and
-  Argon use low, Gemini 2.5 uses a budget of 0, and GPT-5 uses reasoning effort
-  low. Haiku 4.5 and 5.5 get thinking disabled on Anthropic and native Bedrock.
+  set `false` to keep the model default). Gemini 3.6 Flash uses minimal.
+  Gemini 3.8 Flash, Pro, and Argon use low. Gemini 2.5 Flash uses a budget of 0
+  and 2.5 Pro uses 128. GPT-5 and the o-series use reasoning effort low;
+  gpt-5.5-pro uses medium. Haiku 4.5 and 5.5 get thinking disabled on Anthropic
+  and native Bedrock.
   Ollama and OpenRouter only for weights with a think switch (Qwen3, DeepSeek-R1,
   QwQ, gpt-oss, Magistral). Opus and a plain Llama are left alone.
   `GUARDRAILS_LLM_TIMEOUT_SECONDS` sets the call cap (default 10, clamped to 5–60).

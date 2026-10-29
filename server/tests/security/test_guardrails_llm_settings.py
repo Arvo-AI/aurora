@@ -62,6 +62,20 @@ def test_gemini_25_uses_a_zero_budget(monkeypatch):
         "thinking_budget": 0,
         "include_thoughts": False,
     }
+    # Pro rejects 0. 128 is the minimum it accepts.
+    assert safety_judge_thinking_overrides("vertex/gemini-2.5-pro")["thinking_budget"] == 128
+
+
+def test_gemini_38_flash_rejects_minimal():
+    assert safety_judge_thinking_overrides("google/gemini-3.8-flash")["thinking_level"] == "low"
+    assert safety_judge_thinking_overrides("vertex/gemini-3.6-flash")["thinking_level"] == "minimal"
+
+
+def test_gpt55_pro_effort_is_medium_not_low():
+    assert safety_judge_thinking_overrides("openai/gpt-5.5-pro") == {
+        "reasoning": {"effort": "medium"},
+    }
+    assert safety_judge_thinking_overrides("openai/gpt-5.5-pro-2026-04-23")["reasoning"]["effort"] == "medium"
 
 
 def test_openrouter_does_not_send_thinking_level(monkeypatch):

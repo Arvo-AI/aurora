@@ -320,10 +320,10 @@ config:
   GUARDRAILS_SIGMA_ENABLED: "true"
   # Safety judge / input rail model (provider/model format). Empty = use MAIN_MODEL.
   GUARDRAILS_LLM_MODEL: ""
-  # On by default. Gemini 3 Flash uses minimal, Pro/Argon use low, Gemini 2.5
-  # uses budget 0, and GPT-5 uses reasoning effort low. Set false to leave the
-  # model on its own default. Haiku, and Ollama/OpenRouter weights that think,
-  # get an off switch. Restart required.
+  # On by default. 3.6 Flash uses minimal; 3.8 Flash, Pro, and Argon use low.
+  # 2.5 Flash uses budget 0; 2.5 Pro uses 128. GPT-5 and o-series use effort
+  # low; gpt-5.5-pro uses medium. Set false for the model default. Haiku, and
+  # Ollama/OpenRouter weights that think, get an off switch. Restart required.
   GUARDRAILS_DISABLE_THINKING: "true"
   # Seconds the judge may run before the command is blocked. Default 10.
   # Clamped to 5–60. A restart is not required.

@@ -219,7 +219,8 @@ Anything else uses 3600.
 {{- else if not (regexMatch "^[0-9]+$" $raw) -}}
 3600
 {{- else -}}
-{{- $n := int $raw -}}
+{{/* sprig int parses a leading 0 as octal; atoi stays decimal, matching Python */}}
+{{- $n := atoi $raw -}}
 {{- if lt $n 120 -}}
 120
 {{- else if gt $n 10800 -}}

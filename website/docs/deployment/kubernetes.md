@@ -430,7 +430,7 @@ Regardless of controller, ensure these are configured:
 | HTTP version | `1.1` | Required for WebSocket upgrade |
 | Max body size | `50m` | File uploads |
 
-When `className` is `nginx`, these are auto-applied as annotations by the chart.
+When `className` is `nginx` and `ingress.nginx.enabled` is not `false`, these are auto-applied as annotations by the chart. With nginx defaults turned off, set the timeouts on the controller yourself.
 
 ### MCP Ingress {#mcp-ingress}
 

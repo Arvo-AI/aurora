@@ -82,9 +82,8 @@ def guardrails_llm_timeout_seconds() -> int:
 def safety_judge_thinking_overrides(model_name: str) -> dict:
     """Kwargs that shorten the judge. On unless GUARDRAILS_DISABLE_THINKING=false.
 
-    Gemini 3 Flash gets minimal; Pro and Argon get low; 2.5 gets budget 0.
-    GPT-5 gets effort low. Haiku gets thinking disabled. Ollama and OpenRouter
-    only for models that advertise a thinking switch.
+    Each family gets the shortest setting its API accepts. Gemini 3.8 Flash,
+    2.5 Pro, and gpt-5.5-pro reject the shorter values the others take.
     """
     if not _thinking_disabled():
         return {}
@@ -93,18 +92,22 @@ def safety_judge_thinking_overrides(model_name: str) -> dict:
     mode = (os.getenv("LLM_PROVIDER_MODE") or "").strip().lower()
     # OpenRouter's Gemini route returns 400 for thinking_level. Direct Gemini does not.
     if "gemini" in native and mode != "openrouter":
-        # 2.5 disables with a budget. It rejects thinking_level.
+        # 2.5 rejects thinking_level. Pro cannot take budget 0; 128 is its floor.
         if "2.5" in native:
-            return {"thinking_budget": 0, "include_thoughts": False}
+            budget = 128 if "pro" in native else 0
+            return {"thinking_budget": budget, "include_thoughts": False}
         # 3+ and 4 think at high unless a level is sent. include_thoughts only
         # returns the trace; it does not shorten it.
         if "gemini-3" in native or "gemini-4" in native:
-            level = "low" if ("pro" in native or "argon" in native) else "minimal"
+            # 3.8 Flash, Pro, and Argon return 400 for minimal.
+            level = "low" if ("pro" in native or "argon" in native or "3.8" in native) else "minimal"
             return {"thinking_level": level, "include_thoughts": False}
     # The OpenAI provider sets effort=high, then applies kwargs, so this
     # replaces that default. gpt-4 has no reasoning parameter.
     if prefix == "openai" and not native.startswith(("gpt-3", "gpt-4")):
-        return {"reasoning": {"effort": "low"}}
+        # gpt-5.5-pro rejects low. medium is the lowest it accepts.
+        effort = "medium" if "5.5-pro" in native else "low"
+        return {"reasoning": {"effort": effort}}
     # Haiku 4.5 and 5.5 think by default and accept off. Opus returns 400 for
     # thinking.type=disabled, so it is not included. The Bedrock gateway drops
     # additional_model_request_fields; native Converse keeps it.
