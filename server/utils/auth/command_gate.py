@@ -354,9 +354,16 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
     if safety_blocked:
         reasons.append(f"safety guardrail: {safety_decision.reason}")
     if policy_blocked:
+        overlap = ""
+        if policy_verdict.overlapped_allow:
+            overlap = (
+                f" It also matches allow rule '{policy_verdict.overlapped_allow[:120]}'."
+                " The deny rule wins."
+            )
         reasons.append(
             "organization policy: "
             + (policy_verdict.rule_description or "matched organization policy")[:200]
+            + overlap
         )
     if tainted:
         reasons.append("session flagged by input safety check; approval required")

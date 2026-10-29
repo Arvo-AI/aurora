@@ -26,6 +26,7 @@ export interface TestResult {
   allowed: boolean;
   ask_allowed?: boolean;
   rule_description: string | null;
+  overlapped_allow?: string | null;
   command: string;
 }
 

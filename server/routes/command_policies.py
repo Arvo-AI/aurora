@@ -242,6 +242,7 @@ def test_command(user_id):
         "allowed": verdict.allowed,
         "ask_allowed": ask_allowed,
         "rule_description": verdict.rule_description,
+        "overlapped_allow": verdict.overlapped_allow,
         "command": command,
     })
 

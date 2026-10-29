@@ -50,6 +50,8 @@ class CommandVerdict:
     deny_rule_id: Optional[int] = None
     # True when allowlist was enabled and no allow rule matched.
     allowlist_exhausted: bool = False
+    # Set when a deny rule blocked a command an allow rule also matched.
+    overlapped_allow: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -274,10 +276,16 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
         None,
     ) if states.denylist_enabled else None
 
+    # Agent-only rules are idle while the allowlist is off. Always-allowed
+    # rules are not: they already open Ask mode.
     allow_hit = next(
-        (r for r in allow_rules if r.compiled.search(command)),
+        (
+            r for r in allow_rules
+            if r.compiled.search(command)
+            and (states.allowlist_enabled or r.scope == "read_only")
+        ),
         None,
-    ) if states.allowlist_enabled else None
+    ) if allow_rules else None
 
     if deny_hit:
         return CommandVerdict(
@@ -285,6 +293,7 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
             rule_description=deny_hit.description,
             deny_rule_id=deny_hit.id,
             allowlist_exhausted=(states.allowlist_enabled and allow_hit is None),
+            overlapped_allow=(allow_hit.description or allow_hit.pattern) if allow_hit else None,
         )
 
     if bq_write:

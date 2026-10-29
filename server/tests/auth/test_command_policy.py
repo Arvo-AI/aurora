@@ -908,3 +908,33 @@ class TestReadOnlyAllow:
         assert read_only_allow_covers("org-7", "bq query 'select x as y'") is True
         assert read_only_allow_covers("org-7", "ssh admin@198.51.100.1 check-disk") is True
 
+
+class TestDenyBeatsAllow:
+    def test_overlap_names_the_allow_rule(self, policy):
+        policy["states"] = ListStates(allowlist_enabled=True, denylist_enabled=True)
+        policy["deny"].append(_rule(
+            rule_id=2, mode="deny", pattern=r"my-healthcheck", description="Block health checks",
+        ))
+        policy["allow"].append(_rule(
+            rule_id=1, mode="allow", pattern=r"my-healthcheck", scope="agent",
+            description="Custom check",
+        ))
+        verdict = evaluate_command("org-7", "ssh admin@198.51.100.1 my-healthcheck")
+        assert verdict.allowed is False
+        assert verdict.deny_rule_id == 2
+        assert verdict.overlapped_allow == "Custom check"
+
+    def test_idle_agent_rule_is_not_a_conflict(self, policy):
+        policy["states"] = ListStates(allowlist_enabled=False, denylist_enabled=True)
+        policy["deny"].append(_rule(
+            rule_id=2, mode="deny", pattern=r"my-healthcheck", description="Block health checks",
+        ))
+        policy["allow"].append(_rule(
+            rule_id=1, mode="allow", pattern=r"my-healthcheck", scope="agent",
+            description="Custom check",
+        ))
+        verdict = evaluate_command("org-7", "ssh admin@198.51.100.1 my-healthcheck")
+        assert verdict.allowed is False
+        assert verdict.overlapped_allow is None
+
+

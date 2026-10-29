@@ -332,7 +332,7 @@ export function SecuritySettings() {
   const [showAddDeny, setShowAddDeny] = useState(false);
 
   const [testCmd, setTestCmd] = useState("");
-  const [testResult, setTestResult] = useState<{ allowed: boolean; ask_allowed?: boolean; rule_description: string | null } | null>(null);
+  const [testResult, setTestResult] = useState<{ allowed: boolean; ask_allowed?: boolean; rule_description: string | null; overlapped_allow?: string | null } | null>(null);
   const [testLoading, setTestLoading] = useState(false);
 
   const [templates, setTemplates] = useState<PolicyTemplate[]>([]);
@@ -825,6 +825,11 @@ export function SecuritySettings() {
                   {testResult.allowed && testResult.ask_allowed === false ? " · blocked in Ask mode" : ""}
                   {testResult.allowed && testResult.ask_allowed ? " · allowed in Ask mode" : ""}
                 </p>
+                {testResult.overlapped_allow && (
+                  <p className="text-[11px] text-foreground">
+                    Also matches allow rule "{testResult.overlapped_allow}". The deny rule wins.
+                  </p>
+                )}
               </div>
             </div>
           )}
