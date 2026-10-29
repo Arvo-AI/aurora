@@ -19,6 +19,13 @@ from typing import Any, Dict, Optional
 from celery_config import celery_app
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import apply_correlation_outcome
+from services.incidents.repeat_investigation import (
+    claim_enqueue,
+    lock_existing_incident,
+    replace_claim_with_task,
+    should_start_investigation,
+    try_reopen_incident,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -289,7 +296,11 @@ def _create_incident_record(
     alarm_name: str, service: str, severity: str,
     alert_metadata: Dict[str, Any], received_at,
 ):
-    """Insert the incident + lifecycle event + alert link. Returns incident_id or None."""
+    """Insert the incident + lifecycle event + alert link. Returns (incident_id, start_rca)."""
+    existing = lock_existing_incident(
+        cursor, org_id=org_id, source_type="cloudwatch",
+        source_alert_id=alarm_db_id, user_id=user_id,
+    )
     cursor.execute(
         """
         INSERT INTO incidents
@@ -312,11 +323,27 @@ def _create_incident_record(
     incident_row = cursor.fetchone()
     incident_id = incident_row[0] if incident_row else None
     incident_was_inserted = bool(incident_row[1]) if incident_row else False
+    start_rca = should_start_investigation(
+        incident_was_inserted, existing,
+        title=alarm_name, service=service, severity=severity,
+    )
+    rca_claim = None
+    if incident_id and start_rca and not incident_was_inserted:
+        rca_claim = try_reopen_incident(
+            cursor, log_prefix="[CLOUDWATCH][ALARM]",
+            incident_id=incident_id, user_id=user_id, org_id=org_id,
+            severity=severity, title=alarm_name, service=service,
+            started_at=received_at, previous_status=existing.status if existing else None,
+        )
+        if not rca_claim:
+            start_rca = False
+    if incident_id and incident_was_inserted and start_rca:
+        rca_claim = claim_enqueue(cursor, incident_id)
     conn.commit()
 
     if not incident_id:
         logger.error("[CLOUDWATCH][ALARM] Failed to create incident for alarm %s", alarm_name)
-        return None
+        return None, False, None
 
     if incident_was_inserted:
         try:
@@ -335,39 +362,40 @@ def _create_incident_record(
             cursor.execute("ROLLBACK TO SAVEPOINT sp_lifecycle")
             logger.warning("[CLOUDWATCH][ALARM] Failed to record lifecycle event: %s", exc)
 
-    try:
-        cursor.execute("SAVEPOINT sp_incident_alerts")
-        cursor.execute(
-            """
-            INSERT INTO incident_alerts
-              (user_id, org_id, incident_id, source_type, source_alert_id, alert_title,
-               alert_service, alert_severity, correlation_strategy, correlation_score,
-               alert_metadata)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                user_id, org_id, incident_id, "cloudwatch", alarm_db_id, alarm_name,
-                service, severity, "primary", 1.0, json.dumps(alert_metadata),
-            ),
-        )
-        cursor.execute(
-            "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
-            (service, incident_id),
-        )
-        cursor.execute("RELEASE SAVEPOINT sp_incident_alerts")
-        conn.commit()
-    except Exception as exc:
-        cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_alerts")
-        logger.warning("[CLOUDWATCH][ALARM] Failed to record primary alert: %s", exc)
+    if start_rca:
+        try:
+            cursor.execute("SAVEPOINT sp_incident_alerts")
+            cursor.execute(
+                """
+                INSERT INTO incident_alerts
+                  (user_id, org_id, incident_id, source_type, source_alert_id, alert_title,
+                   alert_service, alert_severity, correlation_strategy, correlation_score,
+                   alert_metadata)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    user_id, org_id, incident_id, "cloudwatch", alarm_db_id, alarm_name,
+                    service, severity, "primary", 1.0, json.dumps(alert_metadata),
+                ),
+            )
+            cursor.execute(
+                "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
+                (service, incident_id),
+            )
+            cursor.execute("RELEASE SAVEPOINT sp_incident_alerts")
+            conn.commit()
+        except Exception as exc:
+            cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_alerts")
+            logger.warning("[CLOUDWATCH][ALARM] Failed to record primary alert: %s", exc)
 
-    return incident_id
+    return incident_id, start_rca, rca_claim
 
 
 def _post_incident_actions(
     user_id: str, org_id: str, incident_id, alarm_name: str,
     service: str, severity: str, state_value: str,
     alert_metadata: Dict[str, Any], payload: Dict[str, Any],
-    skip_rca: bool, cursor, conn,
+    skip_rca: bool, cursor, conn, rca_claim=None,
 ) -> None:
     """SSE broadcast, summary generation, and RCA trigger."""
     try:
@@ -432,11 +460,9 @@ def _post_incident_actions(
             },
             incident_id=str(incident_id),
             rail_text=rail_text,
+            rca_claim=rca_claim,
         )
-        cursor.execute(
-            "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-            (task.id, str(incident_id)),
-        )
+        replace_claim_with_task(cursor, incident_id, task.id, rca_claim)
         conn.commit()
         logger.info(
             "[CLOUDWATCH][ALARM] Triggered RCA for session %s (task=%s)",
@@ -515,11 +541,27 @@ def _process_alarm_in_db(
             ):
                 return
 
-            incident_id = _create_incident_record(
+            incident_id, start_rca, rca_claim = _create_incident_record(
                 cursor, conn, user_id, org_id, alarm_db_id,
                 fields.alarm_name, service, severity, alert_metadata, received_at,
             )
             if not incident_id:
+                return
+
+            if not start_rca:
+                logger.info(
+                    "[CLOUDWATCH][ALARM] Repeat of incident %s for alarm '%s'; keeping the existing RCA",
+                    incident_id, fields.alarm_name,
+                )
+                try:
+                    from routes.incidents_sse import broadcast_incident_update_to_user_connections
+                    broadcast_incident_update_to_user_connections(
+                        user_id,
+                        {"type": "incident_update", "incident_id": str(incident_id), "source": "cloudwatch"},
+                        org_id=org_id,
+                    )
+                except Exception as exc:
+                    logger.warning("[CLOUDWATCH][ALARM] Failed to notify SSE: %s", exc)
                 return
 
             logger.info(
@@ -530,7 +572,7 @@ def _process_alarm_in_db(
             _post_incident_actions(
                 user_id, org_id, incident_id, fields.alarm_name,
                 service, severity, fields.state_value, alert_metadata,
-                payload, skip_rca, cursor, conn,
+                payload, skip_rca, cursor, conn, rca_claim,
             )
 
 
