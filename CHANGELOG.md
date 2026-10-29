@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Confluence fetch accepts a page URL, and a v2 pages 404 retries the v1
   content API so a blog post returned by search can still be read.
-- Background investigations touch the session timestamp every minute, so the
+- Background investigations touch the session timestamp every 5 minutes, so the
   20-minute stall sweep no longer treats a live run as dead.
 - Actions: a running run is stale five minutes after the investigation limit,
   measured from worker start. A run still queued keeps a 35-minute allowance,

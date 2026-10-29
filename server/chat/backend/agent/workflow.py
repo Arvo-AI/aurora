@@ -1087,7 +1087,7 @@ class Workflow:
                 if (
                     input_state.session_id
                     and input_state.user_id
-                    and _time.monotonic() - _last_session_touch >= 60
+                    and _time.monotonic() - _last_session_touch >= 5 * 60
                 ):
                     _last_session_touch = _time.monotonic()
                     _touch_in_progress_session(input_state.session_id, input_state.user_id)

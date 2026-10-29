@@ -2741,7 +2741,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         continue
 
                     # --- 1. Stale sessions (no heartbeat for 20 min) ---
-                    # A live worker touches updated_at every minute. Silence means it is gone.
+                    # A live worker touches updated_at every 5 minutes. Silence means it is gone.
                     cursor.execute("""
                         SELECT cs.id, i.id as incident_id
                         FROM chat_sessions cs
