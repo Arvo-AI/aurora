@@ -320,6 +320,14 @@ config:
   GUARDRAILS_SIGMA_ENABLED: "true"
   # Safety judge / input rail model (provider/model format). Empty = use MAIN_MODEL.
   GUARDRAILS_LLM_MODEL: ""
+  # Gemini 3 thinks at high unless this is true. The judge then uses the
+  # lowest level that model accepts (Flash: minimal, Pro/Argon: low).
+  # Gemini 2.5 gets a thinking budget of 0. OpenRouter ignores it.
+  # A restart is required. Does not change the main agent.
+  GUARDRAILS_DISABLE_THINKING: "false"
+  # Seconds the judge may run before the command is blocked. Default 10.
+  # Clamped to 5–60. A restart is not required.
+  GUARDRAILS_LLM_TIMEOUT_SECONDS: "10"
 
   # --- Slack live progress ---
   # Keep editing the "Thinking…" placeholder with elapsed time, the running tool

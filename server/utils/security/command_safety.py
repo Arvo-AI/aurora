@@ -41,7 +41,64 @@ from utils.security.config import config
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT_SECONDS = 10
+# The judge runs on every shell command. Gemini 3 defaults to thinking_level
+# high, which lands around 5s and fails closed at this cap.
+_TIMEOUT_ENV = "GUARDRAILS_LLM_TIMEOUT_SECONDS"
+_DEFAULT_TIMEOUT_SECONDS = 10
+_MIN_TIMEOUT_SECONDS = 5
+_MAX_TIMEOUT_SECONDS = 60
+_DISABLE_THINKING_ENV = "GUARDRAILS_DISABLE_THINKING"
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("true", "1", "yes")
+
+
+def guardrails_llm_timeout_seconds() -> int:
+    """Judge call cap. Unset uses 10s. Out of range is clamped to 5–60s."""
+    raw = (os.getenv(_TIMEOUT_ENV) or "").strip().replace("_", "")
+    if raw.startswith("+"):
+        raw = raw[1:]
+    if not raw:
+        return _DEFAULT_TIMEOUT_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("%s=%r is not an integer; using %ss", _TIMEOUT_ENV, raw, _DEFAULT_TIMEOUT_SECONDS)
+        return _DEFAULT_TIMEOUT_SECONDS
+    if value < _MIN_TIMEOUT_SECONDS:
+        logger.warning("%s=%s is below %ss; clamping", _TIMEOUT_ENV, value, _MIN_TIMEOUT_SECONDS)
+        return _MIN_TIMEOUT_SECONDS
+    if value > _MAX_TIMEOUT_SECONDS:
+        logger.warning("%s=%s is above %ss; clamping", _TIMEOUT_ENV, value, _MAX_TIMEOUT_SECONDS)
+        return _MAX_TIMEOUT_SECONDS
+    return value
+
+
+def safety_judge_thinking_overrides(model_name: str) -> dict:
+    """Kwargs that shorten the judge. Empty unless GUARDRAILS_DISABLE_THINKING is set.
+
+    Gemini 3 cannot turn thinking off: Flash gets minimal, Pro and Argon get
+    low. Gemini 2.5 uses a budget of 0. OpenRouter rejects the field.
+    """
+    if not _env_flag(_DISABLE_THINKING_ENV):
+        return {}
+    # OpenRouter's Gemini route returns 400 for thinking_level.
+    if (os.getenv("LLM_PROVIDER_MODE") or "").strip().lower() == "openrouter":
+        logger.warning("%s is set but LLM_PROVIDER_MODE=openrouter; thinking is unchanged", _DISABLE_THINKING_ENV)
+        return {}
+    native = (model_name or "").split("/", 1)[-1].lower()
+    if "gemini" not in native:
+        return {}
+    # 2.5 disables with a budget. It rejects thinking_level.
+    if "2.5" in native:
+        return {"thinking_budget": 0, "include_thoughts": False}
+    # 3+ and 4 think at high unless a level is sent. include_thoughts only
+    # returns the trace; it does not shorten it.
+    if "gemini-3" in native or "gemini-4" in native:
+        level = "low" if ("pro" in native or "argon" in native) else "minimal"
+        return {"thinking_level": level, "include_thoughts": False}
+    return {}
 
 
 def _fingerprint(command: str) -> str:
@@ -174,7 +231,7 @@ def check_command_safety(
             )
         return verdict
     except concurrent.futures.TimeoutError:
-        logger.exception("[CommandSafety] LLM timed out after %ds", _TIMEOUT_SECONDS)
+        logger.exception("[CommandSafety] LLM timed out after %ds", guardrails_llm_timeout_seconds())
         return _fail_verdict("timeout")
     except Exception as e:
         logger.exception("[CommandSafety] LLM call failed")
@@ -220,6 +277,7 @@ def _create_safety_llm():
         model,
         temperature=0.0,
         streaming=False,
+        **safety_judge_thinking_overrides(model),
     )
     return base.with_structured_output(SafetyVerdict, method="function_calling")
 
@@ -242,7 +300,7 @@ def _call_llm(prompt: str, user_id: Optional[str], session_id: Optional[str]) ->
     error_msg = None
     try:
         future = _executor.submit(llm.invoke, messages)
-        result = future.result(timeout=_TIMEOUT_SECONDS)
+        result = future.result(timeout=guardrails_llm_timeout_seconds())
     except Exception as e:
         error_msg = str(e)
         raise

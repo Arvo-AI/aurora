@@ -136,6 +136,8 @@ x-common-env: &common-env
   GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}
   GUARDRAILS_SIGMA_ENABLED: ${GUARDRAILS_SIGMA_ENABLED:-true}
   GUARDRAILS_LLM_MODEL: ${GUARDRAILS_LLM_MODEL:-}
+  GUARDRAILS_DISABLE_THINKING: ${GUARDRAILS_DISABLE_THINKING:-false}
+  GUARDRAILS_LLM_TIMEOUT_SECONDS: ${GUARDRAILS_LLM_TIMEOUT_SECONDS:-10}
 
   # Slack: keep editing the "Thinking…" placeholder with live progress while a
   # background investigation runs. Interval in seconds (min 10).

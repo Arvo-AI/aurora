@@ -340,6 +340,8 @@ Three-layer safety: input rail + signature matcher + LLM safety judge. See [Comm
 |----------|---------|-------------|
 | `GUARDRAILS_ENABLED` | `true` | Master switch. When enabled (default), all three layers run and every LLM check fails closed on error. Set to `false` to disable all guardrails. |
 | `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Model used by the safety judge and input rail. Same format and routing as `MAIN_MODEL`. |
+| `GUARDRAILS_DISABLE_THINKING` | `false` | Turn Gemini thinking down for the safety judge only. Flash uses `minimal`, Pro and Argon use `low`, Gemini 2.5 uses a budget of 0. OpenRouter ignores it. Requires a restart. Does not change the main agent. |
+| `GUARDRAILS_LLM_TIMEOUT_SECONDS` | `10` | Seconds the safety judge may run before the command is blocked. Clamped to 5–60. |
 | `GUARDRAILS_SIGMA_ENABLED` | `true` | Gates the vendored SigmaHQ rule corpus inside the signature matcher. Requires `GUARDRAILS_ENABLED=true`. Set to `false` to run only hand-written rules. |
 
 ## Cloud Providers
