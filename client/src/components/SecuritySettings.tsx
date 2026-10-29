@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
@@ -27,14 +28,23 @@ const CONNECTOR_ICONS: Record<string, string> = {
 
 const ALWAYS_SHOW_CONNECTORS = new Set(["terraform"]);
 
+type AllowAccess = "read_only" | "off" | "both";
+
+function allowAccess(rule: CommandPolicyRule): AllowAccess {
+  if (!rule.enabled) return "off";
+  return rule.scope === "read_only" ? "read_only" : "both";
+}
+
 function RuleList({
   rules,
   onToggle,
   onDelete,
+  onAccess,
 }: {
   rules: CommandPolicyRule[];
-  onToggle: (rule: CommandPolicyRule) => void;
+  onToggle?: (rule: CommandPolicyRule) => void;
   onDelete: (id: number) => void;
+  onAccess?: (rule: CommandPolicyRule, access: AllowAccess) => void;
 }) {
   if (rules.length === 0) {
     return (
@@ -50,12 +60,28 @@ function RuleList({
             !rule.enabled ? "opacity-50" : ""
           }`}
         >
-          <Switch
-            checked={rule.enabled}
-            onCheckedChange={() => onToggle(rule)}
-            className="shrink-0 scale-90"
-            aria-label={`Toggle rule: ${rule.pattern}`}
-          />
+          {onAccess ? (
+            <Select
+              value={allowAccess(rule)}
+              onValueChange={(value) => onAccess(rule, value as AllowAccess)}
+            >
+              <SelectTrigger className="h-7 w-[9.5rem] shrink-0 text-xs" aria-label={`Access for ${rule.pattern}`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="read_only">Read only</SelectItem>
+                <SelectItem value="off">Deactivated</SelectItem>
+                <SelectItem value="both">Read and write</SelectItem>
+              </SelectContent>
+            </Select>
+          ) : (
+            <Switch
+              checked={rule.enabled}
+              onCheckedChange={() => onToggle?.(rule)}
+              className="shrink-0 scale-90"
+              aria-label={`Toggle rule: ${rule.pattern}`}
+            />
+          )}
           <code className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-mono min-w-0 overflow-x-auto whitespace-nowrap scrollbar-thin">
             {rule.pattern}
           </code>
@@ -64,9 +90,6 @@ function RuleList({
           </span>
           {rule.source === "template" && (
             <span className="text-[10px] text-muted-foreground/60 shrink-0">tpl</span>
-          )}
-          {rule.scope === "read_only" && (
-            <span className="text-[10px] text-primary shrink-0">Ask</span>
           )}
           <Button
             variant="ghost"
@@ -87,16 +110,14 @@ function AddRuleForm({
   mode,
   onAdd,
   onCancel,
-  lockAsk = false,
 }: {
   mode: "allow" | "deny";
   onAdd: (pattern: string, description: string, scope: "agent" | "read_only") => void;
   onCancel: () => void;
-  lockAsk?: boolean;
 }) {
   const [pattern, setPattern] = useState("");
   const [desc, setDesc] = useState("");
-  const [ask, setAsk] = useState(lockAsk);
+  const [access, setAccess] = useState<AllowAccess>("read_only");
 
   return (
     <div className="border-t p-3 space-y-2 bg-muted/20">
@@ -121,15 +142,15 @@ function AddRuleForm({
         </div>
       </div>
       {mode === "allow" && (
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={ask}
-            disabled={lockAsk}
-            onChange={(e) => setAsk(e.target.checked)}
-          />
-          Also allow in Ask mode
-        </label>
+        <Select value={access} onValueChange={(value) => setAccess(value as AllowAccess)}>
+          <SelectTrigger className="h-7 w-[9.5rem] text-xs" aria-label="Access for the new command">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="read_only">Read only</SelectItem>
+            <SelectItem value="both">Read and write</SelectItem>
+          </SelectContent>
+        </Select>
       )}
       <div className="flex gap-2">
         <Button
@@ -137,7 +158,9 @@ function AddRuleForm({
           className="h-6 text-xs"
           disabled={!pattern.trim() || !desc.trim()}
           onClick={() => {
-            if (pattern.trim() && desc.trim()) onAdd(pattern.trim(), desc.trim(), ask ? "read_only" : "agent");
+            if (pattern.trim() && desc.trim()) {
+              onAdd(pattern.trim(), desc.trim(), access === "both" ? "agent" : "read_only");
+            }
           }}
         >
           Add
@@ -305,7 +328,6 @@ export function SecuritySettings() {
   const [loading, setLoading] = useState(true);
 
   const [showAddAllow, setShowAddAllow] = useState(false);
-  const [showAddAsk, setShowAddAsk] = useState(false);
   const [showAddDeny, setShowAddDeny] = useState(false);
 
   const [testCmd, setTestCmd] = useState("");
@@ -398,12 +420,22 @@ export function SecuritySettings() {
         scope: mode === "allow" ? scope : "agent",
       });
       setShowAddAllow(false);
-      setShowAddAsk(false);
       setShowAddDeny(false);
       await fetchPolicies();
       toast({ title: "Rule added" });
     } catch (e) {
       toast({ title: e instanceof Error ? e.message : "Failed to add rule", variant: "destructive" });
+    }
+  };
+
+  const handleAccess = async (rule: CommandPolicyRule, access: AllowAccess) => {
+    try {
+      await commandPolicyService.updatePolicy(rule.id, access === "off"
+        ? { enabled: false }
+        : { enabled: true, scope: access === "read_only" ? "read_only" : "agent" });
+      await fetchPolicies();
+    } catch {
+      toast({ title: "Failed to update rule", variant: "destructive" });
     }
   };
 
@@ -703,35 +735,6 @@ export function SecuritySettings() {
         )}
       </div>
 
-      {/* Ask mode exceptions. Visible with the allowlist off, because turning
-          that list on would refuse every command that is not already listed. */}
-      <div className="rounded-lg border bg-card overflow-hidden">
-        <div className="flex items-center justify-between px-3.5 py-2.5 border-b">
-          <div>
-            <h3 className="text-sm font-medium">Ask mode</h3>
-            <p className="text-[11px] text-muted-foreground">
-              Unrecognized SSH commands are blocked in Ask mode. Add a pattern such as check-disk to allow that command during a read-only investigation.
-            </p>
-          </div>
-          <Button size="sm" variant="ghost" className="h-6 text-xs gap-1 shrink-0 ml-3" onClick={() => setShowAddAsk(!showAddAsk)}>
-            <Plus className="h-3 w-3" /> Add
-          </Button>
-        </div>
-        <RuleList
-          rules={allowRules.filter((rule) => rule.scope === "read_only")}
-          onToggle={handleToggleRule}
-          onDelete={handleDeleteRule}
-        />
-        {showAddAsk && (
-          <AddRuleForm
-            mode="allow"
-            lockAsk
-            onAdd={(p, d, scope) => handleAddRule("allow", p, d, scope)}
-            onCancel={() => setShowAddAsk(false)}
-          />
-        )}
-      </div>
-
       {/* Allowlist */}
       <div className="rounded-lg border bg-card overflow-hidden">
         <div className="flex items-center justify-between px-3.5 py-2.5 border-b">
@@ -744,16 +747,16 @@ export function SecuritySettings() {
             <div>
               <h3 className="text-sm font-medium">Allowlist</h3>
               <p className="text-[11px] text-muted-foreground">
-                {allowlistEnabled ? "Only commands matching these patterns are allowed" : "Disabled -- commands are not filtered by this list"}
+                {allowlistEnabled
+                  ? "Read only runs in Ask mode. Read and write runs in Agent mode."
+                  : "Read only still runs in Ask mode. Turn this on to make the table the only commands Agent mode may run."}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 ml-3">
-            {allowlistEnabled && (
-              <Button size="sm" variant="ghost" className="h-6 text-xs gap-1" onClick={() => setShowAddAllow(!showAddAllow)}>
-                <Plus className="h-3 w-3" /> Add
-              </Button>
-            )}
+            <Button size="sm" variant="ghost" className="h-6 text-xs gap-1" onClick={() => setShowAddAllow(!showAddAllow)}>
+              <Plus className="h-3 w-3" /> Add
+            </Button>
             <Switch
               checked={allowlistEnabled}
               onCheckedChange={(v) => handleToggleList("allowlist", v)}
@@ -762,17 +765,13 @@ export function SecuritySettings() {
             />
           </div>
         </div>
-        {allowlistEnabled && (
-          <>
-            <RuleList rules={allowRules} onToggle={handleToggleRule} onDelete={handleDeleteRule} />
-            {showAddAllow && (
-              <AddRuleForm
-                mode="allow"
-                onAdd={(p, d, scope) => handleAddRule("allow", p, d, scope)}
-                onCancel={() => setShowAddAllow(false)}
-              />
-            )}
-          </>
+        <RuleList rules={allowRules} onDelete={handleDeleteRule} onAccess={handleAccess} />
+        {showAddAllow && (
+          <AddRuleForm
+            mode="allow"
+            onAdd={(p, d, scope) => handleAddRule("allow", p, d, scope)}
+            onCancel={() => setShowAddAllow(false)}
+          />
         )}
       </div>
 
