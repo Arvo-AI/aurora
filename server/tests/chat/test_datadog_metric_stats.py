@@ -44,6 +44,7 @@ from chat.backend.agent.tools.datadog_tool import (  # noqa: E402
     _pick_interval,
     _query_metric_stats,
     _query_metrics,
+    _metric_expressions,
     _round_sig,
     _scope_and_group,
     _summarize_series,
@@ -462,3 +463,93 @@ def test_empty_query_is_rejected():
     client = _FakeClient([], [])
     with pytest.raises(ValueError, match="query is required"):
         _query_metric_stats(client, "", "-30d", "now", 100)
+
+
+# ---------------------------------------------------------------------------
+# One expression per timeseries query
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("query", [
+    "avg:system.cpu.user{*}",
+    "avg:system.cpu.user{env:prod,service:api}",
+    "sum:kubernetes.memory.usage{env:production} by {kube_deployment,kube_namespace}",
+    "avg:my-service.latency{*}",
+    "avg:metric{*}.rollup(avg, 60)",
+    "anomalies(avg:system.cpu.user{*}, 'basic', 2)",
+    "timeshift(avg:metric{*}, -3600)",
+    'avg:metric{service:"a,b"}',
+])
+def test_one_expression_stays_one_expression(query):
+    assert _metric_expressions(query) == [query]
+
+
+def test_commas_outside_filters_are_separate_expressions():
+    assert _metric_expressions(
+        "avg:system.cpu.user{*}, avg:system.mem.pct_usable{env:prod,service:api}"
+    ) == [
+        "avg:system.cpu.user{*}",
+        "avg:system.mem.pct_usable{env:prod,service:api}",
+    ]
+
+
+@pytest.mark.parametrize("query", [
+    "avg:system.cpu.user{*} + avg:system.mem.pct_usable{*}",
+    "a + b",
+    "avg:a{*}/avg:b{*}",
+    "100 * (avg:system.cpu.user{*} / avg:system.cpu.idle{*})",
+    "avg:a{*} - avg:b{*}",
+])
+def test_formula_is_rejected(query):
+    with pytest.raises(ValueError, match="not a formula"):
+        _metric_expressions(query)
+
+
+class _QueryClient:
+    def __init__(self):
+        self.queries = []
+
+    def query_metrics(self, query, start_ms, end_ms, interval=None):
+        self.queries.append(query)
+        return {"data": {"attributes": {
+            "series": [{"group_tags": [f"metric:{query}"]}],
+            "times": [1],
+            "values": [[1.0]],
+        }}}
+
+
+def test_metrics_splits_a_comma_separated_query_into_one_call_each():
+    client = _QueryClient()
+    result = _query_metrics(
+        client,
+        "avg:system.cpu.user{*}, avg:system.mem.pct_usable{*}",
+        "-1h", "now", 100,
+    )
+    assert client.queries == [
+        "avg:system.cpu.user{*}",
+        "avg:system.mem.pct_usable{*}",
+    ]
+    assert [item["query"] for item in result["results"]] == client.queries
+    assert result["count"] == 2
+
+
+def test_metrics_formula_is_not_sent():
+    client = _QueryClient()
+    with pytest.raises(ValueError, match="not a formula"):
+        _query_metrics(client, "avg:a{*} + avg:b{*}", "-1h", "now", 100)
+    assert client.queries == []
+
+
+def test_metric_stats_names_each_expression():
+    client = _QueryClient()
+    result = _query_metric_stats(
+        client,
+        "avg:system.cpu.user{*}, avg:system.mem.pct_usable{*}",
+        "-1h", "now", 100,
+    )
+    assert client.queries == [
+        "avg:system.cpu.user{*}",
+        "avg:system.mem.pct_usable{*}",
+    ]
+    assert [row["query"] for row in result["results"]] == client.queries
+

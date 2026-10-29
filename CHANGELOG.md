@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Datadog metrics: a comma-separated query is fetched as one expression each,
+  and a formula is rejected instead of Datadog's "exactly one expression" error.
 - Confluence fetch accepts a page URL, and a v2 pages 404 retries the v1
   content API so a blog post returned by search can still be read.
 - Background investigations touch the session timestamp every 5 minutes, so the
