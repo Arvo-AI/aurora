@@ -68,6 +68,7 @@ def _patch_azure_refresh(monkeypatch, stored, minted_client_ids):
         assert provider == "azure"
         saved["owner_id"] = owner_id
         saved["data"] = token_data
+        saved["schedule_prediscovery"] = kwargs.get("schedule_prediscovery", True)
 
     monkeypatch.setattr("utils.auth.token_management.store_tokens_in_db", _store)
     return saved
@@ -97,6 +98,7 @@ def test_ask_mode_refresh_keeps_the_agent_service_principal(monkeypatch):
     assert persisted["read_only"]["client_secret"] == _READ_ONLY_CLIENT_SECRET
     assert persisted["access_token"] == _NEW_ACCESS_TOKEN
     assert persisted["subscription_id"] == "sub-default"
+    assert saved["schedule_prediscovery"] is False
 
 
 def test_ask_mode_reuse_returns_read_only_principal_without_storing(monkeypatch):
