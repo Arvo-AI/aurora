@@ -238,6 +238,11 @@ _OPEN_PREFIXES = (
     # (X-Hub-Signature), not session.
     "/bitbucket/webhook/",
     "/slack/callback",
+    # Website "Add to Slack" and "Sign in with Slack" (hosted only): public
+    # entry points that only redirect to Slack with a signed state.
+    "/slack/signup/start",
+    "/slack/signin/start",
+    "/slack/signin/available",
     "/slack/events",
     "/slack/interactions",
     "/teams/callback",
@@ -447,6 +452,14 @@ from routes.slack.slack_channels import slack_channels_bp
 app.register_blueprint(slack_bp, url_prefix="/slack")
 app.register_blueprint(slack_events_bp, url_prefix="/slack")
 app.register_blueprint(slack_channels_bp, url_prefix="/slack")
+# Website "Add to Slack" entry point: public and mints a signed state per hit,
+# so it gets the same tight per-IP budget as the GitHub signup routes.
+from routes.slack.slack_signup import slack_signup_bp
+limiter.limit("10 per minute;30 per hour")(slack_signup_bp)
+app.register_blueprint(slack_signup_bp, url_prefix="/slack")
+# "Sign in with Slack": the start route carries its own per-IP limit.
+from routes.slack.slack_signin import slack_signin_bp
+app.register_blueprint(slack_signin_bp, url_prefix="/slack")
 
 # --- Microsoft Teams Integration Routes ---
 from routes.teams.teams_routes import teams_bp

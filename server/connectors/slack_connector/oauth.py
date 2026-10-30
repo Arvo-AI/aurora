@@ -28,7 +28,6 @@ SLACK_SCOPES = [
     "channels:history",     # Read public channel history
     "groups:read",          # List private channels
     "groups:history",       # Read private channel history
-    "groups:write",         # Create private channels (optional)
     "im:write",             # Send direct messages
     "im:history",           # Read direct message history
     "mpim:write",           # Send group direct messages

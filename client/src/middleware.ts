@@ -21,6 +21,7 @@ const publicRoutes = [
   "/api/auth/reset-password", // Reset completion (emailed code is the proof)
   "/api/auth/password-reset-available", // Whether SMTP is configured (no account data)
   "/api/auth/sso-discover", // Email domain -> SSO login URL (caller isn't signed in yet)
+  "/api/slack/signin-available", // Whether to show "Continue with Slack" (no account data)
   "/google-chat/events",  // Google Chat event POSTs (rewritten to backend)
   "/api/ping",            // Connection health check
 ]

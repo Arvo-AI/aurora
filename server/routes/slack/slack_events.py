@@ -28,6 +28,13 @@ from utils.secrets.secret_ref_utils import get_user_token_data
 from chat.background.task import run_background_chat
 from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import sanitize
+from routes.slack.slack_onboarding import (
+    DEMO_ACTION_ID,
+    LINK_ACTION_PREFIX,
+    is_demo_request,
+    publish_home,
+    run_demo_incident_task,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -197,8 +204,12 @@ def process_event_callback(data: dict) -> None:
                         response_text = (
                             "Hi! I'm Aurora, your AI SRE assistant.\n\n"
                             "You can ask me questions about your infrastructure, incidents, or anything else!\n"
-                            "For example: \"@Aurora my pods are failing in my production cluster. What's going on?\""
+                            "For example: \"@Aurora my pods are failing in my production cluster. What's going on?\"\n"
+                            "New here? Try \"@Aurora demo\" to watch me work a sample incident."
                         )
+                    elif is_demo_request(clean_msg):
+                        # Canned sample incident, played in this thread. No chat, no data access.
+                        run_demo_incident_task.delay(team_id, channel, thread_ts)
                     else:
                         from utils.auth.stateless_auth import get_org_id_for_user
                         from utils.auth.viewer_run import viewer_may_run
@@ -313,6 +324,12 @@ def process_event_callback(data: dict) -> None:
             
                 return
 
+        # Someone opened Aurora's Home tab: render the setup checklist.
+        if event_type == 'app_home_opened':
+            if event.get('tab') == 'home' and event.get('user') and data.get('team_id'):
+                publish_home(data['team_id'], event['user'])
+            return
+
         # Aurora was added to a channel (e.g. an incident.io-created one) —
         # auto-register + describe it so it becomes a routing target.
         if event_type == 'member_joined_channel':
@@ -422,6 +439,16 @@ def process_interaction(payload: dict) -> dict:
                     team_id=team_id,
                     channel_id=channel_id
                 )
+
+            # "See a demo incident" from the welcome DM or the App Home. The
+            # Home tab has no channel, so the demo goes to the clicker's DM.
+            if action_id == DEMO_ACTION_ID:
+                run_demo_incident_task.delay(team_id, channel_id or slack_user_id, None)
+                return {"text": ""}
+
+            # Onboarding url buttons open the app; nothing to do server-side.
+            if action_id.startswith(LINK_ACTION_PREFIX):
+                return {"text": ""}
 
             # "View PR" is a url button: ack with an empty body so Slack does not
             # replace the card with the default "Interaction received" text.

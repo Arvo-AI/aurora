@@ -960,12 +960,9 @@ def get_connected_count(user_id: str, org_id: str) -> int:
     return sum(1 for c in results.values() if c.get("connected"))
 
 
-def _check_all_connectors(
-    user_id: str,
-    org_id: str,
-    app_runtime_ready: bool = False,
-) -> Dict[str, Dict[str, Any]]:
-
+def active_providers(user_id: str, org_id: str) -> Dict[str, str]:
+    """Providers with stored credentials for this user or org, mapped to the
+    user whose credentials win. Presence only: no live API check."""
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
             set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
@@ -995,6 +992,16 @@ def _check_all_connectors(
             for (prov,) in cursor.fetchall():
                 if prov not in providers:
                     providers[prov] = user_id
+    return providers
+
+
+def _check_all_connectors(
+    user_id: str,
+    org_id: str,
+    app_runtime_ready: bool = False,
+) -> Dict[str, Dict[str, Any]]:
+
+    providers = active_providers(user_id, org_id)
 
     results: Dict[str, Dict[str, Any]] = {}
 
