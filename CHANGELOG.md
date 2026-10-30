@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A reply left on "Thinking…" when its worker is killed (out of memory, eviction)
+  is replaced with an error. Slack, Google Chat, and Teams get that message, and
+  the chat transcript does too. A live run is unchanged: the stall sweep still
+  waits until the session has been silent for 20 minutes.
+
 ## [1.5.14] - 2026-10-28
 
 ### Changed
