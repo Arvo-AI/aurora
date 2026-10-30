@@ -32,7 +32,7 @@ def _log_store_fail(provider: str, elapsed_ms: float, exc: Exception) -> None:
 
 def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                       subscription_name: str = None, subscription_id: str = None,
-                      org_id: str = None) -> None:
+                      org_id: str = None, schedule_prediscovery: bool = True) -> None:
     """
     Store token data in Vault and save secret reference in database.
 
@@ -43,6 +43,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         subscription_name: Azure subscription name (optional)
         subscription_id: Azure subscription ID (optional)
         org_id: Organization ID for multi-tenant scoping (optional, auto-resolved from request context)
+        schedule_prediscovery: False on token refresh; a new connector keeps the default.
     """
     start_time = time.perf_counter()
 
@@ -481,8 +482,9 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         except Exception as cache_error:
             logger.warning(f"[STORE-TOKENS] Failed to clear secret cache: {cache_error}")
 
-        # Schedule prediscovery with debounce (10min delay, deduped via Redis)
-        _schedule_prediscovery(user_id)
+        # A token refresh is not a new connector, so those callers opt out.
+        if schedule_prediscovery:
+            _schedule_prediscovery(user_id)
 
         elapsed_time = (time.perf_counter() - start_time) * 1000
         _log_store_ok(provider, elapsed_time)
