@@ -2056,10 +2056,11 @@ Security & Compliance
                         "provider": "azure",
                     })
                 if len(all_subs) > 1:
+                    # Fan-out rechecks Ask mode. The gate approved the prefixed form.
                     return _cloud_exec_azure_multi_subscription(
                         user_id=user_id,
                         connections=all_subs,
-                        command=original_command,
+                        command=gated_cmd,
                         provider_preference=provider_preference,
                         timeout=timeout,
                         output_file=output_file,
@@ -2089,10 +2090,11 @@ Security & Compliance
                 from utils.db.connection_utils import get_all_user_aws_connections
                 all_conns = get_all_user_aws_connections(user_id) if user_id else []
                 if len(all_conns) > 1:
+                    # Fan-out rechecks Ask mode. The gate approved the prefixed form.
                     return _cloud_exec_aws_multi_account(
                         user_id=user_id,
                         connections=all_conns,
-                        command=original_command,
+                        command=gated_cmd,
                         provider_preference=provider_preference,
                         timeout=timeout,
                         output_file=output_file,

@@ -894,7 +894,7 @@ def get_policy_prompt_text(org_id: str) -> str:
         _append_policy_section(lines, "DENIED commands (never run these):", deny_rules, False)
     _append_policy_section(
         lines,
-        "ALWAYS ALLOWED (run these in Ask mode too, even when they modify resources):",
+        "ALWAYS ALLOWED (run these in Ask mode too, even when they modify resources; deny rules and platform restrictions take precedence):",
         always,
         False,
     )
