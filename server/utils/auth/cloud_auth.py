@@ -96,6 +96,7 @@ def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = N
                 else:
                     # Check if token is still valid (with 5-minute buffer)
                     expires_on = existing_token.get('expires_on')
+                    token_is_fresh = False
                     if expires_on:
                         try:
                             # Azure expires_on is typically a timestamp
@@ -121,20 +122,7 @@ def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = N
                                     normalized_mode,
                                     remaining_seconds,
                                 )
-                                
-                                return {
-                                    'access_token': existing_token['access_token'],
-                                    # Requested subscription wins: the ARM token is tenant-scoped, so
-                                    # reusing it across subscriptions is valid, but the caller's target
-                                    # must not be overridden by the stored default (multi-subscription).
-                                    'subscription_id': subscription_id or existing_token.get('subscription_id'),
-                                    'tenant_id': existing_token.get('tenant_id'),
-                                    'client_id': existing_token.get('client_id'),  # Include for CLI auth
-                                    'client_secret': existing_token.get('client_secret'),  # Include for CLI auth
-                                    'expires_on': existing_token.get('expires_on'),
-                                    'auth_method': existing_token.get('auth_method', 'service_principal'),
-                                    'mode': normalized_mode,
-                                }
+                                token_is_fresh = True
                             else:
                                 logger.info(
                                     "Existing Azure token for user %s expires soon (%.0fs), generating new one",
@@ -145,6 +133,25 @@ def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = N
                             logger.warning(f"Could not parse Azure token expiry time '{expires_on}': {parse_error}")
                     else:
                         logger.info(f"Existing Azure token for user {user_id} has no expiry time, generating new one")
+
+                    # Ask mode must return the read-only app, not the stored agent principal.
+                    if token_is_fresh:
+                        cli_identity = _resolve_azure_credentials(
+                            existing_token, normalized_mode, user_id
+                        )
+                        return {
+                            'access_token': existing_token['access_token'],
+                            # Requested subscription wins: the ARM token is tenant-scoped, so
+                            # reusing it across subscriptions is valid, but the caller's target
+                            # must not be overridden by the stored default (multi-subscription).
+                            'subscription_id': subscription_id or existing_token.get('subscription_id'),
+                            'tenant_id': cli_identity.get('tenant_id'),
+                            'client_id': cli_identity.get('client_id'),
+                            'client_secret': cli_identity.get('client_secret'),
+                            'expires_on': existing_token.get('expires_on'),
+                            'auth_method': existing_token.get('auth_method', 'service_principal'),
+                            'mode': normalized_mode,
+                        }
             else:
                 logger.info(f"No existing Azure token found for user {user_id}")
         except Exception as check_error:
@@ -193,16 +200,14 @@ def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = N
         if not token:
             raise ValueError("Failed to get Azure management token")
         
-        # Store the token for reuse (preserve existing metadata such as read-only config).
-        # Keep the stored subscription_id as the account default: a targeted call for one
-        # subscription must not repoint the default for every later call.
+        # The minted client_id and client_secret may be the ask-mode read-only
+        # app. Persisting them erases the agent principal. A targeted
+        # subscription must not replace the stored default subscription_id.
         azure_token_data = dict(token_data)
         azure_token_data.update({
             "access_token": token.token,
             "subscription_id": stored_subscription_id or target_subscription_id,
             "tenant_id": tenant_id,
-            "client_id": client_id,
-            "client_secret": client_secret,
             "expires_on": token.expires_on,
             "auth_method": "service_principal",
             "generated_at": time.time(),
