@@ -90,6 +90,7 @@ def test_ask_mode_refresh_keeps_the_agent_service_principal(monkeypatch):
     # Ask mode still mints with the read-only principal.
     assert minted_client_ids == [("tenant-ro", _READ_ONLY_CLIENT_ID, _READ_ONLY_CLIENT_SECRET)]
     assert result["client_id"] == _READ_ONLY_CLIENT_ID
+    assert result["client_secret"] == _READ_ONLY_CLIENT_SECRET
     assert result["tenant_id"] == "tenant-ro"
     assert result["access_token"] == _NEW_ACCESS_TOKEN
     # The caller's subscription is used for this call only.
