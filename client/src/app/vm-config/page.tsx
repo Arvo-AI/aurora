@@ -115,6 +115,9 @@ export default function VMConfig() {
   // Bumped after a save or check so an older load cannot paint over Ready
   const loadGeneration = useRef(0);
   const manualVmsRef = useRef<VM[]>([]);
+  // Closures in reload and the connection check outlive the render that started them
+  const autoVmsRef = useRef<VM[]>([]);
+  const sshKeysRef = useRef<ManagedKey[]>([]);
 
   const seedManualDrafts = (manualList: VM[]) => {
     const drafts: Record<string, ManualVMDraft> = {};
@@ -183,6 +186,7 @@ export default function VMConfig() {
       if (!res.ok) throw new Error("Failed to load SSH keys");
       const data = await res.json();
       const loaded = data.keys || [];
+      sshKeysRef.current = loaded;
       setSshKeys(loaded);
       return loaded as ManagedKey[];
     } catch (err) {
@@ -282,14 +286,16 @@ export default function VMConfig() {
 
   const publishManualList = (manualList: VM[]) => {
     seedManualDrafts(manualList);
-    syncVms(autoVms, manualList);
-    saveCache(autoVms, manualList, sshKeys);
+    syncVms(autoVmsRef.current, manualList);
+    saveCache(autoVmsRef.current, manualList, sshKeysRef.current);
     window.dispatchEvent(new CustomEvent("providerStateChanged"));
   };
 
   const reloadManualList = async (failure: { title: string; description: string }) => {
-    loadGeneration.current += 1;
+    const generation = ++loadGeneration.current;
     const manualList = await fetchManualVms();
+    // A newer reload or a verified check already published the list
+    if (generation !== loadGeneration.current) return manualList !== null;
     // [] is a real empty list; null is a failed reload
     if (manualList === null) {
       toast({ ...failure, variant: "destructive" });
@@ -301,6 +307,7 @@ export default function VMConfig() {
 
   const syncVms = (autoList: VM[], manualList: VM[]) => {
     manualVmsRef.current = manualList;
+    autoVmsRef.current = autoList;
     setAutoVms(autoList);
     setManualVms(manualList);
     // Keep manual first so they're easy to spot
@@ -329,7 +336,7 @@ export default function VMConfig() {
       const manualList = stale
         ? manualVmsRef.current
         : (manualLoaded ?? manualVmsRef.current);
-      const keysList = keysRes.status === "fulfilled" ? keysRes.value : sshKeys;
+      const keysList = keysRes.status === "fulfilled" ? keysRes.value : sshKeysRef.current;
       // Drafts are seeded only for a load we are actually applying
       if (!stale && manualLoaded) seedManualDrafts(manualLoaded);
       // init runs once. Skipping the auto list leaves it stale for the session.
@@ -365,6 +372,8 @@ export default function VMConfig() {
     if (cached) {
       cacheLoaded.current = true;
       manualVmsRef.current = cached.manualVms || [];
+      autoVmsRef.current = cached.autoVms || [];
+      sshKeysRef.current = cached.sshKeys || [];
       setAutoVms(cached.autoVms || []);
       setManualVms(cached.manualVms || []);
       setVms([...(cached.manualVms || []), ...(cached.autoVms || [])]);
@@ -778,7 +787,7 @@ export default function VMConfig() {
           if (!draft || draft.sshUsername) return prev;
           return { ...prev, [vm.id]: { ...draft, sshUsername: username } };
         });
-        saveCache(autoVms, nextManual, sshKeys);
+        saveCache(autoVmsRef.current, nextManual, sshKeysRef.current);
       }
       window.dispatchEvent(new CustomEvent("providerStateChanged"));
       toast({

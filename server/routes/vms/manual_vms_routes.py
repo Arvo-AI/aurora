@@ -530,8 +530,10 @@ def check_manual_vm_connection(user_id):
                         )
                         cur.execute(verify_query, params)
                         # Zero rows means the saved target changed before this write
-                        verified = cur.rowcount > 0
+                        wrote = cur.rowcount > 0
                         conn.commit()
+                        # A failed commit must not tell the client the VM is Ready
+                        verified = wrote
                 if verified:
                     logger.info(
                         "Connection verified for VM %s, user %s",
