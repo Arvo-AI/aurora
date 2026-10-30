@@ -192,3 +192,40 @@ def test_channel_open_timeout_fails_the_check():
     assert success is False
     assert error == CHANNEL_FAILED
     assert connected_as is None
+
+
+_LEAKED = "secret-detail-not-for-client"
+
+
+class _ProtocolErrorParamiko(_RejectedExecParamiko):
+    class _Client(_RejectedExecParamiko._Client):
+        def connect(self, **_kwargs):
+            raise _RejectedExecParamiko.SSHException(f"internal banner: {_LEAKED}")
+
+    SSHClient = _Client
+
+
+class _UnexpectedErrorParamiko(_RejectedExecParamiko):
+    class _Client(_RejectedExecParamiko._Client):
+        def connect(self, **_kwargs):
+            raise RuntimeError(_LEAKED)
+
+    SSHClient = _Client
+
+
+def test_protocol_errors_do_not_return_exception_text():
+    validate = _load_validate_and_test_ssh(_ProtocolErrorParamiko)
+    success, error, connected_as = validate("198.51.100.1", "aurora-ro", "not-a-key")
+    assert success is False
+    assert connected_as is None
+    assert _LEAKED not in error
+    assert error.startswith("SSH connection error.")
+
+
+def test_unexpected_errors_do_not_return_exception_text():
+    validate = _load_validate_and_test_ssh(_UnexpectedErrorParamiko)
+    success, error, connected_as = validate("198.51.100.1", "aurora-ro", "not-a-key")
+    assert success is False
+    assert connected_as is None
+    assert _LEAKED not in error
+    assert error.startswith("An unexpected error occurred")
