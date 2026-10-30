@@ -277,6 +277,7 @@ services:
       # the signup callback is the sole consumer of the OAuth code exchange.
       HOSTED_SIGNUP_ENABLED: ${HOSTED_SIGNUP_ENABLED:-false}
       GITHUB_APP_CLIENT_SECRET: ${GITHUB_APP_CLIENT_SECRET}
+      MARKETING_SITE_URL: ${MARKETING_SITE_URL:-}
 
       # SAML SSO: require DNS proof of email-domain ownership (enable on multi-tenant installs)
       SSO_ENFORCE_DOMAIN_VERIFICATION: ${SSO_ENFORCE_DOMAIN_VERIFICATION:-false}

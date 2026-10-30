@@ -422,7 +422,8 @@ config:
   NEXT_PUBLIC_ENABLE_NOTION: "false"         # Notion integration
   NEXT_PUBLIC_ENABLE_SPINNAKER: "false"      # Spinnaker integration
   NEXT_PUBLIC_ENABLE_VISUALIZATION: "false"  # Incident infra visualization UI (pairs with VISUALIZATION_ENABLED)
-  HOSTED_SIGNUP_ENABLED: "false"             # One-click GitHub App signup from website (requires GITHUB_APP_CLIENT_SECRET)
+  HOSTED_SIGNUP_ENABLED: "false"             # One-click GitHub App / "Add to Slack" signup from website (GitHub needs GITHUB_APP_CLIENT_SECRET)
+  MARKETING_SITE_URL: ""                     # Website a cancelled "Add to Slack" returns to; empty = app sign-in page
   SSO_ENFORCE_DOMAIN_VERIFICATION: "false"   # SAML SSO: require DNS proof of email-domain ownership (set true when multi-tenant)
   
   # --- Pod Isolation Settings ---
