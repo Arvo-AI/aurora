@@ -106,6 +106,10 @@ export interface Suggestion {
   executedAt?: string;
   executionSessionId?: string;
   executionStatus?: 'in_progress' | 'completed' | 'failed' | 'executed';
+  executionOutput?: string;
+  executionError?: string;
+  executionExitCode?: number;
+  executionResult?: Record<string, any>;
   // Fix-type suggestion fields
   filePath?: string;
   originalContent?: string;
@@ -374,6 +378,10 @@ export const incidentsService = {
           executedAt: s.executedAt,
           executionSessionId: s.executionSessionId,
           executionStatus: s.executionStatus,
+          executionOutput: s.executionOutput,
+          executionError: s.executionError,
+          executionExitCode: s.executionExitCode,
+          executionResult: s.executionResult,
         })),
         citations: (inc.citations || []).map((c: any) => ({
           id: c.id,

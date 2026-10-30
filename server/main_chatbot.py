@@ -571,6 +571,15 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
     
     # Helper to send END status - called on completion or timeout
     async def send_end_status(reason="completed"):
+        """Send final workflow status to websocket and propagate outcome to linked suggestions."""
+        # Propagate terminal status to any linked suggestions (#566)
+        if session_id:
+            try:
+                from chat.background.task import _propagate_suggestion_status
+                _propagate_suggestion_status(session_id, "completed" if reason == "completed" else "failed")
+            except Exception as e:
+                logger.debug(f"Failed to propagate suggestion status in send_end_status: {e}")
+
         if websocket_connected:
             final_response = {
                 "type": "status",
