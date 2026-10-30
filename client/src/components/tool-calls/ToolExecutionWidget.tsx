@@ -28,6 +28,7 @@ import {
   parseCloudflareCommand,
   parseElasticCommand,
   parseSlackCommand,
+  parseSplunkCommand,
   parseGitLabToolCommand,
 } from "./tool-command-parser"
 import { RenderOutput } from "./tool-output-renderer"
@@ -202,6 +203,19 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   // Elastic tools parsing
   else if (tool.tool_name?.startsWith("elastic_")) {
     command = parseElasticCommand(tool.tool_name, normalizedInput)
+  }
+  // Name the Splunk instance on the tool call, including a fan-out across several.
+  else if (
+    tool.tool_name === "search_splunk" ||
+    tool.tool_name === "list_splunk_indexes" ||
+    tool.tool_name === "list_splunk_sourcetypes"
+  ) {
+    const outputStr = typeof tool.output === "string"
+      ? tool.output
+      : tool.output && typeof tool.output === "object"
+        ? JSON.stringify(tool.output)
+        : ""
+    command = parseSplunkCommand(tool.tool_name, normalizedInput, outputStr)
   }
   // Notion tools: humanize the label (actual output rendering stays generic via RenderOutput)
   else if (tool.tool_name?.startsWith("notion_")) {

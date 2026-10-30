@@ -301,6 +301,7 @@ class CitationExtractor:
                 continue
 
             command = self._extract_command(call_info.get("args", {}), content, tool_name)
+            command = self._with_splunk_instance(tool_name, command, call_info.get("args", {}), content)
             output = self._extract_output(content)
             if not output or output.strip() == "":
                 continue
@@ -354,9 +355,11 @@ class CitationExtractor:
             # `command` is captured server-side before args truncation; prefer
             # it. Fall back to parsing args/output for entries without it.
             command = entry.get("command") or ""
+            args = self._parse_history_args(entry.get("args") or entry.get("input"))
+            # Stored command is the SPL text. The instance is on the result.
             if not command:
-                args = self._parse_history_args(entry.get("args") or entry.get("input"))
                 command = self._extract_command(args, output_excerpt, inner_tool)
+            command = self._with_splunk_instance(inner_tool, command, args, output_excerpt)
             started_at = entry.get("started_at")
             rows.append({
                 "tool_name": self._normalize_tool_name(inner_tool),
@@ -420,6 +423,68 @@ class CitationExtractor:
             pass
 
         return "Command not available"
+
+    @staticmethod
+    def _with_splunk_instance(tool_name: str, command: str, args: Any, content: str) -> str:
+        """Append the Splunk instance a search, index, or sourcetype call used."""
+        if tool_name not in ("search_splunk", "list_splunk_indexes", "list_splunk_sourcetypes"):
+            return command
+        label = CitationExtractor._splunk_instance_label(args, content)
+        if not label or label in command:
+            return command
+        return f"{command} on {label}"
+
+    @staticmethod
+    def _splunk_instance_label(args: Any, content: str) -> str:
+        parsed: Any = None
+        if isinstance(content, str) and content:
+            try:
+                parsed = json.loads(content)
+            except (json.JSONDecodeError, TypeError):
+                parsed = None
+        elif isinstance(content, dict):
+            parsed = content
+
+        # The tool result lists every instance the call talked to.
+        if isinstance(parsed, dict):
+            instances = parsed.get("instances")
+            if isinstance(instances, list) and instances:
+                labels = [CitationExtractor._one_splunk_label(item) for item in instances]
+                joined = ", ".join(label for label in labels if label)
+                if joined:
+                    return joined
+            by_account = parsed.get("results_by_account")
+            if isinstance(by_account, dict) and by_account:
+                labels = []
+                for account_id, item in by_account.items():
+                    server_name = item.get("server_name") if isinstance(item, dict) else ""
+                    labels.append(CitationExtractor._format_splunk_label(str(account_id), server_name or ""))
+                return ", ".join(labels)
+            if parsed.get("account_id"):
+                return CitationExtractor._format_splunk_label(
+                    str(parsed.get("account_id")),
+                    str(parsed.get("server_name") or ""),
+                )
+
+        # Result not stored yet — use the account the model asked for.
+        if isinstance(args, dict) and args.get("account_id"):
+            return str(args["account_id"])
+        return ""
+
+    @staticmethod
+    def _one_splunk_label(item: Any) -> str:
+        if not isinstance(item, dict):
+            return ""
+        account_id = item.get("account_id")
+        if not account_id:
+            return ""
+        return CitationExtractor._format_splunk_label(str(account_id), str(item.get("server_name") or ""))
+
+    @staticmethod
+    def _format_splunk_label(account_id: str, server_name: str) -> str:
+        if server_name and server_name != account_id:
+            return f"{server_name} ({account_id})"
+        return account_id
 
     def _extract_output(self, content: str) -> str:
         """Extract the meaningful output from tool response."""

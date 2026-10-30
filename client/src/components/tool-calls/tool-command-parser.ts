@@ -653,3 +653,94 @@ export function parseSlackCommand(toolName: string, toolInput: string): string {
 
   return `Slack: ${toolName.replace(/slack_?/g, "").replace(/_/g, " ")}`
 }
+
+function parseToolJson(raw: string): Record<string, unknown> | null {
+  const trimmed = raw.trim()
+  // Tool args and results are JSON objects. Arrays and plain text are not.
+  if (!trimmed.startsWith("{")) return null
+  try {
+    const parsed = JSON.parse(trimmed)
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    try {
+      const parsed = JSON.parse(trimmed.replace(/'/g, '"'))
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : null
+    } catch {
+      return null
+    }
+  }
+}
+
+function splunkInstanceName(accountId: string, serverName?: string): string {
+  if (serverName && serverName !== accountId) {
+    return `${serverName} (${accountId})`
+  }
+  return accountId
+}
+
+/** Which Splunk a tool call hit. Prefer the result, then the requested account. */
+export function splunkInstanceLabel(toolInput: string, toolOutput?: string): string {
+  const output = toolOutput ? parseToolJson(toolOutput) : null
+  const instances = output?.instances
+  // Fan-out and single-target results both list the instances that were called.
+  if (Array.isArray(instances) && instances.length > 0) {
+    return instances
+      .map((item) => {
+        if (!item || typeof item !== "object") return ""
+        const row = item as Record<string, unknown>
+        const accountId = typeof row.account_id === "string" ? row.account_id : ""
+        const serverName = typeof row.server_name === "string" ? row.server_name : ""
+        return accountId ? splunkInstanceName(accountId, serverName) : ""
+      })
+      .filter(Boolean)
+      .join(", ")
+  }
+  const byAccount = output?.results_by_account
+  if (byAccount && typeof byAccount === "object" && !Array.isArray(byAccount)) {
+    return Object.entries(byAccount as Record<string, unknown>)
+      .map(([accountId, item]) => {
+        const serverName = item && typeof item === "object"
+          ? String((item as Record<string, unknown>).server_name || "")
+          : ""
+        return splunkInstanceName(accountId, serverName)
+      })
+      .join(", ")
+  }
+  const outputAccount = typeof output?.account_id === "string" ? output.account_id : ""
+  const outputServer = typeof output?.server_name === "string" ? output.server_name : ""
+  if (outputAccount) return splunkInstanceName(outputAccount, outputServer)
+
+  const parsed = parseToolJson(toolInput)
+  const args = (parsed?.kwargs && typeof parsed.kwargs === "object"
+    ? parsed.kwargs
+    : parsed) as Record<string, unknown> | null
+  const requested = typeof args?.account_id === "string" ? args.account_id : ""
+  // No account yet — the call is fanning out across every granted instance.
+  return requested || "all connected instances"
+}
+
+export function parseSplunkCommand(toolName: string, toolInput: string, toolOutput?: string): string {
+  const parsed = parseToolJson(toolInput)
+  const args = (parsed?.kwargs && typeof parsed.kwargs === "object"
+    ? parsed.kwargs
+    : parsed || {}) as Record<string, unknown>
+  const on = `on ${splunkInstanceLabel(toolInput, toolOutput)}`
+
+  if (toolName === "search_splunk") {
+    const query = String(args.query || "").replace(/\s+/g, " ").trim()
+    const short = query.length > 80 ? `${query.slice(0, 77)}…` : query
+    return short ? `Splunk: Search ${on} — ${short}` : `Splunk: Search ${on}`
+  }
+  if (toolName === "list_splunk_indexes") {
+    return `Splunk: List indexes ${on}`
+  }
+  if (toolName === "list_splunk_sourcetypes") {
+    const index = typeof args.index === "string" && args.index ? ` in ${args.index}` : ""
+    return `Splunk: List sourcetypes${index} ${on}`
+  }
+  return `Splunk: ${toolName.replace(/_/g, " ")} ${on}`
+}
