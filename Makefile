@@ -301,8 +301,16 @@ deploy-build:
 	@echo "Extracting image registry and build args from values.generated.yaml..."
 	@set -e; \
 	IMAGE_REGISTRY=$$(yq '.image.registry' deploy/helm/aurora/values.generated.yaml); \
-	if [ -z "$$IMAGE_REGISTRY" ] || [ "$$IMAGE_REGISTRY" = "null" ] || [ "$$IMAGE_REGISTRY" = "your-registry" ]; then \
-		echo "Error: image.registry not configured in values.generated.yaml"; \
+	SERVER_REGISTRY=$$(yq '([.image.images.server.registry, .image.registry] | map(select(. != null and . != "")) | .[0]) // ""' deploy/helm/aurora/values.generated.yaml); \
+	FRONTEND_REGISTRY=$$(yq '([.image.images.frontend.registry, .frontendImage.registry] | map(select(. != null and . != "")) | .[0]) // ""' deploy/helm/aurora/values.generated.yaml); \
+	SERVER_REPO=$$(yq '([.image.images.server.repository, "aurora-server"] | map(select(. != null and . != "")) | .[0]) // "aurora-server"' deploy/helm/aurora/values.generated.yaml); \
+	FRONTEND_REPO=$$(yq '([.image.images.frontend.repository, .frontendImage.repository, "aurora-frontend"] | map(select(. != null and . != "")) | .[0]) // "aurora-frontend"' deploy/helm/aurora/values.generated.yaml); \
+	if [ -z "$$SERVER_REGISTRY" ] || [ "$$SERVER_REGISTRY" = "null" ]; then SERVER_REGISTRY="$$IMAGE_REGISTRY"; fi; \
+	if [ -z "$$FRONTEND_REGISTRY" ] || [ "$$FRONTEND_REGISTRY" = "null" ]; then FRONTEND_REGISTRY="$$IMAGE_REGISTRY"; fi; \
+	if [ -z "$$SERVER_REPO" ] || [ "$$SERVER_REPO" = "null" ]; then SERVER_REPO="aurora-server"; fi; \
+	if [ -z "$$FRONTEND_REPO" ] || [ "$$FRONTEND_REPO" = "null" ]; then FRONTEND_REPO="aurora-frontend"; fi; \
+	if [ -z "$$SERVER_REGISTRY" ] || [ "$$SERVER_REGISTRY" = "null" ] || [ "$$SERVER_REGISTRY" = "your-registry" ]; then \
+		echo "Error: image.registry (or image.images.server.registry) not configured in values.generated.yaml"; \
 		exit 1; \
 	fi; \
 	GIT_SHA=$$(git rev-parse --short HEAD); \
@@ -315,37 +323,57 @@ deploy-build:
 		fi; \
 	done; \
 	echo "Using git SHA tag: $$GIT_SHA"; \
-	echo "Building backend image: $$IMAGE_REGISTRY/aurora-server:$$GIT_SHA ($(PLATFORMS))"; \
+	echo "Building backend image: $$SERVER_REGISTRY/$$SERVER_REPO:$$GIT_SHA ($(PLATFORMS))"; \
 	docker buildx build --platform $(PLATFORMS) \
-		-t $$IMAGE_REGISTRY/aurora-server:$$GIT_SHA \
+		-t $$SERVER_REGISTRY/$$SERVER_REPO:$$GIT_SHA \
 		-f server/Dockerfile --target prod ./server --push; \
-	echo "Building frontend image: $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA ($(PLATFORMS))"; \
-	docker buildx build --platform $(PLATFORMS) \
-		-t $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA \
-		-f client/Dockerfile --target prod \
-		$$BUILD_ARGS \
-		./client --push; \
+	BUILD_FRONTEND=true; \
+	if [ "$$FRONTEND_REPO" != "aurora-frontend" ]; then \
+		BUILD_FRONTEND=false; \
+		echo "Frontend repository is $$FRONTEND_REPO; leaving that image alone"; \
+	elif [ -z "$$FRONTEND_REGISTRY" ] || [ "$$FRONTEND_REGISTRY" = "null" ] || [ "$$FRONTEND_REGISTRY" = "your-registry" ]; then \
+		echo "Error: image.registry (or image.images.frontend.registry) not configured in values.generated.yaml"; \
+		exit 1; \
+	else \
+		echo "Building frontend image: $$FRONTEND_REGISTRY/$$FRONTEND_REPO:$$GIT_SHA ($(PLATFORMS))"; \
+		docker buildx build --platform $(PLATFORMS) \
+			-t $$FRONTEND_REGISTRY/$$FRONTEND_REPO:$$GIT_SHA \
+			-f client/Dockerfile --target prod \
+			$$BUILD_ARGS \
+			./client --push; \
+	fi; \
 	ENABLE_POD_ISOLATION=$$(yq '.config.ENABLE_POD_ISOLATION' deploy/helm/aurora/values.generated.yaml); \
 	if [ "$$ENABLE_POD_ISOLATION" = "true" ]; then \
-		echo "Pod isolation enabled, building terminal image: $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA ($(PLATFORMS))"; \
+		echo "Pod isolation enabled, building terminal image: $$SERVER_REGISTRY/aurora-terminal:$$GIT_SHA ($(PLATFORMS))"; \
 		docker buildx build --platform $(PLATFORMS) \
-			-t $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA \
+			-t $$SERVER_REGISTRY/aurora-terminal:$$GIT_SHA \
 			-f server/Dockerfile-user-terminal \
 			./server --push; \
 		echo "Updating TERMINAL_IMAGE in values.generated.yaml..."; \
-		yq -i ".config.TERMINAL_IMAGE = \"$$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml; \
+		yq -i ".config.TERMINAL_IMAGE = \"$$SERVER_REGISTRY/aurora-terminal:$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml; \
 	else \
 		echo "Pod isolation disabled, skipping terminal image build"; \
 	fi; \
 	echo "Images built and pushed successfully with tag: $$GIT_SHA"; \
 	echo "Verifying multi-arch manifests..."; \
-	docker buildx imagetools inspect $$IMAGE_REGISTRY/aurora-server:$$GIT_SHA; \
-	docker buildx imagetools inspect $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA; \
+	docker buildx imagetools inspect $$SERVER_REGISTRY/$$SERVER_REPO:$$GIT_SHA; \
+	if [ "$$BUILD_FRONTEND" = "true" ]; then \
+		docker buildx imagetools inspect $$FRONTEND_REGISTRY/$$FRONTEND_REPO:$$GIT_SHA; \
+	fi; \
 	if [ "$$ENABLE_POD_ISOLATION" = "true" ]; then \
-		docker buildx imagetools inspect $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA; \
+		docker buildx imagetools inspect $$SERVER_REGISTRY/aurora-terminal:$$GIT_SHA; \
 	fi; \
 	echo "Updating values.generated.yaml with new tag..."; \
-	yq -i ".image.tag = \"$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml
+	yq -i ".image.tag = \"$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml; \
+	yq -i ".image.images.server.tag = \"$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml; \
+	yq -i "del(.image.images.server.digest)" deploy/helm/aurora/values.generated.yaml; \
+	yq -i "del(.image.digests.server)" deploy/helm/aurora/values.generated.yaml; \
+	if [ "$$BUILD_FRONTEND" = "true" ]; then \
+		yq -i ".image.images.frontend.tag = \"$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml; \
+		yq -i "del(.frontendImage.digest)" deploy/helm/aurora/values.generated.yaml; \
+		yq -i "del(.image.images.frontend.digest)" deploy/helm/aurora/values.generated.yaml; \
+		yq -i "del(.image.digests.frontend)" deploy/helm/aurora/values.generated.yaml; \
+	fi
 
 deploy: deploy-build
 	@echo "Deploying to Kubernetes with Helm..."

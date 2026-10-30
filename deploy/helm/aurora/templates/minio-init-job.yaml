@@ -19,10 +19,11 @@ spec:
     spec:
       restartPolicy: OnFailure
       automountServiceAccountToken: false
+      {{- include "aurora.imagePullSecrets" (dict "image" "minioInit" "global" $) | nindent 6 }}
       containers:
         # aws-cli, not minio/mc — that was deleted alongside the server image.
         - name: minio-init
-          image: {{ .Values.services.minio.initImage | default "amazon/aws-cli:2.34.6" | quote }}
+          image: {{ include "aurora.image" (dict "image" "minioInit" "global" $) | quote }}
           imagePullPolicy: IfNotPresent
           # Overrides the image's `aws` ENTRYPOINT so we can run a script.
           command:

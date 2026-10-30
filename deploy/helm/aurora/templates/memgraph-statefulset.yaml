@@ -22,10 +22,11 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- include "aurora.podSecurityContext" (dict "service" "memgraph" "global" $ "defaults" (dict "runAsUser" 101 "runAsGroup" 101 "fsGroup" 101)) | nindent 8 }}
+      {{- include "aurora.imagePullSecrets" (dict "image" "memgraph" "global" $) | nindent 6 }}
       {{- include "aurora.scheduling" (dict "service" "memgraph" "global" $) | nindent 6 }}
       containers:
         - name: memgraph
-          image: memgraph/memgraph-mage:3.8.1
+          image: {{ include "aurora.image" (dict "image" "memgraph" "global" $) | quote }}
           imagePullPolicy: IfNotPresent
           securityContext:
             {{- include "aurora.containerSecurityContext" (dict "service" "memgraph" "global" $ "defaults" (dict)) | nindent 12 }}
