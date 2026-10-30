@@ -79,14 +79,18 @@ def test_ask_mode_refresh_keeps_the_agent_service_principal(monkeypatch):
     from utils.auth.cloud_auth import generate_azure_access_token
 
     stored = _stored_token()
+    # Distinct from the agent principal, so a refresh that writes them back fails.
+    stored["read_only"]["tenant_id"] = "tenant-ro"
+    stored["read_only"]["subscription_id"] = "sub-readonly"
     minted_client_ids = []
     saved = _patch_azure_refresh(monkeypatch, stored, minted_client_ids)
 
     result = generate_azure_access_token("uid-1", subscription_id="sub-targeted", mode="ask")
 
     # Ask mode still mints with the read-only principal.
-    assert minted_client_ids == [("tenant-1", _READ_ONLY_CLIENT_ID, _READ_ONLY_CLIENT_SECRET)]
+    assert minted_client_ids == [("tenant-ro", _READ_ONLY_CLIENT_ID, _READ_ONLY_CLIENT_SECRET)]
     assert result["client_id"] == _READ_ONLY_CLIENT_ID
+    assert result["tenant_id"] == "tenant-ro"
     assert result["access_token"] == _NEW_ACCESS_TOKEN
     # The caller's subscription is used for this call only.
     assert result["subscription_id"] == "sub-targeted"
@@ -97,6 +101,7 @@ def test_ask_mode_refresh_keeps_the_agent_service_principal(monkeypatch):
     assert persisted["read_only"]["client_id"] == _READ_ONLY_CLIENT_ID
     assert persisted["read_only"]["client_secret"] == _READ_ONLY_CLIENT_SECRET
     assert persisted["access_token"] == _NEW_ACCESS_TOKEN
+    assert persisted["tenant_id"] == "tenant-1"
     assert persisted["subscription_id"] == "sub-default"
     assert saved["schedule_prediscovery"] is False
 

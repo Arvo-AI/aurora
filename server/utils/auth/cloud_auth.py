@@ -200,14 +200,13 @@ def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = N
         if not token:
             raise ValueError("Failed to get Azure management token")
         
-        # The minted client_id and client_secret may be the ask-mode read-only
-        # app. Persisting them erases the agent principal. A targeted
-        # subscription must not replace the stored default subscription_id.
+        # Ask mode mints with the read-only app. Persisting that app's client,
+        # tenant, or subscription erases the agent principal. A targeted
+        # subscription must not replace the stored default.
         azure_token_data = dict(token_data)
         azure_token_data.update({
             "access_token": token.token,
-            "subscription_id": stored_subscription_id or target_subscription_id,
-            "tenant_id": tenant_id,
+            "subscription_id": token_data.get("subscription_id") or target_subscription_id,
             "expires_on": token.expires_on,
             "auth_method": "service_principal",
             "generated_at": time.time(),
