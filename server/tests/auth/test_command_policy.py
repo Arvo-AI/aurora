@@ -21,7 +21,10 @@ from utils.auth.command_policy import (
     PolicyRule,
     ask_mode_overlap_note,
     ask_mode_permits,
+    ask_mode_write_opt_in,
+    credential_mode,
     derive_pattern_from_command,
+    get_policy_prompt_text,
     evaluate_command,
     evaluate_compound_command,
     invalidate_cache,
@@ -888,6 +891,58 @@ class TestReadOnlyAllow:
             rule_id=1, mode="allow", pattern=r"my-healthcheck", scope="agent",
         ))
         assert ask_mode_permits("uid", "ssh admin@198.51.100.1 my-healthcheck") is False
+
+    def test_recognised_write_runs_when_always_allowed(self, policy, monkeypatch):
+        self._org(monkeypatch)
+        policy["allow"].append(_rule(
+            rule_id=1, mode="allow", pattern=r"kubectl delete", scope="read_only",
+            description="Delete a pod",
+        ))
+        command = "kubectl delete pod x"
+        assert ask_mode_permits("uid", command) is True
+        # The modify identity is only for the write the org opted into.
+        assert ask_mode_write_opt_in("uid", command) is True
+        assert ask_mode_write_opt_in("uid", "kubectl get pods") is False
+        assert ask_mode_permits("uid", "ssh admin@198.51.100.1 systemctl restart nginx") is False
+
+    def test_recognised_write_stays_out_of_ask_mode_on_agent_scope(self, policy, monkeypatch):
+        self._org(monkeypatch)
+        policy["allow"].append(_rule(
+            rule_id=1, mode="allow", pattern=r"kubectl delete", scope="agent",
+        ))
+        assert ask_mode_permits("uid", "kubectl delete pod x") is False
+        assert ask_mode_write_opt_in("uid", "kubectl delete pod x") is False
+
+    def test_deny_still_blocks_an_always_allowed_write(self, policy, monkeypatch):
+        self._org(monkeypatch)
+        policy["states"] = ListStates(allowlist_enabled=True, denylist_enabled=True)
+        policy["deny"].append(_rule(
+            rule_id=2, mode="deny", pattern=r"kubectl delete", description="No deletes",
+        ))
+        policy["allow"].append(_rule(
+            rule_id=1, mode="allow", pattern=r"kubectl delete", scope="read_only",
+        ))
+        assert ask_mode_permits("uid", "kubectl delete pod x") is False
+        assert ask_mode_write_opt_in("uid", "kubectl delete pod x") is False
+
+    def test_prompt_lists_always_allowed_while_the_allowlist_is_off(self, policy):
+        policy["allow"].append(_rule(
+            rule_id=1, mode="allow", pattern=r"systemctl restart", scope="read_only",
+            description="Restart nginx",
+        ))
+        text = get_policy_prompt_text("org-7")
+        assert "ALWAYS ALLOWED" in text
+        assert "systemctl restart" in text
+        assert "Ask mode" in text
+
+    def test_credential_mode_uses_the_modify_identity_only_while_armed(self):
+        assert credential_mode("ask") == "ask"
+        token = command_policy._ask_write_credential.set(True)
+        try:
+            assert credential_mode("ask") == "agent"
+            assert credential_mode("agent") == "agent"
+        finally:
+            command_policy._ask_write_credential.reset(token)
 
     def test_read_only_rule_works_while_the_allowlist_is_off(self, policy, monkeypatch):
         self._org(monkeypatch)
