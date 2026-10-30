@@ -335,6 +335,11 @@ _ACTION_GUARDRAIL_USER_MSG = (
 _CHAT_ERROR_FALLBACK = (
     "Sorry — I hit an error finishing that request. Please try again."
 )
+# OOM and eviction are SIGKILL, so the task finally block never runs. The stall
+# sweep is the only thing left that can replace the "Thinking…" placeholder.
+_WORKER_LOST_REPLY = (
+    "Sorry — this request stopped before I could finish. Please try again."
+)
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -2162,11 +2167,35 @@ def _close_dangling_code_fence(text: str) -> str:
     return text + ("" if text.endswith("\n") else "\n") + _CODE_FENCE
 
 
+def _last_saved_assistant_text(user_id: str, session_id: str, log_prefix: str) -> Optional[str]:
+    """Last bot/assistant message already stored on the session, if any."""
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cursor:
+            set_rls_context(cursor, conn, user_id, log_prefix=log_prefix)
+            cursor.execute("SELECT messages FROM chat_sessions WHERE id = %s", (session_id,))
+            row = cursor.fetchone()
+            if not row or not row[0]:
+                return None
+            messages = row[0]
+            if isinstance(messages, str):
+                messages = json.loads(messages)
+            if not isinstance(messages, list):
+                return None
+            for msg in reversed(messages):
+                if not isinstance(msg, dict):
+                    continue
+                if msg.get("sender") in ("bot", "assistant"):
+                    text = msg.get("text") or msg.get("content")
+                    return text if isinstance(text, str) and text else None
+    return None
+
+
 def _send_response_to_slack(
     user_id: str,
     session_id: str,
     trigger_metadata: Dict[str, Any],
     fallback_text: Optional[str] = None,
+    force_text: Optional[str] = None,
 ) -> bool:
     """Send Aurora's response back to the Slack channel after background chat completes.
 
@@ -2184,41 +2213,23 @@ def _send_response_to_slack(
         if not channel:
             logger.warning(f"[BackgroundChat] No Slack channel in trigger_metadata for session {session_id}")
             return False
-        
-        # Get the last assistant message from the chat session
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:SlackResponse]")
-                cursor.execute(
-                    "SELECT messages FROM chat_sessions WHERE id = %s",
-                    (session_id,)
+
+        # A killed worker may have saved a partial draft. That is not the answer.
+        if force_text:
+            last_assistant_message = force_text
+        else:
+            last_assistant_message = _last_saved_assistant_text(
+                user_id, session_id, "[BackgroundChat:SlackResponse]",
+            )
+            # Guardrail block may leave no assistant message — use caller-provided fallback
+            if not last_assistant_message and fallback_text:
+                last_assistant_message = fallback_text
+            if not last_assistant_message:
+                logger.warning(
+                    f"[BackgroundChat] No assistant message found in session {session_id}"
                 )
-                row = cursor.fetchone()
-                
-                last_assistant_message = None
-                if row and row[0]:
-                    messages = row[0]
-                    if isinstance(messages, str):
-                        messages = json.loads(messages)
+                return False
 
-                    # Find the last assistant/bot message
-                    for msg in reversed(messages):
-                        if not isinstance(msg, dict):
-                            continue
-                        if msg.get('sender') in ('bot', 'assistant'):
-                            last_assistant_message = msg.get('text') or msg.get('content')
-                            break
-
-                if not last_assistant_message:
-                    # Guardrail block may leave no assistant message — use caller-provided fallback
-                    if fallback_text:
-                        last_assistant_message = fallback_text
-                    else:
-                        logger.warning(
-                            f"[BackgroundChat] No assistant message found in session {session_id}"
-                        )
-                        return False
-        
         # Format the response for Slack (markdown conversion, length limits, etc.)
         formatted_message = format_response_for_slack(last_assistant_message)
         
@@ -2324,6 +2335,7 @@ def _send_response_to_teams(
     session_id: str,
     trigger_metadata: Dict[str, Any],
     fallback_text: Optional[str] = None,
+    force_text: Optional[str] = None,
 ) -> bool:
     """Post Aurora's reply back to the Teams channel that triggered the session."""
     try:
@@ -2340,25 +2352,17 @@ def _send_response_to_teams(
             logger.warning("[BackgroundChat] Missing Teams team_id/channel_id for session %s", session_id)
             return False
 
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:TeamsResponse]")
-                cursor.execute("SELECT messages FROM chat_sessions WHERE id = %s", (session_id,))
-                row = cursor.fetchone()
-                last_assistant_message = None
-                if row and row[0]:
-                    messages = row[0]
-                    if isinstance(messages, str):
-                        messages = json.loads(messages)
-                    for msg in reversed(messages):
-                        if isinstance(msg, dict) and msg.get("sender") in ("bot", "assistant"):
-                            last_assistant_message = msg.get("text") or msg.get("content")
-                            break
-                if not last_assistant_message:
-                    if fallback_text:
-                        last_assistant_message = fallback_text
-                    else:
-                        return False
+        # A killed worker may have saved a partial draft. That is not the answer.
+        if force_text:
+            last_assistant_message = force_text
+        else:
+            last_assistant_message = _last_saved_assistant_text(
+                user_id, session_id, "[BackgroundChat:TeamsResponse]",
+            )
+            if not last_assistant_message:
+                last_assistant_message = fallback_text
+            if not last_assistant_message:
+                return False
 
         from connectors.teams_connector.bot_client import (
             send_message_to_team_channel,
@@ -2432,6 +2436,7 @@ def _send_response_to_google_chat(
     session_id: str,
     trigger_metadata: Dict[str, Any],
     fallback_text: Optional[str] = None,
+    force_text: Optional[str] = None,
 ) -> bool:
     """Send Aurora's response back to Google Chat after background chat completes.
 
@@ -2451,36 +2456,20 @@ def _send_response_to_google_chat(
             logger.warning(f"[BackgroundChat] No Google Chat space in trigger_metadata for session {session_id}")
             return False
 
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:GoogleChatResponse]")
-                cursor.execute(
-                    "SELECT messages FROM chat_sessions WHERE id = %s",
-                    (session_id,)
+        # A killed worker may have saved a partial draft. That is not the answer.
+        if force_text:
+            last_assistant_message = force_text
+        else:
+            last_assistant_message = _last_saved_assistant_text(
+                user_id, session_id, "[BackgroundChat:GoogleChatResponse]",
+            )
+            if not last_assistant_message and fallback_text:
+                last_assistant_message = fallback_text
+            if not last_assistant_message:
+                logger.warning(
+                    f"[BackgroundChat] No assistant message found in session {session_id}"
                 )
-                row = cursor.fetchone()
-
-                last_assistant_message = None
-                if row and row[0]:
-                    messages = row[0]
-                    if isinstance(messages, str):
-                        messages = json.loads(messages)
-
-                    for msg in reversed(messages):
-                        if not isinstance(msg, dict):
-                            continue
-                        if msg.get('sender') in ('bot', 'assistant'):
-                            last_assistant_message = msg.get('text') or msg.get('content')
-                            break
-
-                if not last_assistant_message:
-                    if fallback_text:
-                        last_assistant_message = fallback_text
-                    else:
-                        logger.warning(
-                            f"[BackgroundChat] No assistant message found in session {session_id}"
-                        )
-                        return False
+                return False
 
         formatted_message = format_response_for_google_chat(last_assistant_message)
 
@@ -2665,6 +2654,77 @@ def _affected_users(cursor):
     return [r[0] for r in cursor.fetchall()]
 
 
+# A non-array messages value must not abort the sweep; leave the column alone.
+_ORPHAN_SESSION_UPDATE = """
+    UPDATE chat_sessions
+    SET status = 'failed',
+        updated_at = NOW(),
+        messages = CASE
+            WHEN messages IS NULL OR jsonb_typeof(messages) = 'array' THEN
+                COALESCE(messages, '[]'::jsonb) || jsonb_build_array(
+                    jsonb_build_object(
+                        'sender', 'bot',
+                        'text', %s,
+                        'message_number', jsonb_array_length(COALESCE(messages, '[]'::jsonb)) + 1
+                    )
+                )
+            ELSE messages
+        END
+    WHERE {where}
+    RETURNING id, ui_state
+"""
+
+
+def _trigger_metadata_from_ui_state(ui_state) -> Dict[str, Any]:
+    if isinstance(ui_state, str):
+        try:
+            ui_state = json.loads(ui_state)
+        except (TypeError, ValueError):
+            return {}
+    if not isinstance(ui_state, dict):
+        return {}
+    meta = ui_state.get("triggerMetadata")
+    return meta if isinstance(meta, dict) else {}
+
+
+def _claim_orphaned_sessions(cursor, where: str, params: tuple) -> list:
+    """Fail in-progress sessions and store an error the next page load can show.
+
+    Only rows still in_progress are flipped, so a second sweep does not post
+    the error again.
+    """
+    cursor.execute(
+        _ORPHAN_SESSION_UPDATE.format(where=where),
+        (_WORKER_LOST_REPLY, *params),
+    )
+    return cursor.fetchall()
+
+
+def _notify_orphaned_chat_reply(user_id: str, session_id: str, ui_state) -> None:
+    """Replace a Thinking… placeholder the killed worker can no longer update."""
+    meta = _trigger_metadata_from_ui_state(ui_state)
+    src = meta.get("source")
+    try:
+        # Same chats the task finally block covers. SIGKILL skips that block.
+        if src in ("slack", "slack_button"):
+            _send_response_to_slack(
+                user_id, session_id, meta, force_text=_WORKER_LOST_REPLY,
+            )
+        elif src in ("google_chat", "google_chat_button"):
+            _send_response_to_google_chat(
+                user_id, session_id, meta, force_text=_WORKER_LOST_REPLY,
+            )
+        elif src == "teams":
+            _send_response_to_teams(
+                user_id, session_id, meta, force_text=_WORKER_LOST_REPLY,
+            )
+    except Exception:
+        logger.exception(
+            "[BackgroundChat:Cleanup] Failed to post the interrupted reply for session %s",
+            session_id,
+        )
+
+
 def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
     """Mark investigations left in 'running' state by a previous process as failed.
 
@@ -2701,14 +2761,17 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
                             _record_rca_error(cursor, str(inc_id), uid)
                             cleaned += 1
                         conn.commit()
-                    cursor.execute("""
-                        UPDATE chat_sessions SET status = 'failed', updated_at = NOW()
-                        WHERE status = 'in_progress' AND updated_at < %s AND user_id = %s
-                        RETURNING id
-                    """, (threshold, uid))
-                    for (sid,) in cursor.fetchall():
+                    # Younger than the window may still be on a live worker.
+                    orphaned_sessions = _claim_orphaned_sessions(
+                        cursor,
+                        "status = 'in_progress' AND updated_at < %s AND user_id = %s",
+                        (threshold, uid),
+                    )
+                    for sid, _ui in orphaned_sessions:
                         _propagate_suggestion_status(str(sid), 'failed')
                     conn.commit()
+                    for sid, ui_state in orphaned_sessions:
+                        _notify_orphaned_chat_reply(uid, str(sid), ui_state)
 
         if cleaned:
             logger.info(f"[StartupCleanup] Marked {cleaned} orphaned investigations as error")
@@ -2749,11 +2812,10 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         WHERE cs.status = 'in_progress' AND cs.updated_at < %s AND cs.user_id = %s
                     """, (stale_threshold, uid))
                     for session_id, incident_id in cursor.fetchall():
-                        cursor.execute("""
-                            UPDATE chat_sessions SET status = 'failed', updated_at = NOW()
-                            WHERE id = %s AND status = 'in_progress' RETURNING id
-                        """, (session_id,))
-                        if not cursor.fetchone():
+                        claimed = _claim_orphaned_sessions(
+                            cursor, "id = %s AND status = 'in_progress'", (session_id,),
+                        )
+                        if not claimed:
                             continue
                         cleaned_count += 1
                         _propagate_suggestion_status(str(session_id), 'failed')
@@ -2764,6 +2826,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                             )
                             _record_rca_error(cursor, str(incident_id), uid)
                         conn.commit()
+                        _notify_orphaned_chat_reply(uid, str(session_id), claimed[0][1])
                         if incident_id:
                             try:
                                 from utils.notifications.dispatcher import notify_investigation_failed
@@ -2791,15 +2854,18 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         if not cursor.fetchone():
                             conn.commit()
                             continue
+                        claimed_ui = None
                         if session_id:
-                            cursor.execute(
-                                "UPDATE chat_sessions SET status = 'failed', updated_at = NOW() WHERE id = %s AND status = 'in_progress' RETURNING id",
-                                (str(session_id),)
+                            claimed = _claim_orphaned_sessions(
+                                cursor, "id = %s AND status = 'in_progress'", (str(session_id),),
                             )
-                            if cursor.fetchone():
+                            if claimed:
+                                claimed_ui = claimed[0][1]
                                 _propagate_suggestion_status(str(session_id), 'failed')
                         _record_rca_error(cursor, str(inc_id), uid)
                         conn.commit()
+                        if claimed_ui is not None:
+                            _notify_orphaned_chat_reply(uid, str(session_id), claimed_ui)
                         dead_task_count += 1
                         try:
                             from utils.notifications.dispatcher import notify_investigation_failed
