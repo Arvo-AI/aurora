@@ -865,6 +865,17 @@ def apply_yes_always(
     invalidate_cache(org_id)
 
 
+def _append_policy_section(lines: List[str], heading: str, rules: List[PolicyRule], mark_ask: bool) -> None:
+    if not rules:
+        return
+    lines.append(heading)
+    for rule in rules:
+        # A recognised read still runs in Ask mode. The note is the modify exception.
+        note = " — also runs in Ask mode" if mark_ask and rule.scope == "read_only" else ""
+        lines.append(f"  - {rule.description} (pattern: {rule.pattern}){note}")
+    lines.append("")
+
+
 def get_policy_prompt_text(org_id: str) -> str:
     """Render active policy as system-prompt text for the LLM."""
     allow_rules, deny_rules, states = _get_cached(org_id)
@@ -879,29 +890,16 @@ def get_policy_prompt_text(org_id: str) -> str:
         "will be rejected at execution time. Do not attempt blocked commands.",
         "",
     ]
-
-    if states.denylist_enabled and deny_rules:
-        lines.append("DENIED commands (never run these):")
-        for r in deny_rules:
-            lines.append(f"  - {r.description} (pattern: {r.pattern})")
-        lines.append("")
-
-    if always:
-        lines.append(
-            "ALWAYS ALLOWED (run these in Ask mode too, even when they modify resources):"
-        )
-        for r in always:
-            lines.append(f"  - {r.description} (pattern: {r.pattern})")
-        lines.append("")
-
-    if states.allowlist_enabled and allow_rules:
-        lines.append("ALLOWED commands (only these are permitted):")
-        for r in allow_rules:
-            # A recognised read still runs in Ask mode. This note is the modify exception.
-            note = " — also runs in Ask mode" if r.scope == "read_only" else ""
-            lines.append(f"  - {r.description} (pattern: {r.pattern}){note}")
-        lines.append("")
-
+    if states.denylist_enabled:
+        _append_policy_section(lines, "DENIED commands (never run these):", deny_rules, False)
+    _append_policy_section(
+        lines,
+        "ALWAYS ALLOWED (run these in Ask mode too, even when they modify resources):",
+        always,
+        False,
+    )
+    if states.allowlist_enabled:
+        _append_policy_section(lines, "ALLOWED commands (only these are permitted):", allow_rules, True)
     return "\n".join(lines)
 
 

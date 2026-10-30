@@ -564,6 +564,8 @@ def test_setup_azure_environment_allocates_a_distinct_config_dir_each_call():
         "logger": __import__("logging").getLogger("test"),
         "_ISOLATED_HOME": "/tmp/aurora-home",
         "get_mode_from_context": lambda: "agent",
+        # Bare exec has no module globals, so the login-mode helper is injected.
+        "credential_mode": lambda mode: mode,
         "generate_azure_access_token": lambda uid, sub, mode=None: {
             "access_token": "t", "subscription_id": sub or "S1", "tenant_id": "T",
             "client_id": "cid", "client_secret": "sec",
