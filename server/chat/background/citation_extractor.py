@@ -117,11 +117,22 @@ _TOOL_NAME_MAPPING: Dict[str, str] = {
 
 # Internal coordination tools that show up as tool messages but aren't real
 # evidence — filter them out of citations entirely.
+#
+# The agent's own writes to artifacts/memory are bookkeeping, not evidence:
+# their output is a save receipt ("Artifact saved (version 15).") or an error.
+# Left in, they also crowd out real evidence, because the summary prompt only
+# shows the most recent citations: a run that ended with ~25 write_artifact
+# retries pushed every earlier kubectl result out of that window, and the
+# report then listed already-checked resources under "Not Checked".
 _NON_EVIDENCE_TOOLS = frozenset({
     "dispatch_subagent",
     "write_findings",
     "load_skill",
     "trigger_rca",
+    "write_artifact",
+    "write_memory",
+    "append_to_memory",
+    "edit_memory",
 })
 
 # Keys that mark a tool response as carrying real data (not just a status
