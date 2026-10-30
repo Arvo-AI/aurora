@@ -429,11 +429,13 @@ def validate_and_test_ssh(
         logger.error(f"Socket error to {target_host}: {e}")
         return False, error_msg, None
     except paramiko.SSHException as e:
-        error_msg = f"SSH connection error: {str(e)}. The server may not be ready or SSH service may not be running."
+        # Protocol errors can embed internal detail; the client gets a fixed message
+        error_msg = "SSH connection error. The server may not be ready or SSH service may not be running."
         logger.error(f"SSH protocol error to {target_host}: {e}", exc_info=True)
         return False, error_msg, None
     except Exception as e:
-        error_msg = f"An unexpected error occurred: {str(e)}"
+        # Unexpected failures must not return exception text to the caller
+        error_msg = "An unexpected error occurred during the SSH connection."
         logger.error(f"Unexpected SSH error to {target_host}: {e}", exc_info=True)
         return False, error_msg, None
     finally:
