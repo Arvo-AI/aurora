@@ -222,7 +222,10 @@ def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = N
             from utils.auth.token_management import store_tokens_in_db
             from utils.secrets.secret_ref_utils import get_token_owner_id
             owner_id = get_token_owner_id(user_id, "azure")
-            store_tokens_in_db(owner_id, azure_token_data, "azure")
+            # Refreshing an existing connector must not look like a new connect.
+            store_tokens_in_db(
+                owner_id, azure_token_data, "azure", schedule_prediscovery=False
+            )
             logger.info(f"Stored new Azure token in database for user {user_id}")
         except Exception as store_error:
             logger.warning(f"Failed to store Azure token in database: {store_error}")
