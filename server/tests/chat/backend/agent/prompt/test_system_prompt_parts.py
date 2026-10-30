@@ -5,6 +5,7 @@ from chat.backend.agent.prompt.composer import (
     assemble_system_prompt,
     assemble_system_prompt_parts,
 )
+from chat.backend.agent.prompt.provider_rules import build_ephemeral_rules
 from chat.backend.agent.prompt.schema import PromptSegments
 
 
@@ -27,6 +28,13 @@ def _segments(**overrides) -> PromptSegments:
     )
     base.update(overrides)
     return PromptSegments(**base)
+
+
+def test_ask_mode_runs_an_always_allowed_modify():
+    text = build_ephemeral_rules("ask")
+    assert "Always allowed" in text
+    assert "Run that command" in text
+    assert "iac_tool apply" in text
 
 
 def test_static_part_holds_only_cross_session_segments():

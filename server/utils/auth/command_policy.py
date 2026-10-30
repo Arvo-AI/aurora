@@ -19,6 +19,7 @@ Fail-open on DB error: if rules cannot be fetched, commands are allowed.
 """
 
 import collections
+import contextvars
 import logging
 import re
 import shlex
@@ -582,7 +583,11 @@ def read_only_allow_covers(org_id: str, command: str) -> bool:
 
 
 def ask_mode_permits(user_id: Optional[str], command: str) -> bool:
-    """Ask mode runs a recognised read, or a command the org marked read-only."""
+    """Ask mode runs a recognised read, or any command an always-allowed rule names.
+
+    An always-allowed rule (scope ``read_only``) covers a modify command the
+    classifier recognises as a write. The platform floor and an org deny still win.
+    """
     from utils.security.read_only_classifier import is_read_only_command
     if is_read_only_command(command):
         return True
@@ -597,6 +602,46 @@ def ask_mode_permits(user_id: Optional[str], command: str) -> bool:
     if not org_id:
         return False
     return read_only_allow_covers(org_id, command)
+
+
+# Set only for the cloud login of one command an always-allowed rule named.
+_ask_write_credential: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_ask_write_credential", default=False,
+)
+
+
+def ask_mode_write_opt_in(user_id: Optional[str], command: str) -> bool:
+    """True when Ask mode should log in with the modify identity for *command*."""
+    from utils.security.read_only_classifier import is_read_only_command
+    # A recognised read stays on the read-only identity.
+    if is_read_only_command(command):
+        return False
+    return ask_mode_permits(user_id, command)
+
+
+def arm_ask_write_credential(user_id: Optional[str], command: str):
+    """Opt this command's cloud login into the modify identity, or return None."""
+    from utils.cloud.cloud_utils import get_mode_from_context
+    mode = (get_mode_from_context() or "").strip().lower()
+    # Agent mode already uses the modify identity.
+    if mode != "ask" or not ask_mode_write_opt_in(user_id, command):
+        return None
+    return _ask_write_credential.set(True)
+
+
+def disarm_ask_write_credential(token) -> None:
+    if token is not None:
+        _ask_write_credential.reset(token)
+
+
+def credential_mode(mode: Optional[str]) -> Optional[str]:
+    """Chat mode the cloud login should honor.
+
+    An armed always-allowed write uses the modify identity without leaving Ask mode.
+    """
+    if _ask_write_credential.get() and (mode or "").strip().lower() == "ask":
+        return "agent"
+    return mode
 
 
 def ask_mode_overlap_note(user_id: Optional[str], command: str) -> str:
@@ -820,11 +865,23 @@ def apply_yes_always(
     invalidate_cache(org_id)
 
 
+def _append_policy_section(lines: List[str], heading: str, rules: List[PolicyRule], mark_ask: bool) -> None:
+    if not rules:
+        return
+    lines.append(heading)
+    for rule in rules:
+        # A recognised read still runs in Ask mode. The note is the modify exception.
+        note = " — also runs in Ask mode" if mark_ask and rule.scope == "read_only" else ""
+        lines.append(f"  - {rule.description} (pattern: {rule.pattern}){note}")
+    lines.append("")
+
+
 def get_policy_prompt_text(org_id: str) -> str:
     """Render active policy as system-prompt text for the LLM."""
     allow_rules, deny_rules, states = _get_cached(org_id)
-
-    if not states.denylist_enabled and not states.allowlist_enabled:
+    always = [rule for rule in allow_rules if rule.scope == "read_only"]
+    # Always-allowed rules open Ask mode even while the allowlist is off.
+    if not states.denylist_enabled and not states.allowlist_enabled and not always:
         return ""
 
     lines = [
@@ -833,19 +890,16 @@ def get_policy_prompt_text(org_id: str) -> str:
         "will be rejected at execution time. Do not attempt blocked commands.",
         "",
     ]
-
-    if states.denylist_enabled and deny_rules:
-        lines.append("DENIED commands (never run these):")
-        for r in deny_rules:
-            lines.append(f"  - {r.description} (pattern: {r.pattern})")
-        lines.append("")
-
-    if states.allowlist_enabled and allow_rules:
-        lines.append("ALLOWED commands (only these are permitted):")
-        for r in allow_rules:
-            lines.append(f"  - {r.description} (pattern: {r.pattern})")
-        lines.append("")
-
+    if states.denylist_enabled:
+        _append_policy_section(lines, "DENIED commands (never run these):", deny_rules, False)
+    _append_policy_section(
+        lines,
+        "ALWAYS ALLOWED (run these in Ask mode too, even when they modify resources; deny rules and platform restrictions take precedence):",
+        always,
+        False,
+    )
+    if states.allowlist_enabled:
+        _append_policy_section(lines, "ALLOWED commands (only these are permitted):", allow_rules, True)
     return "\n".join(lines)
 
 

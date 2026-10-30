@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Ask mode runs a command the organization marked Always allowed, including
+  when the classifier recognises it as a modify. That command logs in with
+  the modify identity. Other commands stay read-only. A deny rule, a pipe
+  into a shell, a reverse shell, and `rm -rf /` still refuse it.
+
 ## [1.5.14] - 2026-10-28
 
 ### Changed

@@ -39,7 +39,12 @@ from utils.security.read_only_classifier import (  # noqa: F401
     describe_rejection,
     is_read_only_command,
 )
-from utils.auth.command_policy import ask_mode_permits
+from utils.auth.command_policy import (
+    arm_ask_write_credential,
+    ask_mode_permits,
+    credential_mode,
+    disarm_ask_write_credential,
+)
 from utils.log_sanitizer import hash_for_log
 
 
@@ -186,7 +191,8 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
     try:
         logger.info("Setting up isolated Azure environment...")
         
-        current_mode = get_mode_from_context()
+        # An always-allowed write logs in as the modify principal.
+        current_mode = credential_mode(get_mode_from_context())
         azure_creds = generate_azure_access_token(user_id, subscription_id, mode=current_mode)
         access_token = azure_creds["access_token"]
         subscription_id = azure_creds["subscription_id"]
@@ -304,7 +310,8 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
 
             workspace_id = aws_conn["workspace_id"]
 
-            current_mode = get_mode_from_context()
+            # An always-allowed write assumes the modify role, not the read-only one.
+            current_mode = credential_mode(get_mode_from_context())
             from utils.auth.connector_access import credentials_for_user, select_aws_role
             ask_mode = ModeAccessController.is_read_only_mode(current_mode)
             role_arn, use_session_policy = select_aws_role(
@@ -469,7 +476,8 @@ def setup_aws_environments_all_accounts(user_id: str):
         logger.warning("No active AWS connections for user %s", hash_for_log(user_id))
         return []
 
-    current_mode = get_mode_from_context()
+    # Same opt-in as the single-account login: an always-allowed write uses the modify role.
+    current_mode = credential_mode(get_mode_from_context())
     ask_mode = ModeAccessController.is_read_only_mode(current_mode)
     from utils.auth.connector_access import access_for, select_aws_role
     access = access_for(user_id)
@@ -577,7 +585,8 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
             user_id,
             selected_project_id=selected_project_id,
             override_provider=provider_preference,
-            mode=current_mode,
+            # An always-allowed write mints the modify service-account token.
+            mode=credential_mode(current_mode),
         )
         logger.info(f"TIME: generate_contextual_access_token took {time.perf_counter() - token_start:.2f}s")
         access_token = token_resp["access_token"]
@@ -1928,6 +1937,7 @@ Security & Compliance
     # Bound before the try so the cleanup in finally can always read it, including
     # on paths that return before the provider setup block below.
     isolated_env = None
+    ask_write_token = None
     
     try:
         fn_start = time.perf_counter()  # Start timing for entire execution
@@ -1996,6 +2006,9 @@ Security & Compliance
                 "provider": provider.lower(),
             })
 
+        # Login for this command only. A recognised read stays on the read-only identity.
+        ask_write_token = arm_ask_write_credential(user_id, gated_cmd)
+
         # Guardrail passed. Still refuse before login when this role or team cannot use the connector.
         denied = connector_call_denied(user_id, normalized_provider, account_id, command)
         if denied:
@@ -2043,10 +2056,11 @@ Security & Compliance
                         "provider": "azure",
                     })
                 if len(all_subs) > 1:
+                    # Fan-out rechecks Ask mode. The gate approved the prefixed form.
                     return _cloud_exec_azure_multi_subscription(
                         user_id=user_id,
                         connections=all_subs,
-                        command=original_command,
+                        command=gated_cmd,
                         provider_preference=provider_preference,
                         timeout=timeout,
                         output_file=output_file,
@@ -2076,10 +2090,11 @@ Security & Compliance
                 from utils.db.connection_utils import get_all_user_aws_connections
                 all_conns = get_all_user_aws_connections(user_id) if user_id else []
                 if len(all_conns) > 1:
+                    # Fan-out rechecks Ask mode. The gate approved the prefixed form.
                     return _cloud_exec_aws_multi_account(
                         user_id=user_id,
                         connections=all_conns,
-                        command=original_command,
+                        command=gated_cmd,
                         provider_preference=provider_preference,
                         timeout=timeout,
                         output_file=output_file,
@@ -3154,6 +3169,7 @@ Security & Compliance
         
         return exception_result
     finally:
+        disarm_ask_write_credential(ask_write_token)
         # setup_azure_environment_isolated mkdtemps an AZURE_CONFIG_DIR per call. The
         # fan-out path cleans up after itself, but the single-subscription path
         # returns from ~20 places, so clean up here where every path converges.
