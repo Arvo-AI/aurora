@@ -262,7 +262,7 @@ def terminal_exec(
     # read-only. scp/sftp copy files and stay refused.
     # A client later in the line (`true && ssh host reboot`, `sudo ssh`)
     # has to hit the same check as one in the first token.
-    from utils.auth.command_policy import ask_mode_permits
+    from utils.auth.command_policy import ask_mode_overlap_note, ask_mode_permits
     from utils.security.read_only_classifier import (
         COMMAND_WRAPPERS,
         analyze_segment,
@@ -355,6 +355,10 @@ def terminal_exec(
                 mode, ask_mode_permits(user_id, command), command, describe_rejection(command),
             )
             if not allowed:
+                # The classifier only says there is no read verb. Name the deny rule that beat an allow.
+                note = ask_mode_overlap_note(user_id, command)
+                if note:
+                    message = f"{message} {note}"
                 logger.info("Ask mode refused ssh client because it is not a read")
                 return json.dumps({
                     "success": False,

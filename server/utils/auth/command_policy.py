@@ -30,6 +30,7 @@ from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
+# Each process has its own copy. A save clears only the API worker.
 _CACHE_TTL = 30  # seconds
 _CACHE_MAX = 512  # max orgs in cache before LRU eviction
 
@@ -462,18 +463,96 @@ def evaluate_compound_command(
 
 # These run on the Aurora host. Both modes refuse them, and no allow rule lifts them.
 # `rm -rf /tmp` is a customer path and stays on the org denylist, which they can turn off.
-_PIPE_TO_SHELL = re.compile(r"\|\s*(sh|bash|dash|zsh|ksh)\b")
-_RM_ROOT = re.compile(r"\brm\s+-(?:rf|fr)\s+/(?:home\b|\s|$|['\"])")
+_SHELL_NAMES = frozenset({"sh", "bash", "dash", "zsh", "ksh"})
+_SUDO_WITH_ARG = frozenset({"-u", "--user", "-g", "--group"})
 _REVERSE_SHELL = re.compile(r"\b(nc|ncat|netcat|socat)\b.*\s-[ec]\b")
+_RM_SHORT_FLAG = re.compile(r"^-[A-Za-z]+$")
+
+
+def _shell_basename(token: str) -> str:
+    return token.rsplit("/", 1)[-1].lower()
+
+
+def _tokens_run_shell(tokens: list[str]) -> bool:
+    """True when the command is a shell, with an optional sudo in front."""
+    i = 0
+    if i < len(tokens) and tokens[i].lower() == "sudo":
+        i += 1
+        while i < len(tokens) and tokens[i].startswith("-"):
+            flag = tokens[i]
+            i += 1
+            # `-u root` is the account. The next token is not the program.
+            if flag in _SUDO_WITH_ARG and i < len(tokens) and not tokens[i].startswith("-"):
+                i += 1
+    if i >= len(tokens):
+        return False
+    return _shell_basename(tokens[i]) in _SHELL_NAMES
+
+
+def _pipe_to_shell(command: str) -> bool:
+    """`| bash`, `| sudo bash`, and `| /bin/bash`. `||` still counts: the second pipe is a pipe."""
+    for match in re.finditer(r"\|", command):
+        if _tokens_run_shell(command[match.end():].split()):
+            return True
+    return False
+
+
+def _shell_process_substitution(command: str) -> bool:
+    """`bash <(curl ...)`. The shell is the command word immediately before `<(`. """
+    if "<(" not in command:
+        return False
+    tokens = command.split("<(", 1)[0].split()
+    i = len(tokens) - 1
+    # `bash -lc <(...)` — the flags belong to the shell, not a different program.
+    while i >= 0 and tokens[i].startswith("-"):
+        i -= 1
+    if i < 0:
+        return False
+    return _shell_basename(tokens[i]) in _SHELL_NAMES
+
+
+def _rm_target_is_root(target: str) -> bool:
+    path = target.strip("'\"")
+    if path in ("/", "/*"):
+        return True
+    return path == "/home" or path.startswith("/home/")
+
+
+def _rm_root(command: str) -> bool:
+    """Recursive force-delete of `/`, `/home`, or `/*`, including split flags."""
+    for match in re.finditer(r"\brm\b", command, re.IGNORECASE):
+        tokens = command[match.end():].split()
+        recursive = force = False
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            # `--` ends options. The next token is the path.
+            if tok == "--":
+                i += 1
+                break
+            if tok == "--no-preserve-root":
+                i += 1
+                continue
+            flag = _RM_SHORT_FLAG.match(tok)
+            if flag:
+                letters = tok[1:].lower()
+                recursive = recursive or ("r" in letters)
+                force = force or ("f" in letters)
+                i += 1
+                continue
+            break
+        if recursive and force and i < len(tokens) and _rm_target_is_root(tokens[i]):
+            return True
+    return False
 
 
 def _platform_block_reason(command: str) -> Optional[str]:
     """Why this command can compromise the host, or None."""
-    if _PIPE_TO_SHELL.search(command):
+    if _pipe_to_shell(command) or _shell_process_substitution(command):
         return "Pipe into a shell"
     if _REVERSE_SHELL.search(command):
         return "Reverse shell"
-    if _RM_ROOT.search(command):
+    if _rm_root(command):
         return "Recursive deletion of the root filesystem"
     return None
 
@@ -518,6 +597,35 @@ def ask_mode_permits(user_id: Optional[str], command: str) -> bool:
     if not org_id:
         return False
     return read_only_allow_covers(org_id, command)
+
+
+def ask_mode_overlap_note(user_id: Optional[str], command: str) -> str:
+    """Deny rule that also matches an allow rule, or empty when there is no overlap."""
+    if not user_id:
+        return ""
+    try:
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id)
+    except Exception:
+        logger.debug("ask-mode overlap lookup failed", exc_info=True)
+        return ""
+    if not org_id:
+        return ""
+    verdict = evaluate_compound_command(org_id, command)
+    if not verdict.overlapped_allow:
+        return ""
+    deny = (verdict.rule_description or "organization policy")[:200].strip()
+    # The sentence adds its own period. A period already in the description would double.
+    if deny.endswith("."):
+        deny = deny[:-1].rstrip()
+    if not deny:
+        deny = "organization policy"
+    allow = verdict.overlapped_allow[:120]
+    return (
+        f"Deny rule '{deny}' matches."
+        f" It also matches allow rule '{allow}'."
+        " The deny rule wins."
+    )
 
 
 _PATTERN_MAX_LEN = 500
