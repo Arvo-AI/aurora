@@ -1,6 +1,8 @@
 """Ask-mode Azure refresh must not overwrite the agent service principal."""
 
+import sys
 import time
+import types
 from types import SimpleNamespace
 
 
@@ -40,7 +42,17 @@ def _patch_azure_refresh(monkeypatch, stored, minted_client_ids):
             assert scope == "https://management.azure.com/.default"
             return SimpleNamespace(token=_NEW_ACCESS_TOKEN, expires_on=1_900_000_000)
 
-    monkeypatch.setattr("azure.identity.ClientSecretCredential", _Credential)
+    # Unit tests do not install azure-identity. Register a stub so the import
+    # inside generate_azure_access_token resolves to this credential.
+    identity = types.ModuleType("azure.identity")
+    identity.ClientSecretCredential = _Credential
+    azure = sys.modules.get("azure")
+    if azure is None:
+        azure = types.ModuleType("azure")
+        azure.__path__ = []
+        monkeypatch.setitem(sys.modules, "azure", azure)
+    monkeypatch.setattr(azure, "identity", identity, raising=False)
+    monkeypatch.setitem(sys.modules, "azure.identity", identity)
     monkeypatch.setattr(
         "utils.auth.token_management.get_token_data",
         lambda user_id, provider: stored,
