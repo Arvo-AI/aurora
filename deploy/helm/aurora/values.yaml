@@ -58,6 +58,7 @@ services:
       # digest wins: to move to another tag, set it AND clear digest to "".
       tag: "RELEASE.2026-09-16T00-00-00Z"
       # Multi-arch index (linux/amd64 + linux/arm64) for the tag above.
+      # Keep this digest equal to aurora.minioPin in templates/_helpers.tpl.
       digest: "sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46"
     # Bucket-creation hook. aws-cli, not minio/mc — that was deleted too.
     # image.images.minioInit replaces this string when any of its fields are set.

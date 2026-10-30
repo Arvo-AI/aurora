@@ -23,6 +23,18 @@ app.kubernetes.io/part-of: aurora
 {{- end }}
 
 {{/*
+One MinIO pin for the legacy full path and for image.images.minio.
+values.yaml repeats it because reuse-values persists values, not templates.
+*/}}
+{{- define "aurora.minioPin" -}}
+{{- dict "repository" "pgsty/silo" "registry" "docker.io" "fullRepository" "docker.io/pgsty/silo" "tag" "RELEASE.2026-09-16T00-00-00Z" "digest" "sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46" | toJson -}}
+{{- end -}}
+
+{{- define "aurora.awsCliPin" -}}
+{{- dict "repository" "amazon/aws-cli" "tag" "2.34.6" | toJson -}}
+{{- end -}}
+
+{{/*
 Image reference. "image" is server, frontend, postgres, redis, vault, searxng,
 memgraph, minio, or minioInit. Aurora images inherit image.registry and
 image.tag; other images stay public until image.images.<name>.registry is set.
@@ -32,6 +44,8 @@ pin cannot replace a private build. frontendImage fills empty frontend fields.
 {{- define "aurora.image" -}}
 {{- $name := .image -}}
 {{- $ctx := .global -}}
+{{- $minioPin := include "aurora.minioPin" . | fromJson -}}
+{{- $awsPin := include "aurora.awsCliPin" . | fromJson -}}
 {{- $img := $ctx.Values.image | default dict -}}
 {{- $over := dict -}}
 {{- if $img.images -}}
@@ -42,7 +56,7 @@ pin cannot replace a private build. frontendImage fills empty frontend fields.
 {{- include "aurora.minioImage" $ctx -}}
 {{- /* initImage is already a full ref; a structured override replaces it below. */ -}}
 {{- else if and (eq $name "minioInit") (not $over.registry) (not $over.repository) (not $over.tag) (not $over.digest) -}}
-{{- (($ctx.Values.services).minio).initImage | default "amazon/aws-cli:2.34.6" -}}
+{{- (($ctx.Values.services).minio).initImage | default (printf "%s:%s" $awsPin.repository $awsPin.tag) -}}
 {{- else -}}
 {{- $defaults := dict
       "server" (dict "repository" "aurora-server" "aurora" true)
@@ -52,8 +66,8 @@ pin cannot replace a private build. frontendImage fills empty frontend fields.
       "vault" (dict "repository" "hashicorp/vault" "tag" "1.15")
       "searxng" (dict "repository" "searxng/searxng" "tag" "2025.5.8-7ca24eee4")
       "memgraph" (dict "repository" "memgraph/memgraph-mage" "tag" "3.8.1")
-      "minio" (dict "repository" "pgsty/silo" "registry" "docker.io" "tag" "RELEASE.2026-09-16T00-00-00Z" "digest" "sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46")
-      "minioInit" (dict "repository" "amazon/aws-cli" "tag" "2.34.6")
+      "minio" (dict "repository" $minioPin.repository "registry" $minioPin.registry "tag" $minioPin.tag "digest" $minioPin.digest)
+      "minioInit" (dict "repository" $awsPin.repository "tag" $awsPin.tag)
 -}}
 {{- $builtin := index $defaults $name -}}
 {{- if not $builtin -}}
@@ -140,13 +154,13 @@ imagePullSecrets:
 
 {{/*
 MinIO image when image.images.minio is unset. Digest wins over tag.
-Inline defaults are load-bearing: `helm upgrade --reuse-values` skips new chart
-defaults, so upgrades from <=1.5.1 arrive with services.minio.image unset.
+The pin lives in the template: reuse-values skips new values.yaml defaults.
 */}}
 {{- define "aurora.minioImage" -}}
-{{- $defaultRepo := "docker.io/pgsty/silo" -}}
-{{- $defaultTag := "RELEASE.2026-09-16T00-00-00Z" -}}
-{{- $defaultDigest := "sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46" -}}
+{{- $pin := include "aurora.minioPin" . | fromJson -}}
+{{- $defaultRepo := $pin.fullRepository -}}
+{{- $defaultTag := $pin.tag -}}
+{{- $defaultDigest := $pin.digest -}}
 {{- $img := .Values.services.minio.image | default dict -}}
 {{- $repo := $img.repository | default $defaultRepo -}}
 {{- $digest := $img.digest | default "" -}}

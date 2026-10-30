@@ -301,10 +301,10 @@ deploy-build:
 	@echo "Extracting image registry and build args from values.generated.yaml..."
 	@set -e; \
 	IMAGE_REGISTRY=$$(yq '.image.registry' deploy/helm/aurora/values.generated.yaml); \
-	SERVER_REGISTRY=$$(yq '.image.images.server.registry // ""' deploy/helm/aurora/values.generated.yaml); \
-	FRONTEND_REGISTRY=$$(yq '.image.images.frontend.registry // .frontendImage.registry // ""' deploy/helm/aurora/values.generated.yaml); \
-	SERVER_REPO=$$(yq '.image.images.server.repository // "aurora-server"' deploy/helm/aurora/values.generated.yaml); \
-	FRONTEND_REPO=$$(yq '.image.images.frontend.repository // .frontendImage.repository // "aurora-frontend"' deploy/helm/aurora/values.generated.yaml); \
+	SERVER_REGISTRY=$$(yq '([.image.images.server.registry, .image.registry] | map(select(. != null and . != "")) | .[0]) // ""' deploy/helm/aurora/values.generated.yaml); \
+	FRONTEND_REGISTRY=$$(yq '([.image.images.frontend.registry, .frontendImage.registry] | map(select(. != null and . != "")) | .[0]) // ""' deploy/helm/aurora/values.generated.yaml); \
+	SERVER_REPO=$$(yq '([.image.images.server.repository, "aurora-server"] | map(select(. != null and . != "")) | .[0]) // "aurora-server"' deploy/helm/aurora/values.generated.yaml); \
+	FRONTEND_REPO=$$(yq '([.image.images.frontend.repository, .frontendImage.repository, "aurora-frontend"] | map(select(. != null and . != "")) | .[0]) // "aurora-frontend"' deploy/helm/aurora/values.generated.yaml); \
 	if [ -z "$$SERVER_REGISTRY" ] || [ "$$SERVER_REGISTRY" = "null" ]; then SERVER_REGISTRY="$$IMAGE_REGISTRY"; fi; \
 	if [ -z "$$FRONTEND_REGISTRY" ] || [ "$$FRONTEND_REGISTRY" = "null" ]; then FRONTEND_REGISTRY="$$IMAGE_REGISTRY"; fi; \
 	if [ -z "$$SERVER_REPO" ] || [ "$$SERVER_REPO" = "null" ]; then SERVER_REPO="aurora-server"; fi; \
@@ -370,6 +370,7 @@ deploy-build:
 	yq -i "del(.image.digests.server)" deploy/helm/aurora/values.generated.yaml; \
 	if [ "$$BUILD_FRONTEND" = "true" ]; then \
 		yq -i ".image.images.frontend.tag = \"$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml; \
+		yq -i "del(.frontendImage.digest)" deploy/helm/aurora/values.generated.yaml; \
 		yq -i "del(.image.images.frontend.digest)" deploy/helm/aurora/values.generated.yaml; \
 		yq -i "del(.image.digests.frontend)" deploy/helm/aurora/values.generated.yaml; \
 	fi
