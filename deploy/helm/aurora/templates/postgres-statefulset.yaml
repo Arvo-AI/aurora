@@ -49,10 +49,11 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- include "aurora.podSecurityContext" (dict "service" "postgres" "global" $ "defaults" (dict "runAsUser" 70 "runAsGroup" 70 "fsGroup" 70)) | nindent 8 }}
+      {{- include "aurora.imagePullSecrets" (dict "image" "postgres" "global" $) | nindent 6 }}
       {{- include "aurora.scheduling" (dict "service" "postgres" "global" $) | nindent 6 }}
       containers:
         - name: postgres
-          image: postgres:15-alpine
+          image: {{ include "aurora.image" (dict "image" "postgres" "global" $) | quote }}
           imagePullPolicy: IfNotPresent
           {{- /* Command-line settings override postgresql.conf; the image entrypoint
                  prepends "postgres" when the first arg starts with "-". */}}

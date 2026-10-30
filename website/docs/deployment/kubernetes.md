@@ -20,7 +20,7 @@ Deploy Aurora on any Kubernetes cluster using Helm.
 - **GCP GKE / Azure AKS:** Create a cluster with default settings
 
 :::note Third-party images
-Aurora deploys several third-party images from public registries. Your nodes must be able to pull: `postgres:15-alpine`, `redis:7-alpine`, `hashicorp/vault:1.15`, `searxng/searxng:*`, `memgraph/memgraph-mage:3.8.1`. With `services.minio.enabled: true` you also need `pgsty/silo` and `amazon/aws-cli` (bucket-creation hook). For air-gapped clusters, mirror these to a private registry and review enabled services in your `values.yaml`.
+Aurora deploys several third-party images from public registries. Your nodes must be able to pull: `postgres:15-alpine`, `redis:7-alpine`, `hashicorp/vault:1.15`, `searxng/searxng:*`, `memgraph/memgraph-mage:3.8.1`. With `services.minio.enabled: true` you also need `pgsty/silo` and `amazon/aws-cli` (bucket-creation hook). For a private mirror, set `image.images.<name>.registry` on the images you moved (`postgres`, `redis`, `vault`, `searxng`, `memgraph`, `minio`, `minioInit`). Aurora's own images use `image.registry`, or `image.images.server` / `image.images.frontend` when those two live in different registries.
 :::
 
 ### Required tools
@@ -176,8 +176,15 @@ Set at minimum:
 
 ```yaml
 image:
-  registry: "ghcr.io/arvo-ai"   # prebuilt public images (no auth needed)
-  tag: "latest"                  # or "edge" for latest main, or "sha-<7char>"
+  registry: "ghcr.io/arvo-ai"   # Aurora server + frontend. Not applied to postgres, redis, …
+  tag: ""                        # empty = chart appVersion; or "edge", or "sha-<7char>"
+  # images:
+  #   frontend:
+  #     registry: "registry.example.com/apps"   # this image only
+  #   postgres:
+  #     registry: "mirror.example.com"          # library images stay public until set
+  # pullSecrets:
+  #   - name: regcred
 
 config:
   NEXT_PUBLIC_BACKEND_URL: "https://api.yourdomain.com"
@@ -469,7 +476,8 @@ helm upgrade aurora-oss aurora/aurora-oss \
 ```bash
 # Reproducible upgrade, pinned by immutable digest. Each release attaches a
 # values.images-<X.Y.Z>.yaml (download from the GitHub Release) that pins the
-# exact image digests — deploys the same binaries every time.
+# exact image digests and does not set image.registry, so it merges with the
+# registry already in the release (or in values.generated.yaml).
 helm upgrade aurora-oss aurora/aurora-oss \
   --namespace aurora-oss --version <X.Y.Z> --reuse-values \
   -f values.images-<X.Y.Z>.yaml
@@ -502,15 +510,17 @@ helm upgrade aurora-oss aurora/aurora-oss \
   --set-string image.tag=
 ```
 
-Aurora-managed images should then read `:<X.Y.Z>` (or `@sha256:…` if digest-pinned); a custom `frontendImage` override keeps its own tag.
+Stock Aurora images should then read `:<X.Y.Z>` (or `@sha256:…` if digest-pinned). An `image.images.frontend` entry with its own tag or repository keeps that image; so does a legacy `frontendImage` repository.
 :::
 
 ## Building Custom Images
 
 If you need images in a private registry instead of GHCR:
 
+`make deploy-build` pushes the server image to `image.images.server.registry` (or `image.registry`) and the frontend image to `image.images.frontend.registry` when that image is still `aurora-frontend`. A frontend `repository` other than `aurora-frontend` is left as configured. It writes the new tag onto `image.images.server.tag` and `image.images.frontend.tag`, which beats a digest pin in the same values file.
+
 ```bash
-# Automated (reads registry from values.generated.yaml, builds multi-arch, pushes):
+# Automated (reads registries from values.generated.yaml, builds multi-arch, pushes):
 make deploy-build
 
 # Manual:
@@ -710,7 +720,7 @@ For production, use [KMS auto-unseal](./vault-kms-setup).
 kubectl get events -n aurora-oss --sort-by='.lastTimestamp'
 ```
 
-GHCR prebuilt images are public (no auth needed). If using a private registry, configure `image.pullSecrets` in values.
+GHCR prebuilt images are public (no auth needed). For a private registry, set `image.pullSecrets`. A frontend or mirrored dependency in a second registry can set `image.images.<name>.pullSecrets` instead; that list replaces the global one for that image only.
 
 ### EKS: nip.io URLs not working
 

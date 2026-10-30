@@ -26,26 +26,11 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- include "aurora.podSecurityContext" (dict "service" "frontend" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
-      {{- if or .Values.image.pullSecrets (and .Values.frontendImage .Values.frontendImage.pullSecrets) }}
-      imagePullSecrets:
-        {{- if and .Values.frontendImage .Values.frontendImage.pullSecrets }}
-        {{- toYaml .Values.frontendImage.pullSecrets | nindent 8 }}
-        {{- else }}
-        {{- toYaml .Values.image.pullSecrets | nindent 8 }}
-        {{- end }}
-      {{- end }}
+      {{- include "aurora.imagePullSecrets" (dict "image" "frontend" "global" $) | nindent 6 }}
       {{- include "aurora.scheduling" (dict "service" "frontend" "global" $) | nindent 6 }}
       containers:
         - name: aurora-frontend
-          {{- /* Custom frontend image is keyed off repository (the identifying field), so a
-                 custom registry isn't silently dropped when tag is left empty. Registry falls
-                 back to the global image.registry, and tag to the chart appVersion, matching
-                 the default image behaviour. */}}
-          {{- if and .Values.frontendImage .Values.frontendImage.repository }}
-          image: "{{ .Values.frontendImage.registry | default .Values.image.registry }}/{{ .Values.frontendImage.repository }}:{{ .Values.frontendImage.tag | default .Chart.AppVersion }}"
-          {{- else }}
-          image: "{{ include "aurora.image" (dict "image" "frontend" "global" $) }}"
-          {{- end }}
+          image: {{ include "aurora.image" (dict "image" "frontend" "global" $) | quote }}
           imagePullPolicy: IfNotPresent
           securityContext:
             {{- include "aurora.containerSecurityContext" (dict "service" "frontend" "global" $ "defaults" (dict)) | nindent 12 }}
