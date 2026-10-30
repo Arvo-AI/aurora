@@ -217,26 +217,9 @@ export async function DELETE(
       return NextResponse.json(data)
     }
 
-    // Special handling for Splunk
+    // The account query param is forwarded with the request. Do not append it here.
     if (provider === 'splunk') {
-      const account = request.nextUrl.searchParams.get('account')
-      const accountQs = account ? `?account=${encodeURIComponent(account)}` : ''
-      const response = await fetch(`${API_BASE_URL}/splunk/disconnect${accountQs}`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Splunk:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Splunk' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
+      return forwardRequest(request, 'DELETE', '/splunk/disconnect', 'splunk-disconnect')
     }
 
     // Special handling for Dynatrace

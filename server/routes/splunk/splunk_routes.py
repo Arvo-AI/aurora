@@ -149,7 +149,8 @@ def _status_summary(user_id: str, account: Dict[str, Any]) -> Dict[str, Any]:
     client = SplunkClient(account["base_url"], account["api_token"])
     try:
         server_info = client.get_server_info()
-    except SplunkAPIError:
+    # A non-JSON body is not a SplunkAPIError, but it is still this instance's failure.
+    except (SplunkAPIError, ValueError):
         # account_id sits on the token dict, so it cannot be logged.
         logger.exception("[SPLUNK] Status check failed")
         summary["valid"] = False

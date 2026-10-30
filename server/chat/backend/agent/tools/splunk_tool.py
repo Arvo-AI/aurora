@@ -157,7 +157,15 @@ def _by_account(targets: list, run) -> Dict[str, Any]:
     from concurrent.futures import ThreadPoolExecutor
 
     def one(account):
-        item = run(account)
+        try:
+            item = run(account)
+        # One instance's failure must not drop the results from the others.
+        except Exception:
+            logger.exception("[SPLUNK-TOOL] Instance call failed")
+            item = {"error": "Splunk request failed"}
+        # A non-dict would fail the whole fan-out on the update below.
+        if not isinstance(item, dict):
+            item = {"error": "Splunk request failed"}
         item.update(_account_fields(account))
         return account["account_id"], item
 

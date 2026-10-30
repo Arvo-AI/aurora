@@ -150,7 +150,8 @@ def test_account_allowed_denies_when_the_check_fails(monkeypatch):
 
 
 def test_account_allowed_stays_open_without_the_access_module(monkeypatch):
-    monkeypatch.delitem(sys.modules, "utils.auth.connector_access", raising=False)
+    # None keeps this on the ImportError branch after the access module exists.
+    monkeypatch.setitem(sys.modules, "utils.auth.connector_access", None)
     assert account_allowed("user-1", "a.example:8089") is True
 
 
@@ -355,6 +356,71 @@ def test_one_instance_keeps_the_full_output_budget(monkeypatch):
     tool.search_splunk("index=main", user_id=USER)
 
     assert seen == [tool.MAX_OUTPUT_SIZE]
+
+
+def test_fanout_keeps_the_other_instance_when_one_raises():
+    import chat.backend.agent.tools.splunk_tool as tool
+
+    targets = [
+        {"account_id": "a.example:8089", "base_url": "https://a.example:8089", "server_name": "a"},
+        {"account_id": "b.example:8089", "base_url": "https://b.example:8089", "server_name": "b"},
+    ]
+
+    def run(account):
+        if account["account_id"].startswith("a."):
+            raise ValueError("not json")
+        return {"success": True, "results": []}
+
+    out = tool._by_account(targets, run)
+
+    assert out["b.example:8089"]["success"] is True
+    assert out["a.example:8089"]["error"] == "Splunk request failed"
+
+
+def test_search_returns_503_when_the_credential_read_fails(monkeypatch):
+    flask = pytest.importorskip("flask")
+    from routes.splunk import search_routes
+
+    def load(user_id, *, raise_on_error=False):
+        if raise_on_error:
+            raise RuntimeError("vault down")
+        return []
+
+    monkeypatch.setattr(search_routes, "list_splunk_accounts", load)
+    app = flask.Flask(__name__)
+    with app.app_context():
+        creds, error = search_routes._get_splunk_client_for_user(USER)
+    assert creds is None
+    _response, status = error
+    assert status == 503
+
+
+def test_search_stays_not_connected_when_nothing_is_stored(monkeypatch):
+    flask = pytest.importorskip("flask")
+    from routes.splunk import search_routes
+
+    monkeypatch.setattr(search_routes, "list_splunk_accounts", lambda *args, **kwargs: [])
+    app = flask.Flask(__name__)
+    with app.app_context():
+        creds, error = search_routes._get_splunk_client_for_user(USER)
+    assert creds is None
+    _response, status = error
+    assert status == 400
+
+
+def test_status_summary_isolates_a_non_json_body(monkeypatch):
+    routes = _load_splunk_routes(monkeypatch)
+    monkeypatch.setattr(routes, "account_allowed", lambda user_id, account_id: True)
+    monkeypatch.setattr(routes.SplunkClient, "get_server_info", lambda self: (_ for _ in ()).throw(ValueError("not json")))
+
+    summary = routes._status_summary(USER, {
+        "account_id": "a.example:8089",
+        "base_url": "https://a.example:8089",
+        "api_token": "t",
+    })
+
+    assert summary["valid"] is False
+    assert summary["accountId"] == "a.example:8089"
 
 
 def test_sync_writes_one_connection_per_instance_and_retires_the_rest(monkeypatch):

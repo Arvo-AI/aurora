@@ -52,10 +52,11 @@ def _selector_from_request() -> Optional[str]:
 def _get_splunk_client_for_user(user_id: str):
     """Credentials for one granted instance, or a Flask error response."""
     try:
-        accounts = list_splunk_accounts(user_id)
+        accounts = list_splunk_accounts(user_id, raise_on_error=True)
+    # A Vault error is retryable. An empty list is "not connected".
     except Exception:
         logger.exception("[SPLUNK-SEARCH] Failed to get credentials for user %s", hash_for_log(user_id))
-        return None, (jsonify({"error": _NOT_CONNECTED}), 400)
+        return None, (jsonify({"error": "Failed to load Splunk credentials"}), 503)
     if not accounts:
         return None, (jsonify({"error": _NOT_CONNECTED}), 400)
     try:

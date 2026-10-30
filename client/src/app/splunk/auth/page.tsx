@@ -31,9 +31,6 @@ export default function SplunkAuthPage() {
           const parsedStatus = JSON.parse(cachedStatus);
           setStatus(parsedStatus);
           setIsCheckingStatus(false);
-          if (parsedStatus?.connected) {
-            setBaseUrl(parsedStatus.baseUrl ?? "");
-          }
         }
       }
       // Always verify with API in background (handles expired tokens)
@@ -63,9 +60,6 @@ export default function SplunkAuthPage() {
           if (stateChanged) {
             window.dispatchEvent(new CustomEvent("providerStateChanged"));
           }
-        }
-        if (result.connected) {
-          setBaseUrl(result.baseUrl ?? "");
         }
       }
     } catch (err) {
