@@ -136,11 +136,12 @@ class TestCallback:
         app, mod, _ = signin_app
         client = app.test_client()
         _, state, nonce = _start(client)
-        db_pool, _ = _mock_db([("org-1", "sam@acme.io")])
+        db_pool, _ = _mock_db([("org-1", "sam@acme.io", "viewer")])
         with _oidc(mod, nonce), \
              patch.object(mod, "find_user_by_slack_identity", return_value="user-1") as find, \
              patch.object(mod, "db_pool", db_pool), \
              patch("utils.auth.saml_sso.org_requires_sso", return_value=False), \
+             patch.object(mod, "ensure_org_role", return_value=True), \
              patch.object(mod, "mint_handoff", return_value="HANDOFF"):
             resp = client.get(f"/slack/callback?code=c&state={state}")
         assert "/sign-in?handoff=HANDOFF&via=slack_signin" in resp.location
@@ -150,7 +151,7 @@ class TestCallback:
         app, mod, _ = signin_app
         client = app.test_client()
         _, state, nonce = _start(client)
-        db_pool, _ = _mock_db([("org-1", "sam@acme.io")])
+        db_pool, _ = _mock_db([("org-1", "sam@acme.io", "viewer")])
         with _oidc(mod, nonce), \
              patch.object(mod, "find_user_by_slack_identity", return_value="user-1"), \
              patch.object(mod, "db_pool", db_pool), \
@@ -158,6 +159,18 @@ class TestCallback:
              patch.object(mod, "mint_handoff") as mint:
             resp = client.get(f"/slack/callback?code=c&state={state}")
         assert resp.location.endswith("/sign-in?error=slack_sso_required")
+        mint.assert_not_called()
+
+    def test_account_without_a_role_gets_no_handoff_when_repair_fails(self, signin_app):
+        app, mod, _ = signin_app
+        db_pool, _ = _mock_db([("org-1", "sam@acme.io", "viewer")])
+        with app.test_request_context(), \
+             patch.object(mod, "db_pool", db_pool), \
+             patch("utils.auth.saml_sso.org_requires_sso", return_value=False), \
+             patch.object(mod, "ensure_org_role", return_value=False), \
+             patch.object(mod, "mint_handoff") as mint:
+            resp = mod.handoff_redirect("user-1", via="slack_signin")
+        assert resp.location.endswith("/sign-in?error=slack_internal")
         mint.assert_not_called()
 
     def test_callback_from_another_browser_spends_nothing(self, signin_app):
@@ -282,3 +295,27 @@ class TestJoinWorkspaceOrg:
             resp = mod.join_workspace_org(_IDENTITY)
         assert resp.location.endswith("error=slack_identity_mismatch")
         assert _writes(cur) == []
+
+
+class TestEnsureOrgRole:
+    @contextmanager
+    def _enforcer(self, roles):
+        enforcer = MagicMock()
+        enforcer.get_roles_for_user_in_domain.return_value = roles
+        with patch("utils.auth.enforcer.get_enforcer", return_value=enforcer), \
+             patch("utils.auth.enforcer.reload_if_stale"), \
+             patch("utils.auth.enforcer.assign_role_to_user") as assign:
+            yield assign
+
+    def test_missing_role_is_assigned_from_the_user_row(self, signin_app):
+        _, mod, _ = signin_app
+        with self._enforcer([]) as assign:
+            assert mod.ensure_org_role("user-1", "org-1", "viewer") is True
+        assert assign.call_args.args == ("user-1", "viewer", "org-1")
+
+    def test_existing_role_is_never_replaced(self, signin_app):
+        # An admin may have promoted the member in the app since they joined.
+        _, mod, _ = signin_app
+        with self._enforcer(["editor"]) as assign:
+            assert mod.ensure_org_role("user-1", "org-1", "viewer") is True
+        assign.assert_not_called()

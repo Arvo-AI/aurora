@@ -145,11 +145,12 @@ def slack_signup_start():
     """Unauthenticated entry point for the website's "Add to Slack" CTA."""
     if not _signup_ready():
         return _render_error(_ERROR_NOT_AVAILABLE)
-    hop = start_on_callback_host()
+    attribution = _attribution_from(request.args)
+    hop = start_on_callback_host("/slack/signup/start", attribution)
     if hop is not None:
         return hop
     try:
-        state, nonce = _sign_signup_state(_attribution_from(request.args))
+        state, nonce = _sign_signup_state(attribution)
     except RuntimeError:
         logger.exception("[SLACK-SIGNUP] failed to sign signup state")
         return _render_error(_ERROR_INTERNAL)
@@ -302,6 +303,7 @@ def handle_signup_callback(code: str | None, state_payload: dict, slack_error: s
 def _signup_callback(code: str | None, state_payload: dict, slack_error: str | None) -> flask.Response:
     from routes.slack.slack_events_helpers import get_user_id_from_slack_team
     from routes.slack.slack_routes import complete_slack_connection
+    from utils.auth.stateless_auth import get_org_id_for_user
     from connectors.slack_connector.oauth import exchange_code_for_token
 
     attr = state_payload.get("attr")
@@ -333,11 +335,16 @@ def _signup_callback(code: str | None, state_payload: dict, slack_error: str | N
     # Invariant #4: a returning installer is recognized by the Slack
     # identity linked to their Aurora account.
     user_id = find_user_by_slack_identity(identity["team_id"], identity["slack_user_id"])
-    if user_id and get_user_id_from_slack_team(identity["team_id"]):
-        # Already set up: re-running the connection would post a second
-        # welcome. Just sign them in.
-        logger.info("[SLACK-SIGNUP] returning installer signed in user=%s", user_id)
-        return _with_attribution(handoff_redirect(user_id, via="slack", slack_auth="already"), attribution)
+    if user_id:
+        owner = get_user_id_from_slack_team(identity["team_id"])
+        if owner and get_org_id_for_user(owner) != get_org_id_for_user(user_id):
+            # Invariant #5: the workspace now belongs to another org; sign
+            # them in without touching that org's connection.
+            logger.info("[SLACK-SIGNUP] returning installer's workspace is connected elsewhere")
+            return _with_attribution(handoff_redirect(user_id, via="slack", slack_auth="already"), attribution)
+        # Otherwise fall through and store the token Slack just issued: after
+        # an uninstall/reinstall the stored one is revoked. Reconnects keep
+        # the saved channel and skip the first-install welcome.
 
     created = False
     if user_id is None:
@@ -358,8 +365,7 @@ def _signup_callback(code: str | None, state_payload: dict, slack_error: str | N
 
     # A new account still gets logged in if Slack setup fails, so the user
     # lands in the app (where the onboarding page can retry) instead of a
-    # dead end. A returning installer whose workspace was disconnected gets
-    # reconnected here.
+    # dead end.
     connect_error = complete_slack_connection(user_id, token_data)
     if connect_error:
         logger.warning("[SLACK-SIGNUP] connection setup failed user=%s error=%s", user_id, connect_error)

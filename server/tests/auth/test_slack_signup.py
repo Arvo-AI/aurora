@@ -96,13 +96,14 @@ def _start_state(client, query=""):
 
 
 @contextmanager
-def _slack(mod, *, returning_user=None, team_owner=None, joined=None, users_info=None, db_rows=(), sso=False):
+def _slack(mod, *, returning_user=None, team_owner=None, joined=None, users_info=None, db_rows=(), sso=False,
+           org_of=None):
     """``joined`` is what ``join_workspace_org`` returns: None when the
     workspace is not connected to any org yet."""
     db_pool, cur = _mock_db(db_rows)
     signin = sys.modules["routes.slack.slack_signin"]
-    # handoff_redirect reads the user's org + email for the SSO check.
-    handoff_db, _ = _mock_db([("org-1", "dana@acme.io")])
+    # handoff_redirect reads the user's org, email and role.
+    handoff_db, _ = _mock_db([("org-1", "dana@acme.io", "admin")])
     with patch("connectors.slack_connector.oauth.exchange_code_for_token", return_value=_TOKEN_DATA), \
          patch.object(mod.requests, "get", return_value=users_info or _users_info()), \
          patch.object(mod, "find_user_by_slack_identity", return_value=returning_user), \
@@ -113,6 +114,9 @@ def _slack(mod, *, returning_user=None, team_owner=None, joined=None, users_info
          patch.object(signin, "db_pool", handoff_db), \
          patch.object(signin, "mint_handoff", return_value="HANDOFF") as mint, \
          patch("utils.auth.saml_sso.org_requires_sso", return_value=sso), \
+         patch.object(signin, "ensure_org_role", return_value=True), \
+         patch("utils.auth.stateless_auth.get_org_id_for_user",
+               side_effect=lambda uid: (org_of or {}).get(uid, "org-1")), \
          patch("utils.auth.enforcer.assign_role_to_user", create=True), \
          patch("utils.auth.command_policy.seed_default_command_policy", create=True), \
          patch("utils.auth.tool_registry.seed_org_tool_permissions", create=True), \
@@ -184,15 +188,27 @@ class TestSignupCallback:
         # Linked to the Slack identity, so "Sign in with Slack" finds it later.
         assert insert.args[1][-2:] == ("T1", "U1")
 
-    def test_returning_installer_logs_in_without_reconnecting(self, slack_app):
+    def test_returning_installer_stores_the_new_token(self, slack_app):
+        # After an uninstall/reinstall the stored token is revoked; keep the new one.
         app, mod, _ = slack_app
         client = app.test_client()
         state = _start_state(client)
         with _slack(mod, returning_user="user-old", team_owner="user-old") as (connect, cur, join):
             resp = client.get(f"/slack/callback?code=c&state={state}")
-        assert "/sign-in?handoff=HANDOFF&via=slack&slack_auth=already" in resp.location
-        connect.assert_not_called()
+        assert "/sign-in?handoff=HANDOFF&via=slack&slack_auth=success" in resp.location
+        assert connect.call_args.args == ("user-old", _TOKEN_DATA)
         join.assert_not_called()
+        cur.execute.assert_not_called()
+
+    def test_returning_installer_never_takes_over_another_orgs_workspace(self, slack_app):
+        app, mod, _ = slack_app
+        client = app.test_client()
+        state = _start_state(client)
+        with _slack(mod, returning_user="user-old", team_owner="someone-else",
+                    org_of={"user-old": "org-1", "someone-else": "org-2"}) as (connect, cur, _join):
+            resp = client.get(f"/slack/callback?code=c&state={state}")
+        assert "slack_auth=already" in resp.location
+        connect.assert_not_called()
         cur.execute.assert_not_called()
 
     def test_returning_installer_with_disconnected_workspace_is_reconnected(self, slack_app):

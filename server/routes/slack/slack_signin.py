@@ -104,18 +104,20 @@ def sign_in_error(code: str) -> flask.Response:
     return flask.redirect(f"{FRONTEND_URL}/sign-in?error={code}", code=302)
 
 
-def start_on_callback_host() -> flask.Response | None:
+def start_on_callback_host(path: str, params: dict | None = None) -> flask.Response | None:
     """Redirect a start request to the host Slack will call back.
 
     The browser-binding cookie only comes back to the host that set it. In
     local dev the button points at localhost while Slack returns to the
     tunnel, so hop once (``hop=1`` stops a loop if a proxy rewrites Host).
+    The host is our own configured URL and only ``params`` the caller has
+    already allow-listed travel with it.
     """
     callback = urlparse(external_backend_url())
     if not callback.netloc or request.host == callback.netloc or request.args.get("hop"):
         return None
-    args = {**request.args.to_dict(), "hop": "1"}
-    return flask.redirect(f"{callback.scheme}://{callback.netloc}{request.path}?{urlencode(args)}", code=302)
+    query = urlencode({**(params or {}), "hop": "1"})
+    return flask.redirect(f"{external_backend_url()}{path}?{query}", code=302)
 
 
 def bind_to_browser(response: flask.Response, cookie: str, nonce: str, max_age: int) -> flask.Response:
@@ -140,7 +142,8 @@ def handoff_redirect(user_id: str, via: str, slack_auth: str | None = None) -> f
     """Log the browser in with a one-time token and send it to the app.
 
     Every Slack path ends here, so this is where an org that requires SSO
-    keeps Slack from becoming a way around it.
+    keeps Slack from becoming a way around it, and where an account whose
+    role assignment failed earlier gets it before it can sign in.
     """
     from utils.auth.saml_sso import org_requires_sso
 
@@ -148,12 +151,15 @@ def handoff_redirect(user_id: str, via: str, slack_auth: str | None = None) -> f
     try:
         with conn as held_conn:
             with held_conn.cursor() as cur:
-                cur.execute("SELECT org_id, email FROM users WHERE id = %s", (user_id,))
+                cur.execute("SELECT org_id, email, role FROM users WHERE id = %s", (user_id,))
                 row = cur.fetchone()
                 if not row:
                     return sign_in_error("slack_internal")
-                if org_requires_sso(cur, row[0], row[1]):
+                org_id, email, role = row
+                if org_requires_sso(cur, org_id, email):
                     return sign_in_error("slack_sso_required")
+                if not ensure_org_role(user_id, org_id, role):
+                    return sign_in_error("slack_internal")
                 token = mint_handoff(cur, user_id)
                 held_conn.commit()
     except Exception:
@@ -163,6 +169,27 @@ def handoff_redirect(user_id: str, via: str, slack_auth: str | None = None) -> f
     if slack_auth:
         params["slack_auth"] = slack_auth
     return flask.redirect(f"{FRONTEND_URL}/sign-in?{urlencode(params)}", code=302)
+
+
+def ensure_org_role(user_id: str, org_id: str | None, role: str | None) -> bool:
+    """Give the user their stored role in the org if they have none yet.
+
+    Signup and join assign the role best-effort after the user row commits;
+    without one, every RBAC route denies the session. Never replaces an
+    existing role, so a promotion made in the app is kept.
+    """
+    if not org_id:
+        return False
+    try:
+        from utils.auth.enforcer import assign_role_to_user, get_enforcer, reload_if_stale
+        reload_if_stale()
+        if get_enforcer().get_roles_for_user_in_domain(user_id, org_id):
+            return True
+        assign_role_to_user(user_id, role or JOINED_ROLE, org_id)
+        return True
+    except Exception:
+        logger.exception("[SLACK] could not give user %s a role in their org", user_id)
+        return False
 
 
 def find_user_by_slack_identity(team_id: str, slack_user_id: str) -> str | None:
@@ -277,7 +304,7 @@ def slack_signin_start():
     """Unauthenticated entry point for the "Continue with Slack" button."""
     if not signin_ready():
         return sign_in_error("slack_unavailable")
-    hop = start_on_callback_host()
+    hop = start_on_callback_host("/slack/signin/start")
     if hop is not None:
         return hop
     nonce = secrets.token_urlsafe(16)

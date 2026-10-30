@@ -157,7 +157,13 @@ def complete_slack_connection(user_id, token_data):
     org_id = get_org_id_for_user(user_id)
     existing_channel_id = None
     if org_id:
-        existing_channel_id = get_org_preference(org_id, 'slack_incidents_channel_id')
+        # Strict: guessing "no saved channel" on a failed read would create a
+        # second incidents channel and orphan the saved one.
+        try:
+            existing_channel_id = get_org_preference(org_id, 'slack_incidents_channel_id', strict=True)
+        except Exception:
+            logging.exception("Failed to read the saved Slack incidents channel")
+            return "Aurora could not read your saved Slack settings. Please retry."
 
     if existing_channel_id:
         channel_result = join_existing_incidents_channel(access_token, existing_channel_id)

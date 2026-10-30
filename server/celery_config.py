@@ -129,6 +129,7 @@ celery_app.conf.update(
         # Someone just clicked "See a demo incident" and is watching the thread.
         "routes.slack.slack_onboarding.run_demo_incident_task": {"queue": "high"},
         "routes.slack.slack_onboarding.publish_home_task": {"queue": "high"},
+        "routes.slack.slack_onboarding.send_welcome_dm_task": {"queue": "high"},
         "routes.teams.teams_channel_metadata.bulk_activate_channels_task": {"queue": "high"},
     },
     # Explicitly include task modules from their new locations
