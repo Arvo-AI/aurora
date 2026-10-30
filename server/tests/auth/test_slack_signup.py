@@ -11,6 +11,9 @@ Pins the security contract:
   email-only match redirects to sign-in; a workspace owned by another org is
   never connected to a second one (the installer joins that org instead).
 - Clicking Cancel on Slack's screen goes back to the website.
+- A callback only counts in the browser that started the install (login
+  CSRF), the Slack email must be confirmed, and SSO-required orgs never get
+  a Slack handoff.
 
 Slack API and DB are mocked — no I/O.
 """
@@ -35,6 +38,9 @@ def slack_app(monkeypatch):
     monkeypatch.setenv("SLACK_CLIENT_ID", "cid")
     monkeypatch.setenv("SLACK_CLIENT_SECRET", "csecret")
     monkeypatch.setenv("FLASK_SECRET_KEY", "test-secret")
+    # Callback host == request host, so start doesn't hop (a local .env may set these).
+    monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "")
+    monkeypatch.setenv("NGROK_URL", "")
 
     import importlib
     from flask import Flask
@@ -76,7 +82,8 @@ _TOKEN_DATA = {
 
 def _users_info(team_id="T1", email="Dana@Acme.io", **user_overrides):
     resp = MagicMock(status_code=200)
-    user = {"id": "U1", "team_id": team_id, "profile": {"email": email, "real_name": "Dana"}}
+    user = {"id": "U1", "team_id": team_id, "is_email_confirmed": True,
+            "profile": {"email": email, "real_name": "Dana"}}
     user.update(user_overrides)
     resp.json.return_value = {"ok": True, "user": user}
     return resp
@@ -89,12 +96,13 @@ def _start_state(client, query=""):
 
 
 @contextmanager
-def _slack(mod, *, returning_user=None, team_owner=None, joined=None, users_info=None, db_rows=()):
+def _slack(mod, *, returning_user=None, team_owner=None, joined=None, users_info=None, db_rows=(), sso=False):
     """``joined`` is what ``join_workspace_org`` returns: None when the
     workspace is not connected to any org yet."""
     db_pool, cur = _mock_db(db_rows)
     signin = sys.modules["routes.slack.slack_signin"]
-    handoff_db, _ = _mock_db([])
+    # handoff_redirect reads the user's org + email for the SSO check.
+    handoff_db, _ = _mock_db([("org-1", "dana@acme.io")])
     with patch("connectors.slack_connector.oauth.exchange_code_for_token", return_value=_TOKEN_DATA), \
          patch.object(mod.requests, "get", return_value=users_info or _users_info()), \
          patch.object(mod, "find_user_by_slack_identity", return_value=returning_user), \
@@ -103,13 +111,15 @@ def _slack(mod, *, returning_user=None, team_owner=None, joined=None, users_info
          patch("routes.slack.slack_routes.complete_slack_connection", return_value=None) as connect, \
          patch.object(mod, "db_pool", db_pool), \
          patch.object(signin, "db_pool", handoff_db), \
-         patch.object(signin, "mint_handoff", return_value="HANDOFF"), \
+         patch.object(signin, "mint_handoff", return_value="HANDOFF") as mint, \
+         patch("utils.auth.saml_sso.org_requires_sso", return_value=sso), \
          patch("utils.auth.enforcer.assign_role_to_user", create=True), \
          patch("utils.auth.command_policy.seed_default_command_policy", create=True), \
          patch("utils.auth.tool_registry.seed_org_tool_permissions", create=True), \
          patch("routes.audit_routes.record_audit_event", create=True), \
          patch("utils.hooks.get_hook", return_value=lambda *a: None):
         yield connect, cur, join
+        _slack.mint = mint
 
 
 class TestGating:
@@ -272,3 +282,40 @@ class TestCancel:
         state = _start_state(client)
         resp = client.get(f"/slack/callback?error=access_denied&state={state}")
         assert resp.location.endswith("/sign-in?error=slack_cancelled")
+
+
+class TestBrowserBinding:
+    def test_callback_from_another_browser_spends_nothing(self, slack_app):
+        app, mod, _ = slack_app
+        state = _start_state(app.test_client())
+        # A different browser: no cookie from the start request.
+        other = app.test_client()
+        with _slack(mod) as (connect, cur, _join), \
+             patch("connectors.slack_connector.oauth.exchange_code_for_token") as exchange:
+            resp = other.get(f"/slack/callback?code=c&state={state}")
+        assert b"no longer valid" in resp.data
+        exchange.assert_not_called()
+        connect.assert_not_called()
+        cur.execute.assert_not_called()
+
+
+class TestEmailAndSso:
+    def test_unconfirmed_slack_email_provisions_nothing(self, slack_app):
+        app, mod, _ = slack_app
+        client = app.test_client()
+        state = _start_state(client)
+        with _slack(mod, users_info=_users_info(is_email_confirmed=False)) as (connect, cur, join):
+            resp = client.get(f"/slack/callback?code=c&state={state}")
+        assert resp.location.endswith("/sign-in?error=slack_email_unconfirmed")
+        connect.assert_not_called()
+        join.assert_not_called()
+        cur.execute.assert_not_called()
+
+    def test_sso_required_org_gets_no_handoff(self, slack_app):
+        app, mod, _ = slack_app
+        client = app.test_client()
+        state = _start_state(client)
+        with _slack(mod, returning_user="user-old", team_owner="user-old", sso=True) as _ctx:
+            resp = client.get(f"/slack/callback?code=c&state={state}")
+        assert resp.location.endswith("/sign-in?error=slack_sso_required")
+        _slack.mint.assert_not_called()

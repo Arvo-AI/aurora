@@ -9,6 +9,11 @@
 Like the "Add to Slack" signup, the callback is the existing ``/slack/callback``
 redirect URL, dispatched by state salt, so the Slack app needs no new config.
 
+Both flows bind their state to the browser that started them: the start route
+sets a nonce cookie, and the callback refuses a state whose nonce the browser
+doesn't hold, before the Slack code is spent. Otherwise a forwarded callback
+link could log someone into the sender's account (login CSRF).
+
 Who gets in:
 
     1. An account already linked to this exact Slack identity (team + user),
@@ -31,7 +36,7 @@ import json
 import logging
 import os
 import secrets
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import bcrypt
 import flask
@@ -45,6 +50,7 @@ from utils.auth import normalize_email
 from utils.auth.handoff import mint_handoff
 from utils.db.connection_pool import db_pool
 from utils.web.limiter_ext import limiter
+from utils.web.public_url import external_backend_url
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +66,9 @@ _OIDC_TOKEN_URL = "https://slack.com/api/openid.connect.token"
 _OIDC_USERINFO_URL = "https://slack.com/api/openid.connect.userInfo"
 
 JOINED_ROLE = "viewer"
+
+SIGNIN_COOKIE = "aurora_slack_signin"
+_CALLBACK_PATH = "/slack/callback"
 
 
 def signin_ready() -> bool:
@@ -95,12 +104,56 @@ def sign_in_error(code: str) -> flask.Response:
     return flask.redirect(f"{FRONTEND_URL}/sign-in?error={code}", code=302)
 
 
+def start_on_callback_host() -> flask.Response | None:
+    """Redirect a start request to the host Slack will call back.
+
+    The browser-binding cookie only comes back to the host that set it. In
+    local dev the button points at localhost while Slack returns to the
+    tunnel, so hop once (``hop=1`` stops a loop if a proxy rewrites Host).
+    """
+    callback = urlparse(external_backend_url())
+    if not callback.netloc or request.host == callback.netloc or request.args.get("hop"):
+        return None
+    args = {**request.args.to_dict(), "hop": "1"}
+    return flask.redirect(f"{callback.scheme}://{callback.netloc}{request.path}?{urlencode(args)}", code=302)
+
+
+def bind_to_browser(response: flask.Response, cookie: str, nonce: str, max_age: int) -> flask.Response:
+    """Remember which browser started this flow; only the callback reads it."""
+    response.set_cookie(
+        cookie, nonce, max_age=max_age, path=_CALLBACK_PATH, httponly=True,
+        secure=external_backend_url().startswith("https://"), samesite="Lax",
+    )
+    return response
+
+
+def started_in_this_browser(cookie: str, nonce: str) -> bool:
+    return secrets.compare_digest(request.cookies.get(cookie, ""), nonce or "")
+
+
+def forget_browser(response: flask.Response, cookie: str) -> flask.Response:
+    response.delete_cookie(cookie, path=_CALLBACK_PATH)
+    return response
+
+
 def handoff_redirect(user_id: str, via: str, slack_auth: str | None = None) -> flask.Response:
-    """Log the browser in with a one-time token and send it to the app."""
+    """Log the browser in with a one-time token and send it to the app.
+
+    Every Slack path ends here, so this is where an org that requires SSO
+    keeps Slack from becoming a way around it.
+    """
+    from utils.auth.saml_sso import org_requires_sso
+
     conn = db_pool.get_admin_connection()
     try:
         with conn as held_conn:
             with held_conn.cursor() as cur:
+                cur.execute("SELECT org_id, email FROM users WHERE id = %s", (user_id,))
+                row = cur.fetchone()
+                if not row:
+                    return sign_in_error("slack_internal")
+                if org_requires_sso(cur, row[0], row[1]):
+                    return sign_in_error("slack_sso_required")
                 token = mint_handoff(cur, user_id)
                 held_conn.commit()
     except Exception:
@@ -224,6 +277,9 @@ def slack_signin_start():
     """Unauthenticated entry point for the "Continue with Slack" button."""
     if not signin_ready():
         return sign_in_error("slack_unavailable")
+    hop = start_on_callback_host()
+    if hop is not None:
+        return hop
     nonce = secrets.token_urlsafe(16)
     try:
         state = _state_serializer().dumps({"flow": "slack_signin", "nonce": nonce})
@@ -238,7 +294,8 @@ def slack_signin_start():
         "state": state,
         "nonce": nonce,
     }
-    return flask.redirect(f"{_OIDC_AUTHORIZE_URL}?{urlencode(params)}", code=302)
+    response = flask.redirect(f"{_OIDC_AUTHORIZE_URL}?{urlencode(params)}", code=302)
+    return bind_to_browser(response, SIGNIN_COOKIE, nonce, _SIGNIN_STATE_TTL_SEC)
 
 
 def _id_token_nonce(id_token: str) -> str | None:
@@ -309,10 +366,18 @@ def _oidc_identity(code: str, expected_nonce: str) -> dict | None:
 
 def handle_signin_callback(code: str | None, state_payload: dict) -> flask.Response:
     """Sign-in branch of ``/slack/callback``; the state is already verified."""
+    return forget_browser(_signin_callback(code, state_payload), SIGNIN_COOKIE)
+
+
+def _signin_callback(code: str | None, state_payload: dict) -> flask.Response:
     if not signin_ready():
         return sign_in_error("slack_unavailable")
     if not code:
         return sign_in_error("slack_cancelled")
+    # Before the code is exchanged, so a forwarded link can't spend it.
+    if not started_in_this_browser(SIGNIN_COOKIE, state_payload["nonce"]):
+        logger.warning("[SLACK-SIGNIN] state was not started in this browser")
+        return sign_in_error("slack_expired")
 
     identity = _oidc_identity(code, state_payload["nonce"])
     if identity is None:

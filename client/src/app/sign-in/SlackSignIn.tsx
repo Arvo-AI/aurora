@@ -22,6 +22,8 @@ export const SLACK_ERRORS: Record<string, string> = {
   slack_admin_password: "Admins sign in with their password or SSO. Sign in below; Slack works for everyone else on your team.",
   slack_identity_mismatch: "This Aurora account is linked to a different Slack user. Sign in with your password instead.",
   slack_identity: "Slack didn't confirm a verified email for your account. Try again, or sign in with your password.",
+  slack_email_unconfirmed: "Slack hasn't confirmed the email on your account yet. Confirm it in Slack, then try again.",
+  slack_expired: "That Slack link has expired or was opened in a different browser. Start again below.",
   slack_cancelled: "Slack sign-in was cancelled.",
   slack_unavailable: "Sign in with Slack isn't available on this deployment.",
   slack_internal: "Something went wrong signing in with Slack. Please try again.",

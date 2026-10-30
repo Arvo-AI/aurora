@@ -8,6 +8,7 @@ import { useSession } from "next-auth/react"
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion"
 import { connectorRegistry } from "@/components/connectors/ConnectorRegistry"
 import { ROLE_VIEWER } from "@/lib/roles"
+import { useSlackSignInAvailable } from "@/app/sign-in/SlackSignIn"
 
 // Landing page after the website's "Add to Slack" (and "Sign in with Slack"
 // for teammates). The one orchestrated moment is the link animation at the
@@ -230,6 +231,8 @@ function SlackWelcome() {
   const [demo, setDemo] = useState<"idle" | "sending" | "sent" | "error">("idle")
   const [copied, setCopied] = useState(false)
   const connected = useConnectorStatus()
+  // Self-hosted installs keep invite-only registration: no Slack sign-in there.
+  const slackSignIn = useSlackSignInAvailable(true)
 
   const joined = params.get("joined") === "1"
   const slackAuth = params.get("slack_auth")
@@ -416,12 +419,18 @@ function SlackWelcome() {
         </motion.section>
 
         <motion.div {...reveal(1.75)} className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-[13px] leading-relaxed text-white/45">
-            Teammates don&apos;t need an invite. They sign in with Slack.{" "}
-            <button type="button" onClick={copyInvite} className="text-white/75 underline decoration-white/25 underline-offset-4 hover:text-white hover:decoration-white/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30 rounded">
-              {copied ? "Link copied" : "Copy sign-in link"}
-            </button>
-          </p>
+          {slackSignIn ? (
+            <p className="text-[13px] leading-relaxed text-white/45">
+              Teammates don&apos;t need an invite. They sign in with Slack.{" "}
+              <button type="button" onClick={copyInvite} className="text-white/75 underline decoration-white/25 underline-offset-4 hover:text-white hover:decoration-white/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30 rounded">
+                {copied ? "Link copied" : "Copy sign-in link"}
+              </button>
+            </p>
+          ) : (
+            <p className="text-[13px] leading-relaxed text-white/45">
+              Teammates can use @Aurora in Slack right away. To give them an Aurora account, invite them from Settings, Organization.
+            </p>
+          )}
           <Link href="/" className="shrink-0 text-sm text-white/60 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30 rounded">
             Go to dashboard
           </Link>

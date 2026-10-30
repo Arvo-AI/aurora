@@ -56,10 +56,14 @@ from routes.github.github_signup import (
     is_hosted_signup_enabled,
 )
 from routes.slack.slack_signin import (
+    bind_to_browser,
     find_user_by_slack_identity,
+    forget_browser,
     handoff_redirect,
     join_workspace_org,
     sign_in_error,
+    start_on_callback_host,
+    started_in_this_browser,
 )
 from utils.auth import normalize_email
 from utils.db.connection_pool import db_pool
@@ -76,12 +80,14 @@ SLACK_TIMEOUT = 20
 
 _SIGNUP_STATE_TTL_SEC = 30 * 60
 _SIGNUP_STATE_SALT = "aurora.slack.signup-state.v1"
+SIGNUP_COOKIE = "aurora_slack_signup"
 
 # Hard-coded user-facing error strings. NEVER substitute query params.
 _ERROR_NOT_AVAILABLE = "One-click signup is not available on this deployment"
 _ERROR_MISSING_PARAMS = "Missing required parameters from Slack callback"
 _ERROR_TOKEN_EXCHANGE = "Could not complete the Slack installation. Please try again from the website."
 _ERROR_IDENTITY = "Could not verify your Slack identity"
+_ERROR_EXPIRED = "This Slack install link is no longer valid. Start again from the website."
 _ERROR_INTERNAL = "An internal error occurred while creating your account"
 
 
@@ -96,11 +102,13 @@ def _state_serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(secret, salt=_SIGNUP_STATE_SALT)
 
 
-def _sign_signup_state(attribution: dict | None = None) -> str:
-    payload = {"flow": "slack_signup", "nonce": secrets.token_urlsafe(8)}
+def _sign_signup_state(attribution: dict | None = None) -> tuple[str, str]:
+    """Signed state plus its nonce, which the start route also puts in a cookie."""
+    nonce = secrets.token_urlsafe(16)
+    payload = {"flow": "slack_signup", "nonce": nonce}
     if attribution:
         payload["attr"] = attribution
-    return _state_serializer().dumps(payload)
+    return _state_serializer().dumps(payload), nonce
 
 
 def load_signup_state(state: str) -> dict | None:
@@ -137,19 +145,26 @@ def slack_signup_start():
     """Unauthenticated entry point for the website's "Add to Slack" CTA."""
     if not _signup_ready():
         return _render_error(_ERROR_NOT_AVAILABLE)
+    hop = start_on_callback_host()
+    if hop is not None:
+        return hop
     try:
-        state = _sign_signup_state(_attribution_from(request.args))
+        state, nonce = _sign_signup_state(_attribution_from(request.args))
     except RuntimeError:
         logger.exception("[SLACK-SIGNUP] failed to sign signup state")
         return _render_error(_ERROR_INTERNAL)
-    return flask.redirect(get_auth_url(state), code=302)
+    return bind_to_browser(flask.redirect(get_auth_url(state), code=302),
+                           SIGNUP_COOKIE, nonce, _SIGNUP_STATE_TTL_SEC)
+
+
+_UNCONFIRMED = {"unconfirmed": True}
 
 
 def _fetch_installer_identity(token_data: dict) -> dict | None:
     """Installer identity from the token exchange, enriched via ``users.info``.
 
-    Returns ``{"slack_user_id", "team_id", "team_name", "email", "name"}``
-    or None. The bot token was minted for this exact install seconds ago, so
+    Returns ``{"slack_user_id", "team_id", "team_name", "email", "name"}``,
+    ``_UNCONFIRMED`` when Slack hasn't confirmed the email, or None. The bot token was minted for this exact install seconds ago, so
     ``users.info`` reads the profile Slack itself holds for ``authed_user``.
     """
     access_token = token_data.get("access_token")
@@ -182,6 +197,11 @@ def _fetch_installer_identity(token_data: dict) -> dict | None:
         return None
     if user.get("team_id") != team_id:
         return None
+    # The address becomes a verified Aurora login, so Slack must have
+    # confirmed it. A profile email alone can be set by a workspace admin.
+    if user.get("is_email_confirmed") is not True:
+        logger.info("[SLACK-SIGNUP] installer's Slack email is not confirmed")
+        return _UNCONFIRMED
     profile = user.get("profile")
     email = profile.get("email") if isinstance(profile, dict) else None
     if not isinstance(email, str) or "@" not in email:
@@ -276,6 +296,10 @@ def _cancelled_redirect() -> flask.Response:
 
 def handle_signup_callback(code: str | None, state_payload: dict, slack_error: str | None = None) -> flask.Response:
     """Signup branch of ``/slack/callback``; the state is already verified."""
+    return forget_browser(_signup_callback(code, state_payload, slack_error), SIGNUP_COOKIE)
+
+
+def _signup_callback(code: str | None, state_payload: dict, slack_error: str | None) -> flask.Response:
     from routes.slack.slack_events_helpers import get_user_id_from_slack_team
     from routes.slack.slack_routes import complete_slack_connection
     from connectors.slack_connector.oauth import exchange_code_for_token
@@ -289,6 +313,10 @@ def handle_signup_callback(code: str | None, state_payload: dict, slack_error: s
         return _cancelled_redirect()
     if not code:
         return _render_error(_ERROR_MISSING_PARAMS)
+    # Before the code is exchanged, so a forwarded link can't spend it.
+    if not started_in_this_browser(SIGNUP_COOKIE, state_payload.get("nonce", "")):
+        logger.warning("[SLACK-SIGNUP] state was not started in this browser")
+        return _render_error(_ERROR_EXPIRED)
 
     try:
         token_data = exchange_code_for_token(code)
@@ -297,6 +325,8 @@ def handle_signup_callback(code: str | None, state_payload: dict, slack_error: s
         return _render_error(_ERROR_TOKEN_EXCHANGE)
 
     identity = _fetch_installer_identity(token_data)
+    if identity is _UNCONFIRMED:
+        return sign_in_error("slack_email_unconfirmed")
     if identity is None:
         return _render_error(_ERROR_IDENTITY)
 

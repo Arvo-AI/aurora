@@ -223,8 +223,11 @@ def complete_slack_connection(user_id, token_data):
         # First connection for this org: welcome the installer in a DM with
         # the demo and the setup checklist. Reconnects stay quiet.
         if not existing_channel_id:
-            from routes.slack.slack_onboarding import send_welcome_dm
-            send_welcome_dm(access_token, installer_slack_user_id, channel_result.get('channel_id'))
+            try:
+                from routes.slack.slack_onboarding import send_welcome_dm_task
+                send_welcome_dm_task.delay(user_id, installer_slack_user_id, channel_result.get('channel_id'))
+            except Exception:
+                logging.warning("Failed to enqueue the Slack welcome DM (non-fatal)", exc_info=True)
 
         logging.info("Incidents channel ready, Slack credentials stored successfully")
     except Exception:

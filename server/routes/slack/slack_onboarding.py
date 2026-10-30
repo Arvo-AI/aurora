@@ -138,13 +138,22 @@ def welcome_blocks(installer_slack_user_id: str, channel_id: str | None) -> list
     ]
 
 
-def send_welcome_dm(access_token: str, installer_slack_user_id: str, channel_id: str | None) -> None:
-    """Best-effort welcome to the person who installed Aurora."""
+@celery_app.task(name="routes.slack.slack_onboarding.send_welcome_dm_task")
+def send_welcome_dm_task(user_id: str, installer_slack_user_id: str, channel_id: str | None = None):
+    """Best-effort welcome to the person who installed Aurora.
+
+    Queued from the OAuth callback so a slow Slack never holds up the
+    browser's redirect. Takes the Aurora user id, not the token, so the bot
+    token never sits in the task broker.
+    """
     if not installer_slack_user_id:
         return
-    from connectors.slack_connector.client import SlackClient
+    from connectors.slack_connector.client import get_slack_client_for_user
     try:
-        SlackClient(access_token).send_message(
+        client = get_slack_client_for_user(user_id)
+        if not client:
+            return
+        client.send_message(
             channel=installer_slack_user_id,
             text="Aurora is set up. Want to see a demo incident?",
             blocks=welcome_blocks(installer_slack_user_id, channel_id),
@@ -156,13 +165,26 @@ def send_welcome_dm(access_token: str, installer_slack_user_id: str, channel_id:
 # ── App Home ────────────────────────────────────────────────────────
 
 
-def setup_status(user_id: str, org_id: str) -> dict:
-    """Which alert sources and root-cause sources this org has connected."""
-    from routes.connector_status import active_providers
+def _github_app_ready() -> bool:
     try:
-        providers = set(active_providers(user_id, org_id or ""))
+        from connectors.github_connector.config import validate_github_app_config
+        return bool(validate_github_app_config()[0])
     except Exception:
-        logger.warning("[SLACK-ONBOARDING] provider lookup failed", exc_info=True)
+        return False
+
+
+def setup_status(user_id: str, org_id: str) -> dict:
+    """Which alert sources and root-cause sources this org has working.
+
+    The same live checks as the Connectors page, so a revoked token doesn't
+    tick a step and GitHub App or kubectl connections do.
+    """
+    from routes.connector_status import _check_all_connectors
+    try:
+        results = _check_all_connectors(user_id, org_id or "", app_runtime_ready=_github_app_ready())
+        providers = {name for name, status in results.items() if status.get("connected")}
+    except Exception:
+        logger.warning("[SLACK-ONBOARDING] connector status check failed", exc_info=True)
         providers = set()
     return {
         "alerts": sorted(providers & ALERT_PROVIDERS),
@@ -245,8 +267,13 @@ def home_view(status: dict, channel_id: str | None) -> dict:
     return {"type": "home", "blocks": blocks}
 
 
-def publish_home(team_id: str, slack_user_id: str) -> None:
-    """Render the App Home for whoever just opened it. Never raises."""
+@celery_app.task(name="routes.slack.slack_onboarding.publish_home_task")
+def publish_home_task(team_id: str, slack_user_id: str):
+    """Render the App Home for whoever just opened it. Never raises.
+
+    Off the Events request path: the connector checks and views.publish can
+    take longer than Slack's 3-second ack window.
+    """
     from connectors.slack_connector.client import get_slack_client_for_user
     from routes.slack.slack_events_helpers import get_user_id_from_slack_team
     from utils.auth.stateless_auth import get_org_id_for_user

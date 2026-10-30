@@ -188,7 +188,10 @@ function AuthPage() {
   const slackSignIn = useSlackSignInAvailable(mode === "signin")
   const handoffAttempted = useRef(false)
   const [handoffInFlight, setHandoffInFlight] = useState(false)
-  const handoffVia = searchParams.get("via")
+  // Read once: the redeem strips these from the URL, and the panel copy must
+  // not flip to another flow's text while the browser is navigating away.
+  const [handoffVia] = useState(() => searchParams.get("via"))
+  const [handoffSlackAuth] = useState(() => searchParams.get("slack_auth"))
   const isSsoHandoff = handoffVia === "sso"
   const isSlackHandoff = handoffVia?.startsWith("slack") ?? false
   useEffect(() => {
@@ -201,7 +204,7 @@ function AuthPage() {
       try {
         const result = await signIn("handoff", { token: handoffToken, redirect: false })
         if (result?.ok) {
-          globalThis.location.href = handoffDestination(handoffVia, searchParams.get("slack_auth"))
+          globalThis.location.href = handoffDestination(handoffVia, handoffSlackAuth)
         } else {
           setHandoffInFlight(false)
           setError("This sign-in link has expired. Please sign in below.")

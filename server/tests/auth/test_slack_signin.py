@@ -35,6 +35,9 @@ def signin_app(monkeypatch):
     monkeypatch.setenv("SLACK_CLIENT_ID", "cid")
     monkeypatch.setenv("SLACK_CLIENT_SECRET", "csecret")
     monkeypatch.setenv("FLASK_SECRET_KEY", "test-secret")
+    # Callback host == request host, so start doesn't hop (a local .env may set these).
+    monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "")
+    monkeypatch.setenv("NGROK_URL", "")
 
     import importlib
     from flask import Flask
@@ -102,6 +105,16 @@ class TestStart:
         with app.test_request_context():
             assert mod.load_signin_state(state)["nonce"] == nonce
 
+    def test_start_moves_to_the_callback_host_once(self, signin_app, monkeypatch):
+        # The browser cookie must be set on the host Slack calls back.
+        app, _, _ = signin_app
+        monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "https://api.example.test")
+        client = app.test_client()
+        hop = client.get("/slack/signin/start")
+        assert hop.location == "https://api.example.test/slack/signin/start?hop=1"
+        again = client.get("/slack/signin/start?hop=1")
+        assert again.location.startswith("https://slack.com/openid/connect/authorize?")
+
     def test_unavailable_when_hosted_signup_is_off(self, signin_app, monkeypatch):
         app, _, _ = signin_app
         monkeypatch.setenv("HOSTED_SIGNUP_ENABLED", "false")
@@ -123,14 +136,40 @@ class TestCallback:
         app, mod, _ = signin_app
         client = app.test_client()
         _, state, nonce = _start(client)
-        db_pool, _ = _mock_db()
+        db_pool, _ = _mock_db([("org-1", "sam@acme.io")])
         with _oidc(mod, nonce), \
              patch.object(mod, "find_user_by_slack_identity", return_value="user-1") as find, \
              patch.object(mod, "db_pool", db_pool), \
+             patch("utils.auth.saml_sso.org_requires_sso", return_value=False), \
              patch.object(mod, "mint_handoff", return_value="HANDOFF"):
             resp = client.get(f"/slack/callback?code=c&state={state}")
         assert "/sign-in?handoff=HANDOFF&via=slack_signin" in resp.location
         assert find.call_args.args == ("T1", "U2")
+
+    def test_linked_identity_in_sso_required_org_gets_no_handoff(self, signin_app):
+        app, mod, _ = signin_app
+        client = app.test_client()
+        _, state, nonce = _start(client)
+        db_pool, _ = _mock_db([("org-1", "sam@acme.io")])
+        with _oidc(mod, nonce), \
+             patch.object(mod, "find_user_by_slack_identity", return_value="user-1"), \
+             patch.object(mod, "db_pool", db_pool), \
+             patch("utils.auth.saml_sso.org_requires_sso", return_value=True), \
+             patch.object(mod, "mint_handoff") as mint:
+            resp = client.get(f"/slack/callback?code=c&state={state}")
+        assert resp.location.endswith("/sign-in?error=slack_sso_required")
+        mint.assert_not_called()
+
+    def test_callback_from_another_browser_spends_nothing(self, signin_app):
+        app, mod, _ = signin_app
+        _, state, nonce = _start(app.test_client())
+        other = app.test_client()
+        with _oidc(mod, nonce), patch.object(mod, "find_user_by_slack_identity") as find:
+            resp = other.get(f"/slack/callback?code=c&state={state}")
+            exchanged = mod.requests.post.called
+        assert resp.location.endswith("/sign-in?error=slack_expired")
+        assert not exchanged
+        find.assert_not_called()
 
     def test_nonce_mismatch_is_rejected(self, signin_app):
         app, mod, _ = signin_app

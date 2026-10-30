@@ -32,7 +32,7 @@ from routes.slack.slack_onboarding import (
     DEMO_ACTION_ID,
     LINK_ACTION_PREFIX,
     is_demo_request,
-    publish_home,
+    publish_home_task,
     run_demo_incident_task,
 )
 
@@ -327,7 +327,7 @@ def process_event_callback(data: dict) -> None:
         # Someone opened Aurora's Home tab: render the setup checklist.
         if event_type == 'app_home_opened':
             if event.get('tab') == 'home' and event.get('user') and data.get('team_id'):
-                publish_home(data['team_id'], event['user'])
+                publish_home_task.delay(data['team_id'], event['user'])
             return
 
         # Aurora was added to a channel (e.g. an incident.io-created one) —

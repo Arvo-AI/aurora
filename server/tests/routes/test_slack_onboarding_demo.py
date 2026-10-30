@@ -16,8 +16,15 @@ def is_demo_request(monkeypatch):
     celery_stub.celery_app = MagicMock()
     celery_stub.celery_app.task.return_value = lambda fn: fn
     monkeypatch.setitem(sys.modules, "celery_config", celery_stub)
-    monkeypatch.delitem(sys.modules, "routes.slack.slack_onboarding", raising=False)
-    return importlib.import_module("routes.slack.slack_onboarding").is_demo_request
+    name = "routes.slack.slack_onboarding"
+    previous = sys.modules.pop(name, None)
+    try:
+        yield importlib.import_module(name).is_demo_request
+    finally:
+        # Don't leave the stub-task module behind for later imports.
+        sys.modules.pop(name, None)
+        if previous is not None:
+            sys.modules[name] = previous
 
 
 @pytest.mark.parametrize("message", [
