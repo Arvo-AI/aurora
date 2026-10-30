@@ -61,6 +61,13 @@ EXEMPT_FUNCTIONS: Set[str] = {
     # state; callback validates that state + GitHub-verified installation.
     "github_app_signup_start",
     "github_app_signup_callback",
+    # Website "Add to Slack" — start redirects to Slack with a signed state;
+    # the signup branch of slack_callback validates it.
+    "slack_signup_start",
+    # "Sign in with Slack" — start redirects to Slack's OpenID page with a
+    # signed state + nonce; available only reports whether it is configured.
+    "slack_signin_start",
+    "slack_signin_available",
     "bitbucket_callback",
     "slack_callback",
     "teams_callback",

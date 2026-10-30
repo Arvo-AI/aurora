@@ -3256,6 +3256,23 @@ def initialize_tables():
                 logging.warning(f"Error adding GitHub signup columns: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_gh_signup_cols")
 
+            # Migration: Slack identity (one-click "Add to Slack" signup and
+            # "Sign in with Slack"). The (team, user) pair is the auto-login
+            # key, so it is UNIQUE like github_user_id.
+            try:
+                cursor.execute("SAVEPOINT sp_slack_identity_cols")
+                cursor.execute("""
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_team_id VARCHAR(32);
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_user_id VARCHAR(32);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_slack_identity
+                        ON users (slack_team_id, slack_user_id)
+                        WHERE slack_user_id IS NOT NULL;
+                """)
+                cursor.execute("RELEASE SAVEPOINT sp_slack_identity_cols")
+            except Exception as e:
+                logging.warning(f"Error adding Slack identity columns: {e}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_slack_identity_cols")
+
             # Migration: SAML SSO identity. The IdP's subject is only unique
             # within that org's IdP, so the auto-login key is (org, subject).
             try:
