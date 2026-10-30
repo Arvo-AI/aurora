@@ -320,28 +320,31 @@ export default function VMConfig() {
         fetchManualVms(),
         refreshKeys(),
       ]);
-      // A check or save finished while this load was in flight
-      if (generation !== loadGeneration.current) return;
-
-      const autoList = autoRes.status === "fulfilled" ? autoRes.value : [];
+      // A check or save already published the manual list. Keep that copy.
+      const stale = generation !== loadGeneration.current;
+      const autoLoaded = autoRes.status === "fulfilled" ? autoRes.value : null;
       // null means the GET failed; [] is a real empty list
       const manualLoaded =
         manualRes.status === "fulfilled" ? manualRes.value : null;
-      const manualList = manualLoaded ?? manualVmsRef.current;
+      const manualList = stale
+        ? manualVmsRef.current
+        : (manualLoaded ?? manualVmsRef.current);
       const keysList = keysRes.status === "fulfilled" ? keysRes.value : sshKeys;
       // Drafts are seeded only for a load we are actually applying
-      if (manualLoaded) seedManualDrafts(manualLoaded);
-      syncVms(autoList, manualList);
+      if (!stale && manualLoaded) seedManualDrafts(manualLoaded);
+      // init runs once. Skipping the auto list leaves it stale for the session.
+      if (autoLoaded !== null) {
+        syncVms(autoLoaded, manualList);
+      } else if (!stale) {
+        syncVms([], manualList);
+      }
 
-      const canCache =
-        autoRes.status === "fulfilled" &&
-        manualLoaded !== null &&
-        keysRes.status === "fulfilled";
       if (keysRes.status === "rejected") {
         console.error("Failed to refresh keys:", keysRes.reason);
       }
-      if (canCache && generation === loadGeneration.current) {
-        saveCache(autoList, manualList, keysList || []);
+      const manualForCache = stale ? manualVmsRef.current : manualLoaded;
+      if (autoLoaded !== null && manualForCache !== null && keysRes.status === "fulfilled") {
+        saveCache(autoLoaded, manualForCache, keysList || []);
       }
     } catch (err) {
       console.error("Error initializing VM config:", err);
@@ -757,12 +760,24 @@ export default function VMConfig() {
         loadGeneration.current += 1;
         const applyReady = (item: VM): VM =>
           item.id === vm.id
-            ? { ...item, sshKeyConfigured: true, connectionVerified: true }
+            ? {
+                ...item,
+                sshKeyConfigured: true,
+                connectionVerified: true,
+                // The check stored this user when the VM had none.
+                sshUsername: item.sshUsername || username,
+              }
             : item;
         const nextManual = manualVmsRef.current.map(applyReady);
         manualVmsRef.current = nextManual;
         setManualVms(nextManual);
         setVms((prev) => prev.map(applyReady));
+        setManualDrafts((prev) => {
+          const draft = prev[vm.id];
+          // Leave a username the user already typed in the form.
+          if (!draft || draft.sshUsername) return prev;
+          return { ...prev, [vm.id]: { ...draft, sshUsername: username } };
+        });
         saveCache(autoVms, nextManual, sshKeys);
       }
       window.dispatchEvent(new CustomEvent("providerStateChanged"));

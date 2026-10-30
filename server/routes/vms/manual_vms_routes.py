@@ -50,6 +50,24 @@ def _as_int(value: Any) -> Optional[int]:
     return int(value)
 
 
+def target_for_ready_check(
+    stored: Optional[Dict[str, Any]], tested: Dict[str, Any]
+) -> tuple:
+    """Return (stored target to compare, whether to save the tested user).
+
+    A VM saved with no username can take the user this check just used.
+    A stored username that differs stays a mismatch.
+    """
+    if stored is None:
+        return None, False
+    stored_user = _blank_to_none(stored.get("ssh_username"))
+    tested_user = _blank_to_none(tested.get("ssh_username"))
+    # No saved user — this check is the first one, so keep the user it used.
+    if stored_user is None and tested_user:
+        return {**stored, "ssh_username": tested_user}, True
+    return stored, False
+
+
 def connection_fields_changed(existing: Dict[str, Any], proposed: Dict[str, Any]) -> bool:
     """True when this write points SSH at a different host, key, or user."""
     casters = {
@@ -445,9 +463,10 @@ def check_manual_vm_connection(user_id):
             "ssh_key_id": ssh_key_id,
             "ssh_username": username,
         }
+        compared, fill_username = target_for_ready_check(stored_target, tested_target)
         # A one-off user, key, or host must not mark the saved VM Ready
-        matches_stored = stored_target is not None and not connection_fields_changed(
-            stored_target, tested_target
+        matches_stored = compared is not None and not connection_fields_changed(
+            compared, tested_target
         )
         verified = False
         if vm_id is not None and matches_stored:
@@ -461,6 +480,10 @@ def check_manual_vm_connection(user_id):
                         if org_id:
                             sets.append(sql.SQL("org_id = %s"))
                             params.append(org_id)
+                        # The row had no user. Store the one this check just used.
+                        if fill_username:
+                            sets.append(sql.SQL("ssh_username = %s"))
+                            params.append(username)
                         sets.append(sql.SQL("updated_at = NOW()"))
                         params.extend(
                             (
@@ -471,6 +494,21 @@ def check_manual_vm_connection(user_id):
                                 ssh_key_id,
                                 ssh_jump_command,
                                 username,
+                            )
+                        )
+                        # A blank saved user still matches, so this write can fill it in.
+                        username_match = (
+                            sql.SQL(
+                                """(
+                                    NULLIF(BTRIM(ssh_username), '') IS NULL
+                                    OR NULLIF(BTRIM(ssh_username), '')
+                                       IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
+                                )"""
+                            )
+                            if fill_username
+                            else sql.SQL(
+                                """NULLIF(BTRIM(ssh_username), '')
+                                   IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')"""
                             )
                         )
                         # The WHERE re-checks the saved target in case it changed during the SSH attempt
@@ -484,10 +522,12 @@ def check_manual_vm_connection(user_id):
                               AND ssh_key_id IS NOT DISTINCT FROM %s
                               AND NULLIF(BTRIM(ssh_jump_command), '')
                                   IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
-                              AND NULLIF(BTRIM(ssh_username), '')
-                                  IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
+                              AND {username_match}
                             """
-                        ).format(sets=sql.SQL(", ").join(sets))
+                        ).format(
+                            sets=sql.SQL(", ").join(sets),
+                            username_match=username_match,
+                        )
                         cur.execute(verify_query, params)
                         # Zero rows means the saved target changed before this write
                         verified = cur.rowcount > 0
