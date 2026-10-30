@@ -1244,6 +1244,7 @@ def initialize_tables():
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_by VARCHAR(255),
                         source VARCHAR(20) DEFAULT 'custom' NOT NULL,
+                        scope VARCHAR(20) NOT NULL DEFAULT 'agent',
                         UNIQUE(org_id, mode, pattern, source)
                     );
                     CREATE INDEX IF NOT EXISTS idx_ocp_org
@@ -2019,6 +2020,18 @@ def initialize_tables():
                     f"Error adding disconnected_at column/index to user_github_installations: {e}"
                 )
                 conn.rollback()
+
+            # Ask mode can honor a customer allow rule. Existing rows stay agent-only.
+            try:
+                cursor.execute(
+                    "ALTER TABLE org_command_policies "
+                    "ADD COLUMN IF NOT EXISTS scope VARCHAR(20) NOT NULL DEFAULT 'agent';"
+                )
+                conn.commit()
+                logging.info("Ensured scope column exists on org_command_policies.")
+            except Exception as e:
+                conn.rollback()
+                logging.warning(f"Migration for org_command_policies.scope: {e}")
 
             # Migration: add system action columns to actions table
             try:

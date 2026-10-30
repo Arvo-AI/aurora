@@ -24,7 +24,7 @@ ATLASSIAN_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
 ATLASSIAN_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
 ATLASSIAN_AUDIENCE = "api.atlassian.com"
 
-CONFLUENCE_SCOPES = "read:page:confluence read:space:confluence read:user:confluence search:confluence"
+CONFLUENCE_SCOPES = "read:page:confluence read:blogpost:confluence read:space:confluence read:user:confluence search:confluence"
 JIRA_SCOPES = "read:jira-work write:jira-work read:jira-user"
 JSM_OPS_SCOPES = "read:ops-alert:jira-service-management read:ops-config:jira-service-management"
 COMMON_SCOPES = "offline_access"

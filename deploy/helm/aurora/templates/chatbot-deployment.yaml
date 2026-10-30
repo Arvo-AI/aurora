@@ -1,3 +1,4 @@
+{{- include "aurora.rejectInvestigationTimeoutOverride" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -64,10 +65,13 @@ spec:
                 name: {{ include "aurora.secretName.app" . }}
             - secretRef:
                 name: {{ include "aurora.secretName.llm" . }}
-          {{- with .Values.extraEnv }}
           env:
+            # Explicit, so a Secret cannot override the value the proxy timeout was built from.
+            - name: INVESTIGATION_TIMEOUT_SECONDS
+              value: {{ include "aurora.investigationTimeoutSeconds" . | trim | quote }}
+            {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- end }}
           volumeMounts:
             - name: terraform-workdir
               mountPath: /app/terraform_workdir

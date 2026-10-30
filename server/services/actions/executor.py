@@ -87,7 +87,9 @@ def dispatch_action(
         _update_run(run_id, user_id, status="error", error="Failed to create chat session")
         raise
 
-    _update_run(run_id, user_id, chat_session_id=session_id, status="running")
+    # Stay pending until the worker starts. started_at is this insert, and the
+    # stale sweep would otherwise count queue time as execution.
+    _update_run(run_id, user_id, chat_session_id=session_id)
 
     try:
         run_background_chat.delay(
@@ -212,6 +214,25 @@ def build_action_prompt(
     ]
 
     return "\n".join(parts), rail_text
+
+
+def mark_action_run_started(run_id: str, user_id: str) -> None:
+    """Rewrite started_at to worker start. The insert time is only queue wait."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[Actions]")
+                cur.execute(
+                    """UPDATE action_runs
+                       SET status = 'running', started_at = %s
+                       WHERE id = %s AND status IN ('pending', 'running')""",
+                    (datetime.now(timezone.utc), run_id),
+                )
+                conn.commit()
+    except Exception:
+        logger.exception("[Actions] Failed to mark run %s started", run_id)
+        # The task's error path marks the run failed. Swallowing this leaves it pending.
+        raise
 
 
 def update_action_run_status(

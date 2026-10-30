@@ -426,11 +426,11 @@ Regardless of controller, ensure these are configured:
 
 | Setting | Value | Why |
 |---------|-------|-----|
-| Read/send timeout | `3600s` | RCA analysis can run 30+ minutes |
+| Read/send timeout | at least `INVESTIGATION_TIMEOUT_SECONDS` (chart default `7200s`) | The chart sets the nginx annotations only when `className` is `nginx` and nginx defaults are enabled. Other controllers must set this themselves. |
 | HTTP version | `1.1` | Required for WebSocket upgrade |
 | Max body size | `50m` | File uploads |
 
-When `className` is `nginx`, these are auto-applied as annotations by the chart.
+When `className` is `nginx` and `ingress.nginx.enabled` is not `false`, these are auto-applied as annotations by the chart. With nginx defaults turned off, set the timeouts on the controller yourself.
 
 ### MCP Ingress {#mcp-ingress}
 

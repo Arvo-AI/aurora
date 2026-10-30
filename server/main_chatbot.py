@@ -332,7 +332,9 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
     curr_node = "START"
     sent_message_count = 0
     websocket_connected = True
-    workflow_timeout = 1800  # 30 minutes max for any workflow
+    # Same wall as the background Celery task (INVESTIGATION_TIMEOUT_SECONDS).
+    from chat.investigation_timeout import investigation_timeout_seconds
+    workflow_timeout = investigation_timeout_seconds()
     session_id = getattr(state, 'session_id', 'unknown')
 
     # Helper to save incident thoughts for background chats
@@ -856,8 +858,13 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                 timeout_msg["session_id"] = state.session_id
             await send_via_appropriate_sender(timeout_msg)
         await send_end_status("timeout")
-        
+
     except Exception as e:
+        from celery.exceptions import SoftTimeLimitExceeded
+        # Raised in the worker, and it subclasses Exception. Swallowing it
+        # lets the task mark a timed-out investigation complete.
+        if isinstance(e, SoftTimeLimitExceeded):
+            raise
         logger.error(f"Error in workflow processing for session {session_id}: {e}", exc_info=True)
         finalize_streaming_chat_message(remove=True)
         if websocket_connected:

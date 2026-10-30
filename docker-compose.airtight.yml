@@ -123,6 +123,8 @@ x-common-env: &common-env
   ENRICHMENT_MODEL: ${ENRICHMENT_MODEL}
   MEMORY_SELECTOR_MODEL: ${MEMORY_SELECTOR_MODEL}
   AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
+  # Wall-clock limit for one investigation, in seconds. Default is one hour.
+  INVESTIGATION_TIMEOUT_SECONDS: ${INVESTIGATION_TIMEOUT_SECONDS:-3600}
   EMBEDDING_MODEL: ${EMBEDDING_MODEL}
 
   # Root-cause recurrence detection (dedup layer 1): off | shadow | live
@@ -134,6 +136,8 @@ x-common-env: &common-env
   GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}
   GUARDRAILS_SIGMA_ENABLED: ${GUARDRAILS_SIGMA_ENABLED:-true}
   GUARDRAILS_LLM_MODEL: ${GUARDRAILS_LLM_MODEL:-}
+  GUARDRAILS_DISABLE_THINKING: ${GUARDRAILS_DISABLE_THINKING:-true}
+  GUARDRAILS_LLM_TIMEOUT_SECONDS: ${GUARDRAILS_LLM_TIMEOUT_SECONDS:-10}
 
   # Slack: keep editing the "Thinking…" placeholder with live progress while a
   # background investigation runs. Interval in seconds (min 10).
@@ -281,6 +285,8 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - terraform-workdir:/app/terraform_workdir
+    # Idle workers exit on SIGTERM immediately. This only waits while a task is running.
+    stop_grace_period: 3660s
     command: >
       celery -A celery_config worker
         --loglevel=info
@@ -310,6 +316,7 @@ services:
       OVH_US_CLIENT_SECRET: ${OVH_US_CLIENT_SECRET}
       GOOGLE_CHAT_SERVICE_ACCOUNT_KEY: ${GOOGLE_CHAT_SERVICE_ACCOUNT_KEY}
     depends_on:
+      - postgres
       - redis
       - vault
       - memgraph

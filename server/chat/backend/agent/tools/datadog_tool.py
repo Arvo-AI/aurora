@@ -31,7 +31,9 @@ class QueryDatadogArgs(BaseModel):
     query: str = Field(
         default="",
         description="Search query. Syntax varies by resource type. "
-        "Logs: 'service:web status:error'. Metrics: 'avg:system.cpu.user{*}'. "
+        "Logs: 'service:web status:error'. Metrics: one expression, 'avg:system.cpu.user{*}'. "
+        "A comma inside {} is a tag filter; a comma outside {} is another expression "
+        "and is queried separately. Do not send a formula (a + b, avg:cpu{*} / avg:mem{*}). "
         "Metric_stats: same metric syntax as metrics, grouping encouraged "
         "e.g. 'sum:kubernetes.memory.usage{env:production} by {kube_deployment}'. "
         "Monitors: name filter. Events: source filter. "
@@ -158,9 +160,138 @@ def _query_logs(client, query: str, time_from: str, time_to: str, limit: int, **
     return {"resource_type": "logs", "count": len(logs), "results": logs}
 
 
+def _split_top_level_commas(query: str) -> list[str]:
+    """Split on commas that separate expressions, not commas inside a filter or a call."""
+    parts: list[str] = []
+    buf: list[str] = []
+    brace = paren = bracket = 0
+    quote = None
+    i, n = 0, len(query)
+    while i < n:
+        c = query[i]
+        if quote:
+            buf.append(c)
+            # Escaped quote stays inside the string.
+            if c == "\\" and i + 1 < n:
+                buf.append(query[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in ("'", '"'):
+            quote = c
+            buf.append(c)
+            i += 1
+            continue
+        if c == "{":
+            brace += 1
+        elif c == "}" and brace:
+            brace -= 1
+        elif c == "(":
+            paren += 1
+        elif c == ")" and paren:
+            paren -= 1
+        elif c == "[":
+            bracket += 1
+        elif c == "]" and bracket:
+            bracket -= 1
+        # A comma here separates expressions. Inside {} or () it is a tag or an argument.
+        elif c == "," and brace == paren == bracket == 0:
+            parts.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(c)
+        i += 1
+    parts.append("".join(buf))
+    return parts
+
+
+def _is_binary_minus(expr: str, index: int) -> bool:
+    """A hyphen inside a metric name is not subtraction."""
+    prev = expr[index - 1] if index else ""
+    nxt = expr[index + 1] if index + 1 < len(expr) else ""
+    if (prev.isalnum() or prev in "._") and (nxt.isalnum() or nxt in "._"):
+        return False
+    # timeshift(avg:m{*}, -3600) is a function argument, not a formula.
+    stripped = expr[:index].rstrip()
+    if not stripped or stripped[-1] in "(,":
+        return False
+    return True
+
+
+def _is_metric_formula(expr: str) -> bool:
+    """Arithmetic between metrics belongs in a formula, which this API does not send."""
+    brace = 0
+    quote = None
+    i, n = 0, len(expr)
+    while i < n:
+        c = expr[i]
+        if quote:
+            if c == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in ("'", '"'):
+            quote = c
+            i += 1
+            continue
+        if c == "{":
+            brace += 1
+        elif c == "}" and brace:
+            brace -= 1
+        # {*} is a scope wildcard, not multiplication.
+        elif brace == 0 and c in "+*/":
+            return True
+        # Subtraction between two metrics. A hyphen inside a name is not this.
+        elif brace == 0 and c == "-" and _is_binary_minus(expr, i):
+            return True
+        i += 1
+    return False
+
+
+def _metric_expressions(query: str) -> list[str]:
+    """One timeseries query per expression. A formula is rejected, not forwarded."""
+    expressions = []
+    for part in _split_top_level_commas(query):
+        expr = part.strip()
+        # A trailing comma would otherwise be sent as an empty query.
+        if not expr:
+            raise ValueError(
+                "Metric query has an empty expression. Pass one expression "
+                "such as avg:system.cpu.user{*}, or several separated by commas."
+            )
+        # Arithmetic is a formula. The timeseries query field rejects it.
+        if _is_metric_formula(expr):
+            raise ValueError(
+                "Metric query must be one expression, not a formula. "
+                "Query each metric on its own (avg:system.cpu.user{*}) "
+                "instead of combining them with + - * /."
+            )
+        expressions.append(expr)
+    return expressions
+
+
+def _one_metrics_result(client, expr: str, start_ms: int, end_ms: int, interval) -> dict:
+    response = client.query_metrics(query=expr, start_ms=start_ms, end_ms=end_ms, interval=interval)
+    data = response.get("data", {})
+    attrs = data.get("attributes", {}) if isinstance(data, dict) else {}
+    return {
+        "series": attrs.get("series", []),
+        "times": attrs.get("times", []),
+        "values": attrs.get("values", []),
+    }
+
+
 def _query_metrics(client, query: str, time_from: str, time_to: str, limit: int, **kwargs) -> dict:
     if not query:
         raise ValueError("query is required for resource_type='metrics' (e.g., 'avg:system.cpu.user{*}')")
+    expressions = _metric_expressions(query)
     start_ms = _to_unix_ms(time_from)
     end_ms = _to_unix_ms(time_to)
     # Honour an explicit interval, but do NOT auto-pick one here. Datadog's own
@@ -169,15 +300,16 @@ def _query_metrics(client, query: str, time_from: str, time_to: str, limit: int,
     # right-sizing. metric_stats auto-picks because it is new and owns its own
     # contract.
     interval = _clamp_interval(kwargs.get("interval"))
-    response = client.query_metrics(query=query, start_ms=start_ms, end_ms=end_ms, interval=interval)
-    data = response.get("data", {})
-    attrs = data.get("attributes", {}) if isinstance(data, dict) else {}
-    result_data = {
-        "series": attrs.get("series", []),
-        "times": attrs.get("times", []),
-        "values": attrs.get("values", []),
-    }
-    return {"resource_type": "metrics", "count": len(result_data["series"]), "results": [result_data]}
+    results = []
+    total = 0
+    for expr in expressions:
+        item = _one_metrics_result(client, expr, start_ms, end_ms, interval)
+        # Several expressions came in as one string. Name each result.
+        if len(expressions) > 1:
+            item["query"] = expr
+        results.append(item)
+        total += len(item["series"])
+    return {"resource_type": "metrics", "count": total, "results": results}
 
 
 # ---------------------------------------------------------------------------
@@ -386,9 +518,56 @@ def _point_cap_note(span_ms: int, chosen_interval: int, caller_interval: Optiona
     )
 
 
+def _combine_metric_stats(parts: list[dict]) -> dict:
+    results = []
+    for part in parts:
+        results.extend(part.get("results") or [])
+    combined = {
+        "resource_type": "metric_stats",
+        "metrics_source": "datadog",
+        "interval_ms": parts[0].get("interval_ms"),
+        "series_returned": sum(part.get("series_returned", 0) for part in parts),
+        "series_included": len(results),
+        "count": len(results),
+        "results": results,
+    }
+    notes = [part["note"] for part in parts if part.get("note")]
+    # A per-query warning has to survive the merge or the agent reads a partial window as complete.
+    if notes:
+        combined["note"] = " ".join(notes)
+    malformed = sum(part.get("malformed_series", 0) for part in parts)
+    if malformed:
+        combined["malformed_series"] = malformed
+        combined["malformed_note"] = " ".join(
+            part["malformed_note"] for part in parts if part.get("malformed_note")
+        )
+    window = next((part for part in parts if part.get("window_note")), None)
+    if window:
+        combined["window_exceeds_point_cap"] = True
+        combined["window_note"] = window["window_note"]
+    if any(part.get("series_truncated") for part in parts):
+        combined["series_truncated"] = True
+    dropped = sum(part.get("series_dropped", 0) for part in parts)
+    if dropped:
+        combined["series_dropped"] = dropped
+    return combined
+
+
 def _p95_datadog(client, query: str, time_from: str, time_to: str, limit: int,
                  interval: Optional[int] = None) -> dict:
     """Datadog backend: fetch raw rolled-up points and reduce them in Python."""
+    expressions = _metric_expressions(query)
+    # The timeseries API accepts one expression. A comma-separated list is N calls.
+    if len(expressions) > 1:
+        parts = []
+        for expr in expressions:
+            part = _p95_datadog(client, expr, time_from, time_to, limit, interval)
+            for row in part.get("results") or []:
+                row["query"] = expr
+            parts.append(part)
+        return _combine_metric_stats(parts)
+
+    query = expressions[0]
     start_ms = _to_unix_ms(time_from)
     end_ms = _to_unix_ms(time_to)
     chosen_interval = _pick_interval(end_ms - start_ms, interval)

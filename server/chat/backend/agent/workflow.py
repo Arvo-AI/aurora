@@ -23,6 +23,25 @@ from utils.security.output_redaction import redact as _redact
 
 logger = logging.getLogger(__name__)
 
+
+def _touch_in_progress_session(session_id: str, user_id: str) -> None:
+    """Bump updated_at. The stall sweep treats a quiet session as dead."""
+    if not session_id or not user_id:
+        return
+    try:
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[SessionHeartbeat]"):
+                    return
+                cursor.execute(
+                    "UPDATE chat_sessions SET updated_at = NOW() WHERE id = %s AND status = 'in_progress'",
+                    (session_id,),
+                )
+            conn.commit()
+    except Exception:
+        logger.debug("session heartbeat failed", exc_info=True)
+
 # Async-safe context variable: holds the pending guardrails check task so
 # agentic_tool_flow can await it concurrently with its own setup work.
 import contextvars
@@ -1059,10 +1078,19 @@ class Workflow:
             "request_count": 0,
         }
         _USAGE_UPDATE_INTERVAL = 3  # Yield usage_update every N output chunks
+        _last_session_touch = 0.0
         
         try:
             async for event in self.app.astream_events(input_state, self.config, version="v2"):
                 _event_count += 1
+                # A live run must move updated_at or the 20-minute stall sweep kills it.
+                if (
+                    input_state.session_id
+                    and input_state.user_id
+                    and _time.monotonic() - _last_session_touch >= 5 * 60
+                ):
+                    _last_session_touch = _time.monotonic()
+                    _touch_in_progress_session(input_state.session_id, input_state.user_id)
                 event_type = event.get("event")
                 event_name = event.get("name", "")
                 

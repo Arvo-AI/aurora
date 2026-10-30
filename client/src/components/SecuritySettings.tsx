@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
@@ -27,14 +28,23 @@ const CONNECTOR_ICONS: Record<string, string> = {
 
 const ALWAYS_SHOW_CONNECTORS = new Set(["terraform"]);
 
+type AllowAccess = "off" | "agent" | "always";
+
+function allowAccess(rule: CommandPolicyRule): AllowAccess {
+  if (!rule.enabled) return "off";
+  return rule.scope === "read_only" ? "always" : "agent";
+}
+
 function RuleList({
   rules,
   onToggle,
   onDelete,
+  onAccess,
 }: {
   rules: CommandPolicyRule[];
-  onToggle: (rule: CommandPolicyRule) => void;
+  onToggle?: (rule: CommandPolicyRule) => void;
   onDelete: (id: number) => void;
+  onAccess?: (rule: CommandPolicyRule, access: AllowAccess) => void;
 }) {
   if (rules.length === 0) {
     return (
@@ -50,12 +60,28 @@ function RuleList({
             !rule.enabled ? "opacity-50" : ""
           }`}
         >
-          <Switch
-            checked={rule.enabled}
-            onCheckedChange={() => onToggle(rule)}
-            className="shrink-0 scale-90"
-            aria-label={`Toggle rule: ${rule.pattern}`}
-          />
+          {onAccess ? (
+            <Select
+              value={allowAccess(rule)}
+              onValueChange={(value) => onAccess(rule, value as AllowAccess)}
+            >
+              <SelectTrigger className="h-7 w-[11rem] shrink-0 text-xs" aria-label={`Access for ${rule.pattern}`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="off">Deactivated</SelectItem>
+                <SelectItem value="agent">Agent mode only</SelectItem>
+                <SelectItem value="always">Always allowed</SelectItem>
+              </SelectContent>
+            </Select>
+          ) : (
+            <Switch
+              checked={rule.enabled}
+              onCheckedChange={() => onToggle?.(rule)}
+              className="shrink-0 scale-90"
+              aria-label={`Toggle rule: ${rule.pattern}`}
+            />
+          )}
           <code className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-mono min-w-0 overflow-x-auto whitespace-nowrap scrollbar-thin">
             {rule.pattern}
           </code>
@@ -86,11 +112,12 @@ function AddRuleForm({
   onCancel,
 }: {
   mode: "allow" | "deny";
-  onAdd: (pattern: string, description: string) => void;
+  onAdd: (pattern: string, description: string, access: AllowAccess) => void;
   onCancel: () => void;
 }) {
   const [pattern, setPattern] = useState("");
   const [desc, setDesc] = useState("");
+  const [access, setAccess] = useState<AllowAccess>("always");
 
   return (
     <div className="border-t p-3 space-y-2 bg-muted/20">
@@ -100,7 +127,7 @@ function AddRuleForm({
           <Input
             value={pattern}
             onChange={(e) => setPattern(e.target.value)}
-            placeholder={mode === "deny" ? "\\bsudo\\b" : "^ls\\b"}
+            placeholder={mode === "deny" ? "\\bsudo\\b" : "check-disk"}
             className="font-mono text-xs bg-background h-7"
           />
         </div>
@@ -109,17 +136,33 @@ function AddRuleForm({
           <Input
             value={desc}
             onChange={(e) => setDesc(e.target.value)}
-            placeholder={mode === "deny" ? "Block sudo" : "Allow ls"}
+            placeholder={mode === "deny" ? "Block sudo" : "Custom SSH health check"}
             className="bg-background h-7 text-xs"
           />
         </div>
       </div>
+      {mode === "allow" && (
+        <Select value={access} onValueChange={(value) => setAccess(value as AllowAccess)}>
+          <SelectTrigger className="h-7 w-[11rem] text-xs" aria-label="Access for the new command">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="off">Deactivated</SelectItem>
+            <SelectItem value="agent">Agent mode only</SelectItem>
+            <SelectItem value="always">Always allowed</SelectItem>
+          </SelectContent>
+        </Select>
+      )}
       <div className="flex gap-2">
         <Button
           size="sm"
           className="h-6 text-xs"
           disabled={!pattern.trim() || !desc.trim()}
-          onClick={() => { if (pattern.trim() && desc.trim()) onAdd(pattern.trim(), desc.trim()); }}
+          onClick={() => {
+            if (pattern.trim() && desc.trim()) {
+              onAdd(pattern.trim(), desc.trim(), mode === "allow" ? access : "agent");
+            }
+          }}
         >
           Add
         </Button>
@@ -289,7 +332,7 @@ export function SecuritySettings() {
   const [showAddDeny, setShowAddDeny] = useState(false);
 
   const [testCmd, setTestCmd] = useState("");
-  const [testResult, setTestResult] = useState<{ allowed: boolean; rule_description: string | null } | null>(null);
+  const [testResult, setTestResult] = useState<{ allowed: boolean; ask_allowed?: boolean; rule_description: string | null; overlapped_allow?: string | null } | null>(null);
   const [testLoading, setTestLoading] = useState(false);
 
   const [templates, setTemplates] = useState<PolicyTemplate[]>([]);
@@ -366,14 +409,35 @@ export function SecuritySettings() {
     }
   };
 
-  const handleAddRule = async (mode: "allow" | "deny", pattern: string, description: string) => {
+  const handleAddRule = async (
+    mode: "allow" | "deny",
+    pattern: string,
+    description: string,
+    access: AllowAccess = "agent",
+  ) => {
     try {
-      await commandPolicyService.createPolicy({ mode, pattern, description, priority: 50 });
-      mode === "allow" ? setShowAddAllow(false) : setShowAddDeny(false);
+      await commandPolicyService.createPolicy({
+        mode, pattern, description, priority: 50,
+        scope: mode === "allow" && access === "always" ? "read_only" : "agent",
+        enabled: mode === "deny" || access !== "off",
+      });
+      setShowAddAllow(false);
+      setShowAddDeny(false);
       await fetchPolicies();
       toast({ title: "Rule added" });
     } catch (e) {
       toast({ title: e instanceof Error ? e.message : "Failed to add rule", variant: "destructive" });
+    }
+  };
+
+  const handleAccess = async (rule: CommandPolicyRule, access: AllowAccess) => {
+    try {
+      await commandPolicyService.updatePolicy(rule.id, access === "off"
+        ? { enabled: false }
+        : { enabled: true, scope: access === "always" ? "read_only" : "agent" });
+      await fetchPolicies();
+    } catch {
+      toast({ title: "Failed to update rule", variant: "destructive" });
     }
   };
 
@@ -685,16 +749,16 @@ export function SecuritySettings() {
             <div>
               <h3 className="text-sm font-medium">Allowlist</h3>
               <p className="text-[11px] text-muted-foreground">
-                {allowlistEnabled ? "Only commands matching these patterns are allowed" : "Disabled -- commands are not filtered by this list"}
+                {allowlistEnabled
+                  ? "Agent mode only runs in Agent mode. Always allowed also runs in Ask mode."
+                  : "Always allowed still runs in Ask mode. Turn this on to make the table the only commands Agent mode may run."}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 ml-3">
-            {allowlistEnabled && (
-              <Button size="sm" variant="ghost" className="h-6 text-xs gap-1" onClick={() => setShowAddAllow(!showAddAllow)}>
-                <Plus className="h-3 w-3" /> Add
-              </Button>
-            )}
+            <Button size="sm" variant="ghost" className="h-6 text-xs gap-1" onClick={() => setShowAddAllow(!showAddAllow)}>
+              <Plus className="h-3 w-3" /> Add
+            </Button>
             <Switch
               checked={allowlistEnabled}
               onCheckedChange={(v) => handleToggleList("allowlist", v)}
@@ -703,17 +767,13 @@ export function SecuritySettings() {
             />
           </div>
         </div>
-        {allowlistEnabled && (
-          <>
-            <RuleList rules={allowRules} onToggle={handleToggleRule} onDelete={handleDeleteRule} />
-            {showAddAllow && (
-              <AddRuleForm
-                mode="allow"
-                onAdd={(p, d) => handleAddRule("allow", p, d)}
-                onCancel={() => setShowAddAllow(false)}
-              />
-            )}
-          </>
+        <RuleList rules={allowRules} onDelete={handleDeleteRule} onAccess={handleAccess} />
+        {showAddAllow && (
+          <AddRuleForm
+            mode="allow"
+            onAdd={(p, d, access) => handleAddRule("allow", p, d, access)}
+            onCancel={() => setShowAddAllow(false)}
+          />
         )}
       </div>
 
@@ -762,7 +822,14 @@ export function SecuritySettings() {
                 </p>
                 <p className="text-[11px] text-muted-foreground truncate">
                   {testResult.rule_description || "No matching rule"}
+                  {testResult.allowed && testResult.ask_allowed === false ? " · blocked in Ask mode" : ""}
+                  {testResult.allowed && testResult.ask_allowed ? " · allowed in Ask mode" : ""}
                 </p>
+                {testResult.overlapped_allow && (
+                  <p className="text-[11px] text-foreground">
+                    Also matches allow rule "{testResult.overlapped_allow}". The deny rule wins.
+                  </p>
+                )}
               </div>
             </div>
           )}

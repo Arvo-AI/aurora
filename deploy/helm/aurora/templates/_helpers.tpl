@@ -190,3 +190,73 @@ If existingSecret is set, use the user-provided name; otherwise use the chart-ma
 {{- include "aurora.fullname" . -}}-secrets-llm
 {{- end -}}
 {{- end -}}
+
+{{/*
+extraEnv wins over the ConfigMap. A timeout set there would outlive the
+grace period and proxy limits, which only read config.
+*/}}
+{{- define "aurora.rejectInvestigationTimeoutOverride" -}}
+{{- range .Values.extraEnv }}
+{{- if eq .name "INVESTIGATION_TIMEOUT_SECONDS" }}
+{{- fail "Set config.INVESTIGATION_TIMEOUT_SECONDS, not extraEnv. extraEnv overrides the ConfigMap, so worker grace and proxy timeouts would not match the pod." }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Investigation hard limit in seconds. Same clamp as chat/investigation_timeout.py
+(default 3600, range 120–10800). Accepts Python int forms (+9000, 9_000).
+Anything else uses 3600.
+*/}}
+{{- define "aurora.investigationTimeoutSeconds" -}}
+{{- include "aurora.rejectInvestigationTimeoutOverride" . }}
+{{- $raw := .Values.config.INVESTIGATION_TIMEOUT_SECONDS | default "3600" | toString | trim | replace "_" "" -}}
+{{- if regexMatch "^[+][0-9]+$" $raw -}}
+{{- $raw = trimPrefix "+" $raw -}}
+{{- end -}}
+{{- if regexMatch "^-[0-9]+$" $raw -}}
+120
+{{- else if not (regexMatch "^[0-9]+$" $raw) -}}
+3600
+{{- else -}}
+{{/* sprig int parses a leading 0 as octal; atoi stays decimal, matching Python */}}
+{{- $n := atoi $raw -}}
+{{- if lt $n 120 -}}
+120
+{{- else if gt $n 10800 -}}
+10800
+{{- else -}}
+{{ $n }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Celery worker grace. At least the investigation timeout plus 60s, so a
+rolling update does not SIGKILL a task that just started. A higher
+explicit value is kept.
+*/}}
+{{- define "aurora.celeryTerminationGraceSeconds" -}}
+{{- $timeout := include "aurora.investigationTimeoutSeconds" . | trim | int -}}
+{{- $minGrace := add $timeout 60 -}}
+{{- $configured := .Values.celeryWorker.terminationGracePeriodSeconds | default 0 | int -}}
+{{- if lt $configured $minGrace -}}
+{{ $minGrace }}
+{{- else -}}
+{{ $configured }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Floor a duration at the investigation timeout. Pass
+(dict "root" $ "value" <configured seconds>).
+*/}}
+{{- define "aurora.atLeastInvestigationTimeout" -}}
+{{- $timeout := include "aurora.investigationTimeoutSeconds" .root | trim | int -}}
+{{- $configured := .value | default $timeout | int -}}
+{{- if lt $configured $timeout -}}
+{{ $timeout }}
+{{- else -}}
+{{ $configured }}
+{{- end -}}
+{{- end -}}

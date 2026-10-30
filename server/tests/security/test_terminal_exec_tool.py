@@ -493,3 +493,32 @@ class TestTerminalExecInvokesHelpers:
         parsed = json.loads(result)
         assert parsed["success"] is False
         assert parsed["code"] == "POLICY_DENY"
+
+    def test_ask_mode_refusal_names_an_overlapping_allow_rule(self, cleanup_lazy_module_stubs, monkeypatch):
+        transform_spy = MagicMock(side_effect=_transform_ssh_jump_to_proxy)
+        metachar_spy = MagicMock(side_effect=_has_shell_metacharacters)
+        terminal_exec, stubs = _load_terminal_exec_with_spies(transform_spy, metachar_spy)
+        sys.modules["utils.cloud.cloud_utils"].get_mode_from_context.return_value = "ask"
+        import utils.auth.command_policy as command_policy
+        monkeypatch.setattr(command_policy, "ask_mode_permits", lambda *_args, **_kwargs: False)
+        monkeypatch.setattr(
+            command_policy,
+            "ask_mode_overlap_note",
+            lambda *_args, **_kwargs: (
+                "Deny rule 'Block health checks' matches."
+                " It also matches allow rule 'Custom check'."
+                " The deny rule wins."
+            ),
+        )
+
+        blocked = terminal_exec(
+            command="ssh admin@198.51.100.1 my-healthcheck",
+            user_id="u-1",
+            session_id="s-1",
+        )
+
+        body = json.loads(blocked)
+        assert body["code"] == "READ_ONLY_MODE"
+        assert "Deny rule 'Block health checks' matches." in body["error"]
+        assert "It also matches allow rule 'Custom check'." in body["error"]
+        stubs.gate.assert_not_called()

@@ -124,8 +124,10 @@ limits drive throttling and OOM-kills. Say which field any number refers to.
 These are two different questions and must not be conflated:
 - **Reconciliation** -- "does our view match the team's?" Read the org's own monitor
   definitions with `resource_type='monitors'` to get their real `query` strings and
-  `options.thresholds`, then reproduce that formula exactly. This tells you which
-  workloads run hot. It is *not* the basis of any recommended number.
+  `options.thresholds`. Query each metric expression on its own. A monitor formula
+  (`a + b`, `avg:cpu{*} / avg:mem{*}`, comma-separated queries) is not itself a
+  metrics query. This tells you which workloads run hot. It is *not* the basis of
+  any recommended number.
 - **Sizing** -- "what should this value be?" Use `resource_type='metric_stats'` for the
   usage distribution over the window. Never derive a sizing number from a monitor threshold.
 
@@ -186,3 +188,6 @@ pass `account=<label>` on every subsequent step.
 - Group with `by {tag}` rather than issuing one query per workload -- a single grouped query
   returns every deployment at once. A 30-day multi-group query is close to the request timeout,
   so query one environment at a time.
+- `metrics` and `metric_stats` take one expression, such as `avg:system.cpu.user{env:prod,service:api}`.
+  A comma inside `{}` is a tag filter. Commas outside `{}` are separate expressions and are
+  queried one at a time. Do not send a formula (`+`, `-`, `*`, `/` between metrics).

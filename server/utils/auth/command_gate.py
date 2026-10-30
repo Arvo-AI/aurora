@@ -135,11 +135,15 @@ def gate_command(
     token = _gate_inflight_command.set(cmd_hash)
     approved_token = _guardrails_approved_command.set(None)
     try:
-        return _gate_impl(user_id=user_id, tool_name=tool_name, command=command,
-                          cmd_hash=cmd_hash)
+        decision = _gate_impl(user_id=user_id, tool_name=tool_name, command=command,
+                              cmd_hash=cmd_hash)
     finally:
         _gate_inflight_command.reset(token)
         _guardrails_approved_command.reset(approved_token)
+    # Set after the reset, or terminal_run never sees the hash.
+    if decision.allowed:
+        _guardrails_approved_command.set(cmd_hash)
+    return decision
 
 
 def _is_org_tool_permitted(tool_name: str) -> bool:
@@ -301,6 +305,7 @@ def mark_session_tainted(session_id: Optional[str], user_id: Optional[str]) -> N
 def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> GateDecision:
     from utils.auth.command_policy import (
         evaluate_compound_command, CommandVerdict, plan_yes_always,
+        read_only_allow_covers as _read_only_allow_covers,
     )
     from utils.auth.stateless_auth import get_org_id_for_user
     from utils.security.command_safety import evaluate_command as safety_evaluate
@@ -314,17 +319,22 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
     # would have also fired.
     safety_decision = safety_evaluate(
         command, tool=tool_name, user_id=user_id, session_id=session_id,
+        skip_judge=bool(org_id and _read_only_allow_covers(org_id, command)),
     )
     policy_verdict: CommandVerdict = evaluate_compound_command(org_id, command)
+    # A Yes click must not run a command that compromises the Aurora host.
+    if policy_verdict.platform_blocked:
+        return _block(
+            "POLICY_DENIED",
+            "Command blocked by platform policy: "
+            + (policy_verdict.rule_description or "not permitted"),
+        )
 
     safety_blocked = safety_decision.blocked
     policy_blocked = not policy_verdict.allowed
     tainted = foreground and is_session_tainted(session_id, user_id)
 
     if not (safety_blocked or policy_blocked or tainted):
-        # Tell terminal_run._check_guardrails it may skip re-running
-        # signature+judge for this command on the same invocation.
-        _guardrails_approved_command.set(cmd_hash)
         return _ALLOWED
 
     # Compose the block code/reason/layer from whichever layers fired.
@@ -352,10 +362,9 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
     if safety_blocked:
         reasons.append(f"safety guardrail: {safety_decision.reason}")
     if policy_blocked:
-        reasons.append(
-            "organization policy: "
-            + (policy_verdict.rule_description or "matched organization policy")[:200]
-        )
+        reasons.append(_policy_reason(
+            policy_verdict.rule_description, policy_verdict.overlapped_allow,
+        ))
     if tainted:
         reasons.append("session flagged by input safety check; approval required")
     block_reason = "Command blocked by " + "; ".join(reasons)
@@ -379,9 +388,22 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
         org_id=org_id if policy_blocked else None,
         cmd_hash=cmd_hash,
     )
-    if decision.allowed:
-        _guardrails_approved_command.set(cmd_hash)
     return decision
+
+
+def _policy_reason(rule_description: Optional[str], overlapped_allow: Optional[str]) -> str:
+    """Block sentence for an org-policy denial."""
+    description = (rule_description or "matched organization policy")[:200]
+    # "SSH access (use ...) It also matches" reads as one run-on sentence.
+    if overlapped_allow and description[-1:] not in ".!?":
+        description += "."
+    overlap = ""
+    if overlapped_allow:
+        overlap = (
+            f" It also matches allow rule '{overlapped_allow[:120]}'."
+            " The deny rule wins."
+        )
+    return "organization policy: " + description + overlap
 
 
 def _user_is_org_admin(user_id: str, org_id: Optional[str]) -> bool:
