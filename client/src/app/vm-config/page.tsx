@@ -292,17 +292,38 @@ export default function VMConfig() {
   };
 
   const reloadManualList = async (failure: { title: string; description: string }) => {
-    const generation = ++loadGeneration.current;
-    const manualList = await fetchManualVms();
-    // A newer reload or a verified check already published the list
-    if (generation !== loadGeneration.current) return manualList !== null;
-    // [] is a real empty list; null is a failed reload
-    if (manualList === null) {
-      toast({ ...failure, variant: "destructive" });
-      return false;
+    let generation = ++loadGeneration.current;
+    // One retry: a verified check can invalidate the first GET without publishing this save
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const manualList = await fetchManualVms();
+      if (generation !== loadGeneration.current) {
+        // The list did not land. Do not tell the caller this refresh succeeded.
+        if (manualList === null || attempt === 1) {
+          toast({ ...failure, variant: "destructive" });
+          return false;
+        }
+        generation = loadGeneration.current;
+        continue;
+      }
+      // [] is a real empty list; null is a failed reload
+      if (manualList === null) {
+        toast({ ...failure, variant: "destructive" });
+        return false;
+      }
+      publishManualList(manualList);
+      return true;
     }
-    publishManualList(manualList);
-    return true;
+    return false;
+  };
+
+  const setAutoCredential = (vmId: string, configured: boolean) => {
+    const apply = (item: VM): VM =>
+      item.id === vmId ? { ...item, sshKeyConfigured: configured } : item;
+    const nextAuto = autoVmsRef.current.map(apply);
+    autoVmsRef.current = nextAuto;
+    setAutoVms(nextAuto);
+    setVms((prev) => prev.map(apply));
+    saveCache(nextAuto, manualVmsRef.current, sshKeysRef.current);
   };
 
   const syncVms = (autoList: VM[], manualList: VM[]) => {
@@ -489,11 +510,7 @@ export default function VMConfig() {
 
       // Drop a load that started before this save so it cannot clear Ready
       loadGeneration.current += 1;
-      setVms((prev) =>
-        prev.map((item) =>
-          item.id === vmId ? { ...item, sshKeyConfigured: true } : item,
-        ),
-      );
+      setAutoCredential(vmId, true);
 
       setSshUsernames((names) => {
         const next = { ...names };
@@ -555,11 +572,7 @@ export default function VMConfig() {
 
       // Drop a load that started before this delete so it cannot restore Ready
       loadGeneration.current += 1;
-      setVms((prev) =>
-        prev.map((item) =>
-          item.id === vmId ? { ...item, sshKeyConfigured: false } : item,
-        ),
-      );
+      setAutoCredential(vmId, false);
       setExpandedVMs((prev) => new Set(prev).add(vmId));
       window.dispatchEvent(new CustomEvent("providerStateChanged"));
 
