@@ -720,7 +720,7 @@ For production, use [KMS auto-unseal](./vault-kms-setup).
 kubectl get events -n aurora-oss --sort-by='.lastTimestamp'
 ```
 
-GHCR prebuilt images are public (no auth needed). For a private registry, set `image.pullSecrets`. A frontend or mirrored dependency in a second registry can set `image.images.<name>.pullSecrets` instead; that list replaces the global one for that image only.
+GHCR prebuilt images are public (no auth needed). For a private registry, set `image.pullSecrets`. A frontend or mirrored dependency in a second registry can set `image.images.<name>.pullSecrets` instead; that list replaces the global one for that image only. An empty list attaches no pull secret.
 
 ### EKS: nip.io URLs not working
 

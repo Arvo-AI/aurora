@@ -122,8 +122,8 @@ pin cannot replace a private build. frontendImage fills empty frontend fields.
 {{/*
 Pull secrets for the named image. Aurora images use image.pullSecrets.
 Third-party images do too only when pointed at a private registry — a secret
-that cannot see the public registry fails those pulls. Per-image pullSecrets
-replace the global list; frontendImage.pullSecrets is the legacy frontend list.
+that cannot see the public registry fails those pulls. A set pullSecrets list,
+including [], replaces that fallback. frontendImage is the legacy frontend list.
 */}}
 {{- define "aurora.imagePullSecrets" -}}
 {{- $name := .image -}}
@@ -133,11 +133,19 @@ replace the global list; frontendImage.pullSecrets is the legacy frontend list.
 {{- if $img.images -}}
 {{- $over = index $img.images $name | default dict -}}
 {{- end -}}
+{{- /* [] is a real override. A missing key is what falls through. */ -}}
+{{- $explicit := hasKey $over "pullSecrets" -}}
 {{- $secrets := $over.pullSecrets -}}
-{{- if and (not $secrets) (eq $name "frontend") $ctx.Values.frontendImage -}}
-{{- $secrets = $ctx.Values.frontendImage.pullSecrets -}}
+{{- if and (not $explicit) (eq $name "frontend") $ctx.Values.frontendImage -}}
+{{- $legacy := $ctx.Values.frontendImage -}}
+{{- /* Same rule one level down: [] on the legacy key must not inherit the global list. */ -}}
+{{- if hasKey $legacy "pullSecrets" -}}
+{{- $explicit = true -}}
 {{- end -}}
-{{- if not $secrets -}}
+{{- $secrets = $legacy.pullSecrets -}}
+{{- end -}}
+{{- /* Omitted key still inherits the global secret for Aurora images and private registries. */ -}}
+{{- if not $explicit -}}
 {{- $private := $over.registry | default "" -}}
 {{- if and (not $private) (eq $name "frontend") $ctx.Values.frontendImage -}}
 {{- $private = $ctx.Values.frontendImage.registry | default "" -}}
