@@ -117,6 +117,32 @@ def may_use_roles(
     return creds is None or bool(creds)
 
 
+def _role_name(role_arn: str) -> str:
+    # The name is the last segment after role/, so a path cannot spoof it.
+    marker = ":role/"
+    if marker not in role_arn:
+        return ""
+    return role_arn.split(marker, 1)[1].rsplit("/", 1)[-1]
+
+
+def _is_setup_read_only_role(role_arn: str, read_only_role_arn: Optional[str]) -> bool:
+    # The ARN stored as the read role is read-only whatever its name is.
+    if read_only_role_arn and role_arn == read_only_role_arn:
+        return True
+    name = _role_name(role_arn)
+    # CloudFormation uses AuroraReadOnly-${StackName}. Older setups use AuroraReadOnlyRole.
+    return name == "AuroraReadOnlyRole" or name.startswith("AuroraReadOnly-")
+
+
+def _drop_session_policy_for_read_only_role(
+    role_arn: str, use_session_policy: bool, read_only_role_arn: Optional[str],
+):
+    # A session policy can only remove permissions, so it hides reads the role already has.
+    if use_session_policy and _is_setup_read_only_role(role_arn, read_only_role_arn):
+        return role_arn, False
+    return role_arn, use_session_policy
+
+
 def select_aws_role(conn: dict, creds: Optional[frozenset], ask_mode: bool):
     """Which role ARN to assume, and whether to add a read-only session policy.
 
@@ -128,25 +154,25 @@ def select_aws_role(conn: dict, creds: Optional[frozenset], ask_mode: bool):
     read = conn.get("read_only_role_arn")
     if not write:
         return None, False
-    # Not limited: Ask mode prefers the read-only role, and falls back to a
-    # session policy on the modify role when that role was never configured.
+    # Not limited: Ask mode prefers the read-only role, and otherwise uses a
+    # session policy unless role_arn is the setup's read-only role.
     if creds is None:
         if ask_mode and read:
             return read, False
-        return write, ask_mode
+        return _drop_session_policy_for_read_only_role(write, ask_mode, read)
     if not creds:
         return None, False
-    # A read grant never assumes the modify role, including in Agent mode.
+    # A read grant never assumes a separate modify role, including in Agent mode.
     if CREDENTIAL_WRITE not in creds:
         if read:
             return read, False
-        return write, True
+        return _drop_session_policy_for_read_only_role(write, True, read)
     # Write grant. Ask mode still prefers the read-only role, and otherwise
     # intersects the modify role with a read-only session policy.
     if ask_mode:
         if read:
             return read, False
-        return write, True
+        return _drop_session_policy_for_read_only_role(write, True, read)
     return write, False
 
 
