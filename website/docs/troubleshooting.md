@@ -53,7 +53,7 @@ If older, update Docker Desktop or install the latest Docker Compose.
 
 1. Get the root token:
 ```bash
-docker logs vault-init 2>&1 | grep "Root Token:"
+docker logs aurora-vault-init 2>&1 | grep "Root Token:"
 ```
 
 2. Add to `.env`:
@@ -71,7 +71,7 @@ make down && make prod-prebuilt   # or: make prod-local
 **Solution**:
 
 ```bash
-docker restart vault-init
+docker restart aurora-vault-init
 ```
 
 The init container will auto-unseal Vault.

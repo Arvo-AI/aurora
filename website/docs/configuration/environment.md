@@ -212,7 +212,7 @@ VAULT_KV_BASE_PATH=users
 :::info Getting Vault Token
 On first startup, get the root token from:
 ```bash
-docker logs vault-init 2>&1 | grep "Root Token:"
+docker logs aurora-vault-init 2>&1 | grep "Root Token:"
 ```
 :::
 
