@@ -519,7 +519,7 @@ Stock Aurora images should then read `:<X.Y.Z>` (or `@sha256:…` if digest-pinn
 
 If you need images in a private registry instead of GHCR:
 
-`make deploy-build` pushes the server image to `image.images.server.registry` (or `image.registry`) and the frontend image to `image.images.frontend.registry` when that image is still `aurora-frontend`. A frontend `repository` other than `aurora-frontend` is left as configured. For the stock names it writes the new tag to `image.tag` and removes `image.images.server.tag` and `image.images.frontend.tag`, so a digest overlay and `--set-string image.tag=` still apply. A renamed server repository gets `image.images.server.tag`, because that image does not follow `image.tag`.
+`make deploy-build` pushes the server image to `image.images.server.registry` (or `image.registry`) and the frontend image to `image.images.frontend.registry` when that image is still `aurora-frontend`. A frontend `repository` other than `aurora-frontend` is left as configured. For the stock names it writes the new tag to `image.tag` and removes `image.images.server.tag`, `image.images.frontend.tag`, and a legacy `frontendImage.tag`, so a digest overlay and `--set-string image.tag=` still apply. It refuses to push when the registry is still the chart default, `ghcr.io/arvo-ai`. A renamed server repository gets `image.images.server.tag`, because that image does not follow `image.tag`.
 
 ```bash
 # Automated (reads registries from values.generated.yaml, builds multi-arch, pushes):
