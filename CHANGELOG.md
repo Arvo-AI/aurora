@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.15] - 2026-11-03
+
 ### Changed
 - Helm: `image.registry` defaults to `ghcr.io/arvo-ai`. The release digest
   overlay pins digests only, so installing with just
@@ -19,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `image.images.server.tag` only when the server repository is renamed, and
   drops a stock per-image tag left from an earlier run. A digest overlay and
   `--set-string image.tag=` apply to those stock images again.
+- AWS Ask mode: a role named `AuroraReadOnly-*` or `AuroraReadOnlyRole` is
+  assumed without the read-only session policy, so a call `ReadOnlyAccess`
+  already allows is no longer rejected. A configured read role was already
+  assumed that way. Ask mode on any other role still applies the session policy.
 
 ## [1.5.14] - 2026-10-28
 
