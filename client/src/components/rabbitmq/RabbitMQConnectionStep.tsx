@@ -49,10 +49,34 @@ export function RabbitMQConnectionStep({
             <p className="text-muted-foreground">
               Aurora reads the RabbitMQ management HTTP API. It does not publish, purge, or fetch message bodies.
             </p>
-            <ol className="space-y-2 list-decimal list-inside">
-              <li>Enable the management plugin and note its URL, usually port 15672.</li>
-              <li>Create a user with the <span className="font-medium">monitoring</span> tag. Administrator also works, but monitoring cannot change the broker.</li>
-              <li>The URL must be reachable from this Aurora deployment. Private network addresses are allowed.</li>
+            <ol className="space-y-3 list-decimal list-inside">
+              <li>
+                <span className="font-medium">Turn on the management plugin.</span>
+                <span className="block text-muted-foreground mt-1">
+                  The Docker image <code>rabbitmq:3-management</code> already has it. Publish port 15672.
+                  On a package install, run this on the broker:
+                </span>
+                <pre className="mt-2 rounded bg-muted/60 border p-2 overflow-auto text-[11px] leading-snug font-mono">rabbitmq-plugins enable rabbitmq_management</pre>
+                <span className="block text-muted-foreground mt-1">
+                  The HTTP API then listens on port 15672. Port 5672 is AMQP and will not work here.
+                </span>
+              </li>
+              <li>
+                <span className="font-medium">Create a user with the monitoring tag.</span>
+                <span className="block text-muted-foreground mt-1">
+                  Run these on the broker. In Docker, prefix each line with <code>docker exec &lt;container&gt;</code>.
+                  Replace the password. The empty configure and write patterns mean this password cannot publish or change definitions.
+                </span>
+                <pre className="mt-2 rounded bg-muted/60 border p-2 overflow-auto text-[11px] leading-snug font-mono">{`rabbitmqctl add_user aurora-monitor 'choose-a-password'
+rabbitmqctl set_user_tags aurora-monitor monitoring
+rabbitmqctl set_permissions -p / aurora-monitor "^$" "^$" ".*"`}</pre>
+              </li>
+              <li>
+                <span className="font-medium">Use a URL this Aurora server can reach.</span>
+                <span className="block text-muted-foreground mt-1">
+                  Private addresses are allowed. <code>localhost</code> is rejected, because the request comes from Aurora, not your browser.
+                </span>
+              </li>
             </ol>
             <div className="mt-4 p-3 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded">
               <p className="text-xs font-semibold text-orange-900 dark:text-orange-300">What Aurora reads</p>
