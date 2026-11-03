@@ -51,11 +51,6 @@ export function RabbitMQConnectedStatus({
             <p className="text-base font-semibold truncate" title={tags}>{tags}</p>
           </div>
         </div>
-        {status.verifyTls === false && (
-          <p className="text-sm text-orange-700 dark:text-orange-400">
-            TLS certificate verification is disabled for this broker.
-          </p>
-        )}
         <div className="flex justify-end">
           <Button variant="outline" onClick={onDisconnect} disabled={loading}>
             {loading ? "Disconnecting…" : "Disconnect RabbitMQ"}

@@ -251,7 +251,6 @@ def _check_rabbitmq(creds: Dict[str, Any]) -> Dict[str, Any]:
             url=url,
             username=username,
             password=password,
-            verify_tls=bool(creds.get("verify_tls", True)),
             # The batch status call gives up at LIVE_CHECK_TIMEOUT.
             timeout=4,
         )

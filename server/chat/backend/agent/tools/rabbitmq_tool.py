@@ -45,7 +45,6 @@ def _build_client(user_id: str) -> Optional[RabbitMQClient]:
             url=creds["url"],
             username=creds["username"],
             password=creds["password"],
-            verify_tls=bool(creds.get("verify_tls", True)),
             default_vhost=vhost if isinstance(vhost, str) and vhost else "/",
         )
     except Exception:

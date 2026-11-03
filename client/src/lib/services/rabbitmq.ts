@@ -12,7 +12,6 @@ export interface RabbitMQStatus {
   clusterName?: string;
   version?: string;
   tags?: string[];
-  verifyTls?: boolean;
   error?: string;
   validatedAt?: string;
 }
@@ -22,7 +21,6 @@ export interface RabbitMQConnectPayload {
   username: string;
   password: string;
   vhost?: string;
-  verify_tls: boolean;
 }
 
 export interface RabbitMQConnectResponse {
@@ -33,7 +31,6 @@ export interface RabbitMQConnectResponse {
   clusterName?: string;
   version?: string;
   tags?: string[];
-  verifyTls?: boolean;
 }
 
 const API_BASE = '/api/rabbitmq';
@@ -48,7 +45,6 @@ function asStatus(data: UnknownRecord | null): RabbitMQStatus | null {
     clusterName: (data.clusterName ?? data.cluster_name) as string | undefined,
     version: (data.version ?? data.rabbitmq_version) as string | undefined,
     tags: Array.isArray(data.tags) ? (data.tags as string[]) : [],
-    verifyTls: (data.verifyTls ?? data.verify_tls) as boolean | undefined,
     error: data.error as string | undefined,
     validatedAt: (data.validatedAt ?? data.validated_at) as string | undefined,
   };

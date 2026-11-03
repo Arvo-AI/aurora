@@ -57,16 +57,13 @@ def _public_connect_error(kind: str) -> str:
     if kind == "forbidden":
         return "This RabbitMQ user cannot read the management API. Grant the monitoring tag."
     if kind == "tls":
-        return "TLS verification failed. Reconnect with TLS verification disabled if the broker uses a private CA."
+        return "TLS verification failed. Check RABBITMQ_SSL_VERIFY."
     if kind == "timeout":
         return "Timed out reaching the RabbitMQ management API"
     return "Unable to reach the RabbitMQ management API"
 
 
 def _client_from_payload(payload: Dict[str, Any]) -> RabbitMQClient:
-    verify_tls = payload.get("verify_tls", True)
-    if not isinstance(verify_tls, bool):
-        raise ValueError("verify_tls must be a boolean")
     url = payload.get("url")
     # A number or object would raise AttributeError inside the URL parser and become a 500.
     if url is not None and not isinstance(url, str):
@@ -75,7 +72,6 @@ def _client_from_payload(payload: Dict[str, Any]) -> RabbitMQClient:
         url=url or "",
         username=_clean_username(payload.get("username")),
         password=_clean_password(payload.get("password")),
-        verify_tls=verify_tls,
     )
 
 
@@ -93,9 +89,6 @@ def connect(user_id):
         logger.warning("[RABBITMQ] Rejected connection details")
         return jsonify({"error": "Invalid RabbitMQ connection details"}), 400
 
-    # TLS bypass is an explicit opt-in for private CAs. Log the host only.
-    if not client.verify_tls:
-        logger.warning("[RABBITMQ] TLS verification disabled for %s", sanitize(client.url))
     logger.info("[RABBITMQ] Connecting user %s to %s", hash_for_log(user_id), sanitize(client.url))
 
     try:
@@ -112,7 +105,6 @@ def connect(user_id):
         "username": client.username,
         "password": payload.get("password"),
         "vhost": vhost,
-        "verify_tls": client.verify_tls,
         "cluster_name": overview.get("cluster_name"),
         "rabbitmq_version": overview.get("rabbitmq_version"),
         "tags": who.get("tags") or [],
@@ -134,7 +126,6 @@ def connect(user_id):
         "clusterName": overview.get("cluster_name"),
         "version": overview.get("rabbitmq_version"),
         "tags": who.get("tags") or [],
-        "verifyTls": client.verify_tls,
     })
 
 
@@ -150,7 +141,6 @@ def status(user_id):
             url=creds["url"],
             username=creds["username"],
             password=creds["password"],
-            verify_tls=bool(creds.get("verify_tls", True)),
         )
     except ValueError:
         logger.warning("[RABBITMQ] Stored management URL is not usable")
@@ -174,7 +164,6 @@ def status(user_id):
         "clusterName": creds.get("cluster_name"),
         "version": creds.get("rabbitmq_version"),
         "tags": who.get("tags") or [],
-        "verifyTls": bool(creds.get("verify_tls", True)),
         "validatedAt": creds.get("validated_at"),
     })
 

@@ -16,7 +16,6 @@ export default function RabbitMQAuthPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [vhost, setVhost] = useState("");
-  const [skipTls, setSkipTls] = useState(false);
   const [status, setStatus] = useState<RabbitMQStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
@@ -92,7 +91,6 @@ export default function RabbitMQAuthPage() {
         username,
         password,
         vhost,
-        verify_tls: !skipTls,
       });
       setStatus({
         connected: true,
@@ -102,7 +100,6 @@ export default function RabbitMQAuthPage() {
         clusterName: result.clusterName,
         version: result.version,
         tags: result.tags,
-        verifyTls: result.verifyTls,
       });
       updateLocalStorageConnection(true);
       toast({
@@ -204,8 +201,6 @@ export default function RabbitMQAuthPage() {
             setPassword={setPassword}
             vhost={vhost}
             setVhost={setVhost}
-            skipTls={skipTls}
-            setSkipTls={setSkipTls}
             loading={loading}
             onConnect={handleConnect}
           />

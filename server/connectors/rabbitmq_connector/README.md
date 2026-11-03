@@ -15,7 +15,7 @@ Create a user with the `monitoring` tag. That tag can read queues, nodes, connec
 
 The URL must be reachable from Aurora. Loopback and link-local addresses (including cloud metadata) are rejected. Private network addresses are allowed.
 
-TLS verification is on unless the connect form disables it for a private CA.
+TLS verification follows `RABBITMQ_SSL_VERIFY` on the deployment: `false` (default), `true`, or a path to a CA bundle. The connect form does not choose this.
 
 ## What the agent can read
 

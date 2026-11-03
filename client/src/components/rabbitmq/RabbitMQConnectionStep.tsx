@@ -4,7 +4,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 
 interface RabbitMQConnectionStepProps {
   url: string;
@@ -15,8 +14,6 @@ interface RabbitMQConnectionStepProps {
   setPassword: (value: string) => void;
   vhost: string;
   setVhost: (value: string) => void;
-  skipTls: boolean;
-  setSkipTls: (value: boolean) => void;
   loading: boolean;
   onConnect: (event: React.FormEvent<HTMLFormElement>) => void;
 }
@@ -30,8 +27,6 @@ export function RabbitMQConnectionStep({
   setPassword,
   vhost,
   setVhost,
-  skipTls,
-  setSkipTls,
   loading,
   onConnect,
 }: Readonly<RabbitMQConnectionStepProps>) {
@@ -48,34 +43,19 @@ export function RabbitMQConnectionStep({
           <div className="p-4 pt-0 space-y-3 text-sm border-t">
             <p className="text-muted-foreground">
               Aurora reads the RabbitMQ management HTTP API. It does not publish, purge, or fetch message bodies.
+              Paste the URL you already use for the management UI. That is usually port 15672, not the AMQP port 5672.
+              <code>localhost</code> is rejected, because Aurora sends the request, not your browser.
             </p>
             <ol className="space-y-3 list-decimal list-inside">
               <li>
-                <span className="font-medium">Turn on the management plugin.</span>
+                <span className="font-medium">Create an account only Aurora uses.</span>
                 <span className="block text-muted-foreground mt-1">
-                  The Docker image <code>rabbitmq:3-management</code> already has it. Publish port 15672.
-                  On a package install, run this on the broker:
+                  RabbitMQ calls this a user. Give it the monitoring tag, not administrator, so it can read the management API and cannot change the broker.
+                  Set permissions on each vhost Aurora should see. The three patterns are configure, write, and read. <code>^$</code> grants nothing. The read pattern is the scope: <code>.*</code> is the whole vhost, and a narrower pattern limits which queues Aurora can see.
                 </span>
-                <pre className="mt-2 rounded bg-muted/60 border p-2 overflow-auto text-[11px] leading-snug font-mono">rabbitmq-plugins enable rabbitmq_management</pre>
-                <span className="block text-muted-foreground mt-1">
-                  The HTTP API then listens on port 15672. Port 5672 is AMQP and will not work here.
-                </span>
-              </li>
-              <li>
-                <span className="font-medium">Create a user with the monitoring tag.</span>
-                <span className="block text-muted-foreground mt-1">
-                  Run these on the broker. In Docker, prefix each line with <code>docker exec &lt;container&gt;</code>.
-                  Replace the password. The empty configure and write patterns mean this password cannot publish or change definitions.
-                </span>
-                <pre className="mt-2 rounded bg-muted/60 border p-2 overflow-auto text-[11px] leading-snug font-mono">{`rabbitmqctl add_user aurora-monitor 'choose-a-password'
-rabbitmqctl set_user_tags aurora-monitor monitoring
-rabbitmqctl set_permissions -p / aurora-monitor "^$" "^$" ".*"`}</pre>
-              </li>
-              <li>
-                <span className="font-medium">Use a URL this Aurora server can reach.</span>
-                <span className="block text-muted-foreground mt-1">
-                  Private addresses are allowed. <code>localhost</code> is rejected, because the request comes from Aurora, not your browser.
-                </span>
+                <pre className="mt-2 rounded bg-muted/60 border p-2 overflow-auto text-[11px] leading-snug font-mono">{`rabbitmqctl add_user <username> <password>
+rabbitmqctl set_user_tags <username> monitoring
+rabbitmqctl set_permissions -p <vhost> <username> "^$" "^$" "<read-pattern>"`}</pre>
               </li>
             </ol>
             <div className="mt-4 p-3 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded">
@@ -145,19 +125,6 @@ rabbitmqctl set_permissions -p / aurora-monitor "^$" "^$" ".*"`}</pre>
                 <p className="text-xs text-muted-foreground">
                   Used when an investigation does not name a vhost. Leave blank for /.
                 </p>
-              </div>
-              <div className="flex items-start gap-2">
-                <Checkbox
-                  id="rabbitmq-skip-tls"
-                  checked={skipTls}
-                  onCheckedChange={(checked) => setSkipTls(checked === true)}
-                />
-                <div>
-                  <Label htmlFor="rabbitmq-skip-tls">Skip TLS certificate verification</Label>
-                  <p className="text-xs text-muted-foreground">
-                    Only for a private CA. Leave this off when the broker has a public certificate.
-                  </p>
-                </div>
               </div>
               <div className="pt-2">
                 <Button type="submit" disabled={loading} className="w-full md:w-auto">

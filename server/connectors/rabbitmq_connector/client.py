@@ -12,6 +12,8 @@ from urllib.parse import quote, urlparse
 
 import requests
 
+from utils.rabbitmq_config import RABBITMQ_SSL_VERIFY
+
 logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 20
@@ -366,19 +368,17 @@ class RabbitMQClient:
         url: str,
         username: str,
         password: str,
-        verify_tls: bool = True,
         timeout: int = TIMEOUT_SECONDS,
         default_vhost: str = "/",
         session: Optional[requests.Session] = None,
     ):
         self.url = normalize_management_url(url)
         self.username = username
-        self.verify_tls = verify_tls
         self.timeout = timeout
         self.default_vhost = default_vhost or "/"
         self._session = session or requests.Session()
         self._session.auth = (username, password)
-        self._session.verify = verify_tls
+        self._session.verify = RABBITMQ_SSL_VERIFY
         # Ignore HTTP_PROXY so a process-wide proxy cannot re-resolve the host.
         self._session.trust_env = False
         self._session.headers["Accept"] = "application/json"
@@ -579,7 +579,7 @@ class RabbitMQClient:
             ) from exc
         except requests.exceptions.SSLError as exc:
             raise RabbitMQAPIError(
-                "TLS verification failed. Reconnect with TLS verification disabled if the broker uses a private CA.",
+                "TLS verification failed. Check RABBITMQ_SSL_VERIFY.",
                 kind="tls",
             ) from exc
         except requests.exceptions.ConnectionError as exc:
