@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.16] - 2026-11-03
+
+### Fixed
+- Celery workers: pin kombu 5.6.2. kombu 5.7.0, published 2026-11-03,
+  refuses redis-py older than 6.1.0, and the 1.5.15 image installed it because
+  kombu was unpinned. Celery stays 5.3.6 and redis-py stays 5.0.1. The API,
+  frontend, chatbot, and MCP do not open that transport.
+
 ## [1.5.15] - 2026-11-03
 
 ### Changed
