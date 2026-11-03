@@ -125,20 +125,15 @@ def _role_name(role_arn: str) -> str:
     return role_arn.split(marker, 1)[1].rsplit("/", 1)[-1]
 
 
-def _is_setup_read_only_role(role_arn: str, read_only_role_arn: Optional[str]) -> bool:
-    # The ARN stored as the read role is read-only whatever its name is.
-    if read_only_role_arn and role_arn == read_only_role_arn:
-        return True
+def _is_setup_read_only_role(role_arn: str) -> bool:
     name = _role_name(role_arn)
     # CloudFormation uses AuroraReadOnly-${StackName}. Older setups use AuroraReadOnlyRole.
     return name == "AuroraReadOnlyRole" or name.startswith("AuroraReadOnly-")
 
 
-def _drop_session_policy_for_read_only_role(
-    role_arn: str, use_session_policy: bool, read_only_role_arn: Optional[str],
-):
+def _drop_session_policy_for_read_only_role(role_arn: str, use_session_policy: bool):
     # A session policy can only remove permissions, so it hides reads the role already has.
-    if use_session_policy and _is_setup_read_only_role(role_arn, read_only_role_arn):
+    if use_session_policy and _is_setup_read_only_role(role_arn):
         return role_arn, False
     return role_arn, use_session_policy
 
@@ -159,20 +154,20 @@ def select_aws_role(conn: dict, creds: Optional[frozenset], ask_mode: bool):
     if creds is None:
         if ask_mode and read:
             return read, False
-        return _drop_session_policy_for_read_only_role(write, ask_mode, read)
+        return _drop_session_policy_for_read_only_role(write, ask_mode)
     if not creds:
         return None, False
     # A read grant never assumes a separate modify role, including in Agent mode.
     if CREDENTIAL_WRITE not in creds:
         if read:
             return read, False
-        return _drop_session_policy_for_read_only_role(write, True, read)
+        return _drop_session_policy_for_read_only_role(write, True)
     # Write grant. Ask mode still prefers the read-only role, and otherwise
     # intersects the modify role with a read-only session policy.
     if ask_mode:
         if read:
             return read, False
-        return _drop_session_policy_for_read_only_role(write, True, read)
+        return _drop_session_policy_for_read_only_role(write, True)
     return write, False
 
 
