@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.16] - 2026-11-03
+
+### Fixed
+- Celery workers: pin kombu 5.6.2. kombu 5.7.0, published 2026-11-03,
+  refuses redis-py older than 6.1.0, and the 1.5.15 image installed it because
+  kombu was unpinned. Celery stays 5.3.6 and redis-py stays 5.0.1. The API,
+  frontend, chatbot, and MCP do not open that transport.
+
+## [1.5.15] - 2026-11-03
+
+### Changed
+- Helm: `image.registry` defaults to `ghcr.io/arvo-ai`. The release digest
+  overlay pins digests only, so installing with just
+  `values.images-<version>.yaml` still pulls the published images, and a
+  private registry in your values file is left in place.
+
+### Fixed
+- Helm: `make deploy-build` records the new tag on `image.tag` for the stock
+  `aurora-server` and `aurora-frontend` names. It sets
+  `image.images.server.tag` only when the server repository is renamed, and
+  drops a stock per-image tag left from an earlier run. A digest overlay and
+  `--set-string image.tag=` apply to those stock images again.
+- AWS Ask mode: a role named `AuroraReadOnly-*` or `AuroraReadOnlyRole` is
+  assumed without the read-only session policy, so a call `ReadOnlyAccess`
+  already allows is no longer rejected. A configured read role was already
+  assumed that way. Ask mode on any other role still applies the session policy.
+
+## [1.5.14] - 2026-10-28
+
+### Changed
+
+- Investigations: the wall-clock limit is `INVESTIGATION_TIMEOUT_SECONDS`,
+  defaulting to one hour (was a hardcoded 30 minutes). Values outside
+  120–10800 seconds are clamped. A restart is required. On Kubernetes the
+  worker termination grace and the nginx proxy timeouts rise with it, so a
+  longer limit is not cut off by the pod or the ingress.
+
+### Fixed
+
+- Command policy: an allow rule can be marked read-only, so a custom SSH
+  command the Ask-mode classifier does not recognize can still run. Agent-only
+  rules stay out of Ask mode. A pipe into a shell, a reverse shell, and
+  `rm -rf /` are refused in both modes, and an allow rule cannot lift them.
+- Datadog metrics: a comma-separated query is fetched as one expression each,
+  and a formula is rejected instead of Datadog's "exactly one expression" error.
+- Confluence fetch accepts a page URL. A v2 pages 404 retries the v2 blog
+  post route, which needs `read:blogpost:confluence`. Existing OAuth
+  connections have to reconnect before a blog post can be read.
+- Background investigations touch the session timestamp every 5 minutes, so the
+  20-minute stall sweep no longer treats a live run as dead.
+- Actions: a running run is stale five minutes after the investigation limit,
+  measured from worker start. A queued run is stale after the greater of 35
+  minutes and the investigation limit plus five minutes, so queue time is not
+  counted as execution.
+- Safety judge: thinking is shortened by default (`GUARDRAILS_DISABLE_THINKING`,
+  set `false` to keep the model default). Gemini 3.6 Flash uses minimal.
+  Gemini 3.8 Flash, Pro, and Argon use low. Gemini 2.5 Flash uses a budget of 0
+  and 2.5 Pro uses 128. GPT-5 and the o-series use reasoning effort low.
+  gpt-5-pro uses high. Later pro models and chat-latest use medium. Haiku 4.5
+  and 5.5 get thinking disabled on Anthropic, native Bedrock, and OpenRouter.
+  Ollama and OpenRouter only for weights with a think switch (Qwen3, DeepSeek-R1,
+  QwQ, gpt-oss, Magistral). Opus and a plain Llama are left alone.
+  `GUARDRAILS_LLM_TIMEOUT_SECONDS` sets the call cap (default 10, clamped to 5–60).
+  A timeout tells the tool caller to ask an admin to raise that cap or switch
+  `GUARDRAILS_LLM_MODEL` to a faster model.
+
+## [1.5.13] - 2026-10-28
+
+### Added
+- Models: `MEMORY_SELECTOR_MODEL` pins the model that chooses memories for a
+  turn. Unset, Aurora uses a small model the active provider can already call:
+  Gemini 3.5 Flash-Lite, Claude Haiku 5.5, or GPT-5.6 Luna.
+
+### Fixed
+- Memory: the selector was the RCA model, so on a large bank it missed the
+  prefetch window and injected nothing. It now reads up to 2000 memories,
+  ranks them down to 100, and asks that small model. Haiku on Bedrock and
+  the Anthropic API is told not to think. A reply cut off mid-list still
+  injects the entries that finished. If
+  the call does not finish, the agent is told to use the memory index and
+  `read_memory` rather than treat the miss as "nothing relevant."
+
 ## [1.5.12] - 2026-10-27
 
 ### Added

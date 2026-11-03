@@ -22,10 +22,11 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- include "aurora.podSecurityContext" (dict "service" "minio" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
+      {{- include "aurora.imagePullSecrets" (dict "image" "minio" "global" $) | nindent 6 }}
       {{- include "aurora.scheduling" (dict "service" "minio" "global" $) | nindent 6 }}
       containers:
         - name: minio
-          image: {{ include "aurora.minioImage" . | quote }}
+          image: {{ include "aurora.image" (dict "image" "minio" "global" $) | quote }}
           imagePullPolicy: IfNotPresent
           args: ["server", "/data", "--console-address", ":9001"]
           env:

@@ -10,8 +10,16 @@ import logging
 from typing import Any, Dict, List
 
 from celery_config import celery_app
+from chat.investigation_timeout import (
+    investigation_soft_timeout_seconds,
+    investigation_timeout_seconds,
+)
 
 logger = logging.getLogger(__name__)
+
+# Same wall as RCA. Prediscovery calls the background chat workflow.
+_INVESTIGATION_HARD_TIMEOUT = investigation_timeout_seconds()
+_INVESTIGATION_SOFT_TIMEOUT = investigation_soft_timeout_seconds()
 
 
 def _get_users_with_integrations() -> List[Dict[str, Any]]:
@@ -136,7 +144,7 @@ Before writing, check if a relevant entry already exists (use list_memories or g
 
 6. **Observability** (if Datadog/Splunk/Elastic/Coroot/Dynatrace/ThousandEyes/RabbitMQ connected):
    - Datadog: query_datadog(resource_type='monitors') and query_datadog(resource_type='hosts')
-   - Splunk: list_splunk_indexes(), search_splunk() to discover log sources
+   - Splunk: list_splunk_indexes(), search_splunk() to discover log sources. Several instances return results_by_account; pass account_id (host:port) to stay on one. Only instances this user can access are included.
    - Elastic: elastic_list_indices(), elastic_search_logs() to discover log data streams and services
    - Coroot: coroot_get_service_map() for eBPF-discovered service dependencies, coroot_get_applications() for app inventory
    - Dynatrace: query_dynatrace() for entities and topology
@@ -174,8 +182,8 @@ For correcting outdated details, use edit_memory(). Do not rewrite unchanged con
 @celery_app.task(
     bind=True,
     name="chat.background.prediscovery_task.run_prediscovery",
-    time_limit=1800,
-    soft_time_limit=1740,
+    time_limit=_INVESTIGATION_HARD_TIMEOUT,
+    soft_time_limit=_INVESTIGATION_SOFT_TIMEOUT,
 )
 def run_prediscovery(
     self,

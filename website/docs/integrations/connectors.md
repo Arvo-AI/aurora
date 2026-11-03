@@ -1044,6 +1044,7 @@ For Atlassian Cloud (`*.atlassian.net`):
 6. Go to **Permissions** and add scopes for the products you want:
    - **Confluence API** > **Add** > **Configure** > click **Edit Scopes** then **Add granular scopes**:
      - `read:page:confluence`
+     - `read:blogpost:confluence`
      - `read:space:confluence`
      - `read:user:confluence`
      - `search:confluence`
@@ -1500,6 +1501,8 @@ Aurora only needs the `search` capability. You can use the built-in **power** ro
 2. Enter your Splunk instance URL (e.g., `https://your-splunk:8089`)
 3. Paste the API token
 4. Click **Connect**
+
+Repeat those steps to connect another Splunk. Each instance keeps its own URL and token, and is identified by its host and port. Searches and the agent can target one instance, or query every instance the caller is allowed to use. When connector access is limited by role or team, each Splunk is granted on its own, the same way each AWS account is.
 
 #### What Aurora Queries
 

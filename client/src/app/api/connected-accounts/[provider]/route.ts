@@ -89,6 +89,7 @@ export async function DELETE(
       return forwardRequest(request, 'POST', `/${provider}/disconnect`, `${provider}-disconnect`)
     }
 
+    // Query string is forwarded as-is, including Splunk's account selector.
     if (DELETE_DISCONNECT_PROVIDERS.has(provider)) {
       const timeoutMs = DISCONNECT_TIMEOUT_MS[provider]
       return forwardRequest(

@@ -40,7 +40,7 @@ Search Confluence for runbooks and prior postmortems BEFORE deep-diving into inf
 
 - `confluence_search_similar(keywords=['error keywords'], service_name='SERVICE')` -- Search Confluence for pages related to an incident (postmortems, RCA docs). Pass keywords, optional `service_name` and `error_message`. Returns matching pages with excerpts.
 - `confluence_search_runbooks(service_name='SERVICE')` -- Search Confluence for runbooks / playbooks / SOPs for a given service. Pass `service_name` and optional `operation` (e.g. 'restart', 'failover').
-- `confluence_fetch_page(page_id='12345')` -- Fetch a Confluence page by ID and return its content as markdown. Use after search to read full page details.
+- `confluence_fetch_page(page_id='12345')` -- Fetch a Confluence page or blog post by id or page URL and return its content as markdown. Use after search to read full page details.
 - `confluence_runbook_parse(page_url='https://...')` -- Fetch and parse a Confluence runbook into markdown and steps for LLM use.
 
 ### RCA Investigation Flow

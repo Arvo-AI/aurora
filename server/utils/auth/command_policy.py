@@ -30,6 +30,7 @@ from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
+# Each process has its own copy. A save clears only the API worker.
 _CACHE_TTL = 30  # seconds
 _CACHE_MAX = 512  # max orgs in cache before LRU eviction
 
@@ -50,6 +51,10 @@ class CommandVerdict:
     deny_rule_id: Optional[int] = None
     # True when allowlist was enabled and no allow rule matched.
     allowlist_exhausted: bool = False
+    # Set when a deny rule blocked a command an allow rule also matched.
+    overlapped_allow: Optional[str] = None
+    # Host compromise. An allow rule and a Yes click cannot lift it.
+    platform_blocked: bool = False
 
 
 @dataclass(frozen=True)
@@ -60,6 +65,8 @@ class PolicyRule:
     description: str
     priority: int
     compiled: re.Pattern = field(repr=False)
+    # "agent" is the org allowlist only. "read_only" also runs in Ask mode.
+    scope: str = "agent"
 
 
 @dataclass(frozen=True)
@@ -92,7 +99,7 @@ def _fetch(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListStates]
                 cur.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
                 cur.execute(
-                    "SELECT id, mode, pattern, description, priority "
+                    "SELECT id, mode, pattern, description, priority, scope "
                     "FROM org_command_policies "
                     "WHERE org_id = %s AND enabled = true "
                     "ORDER BY priority DESC",
@@ -106,6 +113,7 @@ def _fetch(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListStates]
                         id=row[0], mode=row[1], pattern=row[2],
                         description=row[3] or "", priority=row[4],
                         compiled=compiled,
+                        scope=(row[5] if len(row) > 5 and row[5] else "agent"),
                     )
                     if rule.mode == "allow":
                         allow_rules.append(rule)
@@ -255,6 +263,13 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
     clicking ``Always`` should also add an allow rule alongside disabling
     the deny rule.
     """
+    # Checked before the org lists so a disabled denylist cannot lift it.
+    platform = _platform_block_reason(command)
+    if platform:
+        return CommandVerdict(
+            allowed=False, rule_description=platform, platform_blocked=True,
+        )
+
     if not org_id:
         logger.info("policy_check_skipped reason=no_org_context func=evaluate_command")
         return CommandVerdict(allowed=True)
@@ -271,10 +286,16 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
         None,
     ) if states.denylist_enabled else None
 
+    # Agent-only rules are idle while the allowlist is off. Always-allowed
+    # rules are not: they already open Ask mode.
     allow_hit = next(
-        (r for r in allow_rules if r.compiled.search(command)),
+        (
+            r for r in allow_rules
+            if r.compiled.search(command)
+            and (states.allowlist_enabled or r.scope == "read_only")
+        ),
         None,
-    ) if states.allowlist_enabled else None
+    ) if allow_rules else None
 
     if deny_hit:
         return CommandVerdict(
@@ -282,6 +303,7 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
             rule_description=deny_hit.description,
             deny_rule_id=deny_hit.id,
             allowlist_exhausted=(states.allowlist_enabled and allow_hit is None),
+            overlapped_allow=(allow_hit.description or allow_hit.pattern) if allow_hit else None,
         )
 
     if bq_write:
@@ -414,6 +436,13 @@ def evaluate_compound_command(
     independently.  ALL sub-commands must pass policy; the first denial is
     returned immediately.
     """
+    # The splitter drops the pipe, so the shell shape has to be seen here.
+    platform = _platform_block_reason(command)
+    if platform:
+        return CommandVerdict(
+            allowed=False, rule_description=platform, platform_blocked=True,
+        )
+
     if not org_id:
         logger.info("policy_check_skipped reason=no_org_context func=evaluate_compound_command")
         return CommandVerdict(allowed=True)
@@ -430,6 +459,173 @@ def evaluate_compound_command(
         last_verdict = verdict
 
     return last_verdict
+
+
+# These run on the Aurora host. Both modes refuse them, and no allow rule lifts them.
+# `rm -rf /tmp` is a customer path and stays on the org denylist, which they can turn off.
+_SHELL_NAMES = frozenset({"sh", "bash", "dash", "zsh", "ksh"})
+_SUDO_WITH_ARG = frozenset({"-u", "--user", "-g", "--group"})
+_REVERSE_SHELL = re.compile(r"\b(nc|ncat|netcat|socat)\b.*\s-[ec]\b")
+_RM_SHORT_FLAG = re.compile(r"^-[A-Za-z]+$")
+
+
+def _shell_basename(token: str) -> str:
+    return token.rsplit("/", 1)[-1].lower()
+
+
+def _tokens_run_shell(tokens: list[str]) -> bool:
+    """True when the command is a shell, with an optional sudo in front."""
+    i = 0
+    if i < len(tokens) and tokens[i].lower() == "sudo":
+        i += 1
+        while i < len(tokens) and tokens[i].startswith("-"):
+            flag = tokens[i]
+            i += 1
+            # `-u root` is the account. The next token is not the program.
+            if flag in _SUDO_WITH_ARG and i < len(tokens) and not tokens[i].startswith("-"):
+                i += 1
+    if i >= len(tokens):
+        return False
+    return _shell_basename(tokens[i]) in _SHELL_NAMES
+
+
+def _pipe_to_shell(command: str) -> bool:
+    """`| bash`, `| sudo bash`, and `| /bin/bash`. `||` still counts: the second pipe is a pipe."""
+    for match in re.finditer(r"\|", command):
+        if _tokens_run_shell(command[match.end():].split()):
+            return True
+    return False
+
+
+def _shell_process_substitution(command: str) -> bool:
+    """`bash <(curl ...)`. The shell is the command word immediately before `<(`. """
+    if "<(" not in command:
+        return False
+    tokens = command.split("<(", 1)[0].split()
+    i = len(tokens) - 1
+    # `bash -lc <(...)` — the flags belong to the shell, not a different program.
+    while i >= 0 and tokens[i].startswith("-"):
+        i -= 1
+    if i < 0:
+        return False
+    return _shell_basename(tokens[i]) in _SHELL_NAMES
+
+
+def _rm_target_is_root(target: str) -> bool:
+    path = target.strip("'\"")
+    if path in ("/", "/*"):
+        return True
+    return path == "/home" or path.startswith("/home/")
+
+
+def _rm_root(command: str) -> bool:
+    """Recursive force-delete of `/`, `/home`, or `/*`, including split flags."""
+    for match in re.finditer(r"\brm\b", command, re.IGNORECASE):
+        tokens = command[match.end():].split()
+        recursive = force = False
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            # `--` ends options. The next token is the path.
+            if tok == "--":
+                i += 1
+                break
+            if tok == "--no-preserve-root":
+                i += 1
+                continue
+            flag = _RM_SHORT_FLAG.match(tok)
+            if flag:
+                letters = tok[1:].lower()
+                recursive = recursive or ("r" in letters)
+                force = force or ("f" in letters)
+                i += 1
+                continue
+            break
+        if recursive and force and i < len(tokens) and _rm_target_is_root(tokens[i]):
+            return True
+    return False
+
+
+def _platform_block_reason(command: str) -> Optional[str]:
+    """Why this command can compromise the host, or None."""
+    if _pipe_to_shell(command) or _shell_process_substitution(command):
+        return "Pipe into a shell"
+    if _REVERSE_SHELL.search(command):
+        return "Reverse shell"
+    if _rm_root(command):
+        return "Recursive deletion of the root filesystem"
+    return None
+
+
+def read_only_allow_covers(org_id: str, command: str) -> bool:
+    """A read-only allow rule names this command, and the floor does not."""
+    allow_rules, deny_rules, states = _get_cached(org_id)
+    read_rules = [rule for rule in allow_rules if rule.scope == "read_only" and rule.compiled]
+    if not read_rules:
+        return False
+    # The splitter removes the pipe, so the shell-shape checks have to see the
+    # original command. A quoted `| bash` is still a pipe into a shell.
+    if _platform_block_reason(command):
+        return False
+    parts = _split_compound_command(command) or [command]
+    from utils.security.read_only_classifier import is_read_only_command
+    for part in parts:
+        # An org deny still wins over a customer allow.
+        if states.denylist_enabled and any(rule.compiled.search(part) for rule in deny_rules):
+            return False
+        if is_read_only_command(part):
+            continue
+        if any(rule.compiled.search(part) for rule in read_rules):
+            continue
+        return False
+    return True
+
+
+def ask_mode_permits(user_id: Optional[str], command: str) -> bool:
+    """Ask mode runs a recognised read, or a command the org marked read-only."""
+    from utils.security.read_only_classifier import is_read_only_command
+    if is_read_only_command(command):
+        return True
+    if not user_id:
+        return False
+    try:
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id)
+    except Exception:
+        logger.debug("ask-mode allow lookup failed", exc_info=True)
+        return False
+    if not org_id:
+        return False
+    return read_only_allow_covers(org_id, command)
+
+
+def ask_mode_overlap_note(user_id: Optional[str], command: str) -> str:
+    """Deny rule that also matches an allow rule, or empty when there is no overlap."""
+    if not user_id:
+        return ""
+    try:
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id)
+    except Exception:
+        logger.debug("ask-mode overlap lookup failed", exc_info=True)
+        return ""
+    if not org_id:
+        return ""
+    verdict = evaluate_compound_command(org_id, command)
+    if not verdict.overlapped_allow:
+        return ""
+    deny = (verdict.rule_description or "organization policy")[:200].strip()
+    # The sentence adds its own period. A period already in the description would double.
+    if deny.endswith("."):
+        deny = deny[:-1].rstrip()
+    if not deny:
+        deny = "organization policy"
+    allow = verdict.overlapped_allow[:120]
+    return (
+        f"Deny rule '{deny}' matches."
+        f" It also matches allow rule '{allow}'."
+        " The deny rule wins."
+    )
 
 
 _PATTERN_MAX_LEN = 500

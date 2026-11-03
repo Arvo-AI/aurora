@@ -1,6 +1,6 @@
-import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional
 
 import requests
@@ -15,10 +15,20 @@ from utils.auth.stateless_auth import (
     store_user_preference,
     set_rls_context,
 )
-from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.log_sanitizer import sanitize, hash_for_log
 from utils.secrets.secret_ref_utils import delete_user_secret
+from utils.splunk_accounts import (
+    account_allowed,
+    account_id_for_url,
+    account_summary,
+    find_account,
+    list_splunk_accounts,
+    retire_splunk_connections,
+    store_splunk_accounts,
+    sync_splunk_connections,
+    upsert_account,
+)
 SPLUNK_TIMEOUT = 15
 
 from utils.splunk_config import SPLUNK_SSL_VERIFY
@@ -115,19 +125,104 @@ class SplunkClient:
             return None
 
 
-def _get_stored_splunk_credentials(user_id: str) -> Optional[Dict[str, Any]]:
-    """Retrieve stored Splunk credentials for a user."""
+def _account_from_server(base_url: str, api_token: str, server_info: Dict[str, Any], user_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    entry = server_info.get("entry", [{}])[0] if server_info.get("entry") else {}
+    content = entry.get("content", {})
+    user_entry = user_context.get("entry", [{}])[0] if user_context and user_context.get("entry") else {}
+    user_content = user_entry.get("content", {})
+    account_id = account_id_for_url(base_url)
+    return {
+        "account_id": account_id,
+        "api_token": api_token,
+        "base_url": base_url,
+        "server_name": content.get("serverName", "Splunk"),
+        "version": content.get("version"),
+        "instance_type": content.get("instance_type", "enterprise"),
+        "username": user_content.get("username"),
+    }
+
+
+def _status_summary(user_id: str, account: Dict[str, Any]) -> Dict[str, Any]:
+    """Live check of one instance. A failure stays on that row so the others remain usable."""
+    summary = account_summary(account)
+    summary["allowed"] = account_allowed(user_id, account["account_id"])
+    client = SplunkClient(account["base_url"], account["api_token"])
     try:
-        return get_token_data(user_id, "splunk")
-    except Exception as exc:
-        logger.error(f"Failed to retrieve Splunk credentials for user {sanitize(user_id)}: {sanitize(exc)}")
-        return None
+        server_info = client.get_server_info()
+    # A non-JSON body is not a SplunkAPIError, but it is still this instance's failure.
+    except (SplunkAPIError, ValueError):
+        # account_id sits on the token dict, so it cannot be logged.
+        logger.exception("[SPLUNK] Status check failed")
+        summary["valid"] = False
+        summary["error"] = "Failed to validate stored Splunk credentials"
+        return summary
+    entry = server_info.get("entry", [{}])[0] if server_info.get("entry") else {}
+    content = entry.get("content", {})
+    # Refresh the label from the live server without rewriting the stored token.
+    if content.get("serverName"):
+        summary["serverName"] = content.get("serverName")
+    if content.get("version"):
+        summary["version"] = content.get("version")
+    summary["instanceType"] = content.get("instance_type", account.get("instance_type") or "enterprise")
+    summary["valid"] = True
+    return summary
+
+
+def _stored_payload(user_id: str, accounts: list, validated_id: Optional[str] = None) -> Dict[str, Any]:
+    """Response from stored rows. Skips the live check so connect stays within one validation."""
+    if not accounts:
+        return {"connected": False, "accounts": []}
+    summaries = []
+    for account in accounts:
+        summary = account_summary(account)
+        summary["allowed"] = account_allowed(user_id, account["account_id"])
+        # Other instances were not rechecked, so leave their validity unknown.
+        if validated_id is not None and account["account_id"] == validated_id:
+            summary["valid"] = True
+        summaries.append(summary)
+    primary = summaries[0]
+    return {
+        "connected": True,
+        "baseUrl": primary.get("baseUrl"),
+        "username": primary.get("username"),
+        "server": {
+            "name": primary.get("serverName"),
+            "version": primary.get("version"),
+            "instanceType": primary.get("instanceType") or "enterprise",
+        },
+        "accounts": summaries,
+    }
+
+
+def _connected_payload(user_id: str, accounts: list) -> Dict[str, Any]:
+    if not accounts:
+        return {"connected": False, "accounts": []}
+    # One slow instance must not stack timeouts in front of the others.
+    workers = min(4, len(accounts))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        summaries = list(pool.map(lambda account: _status_summary(user_id, account), accounts))
+    primary = summaries[0]
+    payload = {
+        "connected": True,
+        "baseUrl": primary.get("baseUrl"),
+        "username": primary.get("username"),
+        "server": {
+            "name": primary.get("serverName"),
+            "version": primary.get("version"),
+            "instanceType": primary.get("instanceType") or "enterprise",
+        },
+        "accounts": summaries,
+    }
+    # Every stored token failed — still list them so they can be removed.
+    if summaries and not any(item.get("valid") for item in summaries):
+        payload["error"] = "Failed to validate stored Splunk credentials"
+    return payload
 
 
 @splunk_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
-    """Store Splunk API token and validate connectivity."""
+    """Store a Splunk API token. A new host is added; the same host replaces its token."""
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -154,90 +249,99 @@ def connect(user_id):
         logger.error(f"[SPLUNK] Connection validation failed for user {sanitize(user_id)}: {exc}")
         return jsonify({"error": "Failed to validate Splunk credentials"}), 502
 
-    # Extract server details
-    entry = server_info.get("entry", [{}])[0] if server_info.get("entry") else {}
-    content = entry.get("content", {})
-    server_name = content.get("serverName", "Splunk")
-    version = content.get("version")
-    instance_type = content.get("instance_type", "enterprise")
+    incoming = _account_from_server(base_url, api_token, server_info, user_context)
+    if not incoming.get("account_id"):
+        return jsonify({"error": "A valid Splunk instance URL is required (e.g., https://your-instance.splunkcloud.com:8089)"}), 400
 
-    # Extract user info
-    user_entry = user_context.get("entry", [{}])[0] if user_context and user_context.get("entry") else {}
-    user_content = user_entry.get("content", {})
-    username = user_content.get("username")
-
-    token_payload = {
-        "api_token": api_token,
-        "base_url": base_url,
-        "server_name": server_name,
-        "version": version,
-        "instance_type": instance_type,
-        "username": username,
-    }
+    # A Vault error looks like "nothing stored". Saving then would drop the other instances.
+    try:
+        existing = list_splunk_accounts(user_id, raise_on_error=True)
+    except Exception:
+        logger.exception(
+            "[SPLUNK] Failed to load existing accounts for user %s",
+            hash_for_log(user_id),
+        )
+        return jsonify({"error": "Failed to load existing Splunk credentials"}), 500
+    accounts, replaced = upsert_account(existing, incoming)
 
     try:
-        store_tokens_in_db(user_id, token_payload, "splunk")
-        logger.info(f"[SPLUNK] Stored credentials for user {sanitize(user_id)} (server={sanitize(server_name)})")
+        store_splunk_accounts(user_id, accounts)
+        logger.info(
+            "[SPLUNK] Stored credentials for user %s (accounts=%d, replaced=%s)",
+            hash_for_log(user_id),
+            len(accounts),
+            replaced,
+        )
     except Exception as exc:
         logger.exception(f"[SPLUNK] Failed to store credentials for user {sanitize(user_id)}: {exc}")
         return jsonify({"error": "Failed to store Splunk credentials"}), 500
 
-    return jsonify({
-        "success": True,
-        "server": {
-            "name": server_name,
-            "version": version,
-            "instanceType": instance_type,
-        },
-        "baseUrl": base_url,
-        "username": username,
-    })
+    payload = _stored_payload(user_id, accounts, validated_id=incoming["account_id"])
+    payload["success"] = True
+    payload["replaced"] = replaced
+    return jsonify(payload)
 
 
 @splunk_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
-    """Check Splunk connection status."""
-    creds = _get_stored_splunk_credentials(user_id)
-    if not creds:
-        return jsonify({"connected": False})
+    """Check every connected Splunk. One dead token does not hide the others."""
+    accounts = list_splunk_accounts(user_id)
+    if not accounts:
+        return jsonify({"connected": False, "accounts": []})
 
-    api_token = creds.get("api_token")
-    base_url = creds.get("base_url")
-
-    if not api_token or not base_url:
-        logger.warning(f"[SPLUNK] Incomplete credentials for user {sanitize(user_id)}")
-        return jsonify({"connected": False})
-
-    client = SplunkClient(base_url, api_token)
-
+    # Backfill connection rows for a Splunk saved before instances were tracked.
     try:
-        server_info = client.get_server_info()
-        user_context = client.get_current_user()
-    except SplunkAPIError as exc:
-        logger.warning(f"[SPLUNK] Status check failed for user {sanitize(user_id)}: {sanitize(exc)}")
-        return jsonify({"connected": False, "error": "Failed to validate stored Splunk credentials"})
+        sync_splunk_connections(user_id, accounts)
+    except Exception:
+        logger.warning("[SPLUNK] Could not sync connection rows for user %s", hash_for_log(user_id))
 
-    entry = server_info.get("entry", [{}])[0] if server_info.get("entry") else {}
-    content = entry.get("content", {})
-
-    return jsonify({
-        "connected": True,
-        "server": {
-            "name": content.get("serverName"),
-            "version": content.get("version"),
-            "instanceType": content.get("instance_type", "enterprise"),
-        },
-        "baseUrl": base_url,
-        "username": creds.get("username"),
-    })
+    return jsonify(_connected_payload(user_id, accounts))
 
 
-@splunk_bp.route("/disconnect", methods=["POST", "DELETE"])
+def _selector_from_body() -> Optional[str]:
+    data = request.get_json(silent=True) or {}
+    return data.get("accountId") or data.get("account")
+
+
+@splunk_bp.route("/disconnect", methods=["POST"])
+@require_permission("connectors", "write")
+def disconnect_post(user_id):
+    # The instance name belongs in the body, not the query string.
+    return _disconnect(user_id, _selector_from_body())
+
+
+@splunk_bp.route("/disconnect", methods=["DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
-    """Disconnect Splunk by removing stored credentials."""
+    return _disconnect(user_id, request.args.get("account"))
+
+
+def _disconnect(user_id, selector: Optional[str]):
+    """Remove one Splunk, or every Splunk when no instance is named."""
     try:
+        # A failed read is not "no instances" — that path deletes every Splunk.
+        accounts = list_splunk_accounts(user_id, raise_on_error=True)
+        # One instance — leave the rest stored and drop only that connection row.
+        if selector and str(selector).strip():
+            match = find_account(accounts, str(selector))
+            if match is None:
+                known = ", ".join(a["account_id"] for a in accounts) or "none"
+                return jsonify({"error": f"Unknown Splunk instance. Connected: {known}"}), 404
+            remaining = [a for a in accounts if a["account_id"] != match["account_id"]]
+            if remaining:
+                store_splunk_accounts(user_id, remaining)
+                logger.info(
+                    "[SPLUNK] Removed one Splunk instance for user %s (%d remaining)",
+                    hash_for_log(user_id),
+                    len(remaining),
+                )
+                payload = _stored_payload(user_id, remaining)
+                payload["success"] = True
+                payload["message"] = "Splunk instance removed"
+                return jsonify(payload), 200
+
+        retire_splunk_connections(user_id)
         success, deleted_count = delete_user_secret(user_id, "splunk")
         if not success:
             logger.warning("[SPLUNK] Failed to clean up secrets during disconnect")
@@ -248,7 +352,9 @@ def disconnect(user_id):
         return jsonify({
             "success": True,
             "message": "Splunk disconnected successfully",
-            "deleted": deleted_count
+            "deleted": deleted_count,
+            "connected": False,
+            "accounts": [],
         }), 200
 
     except Exception as exc:
@@ -264,8 +370,7 @@ def alert_webhook(user_id: str):
         return jsonify({"error": "user_id is required"}), 400
 
     # Check if user has Splunk connected
-    creds = get_token_data(user_id, "splunk")
-    if not creds:
+    if not list_splunk_accounts(user_id):
         logger.warning("[SPLUNK] Webhook received for user %s with no Splunk connection", sanitize(user_id))
         return jsonify({"error": "Splunk not connected for this user"}), 404
 

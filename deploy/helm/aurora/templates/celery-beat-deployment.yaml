@@ -32,10 +32,7 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- include "aurora.podSecurityContext" (dict "service" "celeryBeat" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
-      {{- if .Values.image.pullSecrets }}
-      imagePullSecrets:
-        {{- toYaml .Values.image.pullSecrets | nindent 8 }}
-      {{- end }}
+      {{- include "aurora.imagePullSecrets" (dict "image" "server" "global" $) | nindent 6 }}
       {{- include "aurora.scheduling" (dict "service" "celeryBeat" "global" $) | nindent 6 }}
       containers:
         - name: celery-beat

@@ -2,15 +2,17 @@
 Memory Injector — Async Prefetch + Single-Pass LLM Selection
 
 Runs as a non-blocking prefetch in parallel with prompt building.
-One fast LLM call selects up to 5 relevant memories from the index
-(title + description). Whatever it selects gets injected into the system prompt. 
-- Hard caps: 5 entries max, 4KB per entry.
+One fast, non-thinking LLM call selects up to 5 relevant memories from the
+index (title + description). Whatever it selects gets injected into the system prompt.
+- Hard caps: 5 entries max, 4KB per entry, 100 candidates in the selector prompt.
 - Dedup: never re-surface a memory already shown this session.
 """
 
 import asyncio
 import json
 import logging
+import os
+import re
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Set, Tuple
@@ -33,8 +35,32 @@ MAX_SELECTED = 5
 MAX_MEMORY_BYTES_PER_ENTRY = 4096
 STALENESS_DAYS = 2
 
-SELECTOR_MODEL = ModelConfig.RCA_MODEL
+# The TOC index stops at 200. The selector has to read past that, or a memory
+# outside the newest slice can never be injected (a 420-entry bank hid ~220).
+_SELECTOR_FETCH_LIMIT = 2000
+# Lexical rank misses a paraphrase. 100 keeps more of those in the prompt
+# than 60 did, without sending the whole bank.
+_MAX_SELECTOR_CANDIDATES = 100
+# Flash-lite thinks at "minimal" by default, and thought tokens count against
+# this cap. 256 can be spent before the JSON is written.
+SELECTOR_MAX_TOKENS = 1024
+# Shown when the selector times out or returns nothing usable. A valid empty
+# selection must not use this — that one really found nothing.
+_SELECTOR_MISSED = (
+    "MEMORY SELECTOR DID NOT FINISH. No memories were pre-loaded for this turn. "
+    "That is not a finding that none are relevant. Use the org memory index and "
+    "read_memory(category, title) before assuming the bank has nothing for this query."
+)
 SELECTOR_TIMEOUT = 5.0
+
+# Letters and digits. CJK, kana, and Hangul have no spaces, so a whole
+# sentence would be one token and never overlap a shorter title.
+_WORD_RE = re.compile(r"[^\W_]{2,}", re.UNICODE)
+_UNSPACED_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+")
+_STOPWORDS = frozenset({
+    "an", "the", "and", "or", "to", "of", "in", "on", "for", "is", "it",
+    "be", "as", "at", "by", "with", "from", "this", "that", "our", "we", "my",
+})
 
 _SURFACED_SET_TTL = 86400
 
@@ -109,11 +135,12 @@ class MemoryPrefetch:
             elapsed = (time.perf_counter() - self._started_at) * 1000
             logger.warning("[MemoryInjector] Prefetch timed out after %.0fms", elapsed)
             self._task.cancel()
-            self._result = ""
+            # An empty string looks like "nothing relevant". Say the call died.
+            self._result = _SELECTOR_MISSED
         except Exception as e:
             elapsed = (time.perf_counter() - self._started_at) * 1000
             logger.warning("[MemoryInjector] Prefetch failed after %.0fms: %s", elapsed, e)
-            self._result = ""
+            self._result = _SELECTOR_MISSED
 
         return self._result
 
@@ -121,7 +148,9 @@ class MemoryPrefetch:
         try:
             already_surfaced = await asyncio.to_thread(_get_surfaced_set, self.session_id)
 
-            entries = await asyncio.to_thread(get_memory_entries, self.user_id)
+            entries = await asyncio.to_thread(
+                get_memory_entries, self.user_id, _SELECTOR_FETCH_LIMIT,
+            )
             if not entries:
                 return ""
 
@@ -142,23 +171,32 @@ class MemoryPrefetch:
             ]
 
             selected: List[Dict] = list(forced)
+            # A valid empty list means nothing matched. A failed call must not
+            # look the same, or the agent treats a timeout as "no memories".
+            selector_missed = False
             if available:
-                # Single async LLM pass: select up to 5
-                llm_selected = await _select_relevant_memories_async(self.user_message, available)
+                try:
+                    llm_selected = await _select_relevant_memories_async(self.user_message, available)
+                except _SelectorFailed:
+                    selector_missed = True
+                    llm_selected = []
                 selected.extend(llm_selected)
 
-            if not selected:
+            if not selected and not selector_missed:
                 return ""
+            # The model call failed and there is nothing forced to show.
+            if not selected:
+                return _SELECTOR_MISSED
 
             # Fetch content of the selected entries
             memories = await asyncio.to_thread(fetch_memory_content, self.user_id, selected)
             if not memories:
-                return ""
+                return _SELECTOR_MISSED if selector_missed else ""
 
             # Format and inject (with staleness headers + per-entry cap)
             injection_text, surfaced_keys = _format_for_injection(memories)
             if not injection_text:
-                return ""
+                return _SELECTOR_MISSED if selector_missed else ""
 
             await asyncio.to_thread(_mark_surfaced, self.session_id, surfaced_keys)
 
@@ -166,11 +204,17 @@ class MemoryPrefetch:
                 "[MemoryInjector] Injected %d memories for session %s",
                 len(surfaced_keys), self.session_id,
             )
+            if selector_missed:
+                return injection_text + "\n" + _SELECTOR_MISSED
             return injection_text
 
         except Exception:
             logger.exception("[MemoryInjector] Unhandled error in prefetch")
-            return ""
+            return _SELECTOR_MISSED
+
+
+class _SelectorFailed(Exception):
+    """The selector replied, but not with a list we can use."""
 
 
 # ---------------------------------------------------------------------------
@@ -178,11 +222,75 @@ class MemoryPrefetch:
 # ---------------------------------------------------------------------------
 
 
+def _tokens(text: str) -> Set[str]:
+    raw = text or ""
+    tokens = {t for t in _WORD_RE.findall(raw.lower()) if t not in _STOPWORDS}
+    # Bigrams, so "数据库故障" overlaps a query that says "数据库" without sharing the whole string.
+    for run in _UNSPACED_RE.findall(raw):
+        if len(run) == 1:
+            tokens.add(run)
+        else:
+            tokens.update(run[i:i + 2] for i in range(len(run) - 1))
+    return tokens
+
+
+def _complete_objects(text: str) -> List[Dict]:
+    """Pull closed JSON objects out of a reply that was cut off mid-string."""
+    found: List[Dict] = []
+    for match in re.finditer(r"\{[^{}]*\}", text or ""):
+        try:
+            obj = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("title"), str):
+            found.append(obj)
+    return found
+
+
+def _as_naive(ts) -> datetime:
+    # Missing timestamps sort last, behind any real updated_at.
+    if ts is None:
+        return datetime.min
+    # Aware DB timestamps can't be ordered against datetime.min.
+    if getattr(ts, "tzinfo", None) is not None:
+        return ts.replace(tzinfo=None)
+    return ts
+
+
+def _shortlist_entries(user_message: str, entries: List[Dict], limit: int) -> List[Dict]:
+    """Keep the entries most likely to matter so the selector prompt stays small."""
+    query_tokens = _tokens(user_message[:2000])
+
+    def rank(entry: Dict):
+        title = _tokens(entry.get("title") or "")
+        category = _tokens(entry.get("category") or "")
+        desc = _tokens((entry.get("description") or "")[:150])
+        overlap = (
+            3 * len(query_tokens & title)
+            + 2 * len(query_tokens & category)
+            + len(query_tokens & desc)
+        )
+        # Recency breaks ties, and is the only signal when nothing overlaps.
+        return (overlap, _as_naive(entry.get("updated_at")))
+
+    ranked = sorted(entries, key=rank, reverse=True)
+    return ranked[:limit]
+
+
 async def _select_relevant_memories_async(user_message: str, entries: List[Dict]) -> List[Dict]:
     """One strict async LLM call: select up to 5 from the index."""
 
+    # A few hundred full descriptions blow the prefetch budget. Rank first.
+    pool = entries
+    if len(entries) > _MAX_SELECTOR_CANDIDATES:
+        pool = _shortlist_entries(user_message, entries, _MAX_SELECTOR_CANDIDATES)
+        logger.info(
+            "[MemoryInjector] Shortlisted %d/%d memories before selection",
+            len(pool), len(entries),
+        )
+
     manifest_lines = []
-    for entry in entries:
+    for entry in pool:
         ts = entry["updated_at"].isoformat() if entry["updated_at"] else "unknown"
         desc = entry["description"][:150] if entry["description"] else "(no description)"
         manifest_lines.append(f"- [{entry['category']}] \"{entry['title']}\" | updated: {ts} | {desc}")
@@ -192,8 +300,33 @@ async def _select_relevant_memories_async(user_message: str, entries: List[Dict]
         manifest="\n".join(manifest_lines),
     )
 
+    model = ModelConfig.memory_selector_model()
+    extra: Dict = {}
+    native = model.split("/", 1)[-1].lower()
+    # The OpenAI provider pins gpt-5+ to reasoning effort=high. That spends
+    # the prefetch window. gpt-4 and older reject the field entirely.
+    if model.startswith("openai/") and not native.startswith(("gpt-3", "gpt-4")):
+        extra["reasoning"] = {"effort": "low"}
+    # Opus 5.5 rejects thinking.type=disabled with a 400. Haiku 5.5 thinks
+    # by default and accepts off, which is what keeps this call inside the window.
+    if "haiku-5" in native or "haiku-4" in native:
+        provider_mode_for_thinking = (os.getenv("LLM_PROVIDER_MODE") or "direct").lower()
+        # Converse wants the field beside the prompt. ChatAnthropic takes `thinking`.
+        if provider_mode_for_thinking == "bedrock" or model.startswith("bedrock/"):
+            extra["additional_model_request_fields"] = {"thinking": {"type": "disabled"}}
+        elif model.startswith("anthropic/"):
+            extra["thinking"] = {"type": "disabled"}
+    # Gemini 3+ flash-lite counts minimal thoughts against max_tokens.
+    # 2.5 flash-lite rejects thinking_level, and OpenRouter rejects the field.
+    thinking_off = os.getenv("GEMINI_DISABLE_THINKING", "").lower() in ("true", "1", "yes")
+    provider_mode = (os.getenv("LLM_PROVIDER_MODE") or "direct").lower()
+    gemini3_flash_lite = "flash-lite" in native and ("gemini-3" in native or "gemini-4" in native)
+    if gemini3_flash_lite and provider_mode != "openrouter" and not thinking_off:
+        extra["thinking_level"] = "minimal"
     try:
-        llm = create_chat_model(SELECTOR_MODEL, temperature=0.0, streaming=False, max_tokens=256)
+        llm = create_chat_model(
+            model, temperature=0.0, streaming=False, max_tokens=SELECTOR_MAX_TOKENS, **extra,
+        )
         response = await llm.ainvoke(
             [
                 SystemMessage(content=_SELECTOR_SYSTEM),
@@ -210,13 +343,26 @@ async def _select_relevant_memories_async(user_message: str, entries: List[Dict]
             json_str = json_str.split("\n", 1)[1] if "\n" in json_str else json_str
             json_str = json_str.rsplit("```", 1)[0]
 
-        parsed = json.loads(json_str)
-        selected_raw = parsed.get("selected", [])
-        if not isinstance(selected_raw, list):
-            return []
+        try:
+            parsed = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            # A cut reply still has the objects that closed. An empty body does not.
+            selected_raw = _complete_objects(json_str)
+            if not selected_raw:
+                logger.warning("[MemoryInjector] Selector returned invalid JSON: %s", e)
+                raise _SelectorFailed from e
+            logger.warning(
+                "[MemoryInjector] Selector JSON was cut off; kept %d complete entries",
+                len(selected_raw),
+            )
+        else:
+            selected_raw = parsed.get("selected", []) if isinstance(parsed, dict) else None
+            # A non-list "selected" is a malformed reply, not an empty selection.
+            if not isinstance(selected_raw, list):
+                raise _SelectorFailed
 
-        # Validate against actual entries
-        entry_lookup = {_entry_key(e): e for e in entries}
+        # Validate against the candidates we actually showed the model.
+        entry_lookup = {_entry_key(e): e for e in pool}
         validated = []
         for sel in selected_raw[:MAX_SELECTED]:
             title = sel.get("title", "").strip().strip('"')
@@ -224,15 +370,17 @@ async def _select_relevant_memories_async(user_message: str, entries: List[Dict]
             if key in entry_lookup:
                 validated.append(entry_lookup[key])
 
-        logger.info("[MemoryInjector] Selected %d/%d entries", len(validated), len(entries))
+        logger.info(
+            "[MemoryInjector] Selected %d/%d entries with %s",
+            len(validated), len(entries), model,
+        )
         return validated
 
-    except json.JSONDecodeError as e:
-        logger.warning("[MemoryInjector] Selector returned invalid JSON: %s", e)
-        return []
+    except _SelectorFailed:
+        raise
     except Exception as e:
-        logger.warning("[MemoryInjector] Selector failed: %s", e)
-        return []
+        logger.warning("[MemoryInjector] Selector failed (%s): %s", model, e)
+        raise _SelectorFailed from e
 
 
 # ---------------------------------------------------------------------------

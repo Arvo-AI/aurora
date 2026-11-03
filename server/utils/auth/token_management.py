@@ -493,7 +493,9 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         raise
 
 
-def get_token_data(user_id: str, provider: str, org_id: str | None = None) -> Optional[Dict]:
+def get_token_data(
+    user_id: str, provider: str, org_id: str | None = None, *, raise_on_error: bool = False
+) -> Optional[Dict]:
     """
     Retrieve token data from Vault only.
 
@@ -532,7 +534,7 @@ def get_token_data(user_id: str, provider: str, org_id: str | None = None) -> Op
 
             for i, p in enumerate(provider):
                 logger.debug(f"[GET-TOKENS] Trying provider {i+1}/{len(provider)}: {p}")
-                token_data = get_user_token_data(user_id, p)
+                token_data = get_user_token_data(user_id, p, raise_on_error=raise_on_error)
                 if token_data:
                     elapsed_time = (time.perf_counter() - start_time) * 1000
                     logger.debug(f"[GET-TOKENS]Found credentials for provider: {p} in {elapsed_time:.2f}ms")
@@ -545,7 +547,7 @@ def get_token_data(user_id: str, provider: str, org_id: str | None = None) -> Op
             # Use Vault for single providers
             logger.debug(f"[GET-TOKENS] Single provider credential lookup")
             from utils.secrets.secret_ref_utils import get_user_token_data
-            token_data = get_user_token_data(user_id, provider)
+            token_data = get_user_token_data(user_id, provider, raise_on_error=raise_on_error)
 
             elapsed_time = (time.perf_counter() - start_time) * 1000
             if token_data:
@@ -556,6 +558,9 @@ def get_token_data(user_id: str, provider: str, org_id: str | None = None) -> Op
             return token_data if token_data else {}
 
     except Exception as e:
+        # A merge into the stored blob has to tell "Vault is down" from "nothing saved".
+        if raise_on_error:
+            raise
         elapsed_time = (time.perf_counter() - start_time) * 1000
         logger.error("[GET-TOKENS] Failed to fetch credentials for provider(s) %s after %.2fms: %s", provider, elapsed_time, e)
         return {}

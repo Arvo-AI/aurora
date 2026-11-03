@@ -8,16 +8,34 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { splunkService, SplunkStatus, SplunkWebhookUrlResponse } from "@/lib/services/splunk";
+import { splunkService, SplunkAccount, SplunkStatus, SplunkWebhookUrlResponse } from "@/lib/services/splunk";
 import { copyToClipboard } from "@/lib/utils";
 
 interface SplunkWebhookStepProps {
   status: SplunkStatus;
-  onDisconnect: () => Promise<void>;
+  onDisconnect: (accountId?: string) => Promise<void>;
   loading: boolean;
 }
 
+function connectedAccounts(status: SplunkStatus): SplunkAccount[] {
+  if (status.accounts && status.accounts.length > 0) {
+    return status.accounts;
+  }
+  // Cached status from before instances were listed still has one URL.
+  if (!status.baseUrl) return [];
+  return [{
+    accountId: status.baseUrl,
+    baseUrl: status.baseUrl,
+    serverName: status.server?.name,
+    version: status.server?.version,
+    instanceType: status.server?.instanceType,
+    username: status.username,
+  }];
+}
+
 export function SplunkWebhookStep({ status, onDisconnect, loading }: SplunkWebhookStepProps) {
+  const accounts = connectedAccounts(status);
+  const disconnectLabel = accounts.length > 1 ? "Disconnect all Splunk instances" : "Disconnect Splunk";
   const router = useRouter();
   const { toast } = useToast();
   const [webhookData, setWebhookData] = useState<SplunkWebhookUrlResponse | null>(null);
@@ -107,37 +125,42 @@ export function SplunkWebhookStep({ status, onDisconnect, loading }: SplunkWebho
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <CheckCircle2 className="h-5 w-5 text-green-500" />
-          Connected to Splunk
+          {accounts.length > 1 ? `${accounts.length} Splunk instances connected` : "Connected to Splunk"}
         </CardTitle>
         <CardDescription>
-          Your Splunk instance is connected. Configure webhooks to receive alerts.
+          Each Splunk is its own account. Access settings can allow a team to use one and not another.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* Connection Info */}
-        <div className="bg-muted/50 rounded-lg p-4 space-y-2">
-          <div className="flex justify-between">
-            <span className="text-sm text-muted-foreground">Instance URL</span>
-            <span className="text-sm font-medium">{status.baseUrl}</span>
-          </div>
-          {status.server?.name && (
-            <div className="flex justify-between">
-              <span className="text-sm text-muted-foreground">Server Name</span>
-              <span className="text-sm font-medium">{status.server.name}</span>
+        <div className="space-y-3">
+          {accounts.map((account) => (
+            <div key={account.accountId} className="bg-muted/50 rounded-lg p-4 space-y-2">
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{account.serverName || account.accountId}</p>
+                  <p className="text-xs text-muted-foreground break-all">{account.baseUrl}</p>
+                </div>
+                {accounts.length > 1 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onDisconnect(account.accountId)}
+                    disabled={loading}
+                  >
+                    Remove
+                  </Button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                {account.version && <span>Version {account.version}</span>}
+                {account.username && <span>{account.username}</span>}
+                {account.valid === false && (
+                  <span className="text-destructive">{account.error || "Token could not be validated"}</span>
+                )}
+                {account.allowed === false && <span>Your role cannot query this instance</span>}
+              </div>
             </div>
-          )}
-          {status.server?.version && (
-            <div className="flex justify-between">
-              <span className="text-sm text-muted-foreground">Version</span>
-              <span className="text-sm font-medium">{status.server.version}</span>
-            </div>
-          )}
-          {status.username && (
-            <div className="flex justify-between">
-              <span className="text-sm text-muted-foreground">Username</span>
-              <span className="text-sm font-medium">{status.username}</span>
-            </div>
-          )}
+          ))}
         </div>
 
         {/* Quick Actions */}
@@ -226,7 +249,7 @@ export function SplunkWebhookStep({ status, onDisconnect, loading }: SplunkWebho
         <div className="border-t pt-6">
           <Button
             variant="destructive"
-            onClick={onDisconnect}
+            onClick={() => onDisconnect()}
             disabled={loading}
             className="w-full"
           >
@@ -236,7 +259,7 @@ export function SplunkWebhookStep({ status, onDisconnect, loading }: SplunkWebho
                 Disconnecting...
               </>
             ) : (
-              "Disconnect Splunk"
+              disconnectLabel
             )}
           </Button>
         </div>

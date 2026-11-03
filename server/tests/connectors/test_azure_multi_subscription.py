@@ -245,6 +245,9 @@ def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent", login
     from utils.security.read_only_classifier import describe_rejection, is_read_only_command
     ns["is_read_only_command"] = is_read_only_command
     ns["describe_rejection"] = describe_rejection
+    # The extracted function calls ask_mode_permits. This harness has no org,
+    # so the classifier is the permit.
+    ns["ask_mode_permits"] = lambda _user_id, command: is_read_only_command(command)
 
     for fn in ["_apply_azure_subscription",
                "_run_azure_on_subscription", "_fan_out_azure",

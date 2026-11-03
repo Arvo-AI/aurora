@@ -26,10 +26,11 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- include "aurora.podSecurityContext" (dict "service" "searxng" "global" $ "defaults" (dict "runAsUser" 977 "runAsGroup" 977 "fsGroup" 977)) | nindent 8 }}
+      {{- include "aurora.imagePullSecrets" (dict "image" "searxng" "global" $) | nindent 6 }}
       {{- include "aurora.scheduling" (dict "service" "searxng" "global" $) | nindent 6 }}
       initContainers:
         - name: copy-settings
-          image: searxng/searxng:2025.5.8-7ca24eee4
+          image: {{ include "aurora.image" (dict "image" "searxng" "global" $) | quote }}
           command: ["sh", "-c", "cp /etc/searxng-source/settings.yml /etc/searxng/settings.yml"]
           volumeMounts:
             - name: searxng-source
@@ -39,7 +40,7 @@ spec:
               mountPath: /etc/searxng
       containers:
         - name: searxng
-          image: searxng/searxng:2025.5.8-7ca24eee4
+          image: {{ include "aurora.image" (dict "image" "searxng" "global" $) | quote }}
           imagePullPolicy: IfNotPresent
           securityContext:
             {{- include "aurora.containerSecurityContext" (dict "service" "searxng" "global" $ "defaults" (dict "runAsUser" 977 "runAsGroup" 977)) | nindent 12 }}

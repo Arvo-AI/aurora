@@ -23,49 +23,157 @@ app.kubernetes.io/part-of: aurora
 {{- end }}
 
 {{/*
-Resolve a fully-qualified image reference for a given Aurora image.
-Pass a dict with "image" (one of: server, frontend) and "global" (top-level context).
+One MinIO pin for the legacy full path and for image.images.minio.
+values.yaml repeats it because reuse-values persists values, not templates.
+*/}}
+{{- define "aurora.minioPin" -}}
+{{- dict "repository" "pgsty/silo" "registry" "docker.io" "fullRepository" "docker.io/pgsty/silo" "tag" "RELEASE.2026-09-16T00-00-00Z" "digest" "sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46" | toJson -}}
+{{- end -}}
 
-Precedence:
-  1. image.digests.<name> set  -> registry/aurora-<name>@sha256:...  (immutable, preferred)
-  2. otherwise                 -> registry/aurora-<name>:<tag|appVersion>
+{{- define "aurora.awsCliPin" -}}
+{{- dict "repository" "amazon/aws-cli" "tag" "2.34.6" | toJson -}}
+{{- end -}}
 
-Digest pinning wins over tag so a released chart can only ever run one exact
-binary. CI stamps digests into a generated values file at release time.
-Usage: image: {{ include "aurora.image" (dict "image" "server" "global" $) | quote }}
+{{/*
+Image reference. "image" is server, frontend, postgres, redis, vault, searxng,
+memgraph, minio, or minioInit. Aurora images inherit image.registry and
+image.tag; other images stay public until image.images.<name>.registry is set.
+A per-image tag or non-default repository beats image.digests, so a release
+pin cannot replace a private build. frontendImage fills empty frontend fields.
 */}}
 {{- define "aurora.image" -}}
 {{- $name := .image -}}
 {{- $ctx := .global -}}
-{{- $registry := $ctx.Values.image.registry -}}
-{{- $digest := "" -}}
-{{- if $ctx.Values.image.digests -}}
-{{- $digest = index $ctx.Values.image.digests $name -}}
+{{- $minioPin := include "aurora.minioPin" . | fromJson -}}
+{{- $awsPin := include "aurora.awsCliPin" . | fromJson -}}
+{{- $img := $ctx.Values.image | default dict -}}
+{{- $over := dict -}}
+{{- if $img.images -}}
+{{- $over = index $img.images $name | default dict -}}
+{{- end -}}
+{{- /* image.images.minio unset: keep services.minio.image, whose path already includes the host. */ -}}
+{{- if and (eq $name "minio") (not $over.registry) (not $over.repository) (not $over.tag) (not $over.digest) -}}
+{{- include "aurora.minioImage" $ctx -}}
+{{- /* initImage is already a full ref; a structured override replaces it below. */ -}}
+{{- else if and (eq $name "minioInit") (not $over.registry) (not $over.repository) (not $over.tag) (not $over.digest) -}}
+{{- (($ctx.Values.services).minio).initImage | default (printf "%s:%s" $awsPin.repository $awsPin.tag) -}}
+{{- else -}}
+{{- $defaults := dict
+      "server" (dict "repository" "aurora-server" "aurora" true)
+      "frontend" (dict "repository" "aurora-frontend" "aurora" true)
+      "postgres" (dict "repository" "postgres" "tag" "15-alpine")
+      "redis" (dict "repository" "redis" "tag" "7-alpine")
+      "vault" (dict "repository" "hashicorp/vault" "tag" "1.15")
+      "searxng" (dict "repository" "searxng/searxng" "tag" "2025.5.8-7ca24eee4")
+      "memgraph" (dict "repository" "memgraph/memgraph-mage" "tag" "3.8.1")
+      "minio" (dict "repository" $minioPin.repository "registry" $minioPin.registry "tag" $minioPin.tag "digest" $minioPin.digest)
+      "minioInit" (dict "repository" $awsPin.repository "tag" $awsPin.tag)
+-}}
+{{- $builtin := index $defaults $name -}}
+{{- if not $builtin -}}
+{{- fail (printf "aurora.image: unknown image %q" $name) -}}
+{{- end -}}
+{{- $repo := $over.repository | default "" -}}
+{{- $reg := $over.registry | default "" -}}
+{{- $tag := $over.tag | default "" -}}
+{{- $digest := $over.digest | default "" -}}
+{{- /* Legacy frontendImage only fills fields image.images.frontend left empty. */ -}}
+{{- if and (eq $name "frontend") $ctx.Values.frontendImage -}}
+{{- $legacy := $ctx.Values.frontendImage -}}
+{{- if not $reg -}}{{- $reg = $legacy.registry | default "" -}}{{- end -}}
+{{- if not $repo -}}{{- $repo = $legacy.repository | default "" -}}{{- end -}}
+{{- if and (not $tag) $legacy.tag -}}{{- $tag = $legacy.tag -}}{{- end -}}
+{{- if and (not $digest) $legacy.digest -}}{{- $digest = $legacy.digest -}}{{- end -}}
+{{- end -}}
+{{- if not $repo -}}{{- $repo = $builtin.repository -}}{{- end -}}
+{{- $customRepo := ne $repo $builtin.repository -}}
+{{- /* Stock name with no tag of its own follows the release digest pin. */ -}}
+{{- if and (not $digest) (not $tag) (not $customRepo) $img.digests -}}
+{{- $digest = index $img.digests $name | default "" -}}
+{{- end -}}
+{{- /* Custom repo: silo's digest (or any other default) would point at the wrong image. */ -}}
+{{- if and (not $digest) (not $tag) (not $customRepo) $builtin.digest -}}
+{{- $digest = $builtin.digest -}}
+{{- end -}}
+{{- if not $reg -}}
+{{- if $builtin.aurora -}}
+{{- $reg = $img.registry | default "" -}}
+{{- /* Default host only for the stock repo. A full repository already includes one. */ -}}
+{{- else if and $builtin.registry (not $customRepo) -}}
+{{- $reg = $builtin.registry -}}
+{{- end -}}
 {{- end -}}
 {{- if $digest -}}
-{{- printf "%s/aurora-%s@%s" $registry $name $digest -}}
+{{- if $reg -}}{{- printf "%s/%s@%s" $reg $repo $digest -}}{{- else -}}{{- printf "%s@%s" $repo $digest -}}{{- end -}}
 {{- else -}}
-{{- $tag := $ctx.Values.image.tag | default $ctx.Chart.AppVersion -}}
-{{- printf "%s/aurora-%s:%s" $registry $name $tag -}}
+{{- if not $tag -}}
+{{- if $builtin.aurora -}}
+{{- /* A renamed image is not the build image.tag tracks. */ -}}
+{{- if $customRepo -}}{{- $tag = $ctx.Chart.AppVersion -}}{{- else -}}{{- $tag = $img.tag | default $ctx.Chart.AppVersion -}}{{- end -}}
+{{- else -}}
+{{- $tag = $builtin.tag -}}
+{{- end -}}
+{{- end -}}
+{{- if $reg -}}{{- printf "%s/%s:%s" $reg $repo $tag -}}{{- else -}}{{- printf "%s:%s" $repo $tag -}}{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
-MinIO-compatible object storage image; digest wins over tag.
-Inline defaults are load-bearing: `helm upgrade --reuse-values` skips new chart
-defaults, so upgrades from <=1.5.1 arrive with services.minio.image unset — the
-default digest has to live here too, or those upgrades silently lose the pin.
+Pull secrets for the named image. Aurora images use image.pullSecrets.
+Third-party images do too only when pointed at a private registry — a secret
+that cannot see the public registry fails those pulls. A set pullSecrets list,
+including [], replaces that fallback. frontendImage is the legacy frontend list.
+*/}}
+{{- define "aurora.imagePullSecrets" -}}
+{{- $name := .image -}}
+{{- $ctx := .global -}}
+{{- $img := $ctx.Values.image | default dict -}}
+{{- $over := dict -}}
+{{- if $img.images -}}
+{{- $over = index $img.images $name | default dict -}}
+{{- end -}}
+{{- /* [] is a real override. A missing key is what falls through. */ -}}
+{{- $explicit := hasKey $over "pullSecrets" -}}
+{{- $secrets := $over.pullSecrets -}}
+{{- if and (not $explicit) (eq $name "frontend") $ctx.Values.frontendImage -}}
+{{- $legacy := $ctx.Values.frontendImage -}}
+{{- /* Same rule one level down: [] on the legacy key must not inherit the global list. */ -}}
+{{- if hasKey $legacy "pullSecrets" -}}
+{{- $explicit = true -}}
+{{- end -}}
+{{- $secrets = $legacy.pullSecrets -}}
+{{- end -}}
+{{- /* Omitted key still inherits the global secret for Aurora images and private registries. */ -}}
+{{- if not $explicit -}}
+{{- $private := $over.registry | default "" -}}
+{{- if and (not $private) (eq $name "frontend") $ctx.Values.frontendImage -}}
+{{- $private = $ctx.Values.frontendImage.registry | default "" -}}
+{{- end -}}
+{{- if or (or (eq $name "server") (eq $name "frontend")) $private -}}
+{{- $secrets = $img.pullSecrets -}}
+{{- end -}}
+{{- end -}}
+{{- if $secrets }}
+imagePullSecrets:
+  {{- toYaml $secrets | nindent 2 }}
+{{- end }}
+{{- end }}
+
+{{/*
+MinIO image when image.images.minio is unset. Digest wins over tag.
+The pin lives in the template: reuse-values skips new values.yaml defaults.
 */}}
 {{- define "aurora.minioImage" -}}
-{{- $defaultRepo := "docker.io/pgsty/silo" -}}
-{{- $defaultTag := "RELEASE.2026-09-16T00-00-00Z" -}}
-{{- $defaultDigest := "sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46" -}}
+{{- $pin := include "aurora.minioPin" . | fromJson -}}
+{{- $defaultRepo := $pin.fullRepository -}}
+{{- $defaultTag := $pin.tag -}}
+{{- $defaultDigest := $pin.digest -}}
 {{- $img := .Values.services.minio.image | default dict -}}
 {{- $repo := $img.repository | default $defaultRepo -}}
 {{- $digest := $img.digest | default "" -}}
 {{- $tag := $img.tag | default "" -}}
-{{/* Nothing pinned at all: fall back to the verified digest, never a bare tag.
-     Guarded on the repo — silo's digest is meaningless against a custom one. */}}
+{{- /* Nothing pinned: the verified digest, and only for the repo it was taken from. */ -}}
 {{- if and (not $digest) (not $tag) (eq $repo $defaultRepo) -}}
 {{- $digest = $defaultDigest -}}
 {{- end -}}
@@ -188,5 +296,75 @@ If existingSecret is set, use the user-provided name; otherwise use the chart-ma
 {{- .Values.secrets.llm.existingSecret -}}
 {{- else -}}
 {{- include "aurora.fullname" . -}}-secrets-llm
+{{- end -}}
+{{- end -}}
+
+{{/*
+extraEnv wins over the ConfigMap. A timeout set there would outlive the
+grace period and proxy limits, which only read config.
+*/}}
+{{- define "aurora.rejectInvestigationTimeoutOverride" -}}
+{{- range .Values.extraEnv }}
+{{- if eq .name "INVESTIGATION_TIMEOUT_SECONDS" }}
+{{- fail "Set config.INVESTIGATION_TIMEOUT_SECONDS, not extraEnv. extraEnv overrides the ConfigMap, so worker grace and proxy timeouts would not match the pod." }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Investigation hard limit in seconds. Same clamp as chat/investigation_timeout.py
+(default 3600, range 120–10800). Accepts Python int forms (+9000, 9_000).
+Anything else uses 3600.
+*/}}
+{{- define "aurora.investigationTimeoutSeconds" -}}
+{{- include "aurora.rejectInvestigationTimeoutOverride" . }}
+{{- $raw := .Values.config.INVESTIGATION_TIMEOUT_SECONDS | default "3600" | toString | trim | replace "_" "" -}}
+{{- if regexMatch "^[+][0-9]+$" $raw -}}
+{{- $raw = trimPrefix "+" $raw -}}
+{{- end -}}
+{{- if regexMatch "^-[0-9]+$" $raw -}}
+120
+{{- else if not (regexMatch "^[0-9]+$" $raw) -}}
+3600
+{{- else -}}
+{{/* sprig int parses a leading 0 as octal; atoi stays decimal, matching Python */}}
+{{- $n := atoi $raw -}}
+{{- if lt $n 120 -}}
+120
+{{- else if gt $n 10800 -}}
+10800
+{{- else -}}
+{{ $n }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Celery worker grace. At least the investigation timeout plus 60s, so a
+rolling update does not SIGKILL a task that just started. A higher
+explicit value is kept.
+*/}}
+{{- define "aurora.celeryTerminationGraceSeconds" -}}
+{{- $timeout := include "aurora.investigationTimeoutSeconds" . | trim | int -}}
+{{- $minGrace := add $timeout 60 -}}
+{{- $configured := .Values.celeryWorker.terminationGracePeriodSeconds | default 0 | int -}}
+{{- if lt $configured $minGrace -}}
+{{ $minGrace }}
+{{- else -}}
+{{ $configured }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Floor a duration at the investigation timeout. Pass
+(dict "root" $ "value" <configured seconds>).
+*/}}
+{{- define "aurora.atLeastInvestigationTimeout" -}}
+{{- $timeout := include "aurora.investigationTimeoutSeconds" .root | trim | int -}}
+{{- $configured := .value | default $timeout | int -}}
+{{- if lt $configured $timeout -}}
+{{ $timeout }}
+{{- else -}}
+{{ $configured }}
 {{- end -}}
 {{- end -}}
