@@ -68,6 +68,7 @@ Werkzeug==3.1.9
 websockets==15.0
 pyyaml==6.0.1
 celery==5.3.6
+kombu==5.6.2
 redis==5.0.1
 google-cloud-resource-manager==1.13.1
 google-cloud-iam==2.19.0
