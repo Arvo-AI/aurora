@@ -70,6 +70,57 @@ def test_unlimited_aws_keeps_the_old_ask_mode_behavior():
     assert select_aws_role(conn, None, ask_mode=False) == ("arn:write", False)
 
 
+def _role(name: str) -> str:
+    return f"arn:aws:iam::111122223333:role/{name}"
+
+
+MODIFY_ROLE = _role("AuroraAdmin-prod")
+
+
+def test_ask_mode_skips_session_policy_when_role_arn_is_read_only():
+    for name in ("AuroraReadOnlyRole", "AuroraReadOnly-prod"):
+        arn = _role(name)
+        conn = {"role_arn": arn}
+        for creds in (None, frozenset({CREDENTIAL_READ}), frozenset({CREDENTIAL_WRITE})):
+            assert select_aws_role(conn, creds, ask_mode=True) == (arn, False)
+
+
+def test_ask_mode_keeps_session_policy_on_the_modify_role():
+    conn = {"role_arn": MODIFY_ROLE}
+    for creds in (None, frozenset({CREDENTIAL_WRITE})):
+        assert select_aws_role(conn, creds, ask_mode=True) == (MODIFY_ROLE, True)
+
+
+def test_ask_mode_with_a_distinct_read_role_skips_the_session_policy():
+    read = _role("AuroraReadOnly-prod")
+    conn = {"role_arn": MODIFY_ROLE, "read_only_role_arn": read}
+    assert select_aws_role(conn, None, ask_mode=True) == (read, False)
+    assert select_aws_role(conn, frozenset({CREDENTIAL_WRITE}), ask_mode=True) == (read, False)
+
+
+def test_read_grant_skips_session_policy_on_a_read_only_role_in_agent_mode():
+    for name in ("AuroraReadOnlyRole", "AuroraReadOnly-prod"):
+        arn = _role(name)
+        got = select_aws_role({"role_arn": arn}, frozenset({CREDENTIAL_READ}), ask_mode=False)
+        assert got == (arn, False)
+
+
+def test_read_grant_keeps_session_policy_on_the_modify_role():
+    conn = {"role_arn": MODIFY_ROLE}
+    creds = frozenset({CREDENTIAL_READ})
+    assert select_aws_role(conn, creds, ask_mode=False) == (MODIFY_ROLE, True)
+    assert select_aws_role(conn, creds, ask_mode=True) == (MODIFY_ROLE, True)
+
+
+def test_session_policy_matches_the_role_name_not_an_arn_substring():
+    decoy = "arn:aws:iam::111122223333:role/AuroraReadOnly-decoy/AuroraAdmin-prod"
+    assert select_aws_role({"role_arn": decoy}, None, ask_mode=True) == (decoy, True)
+    similar = _role("AuroraReadOnlyCustom")
+    assert select_aws_role({"role_arn": similar}, None, ask_mode=True) == (similar, True)
+    nested = "arn:aws:iam::111122223333:role/team/AuroraReadOnly-prod"
+    assert select_aws_role({"role_arn": nested}, None, ask_mode=True) == (nested, False)
+
+
 def test_gcp_read_grant_forces_the_read_only_service_account():
     assert gcp_token_mode(frozenset({CREDENTIAL_READ}), "agent") == "ask"
     assert gcp_token_mode(frozenset({CREDENTIAL_WRITE}), "agent") == "agent"
