@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Helm: `image.registry` defaults to `ghcr.io/arvo-ai`. The release digest
+  overlay pins digests only, so installing with just
+  `values.images-<version>.yaml` still pulls the published images, and a
+  private registry in your values file is left in place.
+
+### Fixed
+- Helm: `make deploy-build` records the new tag on `image.tag` for the stock
+  `aurora-server` and `aurora-frontend` names. It sets
+  `image.images.server.tag` only when the server repository is renamed, and
+  drops a stock per-image tag left from an earlier run. A digest overlay and
+  `--set-string image.tag=` apply to those stock images again.
+
 ## [1.5.14] - 2026-10-28
 
 ### Changed

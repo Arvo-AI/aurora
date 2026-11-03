@@ -25,10 +25,11 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- include "aurora.podSecurityContext" (dict "service" "vault" "global" $ "defaults" (dict "runAsUser" 100 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
+      {{- include "aurora.imagePullSecrets" (dict "image" "vault" "global" $) | nindent 6 }}
       {{- include "aurora.scheduling" (dict "service" "vault" "global" $) | nindent 6 }}
       containers:
         - name: vault
-          image: hashicorp/vault:1.15
+          image: {{ include "aurora.image" (dict "image" "vault" "global" $) | quote }}
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c"]
           args: 
