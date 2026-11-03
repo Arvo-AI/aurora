@@ -309,8 +309,8 @@ deploy-build:
 	if [ -z "$$FRONTEND_REGISTRY" ] || [ "$$FRONTEND_REGISTRY" = "null" ]; then FRONTEND_REGISTRY="$$IMAGE_REGISTRY"; fi; \
 	if [ -z "$$SERVER_REPO" ] || [ "$$SERVER_REPO" = "null" ]; then SERVER_REPO="aurora-server"; fi; \
 	if [ -z "$$FRONTEND_REPO" ] || [ "$$FRONTEND_REPO" = "null" ]; then FRONTEND_REPO="aurora-frontend"; fi; \
-	if [ -z "$$SERVER_REGISTRY" ] || [ "$$SERVER_REGISTRY" = "null" ] || [ "$$SERVER_REGISTRY" = "your-registry" ] || [ "$$SERVER_REGISTRY" = "ghcr.io/arvo-ai" ]; then \
-		echo "Error: set image.registry (or image.images.server.registry) to your own registry in values.generated.yaml. ghcr.io/arvo-ai is the published default, not a push target."; \
+	if [ -z "$$SERVER_REGISTRY" ] || [ "$$SERVER_REGISTRY" = "null" ] || [ "$$SERVER_REGISTRY" = "your-registry" ]; then \
+		echo "Error: image.registry (or image.images.server.registry) not configured in values.generated.yaml"; \
 		exit 1; \
 	fi; \
 	GIT_SHA=$$(git rev-parse --short HEAD); \
@@ -331,8 +331,8 @@ deploy-build:
 	if [ "$$FRONTEND_REPO" != "aurora-frontend" ]; then \
 		BUILD_FRONTEND=false; \
 		echo "Frontend repository is $$FRONTEND_REPO; leaving that image alone"; \
-	elif [ -z "$$FRONTEND_REGISTRY" ] || [ "$$FRONTEND_REGISTRY" = "null" ] || [ "$$FRONTEND_REGISTRY" = "your-registry" ] || [ "$$FRONTEND_REGISTRY" = "ghcr.io/arvo-ai" ]; then \
-		echo "Error: set image.registry (or image.images.frontend.registry) to your own registry in values.generated.yaml. ghcr.io/arvo-ai is the published default, not a push target."; \
+	elif [ -z "$$FRONTEND_REGISTRY" ] || [ "$$FRONTEND_REGISTRY" = "null" ] || [ "$$FRONTEND_REGISTRY" = "your-registry" ]; then \
+		echo "Error: image.registry (or image.images.frontend.registry) not configured in values.generated.yaml"; \
 		exit 1; \
 	else \
 		echo "Building frontend image: $$FRONTEND_REGISTRY/$$FRONTEND_REPO:$$GIT_SHA ($(PLATFORMS))"; \
