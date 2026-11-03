@@ -366,6 +366,50 @@ def _alert_from_show(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _show_alert(api_key: str, alert_id: str) -> tuple:
+    """(alert, error_json). A 404 is (None, None) so the caller can try the dedup key.
+
+    Ids that are not safe in a URL path skip the show call entirely.
+    """
+    # A slash or space is a source key, not an incident.io alert id.
+    if not _PATH_SAFE_ID.fullmatch(alert_id):
+        return None, None
+    direct = _api_request(api_key, "GET", f"/alerts/{alert_id}")
+    # Hit on the incident.io alert id itself.
+    if "error" not in direct:
+        return _alert_from_show(direct), None
+    # A 404 means this isn't an incident.io alert id. Other errors are final.
+    if direct.get("error") != _NOT_FOUND:
+        return None, json.dumps(direct)
+    return None, None
+
+
+def _alerts_for_dedup_key(api_key: str, alert_id: str) -> tuple:
+    """(matches, error_json, has_more) for a source-system deduplication key."""
+    listed = _api_request(
+        api_key, "GET", "/alerts",
+        params={"page_size": 10, "deduplication_key[is]": alert_id},
+    )
+    if "error" in listed:
+        return [], json.dumps(listed), False
+    matches = [item for item in (listed.get("alerts") or []) if isinstance(item, dict)]
+    # incident.io sends `after` on the last page too, so a short page is the end.
+    has_more = len(matches) >= 10 and bool((listed.get("pagination_meta") or {}).get("after"))
+    return matches, None, has_more
+
+
+def _annotate_alerts(api_key: str, alerts: list) -> list:
+    """Formatted alerts, each with the incidents it is attached to."""
+    formatted = []
+    for alert in alerts:
+        item = _format_alert(alert)
+        # Attachment lookup needs the incident.io id from the alert payload.
+        if item.get("id"):
+            item.update(_attached_incidents(api_key, item["id"]))
+        formatted.append(item)
+    return formatted
+
+
 def get_incidentio_alert(
     alert_id: str,
     user_id: Optional[str] = None,
@@ -384,53 +428,30 @@ def get_incidentio_alert(
     if not alert_id or len(alert_id) > 100 or any(ord(char) < 32 for char in alert_id):
         return _ERR_INVALID_ALERT_ID
 
-    alert = None
-    # Only unreserved ids go in the path. A slash or space is a source key.
-    if _PATH_SAFE_ID.fullmatch(alert_id):
-        direct = _api_request(api_key, "GET", f"/alerts/{alert_id}")
-        # Hit on the incident.io alert id itself.
-        if "error" not in direct:
-            alert = _alert_from_show(direct)
-        # A 404 means this isn't an incident.io alert id. Other errors are final.
-        elif direct.get("error") != _NOT_FOUND:
-            return json.dumps(direct)
+    alert, error = _show_alert(api_key, alert_id)
+    if error:
+        return error
 
+    # Not an incident.io alert id — source ids live on the deduplication key.
     if alert is None:
-        # Source alert ids (Site24x7 and others) are the deduplication key.
-        listed = _api_request(
-            api_key, "GET", "/alerts",
-            params={"page_size": 10, "deduplication_key[is]": alert_id},
-        )
-        if "error" in listed:
-            return json.dumps(listed)
-        matches = [item for item in (listed.get("alerts") or []) if isinstance(item, dict)]
+        matches, error, has_more = _alerts_for_dedup_key(api_key, alert_id)
+        if error:
+            return error
         # The source key is not a deduplication key we have an alert for.
         if not matches:
             return _ERR_ALERT_NOT_FOUND
-        # A single dedup-key hit is the alert the caller asked for.
-        if len(matches) == 1:
-            alert = matches[0]
-        else:
-            # The same source key can exist on more than one alert source.
-            formatted = [_format_alert(item) for item in matches]
-            for item in formatted:
-                # Attachment lookup needs the incident.io id from each match.
-                if item.get("id"):
-                    item.update(_attached_incidents(api_key, item["id"]))
-            # incident.io sends `after` on the last page too, so a short page is the end.
-            page_full = len(matches) >= 10 and bool((listed.get("pagination_meta") or {}).get("after"))
+        # The same source key can exist on more than one alert source.
+        if len(matches) > 1:
+            formatted = _annotate_alerts(api_key, matches)
             return _truncate_output({
                 "matches": formatted,
                 "total_returned": len(formatted),
                 "matched_on": "deduplication_key",
-                "has_more": page_full,
+                "has_more": has_more,
             })
+        alert = matches[0]
 
-    summary = _format_alert(alert)
-    # Attachment lookup needs the incident.io alert id, not the source key.
-    if summary.get("id"):
-        summary.update(_attached_incidents(api_key, summary["id"]))
-    return _truncate_output(summary)
+    return _truncate_output(_annotate_alerts(api_key, [alert])[0])
 
 
 def get_incidentio_timeline(
