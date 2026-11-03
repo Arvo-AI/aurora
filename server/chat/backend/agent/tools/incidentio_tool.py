@@ -22,10 +22,12 @@ _ERR_INVALID_ID = json.dumps({"error": "Invalid incident_id"})
 _ERR_INVALID_ALERT_ID = json.dumps({"error": "Invalid alert_id"})
 _ERR_ALERT_NOT_FOUND = json.dumps({"error": "No incident.io alert found for that id"})
 
-# Safe to place in the URL path. Source ids with other characters are only
-# looked up as a deduplication key, where the query string encodes them.
-_PATH_SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$")
+# incident.io alert ids are ULIDs. Anything else is a source-system key.
+_INCIDENTIO_ALERT_ID = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$", re.IGNORECASE)
 _NOT_FOUND = "Resource not found"
+# A non-ULID on /alerts/{id} is rejected (HTTP 400). A missing ULID is 404.
+# Both should continue on to the deduplication-key search.
+_PATH_MISS = frozenset({_NOT_FOUND, "incident.io API error (HTTP 400)"})
 
 logger = logging.getLogger(__name__)
 
@@ -367,21 +369,18 @@ def _alert_from_show(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _show_alert(api_key: str, alert_id: str) -> tuple:
-    """(alert, error_json). A 404 is (None, None) so the caller can try the dedup key.
-
-    Ids that are not safe in a URL path skip the show call entirely.
-    """
-    # A slash or space is a source key, not an incident.io alert id.
-    if not _PATH_SAFE_ID.fullmatch(alert_id):
+    """(alert, error_json). A miss is (None, None) so the caller can try the dedup key."""
+    # Source ids are not ULIDs. Putting one on the path 400s and hides the search.
+    if not _INCIDENTIO_ALERT_ID.fullmatch(alert_id):
         return None, None
     direct = _api_request(api_key, "GET", f"/alerts/{alert_id}")
     # Hit on the incident.io alert id itself.
     if "error" not in direct:
         return _alert_from_show(direct), None
-    # A 404 means this isn't an incident.io alert id. Other errors are final.
-    if direct.get("error") != _NOT_FOUND:
-        return None, json.dumps(direct)
-    return None, None
+    # 404/400: not this alert. Auth and transport errors are final.
+    if direct.get("error") in _PATH_MISS:
+        return None, None
+    return None, json.dumps(direct)
 
 
 def _alerts_for_dedup_key(api_key: str, alert_id: str) -> tuple:

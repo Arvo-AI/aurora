@@ -53,6 +53,7 @@ def _calls(responses):
 
 
 def _run(alert_id, responses, user_id="u1"):
+    """Call the tool with a scripted API and return (payload, calls)."""
     seen, patches = _calls(responses)
     with patches[0], patches[1]:
         payload = json.loads(tool.get_incidentio_alert(alert_id, user_id=user_id))
@@ -60,6 +61,7 @@ def _run(alert_id, responses, user_id="u1"):
 
 
 def test_requires_a_user_and_a_connection():
+    """Missing user context and a missing connection are distinct errors."""
     assert json.loads(tool.get_incidentio_alert("01ABC"))["error"] == "No user context available"
     with patch.object(tool, "_get_incidentio_credentials", return_value=None):
         missing = json.loads(tool.get_incidentio_alert("01ABC", user_id="u1"))
@@ -67,6 +69,7 @@ def test_requires_a_user_and_a_connection():
 
 
 def test_rejects_blank_oversized_and_control_ids():
+    """Blank, oversized, and control-character ids never reach the API."""
     with patch.object(tool, "_get_incidentio_credentials", return_value="key"):
         blank = json.loads(tool.get_incidentio_alert("  ", user_id="u1"))
         huge = json.loads(tool.get_incidentio_alert("a" * 101, user_id="u1"))
@@ -75,6 +78,7 @@ def test_rejects_blank_oversized_and_control_ids():
 
 
 def test_incidentio_alert_id_includes_the_attached_incident():
+    """A ULID is fetched by path and comes back with the incident it is on."""
     payload, seen = _run(ALERT["id"], [{"alert": ALERT}, LINKS])
 
     assert payload["id"] == ALERT["id"]
@@ -98,30 +102,42 @@ def test_incidentio_alert_id_includes_the_attached_incident():
     ]
 
 
-def test_source_alert_id_falls_back_to_the_deduplication_key():
-    """A Site24x7-style id is not an incident.io alert id; it is the dedup key."""
-    payload, seen = _run("4293868629", [{"error": "Resource not found"}, {"alerts": [ALERT]}, LINKS])
+def test_source_alert_id_is_looked_up_as_a_deduplication_key():
+    """A Site24x7-style id is not an incident.io ULID, so it never hits the path."""
+    payload, seen = _run("4293868629", [{"alerts": [ALERT]}, LINKS])
 
     assert payload["id"] == ALERT["id"]
     assert payload["incidents"][0]["id"] == "01INC"
-    assert seen[0] == ("/alerts/4293868629", None)
-    assert seen[1] == (
+    assert seen[0] == (
         "/alerts",
         {"page_size": 10, "deduplication_key[is]": "4293868629"},
     )
-    assert seen[2][0] == "/incident_alerts"
+    assert seen[1][0] == "/incident_alerts"
+
+
+def test_rejected_ulid_still_searches_by_dedup_key():
+    """HTTP 400 on the path is not fatal; the same id may be a dedup key."""
+    payload, seen = _run(
+        ALERT["id"],
+        [{"error": "incident.io API error (HTTP 400)"}, {"alerts": [ALERT]}, LINKS],
+    )
+    assert payload["deduplication_key"] == "4293868629"
+    assert seen[0] == (f"/alerts/{ALERT['id']}", None)
+    assert seen[1][0] == "/alerts"
 
 
 def test_auth_failure_does_not_search_by_dedup_key():
+    """An auth failure on the path lookup is final."""
     payload, seen = _run(
-        "01ABC",
+        ALERT["id"],
         [{"error": "Authentication failed — API key may be invalid or expired"}],
     )
     assert "Authentication" in payload["error"]
-    assert seen == [("/alerts/01ABC", None)]
+    assert seen == [(f"/alerts/{ALERT['id']}", None)]
 
 
 def test_source_key_with_a_slash_skips_the_path_lookup():
+    """A key that is not a ULID is only searched as a deduplication key."""
     payload, seen = _run("monitor/4293868629", [{"alerts": [ALERT]}, LINKS])
 
     assert payload["title"] == "CPU high"
@@ -132,6 +148,7 @@ def test_source_key_with_a_slash_skips_the_path_lookup():
 
 
 def test_shared_dedup_key_returns_every_match():
+    """One source key on two alert sources returns both, with attachments."""
     other = {**ALERT, "id": "01OTHER", "title": "Other source"}
     payload, seen = _run(
         "monitor/4293868629",
@@ -147,6 +164,7 @@ def test_shared_dedup_key_returns_every_match():
 
 
 def test_full_page_of_matches_reports_more():
+    """A full page plus a cursor means another page may exist."""
     page = [{**ALERT, "id": f"01ALERT{i:02d}"} for i in range(10)]
     responses = [{"alerts": page, "pagination_meta": {"after": "cursor"}}] + [LINKS] * 10
     payload, _ = _run("monitor/4293868629", responses)
@@ -155,6 +173,7 @@ def test_full_page_of_matches_reports_more():
 
 
 def test_missing_incident_points_at_the_alert_tool():
+    """A 404 on an incident id tells the agent to try the alert tool."""
     with patch.object(tool, "_get_incidentio_credentials", return_value="key"), \
             patch.object(tool, "_api_request", return_value={"error": "Resource not found"}):
         payload = json.loads(tool.get_incidentio_incident("4293868629", user_id="u1"))
@@ -162,7 +181,8 @@ def test_missing_incident_points_at_the_alert_tool():
 
 
 def test_unknown_id_and_a_failed_attachment_lookup():
-    missing, _ = _run("4293868629", [{"error": "Resource not found"}, {"alerts": []}])
+    """An unknown key is an error; an attachment failure still returns the alert."""
+    missing, _ = _run("4293868629", [{"alerts": []}])
     assert missing["error"] == "No incident.io alert found for that id"
 
     payload, _ = _run(
