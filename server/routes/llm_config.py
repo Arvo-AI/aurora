@@ -49,6 +49,24 @@ def picker_prefixes(mode: str | None, env: dict) -> list[str] | None:
     return configured or None
 
 
+def picker_local_models(prefixes: list[str] | None, env: dict) -> list[str]:
+    """Ollama model ids the chat picker should offer.
+
+    The picker's catalog only knows cloud model ids, so a direct-mode deployment
+    whose only provider is Ollama had nothing to pick and fell back to a cloud
+    default it cannot serve. Offer the Ollama models this deployment is
+    configured to run (``MAIN_MODEL`` / ``RCA_MODEL``).
+    """
+    if not prefixes or "ollama" not in prefixes:
+        return []
+    models: list[str] = []
+    for var in ("MAIN_MODEL", "RCA_MODEL"):
+        model = (env.get(var) or "").strip()
+        if model.lower().startswith("ollama/") and model not in models:
+            models.append(model)
+    return models
+
+
 llm_config_bp = Blueprint("llm_config", __name__, url_prefix="/api/llm-config")
 
 
@@ -58,11 +76,13 @@ def get_picker_config(user_id):
     """Chat-picker filter: provider mode + prefixes that can actually run."""
     try:
         mode = os.getenv("LLM_PROVIDER_MODE") or "direct"
+        prefixes = picker_prefixes(mode, os.environ)
         return jsonify(
             {
                 "success": True,
                 "mode": mode,
-                "prefixes": picker_prefixes(mode, os.environ),
+                "prefixes": prefixes,
+                "localModels": picker_local_models(prefixes, os.environ),
             }
         ), 200
     except Exception as e:

@@ -27,6 +27,7 @@ from guardrails.input_rail import (  # noqa: E402
     _FAIL_CLOSED_CONNECTIVITY,
     _FAIL_CLOSED_REASON,
     _INIT_FAILURE_BACKOFF_S,
+    OLLAMA_UNSUPPORTED_CALL_PARAMS,
     _GuardrailsLLMCompat,
     check_input,
 )
@@ -565,3 +566,94 @@ class TestGuardrailsLLMCompatGenerate:
         wrapper = _GuardrailsLLMCompat.model_construct(inner=inner)
 
         assert wrapper._llm_type == "fake-gemini"
+
+
+class TestGuardrailsLLMCompatOllamaParams:
+    """#749: ChatOllama rejects the temperature/max_tokens kwargs NeMo adds to every check.
+
+    Unlike the reactive sampling strip, these are dropped before the first call, so an
+    Ollama-only deploy never pays a failed round trip per self-check.
+    """
+
+    class _RejectsCallParams:
+        """Inner model that raises like ChatOllama when given NeMo's call kwargs."""
+
+        def __init__(self):
+            self.calls = []
+
+        def _generate(self, messages, stop=None, **kwargs):
+            self.calls.append(kwargs)
+            for name in ("temperature", "max_tokens"):
+                if name in kwargs:
+                    raise TypeError(f"Client.chat() got an unexpected keyword argument '{name}'")
+            return _chat_result_with(_ai_message_with("No"))
+
+        async def _agenerate(self, messages, stop=None, **kwargs):
+            await asyncio.sleep(0)
+            return self._generate(messages, stop=stop, **kwargs)
+
+    def _wrapper(self, inner, drop):
+        return _GuardrailsLLMCompat.model_construct(
+            inner=inner, rename_max_tokens=False, drop_sampling=False, drop_call_params=drop
+        )
+
+    def test_drops_ollama_params_before_the_first_call(self):
+        inner = self._RejectsCallParams()
+        wrapper = self._wrapper(inner, OLLAMA_UNSUPPORTED_CALL_PARAMS)
+
+        result = wrapper._generate([], stop=None, temperature=0.0, max_tokens=512)
+
+        assert result.generations[0].message.content == "No"
+        assert inner.calls == [{}], "one clean call, no failed attempt first"
+
+    def test_async_path_drops_ollama_params_too(self):
+        inner = self._RejectsCallParams()
+        wrapper = self._wrapper(inner, OLLAMA_UNSUPPORTED_CALL_PARAMS)
+
+        result = _run(wrapper._agenerate([], stop=None, temperature=0.0, max_tokens=512))
+
+        assert result.generations[0].message.content == "No"
+        assert inner.calls == [{}]
+
+    def test_other_kwargs_pass_through(self):
+        inner = _RecordingInner("ok")
+        wrapper = self._wrapper(inner, OLLAMA_UNSUPPORTED_CALL_PARAMS)
+
+        wrapper._generate([], stop=None, temperature=0.0, max_tokens=8, format="json")
+
+        assert inner.last_kwargs == {"format": "json"}
+
+    def test_cloud_models_keep_their_params(self):
+        inner = _RecordingInner("ok")
+        wrapper = self._wrapper(inner, ())
+
+        wrapper._generate([], stop=None, temperature=0.0, max_tokens=8)
+
+        assert inner.last_kwargs == {"temperature": 0.0, "max_tokens": 8}
+
+
+class TestBuildLLMOllamaDetection:
+    """``_build_llm`` turns the Ollama drop on only when Ollama serves the rail model."""
+
+    class _FakeChatModel(_RecordingInner):
+        def __init__(self, llm_type):
+            super().__init__("ok")
+            self._llm_type = llm_type
+
+    def _build(self, monkeypatch, *, provider, llm_type):
+        import chat.backend.agent.providers as providers
+
+        monkeypatch.setattr(providers, "create_chat_model", lambda *a, **k: self._FakeChatModel(llm_type))
+        registry = SimpleNamespace(resolve_provider_name=lambda name, mode: provider)
+        monkeypatch.setattr(providers, "get_registry", lambda: registry)
+        # Capture the constructor kwargs; the real wrapper validates inner as a BaseChatModel.
+        monkeypatch.setattr(input_rail, "_GuardrailsLLMCompat", lambda **kw: SimpleNamespace(**kw))
+        return input_rail._build_llm()
+
+    def test_ollama_provider_enables_the_drop(self, monkeypatch):
+        wrapper = self._build(monkeypatch, provider="ollama", llm_type="chat-ollama")
+        assert wrapper.drop_call_params == OLLAMA_UNSUPPORTED_CALL_PARAMS
+
+    def test_cloud_provider_leaves_params_alone(self, monkeypatch):
+        wrapper = self._build(monkeypatch, provider="anthropic", llm_type="anthropic-chat")
+        assert wrapper.drop_call_params == ()

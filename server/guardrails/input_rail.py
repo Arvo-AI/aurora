@@ -66,6 +66,10 @@ class InputRailResult:
     latency_ms: float = 0.0
 
 
+# Call kwargs NeMo attaches that ``ollama.AsyncClient.chat()`` does not accept.
+OLLAMA_UNSUPPORTED_CALL_PARAMS = ("temperature", "top_p", "top_k", "max_tokens")
+
+
 class _GuardrailsLLMCompat(BaseChatModel):
     """Adapt chat models for NeMo Guardrails self-check tasks.
 
@@ -101,6 +105,11 @@ class _GuardrailsLLMCompat(BaseChatModel):
     # Flipped to True the first time the model rejects a sampling param, so later
     # calls skip the wasted round-trip. Not a constructor argument in practice.
     drop_sampling: bool = False
+    # Call kwargs the inner client cannot take at all, dropped before every call.
+    # ChatOllama forwards unknown call kwargs to ``ollama.AsyncClient.chat()``,
+    # which raises ``TypeError`` on ``temperature`` and ``max_tokens``; the
+    # instance already carries its own temperature in Ollama's ``options``.
+    drop_call_params: tuple = ()
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -117,6 +126,8 @@ class _GuardrailsLLMCompat(BaseChatModel):
     def _prepare(self, kwargs: dict) -> dict:
         """Apply the Gemini rename, then drop sampling params the model has rejected."""
         prepared = self._rename(kwargs)
+        if self.drop_call_params and any(f in prepared for f in self.drop_call_params):
+            prepared = {k: v for k, v in prepared.items() if k not in self.drop_call_params}
         if self.drop_sampling and any(f in prepared for f in SAMPLING_FIELDS):
             prepared = {k: v for k, v in prepared.items() if k not in SAMPLING_FIELDS}
         return prepared
@@ -220,9 +231,12 @@ def _build_llm() -> BaseChatModel:
     serving_provider = get_registry().resolve_provider_name(model_name, mode=provider_mode)
 
     # Gemini's GenerateContentConfig rejects the `max_tokens` alias NeMo sends.
+    # Ollama's client rejects every sampling/length kwarg NeMo sends (#749).
+    is_ollama = serving_provider == "ollama" or getattr(llm, "_llm_type", "") == "chat-ollama"
     return _GuardrailsLLMCompat(
         inner=llm,
         rename_max_tokens=serving_provider in ("google", "vertex"),
+        drop_call_params=OLLAMA_UNSUPPORTED_CALL_PARAMS if is_ollama else (),
     )
 
 

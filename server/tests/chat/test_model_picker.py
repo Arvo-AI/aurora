@@ -1,5 +1,5 @@
 """Chat picker shows only models that can run under the current provider mode."""
-from routes.llm_config import picker_prefixes
+from routes.llm_config import picker_local_models, picker_prefixes
 
 
 def test_openrouter_shows_all():
@@ -30,3 +30,28 @@ def test_direct_google_ai_is_not_vertex():
 def test_direct_no_keys_shows_all():
     assert picker_prefixes("direct", {}) is None
     assert picker_prefixes("direct", {"AWS_DEFAULT_REGION": "us-east-1"}) is None
+
+
+def test_ollama_only_direct_deploy_offers_configured_ollama_models():
+    """#749: the cloud catalog has no ollama/ ids, so the picker needs the local ones."""
+    env = {"OLLAMA_BASE_URL": "http://ollama:11434", "MAIN_MODEL": "ollama/qwen3:8b", "RCA_MODEL": "ollama/llama3.3:70b"}
+    prefixes = picker_prefixes("direct", env)
+    assert prefixes == ["ollama"]
+    assert picker_local_models(prefixes, env) == ["ollama/qwen3:8b", "ollama/llama3.3:70b"]
+
+
+def test_local_models_are_deduplicated():
+    env = {"MAIN_MODEL": "ollama/qwen3:8b", "RCA_MODEL": "ollama/qwen3:8b"}
+    assert picker_local_models(["ollama"], env) == ["ollama/qwen3:8b"]
+
+
+def test_local_models_skip_cloud_ids_and_unset_vars():
+    env = {"MAIN_MODEL": "anthropic/claude-sonnet-5", "RCA_MODEL": ""}
+    assert picker_local_models(["ollama", "anthropic"], env) == []
+
+
+def test_no_local_models_without_ollama_in_the_picker():
+    env = {"MAIN_MODEL": "ollama/qwen3:8b"}
+    assert picker_local_models(["openai"], env) == []
+    # Full-catalog modes (OpenRouter, Ollama mode, no keys) keep their existing behaviour.
+    assert picker_local_models(None, env) == []
