@@ -430,55 +430,89 @@ def _verdict_from_payload(payload: dict) -> Optional[SafetyVerdict]:
     return SafetyVerdict(observation=str(text).strip(), thought=thought.strip(), conclusion=conclusion)
 
 
-def _payloads_from_raw(raw) -> list:
-    payloads = []
-    for attr in ("tool_calls", "invalid_tool_calls"):
-        for call in getattr(raw, attr, None) or []:
-            if not isinstance(call, dict):
-                continue
-            args = call.get("args")
-            # Native tool args are a dict. A string is the unparsed XML or JSON.
-            if isinstance(args, dict):
-                payloads.append(args)
-            elif isinstance(args, str) and args.strip():
-                payloads.append({"observation": args})
-    content = getattr(raw, "content", None)
+def _append_call(payloads: list, call) -> None:
+    if not isinstance(call, dict):
+        return
+    args = call.get("args")
+    # Native tool args are a dict. A string is the unparsed XML or JSON.
+    if isinstance(args, dict):
+        payloads.append(args)
+        return
+    if isinstance(args, str) and args.strip():
+        payloads.append({"observation": args})
+
+
+def _append_content_part(payloads: list, texts: list, part) -> None:
+    if isinstance(part, str):
+        texts.append(part)
+        return
+    if not isinstance(part, dict):
+        return
+    tool_input = part.get("input")
+    # A tool-use block already has the arguments.
+    if isinstance(tool_input, dict):
+        payloads.append(tool_input)
+        return
+    text = part.get("text")
+    if isinstance(text, str):
+        texts.append(text)
+
+
+def _append_content(payloads: list, content) -> None:
     if isinstance(content, str) and content.strip():
         payloads.append({"observation": content})
+        return
     # Bedrock content is a list of blocks, and the tool input may live there.
-    if isinstance(content, list):
-        texts = []
-        for part in content:
-            if isinstance(part, str):
-                texts.append(part)
-            elif isinstance(part, dict) and isinstance(part.get("input"), dict):
-                payloads.append(part["input"])
-            elif isinstance(part, dict) and isinstance(part.get("text"), str):
-                texts.append(part["text"])
-        if texts:
-            payloads.append({"observation": "\n".join(texts)})
+    if not isinstance(content, list):
+        return
+    texts: list = []
+    for part in content:
+        _append_content_part(payloads, texts, part)
+    if texts:
+        payloads.append({"observation": "\n".join(texts)})
+
+
+def _payloads_from_raw(raw) -> list:
+    payloads: list = []
+    for attr in ("tool_calls", "invalid_tool_calls"):
+        for call in getattr(raw, attr, None) or []:
+            _append_call(payloads, call)
+    _append_content(payloads, getattr(raw, "content", None))
     return payloads
+
+
+def _first_recovered(raw) -> Optional[SafetyVerdict]:
+    for payload in _payloads_from_raw(raw):
+        if not isinstance(payload, dict):
+            continue
+        recovered = _verdict_from_payload(payload)
+        # Partial tool call. Still fail closed when it is not a verdict.
+        if recovered is not None:
+            return recovered
+    return None
+
+
+def _verdict_from_include_raw(result: dict) -> SafetyVerdict:
+    parsed = result.get("parsed")
+    if isinstance(parsed, SafetyVerdict):
+        return parsed
+    recovered = _first_recovered(result.get("raw"))
+    if recovered is not None:
+        return recovered
+    parsing_error = result.get("parsing_error")
+    if parsing_error is not None:
+        raise parsing_error
+    raise ValueError("safety judge returned no verdict")
 
 
 def _verdict_from_result(result) -> SafetyVerdict:
     # Already a verdict. The include_raw dict is the path that needs recovery.
     if isinstance(result, SafetyVerdict):
         return result
-    if isinstance(result, dict) and ("parsed" in result or "raw" in result):
-        parsed = result.get("parsed")
-        if isinstance(parsed, SafetyVerdict):
-            return parsed
-        for payload in _payloads_from_raw(result.get("raw")):
-            if not isinstance(payload, dict):
-                continue
-            recovered = _verdict_from_payload(payload)
-            # Partial tool call. Still fail closed when it is not a verdict.
-            if recovered is not None:
-                return recovered
-        parsing_error = result.get("parsing_error")
-        if parsing_error is not None:
-            raise parsing_error
-        raise ValueError("safety judge returned no verdict")
+    if isinstance(result, dict) and "parsed" in result:
+        return _verdict_from_include_raw(result)
+    if isinstance(result, dict) and "raw" in result:
+        return _verdict_from_include_raw(result)
     return SafetyVerdict.model_validate(result)
 
 
