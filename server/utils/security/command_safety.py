@@ -41,7 +41,107 @@ from utils.security.config import config
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT_SECONDS = 10
+# The judge runs on every shell command. Gemini 3 defaults to thinking_level
+# high, which lands around 5s and fails closed at this cap.
+_TIMEOUT_ENV = "GUARDRAILS_LLM_TIMEOUT_SECONDS"
+_DEFAULT_TIMEOUT_SECONDS = 10
+_MIN_TIMEOUT_SECONDS = 5
+_MAX_TIMEOUT_SECONDS = 60
+_DISABLE_THINKING_ENV = "GUARDRAILS_DISABLE_THINKING"
+
+
+def _thinking_disabled() -> bool:
+    """Unset means off. A client sets the env var to false to let the judge think."""
+    raw = os.getenv(_DISABLE_THINKING_ENV)
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() in ("true", "1", "yes")
+
+
+def guardrails_llm_timeout_seconds() -> int:
+    """Judge call cap. Unset uses 10s. Out of range is clamped to 5–60s."""
+    raw = (os.getenv(_TIMEOUT_ENV) or "").strip().replace("_", "")
+    if raw.startswith("+"):
+        raw = raw[1:]
+    if not raw:
+        return _DEFAULT_TIMEOUT_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("%s=%r is not an integer; using %ss", _TIMEOUT_ENV, raw, _DEFAULT_TIMEOUT_SECONDS)
+        return _DEFAULT_TIMEOUT_SECONDS
+    if value < _MIN_TIMEOUT_SECONDS:
+        logger.warning("%s=%s is below %ss; clamping", _TIMEOUT_ENV, value, _MIN_TIMEOUT_SECONDS)
+        return _MIN_TIMEOUT_SECONDS
+    if value > _MAX_TIMEOUT_SECONDS:
+        logger.warning("%s=%s is above %ss; clamping", _TIMEOUT_ENV, value, _MAX_TIMEOUT_SECONDS)
+        return _MAX_TIMEOUT_SECONDS
+    return value
+
+
+def _lowest_openai_effort(native: str) -> str:
+    # gpt-5-pro accepts only high. Later pro models accept medium.
+    if native.startswith("gpt-5-pro"):
+        return "high"
+    if "-pro" in native or "chat-latest" in native:
+        return "medium"
+    return "low"
+
+
+def safety_judge_thinking_overrides(model_name: str) -> dict:
+    """Kwargs that shorten the judge. On unless GUARDRAILS_DISABLE_THINKING=false.
+
+    Each family gets the shortest setting its API accepts. Gemini 3.8 Flash,
+    2.5 Pro, and OpenAI pro models reject the shorter values the others take.
+    """
+    if not _thinking_disabled():
+        return {}
+    native = (model_name or "").split("/", 1)[-1].lower()
+    prefix = model_name.split("/", 1)[0].lower() if "/" in (model_name or "") else ""
+    mode = (os.getenv("LLM_PROVIDER_MODE") or "").strip().lower()
+    # OpenRouter's Gemini route returns 400 for thinking_level. Direct Gemini does not.
+    if "gemini" in native and mode != "openrouter":
+        # 2.5 rejects thinking_level. Pro cannot take budget 0; 128 is its floor.
+        if "2.5" in native:
+            budget = 128 if "pro" in native else 0
+            return {"thinking_budget": budget, "include_thoughts": False}
+        # 3+ and 4 think at high unless a level is sent. include_thoughts only
+        # returns the trace; it does not shorten it.
+        if "gemini-3" in native or "gemini-4" in native:
+            # 3.8 Flash, Pro, and Argon return 400 for minimal.
+            level = "low" if ("pro" in native or "argon" in native or "3.8" in native) else "minimal"
+            return {"thinking_level": level, "include_thoughts": False}
+    # The OpenAI provider sets effort=high, then applies kwargs, so this
+    # replaces that default. gpt-4 has no reasoning parameter.
+    if prefix == "openai" and not native.startswith(("gpt-3", "gpt-4")):
+        return {"reasoning": {"effort": _lowest_openai_effort(native)}}
+    # Haiku 4.5 and 5.5 think by default and accept off. Opus returns 400 for
+    # thinking.type=disabled, so it is not included. The Bedrock gateway drops
+    # additional_model_request_fields; native Converse keeps it.
+    if "haiku-4" in native or "haiku-5" in native:
+        if prefix == "bedrock" or mode == "bedrock":
+            return {"additional_model_request_fields": {"thinking": {"type": "disabled"}}}
+        # Direct Anthropic. OpenRouter would forward `thinking` and 400.
+        if mode != "openrouter" and (prefix == "anthropic" or native.startswith("claude")):
+            return {"thinking": {"type": "disabled"}}
+    # Ollama returns 400 if `reasoning` is sent to a model with no think switch.
+    if prefix == "ollama" and _advertises_thinking(native):
+        return {"reasoning": False}
+    # OpenRouter's unified reasoning flag. Gemini's thinking_level 400s there,
+    # so Haiku and the open weights use this instead.
+    if mode == "openrouter" and (
+        "haiku-4" in native or "haiku-5" in native or _advertises_thinking(native)
+    ):
+        return {"extra_body": {"reasoning": {"enabled": False}}}
+    return {}
+
+
+# Name fragments for weights that ship a think switch. A plain Llama does not.
+_THINKING_WEIGHTS = ("qwen3", "deepseek-r1", "qwq", "gpt-oss", "magistral")
+
+
+def _advertises_thinking(native: str) -> bool:
+    return any(token in native for token in _THINKING_WEIGHTS)
 
 
 def _fingerprint(command: str) -> str:
@@ -174,7 +274,7 @@ def check_command_safety(
             )
         return verdict
     except concurrent.futures.TimeoutError:
-        logger.exception("[CommandSafety] LLM timed out after %ds", _TIMEOUT_SECONDS)
+        logger.exception("[CommandSafety] LLM timed out after %ds", guardrails_llm_timeout_seconds())
         return _fail_verdict("timeout")
     except Exception as e:
         logger.exception("[CommandSafety] LLM call failed")
@@ -185,13 +285,23 @@ def check_command_safety(
 # Internals
 # ---------------------------------------------------------------------------
 
+# Shown on the tool result and the approval prompt. The chat user usually
+# cannot change Helm values, so the sentence names what an admin should do.
+_TIMEOUT_USER_MESSAGE = (
+    "Safety judge timed out, so this command was blocked. "
+    "Ask an admin to raise GUARDRAILS_LLM_TIMEOUT_SECONDS (5–60 seconds; "
+    "applies on the next call) or set GUARDRAILS_LLM_MODEL to a faster model "
+    "and restart the chatbot and celery worker."
+)
+
+
 def _fail_verdict(detail: str) -> SafetyVerdict:
     logger.warning("[CommandSafety] Failing closed: %s", detail)
-    return SafetyVerdict(
-        observation="error",
-        thought=f"Safety check unavailable ({detail}); failing closed",
-        conclusion=True,
+    # A timeout looks like a dangerous command unless the text says otherwise.
+    thought = _TIMEOUT_USER_MESSAGE if detail == "timeout" else (
+        f"Safety check unavailable ({detail}); failing closed"
     )
+    return SafetyVerdict(observation="error", thought=thought, conclusion=True)
 
 
 @lru_cache(maxsize=1)
@@ -220,6 +330,7 @@ def _create_safety_llm():
         model,
         temperature=0.0,
         streaming=False,
+        **safety_judge_thinking_overrides(model),
     )
     return base.with_structured_output(SafetyVerdict, method="function_calling")
 
@@ -242,7 +353,7 @@ def _call_llm(prompt: str, user_id: Optional[str], session_id: Optional[str]) ->
     error_msg = None
     try:
         future = _executor.submit(llm.invoke, messages)
-        result = future.result(timeout=_TIMEOUT_SECONDS)
+        result = future.result(timeout=guardrails_llm_timeout_seconds())
     except Exception as e:
         error_msg = str(e)
         raise
@@ -317,6 +428,7 @@ def evaluate_command(
     tool: str,
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
+    skip_judge: bool = False,
 ) -> GuardrailDecision:
     """Run the signature matcher then the LLM judge against a command.
 
@@ -353,6 +465,10 @@ def evaluate_command(
             reason=sig.description, description=sig.description,
             technique=sig.technique, rule_id=sig.rule_id,
         )
+
+    # The org named this command as read-only. The signature floor still ran.
+    if skip_judge:
+        return GuardrailDecision(blocked=False)
 
     # Ask mode already refused a non-diagnostic ssh. A command that got here
     # still goes to the judge: the classifier is a fast reject, not a bypass.

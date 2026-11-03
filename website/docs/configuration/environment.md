@@ -228,6 +228,7 @@ At least one LLM provider API key is required. See [LLM Providers](/docs/integra
 | `GOOGLE_AI_API_KEY` | - | Google AI API key |
 | `LLM_PROVIDER_MODE` | `openrouter` | Provider routing mode (see below) |
 | `AGENT_RECURSION_LIMIT` | `240` | Max agent reasoning steps |
+| `INVESTIGATION_TIMEOUT_SECONDS` | `3600` | Wall-clock limit for one investigation, in seconds. Default is one hour. Clamped to 120–10800. Requires a process restart. On Kubernetes the chart raises the worker termination grace and the nginx proxy timeouts to at least this value. |
 
 ### LLM_PROVIDER_MODE
 
@@ -251,6 +252,7 @@ GOOGLE_AI_API_KEY=your-key
 
 LLM_PROVIDER_MODE=openrouter   # or: direct
 AGENT_RECURSION_LIMIT=240
+INVESTIGATION_TIMEOUT_SECONDS=3600
 ```
 
 ### Vertex AI (Google Cloud)
@@ -338,6 +340,8 @@ Three-layer safety: input rail + signature matcher + LLM safety judge. See [Comm
 |----------|---------|-------------|
 | `GUARDRAILS_ENABLED` | `true` | Master switch. When enabled (default), all three layers run and every LLM check fails closed on error. Set to `false` to disable all guardrails. |
 | `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Model used by the safety judge and input rail. Same format and routing as `MAIN_MODEL`. |
+| `GUARDRAILS_DISABLE_THINKING` | `true` | Shorten the safety judge. Gemini 3.6 Flash uses `minimal`; Gemini 3.8 Flash, Pro, and Argon use `low` (`minimal` is rejected). Gemini 2.5 Flash uses a budget of 0; 2.5 Pro uses 128. GPT-5 and the o-series use reasoning effort `low`; `gpt-5.5-pro` uses `medium`. Haiku 4.5 and 5.5 get thinking disabled (Opus rejects that field). Ollama and OpenRouter only get it for weights that advertise a think switch (`qwen3`, `deepseek-r1`, `qwq`, `gpt-oss`, `magistral`); a plain Llama is left alone because Ollama returns 400 otherwise. Set to `false` to leave the model on its default. Requires a restart. |
+| `GUARDRAILS_LLM_TIMEOUT_SECONDS` | `10` | Seconds the safety judge may run before the command is blocked. Clamped to 5–60. |
 | `GUARDRAILS_SIGMA_ENABLED` | `true` | Gates the vendored SigmaHQ rule corpus inside the signature matcher. Requires `GUARDRAILS_ENABLED=true`. Set to `false` to run only hand-written rules. |
 
 ## Cloud Providers

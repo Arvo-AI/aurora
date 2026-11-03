@@ -1044,6 +1044,7 @@ For Atlassian Cloud (`*.atlassian.net`):
 6. Go to **Permissions** and add scopes for the products you want:
    - **Confluence API** > **Add** > **Configure** > click **Edit Scopes** then **Add granular scopes**:
      - `read:page:confluence`
+     - `read:blogpost:confluence`
      - `read:space:confluence`
      - `read:user:confluence`
      - `search:confluence`

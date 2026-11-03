@@ -121,13 +121,14 @@ def dispatch_postmortem_action(
     run_id = None
     if action_id:
         from services.actions.executor import _create_run, _update_run
+        # Pending until the worker starts, so queue time is not execution time.
         run_id = _create_run(
             action_id=action_id,
             org_id=org_id,
             user_id=user_id,
             incident_id=incident_id,
             trigger_context=trigger_meta,
-            status="running",
+            status="pending",
         )
         trigger_meta["source"] = "action"
         trigger_meta["run_id"] = run_id
