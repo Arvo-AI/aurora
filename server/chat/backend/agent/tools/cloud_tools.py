@@ -103,10 +103,12 @@ from .incidentio_tool import (
     list_incidentio_incidents,
     get_incidentio_incident,
     get_incidentio_timeline,
+    get_incidentio_alert,
     is_incidentio_connected,
     ListIncidentsArgs,
     GetIncidentArgs,
     GetTimelineArgs,
+    GetAlertArgs,
 )
 from .coroot_tool import (
     coroot_get_incidents,
@@ -2495,7 +2497,24 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             args_schema=GetTimelineArgs,
         ))
 
-        logging.info(f"Added 3 incident.io tools for user {user_id}")
+        context_wrapped_alert = with_user_context(get_incidentio_alert)
+        notification_wrapped_alert = with_completion_notification(context_wrapped_alert)
+        final_alert_func = wrap_func_with_capture(notification_wrapped_alert, "get_incidentio_alert") if tool_capture else notification_wrapped_alert
+
+        tools.append(StructuredTool.from_function(
+            func=final_alert_func,
+            name="get_incidentio_alert",
+            description=(
+                "Look up an incident.io alert by its incident.io alert id, or by the "
+                "source system's own alert id (stored as the alert's deduplication key — "
+                "Site24x7 and other alert sources use this). Returns the alert and any "
+                "incident it is attached to. get_incidentio_incident only accepts an "
+                "incident id; use this when that lookup 404s or the id came from an alert."
+            ),
+            args_schema=GetAlertArgs,
+        ))
+
+        logging.info(f"Added 4 incident.io tools for user {user_id}")
     else:
         logging.debug(f"incident.io tools not added - user {user_id} not connected")
 

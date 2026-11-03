@@ -1,13 +1,15 @@
 """incident.io investigation tools for RCA agent.
 
-Provides three tools for RCA:
+Provides four tools for RCA:
 - list_incidentio_incidents: Find recent/related incidents for pattern analysis
 - get_incidentio_incident: Deep-dive a specific incident (status, roles, custom fields, timestamps)
 - get_incidentio_timeline: Fetch timeline updates for an incident to understand sequence of events
+- get_incidentio_alert: Look up an alert by incident.io alert id or source deduplication key
 """
 
 import json
 import logging
+import re
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
@@ -17,6 +19,13 @@ from utils.auth.token_management import get_token_data
 _ERR_NO_USER = json.dumps({"error": "No user context available"})
 _ERR_NOT_CONNECTED = json.dumps({"error": "incident.io not connected"})
 _ERR_INVALID_ID = json.dumps({"error": "Invalid incident_id"})
+_ERR_INVALID_ALERT_ID = json.dumps({"error": "Invalid alert_id"})
+_ERR_ALERT_NOT_FOUND = json.dumps({"error": "No incident.io alert found for that id"})
+
+# Safe to place in the URL path. Source ids with other characters are only
+# looked up as a deduplication key, where the query string encodes them.
+_PATH_SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$")
+_NOT_FOUND = "Resource not found"
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +62,16 @@ class GetIncidentArgs(BaseModel):
 class GetTimelineArgs(BaseModel):
     """Arguments for get_incidentio_timeline."""
     incident_id: str = Field(description="The incident.io incident ID to get timeline for.")
+
+
+class GetAlertArgs(BaseModel):
+    """Arguments for get_incidentio_alert."""
+    alert_id: str = Field(
+        description=(
+            "An incident.io alert id, or the source system's own alert id. "
+            "Source ids (Site24x7 and others) are stored as the alert's deduplication key."
+        ),
+    )
 
 
 def _get_incidentio_credentials(user_id: str) -> Optional[str]:
@@ -237,6 +256,14 @@ def get_incidentio_incident(
 
     result = _api_request(api_key, "GET", f"/incidents/{incident_id}")
     if "error" in result:
+        # Alert ids 404 here. The alert tool also accepts source dedup keys.
+        if result.get("error") == _NOT_FOUND:
+            result = {
+                "error": (
+                    "Resource not found. If this is an alert id or a source-system "
+                    "alert id (for example Site24x7), use get_incidentio_alert."
+                ),
+            }
         return json.dumps(result)
 
     incident = result.get("incident") or result
@@ -253,6 +280,156 @@ def get_incidentio_incident(
     summary["slack_channel"] = (incident.get("slack_channel_name") or
                                  (incident.get("incident_channel") or {}).get("name"))
 
+    return _truncate_output(summary)
+
+
+def _attribute_value(raw: Any) -> str:
+    """Human-readable label from an alert attribute value (object or multi-select)."""
+    if isinstance(raw, dict):
+        return str(raw.get("label") or raw.get("literal") or "")
+    if isinstance(raw, list):
+        labels = [
+            str(item.get("label") or item.get("literal") or "")
+            for item in raw[:5]
+            if isinstance(item, dict)
+        ]
+        return ", ".join(label for label in labels if label)
+    return ""
+
+
+def _format_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
+    """Distill an alert into the fields useful for RCA."""
+    attributes = []
+    for attr in (alert.get("attributes") or [])[:20]:
+        if not isinstance(attr, dict):
+            continue
+        name = (attr.get("attribute") or {}).get("name")
+        if not name:
+            continue
+        attributes.append({"name": name, "value": _attribute_value(attr.get("value"))})
+
+    description = alert.get("description") or ""
+    if isinstance(description, str) and len(description) > 4000:
+        description = description[:4000] + "... [truncated]"
+
+    return {
+        "id": alert.get("id"),
+        "title": alert.get("title"),
+        "description": description,
+        "status": alert.get("status"),
+        "deduplication_key": alert.get("deduplication_key"),
+        "source_url": alert.get("source_url"),
+        "alert_source_id": alert.get("alert_source_id"),
+        "created_at": alert.get("created_at"),
+        "updated_at": alert.get("updated_at"),
+        "resolved_at": alert.get("resolved_at"),
+        "alert_group_ids": alert.get("alert_group_ids") or [],
+        "attributes": attributes,
+    }
+
+
+def _attached_incidents(api_key: str, alert_id: str) -> Dict[str, Any]:
+    """Incidents this alert is attached to. A lookup failure is reported, not fatal."""
+    result = _api_request(
+        api_key, "GET", "/incident_alerts",
+        params={"alert_id": alert_id, "page_size": 25},
+    )
+    if "error" in result:
+        return {"incidents_error": result["error"]}
+
+    incidents = []
+    for link in (result.get("incident_alerts") or [])[:25]:
+        if not isinstance(link, dict):
+            continue
+        incident = link.get("incident") or {}
+        if not incident.get("id"):
+            continue
+        status = incident.get("incident_status")
+        incidents.append({
+            "id": incident.get("id"),
+            "name": incident.get("name"),
+            "reference": incident.get("reference"),
+            "status": status.get("name") if isinstance(status, dict) else incident.get("status"),
+            "status_category": incident.get("status_category"),
+        })
+    return {"incidents": incidents}
+
+
+def _alert_from_show(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The alert object from GET /alerts/{id}, or None when the body isn't one."""
+    alert = result.get("alert")
+    if isinstance(alert, dict) and alert.get("id"):
+        return alert
+    # Some responses are the alert itself rather than {"alert": ...}.
+    if result.get("id") and "alerts" not in result:
+        return result
+    return None
+
+
+def get_incidentio_alert(
+    alert_id: str,
+    user_id: Optional[str] = None,
+    **kwargs,
+) -> str:
+    """Look up an incident.io alert by its id or by a source-system deduplication key."""
+    if not user_id:
+        return _ERR_NO_USER
+
+    api_key = _get_incidentio_credentials(user_id)
+    if not api_key:
+        return _ERR_NOT_CONNECTED
+
+    alert_id = (alert_id or "").strip()
+    # Control characters are never part of an id and would break the request.
+    if not alert_id or len(alert_id) > 100 or any(ord(char) < 32 for char in alert_id):
+        return _ERR_INVALID_ALERT_ID
+
+    alert = None
+    # Only unreserved ids go in the path. A slash or space is a source key.
+    if _PATH_SAFE_ID.fullmatch(alert_id):
+        direct = _api_request(api_key, "GET", f"/alerts/{alert_id}")
+        # Hit on the incident.io alert id itself.
+        if "error" not in direct:
+            alert = _alert_from_show(direct)
+        # A 404 means this isn't an incident.io alert id. Other errors are final.
+        elif direct.get("error") != _NOT_FOUND:
+            return json.dumps(direct)
+
+    if alert is None:
+        # Source alert ids (Site24x7 and others) are the deduplication key.
+        listed = _api_request(
+            api_key, "GET", "/alerts",
+            params={"page_size": 10, "deduplication_key[is]": alert_id},
+        )
+        if "error" in listed:
+            return json.dumps(listed)
+        matches = [item for item in (listed.get("alerts") or []) if isinstance(item, dict)]
+        # The source key is not a deduplication key we have an alert for.
+        if not matches:
+            return _ERR_ALERT_NOT_FOUND
+        # A single dedup-key hit is the alert the caller asked for.
+        if len(matches) == 1:
+            alert = matches[0]
+        else:
+            # The same source key can exist on more than one alert source.
+            formatted = [_format_alert(item) for item in matches]
+            for item in formatted:
+                # Attachment lookup needs the incident.io id from each match.
+                if item.get("id"):
+                    item.update(_attached_incidents(api_key, item["id"]))
+            # incident.io sends `after` on the last page too, so a short page is the end.
+            page_full = len(matches) >= 10 and bool((listed.get("pagination_meta") or {}).get("after"))
+            return _truncate_output({
+                "matches": formatted,
+                "total_returned": len(formatted),
+                "matched_on": "deduplication_key",
+                "has_more": page_full,
+            })
+
+    summary = _format_alert(alert)
+    # Attachment lookup needs the incident.io alert id, not the source key.
+    if summary.get("id"):
+        summary.update(_attached_incidents(api_key, summary["id"]))
     return _truncate_output(summary)
 
 
