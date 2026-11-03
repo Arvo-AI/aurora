@@ -145,29 +145,44 @@ image:
   # pullSecrets:
   #   - name: regcred
 
-  # Per-image registry, repository, tag, digest, pullSecrets.
-  # Set only the fields that differ. Replace `images: {}` with the block below.
-  # repository defaults:
-  #   server aurora-server, frontend aurora-frontend,
-  #   postgres postgres:15-alpine, redis redis:7-alpine,
-  #   vault hashicorp/vault:1.15, searxng searxng/searxng:2025.5.8-7ca24eee4,
-  #   memgraph memgraph/memgraph-mage:3.8.1,
-  #   minio docker.io/pgsty/silo (digest-pinned), minioInit amazon/aws-cli:2.34.6
-  # images:
-  #   frontend:
-  #     registry: "registry.example.com/apps"
-  #     repository: "aurora-frontend-custom"  # non-default name ignores image.digests
-  #     tag: "1.5.12"
-  #     pullSecrets:
-  #       - name: frontend-pull
-  #   postgres:
-  #     registry: "mirror.example.com"
-  #   redis:
-  #     registry: "mirror.example.com/library"
-  #   minio:
-  #     registry: "mirror.example.com"
-  #     repository: "pgsty/silo"
+  # Set only the fields that differ. A non-default repository ignores image.digests.
   images: {}
+    # server:
+    #   registry: "registry.example.com/aurora"
+    #   repository: "aurora-server"
+    # frontend:
+    #   registry: "registry.example.com/apps"
+    #   repository: "aurora-frontend"
+    #   tag: "1.5.12"
+    #   pullSecrets:
+    #     - name: frontend-pull
+    # postgres:
+    #   registry: "mirror.example.com"
+    #   repository: "postgres"
+    #   tag: "15-alpine"
+    # redis:
+    #   registry: "mirror.example.com"
+    #   repository: "redis"
+    #   tag: "7-alpine"
+    # vault:
+    #   registry: "mirror.example.com"
+    #   repository: "hashicorp/vault"
+    #   tag: "1.15"
+    # searxng:
+    #   registry: "mirror.example.com"
+    #   repository: "searxng/searxng"
+    #   tag: "2025.5.8-7ca24eee4"
+    # memgraph:
+    #   registry: "mirror.example.com"
+    #   repository: "memgraph/memgraph-mage"
+    #   tag: "3.8.1"
+    # minio:
+    #   registry: "mirror.example.com"
+    #   repository: "pgsty/silo"
+    # minioInit:
+    #   registry: "mirror.example.com"
+    #   repository: "amazon/aws-cli"
+    #   tag: "2.34.6"
 
 # Legacy frontend override. Prefer image.images.frontend — that entry wins
 # per field when both are set. A repository here is a different image: it
