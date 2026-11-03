@@ -293,7 +293,12 @@ def validate_and_test_ssh(
 
     try:
         if jump_command:
-            jump_cfg: SSHJumpConfig = parse_ssh_jump_command(jump_command)
+            # Parser messages name the bad flag. Other failures stay generic.
+            try:
+                jump_cfg: SSHJumpConfig = parse_ssh_jump_command(jump_command)
+            except ValueError as e:
+                logger.error(f"SSH jump command invalid: {e}")
+                return False, str(e), None
             target_host = jump_cfg.target_host or target_host
             if jump_cfg.target_port is not None:
                 target_port = jump_cfg.target_port
