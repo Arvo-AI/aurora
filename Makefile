@@ -365,11 +365,15 @@ deploy-build:
 	fi; \
 	echo "Updating values.generated.yaml with new tag..."; \
 	yq -i ".image.tag = \"$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml; \
-	yq -i ".image.images.server.tag = \"$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml; \
+	if [ "$$SERVER_REPO" != "aurora-server" ]; then \
+		yq -i ".image.images.server.tag = \"$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml; \
+	else \
+		yq -i "del(.image.images.server.tag)" deploy/helm/aurora/values.generated.yaml; \
+	fi; \
 	yq -i "del(.image.images.server.digest)" deploy/helm/aurora/values.generated.yaml; \
 	yq -i "del(.image.digests.server)" deploy/helm/aurora/values.generated.yaml; \
 	if [ "$$BUILD_FRONTEND" = "true" ]; then \
-		yq -i ".image.images.frontend.tag = \"$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml; \
+		yq -i "del(.image.images.frontend.tag)" deploy/helm/aurora/values.generated.yaml; \
 		yq -i "del(.frontendImage.digest)" deploy/helm/aurora/values.generated.yaml; \
 		yq -i "del(.image.images.frontend.digest)" deploy/helm/aurora/values.generated.yaml; \
 		yq -i "del(.image.digests.frontend)" deploy/helm/aurora/values.generated.yaml; \

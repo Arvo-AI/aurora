@@ -176,7 +176,7 @@ Set at minimum:
 
 ```yaml
 image:
-  registry: "ghcr.io/arvo-ai"   # Aurora server + frontend. Not applied to postgres, redis, …
+  registry: "ghcr.io/arvo-ai"   # chart default. Override for a private registry. Not applied to postgres, redis, …
   tag: ""                        # empty = chart appVersion; or "edge", or "sha-<7char>"
   # images:
   #   frontend:
@@ -476,8 +476,10 @@ helm upgrade aurora-oss aurora/aurora-oss \
 ```bash
 # Reproducible upgrade, pinned by immutable digest. Each release attaches a
 # values.images-<X.Y.Z>.yaml (download from the GitHub Release) that pins the
-# exact image digests and does not set image.registry, so it merges with the
-# registry already in the release (or in values.generated.yaml).
+# exact image digests and does not set image.registry. With --reuse-values it
+# merges with the registry already in the release. A fresh install that passes
+# only this file uses the chart default, ghcr.io/arvo-ai. Pass your values
+# file first to keep a private registry.
 helm upgrade aurora-oss aurora/aurora-oss \
   --namespace aurora-oss --version <X.Y.Z> --reuse-values \
   -f values.images-<X.Y.Z>.yaml
@@ -517,7 +519,7 @@ Stock Aurora images should then read `:<X.Y.Z>` (or `@sha256:…` if digest-pinn
 
 If you need images in a private registry instead of GHCR:
 
-`make deploy-build` pushes the server image to `image.images.server.registry` (or `image.registry`) and the frontend image to `image.images.frontend.registry` when that image is still `aurora-frontend`. A frontend `repository` other than `aurora-frontend` is left as configured. It writes the new tag onto `image.images.server.tag` and `image.images.frontend.tag`, which beats a digest pin in the same values file.
+`make deploy-build` pushes the server image to `image.images.server.registry` (or `image.registry`) and the frontend image to `image.images.frontend.registry` when that image is still `aurora-frontend`. A frontend `repository` other than `aurora-frontend` is left as configured. For the stock names it writes the new tag to `image.tag` and removes `image.images.server.tag` and `image.images.frontend.tag`, so a digest overlay and `--set-string image.tag=` still apply. A renamed server repository gets `image.images.server.tag`, because that image does not follow `image.tag`.
 
 ```bash
 # Automated (reads registries from values.generated.yaml, builds multi-arch, pushes):

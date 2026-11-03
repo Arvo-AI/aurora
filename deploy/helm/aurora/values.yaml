@@ -125,9 +125,11 @@ serviceAccount:
 #   4. image.tag, or the chart appVersion when tag is empty
 # A digest overlay must not set image.registry. Helm merges maps, so a registry
 # key in that file used to replace the registry from values.generated.yaml.
+# The default below is what `-f values.images-<version>.yaml` alone resolves to.
 image:
-  # Default registry for Aurora images (server, frontend).
-  registry: "your-registry"  # Examples: docker.io/myorg, gcr.io/project-id, ghcr.io/myorg
+  # Published Aurora images (server, frontend). Override before make deploy-build
+  # (docker.io/myorg, gcr.io/project-id, ghcr.io/myorg).
+  registry: "ghcr.io/arvo-ai"
 
   # Tag for stock Aurora images. Empty = chart appVersion. Avoid "latest".
   tag: ""
