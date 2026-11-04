@@ -18,7 +18,7 @@ Yes. Aurora is licensed under Apache License 2.0. The source code is available a
 
 ### Do I need cloud provider accounts?
 
-**No.** Aurora works without any cloud provider accounts. You only need an LLM API key (OpenRouter, OpenAI, or Anthropic) to get started. Cloud connectors are optional.
+**No.** Aurora works without any cloud provider accounts. You only need an LLM API key to get started. Connectors are optional.
 
 ## Setup
 
@@ -38,10 +38,7 @@ About 5 minutes for basic setup. The quickstart guide walks you through:
 
 ### Which LLM provider should I use?
 
-We recommend **OpenRouter** because:
-- Single API key for multiple models
-- Pay-per-token (no monthly commitment)
-- Easy to switch between models
+**OpenRouter** is the shortest path: one key, many models. Direct keys also work for OpenAI, Anthropic, Google Gemini, Vertex AI, and AWS Bedrock. Ollama runs models on your own machine when the deployment cannot call out. See [LLM providers](/docs/integrations/llm-providers).
 
 ### Can I run Aurora without Docker?
 
@@ -59,21 +56,23 @@ Examples:
 
 ### Which cloud providers are supported?
 
-- Google Cloud Platform (GCP)
-- Amazon Web Services (AWS)
-- Microsoft Azure
-- OVH (multi-region)
+AWS, Microsoft Azure, Google Cloud, OVH, Scaleway, Cloudflare, and Fly.io. On-prem machines connect over SSH, including through Tailscale. The [connector catalog](/docs/integrations/connectors) is the current list.
 
-### Which observability tools are supported?
+### Which observability and incident tools are supported?
 
-- Datadog
-- Grafana
-- PagerDuty
-- Netdata
+Monitoring: Datadog, Grafana, New Relic, Splunk, Elastic, Dynatrace, Coroot, ThousandEyes, Netdata, Sentry, and CloudWatch.
+
+Incident management: PagerDuty, OpsGenie / JSM, incident.io, ServiceNow, and BigPanda.
+
+Chat: Slack, Microsoft Teams, and Google Chat. Docs and tickets: Confluence, Jira, Notion, and SharePoint. Code: GitHub, GitLab, and Bitbucket. CI/CD: Jenkins, CloudBees, and Spinnaker.
 
 ### Can I use Aurora with Kubernetes?
 
-Yes. Aurora includes a kubectl agent that runs inside your cluster. See the [kubectl agent documentation](https://github.com/arvo-ai/aurora/blob/main/kubectl-agent/README.md).
+Yes. Install the in-cluster kubectl agent, or upload a kubeconfig for a cluster that is not on a connected cloud. See the [kubectl agent documentation](https://github.com/arvo-ai/aurora/blob/main/kubectl-agent/README.md).
+
+### What are Actions and Monitor?
+
+**Actions** are background agent sessions: a postmortem when an incident resolves, a weekly alert-gap or right-sizing audit, a nightly memory cleanup, or instructions you write. **Monitor** is fleet runs, SRE timings, tool usage, living artifacts, and an audit log. Both are described in [Product](/docs/product).
 
 ## Security
 
@@ -90,7 +89,7 @@ Only when you explicitly query cloud providers or LLM services:
 
 ### Can I self-host everything?
 
-Yes. Aurora runs entirely on your infrastructure. You can even use self-hosted LLMs (via OpenRouter-compatible APIs).
+Yes. Aurora runs entirely on your infrastructure. Use Ollama, or point Bedrock and Vertex at accounts you control, when the model calls must stay inside your network.
 
 ## Development
 
@@ -136,12 +135,7 @@ Add it to `.env` as `VAULT_TOKEN` and restart.
 
 ### Investigations are slow
 
-LLM latency depends on:
-- Model choice (GPT-4 is slower than GPT-3.5)
-- Query complexity
-- Provider load
-
-Try using faster models for simple queries.
+LLM latency depends on the model, how many tools the investigation calls, and the provider. A smaller model (Haiku, a Flash or mini model) is enough for narrow questions. Background RCA can be pinned to a cheaper model with cost optimization. See [LLM providers](/docs/integrations/llm-providers).
 
 ## Pricing
 

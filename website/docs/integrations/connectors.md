@@ -10,6 +10,23 @@ Aurora connects to cloud providers and observability tools through connectors. T
 Aurora works without any cloud provider accounts. You only need an LLM API key to get started. Add cloud connectors when you're ready to query your infrastructure.
 :::
 
+## Catalog
+
+Everything below is connected from **Connectors** in the app. Pages linked here have extra setup steps (OAuth apps, webhooks, IAM). The others take a token or kubeconfig in the UI.
+
+| Category | Connectors |
+|----------|------------|
+| Infrastructure | [GCP](#gcp-google-cloud-platform), [AWS](#aws-amazon-web-services), [Azure](#azure-microsoft-azure), [OVH](#ovh-cloud), [Scaleway](#scaleway), [Cloudflare](#cloudflare), [Fly.io](#flyio), [Tailscale](#tailscale), [SSH](#ssh) |
+| Kubernetes | [kubectl agent or kubeconfig upload](#kubernetes) |
+| Monitoring | [Datadog](#datadog), [Grafana](#grafana), [New Relic](#new-relic), [Sentry](#sentry), [Netdata](#netdata), [Splunk](#splunk), [Elastic](#elastic-cloud), [Dynatrace](#dynatrace), [Coroot](#coroot), [ThousandEyes](#thousandeyes), [CloudWatch](#cloudwatch) |
+| Incident management | [PagerDuty](#pagerduty), [OpsGenie / JSM](./opsgenie-jsm.md), [incident.io](#incidentio), [ServiceNow](./servicenow.md), [BigPanda](#bigpanda) |
+| Chat | [Slack](#slack), [Microsoft Teams](#microsoft-teams), [Google Chat](#google-chat) |
+| Code and CI | [GitHub](#github), [GitLab](#gitlab), [Bitbucket](#bitbucket), [Jenkins](#jenkins), [CloudBees](#cloudbees), [Spinnaker](./spinnaker.md) |
+| Docs and tickets | [Confluence and Jira](#atlassian-confluence-jira), [Jira automatic RCA](./jira.md), [Notion](#notion), [SharePoint](#sharepoint) |
+| Other | [Custom MCP servers](./custom-mcp-servers.md) |
+
+A connector that is not in this table can still be reached by registering its [MCP server](./custom-mcp-servers.md).
+
 ## Cloud Providers
 
 ### GCP (Google Cloud Platform)
@@ -1024,7 +1041,7 @@ make down && make prod-prebuilt # production (prebuilt images)
 
 ## Documentation & Project Management
 
-### Atlassian (Confluence + Jira)
+### Atlassian (Confluence + Jira) {#atlassian-confluence-jira}
 
 OAuth 2.0 authentication for Atlassian Cloud (Confluence and/or Jira), or Personal Access Tokens for Data Center.
 
@@ -1626,7 +1643,7 @@ All calls send `Authorization: ApiKey <encoded>` to the endpoint you configured 
 
 ## Kubernetes
 
-Aurora can connect to Kubernetes clusters via the kubectl agent.
+Aurora can connect to Kubernetes clusters via the kubectl agent. A cluster that is not on a connected cloud can instead take a kubeconfig upload from **Connectors → Kubernetes**.
 
 ### Installing the kubectl Agent
 
@@ -1927,6 +1944,70 @@ Only **posting** (review comments) uses the bot; investigation reads always use 
 | PRs never get reviewed | Check the webhook in Bitbucket shows recent 2xx deliveries; confirm the PR targets the default branch and is not a draft; confirm the same org secret was pasted into the repo hook |
 
 ---
+
+## More connectors {#more-connectors}
+
+These are connected from the Connectors page. Each one asks for a token, an API key, or an OAuth consent. The agent then uses that account during investigations. Alert sources also create incidents.
+
+### Scaleway {#scaleway}
+
+API key for a Scaleway project. Aurora lists and inspects resources in that project.
+
+### Cloudflare {#cloudflare}
+
+API token. Aurora reads DNS, WAF and firewall rules, cache, Workers, load balancers, and traffic analytics.
+
+### Fly.io {#flyio}
+
+Org token. Aurora reads apps, machines, logs, and metrics, and can follow machine lifecycle during an incident.
+
+### Tailscale {#tailscale}
+
+Tailnet API access, plus SSH to machines on the tailnet when you want the agent to reach hosts that are not on a public address.
+
+### SSH {#ssh}
+
+**Connectors → Instances SSH Access.** Upload a key, then point Aurora at VMs. Ask mode allows remote reads (`journalctl`, `kubectl get`, `uptime`) when SSH is on the allow list. Remote writes stay blocked there.
+
+### Dynatrace {#dynatrace}
+
+API token plus a problem-notification webhook. Aurora receives problems and queries metrics, logs, and entities.
+
+### Coroot {#coroot}
+
+Coroot project credentials. Aurora reads metrics, logs, traces, incidents, and the service map.
+
+### ThousandEyes {#thousandeyes}
+
+Cisco ThousandEyes token. Aurora reads tests, alerts, path visualization, BGP, and Internet Insights outages.
+
+### CloudWatch {#cloudwatch}
+
+Uses the AWS connection. An SNS webhook turns alarm state changes into Aurora incidents and starts an RCA.
+
+### incident.io {#incidentio}
+
+Webhook plus API key. Aurora runs RCA on incidents and alerts you choose by severity, and can post the root cause back onto the incident or, for an alert with no open incident, onto the alert.
+
+### BigPanda {#bigpanda}
+
+Webhook for pre-correlated incident clusters. Aurora investigates the cluster instead of each raw alert.
+
+### GitLab {#gitlab}
+
+Personal or group access token. Aurora reads projects, pipelines, and merge requests, and can propose a fix during an investigation.
+
+### Jenkins {#jenkins}
+
+Controller URL and a read-only API token. Aurora reads jobs, builds, and agents. CloudBees CI is the enterprise path; see [CloudBees](#cloudbees).
+
+### Notion {#notion}
+
+OAuth. Aurora searches the workspace, exports postmortems, and can create runbook pages and action-item rows.
+
+### SharePoint {#sharepoint}
+
+Microsoft sign-in. Aurora searches sites and reads pages and documents during an investigation.
 
 ## Anything Else: Custom MCP Servers
 

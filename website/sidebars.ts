@@ -8,6 +8,11 @@ const sidebars: SidebarsConfig = {
       label: 'Introduction',
     },
     {
+      type: 'doc',
+      id: 'product',
+      label: 'Product',
+    },
+    {
       type: 'category',
       label: 'Getting Started',
       collapsed: false,
@@ -66,10 +71,12 @@ const sidebars: SidebarsConfig = {
       label: 'Integrations',
       items: [
         'integrations/connectors',
+        'integrations/jira',
+        'integrations/opsgenie-jsm',
+        'integrations/servicenow',
+        'integrations/spinnaker',
         'integrations/mcp',
         'integrations/custom-mcp-servers',
-        'integrations/spinnaker',
-        'integrations/servicenow',
         'integrations/llm-providers',
       ],
     },
