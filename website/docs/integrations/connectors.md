@@ -27,6 +27,8 @@ Everything below is connected from **Connectors** in the app. Pages linked here 
 
 A connector that is not in this table can still be reached by registering its [MCP server](./custom-mcp-servers.md).
 
+OVH, SharePoint, Notion, Spinnaker, and CloudBees stay hidden until `NEXT_PUBLIC_ENABLE_OVH`, `NEXT_PUBLIC_ENABLE_SHAREPOINT`, `NEXT_PUBLIC_ENABLE_NOTION`, `NEXT_PUBLIC_ENABLE_SPINNAKER`, or `NEXT_PUBLIC_ENABLE_CLOUDBEES` is `true`. PagerDuty OAuth and Bitbucket OAuth are off the same way (`NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH`, `NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH`). Their API-token paths still show.
+
 ## Cloud Providers
 
 ### GCP (Google Cloud Platform)
@@ -51,7 +53,7 @@ gcloud iam service-accounts create aurora-connector \
 
 ##### 2. Grant Roles
 
-At minimum, grant read-only roles for investigation:
+On each project Aurora should investigate:
 
 ```bash
 SA=aurora-connector@YOUR_PROJECT_ID.iam.gserviceaccount.com
@@ -63,18 +65,14 @@ gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
 gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
   --member="serviceAccount:$SA" --role="roles/monitoring.viewer"
 gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-  --member="serviceAccount:$SA" --role="roles/container.viewer"
-gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-  --member="serviceAccount:$SA" --role="roles/compute.viewer"
-gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
   --member="serviceAccount:$SA" --role="roles/bigquery.dataViewer"
 gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
   --member="serviceAccount:$SA" --role="roles/bigquery.jobUser"
 ```
 
-`roles/viewer` lists BigQuery datasets but cannot run queries. `bigquery.dataViewer` reads table data; `bigquery.jobUser` runs query jobs. Together they allow read-only `SELECT` investigations (no DML/DDL).
+`roles/viewer` lists BigQuery datasets but cannot run queries. `bigquery.dataViewer` reads table data; `bigquery.jobUser` runs query jobs. GKE and Compute Engine investigations also need `roles/container.viewer` and `roles/compute.viewer` on that project.
 
-For full investigation access (running commands in sandboxed pods, checking deployments, etc.), add `roles/editor` or the specific roles your team needs.
+To list every project under an organization or folder, grant `roles/browser` on that organization or folder. It only lists projects. A folder binding does not cover sibling folders.
 
 ##### 3. Download Key
 
@@ -183,70 +181,36 @@ In GCP Console, enable these APIs for your project:
 
 ### AWS (Amazon Web Services)
 
-IAM Role with External ID for secure cross-account access.
+Cross-account IAM role. Aurora assumes the role with STS. The onboarding page shows Aurora's account ID, an external ID, and the trust policy.
 
-#### How It Works
+The Aurora process needs its own AWS credentials so it can call `AssumeRole`. Set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (and a region), or an instance role that can assume customer roles. On EKS, IRSA works the same way. Do not put a customer's keys in those variables.
 
-Aurora uses AWS STS AssumeRole to access customer AWS accounts. This requires:
-1. Aurora's AWS credentials (for making STS calls)
-2. An IAM Role in the customer's account with a trust policy
+#### Connect an account
 
-#### 1. Configure Aurora's AWS Credentials
+**Connectors → AWS.** Pick an access level, then create the role.
 
-Aurora needs its own AWS credentials to make STS AssumeRole calls. Add to `.env`:
+| Access level | Managed policy | Role name the page expects |
+|--------------|----------------|----------------------------|
+| Read-only | `ReadOnlyAccess` | `AuroraReadOnlyRole` |
+| Admin | `AdministratorAccess` | `AuroraAdminRole` |
 
-```bash
-AWS_ACCESS_KEY_ID=AKIAXXXXXXXXXXXXXXXX
-AWS_SECRET_ACCESS_KEY=your-secret-access-key
-AWS_DEFAULT_REGION=us-east-1
-```
+**CloudFormation (the button on the page).** **Deploy Read-Only Role** or **Deploy Admin Role** opens a Quick-Create stack in the AWS account you are logged into. Review it, acknowledge IAM, and create the stack. Copy the role ARN from the stack **Outputs** tab and paste it into Aurora. You can download the template YAML instead.
 
-#### 2. Create IAM Role in Customer Account
+**Manual.** Create a role with the trust policy shown on the page (Aurora's account as principal, and the external ID from that page). Attach `ReadOnlyAccess` or `AdministratorAccess`. Paste the role ARN.
 
-Users create this role in their own AWS account:
+A trust-policy change can take a few minutes before assume-role succeeds.
 
-1. Go to [IAM > Roles](https://console.aws.amazon.com/iam/home#/roles) > **Create role**
-2. Select trusted entity:
-   - **AWS account**
-   - **Another AWS account**
-   - Enter Aurora's AWS Account ID (displayed in Aurora onboarding UI)
-   - Check **Require external ID**
-   - Enter the External ID (displayed in Aurora onboarding UI)
-3. Attach permissions:
-   - `ReadOnlyAccess` for read-only access
-   - `PowerUserAccess` for full access (excluding IAM)
-4. Name the role: `AuroraRole`
-5. Copy the **Role ARN** after creation
+More accounts can be added the same way, or registered in bulk as `account-id,region` lines. Disconnecting in Aurora removes the connection only. Delete the CloudFormation stack (or the role) in AWS to revoke access.
 
-#### Trust Policy Example
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "AWS": "arn:aws:iam::AURORA_ACCOUNT_ID:root"
-      },
-      "Action": "sts:AssumeRole",
-      "Condition": {
-        "StringEquals": {
-          "sts:ExternalId": "EXTERNAL_ID_FROM_AURORA"
-        }
-      }
-    }
-  ]
-}
-```
+Turn on **CloudWatch Alerts** on the same page when alarms should open incidents. The SNS steps are under [CloudWatch](#cloudwatch).
 
 #### Troubleshooting
 
 | Error | Solution |
 |-------|----------|
-| "Aurora cannot assume this role" | Verify trust policy has correct Aurora Account ID and External ID |
-| "Unable to determine Aurora's AWS account ID" | Set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in `.env` |
-| "Access denied" | Check the IAM role has sufficient permissions |
+| "Aurora cannot assume this role" | Trust policy account ID or external ID does not match the onboarding page. Wait a few minutes after editing the policy |
+| "Unable to determine Aurora's AWS account ID" | Aurora has no credentials to call STS. Set the server keys, or the instance / IRSA role |
+| "Access denied" | The role is missing `ReadOnlyAccess` or `AdministratorAccess` |
 
 ---
 
@@ -274,7 +238,7 @@ If your tenant sets *Users can register applications* to **No**, ask an Entra ID
 
 #### 1. Get the script
 
-In Aurora, go to **Integrations > Azure**. Either click **Copy Script** to put the whole script on your clipboard, or **Download Setup Script** to save it as a file.
+In Aurora, go to **Connectors → Azure**. **Cloud Shell Setup** is the default: **Copy Script**, then **Open Cloud Shell**, paste, and press Enter. The copied command already includes a management group ID if you filled one in. **Manual Setup** is the download: save the script and upload it to Cloud Shell.
 
 #### 2. Run it in Cloud Shell
 
@@ -310,7 +274,7 @@ All enabled subscriptions in scope are connected. During an investigation the ag
 
 #### Private AKS clusters
 
-A private AKS cluster has no public API server endpoint, so it is unreachable from Cloud Shell and from Aurora. RBAC alone is not enough. The script detects these and lists them at the end — connect each one with the [kubectl agent](#installing-the-kubectl-agent), which runs in-cluster and dials out to Aurora.
+A private AKS cluster has no public API server endpoint, so it is unreachable from Cloud Shell and from Aurora. RBAC alone is not enough. The script detects these and lists them at the end — connect each one with the [kubectl agent](#deploy-agent), which runs in-cluster and dials out to Aurora.
 
 #### Revoking access
 
@@ -361,10 +325,12 @@ ngrok http 5080
 3. Navigate to `/me` > `/me/api/oauth2/client`
 4. Use **POST** to create a new client:
 
+The callback Aurora sends is `{public backend}/ovh_api/ovh/oauth2/callback`. The public backend is `NEXT_PUBLIC_BACKEND_URL`. When that value is `http://localhost…`, Aurora uses `NGROK_URL` instead. Register that exact URL. `OVH_*_REDIRECT_URI` is not read.
+
 ```json
 {
   "callbackUrls": [
-    "https://abc123.ngrok-free.app/ovh/oauth2/callback"
+    "https://abc123.ngrok-free.app/ovh_api/ovh/oauth2/callback"
   ],
   "description": "Aurora Cloud Platform",
   "flow": "AUTHORIZATION_CODE",
@@ -378,21 +344,20 @@ ngrok http 5080
 
 ```bash
 NEXT_PUBLIC_ENABLE_OVH=true
+NEXT_PUBLIC_BACKEND_URL=http://localhost:5080
+NGROK_URL=https://abc123.ngrok-free.app
 
 # EU Region
 OVH_EU_CLIENT_ID=your-eu-client-id
 OVH_EU_CLIENT_SECRET=your-eu-client-secret
-OVH_EU_REDIRECT_URI=https://abc123.ngrok-free.app/ovh_api/ovh/oauth2/callback
 
 # CA Region (optional)
 OVH_CA_CLIENT_ID=your-ca-client-id
 OVH_CA_CLIENT_SECRET=your-ca-client-secret
-OVH_CA_REDIRECT_URI=https://abc123.ngrok-free.app/ovh_api/ovh/oauth2/callback
 
 # US Region (optional)
 OVH_US_CLIENT_ID=your-us-client-id
 OVH_US_CLIENT_SECRET=your-us-client-secret
-OVH_US_REDIRECT_URI=https://abc123.ngrok-free.app/ovh_api/ovh/oauth2/callback
 ```
 
 #### Troubleshooting
@@ -401,7 +366,7 @@ OVH_US_REDIRECT_URI=https://abc123.ngrok-free.app/ovh_api/ovh/oauth2/callback
 |-------|----------|
 | "OAuth2 credentials not configured for [region]" | Set the corresponding `OVH_[REGION]_CLIENT_ID` and `OVH_[REGION]_CLIENT_SECRET` |
 | "OVH connector not enabled" | Set `NEXT_PUBLIC_ENABLE_OVH=true` and restart Aurora |
-| "Invalid redirect_uri" | OVH requires HTTPS. Use ngrok or cloudflared |
+| "Invalid redirect_uri" | The client `callbackUrls` entry must be `{NGROK_URL or NEXT_PUBLIC_BACKEND_URL}/ovh_api/ovh/oauth2/callback`, and it must be HTTPS |
 
 ---
 
@@ -1155,9 +1120,9 @@ Data Center short links work correctly.
 
 ### PagerDuty
 
-OAuth 2.0 or API Token authentication.
+API token, or OAuth when `NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=true`. The **Connect with OAuth** button is hidden until that flag is on. The token form is always there.
 
-#### Option A: OAuth (Recommended)
+#### Option A: OAuth
 
 1. Go to [PagerDuty](https://app.pagerduty.com/) > **Integrations** > **Developer Mode** > **My Apps**
 2. Click **Create New App**
@@ -1236,19 +1201,15 @@ Where the name cannot be read — a key managing several organizations, or one w
 Set a label in that case so the organizations stay tellable apart.
 :::
 
-#### 1. Create API Key
+#### 1. Create a service account key pair
 
-1. Go to [Datadog](https://app.datadoghq.com/) > avatar > **Organization Settings** > **API Keys**
-2. Click **+ New Key**
-3. Name: `Aurora`
-4. Copy the key
+A service account keeps the integration off a personal login. It needs both an API key and an application key.
 
-#### 2. Create Application Key
-
-1. Go to **Organization Settings** > **Application Keys**
-2. Click **+ New Key**
-3. Name: `Aurora`
-4. Copy the key
+1. In Datadog, open the bottom-left **Accounts** menu and switch to the organization you want.
+2. **Organization Settings → Service Accounts**: create a service account for Aurora.
+3. **Organization Settings → API Keys**: create an API key for that service account.
+4. **Organization Settings → Application Keys**: create an application key on the same service account. It needs read access to logs, metrics, monitors, and events: `logs_read`, `metrics_read`, `monitors_read`, `events_read`.
+5. Note the service account name. Aurora shows it as the owner of the connection.
 
 #### 3. Identify Your Site
 
@@ -1258,6 +1219,8 @@ Set a label in that case so the organizations stay tellable apart.
 | US3 | `us3.datadoghq.com` |
 | US5 | `us5.datadoghq.com` |
 | EU | `datadoghq.eu` |
+| AP1 | `ap1.datadoghq.com` |
+| AP2 | `ap2.datadoghq.com` |
 
 Users enter API keys and site via the Aurora UI, with an optional label. Site is recorded per
 organization, so organizations on different Datadog sites can coexist.
@@ -1270,16 +1233,15 @@ organization, so organizations on different Datadog sites can coexist.
 
 #### Webhook Configuration
 
-1. In Datadog: **Integrations** > **Webhooks** > **+ New**
-2. Name: `aurora`
-3. URL: `https://your-aurora-domain/datadog/webhook/{user_id}`
-4. In monitors, add `@webhook-aurora` to notifications
+Aurora shows the URL after connect. It belongs to the Aurora account, not to one Datadog organization.
+
+1. In Datadog: **Integrations**, search for the **Webhooks** integration.
+2. Create a webhook with that URL. A shared secret for signing is optional.
+3. In a monitor's notification, add `@webhook-<name>`, using the name you gave the webhook.
+4. To test: **Monitors → New Monitor → Metric**, any easy condition, the same `@webhook-<name>` in **Notify your team**, then **Test notifications**.
 
 :::warning One URL, every organization
-The webhook URL is per Aurora **user**, not per Datadog organization. With several connected,
-create this same webhook inside **each** of them — otherwise Aurora receives none of their
-alerts while still appearing connected. Keeping the name `aurora` everywhere keeps
-`@webhook-aurora` uniform.
+With several organizations connected, create this webhook inside **each** of them, from the bottom-left **Accounts** menu. Alerts from an organization without it never arrive. Use the same webhook name in each so `@webhook-<name>` is the same everywhere.
 :::
 
 ---
@@ -1292,12 +1254,12 @@ Webhook-based connection for Grafana Cloud or self-hosted instances. No API key 
 
 1. Open the **Grafana** integration page in Aurora
 2. Copy the webhook URL shown on screen
-3. In Grafana: **Alerts & IRM** > **Alerting** > **Notification Configuration** > **Contact points** > **New contact point**
+3. In Grafana: **Alerts & IRM** > **Notification Configuration** > **Contact points** > **New contact point**
    - Type: **Webhook**
    - URL: paste the Aurora webhook URL (`https://your-aurora-domain/grafana/alerts/webhook/{user_id}`)
 4. Click **Test** to send a test notification
 5. Aurora auto-connects when it receives the test webhook
-6. Save the contact point, then add it to a notification policy under **Alerting** > **Notification Configuration** > **Notification policies**
+6. Save the contact point, then add it to a notification policy
 
 #### Disconnect / Reconnect
 
@@ -1479,15 +1441,12 @@ Disconnecting deletes the user's Vault-stored credentials. Webhook deliveries fo
 
 ### Netdata
 
-API Token authentication.
+API token for Netdata Cloud.
 
-#### 1. Get API Token
-
-1. Go to your Netdata Cloud dashboard
-2. Navigate to **Space settings** > **API tokens**
-3. Create a new token for Aurora
-
-Users enter the token via the Aurora UI.
+1. Sign in at [app.netdata.cloud](https://app.netdata.cloud).
+2. Profile picture → **User Settings** → **API Tokens**.
+3. Create a token with `scope:all` and paste it into Aurora.
+4. Space name on that page is an optional label.
 
 ---
 
@@ -1497,13 +1456,7 @@ API Token authentication for Splunk Cloud or Enterprise.
 
 #### 1. Create a Minimal Role (Recommended)
 
-Aurora only needs the `search` capability. You can use the built-in **power** role, or create a minimal custom role:
-
-1. In Splunk: **Settings** > **Roles** > **New Role**
-   - Name: `aurora_readonly`
-   - Capabilities: check **search** only
-   - Under **Indexes**, set **Indexes searched by default** to `All non-internal indexes` (or specific indexes you want Aurora to access)
-2. Create a user with this role, or assign it to an existing user
+Aurora needs the `search` capability, and **Indexes searched by default** set to `*` (or the indexes you want searched). The built-in **power** role already has that. A smaller role works if it has `search` and those default indexes.
 
 #### 2. Create an API Token
 
@@ -1643,75 +1596,33 @@ All calls send `Authorization: ApiKey <encoded>` to the endpoint you configured 
 
 ## Kubernetes
 
-Aurora can connect to Kubernetes clusters via the kubectl agent. A cluster that is not on a connected cloud can instead take a kubeconfig upload from **Connectors → Kubernetes**.
+**Connectors → Kubernetes.** **Deploy Agent** is the default. **Upload Kubeconfig** is the other tab.
 
-### Installing the kubectl Agent
+### Deploy Agent {#deploy-agent}
 
-The kubectl agent runs in your cluster and connects outbound to Aurora via WebSocket.
+The agent runs in the cluster and dials out to Aurora. You need Helm 3 and permission to install a release. The page copies a command that installs chart `oci://gcr.io/sublime-flux-414616/helm/aurora-kubectl-agent` version `1.0.3` as release `aurora-kubectl-agent` in namespace `default`.
 
-#### Prerequisites
-
-- Kubernetes 1.19+
-- Helm 3.x
-- Cluster-admin access
-- Aurora instance running
-
-#### 1. Get Agent Token
-
-1. Log into Aurora UI
-2. Navigate to **Connectors** > **Kubernetes**
-3. Click **Add Cluster**
-4. Copy the generated agent token
-
-#### 2. Build Agent Image
+1. **Generate New Token.** Cluster name is required and should match the name your alerts use. Cluster context is optional. The token is shown once.
+2. Point `kubectl` at that cluster (`kubectl config current-context`, then `kubectl config use-context` if needed).
+3. Paste the **Install with Helm** command from the page. It sets `aurora.agentToken`, `aurora.backendUrl` (`NEXT_PUBLIC_BACKEND_URL`), and `aurora.wsEndpoint` (`NEXT_PUBLIC_WEBSOCKET_URL`). If either URL is missing, the page shows an error instead of a command.
+4. The page switches to **Agent Connected** when the agent checks in.
 
 ```bash
-cd kubectl-agent/src/
-docker build -t your-registry/aurora-kubectl-agent:1.0.3 .
-docker push your-registry/aurora-kubectl-agent:1.0.3
+kubectl get pods -n default -l app=aurora-kubectl-agent
+kubectl logs -n default -l app=aurora-kubectl-agent --tail=50
 ```
 
-#### 3. Create values.yaml
+### Upload Kubeconfig
 
-```yaml
-aurora:
-  backendUrl: "https://your-aurora-instance.com"
-  wsEndpoint: "wss://your-aurora-instance.com/kubectl-agent"
-  agentToken: "your-generated-token-here"
-
-agent:
-  image:
-    repository: your-registry/aurora-kubectl-agent
-    tag: "1.0.3"
-```
-
-#### 4. Install via Helm
-
-```bash
-helm install aurora-kubectl-agent ./kubectl-agent/chart \
-  --namespace aurora --create-namespace \
-  -f values.yaml
-```
-
-#### 5. Verify Installation
-
-```bash
-# Check pod status
-kubectl get pods -n aurora -l app=aurora-kubectl-agent
-
-# Check logs
-kubectl logs -n aurora -l app=aurora-kubectl-agent --tail=50
-```
-
-The cluster should appear in Aurora UI with "Connected" status.
-
-See [kubectl-agent README](https://github.com/arvo-ai/aurora/blob/main/kubectl-agent/README.md) for advanced configuration.
+Use this when the agent cannot be installed (restricted RBAC, no outbound from the cluster). Select one or more `.yaml` or `.yml` kubeconfig files. Aurora runs kubectl with those credentials. Remove a cluster later from the Kubernetes manage page.
 
 ---
 
 ## CI/CD & Development Tools
 
 ### CloudBees
+
+Hidden unless `NEXT_PUBLIC_ENABLE_CLOUDBEES=true`.
 
 Aurora integrates with [CloudBees](https://www.cloudbees.com/) to provide CI/CD deployment visibility, automated incident correlation, and root cause analysis across your entire Jenkins infrastructure.
 
@@ -1947,67 +1858,128 @@ Only **posting** (review comments) uses the bot; investigation reads always use 
 
 ## More connectors {#more-connectors}
 
-These are connected from the Connectors page. Each one asks for a token, an API key, or an OAuth consent. The agent then uses that account during investigations. Alert sources also create incidents.
+Setup below matches the Connectors page. Hidden connectors are called out.
 
 ### Scaleway {#scaleway}
 
-API key for a Scaleway project. Aurora lists and inspects resources in that project.
+1. [Scaleway Console](https://console.scaleway.com) → profile → **IAM & API keys** → **API keys**.
+2. **Generate API key**. Bearer: **Myself (IAM user)**. Copy the access key and the secret key.
+3. In Aurora, paste both. Default project ID is optional.
 
 ### Cloudflare {#cloudflare}
 
-API token. Aurora reads DNS, WAF and firewall rules, cache, Workers, load balancers, and traffic analytics.
+An account administrator creates the token.
+
+1. [Cloudflare dashboard](https://dash.cloudflare.com) → **Manage Account** → **Account API Tokens**.
+2. Next to **Read all resources**, click **Use template**, then **Create Token**.
+3. Confirm **Account — API Tokens — Read** is selected, and pick the zones under **Zone Resources**.
+4. Optional writes, for actions during an incident: Zone — DNS — Edit, Zone — Cache Purge — Purge, Zone — Zone WAF — Edit, Account — Load Balancing: Account Load Balancers — Edit.
+5. Paste the token into Aurora. Creating the token requires **Super Administrator**. Read-only is enough to start.
 
 ### Fly.io {#flyio}
 
-Org token. Aurora reads apps, machines, logs, and metrics, and can follow machine lifecycle during an incident.
+1. Fly.io dashboard → **Account** → [Access Tokens](https://fly.io/tokens). Create a token for the organization.
+2. In Aurora, enter the org slug (`personal` for a personal account, otherwise the org name) and the token.
+
+Aurora detects read-only versus full access. A read-only token can monitor. Restart, stop, and start need a full org token.
 
 ### Tailscale {#tailscale}
 
-Tailnet API access, plus SSH to machines on the tailnet when you want the agent to reach hosts that are not on a public address.
+1. Tailscale admin console → **Settings** → **OAuth clients** → **Generate OAuth client**.
+2. Scopes: `devices:read`, `devices:write`, `keys:read`, `keys:write`, `dns:read`, `acl:read`.
+3. Paste the client ID and client secret into Aurora. The secret is shown once.
+
+SSH to machines on the tailnet is a separate page, **SSH Setup**, after the tailnet is connected. That page gives a public key and a command that appends it to `authorized_keys`.
 
 ### SSH {#ssh}
 
-**Connectors → Instances SSH Access.** Upload a key, then point Aurora at VMs. Ask mode allows remote reads (`journalctl`, `kubectl get`, `uptime`) when SSH is on the allow list. Remote writes stay blocked there.
+**Connectors → Instances SSH Access.** Aurora shows a public key and a command. SSH to each host and run it so the key lands in `authorized_keys`. Ask mode allows remote reads (`journalctl`, `kubectl get`, `uptime`) when SSH is on the allow list. Remote writes stay blocked there.
 
 ### Dynatrace {#dynatrace}
 
-API token plus a problem-notification webhook. Aurora receives problems and queries metrics, logs, and entities.
+1. Environment URL. SaaS looks like `https://abc12345.live.dynatrace.com`. Managed looks like `https://your-domain.com/e/environment-id`.
+2. **Settings → Access tokens** → **Generate new token**.
+3. Scopes: `problems.read`, `entities.read`, `metrics.read`, `logs.read`, `events.read`. A scope is missing from the picker when that feature is not in the plan.
+4. Paste the URL and token into Aurora. Problem notifications are a webhook configured after connect.
 
 ### Coroot {#coroot}
 
-Coroot project credentials. Aurora reads metrics, logs, traces, incidents, and the service map.
+Not an API key. Aurora signs in to the Coroot HTTP API with an email and password (a session cookie).
+
+1. The Coroot URL must be reachable from this Aurora deployment.
+2. Use an account that can see the projects you want monitored. A dedicated account is the better choice.
+3. Enter the URL, email, and password.
+
+Aurora then reads metrics (PromQL), logs, traces, incidents, the service map, profiling, deployments, costs, and risks.
 
 ### ThousandEyes {#thousandeyes}
 
-Cisco ThousandEyes token. Aurora reads tests, alerts, path visualization, BGP, and Internet Insights outages.
+1. [app.thousandeyes.com](https://app.thousandeyes.com) → **Manage** → **Account Settings** → **Users and Roles**.
+2. Under **User API Tokens**, **Create** next to **OAuth Bearer Token**. The token is shown once.
+3. Paste it into Aurora. Account Group ID is optional.
+
+That token can read tests and results, alerts, agents, dashboards, Internet Insights, path visualization, BGP, and DNS/VoIP data.
 
 ### CloudWatch {#cloudwatch}
 
-Uses the AWS connection. An SNS webhook turns alarm state changes into Aurora incidents and starts an RCA.
+Turn on **CloudWatch Alerts** on the AWS connector page. Aurora shows an HTTPS URL.
+
+1. SNS → **Topics** → create a Standard topic.
+2. **Create subscription**. Protocol **HTTPS**, endpoint is that URL. Aurora confirms the subscription when AWS sends `SubscriptionConfirmation`.
+3. On each alarm, under **Notification**, send **In alarm**, **OK**, and **Insufficient data** to that topic.
+
+An alarm that enters ALARM starts an RCA.
 
 ### incident.io {#incidentio}
 
-Webhook plus API key. Aurora runs RCA on incidents and alerts you choose by severity, and can post the root cause back onto the incident or, for an alert with no open incident, onto the alert.
+**Settings → API keys.** The key needs:
+
+- **View all incident data**, including private incidents
+- **Create incidents**
+- **View data**, so Aurora can read alert priorities. Without it, RCA still runs on every alert
+- **Edit incidents**, so Aurora can post the root cause as an incident update
+- **Create and manage on-call resources** (incident.io spells the checkbox "ressources"), so Aurora can post the root cause as a note on an alert that only escalated. Without it, incident updates still post
+
+After connect, create the webhook in incident.io and paste the signing secret (`whsec_…`) into Aurora. Without that secret, Aurora accepts any request to the webhook URL.
 
 ### BigPanda {#bigpanda}
 
-Webhook for pre-correlated incident clusters. Aurora investigates the cluster instead of each raw alert.
+1. BigPanda → **Settings → API Keys**. Copy the User API Key, or create one.
+2. Paste it into Aurora.
+3. After connect, copy the webhook URL. In BigPanda: **Integrations → Outbound Integrations → Webhooks → New Integration → Alerts Webhook**.
+4. Paste the URL. Sign requests with header `X-Aurora-Signature`, HMAC-SHA256 of the body using the webhook secret. Choose which environments and incident types notify Aurora, then save.
 
 ### GitLab {#gitlab}
 
-Personal or group access token. Aurora reads projects, pipelines, and merge requests, and can propose a fix during an investigation.
+Group access token, not a personal one.
+
+1. **Group → Settings → Access Tokens**.
+2. Full use (investigation plus fix branches, commits, and merge requests): role **Maintainer**, scope `api`.
+3. Read-only investigation: role **Reporter**, scope `read_api`. The agent cannot open a fix.
+4. In Aurora, set the instance URL (`https://gitlab.com` or your host) and paste the token (`glpat-…`).
+
+Projects in that group and its subgroups are connected. There is no per-project picker.
 
 ### Jenkins {#jenkins}
 
-Controller URL and a read-only API token. Aurora reads jobs, builds, and agents. CloudBees CI is the enterprise path; see [CloudBees](#cloudbees).
+Read-only. Aurora does not need a Jenkins admin token.
+
+1. Sign in as the user Aurora should use.
+2. Username (top right) → **Configure → API Token → Add new Token**. Name it and generate it. Copy it immediately.
+3. In Aurora, enter the Jenkins URL (no trailing slash), the username, and the token.
 
 ### Notion {#notion}
 
-OAuth. Aurora searches the workspace, exports postmortems, and can create runbook pages and action-item rows.
+Hidden unless `NEXT_PUBLIC_ENABLE_NOTION=true`. This is an integration token, not Notion OAuth.
+
+1. [notion.so/my-integrations](https://www.notion.so/my-integrations) → **New connection**. Name it Aurora. Authentication method: **Access token**.
+2. On **Configuration**, copy the integration token. Capabilities: **Read**, **Update**, and **Insert content**.
+3. Share each page or database with the connection (**Connections → Add connections**), or use the connection's **Content access** tab.
+4. Paste the token into Aurora.
 
 ### SharePoint {#sharepoint}
 
-Microsoft sign-in. Aurora searches sites and reads pages and documents during an investigation.
+Hidden unless `NEXT_PUBLIC_ENABLE_SHAREPOINT=true`. The page is **Connect with Microsoft**. There is no token to paste. Aurora then reads documents and site pages for the signed-in user.
 
 ## Anything Else: Custom MCP Servers
 
