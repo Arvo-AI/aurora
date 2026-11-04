@@ -363,6 +363,48 @@ def _alert_with_incidents(api_key: str, alert: Dict[str, Any]) -> Dict[str, Any]
     return item
 
 
+def _alert_by_id(api_key: str, alert_id: str):
+    """(alert, error_json). A miss is (None, None) so the caller can try the dedup key."""
+    # Source ids are not ULIDs. Putting one on the path 400s and hides the search.
+    if not _INCIDENTIO_ALERT_ID.fullmatch(alert_id):
+        return None, None
+    direct = _api_request(api_key, "GET", f"/alerts/{alert_id}")
+    if "error" not in direct:
+        body = direct.get("alert") if isinstance(direct.get("alert"), dict) else direct
+        # A list body is not one alert; leave it for the dedup search.
+        if isinstance(body, dict) and body.get("id") and "alerts" not in body:
+            return body, None
+        return None, None
+    # 404/400: not this alert. Auth and transport errors are final.
+    if direct.get("error") in _PATH_MISS:
+        return None, None
+    return None, json.dumps(direct)
+
+
+def _alerts_by_dedup_key(api_key: str, alert_id: str):
+    """One alert, or a JSON payload when the key misses, errors, or matches several."""
+    listed = _api_request(
+        api_key, "GET", "/alerts",
+        params={"page_size": 10, "deduplication_key[is]": alert_id},
+    )
+    if "error" in listed:
+        return json.dumps(listed)
+    matches = [item for item in (listed.get("alerts") or []) if isinstance(item, dict)]
+    if not matches:
+        return _ERR_ALERT_NOT_FOUND
+    # One source key on one alert source is the normal case.
+    if len(matches) == 1:
+        return matches[0]
+    # incident.io sends `after` on the last page too, so a short page is the end.
+    has_more = len(matches) >= 10 and bool((listed.get("pagination_meta") or {}).get("after"))
+    return _truncate_output({
+        "matches": [_alert_with_incidents(api_key, item) for item in matches],
+        "total_returned": len(matches),
+        "matched_on": "deduplication_key",
+        "has_more": has_more,
+    })
+
+
 def get_incidentio_alert(
     alert_id: str,
     user_id: Optional[str] = None,
@@ -381,40 +423,15 @@ def get_incidentio_alert(
     if not alert_id or len(alert_id) > 100 or any(ord(char) < 32 for char in alert_id):
         return _ERR_INVALID_ALERT_ID
 
-    alert = None
-    # Source ids are not ULIDs. Putting one on the path 400s and hides the search.
-    if _INCIDENTIO_ALERT_ID.fullmatch(alert_id):
-        direct = _api_request(api_key, "GET", f"/alerts/{alert_id}")
-        if "error" not in direct:
-            body = direct.get("alert") if isinstance(direct.get("alert"), dict) else direct
-            # A list body is not one alert; leave it for the dedup search.
-            if isinstance(body, dict) and body.get("id") and "alerts" not in body:
-                alert = body
-        elif direct.get("error") not in _PATH_MISS:
-            return json.dumps(direct)
-
+    alert, error = _alert_by_id(api_key, alert_id)
+    if error:
+        return error
     # Not an incident.io alert id — source ids live on the deduplication key.
     if alert is None:
-        listed = _api_request(
-            api_key, "GET", "/alerts",
-            params={"page_size": 10, "deduplication_key[is]": alert_id},
-        )
-        if "error" in listed:
-            return json.dumps(listed)
-        matches = [item for item in (listed.get("alerts") or []) if isinstance(item, dict)]
-        if not matches:
-            return _ERR_ALERT_NOT_FOUND
-        # The same source key can exist on more than one alert source.
-        if len(matches) > 1:
-            # incident.io sends `after` on the last page too, so a short page is the end.
-            has_more = len(matches) >= 10 and bool((listed.get("pagination_meta") or {}).get("after"))
-            return _truncate_output({
-                "matches": [_alert_with_incidents(api_key, item) for item in matches],
-                "total_returned": len(matches),
-                "matched_on": "deduplication_key",
-                "has_more": has_more,
-            })
-        alert = matches[0]
+        found = _alerts_by_dedup_key(api_key, alert_id)
+        if isinstance(found, str):
+            return found
+        alert = found
 
     return _truncate_output(_alert_with_incidents(api_key, alert))
 
