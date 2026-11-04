@@ -243,6 +243,14 @@ def test_tool_choice_mention_without_rejection_is_not_a_refusal(force_tool_modul
     assert force_tool_module._rejects_forced_tool_choice(err) is False
 
 
+def test_other_unsupported_feature_mentioning_tool_choice_is_not_a_refusal(force_tool_module):
+    """tool_choice has to be the thing that isn't supported."""
+    err = RuntimeError(
+        "does not currently support JSON response format when tool_choice=tool"
+    )
+    assert force_tool_module._rejects_forced_tool_choice(err) is False
+
+
 def test_unrelated_errors_are_not_swallowed(force_tool_module):
     """Only tool_choice rejections trigger the fallback — everything else propagates."""
     def call_next(request):

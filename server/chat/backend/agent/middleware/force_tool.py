@@ -43,10 +43,12 @@ _REJECTION_MARKERS = (
     "is not valid",
     "invalid",
 )
-# Bedrock inserts a word ("does not currently support"), so a contiguous
-# substring misses it. Cap the gap: a later "are supported" is the allow-list,
-# not a rejection.
-_NOT_SUPPORT_GAP_RE = re.compile(r"not(?:\s+\w+){1,3}\s+support")
+# Bedrock puts a word between "not" and "support" ("does not currently
+# support tool_choice"). tool_choice has to be what isn't supported, so a
+# different feature that only mentions it still surfaces.
+_NOT_SUPPORT_GAP_RE = re.compile(
+    r"not(?:\s+\w+){1,3}\s+support\w*(?:\s+\w+)?\s+tool(?:[\s_]+)?choice"
+)
 
 _FALLBACK_DIRECTIVE = (
     "SYSTEM DIRECTIVE: this turn was started by an explicit UI action, not by a "
@@ -97,7 +99,7 @@ def _rejects_forced_tool_choice(err: BaseException) -> bool:
     # Contiguous rejection ("not supported", "invalid", ...).
     if any(marker in msg for marker in _REJECTION_MARKERS):
         return True
-    # "does not currently support" — words sit between "not" and "support".
+    # "does not currently support tool_choice" — gap, and tool_choice is the object.
     return _NOT_SUPPORT_GAP_RE.search(msg) is not None
 
 
