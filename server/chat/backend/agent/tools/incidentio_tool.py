@@ -110,7 +110,8 @@ def _api_request(api_key: str, method: str, path: str, params: Optional[Dict] = 
     except requests.exceptions.ConnectionError:
         return {"error": "Unable to reach incident.io API"}
     except requests.HTTPError as exc:
-        status = exc.response.status_code if exc.response else None
+        # A 4xx/5xx Response is false, so a truthiness check would drop the status.
+        status = exc.response.status_code if exc.response is not None else None
         if status == 401:
             return {"error": "Authentication failed — API key may be invalid or expired"}
         if status == 403:
@@ -286,7 +287,7 @@ def get_incidentio_incident(
 
 
 def _attribute_value(raw: Any) -> str:
-    """Human-readable label from an alert attribute value (object or multi-select)."""
+    """Label from an alert attribute, including a short multi-select."""
     if isinstance(raw, dict):
         return str(raw.get("label") or raw.get("literal") or "")
     if isinstance(raw, list):
@@ -300,15 +301,14 @@ def _attribute_value(raw: Any) -> str:
 
 
 def _format_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
-    """Distill an alert into the fields useful for RCA."""
+    """Distill an alert the same way an incident summary drops unused fields."""
     attributes = []
     for attr in (alert.get("attributes") or [])[:20]:
         if not isinstance(attr, dict):
             continue
         name = (attr.get("attribute") or {}).get("name")
-        if not name:
-            continue
-        attributes.append({"name": name, "value": _attribute_value(attr.get("value"))})
+        if name:
+            attributes.append({"name": name, "value": _attribute_value(attr.get("value"))})
 
     description = alert.get("description") or ""
     if isinstance(description, str) and len(description) > 4000:
@@ -330,14 +330,19 @@ def _format_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _attached_incidents(api_key: str, alert_id: str) -> Dict[str, Any]:
-    """Incidents this alert is attached to. A lookup failure is reported, not fatal."""
+def _alert_with_incidents(api_key: str, alert: Dict[str, Any]) -> Dict[str, Any]:
+    """Formatted alert plus the incidents it is attached to. One page is enough."""
+    item = _format_alert(alert)
+    if not item.get("id"):
+        return item
     result = _api_request(
         api_key, "GET", "/incident_alerts",
-        params={"alert_id": alert_id, "page_size": 25},
+        params={"alert_id": item["id"], "page_size": 25},
     )
+    # The alert is still useful when the attachment lookup fails.
     if "error" in result:
-        return {"incidents_error": result["error"]}
+        item["incidents_error"] = result["error"]
+        return item
 
     incidents = []
     for link in (result.get("incident_alerts") or [])[:25]:
@@ -354,59 +359,8 @@ def _attached_incidents(api_key: str, alert_id: str) -> Dict[str, Any]:
             "status": status.get("name") if isinstance(status, dict) else incident.get("status"),
             "status_category": incident.get("status_category"),
         })
-    return {"incidents": incidents}
-
-
-def _alert_from_show(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The alert object from GET /alerts/{id}, or None when the body isn't one."""
-    alert = result.get("alert")
-    if isinstance(alert, dict) and alert.get("id"):
-        return alert
-    # Some responses are the alert itself rather than {"alert": ...}.
-    if result.get("id") and "alerts" not in result:
-        return result
-    return None
-
-
-def _show_alert(api_key: str, alert_id: str) -> tuple:
-    """(alert, error_json). A miss is (None, None) so the caller can try the dedup key."""
-    # Source ids are not ULIDs. Putting one on the path 400s and hides the search.
-    if not _INCIDENTIO_ALERT_ID.fullmatch(alert_id):
-        return None, None
-    direct = _api_request(api_key, "GET", f"/alerts/{alert_id}")
-    # Hit on the incident.io alert id itself.
-    if "error" not in direct:
-        return _alert_from_show(direct), None
-    # 404/400: not this alert. Auth and transport errors are final.
-    if direct.get("error") in _PATH_MISS:
-        return None, None
-    return None, json.dumps(direct)
-
-
-def _alerts_for_dedup_key(api_key: str, alert_id: str) -> tuple:
-    """(matches, error_json, has_more) for a source-system deduplication key."""
-    listed = _api_request(
-        api_key, "GET", "/alerts",
-        params={"page_size": 10, "deduplication_key[is]": alert_id},
-    )
-    if "error" in listed:
-        return [], json.dumps(listed), False
-    matches = [item for item in (listed.get("alerts") or []) if isinstance(item, dict)]
-    # incident.io sends `after` on the last page too, so a short page is the end.
-    has_more = len(matches) >= 10 and bool((listed.get("pagination_meta") or {}).get("after"))
-    return matches, None, has_more
-
-
-def _annotate_alerts(api_key: str, alerts: list) -> list:
-    """Formatted alerts, each with the incidents it is attached to."""
-    formatted = []
-    for alert in alerts:
-        item = _format_alert(alert)
-        # Attachment lookup needs the incident.io id from the alert payload.
-        if item.get("id"):
-            item.update(_attached_incidents(api_key, item["id"]))
-        formatted.append(item)
-    return formatted
+    item["incidents"] = incidents
+    return item
 
 
 def get_incidentio_alert(
@@ -427,30 +381,42 @@ def get_incidentio_alert(
     if not alert_id or len(alert_id) > 100 or any(ord(char) < 32 for char in alert_id):
         return _ERR_INVALID_ALERT_ID
 
-    alert, error = _show_alert(api_key, alert_id)
-    if error:
-        return error
+    alert = None
+    # Source ids are not ULIDs. Putting one on the path 400s and hides the search.
+    if _INCIDENTIO_ALERT_ID.fullmatch(alert_id):
+        direct = _api_request(api_key, "GET", f"/alerts/{alert_id}")
+        if "error" not in direct:
+            body = direct.get("alert") if isinstance(direct.get("alert"), dict) else direct
+            # A list body is not one alert; leave it for the dedup search.
+            if isinstance(body, dict) and body.get("id") and "alerts" not in body:
+                alert = body
+        elif direct.get("error") not in _PATH_MISS:
+            return json.dumps(direct)
 
     # Not an incident.io alert id — source ids live on the deduplication key.
     if alert is None:
-        matches, error, has_more = _alerts_for_dedup_key(api_key, alert_id)
-        if error:
-            return error
-        # The source key is not a deduplication key we have an alert for.
+        listed = _api_request(
+            api_key, "GET", "/alerts",
+            params={"page_size": 10, "deduplication_key[is]": alert_id},
+        )
+        if "error" in listed:
+            return json.dumps(listed)
+        matches = [item for item in (listed.get("alerts") or []) if isinstance(item, dict)]
         if not matches:
             return _ERR_ALERT_NOT_FOUND
         # The same source key can exist on more than one alert source.
         if len(matches) > 1:
-            formatted = _annotate_alerts(api_key, matches)
+            # incident.io sends `after` on the last page too, so a short page is the end.
+            has_more = len(matches) >= 10 and bool((listed.get("pagination_meta") or {}).get("after"))
             return _truncate_output({
-                "matches": formatted,
-                "total_returned": len(formatted),
+                "matches": [_alert_with_incidents(api_key, item) for item in matches],
+                "total_returned": len(matches),
                 "matched_on": "deduplication_key",
                 "has_more": has_more,
             })
         alert = matches[0]
 
-    return _truncate_output(_annotate_alerts(api_key, [alert])[0])
+    return _truncate_output(_alert_with_incidents(api_key, alert))
 
 
 def get_incidentio_timeline(

@@ -2,6 +2,8 @@
 import json
 from unittest.mock import patch
 
+import requests
+
 import chat.backend.agent.tools.incidentio_tool as tool
 
 ALERT = {
@@ -170,6 +172,57 @@ def test_full_page_of_matches_reports_more():
     payload, _ = _run("monitor/4293868629", responses)
     assert payload["has_more"] is True
     assert payload["total_returned"] == 10
+
+
+def _http_response(status, body=None):
+    """A real requests.Response. Error statuses are false, which is the bug."""
+    resp = requests.Response()
+    resp.status_code = status
+    resp.url = f"{tool.INCIDENTIO_API_BASE}/alerts/x"
+    resp.reason = "OK" if status < 400 else "Error"
+    if body is not None:
+        resp._content = json.dumps(body).encode()
+        resp.headers["Content-Type"] = "application/json"
+    return resp
+
+
+def test_error_status_is_read_from_a_real_response():
+    """A 4xx Response is false, so the status has to be read with an explicit check."""
+    with patch("requests.request", return_value=_http_response(404)):
+        missing = tool._api_request("key", "GET", "/alerts/01ABC")
+    assert missing == {"error": "Resource not found"}
+
+    with patch("requests.request", return_value=_http_response(400)):
+        rejected = tool._api_request("key", "GET", "/alerts/01ABC")
+    assert rejected["error"] in tool._PATH_MISS
+
+    with patch("requests.request", return_value=_http_response(401)):
+        denied = tool._api_request("key", "GET", "/alerts/01ABC")
+    assert denied["error"].startswith("Authentication failed")
+
+
+def test_real_404_on_a_ulid_still_searches_by_dedup_key():
+    """The path miss has to be the string _api_request actually returns."""
+    responses = [
+        _http_response(404),
+        _http_response(200, {"alerts": [ALERT]}),
+        _http_response(200, LINKS),
+    ]
+
+    with patch.object(tool, "_get_incidentio_credentials", return_value="key"), \
+            patch("requests.request", side_effect=responses):
+        payload = json.loads(tool.get_incidentio_alert(ALERT["id"], user_id="u1"))
+    assert payload["id"] == ALERT["id"]
+    assert payload["incidents"][0]["id"] == "01INC"
+
+
+def test_real_incident_404_points_at_the_alert_tool():
+    """The incident hint only runs when a 404 stays 'Resource not found'."""
+    with patch.object(tool, "_get_incidentio_credentials", return_value="key"), \
+            patch("requests.request", return_value=_http_response(404)):
+        payload = json.loads(tool.get_incidentio_incident("4293868629", user_id="u1"))
+    assert payload["error"].startswith("Resource not found")
+    assert "get_incidentio_alert" in payload["error"]
 
 
 def test_missing_incident_points_at_the_alert_tool():
