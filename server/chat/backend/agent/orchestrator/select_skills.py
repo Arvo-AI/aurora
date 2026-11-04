@@ -66,6 +66,7 @@ _TOOL_METADATA: dict = {
     "list_incidentio_incidents": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
     "get_incidentio_incident": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
     "get_incidentio_timeline": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
+    "list_incidentio_alerts": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
     "get_incidentio_alert": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
     "list_servicenow_incidents": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
     "get_servicenow_incident": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},

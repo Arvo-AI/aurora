@@ -260,3 +260,47 @@ def test_oversized_matches_stay_valid_json():
     assert parsed["truncated"] is True
     assert parsed["total_returned"] == len(parsed["matches"])
     assert len(parsed["matches"]) < 20
+
+
+def test_list_alerts_returns_ids_and_follows_the_cursor():
+    """A cursor on this endpoint means another page, even when the page is short."""
+    seen = []
+
+    def fake(api_key, method, path, params=None):
+        seen.append((path, params))
+        return {
+            "alerts": [ALERT, "not-a-dict"],
+            "pagination_meta": {"after": "cursor"},
+        }
+
+    with patch.object(tool, "_get_incidentio_credentials", return_value="key"), \
+            patch.object(tool, "_api_request", side_effect=fake):
+        payload = json.loads(tool.list_incidentio_alerts(" FIRING ", page_size=80, user_id="u1"))
+
+    assert payload["alerts"] == [{
+        "id": ALERT["id"],
+        "title": "CPU high",
+        "status": "firing",
+        "deduplication_key": "4293868629",
+        "source_url": ALERT["source_url"],
+        "alert_source_id": "01SRC",
+        "created_at": ALERT["created_at"],
+        "resolved_at": None,
+    }]
+    assert payload["has_more"] is True
+    assert payload["next_cursor"] == "cursor"
+    assert seen == [("/alerts", {"page_size": 50, "status[one_of]": "firing"})]
+
+
+def test_list_alerts_rejects_a_bad_status_and_a_missing_connection():
+    """Status is firing or resolved, and a missing connection never reaches the API."""
+    assert json.loads(tool.list_incidentio_alerts())["error"] == "No user context available"
+    with patch.object(tool, "_get_incidentio_credentials", return_value="key"):
+        bad = json.loads(tool.list_incidentio_alerts(status="live", user_id="u1"))
+    assert "firing" in bad["error"]
+
+    with patch.object(tool, "_get_incidentio_credentials", return_value="key"), \
+            patch.object(tool, "_api_request", return_value={"alerts": [ALERT]}):
+        done = json.loads(tool.list_incidentio_alerts(user_id="u1"))
+    assert done["has_more"] is False
+    assert "next_cursor" not in done

@@ -101,11 +101,13 @@ from .servicenow_tool import (
 )
 from .incidentio_tool import (
     list_incidentio_incidents,
+    list_incidentio_alerts,
     get_incidentio_incident,
     get_incidentio_timeline,
     get_incidentio_alert,
     is_incidentio_connected,
     ListIncidentsArgs,
+    ListAlertsArgs,
     GetIncidentArgs,
     GetTimelineArgs,
     GetAlertArgs,
@@ -2514,7 +2516,24 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             args_schema=GetAlertArgs,
         ))
 
-        logging.info(f"Added 4 incident.io tools for user {user_id}")
+        context_wrapped_alerts = with_user_context(list_incidentio_alerts)
+        notification_wrapped_alerts = with_completion_notification(context_wrapped_alerts)
+        final_alerts_func = wrap_func_with_capture(notification_wrapped_alerts, "list_incidentio_alerts") if tool_capture else notification_wrapped_alerts
+
+        tools.append(StructuredTool.from_function(
+            func=final_alerts_func,
+            name="list_incidentio_alerts",
+            description=(
+                "List recent incident.io alerts. Use this when the question is about alerts "
+                "rather than incidents. Returns alert ids; pass one to get_incidentio_alert "
+                "for the full alert and the incident it is attached to. "
+                "Filter by status ('firing' or 'resolved'). "
+                "Supports pagination via 'after' cursor."
+            ),
+            args_schema=ListAlertsArgs,
+        ))
+
+        logging.info(f"Added 5 incident.io tools for user {user_id}")
     else:
         logging.debug(f"incident.io tools not added - user {user_id} not connected")
 

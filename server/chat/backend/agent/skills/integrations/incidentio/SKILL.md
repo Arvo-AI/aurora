@@ -1,7 +1,7 @@
 ---
 name: incidentio
 id: incidentio
-description: "incident.io integration for listing incidents, looking up alerts by alert id, and reviewing timelines during RCA"
+description: "incident.io integration for listing incidents and alerts, looking up an alert by id, and reviewing timelines during RCA"
 category: incident_management
 connection_check:
   method: is_connected_function
@@ -9,12 +9,13 @@ connection_check:
   function: is_incidentio_connected
 tools:
   - list_incidentio_incidents
+  - list_incidentio_alerts
   - get_incidentio_incident
   - get_incidentio_timeline
   - get_incidentio_alert
-index: "Incident management -- list incidents, get details, look up alerts, review timeline"
+index: "Incident management -- list incidents, list alerts, get details, look up one alert, review timeline"
 rca_priority: 2
-allowed-tools: list_incidentio_incidents, get_incidentio_incident, get_incidentio_timeline, get_incidentio_alert
+allowed-tools: list_incidentio_incidents, list_incidentio_alerts, get_incidentio_incident, get_incidentio_timeline, get_incidentio_alert
 metadata:
   author: aurora
   version: "1.0"
@@ -31,7 +32,8 @@ incident.io integration for investigating incidents during Root Cause Analysis. 
 1. `list_incidentio_incidents()` -- Find recent or related incidents. Filter by status or severity.
 2. `get_incidentio_incident(incident_id='X')` -- Get full details including roles, custom fields, and duration.
 3. `get_incidentio_timeline(incident_id='X')` -- See the sequence of events, status changes, and human updates.
-4. `get_incidentio_alert(alert_id='X')` -- Look up an alert. Accepts an incident.io alert id or a source-system id (Site24x7 and others store that as the deduplication key).
+4. `list_incidentio_alerts()` -- List recent alerts. Filter with status 'firing' or 'resolved'.
+5. `get_incidentio_alert(alert_id='X')` -- Look up one alert by an id from that list, an incident.io alert id, or a source-system id (Site24x7 and others store that as the deduplication key).
 
 ### Investigation Patterns
 - Find similar incidents: `list_incidentio_incidents(status='closed', page_size=10)` to check for recurring issues.
@@ -57,7 +59,8 @@ After incident.io analysis, correlate with infrastructure data from other connec
 
 ## Alerts vs incidents
 `get_incidentio_incident` only accepts an incident.io **incident** id. An id from an alert event, or from an upstream monitor such as Site24x7, is an **alert** id (or that source's id on `deduplication_key`).
-- Call `get_incidentio_alert(alert_id='...')` for either kind of id.
+- To see recent alerts, call `list_incidentio_alerts()`. An incident id from `list_incidentio_incidents` is not an alert id.
+- Call `get_incidentio_alert(alert_id='...')` with an id from that list, or with a source-system id.
 - When the result includes an attached incident, use that incident id with `get_incidentio_incident` and `get_incidentio_timeline`.
 - A 404 from `get_incidentio_incident` on an id that came from an alert means call `get_incidentio_alert` instead.
 

@@ -1,7 +1,8 @@
 """incident.io investigation tools for RCA agent.
 
-Provides four tools for RCA:
+Provides five tools for RCA:
 - list_incidentio_incidents: Find recent/related incidents for pattern analysis
+- list_incidentio_alerts: Find recent alerts, then look one up by the id this returns
 - get_incidentio_incident: Deep-dive a specific incident (status, roles, custom fields, timestamps)
 - get_incidentio_timeline: Fetch timeline updates for an incident to understand sequence of events
 - get_incidentio_alert: Look up an alert by incident.io alert id or source deduplication key
@@ -73,6 +74,22 @@ class GetAlertArgs(BaseModel):
             "An incident.io alert id, or the source system's own alert id. "
             "Source ids (Site24x7 and others) are stored as the alert's deduplication key."
         ),
+    )
+
+
+class ListAlertsArgs(BaseModel):
+    """Arguments for list_incidentio_alerts."""
+    status: Optional[str] = Field(
+        default=None,
+        description="Filter by alert status: 'firing' or 'resolved'. Leave empty for both.",
+    )
+    page_size: int = Field(
+        default=25,
+        description="Number of alerts to return (max 50).",
+    )
+    after: Optional[str] = Field(
+        default=None,
+        description="Pagination cursor from a previous response's 'next_cursor'.",
     )
 
 
@@ -183,7 +200,7 @@ def _truncatable_items(data: Any) -> Optional[list]:
     """The list a caller can shorten without breaking the JSON around it."""
     if not isinstance(data, dict):
         return None
-    for key in ("incidents", "matches"):
+    for key in ("incidents", "matches", "alerts"):
         items = data.get(key)
         if isinstance(items, list):
             return items
@@ -250,6 +267,68 @@ def list_incidentio_incidents(
     if "total_record_count" in pagination:
         output["total_count"] = pagination["total_record_count"]
 
+    return _truncate_output(output)
+
+
+_ALERT_STATUSES = frozenset({"firing", "resolved"})
+
+
+def _alert_list_item(alert: Dict[str, Any]) -> Dict[str, Any]:
+    """The fields needed to pick an alert and then call get_incidentio_alert."""
+    return {
+        "id": alert.get("id"),
+        "title": alert.get("title"),
+        "status": alert.get("status"),
+        "deduplication_key": alert.get("deduplication_key"),
+        "source_url": alert.get("source_url"),
+        "alert_source_id": alert.get("alert_source_id"),
+        "created_at": alert.get("created_at"),
+        "resolved_at": alert.get("resolved_at"),
+    }
+
+
+def list_incidentio_alerts(
+    status: Optional[str] = None,
+    page_size: int = 25,
+    after: Optional[str] = None,
+    user_id: Optional[str] = None,
+    **kwargs,
+) -> str:
+    """List incident.io alerts. Pass an id from the result to get_incidentio_alert."""
+    if not user_id:
+        return _ERR_NO_USER
+
+    api_key = _get_incidentio_credentials(user_id)
+    if not api_key:
+        return _ERR_NOT_CONNECTED
+
+    # The alerts list caps at 50, unlike the incidents list.
+    page_size = min(max(page_size, 1), 50)
+    params: Dict[str, Any] = {"page_size": page_size}
+    if status:
+        status = status.strip().lower()
+        if status not in _ALERT_STATUSES:
+            return json.dumps({"error": "Invalid status. Use 'firing' or 'resolved'."})
+        params["status[one_of]"] = status
+    if after:
+        params["after"] = after
+
+    result = _api_request(api_key, "GET", "/alerts", params=params)
+    if "error" in result:
+        return json.dumps(result)
+
+    alerts = [item for item in (result.get("alerts") or []) if isinstance(item, dict)]
+    cursor = (result.get("pagination_meta") or {}).get("after")
+    output: Dict[str, Any] = {
+        "alerts": [_alert_list_item(alert) for alert in alerts],
+        "total_returned": len(alerts),
+    }
+    # On this endpoint a cursor means another page, even when this page is short.
+    if cursor:
+        output["next_cursor"] = cursor
+        output["has_more"] = True
+    else:
+        output["has_more"] = False
     return _truncate_output(output)
 
 
