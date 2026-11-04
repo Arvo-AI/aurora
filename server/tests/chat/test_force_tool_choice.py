@@ -223,6 +223,26 @@ def test_rejection_is_remembered_so_later_runs_skip_the_400(force_tool_module):
     assert attempts == ["auto"], "forced attempt should be skipped after a known rejection"
 
 
+_BEDROCK_FABLE_REJECTION = (
+    "Model anthropic.claude-fable-5-1 does not currently support tool_choice "
+    "of type tool. The following tool_choice types are supported: ('auto',)."
+)
+
+
+def test_bedrock_fable_wording_counts_as_forced_tool_rejection(force_tool_module):
+    """'currently' sits between 'not' and 'support', so a contiguous marker misses it."""
+    err = RuntimeError(_BEDROCK_FABLE_REJECTION)
+    assert force_tool_module._rejects_forced_tool_choice(err) is True
+
+
+def test_tool_choice_mention_without_rejection_is_not_a_refusal(force_tool_module):
+    """Listing allowed tool_choice types ('are supported') is not a rejection."""
+    err = RuntimeError(
+        "tool_choice of type tool. The following tool_choice types are supported: ('auto',)."
+    )
+    assert force_tool_module._rejects_forced_tool_choice(err) is False
+
+
 def test_unrelated_errors_are_not_swallowed(force_tool_module):
     """Only tool_choice rejections trigger the fallback — everything else propagates."""
     def call_next(request):
