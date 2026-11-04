@@ -179,18 +179,30 @@ def _calculate_duration(incident: Dict[str, Any]) -> Optional[int]:
         return None
 
 
+def _truncatable_items(data: Any) -> Optional[list]:
+    """The list a caller can shorten without breaking the JSON around it."""
+    if not isinstance(data, dict):
+        return None
+    for key in ("incidents", "matches"):
+        items = data.get(key)
+        if isinstance(items, list):
+            return items
+    return None
+
+
 def _truncate_output(data: Any) -> str:
     output = json.dumps(data, default=str)
     if len(output) <= MAX_OUTPUT_SIZE:
         return output
-    if isinstance(data, dict) and "incidents" in data and isinstance(data["incidents"], list):
-        items = data["incidents"]
-        while items and len(json.dumps(data, default=str)) > MAX_OUTPUT_SIZE:
-            items.pop()
-        data["truncated"] = True
-        data["total_returned"] = len(items)
-        return json.dumps(data, default=str)
-    return output[:MAX_OUTPUT_SIZE]
+    items = _truncatable_items(data)
+    # A mid-string cut drops the closing brace, so only slice when there is no list to shrink.
+    if items is None:
+        return output[:MAX_OUTPUT_SIZE]
+    while items and len(json.dumps(data, default=str)) > MAX_OUTPUT_SIZE:
+        items.pop()
+    data["truncated"] = True
+    data["total_returned"] = len(items)
+    return json.dumps(data, default=str)
 
 
 def list_incidentio_incidents(

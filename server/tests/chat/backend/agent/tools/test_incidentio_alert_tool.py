@@ -245,3 +245,18 @@ def test_unknown_id_and_a_failed_attachment_lookup():
     assert payload["id"] == ALERT["id"]
     assert payload["incidents_error"] == "incident.io API error (HTTP 500)"
     assert "incidents" not in payload
+
+
+def test_oversized_matches_stay_valid_json():
+    """A matches payload over the cap drops records instead of slicing the JSON."""
+    payload = {
+        "matches": [{"id": str(i), "description": "x" * 200} for i in range(20)],
+        "total_returned": 20,
+        "matched_on": "deduplication_key",
+    }
+    with patch.object(tool, "MAX_OUTPUT_SIZE", 500):
+        raw = tool._truncate_output(payload)
+    parsed = json.loads(raw)
+    assert parsed["truncated"] is True
+    assert parsed["total_returned"] == len(parsed["matches"])
+    assert len(parsed["matches"]) < 20
