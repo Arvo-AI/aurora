@@ -27,13 +27,13 @@ metadata:
 
 # RabbitMQ Integration
 
-Read-only management API. The connected user should have the `monitoring` tag. Do not try to publish, purge, delete, or fetch message bodies. Fetching bodies dequeues them, and these tools do not expose that endpoint.
+Read-only management API. The connected user should have the `monitoring` tag and read permission on each vhost. The tag does not grant that permission. Do not try to publish, purge, delete, or fetch message bodies. Fetching bodies dequeues them, and these tools do not expose that endpoint.
 
 ## When a queue looks stuck
 
 1. `rabbitmq_health_checks()` and `rabbitmq_list_nodes()` — memory or disk alarms block publishers cluster-wide.
 2. `rabbitmq_get_overview()` — version, listeners, and whether ready or unacked messages are growing.
-3. `rabbitmq_list_queues()` — deepest queues first. A queue with `consumers: 0` and a rising `messages_ready` has no subscriber on that queue. Confirm the worker connection before calling it down. A high `messages_unacknowledged` means consumers are stuck or prefetch is too high.
+3. `rabbitmq_list_queues()` — deepest queues this user can read. Omitting `vhost` does not show queues the user has no permission on. A queue with `consumers: 0` and a rising `messages_ready` has no subscriber on that queue. Confirm the worker connection before calling it down. A high `messages_unacknowledged` means consumers are stuck or prefetch is too high.
 4. `rabbitmq_get_queue(name='QUEUE')` — dead-letter arguments (`x-dead-letter-exchange`) and rates. Then inspect that dead-letter queue the same way.
 5. `rabbitmq_list_consumers(vhost='VHOST')` and `rabbitmq_list_connections()` — confirm the worker process is still connected.
 6. `rabbitmq_list_bindings(queue='QUEUE')` — custom bindings. An empty list is not proof of dropped publishes: the default exchange routes to a queue by its name and does not create a binding row.
@@ -46,5 +46,6 @@ Read-only management API. The connected user should have the `monitoring` tag. D
 - `mem_alarm` or `disk_free_alarm` true: the node is blocking publishers. This looks like a producer outage, not a consumer bug.
 - `state` other than `running`: the queue is down or synchronising.
 - A failed `amqp_listener` check is expected when the broker listens only on 5671, and the reverse.
+- `list_queues` or `list_exchanges` is empty while `object_totals` is not: this user has no read permission on those vhosts. The monitoring tag does not grant it. A 401 that says the user cannot read that vhost is the same gap, not a bad password.
 
-Omit `vhost` on list calls to scan the cluster. Pass it once you know which vhost the failing service uses. The default saved at connect time is `/` unless the user set another.
+Omit `vhost` to list every vhost this user can read. Pass it once you know which vhost the failing service uses. The default saved at connect time is `/` unless the user set another.

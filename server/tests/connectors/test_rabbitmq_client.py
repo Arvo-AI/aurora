@@ -92,6 +92,22 @@ def test_auth_failure_does_not_echo_secrets():
     assert "s3cret-password" not in session.request.call_args.args[1]
 
 
+def test_vhost_401_is_not_reported_as_a_bad_password():
+    session = MagicMock()
+    session.request.side_effect = [
+        _response(401, {"error": "not_authorised", "reason": "Access refused"}),
+        _response(200, {"name": "monitor", "tags": "monitoring"}),
+    ]
+    broker = _client(session)
+    with pytest.raises(rmq.RabbitMQAPIError) as caught:
+        broker.queues(vhost="/")
+    assert caught.value.kind == "vhost"
+    message = str(caught.value)
+    assert "password" not in message.lower()
+    assert 'set_permissions -p <vhost> <username> "^$" "^$" ".*"' in message
+    assert session.request.call_args_list[1].args[1].endswith("/api/whoami")
+
+
 def test_oversized_response_is_rejected_before_it_is_kept():
     session = MagicMock()
     response = MagicMock()
@@ -159,6 +175,19 @@ def test_health_checks_keep_failure_reasons_and_mark_missing_checks():
     assert checks["alarms"]["status"] == "failed"
     assert "memory alarm" in checks["alarms"]["reason"]
     assert checks["local_alarms"]["status"] == "unsupported"
+
+
+def test_empty_queue_page_notes_missing_permission():
+    from chat.backend.agent.tools.rabbitmq_tool import _note_if_invisible
+
+    noted = _note_if_invisible(
+        {"items": [], "page": 1, "page_count": 0, "total_count": 0, "filtered_count": 0},
+        filtered=False,
+    )
+    assert "read permission" in noted["note"]
+    # A name filter is supposed to return nothing when nothing matches.
+    filtered = _note_if_invisible({"items": [], "total_count": 0}, filtered=True)
+    assert "note" not in filtered
 
 
 def test_as_page_slices_a_bare_list():

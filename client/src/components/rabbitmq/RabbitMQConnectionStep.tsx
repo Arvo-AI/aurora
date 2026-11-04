@@ -41,21 +41,15 @@ export function RabbitMQConnectionStep({
             <span className="font-semibold">Prerequisites</span>
           </div>
           <div className="p-4 pt-0 space-y-3 text-sm border-t">
-            <p className="text-muted-foreground">
-              Aurora reads the RabbitMQ management HTTP API. It does not publish, purge, or fetch message bodies.
-              Paste the URL you already use for the management UI. That is usually port 15672, not the AMQP port 5672.
-              <code>localhost</code> is rejected, because Aurora sends the request, not your browser.
-            </p>
             <ol className="space-y-3 list-decimal list-inside">
               <li>
                 <span className="font-medium">Create an account only Aurora uses.</span>
                 <span className="block text-muted-foreground mt-1">
-                  RabbitMQ calls this a user. Give it the monitoring tag, not administrator, so it can read the management API and cannot change the broker.
-                  Set permissions on each vhost Aurora should see. The three patterns are configure, write, and read. <code>^$</code> grants nothing. The read pattern is the scope: <code>.*</code> is the whole vhost, and a narrower pattern limits which queues Aurora can see.
+                  The monitoring tag lets Aurora sign in. It cannot change the broker, and it does not grant access to a vhost. In the management UI, open Admin, then the user, then Set permission. Configure and write are <code>^$</code>, which match nothing, so Aurora cannot create or publish. Read is <code>.*</code>, the whole vhost. Repeat for every vhost Aurora should see. From the broker host, not from Aurora:
                 </span>
                 <pre className="mt-2 rounded bg-muted/60 border p-2 overflow-auto text-[11px] leading-snug font-mono">{`rabbitmqctl add_user <username> <password>
 rabbitmqctl set_user_tags <username> monitoring
-rabbitmqctl set_permissions -p <vhost> <username> "^$" "^$" "<read-pattern>"`}</pre>
+rabbitmqctl set_permissions -p / <username> "^$" "^$" ".*"`}</pre>
               </li>
             </ol>
             <div className="mt-4 p-3 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded">

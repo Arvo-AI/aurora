@@ -392,6 +392,26 @@ class RabbitMQClient:
         except Exception:
             logger.debug("[RABBITMQ] Failed to close session", exc_info=True)
 
+    def _password_accepted(self) -> bool:
+        """True when whoami succeeds. Used to tell a bad password from a vhost 401."""
+        response = None
+        try:
+            response = self._session.request(
+                "GET",
+                f"{self.url}/api/whoami",
+                timeout=self.timeout,
+                allow_redirects=False,
+                stream=True,
+            )
+            _read_limited(response)
+            return response.status_code == 200
+        # A failed probe cannot prove the password, so the caller keeps the auth error.
+        except (requests.RequestException, RabbitMQAPIError):
+            return False
+        finally:
+            if response is not None:
+                response.close()
+
     def whoami(self) -> Dict[str, Any]:
         body = self._get_json("/api/whoami")
         if not isinstance(body, dict):
@@ -600,6 +620,15 @@ class RabbitMQClient:
         # Do not log the path or the response: both are tainted by the credentialed call.
         if response.status_code == 401:
             logger.warning("[RABBITMQ] management request was rejected")
+            # A missing vhost permission is also a 401. whoami only succeeds when the password is valid.
+            if self._password_accepted():
+                raise RabbitMQAPIError(
+                    "This RabbitMQ user cannot read that vhost. The monitoring tag does not grant access. "
+                    "In the management UI, set permission on that vhost: configure ^$, write ^$, read .*. "
+                    'Or on the broker host run rabbitmqctl set_permissions -p <vhost> <username> "^$" "^$" ".*"',
+                    401,
+                    kind="vhost",
+                )
             raise RabbitMQAPIError("RabbitMQ rejected the username or password", 401, kind="auth")
         if response.status_code == 403:
             logger.warning("[RABBITMQ] management request was forbidden")

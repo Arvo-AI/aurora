@@ -4,7 +4,7 @@ Read-only access to a broker through the [management HTTP API](https://www.rabbi
 
 ## Credentials
 
-Create a user with the `monitoring` tag. That tag can read queues, nodes, connections, and alarms, and cannot publish, purge, or change policy.
+Create a user with the `monitoring` tag and read permission on each vhost Aurora should see. The tag can read the management API and cannot publish, purge, or change policy. It does not grant vhost access by itself. Connect lists the default vhost and refuses the account when that call is unauthorized.
 
 | Field | Example |
 |---|---|

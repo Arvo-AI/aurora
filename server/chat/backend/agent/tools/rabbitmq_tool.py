@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 MAX_OUTPUT_CHARS = 80_000
 _PAGE_HELP = "Page number, starting at 1."
+_VISIBILITY_NOTE = (
+    "No resources were visible to this user. Overview counts the whole cluster. "
+    "If that total is nonzero, this account is missing read permission on those vhosts."
+)
 
 
 def _credentials(user_id: str) -> Optional[Dict[str, Any]]:
@@ -62,6 +66,15 @@ def _clamp_page(page: int, page_size: int) -> tuple:
     except (TypeError, ValueError):
         size = 50
     return max(1, min(page_num, 100)), max(1, min(size, MAX_PAGE_SIZE))
+
+
+def _note_if_invisible(payload: Dict[str, Any], *, filtered: bool) -> Dict[str, Any]:
+    # A user with no set_permissions gets an empty 200, not an error.
+    if filtered or payload.get("total_count") != 0:
+        return payload
+    noted = dict(payload)
+    noted["note"] = _VISIBILITY_NOTE
+    return noted
 
 
 def _dump(payload: Any) -> str:
@@ -165,11 +178,12 @@ def rabbitmq_list_queues(
     page_size: int = 50,
     **kwargs: Any,
 ) -> Dict[str, Any]:
-    """Queues sorted by depth. Zero consumers means nothing is subscribed to that queue."""
+    """Queues this user can read, deepest first. Zero consumers means nothing is subscribed."""
     page, page_size = _clamp_page(page, page_size)
     name_filter = name.strip() if isinstance(name, str) and name.strip() else None
     vhost_filter = vhost.strip() if isinstance(vhost, str) and vhost.strip() else None
-    return client.queues(vhost=vhost_filter, name=name_filter, page=page, page_size=page_size)
+    page_body = client.queues(vhost=vhost_filter, name=name_filter, page=page, page_size=page_size)
+    return _note_if_invisible(page_body, filtered=name_filter is not None)
 
 
 @_rabbitmq_tool
@@ -194,10 +208,11 @@ def rabbitmq_list_exchanges(
     page_size: int = 50,
     **kwargs: Any,
 ) -> Dict[str, Any]:
-    """Exchanges and their publish rates. The default exchange name is empty."""
+    """Exchanges this user can read, and their publish rates. The default exchange name is empty."""
     page, page_size = _clamp_page(page, page_size)
     vhost_filter = vhost.strip() if isinstance(vhost, str) and vhost.strip() else None
-    return client.exchanges(vhost=vhost_filter, page=page, page_size=page_size)
+    page_body = client.exchanges(vhost=vhost_filter, page=page, page_size=page_size)
+    return _note_if_invisible(page_body, filtered=False)
 
 
 @_rabbitmq_tool

@@ -50,10 +50,30 @@ def _clean_vhost(raw: Any) -> str:
     return vhost
 
 
-def _public_connect_error(kind: str) -> str:
-    """Map a failure kind to a fixed sentence. The kind never reaches the client."""
+def _command_token(value: str) -> bool:
+    return bool(value) and len(value) <= 200 and all(ch.isalnum() or ch in "/._-@" for ch in value)
+
+
+def _read_permission_command(vhost: str, username: str) -> str:
+    # A quote or space in the name would make the copied command wrong.
+    target = vhost if _command_token(vhost) else "<vhost>"
+    user = username if _command_token(username) else "<username>"
+    return f'rabbitmqctl set_permissions -p {target} {user} "^$" "^$" ".*"'
+
+
+def _public_connect_error(kind: str, vhost: str = "/", username: str = "") -> str:
+    """User-facing connect failure. The vhost command is filled in when it is safe to copy."""
     if kind == "auth":
         return "RabbitMQ rejected the username or password"
+    if kind == "vhost":
+        target = vhost if _command_token(vhost) else "<vhost>"
+        return (
+            "This user can sign in, but cannot read that vhost. The monitoring tag does not grant access. "
+            f"In the management UI, set permission on vhost {target}: configure ^$, write ^$, read .*. "
+            f"Or on the broker host run {_read_permission_command(vhost, username)}"
+        )
+    if kind == "not_found":
+        return "That RabbitMQ vhost does not exist"
     if kind == "forbidden":
         return "This RabbitMQ user cannot read the management API. Grant the monitoring tag."
     if kind == "tls":
@@ -94,9 +114,11 @@ def connect(user_id):
     try:
         who = client.whoami()
         overview = client.overview()
+        # whoami succeeds for a monitoring user with no permissions. Listing the vhost does not.
+        client.queues(vhost=vhost, page=1, page_size=1)
     except RabbitMQAPIError as exc:
         logger.warning("[RABBITMQ] Connect failed")
-        return jsonify({"error": _public_connect_error(exc.kind)}), 400
+        return jsonify({"error": _public_connect_error(exc.kind, vhost=vhost, username=client.username)}), 400
     finally:
         client.close()
 
@@ -146,26 +168,41 @@ def status(user_id):
         logger.warning("[RABBITMQ] Stored management URL is not usable")
         return jsonify({"connected": False, "error": "Failed to validate RabbitMQ connection"})
 
+    vhost = creds.get("vhost") if isinstance(creds.get("vhost"), str) and creds.get("vhost") else "/"
+    access_error = None
     try:
-        # whoami is enough to prove the credentials still work. Cluster name
-        # and version were stored at connect time.
+        # whoami only proves the password. The vhost list proves this user can see queues.
         who = client.whoami()
+        try:
+            client.queues(vhost=vhost, page=1, page_size=1)
+        except RabbitMQAPIError as exc:
+            # Keep the saved connection so the page can show the permission gap.
+            if exc.kind not in ("vhost", "not_found"):
+                raise
+            access_error = _public_connect_error(
+                exc.kind,
+                vhost=vhost,
+                username=creds.get("username") if isinstance(creds.get("username"), str) else "",
+            )
     except (RabbitMQAPIError, ValueError):
         logger.warning("[RABBITMQ] Status validation failed")
         return jsonify({"connected": False, "error": "Failed to validate RabbitMQ connection"})
     finally:
         client.close()
 
-    return jsonify({
+    body = {
         "connected": True,
         "url": creds.get("url"),
         "username": who.get("name") or creds.get("username"),
-        "vhost": creds.get("vhost") or "/",
+        "vhost": vhost,
         "clusterName": creds.get("cluster_name"),
         "version": creds.get("rabbitmq_version"),
         "tags": who.get("tags") or [],
         "validatedAt": creds.get("validated_at"),
-    })
+    }
+    if access_error:
+        body["error"] = access_error
+    return jsonify(body)
 
 
 @rabbitmq_bp.route("/disconnect", methods=["DELETE", "POST"])

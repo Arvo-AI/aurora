@@ -21,10 +21,17 @@ export function RabbitMQConnectedStatus({
       <CardHeader>
         <CardTitle>RabbitMQ connected</CardTitle>
         <CardDescription>
-          Aurora can read queue depth, consumers, node alarms, and connections from this broker.
+          {status.error
+            ? "This account is saved, but Aurora cannot read the default vhost yet."
+            : "Aurora can read queue depth, consumers, node alarms, and connections from this broker."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        {status.error && (
+          <div className="p-3 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded text-sm text-orange-900 dark:text-orange-300">
+            {status.error}
+          </div>
+        )}
         <div className="grid md:grid-cols-3 gap-4">
           <div className="p-4 border rounded-lg">
             <p className="text-xs text-muted-foreground uppercase tracking-wide">Management URL</p>
