@@ -179,6 +179,14 @@ celery_app.conf.update(
             'task': 'chat.background.cleanup_stale_sessions',
             'schedule': 300.0,  # Every 5 minutes
         },
+        # Safety net for incidents the summary task's own retries cannot save:
+        # a hard-limit SIGKILL of the summary fork persists nothing, leaving
+        # the incident 'summarizing' forever. Re-drives those; see
+        # reconcile_stuck_summarizing in chat/background/task.py.
+        'reconcile-stuck-summarizing': {
+            'task': 'chat.background.reconcile_stuck_summarizing',
+            'schedule': 600.0,  # Every 10 minutes
+        },
         'run-full-discovery': {
             'task': 'services.discovery.tasks.run_full_discovery',
             'schedule': float(os.getenv('DISCOVERY_INTERVAL_HOURS', '1')) * 3600,  # Default: every hour

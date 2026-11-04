@@ -2897,3 +2897,84 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
     except Exception as e:
         logger.exception(f"[BackgroundChat:Cleanup] Failed: {e}")
         return {"error": str(e), "cleaned": 0}
+
+
+@celery_app.task(
+    name="chat.background.reconcile_stuck_summarizing",
+    time_limit=120,  # DB sweep + fan-out of .delay() calls only
+    soft_time_limit=90,
+)
+def reconcile_stuck_summarizing() -> Dict[str, Any]:
+    """Beat entry point. The body lives in the undecorated function below so tests
+    and other callers can invoke it without a broker."""
+    return _reconcile_stuck_summarizing()
+
+
+def _reconcile_stuck_summarizing() -> Dict[str, Any]:
+    """Re-drive incidents stranded in 'summarizing' by a killed summary task.
+
+    The safety net for the one failure mode the summary task's own retries
+    cannot cover: when the worker's hard time limit SIGKILLs the task fork,
+    nothing is persisted — no summary, no status, no retry — and the incident
+    stays 'summarizing' forever. A soft-limit or failed run marks 'error'
+    itself and is never picked up here.
+
+    Eligibility: 'summarizing' for longer than a full summary budget (soft
+    limit x retries) plus margin, so a legitimately slow run is never
+    double-enqueued — default 30 minutes vs ~17 minutes of worst-case budget
+    (SUMMARIZING_STUCK_AFTER_MINUTES) — and for no longer than a re-drive
+    window, so a permanently failing incident stops being re-driven instead of
+    burning LLM calls forever (SUMMARIZING_REDRIVE_MAX_AGE_DAYS). To clear a
+    backlog older than the window, raise the latter temporarily.
+
+    Claiming a row restamps updated_at: that both prevents a second enqueue on
+    the next pass and spaces re-drives of a still-stuck row by the threshold.
+    """
+    stuck_after = timedelta(minutes=int(os.getenv("SUMMARIZING_STUCK_AFTER_MINUTES", "30")))
+    max_age = timedelta(days=int(os.getenv("SUMMARIZING_REDRIVE_MAX_AGE_DAYS", "7")))
+    now = datetime.now()
+    stuck_threshold = now - stuck_after
+    age_threshold = now - max_age
+
+    re_driven = 0
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                for uid in _affected_users(cursor):
+                    if not set_rls_context(cursor, conn, uid, log_prefix="[ReconcileSummarizing]"):
+                        continue
+                    cursor.execute("""
+                        UPDATE incidents
+                           SET updated_at = NOW()
+                         WHERE user_id = %s
+                           AND aurora_status = 'summarizing'
+                           AND status != 'merged'
+                           AND merged_into_incident_id IS NULL
+                           AND aurora_chat_session_id IS NOT NULL
+                           AND updated_at < %s
+                           AND updated_at > %s
+                        RETURNING id, aurora_chat_session_id
+                    """, (uid, stuck_threshold, age_threshold))
+                    claimed = cursor.fetchall()
+                    conn.commit()
+                    for inc_id, session_id in claimed:
+                        try:
+                            from chat.background.summarization import generate_incident_summary_from_chat
+                            generate_incident_summary_from_chat.delay(
+                                incident_id=str(inc_id),
+                                user_id=uid,
+                                session_id=str(session_id),
+                                announce_completion=True,
+                            )
+                            re_driven += 1
+                        except Exception:
+                            logger.exception(
+                                "[ReconcileSummarizing] Failed to re-enqueue summary for incident %s", inc_id
+                            )
+        if re_driven:
+            logger.info("[ReconcileSummarizing] Re-drove %d incident(s) stuck in 'summarizing'", re_driven)
+        return {"re_driven": re_driven}
+
+    except Exception as e:
+        logger.exception(f"[ReconcileSummarizing] Failed: {e}")
+        return {"error": str(e), "re_driven": 0}
