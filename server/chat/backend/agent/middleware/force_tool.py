@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections import deque
 from typing import Any
 
@@ -41,6 +42,12 @@ _REJECTION_MARKERS = (
     "unsupported",
     "is not valid",
     "invalid",
+)
+# Bedrock puts a word between "not" and "support" ("does not currently
+# support tool_choice"). tool_choice has to be what isn't supported, so a
+# different feature that only mentions it still surfaces.
+_NOT_SUPPORT_GAP_RE = re.compile(
+    r"not(?:\s+\w+){1,3}\s+support\w*(?:\s+\w+)?\s+tool(?:[\s_]+)?choice"
 )
 
 _FALLBACK_DIRECTIVE = (
@@ -86,9 +93,14 @@ def _rejects_forced_tool_choice(err: BaseException) -> bool:
     (bad tool schema, context overflow) still surface to the caller unchanged.
     """
     msg = str(err).lower()
-    return any(m in msg for m in _TOOL_CHOICE_MARKERS) and any(
-        m in msg for m in _REJECTION_MARKERS
-    )
+    # No tool_choice mention — an unrelated 400 must still surface.
+    if not any(marker in msg for marker in _TOOL_CHOICE_MARKERS):
+        return False
+    # Contiguous rejection ("not supported", "invalid", ...).
+    if any(marker in msg for marker in _REJECTION_MARKERS):
+        return True
+    # "does not currently support tool_choice" — gap, and tool_choice is the object.
+    return _NOT_SUPPORT_GAP_RE.search(msg) is not None
 
 
 class ForceToolChoice(AgentMiddleware):
