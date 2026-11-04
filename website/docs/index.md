@@ -9,7 +9,7 @@ Aurora is an automated **root cause analysis** investigation tool that uses AI a
 
 ## What is Aurora?
 
-An alert becomes an incident. Aurora investigates across your cloud accounts, Kubernetes clusters, and observability tools, then leaves a structured root cause, a postmortem, and whatever follow-up you configured as an Action.
+An alert becomes an incident. Aurora investigates across your cloud accounts, Kubernetes clusters, and observability tools, then leaves a structured root cause and whatever follow-up you configured as an Action. The Generate Postmortem action writes the postmortem when the incident is resolved.
 
 You can also just ask:
 
@@ -28,7 +28,7 @@ The product surfaces (Chat, Incidents, Actions, Monitor, Memory) are described i
 - **Memory** — Runbooks and notes the agent reads and updates, shared across the org.
 - **Anywhere you already talk** — Slack, Microsoft Teams, and Google Chat.
 - **Your model** — OpenRouter, OpenAI, Anthropic, Gemini, Vertex AI, AWS Bedrock, or Ollama. See [LLM providers](/docs/integrations/llm-providers).
-- **Self-hosted** — Docker Compose or Helm. Credentials stay in Vault or AWS Secrets Manager. [Command safety](/docs/configuration/command-safety) checks every shell command.
+- **Self-hosted** — Docker Compose or Helm. Credentials stay in Vault or AWS Secrets Manager. [Command safety](/docs/configuration/command-safety) guardrails are on by default.
 
 ## Quick Links
 
@@ -40,7 +40,7 @@ The product surfaces (Chat, Incidents, Actions, Monitor, Memory) are described i
 ## Requirements
 
 - Docker and Docker Compose >= 28.x
-- At least one LLM API key (OpenRouter, OpenAI, Anthropic, Gemini, Vertex AI, Bedrock, or a local Ollama)
+- At least one LLM: an API key for OpenRouter, OpenAI, Anthropic, Gemini, Vertex AI, or Bedrock, or a reachable Ollama (`OLLAMA_BASE_URL`, no key)
 
 **No cloud provider accounts required** to get started. Cloud connectors are optional.
 

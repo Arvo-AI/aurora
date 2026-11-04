@@ -564,7 +564,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                 </a>
                 <span className="mx-2 text-muted-foreground/40">|</span>
                 <a
-                  href="https://github.com/Arvo-AI/aurora/blob/main/website/docs/integrations/connectors.md#atlassian-confluence--jira"
+                  href="https://arvo-ai.github.io/aurora/docs/integrations/connectors#atlassian-confluence-jira"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"

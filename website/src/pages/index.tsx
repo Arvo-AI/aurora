@@ -81,7 +81,7 @@ const FeatureList: FeatureItem[] = [
     title: 'Self-hosted',
     icon: '06',
     description:
-      'Docker or Helm. Vault for secrets. Command safety on every shell call. Apache 2.0.',
+      'Docker or Helm. Vault for secrets. Command safety guardrails on by default. Apache 2.0.',
   },
 ];
 

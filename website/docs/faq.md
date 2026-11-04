@@ -78,7 +78,7 @@ Yes. Install the in-cluster kubectl agent, or upload a kubeconfig for a cluster 
 
 ### Where are my credentials stored?
 
-All credentials are stored in HashiCorp Vault, not in the database. The database only stores references to Vault paths.
+Credentials are stored in the secrets backend, HashiCorp Vault by default or AWS Secrets Manager when `SECRETS_BACKEND=aws_secrets_manager`. The database only stores references to that backend.
 
 ### Is my data sent to external services?
 
@@ -89,7 +89,7 @@ Only when you explicitly query cloud providers or LLM services:
 
 ### Can I self-host everything?
 
-Yes. Aurora runs entirely on your infrastructure. Use Ollama, or point Bedrock and Vertex at accounts you control, when the model calls must stay inside your network.
+Yes. Aurora runs on your infrastructure. Ollama keeps model calls on that host. Bedrock and Vertex use public endpoints unless you add AWS PrivateLink or Private Service Connect. With `LLM_PROVIDER_MODE=ollama`, a model id that does not start with `ollama/` is sent to that model's own provider when its credentials are set.
 
 ## Development
 
