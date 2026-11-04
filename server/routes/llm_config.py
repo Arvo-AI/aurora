@@ -62,7 +62,8 @@ def picker_local_models(prefixes: list[str] | None, env: dict) -> list[str]:
     models: list[str] = []
     for var in ("MAIN_MODEL", "RCA_MODEL"):
         model = (env.get(var) or "").strip()
-        if model.lower().startswith("ollama/") and model not in models:
+        # A bare "ollama/" names no model, so the picker can't offer it.
+        if model.lower().startswith("ollama/") and model[len("ollama/"):] and model not in models:
             models.append(model)
     return models
 

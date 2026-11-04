@@ -69,6 +69,27 @@ class InputRailResult:
 # Call kwargs NeMo attaches that ``ollama.AsyncClient.chat()`` does not accept.
 OLLAMA_UNSUPPORTED_CALL_PARAMS = ("temperature", "top_p", "top_k", "max_tokens")
 
+# ChatOllama fields it copies into Ollama's ``options`` when the call passes none
+# (``ChatOllama._chat_params``, langchain-ollama 0.3.x).
+_OLLAMA_OPTION_FIELDS = (
+    "mirostat", "mirostat_eta", "mirostat_tau", "num_ctx", "num_gpu", "num_thread",
+    "num_predict", "repeat_last_n", "repeat_penalty", "temperature", "seed",
+    "tfs_z", "top_k", "top_p",
+)
+
+
+def _ollama_options(inner, stop, num_predict) -> dict:
+    """The options ChatOllama would send itself, with ``num_predict`` set.
+
+    ChatOllama reads the output limit only from ``options``, and a call-level
+    ``options`` replaces the one it builds from its fields, so start from those
+    fields to keep the model's own settings (``num_ctx``, ``temperature``, ``stop``).
+    """
+    options = {field: getattr(inner, field, None) for field in _OLLAMA_OPTION_FIELDS}
+    options["stop"] = stop if stop is not None else getattr(inner, "stop", None)
+    options["num_predict"] = num_predict
+    return {k: v for k, v in options.items() if v is not None}
+
 
 class _GuardrailsLLMCompat(BaseChatModel):
     """Adapt chat models for NeMo Guardrails self-check tasks.
@@ -109,6 +130,7 @@ class _GuardrailsLLMCompat(BaseChatModel):
     # ChatOllama forwards unknown call kwargs to ``ollama.AsyncClient.chat()``,
     # which raises ``TypeError`` on ``temperature`` and ``max_tokens``; the
     # instance already carries its own temperature in Ollama's ``options``.
+    # A dropped ``max_tokens`` is passed on as Ollama's ``num_predict``.
     drop_call_params: tuple = ()
 
     model_config = {"arbitrary_types_allowed": True}
@@ -123,11 +145,15 @@ class _GuardrailsLLMCompat(BaseChatModel):
             kwargs["max_output_tokens"] = kwargs.pop("max_tokens")
         return kwargs
 
-    def _prepare(self, kwargs: dict) -> dict:
-        """Apply the Gemini rename, then drop sampling params the model has rejected."""
+    def _prepare(self, kwargs: dict, stop=None) -> dict:
+        """Apply the Gemini rename, then drop params the model can't take or has rejected."""
         prepared = self._rename(kwargs)
         if self.drop_call_params and any(f in prepared for f in self.drop_call_params):
+            max_tokens = prepared.get("max_tokens")
             prepared = {k: v for k, v in prepared.items() if k not in self.drop_call_params}
+            # Keep the self-check's output budget (prompts.yml ``max_tokens``).
+            if "max_tokens" in self.drop_call_params and max_tokens is not None and "options" not in prepared:
+                prepared["options"] = _ollama_options(self.inner, stop, max_tokens)
         if self.drop_sampling and any(f in prepared for f in SAMPLING_FIELDS):
             prepared = {k: v for k, v in prepared.items() if k not in SAMPLING_FIELDS}
         return prepared
@@ -182,27 +208,27 @@ class _GuardrailsLLMCompat(BaseChatModel):
     def _generate(self, messages, stop=None, **kwargs):
         try:
             return self._flatten(
-                self.inner._generate(messages, stop=stop, **self._prepare(kwargs))
+                self.inner._generate(messages, stop=stop, **self._prepare(kwargs, stop))
             )
         except Exception as err:  # noqa: BLE001
             # Model removed temperature/top_p/top_k — drop them and retry once.
             if not self._note_sampling_rejection(err, kwargs):
                 raise
             return self._flatten(
-                self.inner._generate(messages, stop=stop, **self._prepare(kwargs))
+                self.inner._generate(messages, stop=stop, **self._prepare(kwargs, stop))
             )
 
     async def _agenerate(self, messages, stop=None, **kwargs):
         try:
             return self._flatten(
-                await self.inner._agenerate(messages, stop=stop, **self._prepare(kwargs))
+                await self.inner._agenerate(messages, stop=stop, **self._prepare(kwargs, stop))
             )
         except Exception as err:  # noqa: BLE001
             # Model removed temperature/top_p/top_k — drop them and retry once.
             if not self._note_sampling_rejection(err, kwargs):
                 raise
             return self._flatten(
-                await self.inner._agenerate(messages, stop=stop, **self._prepare(kwargs))
+                await self.inner._agenerate(messages, stop=stop, **self._prepare(kwargs, stop))
             )
 
 

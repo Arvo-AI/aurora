@@ -55,3 +55,8 @@ def test_no_local_models_without_ollama_in_the_picker():
     assert picker_local_models(["openai"], env) == []
     # Full-catalog modes (OpenRouter, Ollama mode, no keys) keep their existing behaviour.
     assert picker_local_models(None, env) == []
+
+
+def test_bare_ollama_prefix_is_not_a_model():
+    env = {"MAIN_MODEL": "ollama/", "RCA_MODEL": "ollama/qwen3:8b"}
+    assert picker_local_models(["ollama"], env) == ["ollama/qwen3:8b"]

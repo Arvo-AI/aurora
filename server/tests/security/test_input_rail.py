@@ -604,7 +604,7 @@ class TestGuardrailsLLMCompatOllamaParams:
         result = wrapper._generate([], stop=None, temperature=0.0, max_tokens=512)
 
         assert result.generations[0].message.content == "No"
-        assert inner.calls == [{}], "one clean call, no failed attempt first"
+        assert inner.calls == [{"options": {"num_predict": 512}}], "one clean call, no failed attempt first"
 
     def test_async_path_drops_ollama_params_too(self):
         inner = self._RejectsCallParams()
@@ -613,7 +613,7 @@ class TestGuardrailsLLMCompatOllamaParams:
         result = _run(wrapper._agenerate([], stop=None, temperature=0.0, max_tokens=512))
 
         assert result.generations[0].message.content == "No"
-        assert inner.calls == [{}]
+        assert inner.calls == [{"options": {"num_predict": 512}}]
 
     def test_other_kwargs_pass_through(self):
         inner = _RecordingInner("ok")
@@ -621,7 +621,30 @@ class TestGuardrailsLLMCompatOllamaParams:
 
         wrapper._generate([], stop=None, temperature=0.0, max_tokens=8, format="json")
 
-        assert inner.last_kwargs == {"format": "json"}
+        assert inner.last_kwargs == {"format": "json", "options": {"num_predict": 8}}
+
+    def test_output_limit_keeps_the_models_own_options(self):
+        """A call-level ``options`` replaces ChatOllama's, so its fields must be carried over."""
+        inner = _RecordingInner("ok")
+        inner.num_ctx = 8192
+        inner.temperature = 0.0
+        inner.num_predict = 64
+        inner.stop = None
+        wrapper = self._wrapper(inner, OLLAMA_UNSUPPORTED_CALL_PARAMS)
+
+        wrapper._generate([], stop=["\n"], temperature=0.0, max_tokens=512)
+
+        assert inner.last_kwargs == {
+            "options": {"num_ctx": 8192, "temperature": 0.0, "num_predict": 512, "stop": ["\n"]},
+        }
+
+    def test_no_options_without_an_output_limit(self):
+        inner = _RecordingInner("ok")
+        wrapper = self._wrapper(inner, OLLAMA_UNSUPPORTED_CALL_PARAMS)
+
+        wrapper._generate([], stop=None, temperature=0.0)
+
+        assert inner.last_kwargs == {}
 
     def test_cloud_models_keep_their_params(self):
         inner = _RecordingInner("ok")
