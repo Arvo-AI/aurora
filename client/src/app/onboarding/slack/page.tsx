@@ -16,6 +16,12 @@ import { useSlackSignInAvailable } from "@/app/sign-in/SlackSignIn"
 
 const ALERT_IDS = ["pagerduty", "datadog", "grafana", "incidentio", "opsgenie", "newrelic"]
 const ROOT_CAUSE_IDS = ["aws", "gcp", "azure", "kubectl", "github", "gitlab"]
+// These connect from ConnectorCard rather than a registry path.
+const TILE_HREFS: Record<string, string> = {
+  gcp: "/gcp/auth",
+  gitlab: "/gitlab/connect",
+  github: "/connectors?highlight=GitHub&connect=github",
+}
 const ALL_ALERT_IDS = new Set([...ALERT_IDS, "servicenow", "bigpanda", "dynatrace", "sentry", "splunk", "elastic", "coroot", "netdata", "cloudwatch", "thousandeyes"])
 const ALL_ROOT_CAUSE_IDS = new Set([...ROOT_CAUSE_IDS, "onprem", "bitbucket", "cloudflare", "flyio", "ovh", "scaleway"])
 
@@ -160,7 +166,7 @@ function ProviderTiles({ ids, connected }: Readonly<{ ids: string[]; connected: 
         return (
           <Link
             key={id}
-            href={c.path ?? "/connectors"}
+            href={TILE_HREFS[id] ?? c.path ?? "/connectors"}
             className={`group flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30 ${isOn ? "border-[#2eb67d]/40 bg-[#2eb67d]/[0.07] text-white" : "border-white/[0.08] bg-white/[0.02] text-white/80 hover:border-white/20 hover:bg-white/[0.05] hover:text-white"}`}
           >
             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-white p-1">

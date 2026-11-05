@@ -36,6 +36,7 @@ function syncLocalStorage(connectorId: string, connectorName: string, isConnecte
 export default function ConnectorsClient() {
   const searchParams = useSearchParams();
   const highlightConnector = searchParams.get("highlight") || "";
+  const openConnectorId = searchParams.get("connect");
   const [searchQuery, setSearchQuery] = useState(highlightConnector);
   const { toast } = useToast();
 
@@ -155,14 +156,14 @@ export default function ConnectorsClient() {
                     Installed
                   </h2>
                 </div>
-                <ConnectorGrid connectors={installedConnectors} connectedStatus={statuses} />
+                <ConnectorGrid connectors={installedConnectors} connectedStatus={statuses} openConnectorId={openConnectorId} />
               </div>
             )}
             
             {availableConnectors.length > 0 && (
               <div>
                 <h2 className="text-xl font-semibold mb-4">Available</h2>
-                <ConnectorGrid connectors={availableConnectors} connectedStatus={statuses} />
+                <ConnectorGrid connectors={availableConnectors} connectedStatus={statuses} openConnectorId={openConnectorId} />
               </div>
             )}
             

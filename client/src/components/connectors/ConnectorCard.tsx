@@ -95,15 +95,16 @@ function TeamsStatusBadge({ status }: { status: { connected?: boolean; setup_com
 interface ConnectorCardProps {
   connector: ConnectorConfig;
   connectedOverride?: boolean;
+  openOnMount?: boolean;
 }
 
-export default function ConnectorCard({ connector, connectedOverride }: ConnectorCardProps) {
+export default function ConnectorCard({ connector, connectedOverride, openOnMount }: ConnectorCardProps) {
   const router = useRouter();
   const { toast } = useToast();
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
   const userId = user?.id ?? null;
-  const [showGitHubDialog, setShowGitHubDialog] = useState(false);
+  const [showGitHubDialog, setShowGitHubDialog] = useState(Boolean(openOnMount) && connector.id === "github");
   const [showBitbucketDialog, setShowBitbucketDialog] = useState(false);
   const [showGcpDialog, setShowGcpDialog] = useState(false);
   const [showOvhDialog, setShowOvhDialog] = useState(false);
