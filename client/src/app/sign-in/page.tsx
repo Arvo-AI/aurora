@@ -202,7 +202,9 @@ function AuthPage() {
     setIsLoading(true)
     ;(async () => {
       try {
-        const panelShown = new Promise((resolve) => setTimeout(resolve, isSlackHandoff ? SLACK_HANDOFF_MIN_MS : 0))
+        const panelShown = isSlackHandoff
+          ? new Promise((resolve) => setTimeout(resolve, SLACK_HANDOFF_MIN_MS))
+          : Promise.resolve()
         const result = await signIn("handoff", { token: handoffToken, redirect: false })
         if (result?.ok) {
           await panelShown
