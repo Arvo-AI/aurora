@@ -17,6 +17,7 @@ from utils.ssh.session_reply import (
     SESSION_DROPPED,
     session_reply_result,
 )
+from utils.ssh.ssh_jump_parser import SSHJumpConfig, parse_ssh_jump_command
 
 # Pre-checks do not install Paramiko, so this test never imports ssh_utils.
 _SSH_UTILS = (
@@ -45,6 +46,8 @@ def _load_validate_and_test_ssh(paramiko_mod):
             namespace = {
                 "logger": logging.getLogger("test_ssh_connection_check"),
                 "parse_private_key": lambda _key: object(),
+                "parse_ssh_jump_command": parse_ssh_jump_command,
+                "SSHJumpConfig": SSHJumpConfig,
                 "paramiko": paramiko_mod,
                 "session_reply_result": session_reply_result,
                 "socket": socket,
@@ -192,3 +195,53 @@ def test_channel_open_timeout_fails_the_check():
     assert success is False
     assert error == CHANNEL_FAILED
     assert connected_as is None
+
+
+_LEAKED = "secret-detail-not-for-client"
+
+
+class _ProtocolErrorParamiko(_RejectedExecParamiko):
+    class _Client(_RejectedExecParamiko._Client):
+        def connect(self, **_kwargs):
+            raise _RejectedExecParamiko.SSHException(f"internal banner: {_LEAKED}")
+
+    SSHClient = _Client
+
+
+class _UnexpectedErrorParamiko(_RejectedExecParamiko):
+    class _Client(_RejectedExecParamiko._Client):
+        def connect(self, **_kwargs):
+            raise RuntimeError(_LEAKED)
+
+    SSHClient = _Client
+
+
+def test_protocol_errors_do_not_return_exception_text():
+    validate = _load_validate_and_test_ssh(_ProtocolErrorParamiko)
+    success, error, connected_as = validate("198.51.100.1", "aurora-ro", "not-a-key")
+    assert success is False
+    assert connected_as is None
+    assert _LEAKED not in error
+    assert error.startswith("SSH connection error.")
+
+
+def test_bad_jump_command_returns_the_parser_message():
+    validate = _load_validate_and_test_ssh(_RejectedExecParamiko)
+    success, error, connected_as = validate(
+        "198.51.100.1",
+        "aurora-ro",
+        "not-a-key",
+        jump_command="ssh -J",
+    )
+    assert success is False
+    assert connected_as is None
+    assert error == "Invalid SSH command: -J provided without value"
+
+
+def test_unexpected_errors_do_not_return_exception_text():
+    validate = _load_validate_and_test_ssh(_UnexpectedErrorParamiko)
+    success, error, connected_as = validate("198.51.100.1", "aurora-ro", "not-a-key")
+    assert success is False
+    assert connected_as is None
+    assert _LEAKED not in error
+    assert error.startswith("An unexpected error occurred")
