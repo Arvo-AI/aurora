@@ -301,7 +301,7 @@ export default function PagerDutyAuthPage() {
               loading={loading}
               error={null}
               onConnect={handleConnect}
-              onOAuthConnect={handleOAuthConnect}
+              onOAuthConnect={status?.oauthAvailable ? handleOAuthConnect : undefined}
             />
           ) : status ? (
             <div className="space-y-4">

@@ -68,7 +68,7 @@ Chat: Slack, Microsoft Teams, and Google Chat. Docs and tickets: Confluence, Jir
 
 ### Can I use Aurora with Kubernetes?
 
-Yes. Install the in-cluster kubectl agent, or upload a kubeconfig when the agent cannot be installed, such as restricted RBAC or no outbound access. See the [kubectl agent documentation](https://github.com/arvo-ai/aurora/blob/main/kubectl-agent/README.md).
+Yes. Install the in-cluster kubectl agent, or upload a kubeconfig when the agent cannot be installed, such as restricted RBAC or no outbound access. The [kubectl agent documentation](https://github.com/arvo-ai/aurora/blob/main/kubectl-agent/README.md) covers the agent. [Upload Kubeconfig](/docs/integrations/connectors#upload-kubeconfig) covers the fallback.
 
 ### What are Actions and Monitor?
 

@@ -145,12 +145,17 @@ def pagerduty_status(user_id):
     """Get PagerDuty connection status."""
     creds = get_token_data(user_id, "pagerduty")
     if not creds:
-        return jsonify({"connected": False})
+        # The OAuth button is hidden unless the server can actually start the flow.
+        return jsonify({"connected": False, "oauthAvailable": oauth_configured()})
 
     if creds.get("auth_type") == "oauth":
         success, creds = refresh_and_store_if_needed(user_id, creds)
         if not success:
-            return jsonify({"connected": False, "error": "OAuth token expired, please reconnect"})
+            return jsonify({
+                "connected": False,
+                "error": "OAuth token expired, please reconnect",
+                "oauthAvailable": oauth_configured(),
+            })
 
     return jsonify(_status_payload(creds))
 

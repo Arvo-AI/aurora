@@ -9,7 +9,7 @@ This page explains how to configure a GCP service account for Aurora that cannot
 
 ## Service account roles
 
-Grant these roles yourself when the service account must investigate without reading logs, Cloud SQL contents, or traces. Aurora does not assign this set. An OAuth connection creates a separate read-only service account and grants a broader set, including `roles/viewer` and `logging.viewer`. The BigQuery roles below can read table rows, which may contain PII.
+Grant these roles yourself when the service account must investigate without reading logs, Cloud SQL contents, or traces. Aurora does not assign this set. An OAuth connection creates a separate service account and grants a wider set, including `roles/viewer` and `roles/logging.viewer`. That account is not read-only: the same grant includes `roles/iam.serviceAccountUser` and `roles/iam.serviceAccountTokenCreator`, which can act as service accounts and mint short-lived credentials. The BigQuery roles below can read table rows, which may contain PII.
 
 ```bash
 export PROJECT_ID="your-project-id"

@@ -480,7 +480,7 @@ export default function AzureAuthPage() {
                     <div className="text-sm text-muted-foreground mt-1">
                       <p>- Azure CLI installed (<a href="https://docs.microsoft.com/en-us/cli/azure/install-azure-cli" target="_blank" rel="noopener noreferrer" className="underline text-primary hover:text-primary/80">install guide</a>)</p>
                       <p>- Logged into Azure: <code className="bg-card border border-border px-2 py-1 rounded text-foreground">az login</code></p>
-                      <p>- Owner or User Access Administrator on the subscriptions you want covered</p>
+                      <p>- Owner or User Access Administrator on every enabled subscription in the tenant. With a management group, that role has to be on the group, not only on a subscription</p>
                       <p>- Permission to register applications in Entra ID</p>
                     </div>
                   </div>

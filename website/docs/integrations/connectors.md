@@ -70,7 +70,7 @@ gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
 
 `roles/viewer` lists BigQuery datasets but cannot run queries. `bigquery.dataViewer` reads table rows. `bigquery.jobUser` creates the query job. Those are the project roles the Service Account tab asks for, together with `logging.viewer` and `monitoring.viewer`. `roles/viewer` already includes GKE and Compute Engine reads, so `container.viewer` and `compute.viewer` are not extra grants on this key.
 
-To list every project under an organization or folder, grant `roles/browser` there. It only lists projects. A folder binding does not cover sibling folders. Without it, Aurora only sees the project the key was created in.
+To list every project under an organization or folder, grant `roles/browser` there. It only lists projects. A folder binding does not cover sibling folders. Without that grant, Aurora lists the projects the key can already get: the project the key was created in, and any other project where the key already has a role such as `roles/viewer`.
 
 ##### 3. Download Key
 
@@ -227,7 +227,7 @@ Built-in roles only — no custom roles, and no `cluster-admin`. Contributor exc
 
 Azure keeps subscription access and directory access separate, and the script needs both:
 
-- **Owner** or **User Access Administrator** on the subscriptions you want covered, to assign the roles.
+- **Owner** or **User Access Administrator** on every enabled subscription in the tenant. That is the scope when you do not pass a management group. If you pass one, the same role has to be on the group. A subscription-level grant does not cover it.
 - Permission to **register applications** in Entra ID, to create the two service principals. Subscription Owner does *not* include this.
 
 If your tenant sets *Users can register applications* to **No**, ask an Entra ID admin to either change that setting or grant you the **Application Developer** role. The script checks this and stops before creating anything, so a missing permission costs you nothing but a re-run.
@@ -1114,7 +1114,7 @@ Data Center short links work correctly.
 
 ### PagerDuty
 
-API token, or OAuth. OAuth needs `PAGERDUTY_CLIENT_ID` and `PAGERDUTY_CLIENT_SECRET` on the server. The token form works without them.
+API token, or OAuth. OAuth needs `PAGERDUTY_CLIENT_ID`, `PAGERDUTY_CLIENT_SECRET`, and `NEXT_PUBLIC_BACKEND_URL` on the server. The Connect with OAuth button stays hidden until all three are set. The token form works without them.
 
 #### Option A: OAuth
 
@@ -1606,7 +1606,7 @@ kubectl get pods -n default -l app=aurora-kubectl-agent
 kubectl logs -n default -l app=aurora-kubectl-agent --tail=50
 ```
 
-### Upload Kubeconfig
+### Upload Kubeconfig {#upload-kubeconfig}
 
 Use this when the agent cannot be installed (restricted RBAC, no outbound from the cluster). Select one or more `.yaml` or `.yml` kubeconfig files. Aurora runs kubectl with those credentials. Remove a cluster later from the Kubernetes manage page.
 
@@ -1748,7 +1748,7 @@ Grant these scopes:
 
 #### Option B: OAuth (optional)
 
-Use OAuth if you prefer a per-user consent flow. The OAuth tab is always on the Bitbucket page. It needs a registered OAuth consumer.
+Use OAuth if you prefer a per-user consent flow. The OAuth tab is always on the Bitbucket page. Connect works only when `BB_OAUTH_CLIENT_ID` and `BB_OAUTH_CLIENT_SECRET` are set. Without them the tab is still there, and Connect returns "Bitbucket OAuth is not available. Use an API token instead."
 
 ##### 1. Create OAuth Consumer
 
