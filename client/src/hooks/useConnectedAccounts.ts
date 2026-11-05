@@ -1,4 +1,3 @@
-import { isOvhEnabled } from '@/lib/feature-flags';
 import { useQuery } from '@/lib/query';
 import {
   CACHE_KEY,
@@ -52,11 +51,7 @@ export function useConnectedAccounts() {
     providerIds.includes(id.toLowerCase());
 
   const infraProviders: ConnectedProvider[] = providerIds
-    .filter(id => {
-      if (!(id in INFRA_PROVIDERS)) return false;
-      if (id === 'ovh' && !isOvhEnabled()) return false;
-      return true;
-    })
+    .filter(id => id in INFRA_PROVIDERS)
     .map(id => ({
       id,
       name: INFRA_PROVIDERS[id].name,

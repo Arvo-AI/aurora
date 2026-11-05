@@ -472,11 +472,9 @@ from routes.cloudbees import bp as cloudbees_bp  # noqa: F401
 app.register_blueprint(cloudbees_bp, url_prefix="/cloudbees")
 
 # --- Spinnaker Integration Routes ---
-from utils.flags.feature_flags import is_spinnaker_enabled
-if is_spinnaker_enabled():
-    from routes.spinnaker import bp as spinnaker_bp
-    import routes.spinnaker.tasks  # noqa: F401
-    app.register_blueprint(spinnaker_bp, url_prefix="/spinnaker")
+from routes.spinnaker import bp as spinnaker_bp
+import routes.spinnaker.tasks  # noqa: F401
+app.register_blueprint(spinnaker_bp, url_prefix="/spinnaker")
 
 # --- Grafana Integration Routes ---
 from routes.grafana import bp as grafana_bp  # noqa: F401
@@ -575,14 +573,10 @@ from routes.jira import bp as jira_bp  # noqa: F401
 app.register_blueprint(jira_bp, url_prefix="/jira")
 
 # --- SharePoint Integration Routes ---
-from utils.flags.feature_flags import is_sharepoint_enabled
-if is_sharepoint_enabled():
-    from routes.sharepoint import bp as sharepoint_bp  # noqa: F401
-    app.register_blueprint(sharepoint_bp, url_prefix="/sharepoint")
+from routes.sharepoint import bp as sharepoint_bp  # noqa: F401
+app.register_blueprint(sharepoint_bp, url_prefix="/sharepoint")
 
 # --- Notion Integration Routes ---
-# Always registered (no feature flag): frontend gates via isNotionEnabled(),
-# but backend routes must remain reachable so OAuth callbacks work in all envs.
 from routes.notion import bp as notion_bp  # noqa: F401
 app.register_blueprint(notion_bp, url_prefix="/notion")
 
@@ -685,10 +679,8 @@ from routes.azure import bp as azure_bp
 app.register_blueprint(azure_bp)
 
 # --- OVH Routes ---
-from utils.flags.feature_flags import is_ovh_enabled
-if is_ovh_enabled():
-    from routes.ovh import ovh_bp
-    app.register_blueprint(ovh_bp, url_prefix="/ovh_api")
+from routes.ovh import ovh_bp
+app.register_blueprint(ovh_bp, url_prefix="/ovh_api")
 
 # --- Scaleway Routes ---
 from routes.scaleway import scaleway_bp

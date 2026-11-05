@@ -9,7 +9,6 @@ import { PagerDutyNotesCard } from "@/components/pagerduty/PagerDutyNotesCard";
 import { PagerDutyWebhookStep } from "@/components/pagerduty/PagerDutyWebhookStep";
 import { TokenInputModal } from "@/components/pagerduty/TokenInputModal";
 import { ConnectionLoadingOverlay } from "@/components/ui/connection-loading-overlay";
-import { isPagerDutyOAuthEnabled } from "@/lib/feature-flags";
 import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
 import { getUserFriendlyError } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
@@ -302,7 +301,7 @@ export default function PagerDutyAuthPage() {
               loading={loading}
               error={null}
               onConnect={handleConnect}
-              onOAuthConnect={isPagerDutyOAuthEnabled() ? handleOAuthConnect : undefined}
+              onOAuthConnect={handleOAuthConnect}
             />
           ) : status ? (
             <div className="space-y-4">

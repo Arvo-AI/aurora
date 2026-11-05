@@ -10,7 +10,6 @@ import os
 import urllib.parse
 from flask import Blueprint, jsonify, request, redirect
 
-from utils.flags.feature_flags import is_pagerduty_oauth_enabled
 from utils.web.public_url import external_backend_url
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -22,7 +21,12 @@ from utils.auth.stateless_auth import (
     store_org_preference,
 )
 from utils.log_sanitizer import sanitize
-from routes.pagerduty.oauth_utils import get_auth_url, exchange_code_for_token, refresh_and_store_if_needed
+from routes.pagerduty.oauth_utils import (
+    exchange_code_for_token,
+    get_auth_url,
+    oauth_configured,
+    refresh_and_store_if_needed,
+)
 from routes.pagerduty.pagerduty_helpers import (
     PD_READ_ONLY_ROLES,
     PagerDutyClient,
@@ -143,7 +147,7 @@ def pagerduty_status(user_id):
     if not creds:
         return jsonify({"connected": False})
 
-    if creds.get("auth_type") == "oauth" and is_pagerduty_oauth_enabled():
+    if creds.get("auth_type") == "oauth":
         success, creds = refresh_and_store_if_needed(user_id, creds)
         if not success:
             return jsonify({"connected": False, "error": "OAuth token expired, please reconnect"})
@@ -226,8 +230,8 @@ def pagerduty_disconnect(user_id):
 @require_permission("connectors", "write")
 def oauth_login(user_id):
     """Initiate OAuth flow."""
-    if not is_pagerduty_oauth_enabled():
-        return jsonify({"error": "PagerDuty OAuth is not enabled"}), 403
+    if not oauth_configured():
+        return jsonify({"error": "PagerDuty OAuth credentials are not configured"}), 503
     
     try:
         oauth_url = get_auth_url(state=urllib.parse.quote(user_id))
@@ -239,14 +243,12 @@ def oauth_login(user_id):
 @pagerduty_bp.route("/oauth/callback", methods=["GET"])
 def oauth_callback():
     """Handle OAuth callback."""
-    if not is_pagerduty_oauth_enabled():
-        callback_url = f"{FRONTEND_URL}/pagerduty/auth/callback"
-        return redirect(f"{callback_url}?oauth=failed&error=oauth_not_enabled")
+    callback_url = f"{FRONTEND_URL}/pagerduty/auth/callback"
+    if not oauth_configured():
+        return redirect(f"{callback_url}?oauth=failed&error=oauth_not_configured")
     error = request.args.get("error")
     code = request.args.get("code")
     state = request.args.get("state")
-    
-    callback_url = f"{FRONTEND_URL}/pagerduty/auth/callback"
     
     if error or not code or not state:
         # Use a fixed error code rather than echoing user-provided error string
@@ -294,8 +296,8 @@ def oauth_callback():
 
 def _oauth_client_for(user_id: str, creds: dict):
     """(client, creds, error_response) for an OAuth connection; refreshes and persists the token first."""
-    if not is_pagerduty_oauth_enabled():
-        return None, creds, (jsonify({"error": "PagerDuty OAuth is not enabled", "code": "oauth_disabled"}), 403)
+    if not oauth_configured():
+        return None, creds, (jsonify({"error": "PagerDuty OAuth credentials are not configured", "code": "oauth_not_configured"}), 503)
     success, creds = refresh_and_store_if_needed(user_id, creds)
     if not success:
         return None, creds, (jsonify({"error": "OAuth token expired, please reconnect", "code": "token_expired"}), 401)

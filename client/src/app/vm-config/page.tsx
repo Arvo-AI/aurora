@@ -37,7 +37,6 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useUserId } from "@/hooks/use-user-id";
-import { isOvhEnabled } from "@/lib/feature-flags";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 type VMSource = "auto" | "manual";
@@ -198,29 +197,26 @@ export default function VMConfig() {
   const fetchAutoVms = async () => {
     const all: VM[] = [];
     
-    // OVH (only if feature flag is enabled)
-    if (isOvhEnabled()) {
-      try {
-        const ovhResponse = await fetch(`/api/proxy/ovh/instances`, {
-        });
-        if (ovhResponse.ok) {
-          const ovhData = await ovhResponse.json();
-          const ovhVMs: VM[] = (ovhData.instances || []).map((instance: any) => ({
-            id: `ovh-${instance.id}`,
-            name: instance.name,
-            platform: "OVH",
-            ipAddress: instance.ipAddresses?.[0]?.ip || "N/A",
-            sshKeyConfigured: !!instance.sshConfig,
-            region: instance.region,
-            status: instance.status,
-            imageName: instance.imageName,
-            source: "auto",
-          }));
-          all.push(...ovhVMs);
-        }
-      } catch (err) {
-        console.error("Error fetching OVH VMs:", err);
+    try {
+      const ovhResponse = await fetch(`/api/proxy/ovh/instances`, {
+      });
+      if (ovhResponse.ok) {
+        const ovhData = await ovhResponse.json();
+        const ovhVMs: VM[] = (ovhData.instances || []).map((instance: any) => ({
+          id: `ovh-${instance.id}`,
+          name: instance.name,
+          platform: "OVH",
+          ipAddress: instance.ipAddresses?.[0]?.ip || "N/A",
+          sshKeyConfigured: !!instance.sshConfig,
+          region: instance.region,
+          status: instance.status,
+          imageName: instance.imageName,
+          source: "auto",
+        }));
+        all.push(...ovhVMs);
       }
+    } catch (err) {
+      console.error("Error fetching OVH VMs:", err);
     }
 
     // Scaleway

@@ -31,7 +31,6 @@ A read-only or account-level key still works for reading incidents and triggerin
 #### 2. Configure `.env`
 
 ```bash
-NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=true
 PAGERDUTY_CLIENT_ID=your-client-id
 PAGERDUTY_CLIENT_SECRET=your-client-secret
 ```
@@ -99,7 +98,7 @@ Webhook URL format: `https://your-aurora-domain/pagerduty/webhook/{user_id}`
 
 ## Troubleshooting
 
-**"PagerDuty OAuth is not enabled"** — Set `NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=true`
+**"PagerDuty OAuth credentials are not configured"** — Set `PAGERDUTY_CLIENT_ID` and `PAGERDUTY_CLIENT_SECRET`
 
 **"Missing OAuth credentials"** — Verify all `PAGERDUTY_*` env vars are set
 

@@ -443,8 +443,7 @@ See the [GitHub connector setup walkthroughs](../integrations/connectors.md#gith
 ### Bitbucket
 
 Bitbucket connects via a scoped API token entered in the UI (no env vars) or
-optional OAuth (`BB_OAUTH_CLIENT_ID` / `BB_OAUTH_CLIENT_SECRET` +
-`NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH=true`).
+optional OAuth (`BB_OAUTH_CLIENT_ID` / `BB_OAUTH_CLIENT_SECRET`).
 
 **Incident Prevention on Bitbucket** needs no additional environment
 variables: connect Bitbucket, flip the per-repo **Incident Prevention**
@@ -512,12 +511,10 @@ GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH` | `false` | Enable PagerDuty OAuth in UI |
 | `PAGERDUTY_CLIENT_ID` | - | PagerDuty OAuth Client ID |
 | `PAGERDUTY_CLIENT_SECRET` | - | PagerDuty OAuth Client Secret |
 
 ```bash
-NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=true
 PAGERDUTY_CLIENT_ID=your-client-id
 PAGERDUTY_CLIENT_SECRET=your-client-secret
 ```
@@ -528,7 +525,6 @@ OAuth now requests `incidents.write` (for posting RCA notes); register it on the
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEXT_PUBLIC_ENABLE_OVH` | `false` | Enable OVH connector in UI |
 | `OVH_EU_CLIENT_ID` | - | OVH EU region Client ID |
 | `OVH_EU_CLIENT_SECRET` | - | OVH EU region Client Secret |
 | `OVH_CA_CLIENT_ID` | - | OVH CA region Client ID |
@@ -537,7 +533,6 @@ OAuth now requests `incidents.write` (for posting RCA notes); register it on the
 | `OVH_US_CLIENT_SECRET` | - | OVH US region Client Secret |
 
 ```bash
-NEXT_PUBLIC_ENABLE_OVH=true
 OVH_EU_CLIENT_ID=your-eu-client-id
 OVH_EU_CLIENT_SECRET=your-eu-client-secret
 ```
@@ -562,13 +557,11 @@ CONFLUENCE_CLIENT_SECRET=your-client-secret
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEXT_PUBLIC_ENABLE_SHAREPOINT` | `false` | Enable SharePoint connector in UI |
 | `SHAREPOINT_CLIENT_ID` | - | Azure App Client ID |
 | `SHAREPOINT_CLIENT_SECRET` | - | Azure App Client Secret |
 | `SHAREPOINT_TENANT_ID` | `common` | Azure Tenant ID |
 
 ```bash
-NEXT_PUBLIC_ENABLE_SHAREPOINT=true
 SHAREPOINT_CLIENT_ID=your-client-id
 SHAREPOINT_CLIENT_SECRET=your-client-secret
 SHAREPOINT_TENANT_ID=your-tenant-id
