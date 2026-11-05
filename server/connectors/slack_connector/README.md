@@ -23,7 +23,7 @@ OAuth 2.0 authentication for Slack workspaces.
    - `channels:manage` — create channels, invite users, set topics
    - `channels:read` — list public channels
    - `channels:history` — read public channel history
-   - `groups:read`, `groups:history`, `groups:write` — private channels
+   - `groups:read`, `groups:history` — private channels
    - `im:write`, `im:history` — direct messages
    - `mpim:write`, `mpim:history` — group direct messages
    - `users:read`, `users:read.email` — read user info / email

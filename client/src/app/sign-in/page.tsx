@@ -9,6 +9,7 @@ import dynamic from "next/dynamic"
 import { useDarkPageBackground } from "@/hooks/useDarkPageBackground"
 import { usePasswordReset, usePasswordResetAvailable } from "@/hooks/usePasswordReset"
 import { ForgotPasswordPanel, ResetPasswordPanel } from "./PasswordResetPanels"
+import { SlackHandoffPanel, ContinueWithSlack, AddAuroraToSlack, useSlackSignInAvailable, SLACK_ERRORS, SLACK_RESUME_KEY, resumeSlackConnect } from "./SlackSignIn"
 
 const AuroraShader = dynamic(() => import('@/app/components/AuroraShader'), { ssr: false })
 
@@ -68,8 +69,9 @@ const SSO_ERRORS: Record<string, string> = {
 
 const QUERY_ERRORS: Record<string, string> = {
   // GitHub email already has an (unlinked) Aurora account — sign in normally instead
-  account_exists: "An account with your GitHub email already exists. Sign in below, then finish connecting GitHub from the Connectors page.",
+  account_exists: "An account with your email already exists. Sign in below, then finish connecting from the Connectors page.",
   ...SSO_ERRORS,
+  ...SLACK_ERRORS,
 }
 
 function errorFromQuery(code: string | null): string | null {
@@ -87,6 +89,14 @@ function getInitialMode(searchParams: URLSearchParams): AuthMode {
   const mode = searchParams.get("mode")
   // Anything unrecognized (or absent) lands on sign-in rather than a blank panel.
   return AUTH_MODES.find((m) => m === mode) ?? "signin"
+}
+
+// Where a redeemed one-time login lands, by the flow that minted it.
+function handoffDestination(via: string | null, slackAuth: string | null): string {
+  if (via === "slack") return `/onboarding/slack?slack_auth=${slackAuth === "failed" ? "failed" : "success"}`
+  if (via === "slack_join") return "/onboarding/slack?joined=1"
+  if (via === "sso" || via === "slack_signin") return "/"
+  return "/connectors?installed=github"
 }
 
 // Same-origin paths only — "//host" is protocol-relative and would leave the app.
@@ -175,9 +185,15 @@ function AuthPage() {
   // again". The panel stays up through the redirect; only a failure
   // reveals the form (with the reason).
   // SSO logins reuse the same handoff; they land on the app, not GitHub setup.
+  const slackSignIn = useSlackSignInAvailable(mode === "signin")
   const handoffAttempted = useRef(false)
   const [handoffInFlight, setHandoffInFlight] = useState(false)
-  const isSsoHandoff = searchParams.get("via") === "sso"
+  // Read once: the redeem strips these from the URL, and the panel copy must
+  // not flip to another flow's text while the browser is navigating away.
+  const [handoffVia] = useState(() => searchParams.get("via"))
+  const [handoffSlackAuth] = useState(() => searchParams.get("slack_auth"))
+  const isSsoHandoff = handoffVia === "sso"
+  const isSlackHandoff = handoffVia?.startsWith("slack") ?? false
   useEffect(() => {
     const handoffToken = searchParams.get("handoff")
     if (!handoffToken || handoffAttempted.current) return
@@ -188,7 +204,7 @@ function AuthPage() {
       try {
         const result = await signIn("handoff", { token: handoffToken, redirect: false })
         if (result?.ok) {
-          globalThis.location.href = isSsoHandoff ? "/" : "/connectors?installed=github"
+          globalThis.location.href = handoffDestination(handoffVia, handoffSlackAuth)
         } else {
           setHandoffInFlight(false)
           setError("This sign-in link has expired. Please sign in below.")
@@ -200,6 +216,7 @@ function AuthPage() {
         const url = new URL(globalThis.location.href)
         url.searchParams.delete("handoff")
         url.searchParams.delete("via")
+        url.searchParams.delete("slack_auth")
         globalThis.history.replaceState(null, "", url.toString())
         setIsLoading(false)
       }
@@ -209,8 +226,11 @@ function AuthPage() {
 
   // ?error=<code> from the GitHub signup or SAML callbacks.
   useEffect(() => {
-    const message = errorFromQuery(searchParams.get("error"))
+    const code = searchParams.get("error")
+    const message = errorFromQuery(code)
     if (message) setError(message)
+    // Their email already had an account: finish the Slack install right after they sign in.
+    if (code === "slack_account_exists") sessionStorage.setItem(SLACK_RESUME_KEY, "1")
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
@@ -260,6 +280,7 @@ function AuthPage() {
       } else if (result?.error) {
         setError("Invalid email or password")
       } else if (result?.ok) {
+        if (await resumeSlackConnect()) return
         router.push(callbackUrl)
         router.refresh()
       }
@@ -496,7 +517,9 @@ function AuthPage() {
             </div>
           </div>
 
-          {handoffInFlight && (
+          {handoffInFlight && isSlackHandoff && <SlackHandoffPanel via={handoffVia} />}
+
+          {handoffInFlight && !isSlackHandoff && (
             <div className="space-y-8" aria-live="polite">
               <div>
                 <h2 className="text-2xl font-semibold text-white">{isSsoHandoff ? "Signing you in" : "Setting up your account"}</h2>
@@ -532,13 +555,17 @@ function AuthPage() {
                   </div>
                   {error && <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3"><p className="text-sm text-red-400">{error}</p></div>}
                   {notice && !error && <div className="rounded-lg bg-white/[0.04] border border-white/[0.12] px-4 py-3"><p className="text-sm text-[#bbb]">{notice}</p></div>}
+                  {searchParams.get("error") === "slack_workspace_not_connected" && <AddAuroraToSlack />}
                   <button type="submit" disabled={isLoading} className="w-full py-2.5 px-4 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#0a0a0a] disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
                     {isLoading ? <span className="flex items-center justify-center gap-2"><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>Signing in...</span> : "Sign in"}
                   </button>
                 </form>
-                <button type="button" onClick={() => switchMode('sso')} disabled={isLoading} className="w-full py-2.5 px-4 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm font-medium hover:bg-white/[0.06] focus:outline-none focus:ring-2 focus:ring-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
-                  Sign in with SSO
-                </button>
+                <div className="space-y-2.5">
+                  {slackSignIn && <ContinueWithSlack disabled={isLoading} />}
+                  <button type="button" onClick={() => switchMode('sso')} disabled={isLoading} className="w-full py-2.5 px-4 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-sm font-medium hover:bg-white/[0.06] focus:outline-none focus:ring-2 focus:ring-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
+                    Sign in with SSO
+                  </button>
+                </div>
                 <p className="text-center text-sm text-[#555]">Don&apos;t have an account?{" "}<button onClick={() => switchMode('signup')} className="text-white/80 hover:text-white transition-colors">Sign up</button></p>
                 <div className="pt-6 border-t border-white/[0.06]">
                   <p className="text-center text-xs text-[#444]">By signing in, you agree to our{" "}<Link href="/terms" className="text-[#666] hover:text-white/60 transition-colors">Terms</Link>{" "}and{" "}<Link href="/terms" className="text-[#666] hover:text-white/60 transition-colors">Privacy Policy</Link></p>

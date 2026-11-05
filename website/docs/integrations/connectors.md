@@ -702,7 +702,6 @@ In **OAuth & Permissions** > **Scopes** > **Bot Token Scopes**, add (these must 
 | `channels:history` | Read public channel messages |
 | `groups:read` | List private channels |
 | `groups:history` | Read private channel messages |
-| `groups:write` | Create private channels |
 | `im:write` | Send direct messages |
 | `im:history` | Read direct messages |
 | `mpim:write` | Send group direct messages |
@@ -724,6 +723,10 @@ In **Event Subscriptions**, toggle **Enable Events** on.
 |-------|---------|
 | `app_mention` | Aurora replies when @mentioned (required) |
 | `member_joined_channel` | *Instant* activation of channels Aurora is added to, e.g. incident.io channels (optional — the connector page also reconciles membership on load) |
+| `app_home_opened` | Shows the setup checklist and demo button on Aurora's **Home** tab (optional) |
+
+For the Home tab and the welcome DM, also open **App Home** and turn on the
+**Home Tab** and the **Messages Tab**.
 
 Save changes. If the app is already installed, Slack will prompt you to
 **reinstall** so the new events and scopes take effect.
