@@ -22,6 +22,7 @@ from utils.auth.stateless_auth import set_rls_context, get_org_id_for_user
 from connectors.google_chat_connector.client import get_chat_app_client
 from connectors.slack_connector.client import get_slack_client_for_user
 from utils.db.connection_pool import db_pool
+from chat.intake_limit import consume_background_chat_slot
 from chat.investigation_timeout import (
     investigation_soft_timeout_seconds,
     investigation_stale_after_seconds,
@@ -316,9 +317,6 @@ def _ensure_llm_context_history(
         return None
 
 
-_RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
-_RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
-
 # RCA sources that use rca_context in system prompt
 _RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'elastic', 'slack', 'teams', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'jira', 'servicenow', 'action'}
 
@@ -343,34 +341,12 @@ if _redis_client is None:
 
 
 def is_background_chat_allowed(user_id: str) -> bool:
-    """Check if user is allowed to create another background chat using Redis.
-    
-    Uses Redis INCR with expiration for counter-based rate limiting.
-    Allows up to 5 background chats per 5 minute window.
-    This prevents alert floods from creating dozens of expensive RCA chats.
-    
-    Args:
-        user_id: The user ID
-        
-    Returns:
-        True if allowed, False if rate limited
+    """True when this user may start another background investigation.
+
+    Redis counter over a fixed 5-minute window. Override the cap with
+    BACKGROUND_CHAT_RATE_LIMIT_MAX (default 20, clamped to 1–1000).
     """
-    key = f"background_chat_rate_limit:{user_id}"
-    
-    # Increment counter and get new value
-    count = _redis_client.incr(key)
-    
-    # Set expiration on first request in window
-    if count == 1:
-        _redis_client.expire(key, _RATE_LIMIT_WINDOW_SECONDS)
-    
-    if count > _RATE_LIMIT_MAX_REQUESTS:
-        ttl = _redis_client.ttl(key)
-        logger.warning(f"[BackgroundChat] Rate limited user {user_id} - {count}/{_RATE_LIMIT_MAX_REQUESTS} requests, {ttl}s remaining")
-        return False
-    
-    logger.debug(f"[BackgroundChat] User {user_id} request {count}/{_RATE_LIMIT_MAX_REQUESTS}")
-    return True
+    return consume_background_chat_slot(user_id, _redis_client)
 
 
 def _get_connected_integrations(user_id: str) -> Dict[str, bool]:

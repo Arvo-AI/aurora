@@ -287,7 +287,7 @@ def process_netdata_alert(
                         # Trigger background chat for RCA if enabled (only for new alerts)
                         if should_trigger_background_chat(user_id, payload):
                             try:
-                                # Rate limit check - max 1 background chat per user per 5 minutes
+                                # Shared intake cap — skip when this user is already at the limit.
                                 if not is_background_chat_allowed(user_id):
                                     logger.info(
                                         "[NETDATA][ALERT] Skipping background RCA - rate limited for user %s",
