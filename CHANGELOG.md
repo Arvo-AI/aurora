@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Command safety judge: Haiku on Bedrock sometimes returns only `observation`,
+  with `thought` and `conclusion` written as XML inside that string. Those
+  payloads are read as a verdict instead of failing closed, and the prompt
+  no longer also asks for a raw JSON object.
+
 ## [1.5.16] - 2026-11-03
 
 ### Fixed

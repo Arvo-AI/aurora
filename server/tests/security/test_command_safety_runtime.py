@@ -23,8 +23,10 @@ if os.path.abspath(_server_dir) not in sys.path:
 
 from utils.security import command_safety  # noqa: E402
 from utils.security.command_safety import (  # noqa: E402
+    SYSTEM_PROMPT,
     SafetyVerdict,
     _fingerprint,
+    _verdict_from_payload,
     check_command_safety,
 )
 
@@ -169,6 +171,93 @@ class TestMalformedPayloadBlocks:
 
         assert v.conclusion is True
         assert v.observation == "error"
+
+
+class TestTaggedToolPayload:
+    """Haiku on Bedrock sometimes puts thought and conclusion inside observation."""
+
+    def test_prompt_asks_for_the_tool_call_only(self):
+        assert "Return a JSON object" not in SYSTEM_PROMPT
+        assert '{"observation"' not in SYSTEM_PROMPT
+        assert "tool call is the only format" in SYSTEM_PROMPT
+
+    def test_both_fields_tagged_inside_observation(self):
+        verdict = _verdict_from_payload({
+            "observation": (
+                'Lists pods in the namespace. '
+                'name="thought">Read-only diagnostic.</parameter> '
+                'name="conclusion">false'
+            ),
+        })
+
+        assert verdict is not None
+        assert verdict.conclusion is False
+        assert verdict.thought == "Read-only diagnostic."
+        assert verdict.observation == "Lists pods in the namespace."
+
+    def test_conclusion_tag_keeps_a_real_thought_argument(self):
+        verdict = _verdict_from_payload({
+            "observation": 'Lists pods. name="conclusion">false',
+            "thought": "Read-only.",
+        })
+
+        assert verdict is not None
+        assert verdict.conclusion is False
+        assert verdict.thought == "Read-only."
+
+    def test_parameter_tags_with_a_block(self):
+        verdict = _verdict_from_payload({
+            "observation": (
+                '<parameter name="observation">Compiles and runs a binary.</parameter>'
+                '<parameter name="thought">Executing untrusted code.</parameter>'
+                '<parameter name="conclusion">true</parameter>'
+            ),
+        })
+
+        assert verdict is not None
+        assert verdict.conclusion is True
+        assert verdict.thought == "Executing untrusted code."
+        assert verdict.observation == "Compiles and runs a binary."
+
+    def test_missing_fields_without_tags_are_not_a_verdict(self):
+        assert _verdict_from_payload({"observation": "missing fields"}) is None
+
+    def test_call_llm_uses_the_tagged_payload(self, monkeypatch):
+        raw = MagicMock()
+        raw.tool_calls = [{
+            "name": "SafetyVerdict",
+            "args": {
+                "observation": 'Lists pods. name="thought">Read-only.</parameter> name="conclusion">false',
+            },
+        }]
+        raw.invalid_tool_calls = []
+        raw.content = ""
+        llm = MagicMock()
+        llm.invoke.return_value = {"raw": raw, "parsed": None, "parsing_error": ValueError("Field required")}
+        monkeypatch.setattr(command_safety, "_create_safety_llm", lambda: llm)
+        monkeypatch.setattr(command_safety, "_track_usage", lambda *a, **k: None)
+
+        verdict = command_safety._call_llm("prompt", None, None)
+
+        assert verdict.conclusion is False
+        assert verdict.thought == "Read-only."
+
+    def test_call_llm_still_fails_closed_when_the_payload_cannot_be_read(self, monkeypatch):
+        raw = MagicMock()
+        raw.tool_calls = [{"name": "SafetyVerdict", "args": {"observation": "missing fields"}}]
+        raw.invalid_tool_calls = []
+        raw.content = ""
+        llm = MagicMock()
+        llm.invoke.return_value = {
+            "raw": raw,
+            "parsed": None,
+            "parsing_error": ValueError("Field required"),
+        }
+        monkeypatch.setattr(command_safety, "_create_safety_llm", lambda: llm)
+        monkeypatch.setattr(command_safety, "_track_usage", lambda *a, **k: None)
+
+        with pytest.raises(ValueError, match="Field required"):
+            command_safety._call_llm("prompt", None, None)
 
 
 # ---------------------------------------------------------------------------
