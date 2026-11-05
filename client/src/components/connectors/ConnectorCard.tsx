@@ -98,6 +98,14 @@ interface ConnectorCardProps {
   openOnMount?: boolean;
 }
 
+// Otherwise the dialog reopens by itself when the card next mounts.
+function clearConnectParam() {
+  const url = new URL(globalThis.location.href);
+  if (!url.searchParams.has("connect")) return;
+  url.searchParams.delete("connect");
+  globalThis.history.replaceState(null, "", url.toString());
+}
+
 export default function ConnectorCard({ connector, connectedOverride, openOnMount }: ConnectorCardProps) {
   const router = useRouter();
   const { toast } = useToast();
@@ -521,6 +529,7 @@ export default function ConnectorCard({ connector, connectedOverride, openOnMoun
         showNotionDialog={showNotionDialog}
         onGitHubDialogChange={(open) => {
           setShowGitHubDialog(open);
+          if (!open) clearConnectParam();
           if (!open) {
             checkGitHubStatus();
             window.dispatchEvent(new Event('providerStateChanged'));
@@ -537,7 +546,10 @@ export default function ConnectorCard({ connector, connectedOverride, openOnMoun
         onOvhDialogChange={setShowOvhDialog}
         onScalewayDialogChange={setShowScalewayDialog}
         onNotionDialogChange={setShowNotionDialog}
-        onGitHubDialogClose={() => setShowGitHubDialog(false)}
+        onGitHubDialogClose={() => {
+          setShowGitHubDialog(false);
+          clearConnectParam();
+        }}
       />
 
       <DisconnectConfirmDialog
