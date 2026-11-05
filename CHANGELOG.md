@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.17] - 2026-11-05
+
+### Added
+- Slack: one-click "Add to Slack" signup, Sign in with Slack, a welcome DM,
+  an App Home setup checklist, and a sample demo incident. Hosted only
+  (`HOSTED_SIGNUP_ENABLED=true` plus Slack OAuth credentials). Self-hosted
+  installs keep invite-only registration. `MARKETING_SITE_URL` sets where a
+  cancelled install returns to.
+
+### Changed
+- Slack: the `groups:write` scope is no longer requested.
+- Database: `users` gains `slack_team_id` and `slack_user_id`, added
+  automatically at startup.
+
+### Fixed
+- Chat: retry when Bedrock rejects a forced `tool_choice`.
+
 ## [1.5.16] - 2026-11-03
 
 ### Fixed
