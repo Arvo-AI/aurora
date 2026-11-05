@@ -392,7 +392,9 @@ def initialize_tables():
                         received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         processed_at TIMESTAMP NULL,
                         status VARCHAR(20) NOT NULL DEFAULT 'received',
-                        error TEXT NULL
+                        error TEXT NULL,
+                        repo_full_name VARCHAR(255) NULL,
+                        gating_outcome VARCHAR(32) NULL
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_received_at
@@ -1928,6 +1930,20 @@ def initialize_tables():
                 logging.warning(
                     f"Error adding installation_id column/FK to connected_repos: {e}"
                 )
+                conn.rollback()
+
+            # Migration: record which repo a webhook came from and what change
+            # gating did with it, so a PR without a review can be explained.
+            try:
+                cursor.execute(
+                    """ALTER TABLE webhook_deliveries
+                       ADD COLUMN IF NOT EXISTS repo_full_name VARCHAR(255) NULL,
+                       ADD COLUMN IF NOT EXISTS gating_outcome VARCHAR(32) NULL;"""
+                )
+                conn.commit()
+                logging.info("Ensured gating outcome columns exist on webhook_deliveries table.")
+            except Exception as e:
+                logging.warning(f"Error adding gating outcome columns to webhook_deliveries: {e}")
                 conn.rollback()
 
             # Migration: Add change_gating_enabled to connected_repos so

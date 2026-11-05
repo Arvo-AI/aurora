@@ -74,6 +74,8 @@ class _FakeCursor:
     def fetchone(self):
         if "FROM github_installations" in self._last_sql:
             return ("2026-01-01",) if self._state["suspended"] else (None,)
+        if "COUNT(*)" in self._last_sql:
+            return self._state["repo_counts"]
         if "FROM connected_repos" in self._last_sql:
             return (1,) if self._state["enrolled"] else None
         return None
@@ -122,6 +124,7 @@ def gating_env(monkeypatch):
         "suspended": False,
         "enrolled": True,
         "linked_users": [_USER_ID],
+        "repo_counts": (3, 3),
     }
     import utils.auth.stateless_auth as stateless_auth
     import utils.cache.redis_client as redis_client_mod
@@ -259,6 +262,44 @@ class TestPullRequestChangeGatingFilterMatrix:
         gating_env.redis.delete.assert_called_once_with(
             f"change_gating:seen:{_REPO}:{_PR_NUMBER}:{_HEAD_SHA}"
         )
+
+
+class TestReposAddedAfterInstall:
+    """A repo added later is reviewed only when the installation is hands-off."""
+
+    @pytest.fixture
+    def importer(self, monkeypatch):
+        stub = ModuleType("routes.github.github_repo_metadata")
+        stub.import_installation_repos = MagicMock()
+        monkeypatch.setitem(sys.modules, "routes.github.github_repo_metadata", stub)
+        return stub.import_installation_repos
+
+    @pytest.mark.parametrize(
+        "selection, repo_counts, linked_users, expect_import",
+        [
+            ("all", (3, 3), [_USER_ID], True),
+            ("all", (3, 2), [_USER_ID], False),  # someone opted a repo out
+            ("all", (0, 0), [_USER_ID], False),  # nothing connected yet
+            ("all", (3, 3), [], False),  # no Aurora user on this installation
+            ("selected", (3, 3), [_USER_ID], False),
+        ],
+    )
+    def test_import_only_when_every_connected_repo_is_enrolled(
+        self, gating_env, importer, selection, repo_counts, linked_users, expect_import
+    ):
+        gating_env.state["repo_counts"] = repo_counts
+        gating_env.state["linked_users"] = linked_users
+        payload = {
+            "action": "added",
+            "installation": {"id": _INSTALLATION_ID},
+            "repository_selection": selection,
+            "repositories_added": [{"full_name": "acme/new"}],
+        }
+
+        webhook_tasks._handle_installation_repositories_event(payload, "added", _DELIVERY_ID)
+
+        assert importer.delay.called is expect_import
+        gating_env.update_status.assert_called_once_with(_DELIVERY_ID, status="processed")
 
 
 class TestProgressComment:
