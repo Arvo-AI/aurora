@@ -128,9 +128,13 @@ Once connected, the **GCP Project Management** dialog lets you scope Aurora to a
 
 ---
 
-#### Option B: OAuth 2.0
+#### Option B: OAuth 2.0 {#gcp-oauth}
 
-Interactive OAuth flow. The page is **Connect with Google**. After consent, Aurora creates its own read-only service account and grants, on each project it sets up, `roles/viewer`, `logging.viewer`, `monitoring.viewer`, `browser`, `cloudasset.viewer`, `compute.viewer`, `container.viewer`, `storage.objectViewer`, `bigquery.dataViewer`, `bigquery.jobUser`, plus `iam.serviceAccountUser` and `iam.serviceAccountTokenCreator` so Aurora can impersonate that account. That list is not shown on the connect page. The roles in Option A are what you grant on a key you upload.
+Interactive OAuth flow. The page is **Connect with Google**. After consent, Aurora creates two service accounts. Neither list is shown on the connect page. The roles in Option A are what you grant on a key you upload.
+
+The Agent account receives `roles/owner`, `roles/iam.serviceAccountUser`, and `roles/iam.serviceAccountTokenCreator`. When the consenting user can see an organization, those roles are granted on the organization and on each project. Otherwise they are granted on each project.
+
+The Ask-mode account receives, on each project, `roles/viewer`, `roles/logging.viewer`, `roles/monitoring.viewer`, `roles/browser`, `roles/cloudasset.viewer`, `roles/compute.viewer`, `roles/container.viewer`, `roles/storage.objectViewer`, `roles/bigquery.dataViewer`, `roles/bigquery.jobUser`, `roles/iam.serviceAccountUser`, and `roles/iam.serviceAccountTokenCreator`.
 
 ##### 1. Create OAuth Credentials
 

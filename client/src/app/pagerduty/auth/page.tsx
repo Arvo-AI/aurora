@@ -238,15 +238,9 @@ export default function PagerDutyAuthPage() {
     try {
       await pagerdutyService.disconnect();
 
-      setStatus({ connected: false });
       setDisplayName("PagerDuty");
-
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem(CACHE_KEY);
-        localStorage.removeItem('isPagerDutyConnected');
-      }
-
-      updateLocalStorageConnection(false);
+      // Status includes oauthAvailable. A local { connected: false } would hide the button.
+      await fetchAndUpdateStatus();
 
       toast({
         title: 'Success',
