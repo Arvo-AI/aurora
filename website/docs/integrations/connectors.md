@@ -27,8 +27,6 @@ Everything below is connected from **Connectors** in the app. Pages linked here 
 
 A connector that is not in this table can still be reached by registering its [MCP server](./custom-mcp-servers.md).
 
-OVH, SharePoint, Notion, Spinnaker, and CloudBees stay hidden until `NEXT_PUBLIC_ENABLE_OVH`, `NEXT_PUBLIC_ENABLE_SHAREPOINT`, `NEXT_PUBLIC_ENABLE_NOTION`, `NEXT_PUBLIC_ENABLE_SPINNAKER`, or `NEXT_PUBLIC_ENABLE_CLOUDBEES` is `true`. PagerDuty OAuth and Bitbucket OAuth are off the same way (`NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH`, `NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH`). Their API-token paths still show.
-
 ## Cloud Providers
 
 ### GCP (Google Cloud Platform)
@@ -70,9 +68,9 @@ gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
   --member="serviceAccount:$SA" --role="roles/bigquery.jobUser"
 ```
 
-`roles/viewer` lists BigQuery datasets but cannot run queries. `bigquery.dataViewer` reads table data; `bigquery.jobUser` runs query jobs. GKE and Compute Engine investigations also need `roles/container.viewer` and `roles/compute.viewer` on that project.
+`roles/viewer` lists BigQuery datasets but cannot run queries. `bigquery.dataViewer` reads table rows. `bigquery.jobUser` creates the query job. Those are the project roles the Service Account tab asks for, together with `logging.viewer` and `monitoring.viewer`. `roles/viewer` already includes GKE and Compute Engine reads, so `container.viewer` and `compute.viewer` are not extra grants on this key.
 
-To list every project under an organization or folder, grant `roles/browser` on that organization or folder. It only lists projects. A folder binding does not cover sibling folders.
+To list every project under an organization or folder, grant `roles/browser` there. It only lists projects. A folder binding does not cover sibling folders. Without it, Aurora only sees the project the key was created in.
 
 ##### 3. Download Key
 
@@ -97,7 +95,7 @@ By default Aurora only sees the project the key was created in. Project enumerat
 | `roles/browser` | ✅ yes | ❌ no — directory-listing only |
 | `roles/viewer` | ✅ yes | ✅ yes, but grants org-wide read of every resource (logs, IAM, billing, …) |
 
-The recommended split is **`roles/browser` for enumeration** + **`roles/viewer`-family roles per project for inspection**:
+The recommended split is **`roles/browser` for enumeration** + the step 2 roles on each project you want investigated:
 
 ```bash
 SA=aurora-connector@YOUR_PROJECT_ID.iam.gserviceaccount.com
@@ -105,11 +103,9 @@ SA=aurora-connector@YOUR_PROJECT_ID.iam.gserviceaccount.com
 # Enumerate every project under the org
 gcloud organizations add-iam-policy-binding YOUR_ORG_ID \
   --member="serviceAccount:$SA" --role="roles/browser"
-
-# Then grant viewer-tier roles on the projects you actually want Aurora to use
-gcloud projects add-iam-policy-binding TARGET_PROJECT \
-  --member="serviceAccount:$SA" --role="roles/viewer"
 ```
+
+Then repeat the step 2 bindings (`roles/viewer`, `logging.viewer`, `monitoring.viewer`, `bigquery.dataViewer`, `bigquery.jobUser`) on each project Aurora should investigate.
 
 Bind at the **organization** level to reach everything; a **folder**-level binding only enumerates projects under that folder (sibling folders stay invisible — bind each individually or move up to the org).
 
@@ -134,7 +130,7 @@ Once connected, the **GCP Project Management** dialog lets you scope Aurora to a
 
 #### Option B: OAuth 2.0
 
-Interactive OAuth flow — best for development or when users connect their own GCP accounts.
+Interactive OAuth flow. The page is **Connect with Google**. After consent, Aurora creates its own read-only service account and grants, on each project it sets up, `roles/viewer`, `logging.viewer`, `monitoring.viewer`, `browser`, `cloudasset.viewer`, `compute.viewer`, `container.viewer`, `storage.objectViewer`, `bigquery.dataViewer`, `bigquery.jobUser`, plus `iam.serviceAccountUser` and `iam.serviceAccountTokenCreator` so Aurora can impersonate that account. That list is not shown on the connect page. The roles in Option A are what you grant on a key you upload.
 
 ##### 1. Create OAuth Credentials
 
@@ -222,8 +218,8 @@ The script creates **two** service principals:
 
 | Principal | Roles | Used for |
 |-----------|-------|----------|
-| `Aurora-Agent-*` | Contributor, AKS RBAC Writer, Cost Management Reader | Agent mode (remediation) |
-| `Aurora-ReadOnly-*` | Log Analytics Reader, Cost Management Reader, AKS Cluster User, AKS RBAC Reader | Ask mode (investigation only) |
+| `Aurora-Agent-*` | Contributor, Azure Kubernetes Service RBAC Writer, Cost Management Reader | Agent mode (remediation) |
+| `Aurora-ReadOnly-*` | Log Analytics Reader, Cost Management Reader, Azure Kubernetes Service Cluster User Role, Azure Kubernetes Service RBAC Reader | Ask mode (investigation only) |
 
 Built-in roles only — no custom roles, and no `cluster-admin`. Contributor excludes all `Microsoft.Authorization` writes, so Aurora cannot escalate its own access in either mode.
 
@@ -343,7 +339,6 @@ The callback Aurora sends is `{public backend}/ovh_api/ovh/oauth2/callback`. The
 #### 3. Configure Environment
 
 ```bash
-NEXT_PUBLIC_ENABLE_OVH=true
 NEXT_PUBLIC_BACKEND_URL=http://localhost:5080
 NGROK_URL=https://abc123.ngrok-free.app
 
@@ -365,7 +360,6 @@ OVH_US_CLIENT_SECRET=your-us-client-secret
 | Error | Solution |
 |-------|----------|
 | "OAuth2 credentials not configured for [region]" | Set the corresponding `OVH_[REGION]_CLIENT_ID` and `OVH_[REGION]_CLIENT_SECRET` |
-| "OVH connector not enabled" | Set `NEXT_PUBLIC_ENABLE_OVH=true` and restart Aurora |
 | "Invalid redirect_uri" | The client `callbackUrls` entry must be `{NGROK_URL or NEXT_PUBLIC_BACKEND_URL}/ovh_api/ovh/oauth2/callback`, and it must be HTTPS |
 
 ---
@@ -1120,7 +1114,7 @@ Data Center short links work correctly.
 
 ### PagerDuty
 
-API token, or OAuth when `NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=true`. The **Connect with OAuth** button is hidden until that flag is on. The token form is always there.
+API token, or OAuth. OAuth needs `PAGERDUTY_CLIENT_ID` and `PAGERDUTY_CLIENT_SECRET` on the server. The token form works without them.
 
 #### Option A: OAuth
 
@@ -1134,7 +1128,6 @@ API token, or OAuth when `NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=true`. The **Connec
 3. Copy **Client ID** and **Client Secret**
 
 ```bash
-NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=true
 PAGERDUTY_CLIENT_ID=your-client-id
 PAGERDUTY_CLIENT_SECRET=your-client-secret
 ```
@@ -1211,7 +1204,7 @@ A service account keeps the integration off a personal login. It needs both an A
 4. **Organization Settings → Application Keys**: create an application key on the same service account. It needs read access to logs, metrics, monitors, and events: `logs_read`, `metrics_read`, `monitors_read`, `events_read`.
 5. Note the service account name. Aurora shows it as the owner of the connection.
 
-#### 3. Identify Your Site
+#### 2. Identify Your Site
 
 | Site | API URL |
 |------|---------|
@@ -1222,13 +1215,14 @@ A service account keeps the integration off a personal login. It needs both an A
 | AP1 | `ap1.datadoghq.com` |
 | AP2 | `ap2.datadoghq.com` |
 
-Users enter API keys and site via the Aurora UI, with an optional label. Site is recorded per
-organization, so organizations on different Datadog sites can coexist.
+#### 3. Connect in Aurora
+
+On the Datadog page, enter the API key, the application key, and the site. A label is optional. Site is recorded per organization, so organizations on different Datadog sites can coexist.
 
 #### 4. Connect Additional Organizations
 
 1. Switch organization from the bottom-left **Accounts** menu in Datadog
-2. Repeat steps 1-3 to create a key pair there
+2. Repeat the key pair and site steps in that organization
 3. In Aurora, use **Add another organization** on the Datadog page and enter the new keys
 
 #### Webhook Configuration
@@ -1622,8 +1616,6 @@ Use this when the agent cannot be installed (restricted RBAC, no outbound from t
 
 ### CloudBees
 
-Hidden unless `NEXT_PUBLIC_ENABLE_CLOUDBEES=true`.
-
 Aurora integrates with [CloudBees](https://www.cloudbees.com/) to provide CI/CD deployment visibility, automated incident correlation, and root cause analysis across your entire Jenkins infrastructure.
 
 #### What You Get
@@ -1723,7 +1715,7 @@ When enabled (default), Aurora automatically starts an investigation when a depl
 
 ### Bitbucket
 
-Bitbucket Cloud supports two authentication methods: **API Token** (recommended — no `.env` setup) or **OAuth** (optional — requires registering a consumer and enabling a feature flag).
+Bitbucket Cloud supports two authentication methods: **API Token** (recommended — no `.env` setup) or **OAuth** (optional — requires registering a consumer).
 
 :::tip Scopes need read **and** write
 Aurora's remediation features open pull requests, push branches/commits, comment on issues, and trigger pipelines. Both auth methods therefore need **write** access to repositories, pull requests, issues, and pipelines — read-only credentials will connect but block those actions.
@@ -1756,7 +1748,7 @@ Grant these scopes:
 
 #### Option B: OAuth (optional)
 
-Use OAuth if you prefer a per-user consent flow. This path requires both a feature flag (to show the OAuth option in the UI) and a registered OAuth consumer.
+Use OAuth if you prefer a per-user consent flow. The OAuth tab is always on the Bitbucket page. It needs a registered OAuth consumer.
 
 ##### 1. Create OAuth Consumer
 
@@ -1773,10 +1765,6 @@ Use OAuth if you prefer a per-user consent flow. This path requires both a featu
 ##### 2. Configure Environment
 
 ```bash
-# Show the OAuth option in the Connectors UI (frontend flag, default false).
-# Without this, only the API Token form is shown.
-NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH=true
-
 BB_OAUTH_CLIENT_ID=your-bitbucket-key
 BB_OAUTH_CLIENT_SECRET=your-bitbucket-secret
 ```
@@ -1847,7 +1835,6 @@ Only **posting** (review comments) uses the bot; investigation reads always use 
 | "Authentication failed... you are using a classic API token (not supported)" | Create a **scoped** token at [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens), not a classic one |
 | "Missing required scopes: ..." | Recreate the API token with all the read+write scopes listed above |
 | "Bitbucket OAuth is not available. Use an API token instead." | `BB_OAUTH_CLIENT_ID`/`BB_OAUTH_CLIENT_SECRET` are not set. Use the API token method, or configure the OAuth consumer |
-| OAuth tab not visible in the UI | `NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH` is not `true`. Set it and restart |
 | Incident Prevention toggle missing | `NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION` is `false`, or Bitbucket is not connected |
 | "Verification pending" when clicking Verify webhook | The token lacks `read:webhook:bitbucket`. Not a failure — open or update a PR and the first delivery confirms the hook automatically |
 | Badge stuck on "Awaiting first delivery" | No PR event has arrived yet. Bitbucket sends no test event on save, so push to a PR. If it still does not flip, check **Repository settings → Webhooks → View requests** for the delivery attempts and their response codes |
@@ -1858,7 +1845,7 @@ Only **posting** (review comments) uses the bot; investigation reads always use 
 
 ## More connectors {#more-connectors}
 
-Setup below matches the Connectors page. Hidden connectors are called out.
+Setup below matches the Connectors page.
 
 ### Scaleway {#scaleway}
 
@@ -1970,7 +1957,7 @@ Read-only. Aurora does not need a Jenkins admin token.
 
 ### Notion {#notion}
 
-Hidden unless `NEXT_PUBLIC_ENABLE_NOTION=true`. This is an integration token, not Notion OAuth.
+This is an integration token, not Notion OAuth.
 
 1. [notion.so/my-integrations](https://www.notion.so/my-integrations) → **New connection**. Name it Aurora. Authentication method: **Access token**.
 2. On **Configuration**, copy the integration token. Capabilities: **Read**, **Update**, and **Insert content**.
@@ -1979,7 +1966,7 @@ Hidden unless `NEXT_PUBLIC_ENABLE_NOTION=true`. This is an integration token, no
 
 ### SharePoint {#sharepoint}
 
-Hidden unless `NEXT_PUBLIC_ENABLE_SHAREPOINT=true`. The page is **Connect with Microsoft**. There is no token to paste. Aurora then reads documents and site pages for the signed-in user.
+The page is **Connect with Microsoft**. There is no token to paste. Aurora then reads documents and site pages for the signed-in user.
 
 ## Anything Else: Custom MCP Servers
 

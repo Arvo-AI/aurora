@@ -40,7 +40,7 @@ The product surfaces (Chat, Incidents, Actions, Monitor, Memory) are described i
 ## Requirements
 
 - Docker and Docker Compose >= 28.x
-- At least one LLM: an API key for OpenRouter, OpenAI, Anthropic, Gemini, Vertex AI, or Bedrock, or a reachable Ollama (`OLLAMA_BASE_URL`, no key)
+- At least one LLM: an API key for OpenRouter, OpenAI, Anthropic, or Gemini; Vertex AI (`VERTEX_AI_PROJECT` and service account credentials); Bedrock (a gateway URL in `BEDROCK_BASE_URL`, or a region plus AWS credentials or an IAM role); or a reachable Ollama (`OLLAMA_BASE_URL`, no key)
 
 **No cloud provider accounts required** to get started. Cloud connectors are optional.
 

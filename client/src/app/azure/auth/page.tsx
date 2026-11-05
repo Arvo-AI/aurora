@@ -398,8 +398,7 @@ export default function AzureAuthPage() {
                   <div>
                     <h3 className="text-lg font-medium text-foreground">Manual Setup</h3>
                     <p className="text-muted-foreground text-sm">
-                      Run our script to automatically create a service principal with read-only permissions 
-                      for Aurora to access your Azure subscription.
+                      Download the same setup script and run it yourself. It creates two service principals and assigns built-in roles.
                     </p>
                   </div>
                   <div className="bg-green-100 dark:bg-green-800 text-green-800 dark:text-green-200 text-xs px-2 py-1 rounded-full">
@@ -481,8 +480,8 @@ export default function AzureAuthPage() {
                     <div className="text-sm text-muted-foreground mt-1">
                       <p>- Azure CLI installed (<a href="https://docs.microsoft.com/en-us/cli/azure/install-azure-cli" target="_blank" rel="noopener noreferrer" className="underline text-primary hover:text-primary/80">install guide</a>)</p>
                       <p>- Logged into Azure: <code className="bg-card border border-border px-2 py-1 rounded text-foreground">az login</code></p>
-                      <p>- Owner or Contributor + User Access Administrator permissions</p>
-                      <p>- Application Administrator role in Entra ID</p>
+                      <p>- Owner or User Access Administrator on the subscriptions you want covered</p>
+                      <p>- Permission to register applications in Entra ID</p>
                     </div>
                   </div>
                 </div>
@@ -577,10 +576,10 @@ export default function AzureAuthPage() {
                 <div className="bg-muted rounded-lg p-4">
                 <h4 className="font-medium text-foreground mb-2">What the script does:</h4>
                 <ul className="text-sm text-muted-foreground space-y-1">
-                  <li>- Creates a custom "Aurora Manager" role with comprehensive permissions</li>
-                  <li>- Creates a service principal specifically for Aurora</li>
-                  <li>- Detects existing AKS clusters and automatically assigns permissions</li>
-                  <li>- Outputs service principal credentials in JSON format</li>
+                  <li>- Creates two service principals: one for agent mode, one read-only for ask mode</li>
+                  <li>- Assigns built-in Azure roles across the subscriptions in scope</li>
+                  <li>- Detects existing AKS clusters and flags private ones</li>
+                  <li>- Outputs both sets of credentials in JSON format</li>
                   <li>- Includes instructions for revoking access later</li>
                 </ul>
                   </div>

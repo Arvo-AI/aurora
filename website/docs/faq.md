@@ -18,7 +18,7 @@ Yes. Aurora is licensed under Apache License 2.0. The source code is available a
 
 ### Do I need cloud provider accounts?
 
-**No.** Aurora works without any cloud provider accounts. You only need an LLM API key to get started. Connectors are optional.
+**No.** Aurora works without any cloud provider accounts. You need an LLM provider configured. Connectors are optional.
 
 ## Setup
 
@@ -33,12 +33,12 @@ Yes. Aurora is licensed under Apache License 2.0. The source code is available a
 About 5 minutes for basic setup. The quickstart guide walks you through:
 1. Clone repository
 2. Run `make init`
-3. Add LLM API key
+3. Configure an LLM provider
 4. Run `make prod-prebuilt` (or `make prod-local` to build from source)
 
 ### Which LLM provider should I use?
 
-**OpenRouter** is the shortest path: one key, many models. Direct keys also work for OpenAI, Anthropic, Google Gemini, Vertex AI, and AWS Bedrock. Ollama runs models on your own machine when the deployment cannot call out. See [LLM providers](/docs/integrations/llm-providers).
+**OpenRouter** is the shortest path: one key, many models. OpenAI, Anthropic, and Google Gemini take their own API keys. Vertex AI needs a project and credentials. Bedrock needs a region plus AWS credentials or an IAM role, or a gateway URL. Ollama runs models on your own machine and needs no API key. See [LLM providers](/docs/integrations/llm-providers).
 
 ### Can I run Aurora without Docker?
 
@@ -68,7 +68,7 @@ Chat: Slack, Microsoft Teams, and Google Chat. Docs and tickets: Confluence, Jir
 
 ### Can I use Aurora with Kubernetes?
 
-Yes. Install the in-cluster kubectl agent, or upload a kubeconfig for a cluster that is not on a connected cloud. See the [kubectl agent documentation](https://github.com/arvo-ai/aurora/blob/main/kubectl-agent/README.md).
+Yes. Install the in-cluster kubectl agent, or upload a kubeconfig when the agent cannot be installed, such as restricted RBAC or no outbound access. See the [kubectl agent documentation](https://github.com/arvo-ai/aurora/blob/main/kubectl-agent/README.md).
 
 ### What are Actions and Monitor?
 
