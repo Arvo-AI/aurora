@@ -111,7 +111,9 @@ const HANDOFF_STEPS: Record<string, { title: string; desc: string; steps: string
   },
 }
 
-const STEP_MS = 380
+const STEP_MS = 800
+// Signing in takes well under a second. Hold the panel long enough to read it.
+export const SLACK_HANDOFF_MIN_MS = 2500
 
 /** Replaces the form while a Slack handoff redeems: progress, not a login box. */
 export function SlackHandoffPanel({ via }: Readonly<{ via: string | null }>) {

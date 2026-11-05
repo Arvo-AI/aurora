@@ -9,7 +9,7 @@ import dynamic from "next/dynamic"
 import { useDarkPageBackground } from "@/hooks/useDarkPageBackground"
 import { usePasswordReset, usePasswordResetAvailable } from "@/hooks/usePasswordReset"
 import { ForgotPasswordPanel, ResetPasswordPanel } from "./PasswordResetPanels"
-import { SlackHandoffPanel, ContinueWithSlack, AddAuroraToSlack, useSlackSignInAvailable, SLACK_ERRORS, SLACK_RESUME_KEY, resumeSlackConnect } from "./SlackSignIn"
+import { SLACK_HANDOFF_MIN_MS, SlackHandoffPanel, ContinueWithSlack, AddAuroraToSlack, useSlackSignInAvailable, SLACK_ERRORS, SLACK_RESUME_KEY, resumeSlackConnect } from "./SlackSignIn"
 
 const AuroraShader = dynamic(() => import('@/app/components/AuroraShader'), { ssr: false })
 
@@ -202,8 +202,12 @@ function AuthPage() {
     setIsLoading(true)
     ;(async () => {
       try {
+        const panelShown = isSlackHandoff
+          ? new Promise((resolve) => setTimeout(resolve, SLACK_HANDOFF_MIN_MS))
+          : Promise.resolve()
         const result = await signIn("handoff", { token: handoffToken, redirect: false })
         if (result?.ok) {
+          await panelShown
           globalThis.location.href = handoffDestination(handoffVia, handoffSlackAuth)
         } else {
           setHandoffInFlight(false)
