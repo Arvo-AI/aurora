@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -95,7 +95,6 @@ function TeamsStatusBadge({ status }: { status: { connected?: boolean; setup_com
 interface ConnectorCardProps {
   connector: ConnectorConfig;
   connectedOverride?: boolean;
-  openOnMount?: boolean;
 }
 
 // Otherwise the dialog reopens by itself when the card next mounts.
@@ -106,13 +105,14 @@ function clearConnectParam() {
   globalThis.history.replaceState(null, "", url.toString());
 }
 
-export default function ConnectorCard({ connector, connectedOverride, openOnMount }: ConnectorCardProps) {
+export default function ConnectorCard({ connector, connectedOverride }: ConnectorCardProps) {
   const router = useRouter();
   const { toast } = useToast();
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
   const userId = user?.id ?? null;
-  const [showGitHubDialog, setShowGitHubDialog] = useState(Boolean(openOnMount) && connector.id === "github");
+  const searchParams = useSearchParams();
+  const [showGitHubDialog, setShowGitHubDialog] = useState(connector.id === "github" && searchParams.get("connect") === "github");
   const [showBitbucketDialog, setShowBitbucketDialog] = useState(false);
   const [showGcpDialog, setShowGcpDialog] = useState(false);
   const [showOvhDialog, setShowOvhDialog] = useState(false);
