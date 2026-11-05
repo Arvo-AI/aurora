@@ -3,11 +3,11 @@
 import { useEffect, useState } from "react"
 import Image from "next/image"
 import { motion, useReducedMotion } from "framer-motion"
+import { getEnv } from "@/lib/env"
 
 // "Continue with Slack", the Slack variant of the handoff panel, and the
 // messages for ?error=slack_* codes set by the backend's Slack flows.
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || ""
 const GREEN = "#2eb67d"
 const EASE = [0.22, 1, 0.36, 1] as const
 
@@ -81,12 +81,16 @@ function SlackButton({ href, label, busyLabel, disabled }: Readonly<{ href: stri
   )
 }
 
+function backendUrl(path: string) {
+  return `${getEnv("NEXT_PUBLIC_BACKEND_URL") || ""}${path}`
+}
+
 export function ContinueWithSlack({ disabled }: Readonly<{ disabled?: boolean }>) {
-  return <SlackButton href={`${BACKEND_URL}/slack/signin/start`} label="Continue with Slack" busyLabel="Opening Slack…" disabled={disabled} />
+  return <SlackButton href={backendUrl("/slack/signin/start")} label="Continue with Slack" busyLabel="Opening Slack…" disabled={disabled} />
 }
 
 export function AddAuroraToSlack() {
-  return <SlackButton href={`${BACKEND_URL}/slack/signup/start`} label="Add Aurora to Slack" busyLabel="Opening Slack…" />
+  return <SlackButton href={backendUrl("/slack/signup/start")} label="Add Aurora to Slack" busyLabel="Opening Slack…" />
 }
 
 const HANDOFF_STEPS: Record<string, { title: string; desc: string; steps: string[] }> = {
