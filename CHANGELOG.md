@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Slack: "Continue with Slack" and "Add Aurora to Slack" read the backend URL
   at runtime. In prebuilt images the links stayed on the frontend host, so
   "Continue with Slack" sent the visitor back to sign-in.
+- SSH: connection checks no longer return exception text to clients, and a
+  malformed jump command reports its own parser error.
+
+### Security
+- Bump langgraph to 1.2.14 and dnspython to 2.9.0, and pick up the open npm
+  security updates.
 
 ## [1.5.17] - 2026-11-05
 
