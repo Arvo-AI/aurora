@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.18] - 2026-11-05
+
+### Fixed
+- Slack: "Continue with Slack" and "Add Aurora to Slack" read the backend URL
+  at runtime. In prebuilt images the links stayed on the frontend host, so
+  "Continue with Slack" sent the visitor back to sign-in.
+
 ## [1.5.17] - 2026-11-05
 
 ### Added
