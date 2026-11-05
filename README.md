@@ -323,6 +323,7 @@ Aurora is **100% self-hosted**. Your incident data never leaves your infrastruct
 - **[Documentation](https://arvo-ai.github.io/aurora/)** — Full deployment and configuration guides
 - **[Blog](https://www.aurorasre.ai/blog)** — SRE best practices, incident management guides
 - **[Aurora Lab](https://github.com/Arvo-AI/aurora-lab)** — Reproducible Kubernetes failure scenarios and every graded Aurora run
+- **[lastwords](https://github.com/Arvo-AI/lastwords)**: Open-source Kubernetes DaemonSet that snapshots a container's memory before an OOM kill and saves the logs and core dumps of crashes. Works on its own, without Aurora.
 - **[Contributing](CONTRIBUTING.md)** — We welcome PRs! Read the guide first.
 
 ---
