@@ -32,7 +32,8 @@ def viewer_only(roles: list) -> bool:
     return bool(names) and names.isdisjoint({ROLE_ADMIN, ROLE_EDITOR})
 
 
-def _org_flag(org_id: str, key: str, default: bool = _DEFAULT) -> bool:
+def _org_flag_state(org_id: str, key: str, default: bool = _DEFAULT) -> bool | None:
+    """The org switch, or None when it could not be read."""
     if not org_id:
         return default
     try:
@@ -50,9 +51,13 @@ def _org_flag(org_id: str, key: str, default: bool = _DEFAULT) -> bool:
             row = cur.fetchone()
         return flag_enabled(row[0] if row else None, default)
     except Exception:
-        # A failed read must not grant an edit the org may have turned off.
         logger.exception("Could not read viewer preference %s for org %s", key, sanitize(org_id))
-        return False
+        return None
+
+
+def _org_flag(org_id: str, key: str, default: bool = _DEFAULT) -> bool:
+    """The org switch. A failed read must not grant an edit the org may have turned off."""
+    return _org_flag_state(org_id, key, default) is True
 
 
 def org_allows_viewers(org_id: str) -> bool:
@@ -60,13 +65,22 @@ def org_allows_viewers(org_id: str) -> bool:
     return _org_flag(org_id, _CHAT_KEY, True)
 
 
+def _memory_switch(org_id: str, role: str) -> bool | None:
+    """The memory switch for an editor or viewer, or None when it could not be read."""
+    if role == ROLE_EDITOR:
+        # Unset stays on, so existing editors do not lose memory edits.
+        return _org_flag_state(org_id, _EDITOR_MEMORY_KEY, True)
+    return _org_flag_state(org_id, _MEMORY_KEY)
+
+
 def org_allows_memory_edits(org_id: str) -> bool:
-    return _org_flag(org_id, _MEMORY_KEY)
+    """True when the org lets viewers modify memory."""
+    return _memory_switch(org_id, ROLE_VIEWER) is True
 
 
 def org_allows_editor_memory_edits(org_id: str) -> bool:
-    # Unset stays on, so existing editors do not lose memory edits.
-    return _org_flag(org_id, _EDITOR_MEMORY_KEY, True)
+    """True when the org lets editors modify memory."""
+    return _memory_switch(org_id, ROLE_EDITOR) is True
 
 
 def _viewer_allowed(user_id: str, org_id: str, org_flag) -> bool:
@@ -104,6 +118,7 @@ def _memory_role(user_id: str, org_id: str) -> tuple[str | None, bool]:
 
 
 def viewer_may_edit_memory(user_id: str, org_id: str) -> bool:
+    """True when this person's role may modify memory under the org's switches."""
     if not user_id or not org_id:
         return False
     role, _ = _memory_role(user_id, org_id)
@@ -118,24 +133,45 @@ def viewer_may_edit_memory(user_id: str, org_id: str) -> bool:
     return False
 
 
+_SWITCHES = {ROLE_EDITOR: "Editors can modify memories", ROLE_VIEWER: "Viewers can modify memories"}
+
+
 def memory_edit_refusal(user_id: str, org_id: str) -> str | None:
     """Why this person may not modify memory, or None when they may.
 
-    The agent repeats this to the user, so it names the person's role and the
-    exact switch. A bare "not allowed" reads as an org-wide setting.
+    The agent repeats this to the user, so each cause gets its own wording: a
+    role the org switch excludes, no role, an unknown organization, or a switch
+    that could not be read. A bare "not allowed" reads as an org-wide setting.
     """
     from utils.auth.connector_access import denial_message
 
-    if viewer_may_edit_memory(user_id, org_id):
+    if not user_id or not org_id:
+        # The org lookup returns nothing both when it is missing and when it fails.
+        return (
+            "Aurora could not determine this person's organization, so memory was not "
+            "modified. Try again. If it keeps failing, check that their account belongs "
+            "to an organization."
+        )
+    role, guest = _memory_role(user_id, org_id)
+    # Admins stay allowed so an org cannot lock itself out of memory.
+    if role == ROLE_ADMIN:
         return None
-    role, guest = _memory_role(user_id, org_id) if user_id and org_id else (None, False)
+    if role not in _SWITCHES:
+        return (
+            "You don't have access to modify memories because you have no role in this "
+            "organization. Ask an admin to assign you one in org Settings."
+        )
+    allowed = _memory_switch(org_id, role)
+    if allowed:
+        return None
+    switch = _SWITCHES[role]
+    if allowed is None:
+        return (
+            f"Aurora could not read the '{switch}' setting, so memory was not modified. "
+            "This is a temporary read failure, not a permission change. Try again shortly."
+        )
     # Same wording as a refused connector, so every Access-tab refusal reads alike.
-    if role == ROLE_EDITOR:
-        audience, switch = "editor", "Editors can modify memories"
-    elif role == ROLE_VIEWER:
-        audience, switch = ("general viewer" if guest else "viewer"), "Viewers can modify memories"
-    else:
-        return denial_message("modify memories", "")
+    audience = "general viewer" if guest and role == ROLE_VIEWER else role
     return f"{denial_message('modify memories', audience)} The switch is '{switch}'."
 
 
