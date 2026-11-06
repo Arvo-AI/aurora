@@ -80,14 +80,12 @@ def _reject_edit(user_id: str | None) -> str | None:
     if not user_id:
         return _NO_USER_CTX
     from utils.auth.stateless_auth import get_org_id_for_user
-    from utils.auth.viewer_run import viewer_may_edit_memory
+    from utils.auth.viewer_run import memory_edit_refusal
 
     org_id = get_org_id_for_user(user_id)
     # Missing org fails closed. The helper applies the Access-tab switches.
-    if not org_id or not viewer_may_edit_memory(user_id, org_id):
-        return json.dumps({
-            "error": "You cannot modify memories. An admin can allow it on the Access tab.",
-        })
+    if reason := memory_edit_refusal(user_id, org_id):
+        return json.dumps({"error": reason, "code": "memory_edit_not_allowed"})
     return None
 
 

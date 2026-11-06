@@ -116,3 +116,87 @@ def test_admins_always_modify_memory(monkeypatch):
     monkeypatch.setattr("utils.auth.viewer_run.org_allows_memory_edits", _unexpected)
     monkeypatch.setattr("utils.auth.viewer_run.org_allows_editor_memory_edits", _unexpected)
     assert viewer_may_edit_memory("uid", "org") is True
+
+
+def _memory_switches(monkeypatch, **values):
+    """Stub the stored memory switches. A value of None simulates a failed read."""
+    keys = {"viewer": "viewer_can_edit_memory", "editor": "editor_can_edit_memory"}
+    by_key = {keys[name]: value for name, value in values.items()}
+    monkeypatch.setattr(
+        "utils.auth.viewer_run._org_flag_state",
+        lambda _org, key, default=False: by_key.get(key, default),
+    )
+
+
+def test_memory_refusal_names_the_viewer_role_and_switch(monkeypatch):
+    from utils.auth.viewer_run import memory_edit_refusal
+
+    monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: ["viewer"])
+    _memory_switches(monkeypatch, viewer=False)
+    assert memory_edit_refusal("uid", "org") == (
+        "You don't have access to modify memories as a viewer. Ask an admin to change this "
+        "permission in org Settings, on the Access tab. The switch is 'Viewers can modify memories'."
+    )
+    _memory_switches(monkeypatch, viewer=True)
+    assert memory_edit_refusal("uid", "org") is None
+
+
+def test_memory_refusal_names_the_editor_switch(monkeypatch):
+    from utils.auth.viewer_run import memory_edit_refusal
+
+    monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: ["editor"])
+    _memory_switches(monkeypatch, editor=False)
+    reason = memory_edit_refusal("uid", "org")
+    assert reason.startswith("You don't have access to modify memories as an editor.")
+    assert reason.endswith("The switch is 'Editors can modify memories'.")
+    # Unset stays on for editors.
+    _memory_switches(monkeypatch)
+    assert memory_edit_refusal("uid", "org") is None
+
+
+def test_memory_refusal_explains_a_slack_guest(monkeypatch):
+    from utils.auth.viewer_run import memory_edit_refusal
+
+    # The connector owner is an admin, but the guest pin is what counts.
+    monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: ["admin"])
+    _memory_switches(monkeypatch, viewer=False)
+    monkeypatch.setattr(
+        "utils.auth.connector_access.general_viewer_access",
+        lambda _uid: Access([], ["viewer"]),
+    )
+    with pin_sender_access("admin-uid", "general_viewer"):
+        reason = memory_edit_refusal("admin-uid", "org")
+    assert reason.startswith("You don't have access to modify memories as a general viewer.")
+
+
+def test_memory_refusal_without_a_role(monkeypatch):
+    from utils.auth.viewer_run import memory_edit_refusal
+
+    monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: [])
+    assert memory_edit_refusal("uid", "org") == (
+        "You don't have access to modify memories because you have no role in this "
+        "organization. Ask an admin to assign you one in org Settings."
+    )
+
+
+def test_memory_refusal_without_an_org():
+    from utils.auth.viewer_run import memory_edit_refusal
+
+    assert memory_edit_refusal("uid", "") == (
+        "Aurora could not determine this person's organization, so memory was not "
+        "modified. Try again. If it keeps failing, check that their account belongs "
+        "to an organization."
+    )
+
+
+def test_memory_refusal_reports_a_failed_switch_read(monkeypatch):
+    from utils.auth.viewer_run import memory_edit_refusal, viewer_may_edit_memory
+
+    monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: ["viewer"])
+    _memory_switches(monkeypatch, viewer=None)
+    # Still fails closed, but is not reported as the switch being off.
+    assert viewer_may_edit_memory("uid", "org") is False
+    assert memory_edit_refusal("uid", "org") == (
+        "Aurora could not read the 'Viewers can modify memories' setting, so memory was not "
+        "modified. This is a temporary read failure, not a permission change. Try again shortly."
+    )
