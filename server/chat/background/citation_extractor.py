@@ -58,6 +58,8 @@ _TOOL_NAME_MAPPING: Dict[str, str] = {
     "list_incidentio_incidents": "incident.io",
     "get_incidentio_incident": "incident.io",
     "get_incidentio_timeline": "incident.io Timeline",
+    "list_incidentio_alerts": "incident.io Alerts",
+    "get_incidentio_alert": "incident.io Alert",
     "list_servicenow_incidents": "ServiceNow",
     "get_servicenow_incident": "ServiceNow",
     "servicenow_add_work_note": "ServiceNow",
