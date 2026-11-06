@@ -75,7 +75,15 @@ def enqueue_replay(user_id: str, org_id: Optional[str], installation_id: int, re
             json.dumps({"repo_full_name": repo_full_name, "status": "queued"}),
             ex=REPORT_TTL_SECONDS,
         )
-    replay_reverted_prs.delay(user_id, org_id, installation_id, repo_full_name)
+    try:
+        replay_reverted_prs.delay(user_id, org_id, installation_id, repo_full_name)
+    except Exception:
+        # Broker down: release the lock and clear "queued" so the panel does
+        # not spin for three hours and the next toggle can try again.
+        if redis_client is not None:
+            redis_client.delete(keys["lock"])
+            redis_client.delete(keys["report"])
+        raise
     return True
 
 

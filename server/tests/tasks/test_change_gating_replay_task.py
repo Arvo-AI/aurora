@@ -71,6 +71,14 @@ def test_enqueue_takes_a_lock_so_a_second_click_does_not_queue_again(redis, monk
     assert replay_task.load_report("org-b", "acme/api") is None
 
 
+def test_a_failed_enqueue_does_not_leave_a_stuck_lock(redis, monkeypatch):
+    monkeypatch.setattr(replay_task.replay_reverted_prs, "delay",
+                        MagicMock(side_effect=ConnectionError("broker down")))
+    with pytest.raises(ConnectionError):
+        replay_task.enqueue_replay("u1", "org-a", 55, "acme/api")
+    assert redis.store == {}
+
+
 def test_task_stores_the_report_and_releases_the_lock(redis, monkeypatch):
     keys = replay_task.replay_keys("org-a", "acme/api")
     redis.set(keys["lock"], "queued")
