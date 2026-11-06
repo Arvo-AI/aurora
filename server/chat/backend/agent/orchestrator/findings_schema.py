@@ -55,31 +55,54 @@ def _parse_frontmatter(body: str) -> tuple[dict, str]:
 
 def parse_findings(body: str) -> dict:
     meta, content = _parse_frontmatter(body)
+
     missing = _REQUIRED_FRONTMATTER_KEYS - meta.keys()
     if missing:
         raise FindingsValidationError(
             f"findings.md frontmatter missing required keys: {sorted(missing)}"
         )
+
     status = str(meta.get("status", ""))
     if status not in _VALID_STATUSES:
         raise FindingsValidationError(
             f"findings.md status must be one of {sorted(_VALID_STATUSES)}, got {status!r}"
         )
+
     strength = str(meta.get("self_assessed_strength", ""))
     if strength not in _VALID_STRENGTHS:
         raise FindingsValidationError(
             f"findings.md self_assessed_strength must be one of {sorted(_VALID_STRENGTHS)}, got {strength!r}"
         )
+
     missing = sorted(s for s in _REQUIRED_SECTIONS if s not in content)
     if missing:
         raise FindingsValidationError(
             f"findings.md missing required sections: {missing}"
         )
+
     for list_key in ("tools_used", "citations", "follow_ups_suggested"):
         if not isinstance(meta.get(list_key), list):
             raise FindingsValidationError(
                 f"findings.md frontmatter key {list_key!r} must be a YAML list"
             )
+
+    # Optional evidence graph; legacy findings remain valid.
+    if "evidence_graph" in meta:
+        from pydantic import ValidationError
+        from chat.backend.agent.orchestrator.evidence_graph import EvidenceGraph
+
+        try:
+            graph = EvidenceGraph.model_validate(meta["evidence_graph"])
+        except (ValidationError, ValueError, TypeError) as exc:
+            raise FindingsValidationError(
+                f"invalid evidence_graph: {exc}"
+            ) from exc
+
+        meta["evidence_graph"] = graph.model_dump(
+            mode="json",
+            exclude_none=True,
+        )
+
     return meta
 
 
