@@ -60,6 +60,9 @@ _HEALTH_CHECKS = (
 
 
 _UNEXPECTED = "RabbitMQ returned an unexpected response"
+# The broker's 401 reason for a valid user that lacks a management tag.
+_NOT_MANAGEMENT_USER = "Not management user"
+_MONITORING_TAG_MESSAGE = "This RabbitMQ user cannot read the management API. Grant the monitoring tag."
 
 
 class RabbitMQAPIError(Exception):
@@ -217,7 +220,8 @@ def summarize_node(node: Dict[str, Any]) -> Dict[str, Any]:
         "name": node.get("name"),
         "running": node.get("running"),
         "type": node.get("type"),
-        "uptime": node.get("uptime"),
+        # Milliseconds; the bare name was read as seconds.
+        "uptime_ms": node.get("uptime"),
         "mem_used": node.get("mem_used"),
         "mem_limit": node.get("mem_limit"),
         "mem_alarm": node.get("mem_alarm"),
@@ -521,8 +525,9 @@ class RabbitMQClient:
         checks: Dict[str, Any] = {}
         for name, path in _HEALTH_CHECKS:
             response = self._request("GET", path, accept_error=True)
-            # A missing check on older plugins is not a cluster failure.
-            if response.status_code == 404:
+            # A missing check is not a cluster failure. Older plugins 404; 4.x removed
+            # mirror sync and answers 406 to an Accept: application/json request.
+            if response.status_code in (404, 406):
                 checks[name] = {"status": "unsupported"}
                 continue
             # A proxy in front of the broker sometimes returns an HTML error page.
@@ -564,6 +569,14 @@ class RabbitMQClient:
     def _get_json(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
         response = self._request("GET", path, params=params)
         return self._json_body(response)
+
+    def _not_management_user(self, response: requests.Response) -> bool:
+        """A 401 whose reason says the user has no management tag. The reason is never echoed."""
+        try:
+            body = self._json_body(response)
+        except RabbitMQAPIError:
+            return False
+        return isinstance(body, dict) and body.get("reason") == _NOT_MANAGEMENT_USER
 
     def _json_body(self, response: requests.Response) -> Any:
         if not response.content:
@@ -620,6 +633,9 @@ class RabbitMQClient:
         # Do not log the path or the response: both are tainted by the credentialed call.
         if response.status_code == 401:
             logger.warning("[RABBITMQ] management request was rejected")
+            # Brokers answer a user without the monitoring tag with 401, not 403, on every endpoint.
+            if self._not_management_user(response):
+                raise RabbitMQAPIError(_MONITORING_TAG_MESSAGE, 401, kind="forbidden")
             # A missing vhost permission is also a 401. whoami only succeeds when the password is valid.
             if self._password_accepted():
                 raise RabbitMQAPIError(
@@ -632,11 +648,7 @@ class RabbitMQClient:
             raise RabbitMQAPIError("RabbitMQ rejected the username or password", 401, kind="auth")
         if response.status_code == 403:
             logger.warning("[RABBITMQ] management request was forbidden")
-            raise RabbitMQAPIError(
-                "This RabbitMQ user cannot read the management API. Grant the monitoring tag.",
-                403,
-                kind="forbidden",
-            )
+            raise RabbitMQAPIError(_MONITORING_TAG_MESSAGE, 403, kind="forbidden")
         if response.status_code == 404:
             logger.warning("[RABBITMQ] management resource was not found")
             raise RabbitMQAPIError("RabbitMQ resource was not found", 404, kind="not_found")

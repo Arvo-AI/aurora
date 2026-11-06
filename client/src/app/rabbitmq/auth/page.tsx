@@ -114,18 +114,6 @@ export default function RabbitMQAuthPage() {
       } catch {
         console.warn("[rabbitmq] Status refresh after connect failed");
       }
-      try {
-        await fetch("/api/provider-preferences", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "add", provider: "rabbitmq" }),
-        });
-        window.dispatchEvent(new CustomEvent("providerPreferenceChanged", {
-          detail: { providers: ["rabbitmq"] },
-        }));
-      } catch (prefErr: unknown) {
-        console.warn("[rabbitmq] Failed to update provider preferences", prefErr);
-      }
     } catch (error: unknown) {
       console.error("[rabbitmq] Connect failed", error);
       toast({
@@ -156,18 +144,6 @@ export default function RabbitMQAuthPage() {
       }
       updateLocalStorageConnection(false);
       toast({ title: "RabbitMQ disconnected" });
-      try {
-        await fetch("/api/provider-preferences", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "remove", provider: "rabbitmq" }),
-        });
-        window.dispatchEvent(new CustomEvent("providerPreferenceChanged", {
-          detail: { providers: [] },
-        }));
-      } catch (prefErr: unknown) {
-        console.warn("[rabbitmq] Failed to update provider preferences", prefErr);
-      }
     } catch (error: unknown) {
       console.error("[rabbitmq] Disconnect failed", error);
       toast({

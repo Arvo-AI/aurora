@@ -194,3 +194,45 @@ def test_as_page_slices_a_bare_list():
     page = rmq.as_page([{"name": "a"}, {"name": "b"}, {"name": "c"}], page=2, page_size=2)
     assert page["items"] == [{"name": "c"}]
     assert page["total_count"] == 3
+
+
+def test_user_without_management_tag_gets_the_monitoring_message():
+    """Brokers answer a missing management tag with 401 and a fixed reason, not 403."""
+    session = MagicMock()
+    session.request.return_value = _response(401, {"error": "not_authorised", "reason": "Not management user"})
+    with pytest.raises(rmq.RabbitMQAPIError) as raised:
+        _client(session).whoami()
+    assert raised.value.kind == "forbidden"
+    assert "monitoring tag" in str(raised.value)
+    # The reason decides the message; whoami is not probed again.
+    assert session.request.call_count == 1
+
+
+def test_mirror_sync_406_on_4x_is_unsupported():
+    """4.x removed mirror sync and answers 406 to Accept: application/json."""
+    session = MagicMock()
+
+    def _respond(method, url, **kwargs):
+        if "mirror-sync" in url:
+            return _response(406, {"error": "not_acceptable"})
+        return _response(200, {"status": "ok"})
+
+    session.request.side_effect = _respond
+    checks = _client(session).health_checks()
+    assert checks["mirror_sync"] == {"status": "unsupported"}
+    assert checks["alarms"]["status"] == "ok"
+
+
+def test_node_uptime_is_named_in_milliseconds():
+    summary = rmq.summarize_node({"name": "rabbit@a", "uptime": 352384})
+    assert summary["uptime_ms"] == 352384
+    assert "uptime" not in summary
+
+
+def test_connect_404_mentions_missing_permission():
+    """RabbitMQ 4.x returns 404 for a vhost the user cannot read, same as a missing one."""
+    from routes.rabbitmq.rabbitmq_routes import _public_connect_error
+
+    message = _public_connect_error("not_found", vhost="/", username="monitor")
+    assert "no read permission" in message
+    assert 'rabbitmqctl set_permissions -p / monitor "^$" "^$" ".*"' in message

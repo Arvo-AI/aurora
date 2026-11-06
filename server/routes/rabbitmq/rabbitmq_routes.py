@@ -65,15 +65,19 @@ def _public_connect_error(kind: str, vhost: str = "/", username: str = "") -> st
     """User-facing connect failure. The vhost command is filled in when it is safe to copy."""
     if kind == "auth":
         return "RabbitMQ rejected the username or password"
+    target = vhost if _command_token(vhost) else "<vhost>"
+    grant = (
+        f"In the management UI, set permission on vhost {target}: configure ^$, write ^$, read .*. "
+        f"Or on the broker host run {_read_permission_command(vhost, username)}"
+    )
     if kind == "vhost":
-        target = vhost if _command_token(vhost) else "<vhost>"
         return (
             "This user can sign in, but cannot read that vhost. The monitoring tag does not grant access. "
-            f"In the management UI, set permission on vhost {target}: configure ^$, write ^$, read .*. "
-            f"Or on the broker host run {_read_permission_command(vhost, username)}"
+            + grant
         )
     if kind == "not_found":
-        return "That RabbitMQ vhost does not exist"
+        # RabbitMQ 4.x answers 404 for a vhost the user has no permission on, same as a missing one.
+        return f"RabbitMQ vhost {target} was not found, or this user has no read permission on it. " + grant
     if kind == "forbidden":
         return "This RabbitMQ user cannot read the management API. Grant the monitoring tag."
     if kind == "tls":
