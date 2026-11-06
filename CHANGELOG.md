@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.19] - 2026-11-06
+
+### Fixed
+- Slack: the onboarding GitHub, GitLab and GCP tiles start the connection
+  instead of leaving people on the generic connectors page. GitHub opens its
+  connect dialog through `/connectors?connect=github`.
+- Slack: the "logging you in" panel stays up long enough to read after a
+  Slack sign-in.
+
+### Security
+- Bump pyasn1 to 0.6.5.
+
 ## [1.5.18] - 2026-11-05
 
 ### Fixed
