@@ -362,6 +362,9 @@ config:
   # Wall-clock limit for one investigation, in seconds. Default is one hour.
   # Clamped to 120–10800. Worker grace and nginx proxy timeouts follow this.
   INVESTIGATION_TIMEOUT_SECONDS: "3600"
+  # Max background investigations (alert RCA, manual RCA, actions) one user
+  # may start per 5-minute window. Clamped to 1–1000.
+  BACKGROUND_CHAT_RATE_LIMIT_MAX: "20"
 
   # --- AI Safety Guardrails ---
   # Input rail + signature matcher + LLM safety judge. All three activate with
