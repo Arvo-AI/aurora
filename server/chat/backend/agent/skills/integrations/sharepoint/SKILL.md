@@ -7,7 +7,6 @@ connection_check:
   method: get_token_data
   provider_key: sharepoint
   required_field: access_token
-  feature_flag: is_sharepoint_enabled
 tools:
   - sharepoint_search
   - sharepoint_fetch_page

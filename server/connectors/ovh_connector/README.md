@@ -31,8 +31,6 @@ OAuth 2.0 authentication for OVH Cloud (multi-region).
 ### 2. Configure `.env`
 
 ```bash
-NEXT_PUBLIC_ENABLE_OVH=true
-
 # Europe region (configure at least one region)
 OVH_EU_CLIENT_ID=your-eu-client-id
 OVH_EU_CLIENT_SECRET=your-eu-client-secret
@@ -66,5 +64,3 @@ To run locally with OVH OAuth:
 ## Troubleshooting
 
 **"OAuth2 credentials not configured for [region]"** — Set `OVH_[REGION]_CLIENT_ID` and `OVH_[REGION]_CLIENT_SECRET`
-
-**OVH connector not enabled** — Ensure `NEXT_PUBLIC_ENABLE_OVH=true` and restart Aurora

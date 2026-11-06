@@ -48,40 +48,40 @@ type FeatureItem = {
 
 const FeatureList: FeatureItem[] = [
   {
-    title: 'AI-Powered RCA',
+    title: 'Investigations',
     icon: '01',
     description:
-      'Automated root cause analysis using LLM agents to help SREs resolve incidents faster.',
+      'An alert starts an agent. It runs kubectl and cloud CLIs in a sandbox and returns a root cause with the evidence.',
   },
   {
-    title: 'Multi-Cloud',
+    title: 'Actions',
     icon: '02',
     description:
-      'Connect to GCP, AWS, Azure, and more. Query infrastructure using natural language.',
+      'Postmortems, alert-gap audits, right-sizing, and your own instructions, on an incident, a schedule, or a click.',
   },
   {
-    title: 'Local-First',
+    title: 'Monitor',
     icon: '03',
     description:
-      'Run entirely on your machine with Docker. No cloud accounts required to start.',
+      'Fleet runs, SRE timings, tool usage, living artifacts the agent keeps current, and an audit log.',
   },
   {
-    title: 'Extensible',
+    title: 'Your stack',
     icon: '04',
     description:
-      'Integrate with Slack, PagerDuty, Datadog, Grafana, and other observability tools.',
+      'AWS, Azure, GCP, Kubernetes, Slack, Teams, ServiceNow, PagerDuty, Datadog, and the rest of the connector list.',
   },
   {
-    title: 'Secure',
+    title: 'Your model',
     icon: '05',
     description:
-      'HashiCorp Vault for secrets. Your credentials stay on your infrastructure.',
+      'OpenRouter, OpenAI, Anthropic, Gemini, Vertex, Bedrock, or Ollama on your own machine.',
   },
   {
-    title: 'Open Source',
+    title: 'Self-hosted',
     icon: '06',
     description:
-      'Apache 2.0 licensed. Fully transparent, community-driven development.',
+      'Docker or Helm. Vault or AWS Secrets Manager for secrets. Command safety guardrails on by default. Apache 2.0.',
   },
 ];
 
@@ -148,7 +148,7 @@ export default function Home(): JSX.Element {
   return (
     <Layout
       title={`${siteConfig.title}`}
-      description="Aurora is an automated root cause analysis tool that uses AI agents to help Site Reliability Engineers resolve incidents.">
+      description="Aurora investigates incidents, writes the postmortem, and keeps living artifacts. Self-hosted, Apache 2.0.">
       <HomepageHeader />
       <div className={styles.sectionDivider} />
       <QuickstartSection />

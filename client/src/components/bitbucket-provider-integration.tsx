@@ -9,8 +9,6 @@ import { Loader2, Check, LogOut, RefreshCw, AlertTriangle } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BitbucketIntegrationService } from '@/services/bitbucket-integration-service';
 import BitbucketWorkspaceBrowser from '@/components/bitbucket-workspace-browser';
-import { isBitbucketOAuthEnabled } from '@/lib/feature-flags';
-
 // Re-export service so existing imports from this path keep working
 export { BitbucketIntegrationService } from '@/services/bitbucket-integration-service';
 
@@ -41,7 +39,6 @@ export default function BitbucketProviderIntegration() {
   const [isLoading, setIsLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const { toast } = useToast();
-  const oauthAvailable = isBitbucketOAuthEnabled();
 
   // API token form
   const [email, setEmail] = useState('');
@@ -187,7 +184,6 @@ export default function BitbucketProviderIntegration() {
   return (
     <div className="space-y-4">
       {!isAuthenticated ? (
-        oauthAvailable ? (
         <Tabs defaultValue="api-token" className="w-full">
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="api-token">API Token</TabsTrigger>
@@ -225,9 +221,6 @@ export default function BitbucketProviderIntegration() {
             {apiTokenForm}
           </TabsContent>
         </Tabs>
-        ) : (
-          <div className="space-y-3">{apiTokenForm}</div>
-        )
       ) : (
         <div className="flex items-center justify-between p-3 border border-border rounded-lg">
           <div className="flex items-center gap-3">

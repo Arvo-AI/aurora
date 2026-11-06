@@ -481,11 +481,6 @@ config:
   # --- Optional Features (enable as needed) ---
   ENABLE_POD_ISOLATION: "false"               # Isolate terminal commands in separate pods
   # NEXT_PUBLIC_* feature flags — written to window.__ENV by docker-entrypoint.sh at startup, no image rebuild needed
-  NEXT_PUBLIC_ENABLE_OVH: "false"            # OVH Cloud integration
-  NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: "false" # PagerDuty integration
-  NEXT_PUBLIC_ENABLE_SHAREPOINT: "false"     # SharePoint integration
-  NEXT_PUBLIC_ENABLE_NOTION: "false"         # Notion integration
-  NEXT_PUBLIC_ENABLE_SPINNAKER: "false"      # Spinnaker integration
   NEXT_PUBLIC_ENABLE_VISUALIZATION: "false"  # Incident infra visualization UI (pairs with VISUALIZATION_ENABLED)
   HOSTED_SIGNUP_ENABLED: "false"             # One-click GitHub App / "Add to Slack" signup from website (GitHub needs GITHUB_APP_CLIENT_SECRET)
   MARKETING_SITE_URL: ""                     # Website a cancelled "Add to Slack" returns to; empty = app sign-in page

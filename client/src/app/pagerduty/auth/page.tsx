@@ -9,7 +9,6 @@ import { PagerDutyNotesCard } from "@/components/pagerduty/PagerDutyNotesCard";
 import { PagerDutyWebhookStep } from "@/components/pagerduty/PagerDutyWebhookStep";
 import { TokenInputModal } from "@/components/pagerduty/TokenInputModal";
 import { ConnectionLoadingOverlay } from "@/components/ui/connection-loading-overlay";
-import { isPagerDutyOAuthEnabled } from "@/lib/feature-flags";
 import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
 import { getUserFriendlyError } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
@@ -239,15 +238,9 @@ export default function PagerDutyAuthPage() {
     try {
       await pagerdutyService.disconnect();
 
-      setStatus({ connected: false });
       setDisplayName("PagerDuty");
-
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem(CACHE_KEY);
-        localStorage.removeItem('isPagerDutyConnected');
-      }
-
-      updateLocalStorageConnection(false);
+      // Status includes oauthAvailable. A local { connected: false } would hide the button.
+      await fetchAndUpdateStatus();
 
       toast({
         title: 'Success',
@@ -302,7 +295,7 @@ export default function PagerDutyAuthPage() {
               loading={loading}
               error={null}
               onConnect={handleConnect}
-              onOAuthConnect={isPagerDutyOAuthEnabled() ? handleOAuthConnect : undefined}
+              onOAuthConnect={status?.oauthAvailable ? handleOAuthConnect : undefined}
             />
           ) : status ? (
             <div className="space-y-4">

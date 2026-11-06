@@ -17,21 +17,6 @@
 
 ---
 
-## What's New
-
-- **Artifacts** — Persistent agent-maintained documents in Monitor, continuously updated as investigations progress
-- **Actions** — Automated post-RCA workflows (generate postmortems, open fix PRs, notify Slack) triggered on investigation completion
-- **AWS Bedrock Support** — Use Claude, Titan, and other Bedrock models via IAM auth
-- **Fly.io Connector** — Investigate incidents on Fly.io infrastructure
-- **CloudBees Enterprise** — Operations Center + Feature Management connector
-- **Kubeconfig Upload** — Connect on-prem Kubernetes clusters without a cloud provider
-- **CloudWatch Alarm Webhooks** — Ingest AWS CloudWatch alarms directly as incidents
-- **Extensibility Hooks** — Gate LLM calls, enforce seat limits, and customize behavior with lifecycle hooks
-
-See the full [CHANGELOG](CHANGELOG.md) for all releases.
-
----
-
 ## Why Aurora?
 
 When an alert fires at 3 AM, your on-call engineer spends 30-60 minutes doing the same thing every time: checking dashboards, running kubectl commands, reading logs, correlating deployments, and searching Slack history.
@@ -140,7 +125,7 @@ Visualize your entire infrastructure as a dependency graph. When an incident occ
 </tr>
 </table>
 
-**More capabilities:** Knowledge Base RAG &bull; Multi-Cloud (AWS, Azure, GCP, OVH, Scaleway, Cloudflare) &bull; Any LLM (OpenAI, Anthropic, Gemini, Vertex AI, OpenRouter, Ollama) &bull; Terraform/IaC Analysis &bull; MCP Server (Cursor, Claude Desktop, Windsurf) &bull; Org-level Command Policies &bull; SigmaHQ Guardrails &bull; NeMo Input Rail
+**More capabilities:** Org memory &bull; Fix pull requests &bull; Multi-cloud (AWS, Azure, GCP, OVH, Scaleway, Cloudflare, Fly.io) &bull; Any LLM (OpenAI, Anthropic, Gemini, Vertex AI, Bedrock, OpenRouter, Ollama) &bull; Slack, Teams, and Google Chat &bull; MCP (Cursor, Claude Desktop, and your own servers) &bull; SAML SSO &bull; Per-role connector access &bull; Command policies, SigmaHQ signatures, and a NeMo input rail
 
 ---
 
@@ -254,6 +239,11 @@ Also available via OCI: `oci://ghcr.io/arvo-ai/charts/aurora-oss`
 ![Fly.io](https://img.shields.io/badge/Fly.io-7B36ED?style=flat-square&logo=flydotio&logoColor=white)
 ![CloudBees](https://img.shields.io/badge/CloudBees-1997B5?style=flat-square&logoColor=white)
 ![Tailscale](https://img.shields.io/badge/Tailscale-242424?style=flat-square&logo=tailscale&logoColor=white)
+![ServiceNow](https://img.shields.io/badge/ServiceNow-81B5A1?style=flat-square&logo=servicenow&logoColor=white)
+![Microsoft Teams](https://img.shields.io/badge/Microsoft_Teams-6264A7?style=flat-square&logo=microsoftteams&logoColor=white)
+![GitLab](https://img.shields.io/badge/GitLab-FC6D26?style=flat-square&logo=gitlab&logoColor=white)
+![Sentry](https://img.shields.io/badge/Sentry-362D59?style=flat-square&logo=sentry&logoColor=white)
+![Scaleway](https://img.shields.io/badge/Scaleway-4F0599?style=flat-square&logo=scaleway&logoColor=white)
 
 **LLMs:** OpenAI &bull; Anthropic &bull; Google Gemini &bull; Vertex AI &bull; AWS Bedrock &bull; OpenRouter &bull; Ollama (air-gapped)
 

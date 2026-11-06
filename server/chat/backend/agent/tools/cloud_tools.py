@@ -2945,13 +2945,12 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to add Jira tools: {e}")
 
-    # Add SharePoint search tools if enabled
+    # Add SharePoint search tools when this user has connected SharePoint
     try:
-        from utils.flags.feature_flags import is_sharepoint_enabled
         from utils.secrets.secret_ref_utils import has_user_credentials
 
         # A team limit hides the tool the same way it hides the skill.
-        if is_sharepoint_enabled() and has_user_credentials(user_id, "sharepoint") and _open("sharepoint"):
+        if has_user_credentials(user_id, "sharepoint") and _open("sharepoint"):
             _sharepoint_tools = [
                 (sharepoint_search, "sharepoint_search", SharePointSearchArgs,
                  "Search SharePoint for pages, documents, and list items matching a query. "

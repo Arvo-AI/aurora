@@ -1253,11 +1253,7 @@ async def handle_connection(websocket) -> None:
             if isinstance(provider_preference, str):
                 provider_preference = [provider_preference]
             if isinstance(provider_preference, list):
-                # Build valid_providers list, conditionally including ovh
-                from utils.flags.feature_flags import is_ovh_enabled
-                valid_providers = ['gcp', 'azure', 'aws', 'scaleway', 'tailscale']
-                if is_ovh_enabled():
-                    valid_providers.append('ovh')
+                valid_providers = ['gcp', 'azure', 'aws', 'ovh', 'scaleway', 'tailscale']
                 provider_preference = [p for p in provider_preference if p in valid_providers]
                 if not provider_preference:
                     provider_preference = None
