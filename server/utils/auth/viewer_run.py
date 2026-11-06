@@ -122,31 +122,21 @@ def memory_edit_refusal(user_id: str, org_id: str) -> str | None:
     """Why this person may not modify memory, or None when they may.
 
     The agent repeats this to the user, so it names the person's role and the
-    exact switch. A bare "not allowed" reads as an org-wide outage.
+    exact switch. A bare "not allowed" reads as an org-wide setting.
     """
+    from utils.auth.connector_access import denial_message
+
     if viewer_may_edit_memory(user_id, org_id):
         return None
-    if not user_id or not org_id:
-        return "Memory cannot be modified: this request has no user or organization."
-    role, guest = _memory_role(user_id, org_id)
+    role, guest = _memory_role(user_id, org_id) if user_id and org_id else (None, False)
+    # Same wording as a refused connector, so every Access-tab refusal reads alike.
     if role == ROLE_EDITOR:
-        who, switch = "The person asking has the Editor role", "Editors can modify memories"
+        audience, switch = "editor", "Editors can modify memories"
     elif role == ROLE_VIEWER:
-        who = (
-            "The person asking has no Aurora account, so Aurora answers them as a Viewer"
-            if guest else "The person asking has the Viewer role"
-        )
-        switch = "Viewers can modify memories"
+        audience, switch = ("general viewer" if guest else "viewer"), "Viewers can modify memories"
     else:
-        return (
-            "The person asking has no role in this organization, so they cannot modify "
-            "memory. An admin can assign them a role in org Settings."
-        )
-    return (
-        f"{who}, and this organization does not let that role modify memory. "
-        f"This is about the person's role, not a workspace-wide setting: admins can always "
-        f"save memory. An admin can turn on '{switch}' in org Settings, on the Access tab."
-    )
+        return denial_message("modify memories", "")
+    return f"{denial_message('modify memories', audience)} The switch is '{switch}'."
 
 
 def message_starts_chat(question, data: dict) -> bool:

@@ -124,9 +124,9 @@ def test_memory_refusal_names_the_viewer_role_and_switch(monkeypatch):
     monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: ["viewer"])
     monkeypatch.setattr("utils.auth.viewer_run.org_allows_memory_edits", lambda _org: False)
     reason = memory_edit_refusal("uid", "org")
-    assert "Viewer role" in reason
-    assert "'Viewers can modify memories'" in reason
-    assert "not a workspace-wide setting" in reason
+    assert reason.startswith("You don't have access to modify memories as a viewer.")
+    assert "on the Access tab" in reason
+    assert reason.endswith("The switch is 'Viewers can modify memories'.")
     monkeypatch.setattr("utils.auth.viewer_run.org_allows_memory_edits", lambda _org: True)
     assert memory_edit_refusal("uid", "org") is None
 
@@ -137,8 +137,8 @@ def test_memory_refusal_names_the_editor_switch(monkeypatch):
     monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: ["editor"])
     monkeypatch.setattr("utils.auth.viewer_run.org_allows_editor_memory_edits", lambda _org: False)
     reason = memory_edit_refusal("uid", "org")
-    assert "Editor role" in reason
-    assert "'Editors can modify memories'" in reason
+    assert reason.startswith("You don't have access to modify memories as an editor.")
+    assert reason.endswith("The switch is 'Editors can modify memories'.")
 
 
 def test_memory_refusal_explains_a_slack_guest(monkeypatch):
@@ -153,12 +153,12 @@ def test_memory_refusal_explains_a_slack_guest(monkeypatch):
     )
     with pin_sender_access("admin-uid", "general_viewer"):
         reason = memory_edit_refusal("admin-uid", "org")
-    assert "no Aurora account" in reason
+    assert "as a general viewer" in reason
 
 
 def test_memory_refusal_without_a_role(monkeypatch):
     from utils.auth.viewer_run import memory_edit_refusal
 
     monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda _uid, _org: [])
-    assert "no role" in memory_edit_refusal("uid", "org")
+    assert memory_edit_refusal("uid", "org").startswith("You don't have access to modify memories.")
     assert memory_edit_refusal("uid", "") is not None
