@@ -88,28 +88,65 @@ def viewer_may_run(user_id: str, org_id: str) -> bool:
     return _viewer_allowed(user_id, org_id, org_allows_viewers)
 
 
-def viewer_may_edit_memory(user_id: str, org_id: str) -> bool:
-    if not user_id or not org_id:
-        return False
+def _memory_role(user_id: str, org_id: str) -> tuple[str | None, bool]:
+    """The role memory edits are checked against, and whether it is a Slack guest pin."""
     from utils.auth.connector_access import pinned_roles
     from utils.auth.enforcer import get_user_roles_in_org
 
     pinned = pinned_roles()
     # A Slack guest keeps the connector owner's id. The pin is the role to check.
-    if pinned is not None:
-        roles = pinned
-    else:
-        roles = get_user_roles_in_org(user_id, org_id)
-    names = {str(role) for role in roles if role}
+    roles = pinned if pinned is not None else get_user_roles_in_org(user_id, org_id)
+    names = {str(role) for role in roles or [] if role}
+    for role in (ROLE_ADMIN, ROLE_EDITOR, ROLE_VIEWER):
+        if role in names:
+            return role, pinned is not None
+    return None, pinned is not None
+
+
+def viewer_may_edit_memory(user_id: str, org_id: str) -> bool:
+    if not user_id or not org_id:
+        return False
+    role, _ = _memory_role(user_id, org_id)
     # Admins stay allowed so an org cannot lock itself out of memory.
-    if ROLE_ADMIN in names:
+    if role == ROLE_ADMIN:
         return True
     # Editors follow their own switch. Viewers follow the other one.
-    if ROLE_EDITOR in names:
+    if role == ROLE_EDITOR:
         return org_allows_editor_memory_edits(org_id)
-    if ROLE_VIEWER in names:
+    if role == ROLE_VIEWER:
         return org_allows_memory_edits(org_id)
     return False
+
+
+def memory_edit_refusal(user_id: str, org_id: str) -> str | None:
+    """Why this person may not modify memory, or None when they may.
+
+    The agent repeats this to the user, so it names the person's role and the
+    exact switch. A bare "not allowed" reads as an org-wide outage.
+    """
+    if viewer_may_edit_memory(user_id, org_id):
+        return None
+    if not user_id or not org_id:
+        return "Memory cannot be modified: this request has no user or organization."
+    role, guest = _memory_role(user_id, org_id)
+    if role == ROLE_EDITOR:
+        who, switch = "The person asking has the Editor role", "Editors can modify memories"
+    elif role == ROLE_VIEWER:
+        who = (
+            "The person asking has no Aurora account, so Aurora answers them as a Viewer"
+            if guest else "The person asking has the Viewer role"
+        )
+        switch = "Viewers can modify memories"
+    else:
+        return (
+            "The person asking has no role in this organization, so they cannot modify "
+            "memory. An admin can assign them a role in org Settings."
+        )
+    return (
+        f"{who}, and this organization does not let that role modify memory. "
+        f"This is about the person's role, not a workspace-wide setting: admins can always "
+        f"save memory. An admin can turn on '{switch}' in org Settings, on the Access tab."
+    )
 
 
 def message_starts_chat(question, data: dict) -> bool:
