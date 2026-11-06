@@ -292,6 +292,108 @@ def _read_final_assistant_message(user_id: str, session_id: str) -> Optional[str
     return None
 
 
+def run_review_agent(
+    user_id: str,
+    prompt: str,
+    *,
+    rail_text: str,
+    title: str,
+    trigger_metadata: dict[str, Any],
+    log_key: str,
+    log_ctx: str,
+) -> dict[str, Any]:
+    """Run one read-only review agent and return its normalized verdict.
+
+    Shared by the live PR review (:func:`_run_investigation_core`) and revert
+    replay (``tasks.change_gating_replay``) so a replayed verdict comes from
+    exactly the agent, mode and parsing a live review uses.
+
+    Returns ``{"status", "session_id", "verdict"}`` where status is one of
+    ``completed | agent_failed | guardrail_blocked | verdict_parse_failed``
+    and ``verdict`` is set only when completed. ``rail_text`` carries only
+    the externally-authored fields (prompt-injection guardrail surface).
+    Deliberately no is_background_chat_allowed call (design sec. 12).
+    """
+    from chat.background.task import create_background_chat_session, run_background_chat
+    from services.change_gating.verdict import (
+        extract_verdict_with_llm,
+        normalize_verdict,
+        parse_verdict,
+    )
+
+    session_id = create_background_chat_session(
+        user_id=user_id,
+        title=title,
+        trigger_metadata=trigger_metadata,
+    )
+
+    # NOTE: .result, NOT .get() — inside a prefork worker Celery's
+    # EagerResult.get() raises "Never call result.get() within a
+    # task!"; .result returns the eager return value directly (or the
+    # exception instance, which fails the dict check below safely).
+    result = run_background_chat.apply(
+        kwargs={
+            "user_id": user_id,
+            "session_id": session_id,
+            "initial_message": prompt,
+            "trigger_metadata": trigger_metadata,
+            "send_notifications": False,
+            "mode": "ask",
+            "rail_text": rail_text,
+        }
+    ).result
+
+    if not isinstance(result, dict) or result.get("status") != "completed":
+        logger.error(
+            "change_gating=%s %s session_id=%s status=agent_failed agent_status=%s",
+            log_key,
+            log_ctx,
+            session_id,
+            (result or {}).get("status") if isinstance(result, dict) else type(result).__name__,
+        )
+        return {"status": "agent_failed", "session_id": session_id}
+    if result.get("guardrail_blocked"):
+        # The input rail blocked the (attacker-controllable) PR
+        # title/body. The session's final message is just the block
+        # notice — there was NO investigation, so posting any verdict
+        # would be wrong. Post nothing.
+        logger.warning(
+            "change_gating=%s %s session_id=%s status=guardrail_blocked",
+            log_key, log_ctx, session_id,
+        )
+        return {"status": "guardrail_blocked", "session_id": session_id}
+
+    final_text = _read_final_assistant_message(user_id, session_id)
+    verdict = None
+    if final_text:
+        verdict = parse_verdict(final_text)
+        if verdict:
+            logger.info(
+                "change_gating=%s %s verdict_source=parse_verdict",
+                log_key, log_ctx,
+            )
+        else:
+            verdict = extract_verdict_with_llm(final_text)
+            if verdict:
+                logger.warning(
+                    "change_gating=%s %s verdict_source=llm_extraction_fallback",
+                    log_key, log_ctx,
+                )
+    if not verdict:
+        logger.error(
+            "change_gating=%s %s session_id=%s status=verdict_parse_failed "
+            "has_final_text=%s",
+            log_key, log_ctx, session_id, bool(final_text),
+        )
+        return {"status": "verdict_parse_failed", "session_id": session_id}
+
+    return {
+        "status": "completed",
+        "session_id": session_id,
+        "verdict": normalize_verdict(verdict, log_key=log_key, log_ctx=log_ctx, session_id=session_id),
+    }
+
+
 @celery_app.task(
     bind=True,
     name="tasks.change_gating.investigate_pr",
@@ -627,8 +729,6 @@ def _run_investigation_core(
     from services.change_gating.markers import finding_fingerprint
     from services.change_gating.verdict import (
         build_review_prompt,
-        extract_verdict_with_llm,
-        parse_verdict,
         render_inline_comment,
         render_review_body,
     )
@@ -695,11 +795,6 @@ def _run_investigation_core(
                 prior_findings=prior_findings, incremental=incremental,
             )
 
-            # Session + synchronous agent run. rail_text carries only the
-            # externally-authored fields (prompt-injection guardrail surface).
-            # Deliberately no is_background_chat_allowed call (design sec. 12).
-            from chat.background.task import create_background_chat_session, run_background_chat
-
             trigger_metadata = {
                 "source": "change_gating",
                 "provider": provider,
@@ -708,84 +803,19 @@ def _run_investigation_core(
                 "head_sha": head_sha,
                 "delivery_id": delivery_id,
             }
-            session_id = create_background_chat_session(
-                user_id=user_id,
+            agent = run_review_agent(
+                user_id,
+                prompt,
+                rail_text=(pr.get("title") or "") + "\n\n" + (pr.get("body") or ""),
                 title=f"PR Risk Review: {repo_full_name}#{pr_number}",
                 trigger_metadata=trigger_metadata,
+                log_key=log_key,
+                log_ctx=log_ctx,
             )
-            rail_text = (pr.get("title") or "") + "\n\n" + (pr.get("body") or "")
-
-            # NOTE: .result, NOT .get() — inside a prefork worker Celery's
-            # EagerResult.get() raises "Never call result.get() within a
-            # task!"; .result returns the eager return value directly (or the
-            # exception instance, which fails the dict check below safely).
-            result = run_background_chat.apply(
-                kwargs={
-                    "user_id": user_id,
-                    "session_id": session_id,
-                    "initial_message": prompt,
-                    "trigger_metadata": trigger_metadata,
-                    "send_notifications": False,
-                    "mode": "ask",
-                    "rail_text": rail_text,
-                }
-            ).result
-
-            if not isinstance(result, dict) or result.get("status") != "completed":
-                logger.error(
-                    "change_gating=%s %s session_id=%s status=agent_failed agent_status=%s",
-                    log_key,
-                    log_ctx,
-                    session_id,
-                    (result or {}).get("status") if isinstance(result, dict) else type(result).__name__,
-                )
-                return {"status": "agent_failed", "session_id": session_id}
-            if result.get("guardrail_blocked"):
-                # The input rail blocked the (attacker-controllable) PR
-                # title/body. The session's final message is just the block
-                # notice — there was NO investigation, so posting any verdict
-                # would be wrong. Post nothing.
-                logger.warning(
-                    "change_gating=%s %s session_id=%s status=guardrail_blocked",
-                    log_key, log_ctx, session_id,
-                )
-                return {"status": "guardrail_blocked", "session_id": session_id}
-
-            final_text = _read_final_assistant_message(user_id, session_id)
-            verdict = None
-            if final_text:
-                verdict = parse_verdict(final_text)
-                if verdict:
-                    logger.info(
-                        "change_gating=%s %s verdict_source=parse_verdict",
-                        log_key, log_ctx,
-                    )
-                else:
-                    verdict = extract_verdict_with_llm(final_text)
-                    if verdict:
-                        logger.warning(
-                            "change_gating=%s %s verdict_source=llm_extraction_fallback",
-                            log_key, log_ctx,
-                        )
-            if not verdict:
-                logger.error(
-                    "change_gating=%s %s session_id=%s status=verdict_parse_failed "
-                    "has_final_text=%s",
-                    log_key, log_ctx, session_id, bool(final_text),
-                )
-                return {"status": "verdict_parse_failed", "session_id": session_id}
-
-            # Normalize: SAFE never carries findings; RISKY without findings is
-            # demoted to SAFE (nothing actionable to anchor or list).
-            if verdict.get("verdict") == "SAFE":
-                verdict["findings"] = []
-            elif verdict.get("verdict") == "RISKY" and not verdict.get("findings"):
-                logger.info(
-                    "change_gating=%s %s session_id=%s status=demoted_risky_no_findings",
-                    log_key, log_ctx, session_id,
-                )
-                verdict["verdict"] = "SAFE"
-                verdict["findings"] = []
+            session_id = agent.get("session_id")
+            if agent["status"] != "completed":
+                return {"status": agent["status"], "session_id": session_id}
+            verdict = agent["verdict"]
 
             if redis_client is not None:
                 try:
