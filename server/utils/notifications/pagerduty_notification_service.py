@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional, Tuple
 from routes.pagerduty.pagerduty_helpers import PagerDutyAPIError, PagerDutyClient
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.notifications.postback_claim import PostbackClaim
-from utils.notifications.rca_note import MIN_SUMMARY_CHARS, compose_note, extract_note_body
+from utils.notifications.rca_note import MIN_SUMMARY_CHARS, compose_note, extract_next_steps, extract_note_body
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,8 @@ def send_pagerduty_incident_note(user_id: str, incident_data: Dict[str, Any]) ->
         if client is None:
             return False
 
-        content = compose_note(root_cause, incident_id, impact, FRONTEND_URL)
+        next_steps = extract_next_steps(incident_data.get("aurora_summary"))
+        content = compose_note(root_cause, incident_id, impact, FRONTEND_URL, next_steps)
 
         if not _claims.claim(incident_id, user_id):
             logger.info("%s Incident %s already has a note posted or in flight", _LOG, incident_id)

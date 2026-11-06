@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- PagerDuty: the RCA note ends with up to three suggested next steps, read
+  from a new "## Suggested Next Steps" section of the RCA summary (one line
+  each, action first). The note cap rises to 2,500 characters to fit them.
+
 ## [1.5.19] - 2026-11-06
 
 ### Fixed
