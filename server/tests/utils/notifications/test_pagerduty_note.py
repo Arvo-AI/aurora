@@ -95,14 +95,19 @@ def test_plain_text_keeps_paragraph_breaks_and_drops_heading_marks():
 
 
 def test_plain_text_truncates_on_a_word_boundary():
-    out = rca_note.to_plain_text("word " * 200)
+    out = rca_note.to_plain_text("word " * 600)
     assert out.endswith("word...")
     assert len(out) <= rca_note.NOTE_MAX_CHARS + 3
 
 
 def test_truncate_hard_cuts_when_no_early_space():
-    out = rca_note.truncate("x" * 900)
+    out = rca_note.truncate("x" * (rca_note.NOTE_MAX_CHARS + 200))
     assert out == "x" * rca_note.NOTE_MAX_CHARS + "..."
+
+
+def test_truncate_keeps_word_boundary_for_short_limits():
+    out = rca_note.truncate("word " * 60, rca_note.NEXT_STEP_MAX_CHARS)
+    assert out.endswith("word...")
 
 
 # --- _should_post -------------------------------------------------------------
@@ -193,7 +198,70 @@ def test_bullet_sections_never_leak_when_no_prose_precedes_them():
     assert rca_note.extract_note_body("## Ruled Out\n\n- **Hypothesis** — killed by evidence [1].\n") == ("", "")
 
 
+# --- extract_next_steps ------------------------------------------------------
+
+NEXT_STEPS_REPORT = REPORT + (
+    "\n## Suggested Next Steps\n\n"
+    "- **Redeploy** the checkout frontend so clients drop stale Server Action IDs [7] [S:4]\n"
+    "- Add a 5xx alert on `checkout-api` scoped to the deploy window\n"
+    "2. Confirm the Fleet Server agent count recovered [28]\n"
+    "- A fourth step the note leaves out\n"
+)
+NEXT_STEPS = [
+    "Redeploy the checkout frontend so clients drop stale Server Action IDs",
+    "Add a 5xx alert on checkout-api scoped to the deploy window",
+    "Confirm the Fleet Server agent count recovered",
+]
+
+
+def test_next_steps_are_read_as_plain_one_liners_capped_at_three():
+    assert rca_note.extract_next_steps(NEXT_STEPS_REPORT) == NEXT_STEPS
+
+
+def test_next_steps_do_not_change_root_cause_or_impact():
+    assert rca_note.extract_note_body(NEXT_STEPS_REPORT) == (REPORT_ROOT_CAUSE, REPORT_IMPACT)
+
+
+@pytest.mark.parametrize("heading", ["## Next steps", "**Next Steps**", "### Recommendations"])
+def test_next_steps_heading_variants(heading):
+    summary = SUMMARY + f"\n\n{heading}\n- Raise max_connections on orders-db to 400\n\n## Not Checked\n- DNS"
+    assert rca_note.extract_next_steps(summary) == ["Raise max_connections on orders-db to 400"]
+
+
+def test_no_next_steps_section_gives_none():
+    assert rca_note.extract_next_steps(REPORT) == []
+    assert rca_note.extract_next_steps(None) == []
+
+
+def test_long_next_step_is_cut_on_a_word():
+    step = rca_note.extract_next_steps("## Next steps\n- " + "word " * 60)[0]
+    assert step.endswith("word...")
+    assert len(step) <= rca_note.NEXT_STEP_MAX_CHARS + 3
+
+
 # --- _compose_note ------------------------------------------------------------
+
+def test_note_ends_with_next_steps_block_before_link_and_disclaimer():
+    root, impact = rca_note.extract_note_body(NEXT_STEPS_REPORT)
+    steps = rca_note.extract_next_steps(NEXT_STEPS_REPORT)
+    note = rca_note.compose_note(root, "i1", impact, "https://aurora.example.com", steps)
+    assert note.endswith(
+        "Next steps\n- " + "\n- ".join(NEXT_STEPS) + "\n\n"
+        "Full investigation: https://aurora.example.com/incidents/i1\n\n"
+        "Generated automatically by Aurora. Verify before acting."
+    )
+    assert "[S:" not in note
+    assert len(note) <= rca_note.NOTE_MAX_CHARS
+
+
+def test_largest_possible_note_fits_the_cap():
+    root = rca_note.truncate("word " * 400, rca_note.ROOT_CAUSE_MAX_CHARS)
+    impact = rca_note.truncate("word " * 200, rca_note.IMPACT_MAX_CHARS)
+    steps = [rca_note.truncate("word " * 60, rca_note.NEXT_STEP_MAX_CHARS)] * rca_note.NEXT_STEPS_MAX
+    base_url = "https://aurora." + "x" * 80 + ".example.com"
+    note = rca_note.compose_note(root, "0" * 36, impact, base_url, steps)
+    assert len(note) <= rca_note.NOTE_MAX_CHARS
+
 
 def test_note_has_root_cause_impact_link_and_disclaimer():
     note = rca_note.compose_note("Because X.", "i1", "Nobody noticed.", "https://aurora.example.com/")
@@ -352,6 +420,12 @@ def test_happy_path_claims_posts_then_records(wired, monkeypatch):
     assert "**" not in content
     assert wired.built == [{"from_email": "bot@acme.com", "api_token": "tok"}]
     wired.stored.assert_not_called()
+
+
+def test_posted_note_includes_next_steps(wired):
+    assert svc.send_pagerduty_incident_note("u1", _anchor(aurora_summary=NEXT_STEPS_REPORT)) is True
+    _, content = wired.client.create_note.call_args.args
+    assert "\n\nNext steps\n- " + "\n- ".join(NEXT_STEPS) + "\n\n" in content
 
 
 def test_lost_claim_posts_nothing(wired):
