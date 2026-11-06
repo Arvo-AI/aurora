@@ -5,7 +5,7 @@
 
 The zero-trust door to Incident Prevention: no GitHub App, no account, no
 connected systems. It reads the repo's recent reverted PRs and a control set
-of PRs that shipped fine, asks the configured model (``MAIN_MODEL``, same
+of PRs that shipped fine, asks the model (``--model`` or ``MAIN_MODEL``, same
 provider env vars as the server) for the normal pre-merge review of each
 original diff, and prints the scorecard. ``GITHUB_TOKEN`` is optional and
 only raises GitHub's rate limit; replay never writes anything.
@@ -24,15 +24,16 @@ import sys
 from typing import Any, Optional
 
 
-def _llm_reviewer(model: Optional[str]):
+def _llm_reviewer(model: str):
     from langchain_core.messages import HumanMessage
 
-    from chat.backend.agent.llm import ModelConfig
+    # Not ModelConfig: importing chat.backend.agent.llm opens the DB pool,
+    # and this CLI must run with no Aurora stack at all.
     from chat.backend.agent.providers import create_chat_model
     from services.change_gating.replay import build_replay_prompt
     from services.change_gating.verdict import normalize_verdict, parse_verdict
 
-    llm = create_chat_model(model or ModelConfig.MAIN_MODEL, temperature=0.0, streaming=False)
+    llm = create_chat_model(model, temperature=0.0, streaming=False)
 
     def review(pr: dict[str, Any], files: list, diff: Optional[str]) -> dict[str, Any]:
         repo = ((pr.get("base") or {}).get("repo") or {}).get("full_name") or ""
@@ -53,11 +54,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("repo", help="owner/name of a public GitHub repository")
     parser.add_argument("--reverted", type=int, default=5, help="reverted PRs to replay")
     parser.add_argument("--controls", type=int, default=5, help="never-reverted PRs to replay")
-    parser.add_argument("--model", default=None, help="override MAIN_MODEL")
+    parser.add_argument("--model", default=os.getenv("MAIN_MODEL"),
+                        help="provider/model, e.g. openai/gpt-6-astra (default: $MAIN_MODEL)")
     parser.add_argument("--json", dest="json_path", help="also write the full report here")
     parser.add_argument("--list-only", action="store_true",
                         help="only list the cases that would be replayed (no model calls)")
     args = parser.parse_args(argv)
+    if not args.model and not args.list_only:
+        parser.error("set MAIN_MODEL or pass --model")
 
     from services.change_gating.github_adapter import PublicRepoReader
     from services.change_gating.replay import run_replay
