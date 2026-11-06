@@ -19,7 +19,7 @@ ALERT = {
         {"attribute": {"name": "Service"}, "value": {"label": "payments"}},
         {
             "attribute": {"name": "Team"},
-            "value": [{"label": "oncall"}, {"label": "payments"}],
+            "array_value": [{"label": "oncall"}, {"label": "payments"}],
         },
     ],
     "alert_group_ids": ["01GRP"],
@@ -74,9 +74,17 @@ def test_rejects_blank_oversized_and_control_ids():
     """Blank, oversized, and control-character ids never reach the API."""
     with patch.object(tool, "_get_incidentio_credentials", return_value="key"):
         blank = json.loads(tool.get_incidentio_alert("  ", user_id="u1"))
-        huge = json.loads(tool.get_incidentio_alert("a" * 101, user_id="u1"))
+        huge = json.loads(tool.get_incidentio_alert("a" * 1025, user_id="u1"))
         broken = json.loads(tool.get_incidentio_alert("id\n1", user_id="u1"))
     assert blank["error"] == huge["error"] == broken["error"] == "Invalid alert_id"
+
+
+def test_long_source_key_is_still_searched():
+    """Dedup keys have no API max, so a key past the incident-id cap is searched."""
+    key = "k" * 113
+    payload, seen = _run(key, [{"alerts": [ALERT]}, LINKS])
+    assert payload["id"] == ALERT["id"]
+    assert seen[0] == ("/alerts", {"page_size": 10, "deduplication_key[is]": key})
 
 
 def test_incidentio_alert_id_includes_the_attached_incident():
@@ -94,7 +102,6 @@ def test_incidentio_alert_id_includes_the_attached_incident():
             "id": "01INC",
             "name": "Payments down",
             "reference": "INC-12",
-            "status": None,
             "status_category": "live",
         }
     ]
@@ -121,7 +128,11 @@ def test_rejected_ulid_still_searches_by_dedup_key():
     """HTTP 400 on the path is not fatal; the same id may be a dedup key."""
     payload, seen = _run(
         ALERT["id"],
-        [{"error": "incident.io API error (HTTP 400)"}, {"alerts": [ALERT]}, LINKS],
+        [
+            {"error": "incident.io API error (HTTP 400)", "status_code": 400},
+            {"alerts": [ALERT]},
+            LINKS,
+        ],
     )
     assert payload["deduplication_key"] == "4293868629"
     assert seen[0] == (f"/alerts/{ALERT['id']}", None)
@@ -132,7 +143,7 @@ def test_auth_failure_does_not_search_by_dedup_key():
     """An auth failure on the path lookup is final."""
     payload, seen = _run(
         ALERT["id"],
-        [{"error": "Authentication failed — API key may be invalid or expired"}],
+        [{"error": "Authentication failed — API key may be invalid or expired", "status_code": 401}],
     )
     assert "Authentication" in payload["error"]
     assert seen == [(f"/alerts/{ALERT['id']}", None)]
@@ -190,11 +201,11 @@ def test_error_status_is_read_from_a_real_response():
     """A 4xx Response is false, so the status has to be read with an explicit check."""
     with patch("requests.request", return_value=_http_response(404)):
         missing = tool._api_request("key", "GET", "/alerts/01ABC")
-    assert missing == {"error": "Resource not found"}
+    assert missing == {"error": "Resource not found", "status_code": 404}
 
     with patch("requests.request", return_value=_http_response(400)):
         rejected = tool._api_request("key", "GET", "/alerts/01ABC")
-    assert rejected["error"] in tool._PATH_MISS
+    assert rejected["status_code"] in tool._PATH_MISS
 
     with patch("requests.request", return_value=_http_response(401)):
         denied = tool._api_request("key", "GET", "/alerts/01ABC")
@@ -225,12 +236,21 @@ def test_real_incident_404_points_at_the_alert_tool():
     assert "get_incidentio_alert" in payload["error"]
 
 
-def test_missing_incident_points_at_the_alert_tool():
-    """A 404 on an incident id tells the agent to try the alert tool."""
+def test_rejected_incident_id_points_at_the_alert_tool():
+    """A 400 on a non-ULID incident id gets the same pointer as a 404."""
     with patch.object(tool, "_get_incidentio_credentials", return_value="key"), \
-            patch.object(tool, "_api_request", return_value={"error": "Resource not found"}):
-        payload = json.loads(tool.get_incidentio_incident("4293868629", user_id="u1"))
+            patch("requests.request", return_value=_http_response(400)):
+        payload = json.loads(tool.get_incidentio_incident("abc123", user_id="u1"))
+    assert payload["error"].startswith("incident.io API error (HTTP 400)")
     assert "get_incidentio_alert" in payload["error"]
+
+
+def test_incident_auth_failure_has_no_alert_hint():
+    """Only a path miss suggests the alert tool."""
+    with patch.object(tool, "_get_incidentio_credentials", return_value="key"), \
+            patch("requests.request", return_value=_http_response(401)):
+        payload = json.loads(tool.get_incidentio_incident("01INC", user_id="u1"))
+    assert "get_incidentio_alert" not in payload["error"]
 
 
 def test_unknown_id_and_a_failed_attachment_lookup():
@@ -240,7 +260,7 @@ def test_unknown_id_and_a_failed_attachment_lookup():
 
     payload, _ = _run(
         ALERT["id"],
-        [{"alert": ALERT}, {"error": "incident.io API error (HTTP 500)"}],
+        [{"alert": ALERT}, {"error": "incident.io API error (HTTP 500)", "status_code": 500}],
     )
     assert payload["id"] == ALERT["id"]
     assert payload["incidents_error"] == "incident.io API error (HTTP 500)"
@@ -263,7 +283,7 @@ def test_oversized_matches_stay_valid_json():
 
 
 def test_list_alerts_returns_ids_and_follows_the_cursor():
-    """A cursor on this endpoint means another page, even when the page is short."""
+    """A full page plus a cursor means another page."""
     seen = []
 
     def fake(api_key, method, path, params=None):
@@ -275,7 +295,7 @@ def test_list_alerts_returns_ids_and_follows_the_cursor():
 
     with patch.object(tool, "_get_incidentio_credentials", return_value="key"), \
             patch.object(tool, "_api_request", side_effect=fake):
-        payload = json.loads(tool.list_incidentio_alerts(" FIRING ", page_size=80, user_id="u1"))
+        payload = json.loads(tool.list_incidentio_alerts(" FIRING ", page_size=2, user_id="u1"))
 
     assert payload["alerts"] == [{
         "id": ALERT["id"],
@@ -289,7 +309,19 @@ def test_list_alerts_returns_ids_and_follows_the_cursor():
     }]
     assert payload["has_more"] is True
     assert payload["next_cursor"] == "cursor"
-    assert seen == [("/alerts", {"page_size": 50, "status[one_of]": "firing"})]
+    assert seen == [("/alerts", {"page_size": 2, "status[one_of]": "firing"})]
+
+
+def test_list_alerts_short_page_with_a_cursor_is_the_end():
+    """incident.io sends `after` on the last page, so a short page has no more."""
+    with patch.object(tool, "_get_incidentio_credentials", return_value="key"), \
+            patch.object(tool, "_api_request", return_value={
+                "alerts": [ALERT], "pagination_meta": {"after": "cursor"},
+            }) as api:
+        payload = json.loads(tool.list_incidentio_alerts(page_size=80, user_id="u1"))
+    assert payload["has_more"] is False
+    assert "next_cursor" not in payload
+    assert api.call_args.kwargs["params"]["page_size"] == 50
 
 
 def test_list_alerts_rejects_a_bad_status_and_a_missing_connection():

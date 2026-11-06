@@ -11,6 +11,7 @@ Provides five tools for RCA:
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
@@ -25,10 +26,13 @@ _ERR_ALERT_NOT_FOUND = json.dumps({"error": "No incident.io alert found for that
 
 # incident.io alert ids are ULIDs. Anything else is a source-system key.
 _INCIDENTIO_ALERT_ID = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$", re.IGNORECASE)
-_NOT_FOUND = "Resource not found"
-# A non-ULID on /alerts/{id} is rejected (HTTP 400). A missing ULID is 404.
-# Both should continue on to the deduplication-key search.
-_PATH_MISS = frozenset({_NOT_FOUND, "incident.io API error (HTTP 400)"})
+# A non-ULID on a /{id} path is rejected (HTTP 400). A missing ULID is 404.
+# Both mean "not this resource", so callers branch on the status, not the message.
+_PATH_MISS = frozenset({400, 404})
+# Source dedup keys go in a query param, never the path, so they get a looser cap.
+_MAX_ALERT_ID_LEN = 1024
+_DEDUP_PAGE_SIZE = 10
+_ATTACHMENT_WORKERS = 5
 
 logger = logging.getLogger(__name__)
 
@@ -129,13 +133,14 @@ def _api_request(api_key: str, method: str, path: str, params: Optional[Dict] = 
     except requests.HTTPError as exc:
         # A 4xx/5xx Response is false, so a truthiness check would drop the status.
         status = exc.response.status_code if exc.response is not None else None
-        if status == 401:
-            return {"error": "Authentication failed — API key may be invalid or expired"}
-        if status == 403:
-            return {"error": "API key lacks required permissions"}
-        if status == 404:
-            return {"error": "Resource not found"}
-        return {"error": f"incident.io API error (HTTP {status})"}
+        messages = {
+            401: "Authentication failed — API key may be invalid or expired",
+            403: "API key lacks required permissions",
+            404: "Resource not found",
+        }
+        message = messages.get(status, f"incident.io API error (HTTP {status})")
+        # Callers branch on status_code so rewording a message cannot change control flow.
+        return {"error": message, "status_code": status}
 
 
 def _format_incident_summary(incident: Dict[str, Any]) -> Dict[str, Any]:
@@ -317,14 +322,15 @@ def list_incidentio_alerts(
     if "error" in result:
         return json.dumps(result)
 
-    alerts = [item for item in (result.get("alerts") or []) if isinstance(item, dict)]
+    raw_alerts = result.get("alerts") or []
+    alerts = [item for item in raw_alerts if isinstance(item, dict)]
     cursor = (result.get("pagination_meta") or {}).get("after")
     output: Dict[str, Any] = {
         "alerts": [_alert_list_item(alert) for alert in alerts],
         "total_returned": len(alerts),
     }
-    # On this endpoint a cursor means another page, even when this page is short.
-    if cursor:
+    # incident.io sends `after` on the last page too, so a short page is the end.
+    if cursor and len(raw_alerts) >= page_size:
         output["next_cursor"] = cursor
         output["has_more"] = True
     else:
@@ -350,11 +356,12 @@ def get_incidentio_incident(
 
     result = _api_request(api_key, "GET", f"/incidents/{incident_id}")
     if "error" in result:
-        # Alert ids 404 here. The alert tool also accepts source dedup keys.
-        if result.get("error") == _NOT_FOUND:
+        # Alert ids 404 here and non-ULID source ids 400. The alert tool takes both.
+        if result.get("status_code") in _PATH_MISS:
             result = {
+                **result,
                 "error": (
-                    "Resource not found. If this is an alert id or a source-system "
+                    f"{result['error']}. If this is an alert id or a source-system "
                     "alert id (for example Site24x7), use get_incidentio_alert."
                 ),
             }
@@ -399,7 +406,11 @@ def _format_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
             continue
         name = (attr.get("attribute") or {}).get("name")
         if name:
-            attributes.append({"name": name, "value": _attribute_value(attr.get("value"))})
+            # Multi-value attributes come back under `array_value`, not `value`.
+            raw = attr.get("value")
+            if raw is None:
+                raw = attr.get("array_value")
+            attributes.append({"name": name, "value": _attribute_value(raw)})
 
     description = alert.get("description") or ""
     if isinstance(description, str) and len(description) > 4000:
@@ -442,12 +453,11 @@ def _alert_with_incidents(api_key: str, alert: Dict[str, Any]) -> Dict[str, Any]
         incident = link.get("incident") or {}
         if not incident.get("id"):
             continue
-        status = incident.get("incident_status")
+        # IncidentSlimV2 carries status_category only, no status name.
         incidents.append({
             "id": incident.get("id"),
             "name": incident.get("name"),
             "reference": incident.get("reference"),
-            "status": status.get("name") if isinstance(status, dict) else incident.get("status"),
             "status_category": incident.get("status_category"),
         })
     item["incidents"] = incidents
@@ -461,13 +471,12 @@ def _alert_by_id(api_key: str, alert_id: str):
         return None, None
     direct = _api_request(api_key, "GET", f"/alerts/{alert_id}")
     if "error" not in direct:
-        body = direct.get("alert") if isinstance(direct.get("alert"), dict) else direct
-        # A list body is not one alert; leave it for the dedup search.
-        if isinstance(body, dict) and body.get("id") and "alerts" not in body:
+        body = direct.get("alert")
+        if isinstance(body, dict) and body.get("id"):
             return body, None
         return None, None
     # 404/400: not this alert. Auth and transport errors are final.
-    if direct.get("error") in _PATH_MISS:
+    if direct.get("status_code") in _PATH_MISS:
         return None, None
     return None, json.dumps(direct)
 
@@ -476,7 +485,7 @@ def _alerts_by_dedup_key(api_key: str, alert_id: str):
     """One alert, or a JSON payload when the key misses, errors, or matches several."""
     listed = _api_request(
         api_key, "GET", "/alerts",
-        params={"page_size": 10, "deduplication_key[is]": alert_id},
+        params={"page_size": _DEDUP_PAGE_SIZE, "deduplication_key[is]": alert_id},
     )
     if "error" in listed:
         return json.dumps(listed)
@@ -487,9 +496,15 @@ def _alerts_by_dedup_key(api_key: str, alert_id: str):
     if len(matches) == 1:
         return matches[0]
     # incident.io sends `after` on the last page too, so a short page is the end.
-    has_more = len(matches) >= 10 and bool((listed.get("pagination_meta") or {}).get("after"))
+    has_more = (
+        len(matches) >= _DEDUP_PAGE_SIZE
+        and bool((listed.get("pagination_meta") or {}).get("after"))
+    )
+    # One attachment lookup per match; run them together so a slow API is not 10x slower.
+    with ThreadPoolExecutor(max_workers=_ATTACHMENT_WORKERS) as pool:
+        enriched = list(pool.map(lambda item: _alert_with_incidents(api_key, item), matches))
     return _truncate_output({
-        "matches": [_alert_with_incidents(api_key, item) for item in matches],
+        "matches": enriched,
         "total_returned": len(matches),
         "matched_on": "deduplication_key",
         "has_more": has_more,
@@ -511,7 +526,8 @@ def get_incidentio_alert(
 
     alert_id = (alert_id or "").strip()
     # Control characters are never part of an id and would break the request.
-    if not alert_id or len(alert_id) > 100 or any(ord(char) < 32 for char in alert_id):
+    too_long = len(alert_id) > _MAX_ALERT_ID_LEN
+    if not alert_id or too_long or any(ord(char) < 32 for char in alert_id):
         return _ERR_INVALID_ALERT_ID
 
     alert, error = _alert_by_id(api_key, alert_id)
