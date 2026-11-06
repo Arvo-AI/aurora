@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- PagerDuty: a page the recurrence agent folds into an earlier incident now
+  gets a short note on its own PagerDuty incident: which incident it repeats
+  and when, that incident's root cause in a line or two, and a link to it.
+  Folded pages used to get no note. One note per incident, only when PagerDuty
+  notes are on for the org, and none when another Aurora incident already
+  noted the same PagerDuty incident.
+
 ## [1.5.19] - 2026-11-06
 
 ### Fixed
