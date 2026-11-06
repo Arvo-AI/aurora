@@ -58,6 +58,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "jira",       # Jira connector tokens
     "sharepoint", # SharePoint connector tokens
     "coroot",   # Coroot connector tokens
+    "rabbitmq", # RabbitMQ management API credentials
     "bitbucket", # Bitbucket connector tokens
     "dynatrace", # Dynatrace connector tokens
     "bigpanda", # BigPanda connector tokens

@@ -2,8 +2,56 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getAuthenticatedUser } from '@/lib/auth-helper'
 import { forwardRequest } from '@/lib/backend-proxy'
 
-// Backend base URL
-const API_BASE_URL = process.env.BACKEND_URL
+// DELETE /{provider}/disconnect. A new connector only needs its name here.
+const DELETE_DISCONNECT_PROVIDERS = new Set([
+  'bigpanda',
+  'cloudbees',
+  'confluence',
+  'coroot',
+  'datadog',
+  'dynatrace',
+  'elastic',
+  'grafana',
+  'incidentio',
+  'jenkins',
+  'jira',
+  'netdata',
+  'opsgenie',
+  'rabbitmq',
+  'sentry',
+  'servicenow',
+  'sharepoint',
+  'spinnaker',
+  'splunk',
+  'thousandeyes',
+])
+
+// Same path, but the backend route is POST-only.
+const POST_DISCONNECT_PROVIDERS = new Set(['github', 'gitlab'])
+
+// SharePoint's Graph cleanup can outlast the default proxy timeout.
+const DISCONNECT_TIMEOUT_MS: Record<string, number> = {
+  sharepoint: 20_000,
+}
+
+// Backend route is not /{provider}/disconnect.
+const CUSTOM_DISCONNECTS: Record<string, { method: 'DELETE' | 'POST'; path: string }> = {
+  google_chat: { method: 'DELETE', path: '/google-chat' },
+  ovh: { method: 'POST', path: '/ovh_api/ovh/disconnect' },
+  scaleway: { method: 'POST', path: '/scaleway_api/scaleway/disconnect' },
+  slack: { method: 'DELETE', path: '/slack' },
+  tailscale: { method: 'POST', path: '/tailscale_api/tailscale/disconnect' },
+}
+
+// Generic delete also clears provider caches and graph nodes.
+const ACCOUNT_PROVIDERS = new Set(['gcp', 'azure', 'aws', 'newrelic'])
+
+const VALID_PROVIDERS = new Set<string>([
+  ...DELETE_DISCONNECT_PROVIDERS,
+  ...POST_DISCONNECT_PROVIDERS,
+  ...Object.keys(CUSTOM_DISCONNECTS),
+  ...ACCOUNT_PROVIDERS,
+])
 
 // ---------------------------------------------------------------------------
 // DELETE /api/connected-accounts/[provider]
@@ -17,509 +65,48 @@ export async function DELETE(
     const authResult = await getAuthenticatedUser()
 
     if (authResult instanceof NextResponse) {
-      return authResult // Return the error response
+      return authResult
     }
 
-    const { userId, headers: authHeaders } = authResult
-    // In Next.js 15 `params` is a Promise; await it before accessing its properties
+    const { userId } = authResult
     const { provider } = await context.params
 
-    // Validate provider
-    if (!['gcp', 'azure', 'aws', 'github', 'gitlab', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'google_chat', 'splunk', 'dynatrace', 'confluence', 'jira', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker', 'newrelic', 'opsgenie', 'incidentio', 'servicenow', 'sentry', 'elastic'].includes(provider)) {
+    if (!VALID_PROVIDERS.has(provider)) {
       return NextResponse.json(
         { error: 'Invalid provider' },
         { status: 400 }
       )
     }
 
-    // Slack (uses unified /api/slack endpoint)
-    if (provider === 'slack') {
-      const response = await fetch(`${API_BASE_URL}/slack`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Slack:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Slack' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
+    // Path doesn't match /{provider}/disconnect.
+    const custom = CUSTOM_DISCONNECTS[provider]
+    if (custom) {
+      return forwardRequest(request, custom.method, custom.path, `${provider}-disconnect`)
     }
 
-    // Google Chat (uses unified /api/google-chat endpoint)
-    if (provider === 'google_chat') {
-      const response = await fetch(`${API_BASE_URL}/google-chat`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Google Chat:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Google Chat' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
+    // GitHub and GitLab register disconnect as POST only.
+    if (POST_DISCONNECT_PROVIDERS.has(provider)) {
+      return forwardRequest(request, 'POST', `/${provider}/disconnect`, `${provider}-disconnect`)
     }
 
-    // Special handling for OVH (uses POST instead of DELETE)
-    if (provider === 'ovh') {
-      const response = await fetch(`${API_BASE_URL}/ovh_api/ovh/disconnect`, {
-        method: 'POST',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting OVH:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect OVH' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for Scaleway (uses POST instead of DELETE)
-    if (provider === 'scaleway') {
-      const response = await fetch(`${API_BASE_URL}/scaleway_api/scaleway/disconnect`, {
-        method: 'POST',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Scaleway:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Scaleway' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for Tailscale (uses POST instead of DELETE)
-    if (provider === 'tailscale') {
-      const response = await fetch(`${API_BASE_URL}/tailscale_api/tailscale/disconnect`, {
-        method: 'POST',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Tailscale:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Tailscale' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for GitHub
-    if (provider === 'github') {
-      const response = await fetch(`${API_BASE_URL}/github/disconnect`, {
-        method: 'POST',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting GitHub:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect GitHub' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for GitLab
-    if (provider === 'gitlab') {
-      return forwardRequest(request, 'POST', '/gitlab/disconnect', 'gitlab-disconnect')
-    }
-
-    // Special handling for Grafana
-    if (provider === 'grafana') {
-      const response = await fetch(`${API_BASE_URL}/grafana/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Grafana:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Grafana' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for Datadog
-    if (provider === 'datadog') {
-      const response = await fetch(`${API_BASE_URL}/datadog/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Datadog:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Datadog' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for Netdata
-    if (provider === 'netdata') {
-      const response = await fetch(`${API_BASE_URL}/netdata/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Netdata:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Netdata' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // The account query param is forwarded with the request. Do not append it here.
-    if (provider === 'splunk') {
-      return forwardRequest(request, 'DELETE', '/splunk/disconnect', 'splunk-disconnect')
-    }
-
-    // Special handling for Dynatrace
-    if (provider === 'dynatrace') {
-      const response = await fetch(`${API_BASE_URL}/dynatrace/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Dynatrace:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Dynatrace' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for Confluence
-    if (provider === 'confluence') {
-      const response = await fetch(`${API_BASE_URL}/atlassian/disconnect`, {
-        method: 'POST',
-        headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ product: 'confluence' }),
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Confluence:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Confluence' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for Jira
-    if (provider === 'jira') {
-      const response = await fetch(`${API_BASE_URL}/atlassian/disconnect`, {
-        method: 'POST',
-        headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ product: 'jira' }),
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Jira:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Jira' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for SharePoint
-    if (provider === 'sharepoint') {
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 20000)
-      let response: Response
-      try {
-        response = await fetch(`${API_BASE_URL}/sharepoint/disconnect`, {
-          method: 'DELETE',
-          headers: authHeaders,
-          signal: controller.signal,
-        })
-      } finally {
-        clearTimeout(timeoutId)
-      }
-
-      if (!response.ok) {
-        console.error('Backend error disconnecting SharePoint: status=%d', response.status)
-        return NextResponse.json(
-          { error: 'Failed to disconnect SharePoint' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for Jenkins
-    if (provider === 'jenkins') {
-      const response = await fetch(`${API_BASE_URL}/jenkins/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Jenkins:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Jenkins' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for CloudBees
-    if (provider === 'cloudbees') {
-      const response = await fetch(`${API_BASE_URL}/cloudbees/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting CloudBees', {
-          status: response.status,
-          statusText: response.statusText,
-          bodyLength: errorText.length,
-        })
-        return NextResponse.json(
-          { error: 'Failed to disconnect CloudBees' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for Spinnaker
-    if (provider === 'spinnaker') {
-      const response = await fetch(`${API_BASE_URL}/spinnaker/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Spinnaker:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Spinnaker' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for Coroot
-    if (provider === 'coroot') {
-      const response = await fetch(`${API_BASE_URL}/coroot/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Coroot:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Coroot' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for ThousandEyes
-    if (provider === 'thousandeyes') {
-      const response = await fetch(`${API_BASE_URL}/thousandeyes/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        console.error('Backend error disconnecting ThousandEyes: status=%d', response.status)
-        return NextResponse.json(
-          { error: 'Failed to disconnect ThousandEyes' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for OpsGenie
-    if (provider === 'opsgenie') {
-      const backendResponse = await fetch(`${API_BASE_URL}/opsgenie/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-        credentials: 'include',
-      })
-
-      if (!backendResponse.ok) {
-        const text = await backendResponse.text()
-        return NextResponse.json(
-          { error: text || 'Failed to disconnect OpsGenie' },
-          { status: backendResponse.status }
-        )
-      }
-
-      return NextResponse.json({ success: true })
-    }
-
-    // Special handling for incident.io
-    if (provider === 'incidentio') {
-      const response = await fetch(`${API_BASE_URL}/incidentio/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting incident.io:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect incident.io' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for ServiceNow (backend disconnect is POST)
-    if (provider === 'servicenow') {
-      return forwardRequest(request, 'POST', '/servicenow/disconnect', 'servicenow-disconnect')
-    }
-
-    // Special handling for Sentry
-    if (provider === 'sentry') {
-      const response = await fetch(`${API_BASE_URL}/sentry/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting Sentry:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Sentry' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // Special handling for Elastic
-    if (provider === 'elastic') {
-      return forwardRequest(request, 'DELETE', '/elastic/disconnect', 'elastic-disconnect')
-    }
-
-    // Special handling for BigPanda
-    if (provider === 'bigpanda') {
-      const response = await fetch(`${API_BASE_URL}/bigpanda/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting BigPanda:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect BigPanda' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
-    }
-
-    // For other providers, use the general disconnect endpoint
-    const response = await fetch(`${API_BASE_URL}/api/connected-accounts/${userId}/${provider}`, {
-      method: 'DELETE',
-      headers: authHeaders,
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error(`Backend error disconnecting ${provider}:`, errorText)
-      return NextResponse.json(
-        { error: `Failed to disconnect ${provider}` },
-        { status: response.status }
+    // Query string is forwarded as-is, including Splunk's account selector.
+    if (DELETE_DISCONNECT_PROVIDERS.has(provider)) {
+      const timeoutMs = DISCONNECT_TIMEOUT_MS[provider]
+      return forwardRequest(
+        request,
+        'DELETE',
+        `/${provider}/disconnect`,
+        `${provider}-disconnect`,
+        timeoutMs ? { timeoutMs } : {},
       )
     }
 
-    const data = await response.json()
-    return NextResponse.json(data)
+    return forwardRequest(
+      request,
+      'DELETE',
+      `/api/connected-accounts/${userId}/${provider}`,
+      `${provider}-disconnect`,
+    )
   } catch (err) {
     console.error('Error disconnecting provider:', err)
     return NextResponse.json(

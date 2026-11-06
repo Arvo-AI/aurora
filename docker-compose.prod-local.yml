@@ -47,6 +47,7 @@ x-common-env: &common-env
   REDIS_SSL_CA_CERTS: ${REDIS_SSL_CA_CERTS:-}
   REDIS_SSL_CERT_REQS: ${REDIS_SSL_CERT_REQS:-}
   SPLUNK_SSL_VERIFY: ${SPLUNK_SSL_VERIFY:-false}
+  RABBITMQ_SSL_VERIFY: ${RABBITMQ_SSL_VERIFY:-false}
   ELASTIC_SSL_VERIFY: ${ELASTIC_SSL_VERIFY:-true}
 
   # AWS base credentials for role assumption
