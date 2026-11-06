@@ -1,5 +1,6 @@
 """pagerduty_notification_service + PagerDuty write-capability detection (no DB, no network)."""
 
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -483,7 +484,7 @@ def test_forbidden_flips_write_capability_off(wired):
 
 
 def test_ineligible_incident_never_touches_db_or_pagerduty(wired):
-    assert svc.send_pagerduty_incident_note("u1", _anchor(recurrence_of="root-1")) is False
+    assert svc.send_pagerduty_incident_note("u1", _anchor(source_type="datadog")) is False
     assert wired.pool.updates == []
     wired.client.create_note.assert_not_called()
 
@@ -502,3 +503,151 @@ def test_empty_frontend_url_omits_the_link_line(wired, monkeypatch):
     content = wired.client.create_note.call_args.args[1]
     assert "Full investigation" not in content
     assert "/incidents/" not in content
+
+
+# --- recurrence note (folded incidents) ---------------------------------------
+
+ANCHOR_ID = "a0"
+ANCHOR_FIRED = datetime(2026, 11, 3, 14, 5, 9)
+ANCHOR_SUMMARY = (
+    "What happened: checkout 5xx paged the on-call at 14:05.\n\n"
+    "Root cause: the payments-db connection pool was exhausted after a deploy doubled the worker count [3]. "
+    "Postgres max_connections was never raised. A third sentence the note leaves out."
+)
+FOLD_CLAIM = ("UPDATE incidents SET pagerduty_note_id = %s WHERE id = %s AND pagerduty_note_id IS NULL", ("pending", "c1"))
+FOLD_RECORD = ("UPDATE incidents SET pagerduty_note_id = %s WHERE id = %s", ("PWL7QXS", "c1"))
+
+
+def _folded(**over):
+    data = {
+        "incident_id": "c1", "source_type": "pagerduty", "recurrence_of": ANCHOR_ID, "pagerduty_note_id": None,
+        "alert_metadata": {"incidentId": "PREP456"}, "aurora_summary": SUMMARY,
+        "anchor_alert_title": "Checkout 5xx spike",
+    }
+    data.update(over)
+    return data
+
+
+@pytest.fixture
+def anchor_row(wired, monkeypatch):
+    """Rows _fetch_anchor reads: anchor title, summary, first fire, and whether the PD incident has a note."""
+    row = ["Checkout 5xx spike", ANCHOR_SUMMARY, ANCHOR_FIRED, False]
+    monkeypatch.setattr(svc, "db_pool", wired.pool.pool)
+    monkeypatch.setattr(svc, "set_rls_context", lambda *a, **k: "org-1")
+    wired.pool.cursor.fetchone.side_effect = lambda: tuple(row)
+    return row
+
+
+def test_folded_incident_posts_one_recurrence_note(wired, anchor_row, monkeypatch):
+    monkeypatch.setattr(svc, "FRONTEND_URL", "https://aurora.acme.com/")
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is True
+    assert wired.pool.updates == [FOLD_CLAIM, FOLD_RECORD]
+    wired.client.create_note.assert_called_once()
+    pd_incident_id, content = wired.client.create_note.call_args.args
+    assert pd_incident_id == "PREP456"  # the folded incident's own PagerDuty incident, not the anchor's
+    assert content == (
+        "Aurora RCA: recurrence\n\n"
+        'Recurrence of "Checkout 5xx spike" (2026-11-03 14:05 UTC).\n'
+        "Root cause then: the payments-db connection pool was exhausted after a deploy doubled the worker count. "
+        "Postgres max_connections was never raised.\n\n"
+        "Earlier investigation: https://aurora.acme.com/incidents/a0\n\n"
+        "Generated automatically by Aurora. Verify before acting."
+    )
+
+
+def test_anchor_lookup_is_scoped_to_the_anchor_and_this_pd_incident(wired, anchor_row):
+    svc.send_pagerduty_incident_note("u1", _folded())
+    selects = [(sql, params) for sql, params in wired.pool.executes if sql.startswith("SELECT a.alert_title")]
+    assert len(selects) == 1
+    sql, params = selects[0]
+    assert params == ("c1", "PREP456", ANCHOR_ID)
+    assert "o.pagerduty_note_id IS NOT NULL" in sql and "o.id <> %s" in sql
+
+
+def test_retried_completion_posts_no_second_recurrence_note(wired, anchor_row):
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is True
+    # The retry re-reads the incident: the claim column now holds the note id
+    assert svc.send_pagerduty_incident_note("u1", _folded(pagerduty_note_id="PWL7QXS")) is False
+    wired.client.create_note.assert_called_once()
+
+
+def test_concurrent_recurrence_note_loses_the_claim(wired, anchor_row):
+    wired.pool.cursor.rowcount = 0
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is False
+    assert wired.pool.updates == [FOLD_CLAIM]
+    wired.client.create_note.assert_not_called()
+
+
+def test_pd_incident_already_noted_by_another_aurora_incident_is_skipped(wired, anchor_row):
+    # A re-triggered page folded onto its own anchor shares the anchor's PagerDuty incident
+    anchor_row[3] = True
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is False
+    assert wired.pool.updates == []
+    wired.client.create_note.assert_not_called()
+
+
+def test_missing_anchor_posts_nothing(wired, anchor_row):
+    wired.pool.cursor.fetchone.side_effect = lambda: None
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is False
+    wired.client.create_note.assert_not_called()
+
+
+@pytest.mark.parametrize("over", [
+    {"source_type": "datadog"},
+    {"pagerduty_note_id": "pending"},
+    {"alert_metadata": {}},
+    {"alert_metadata": {"incidentId": "../users/PX"}},
+])
+def test_ineligible_folded_incident_never_touches_db_or_pagerduty(wired, anchor_row, over):
+    assert svc.send_pagerduty_incident_note("u1", _folded(**over)) is False
+    assert wired.pool.executes == []
+    wired.client.create_note.assert_not_called()
+
+
+def test_read_only_credentials_post_no_recurrence_note(wired, anchor_row, monkeypatch):
+    creds = {**wired.creds, "capabilities": {"can_write_incidents": False}}
+    monkeypatch.setattr(svc, "get_token_data", lambda user_id, provider: creds)
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is False
+    assert wired.pool.executes == []
+    wired.client.create_note.assert_not_called()
+
+
+def test_rejected_recurrence_note_releases_the_claim(wired, anchor_row):
+    wired.client.create_note.side_effect = PagerDutyAPIError("Rate limited", status_code=429)
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is False
+    assert wired.pool.updates == [
+        FOLD_CLAIM,
+        ("UPDATE incidents SET pagerduty_note_id = NULL WHERE id = %s AND pagerduty_note_id = %s", ("c1", "pending")),
+    ]
+
+
+def test_anchor_without_a_usable_root_cause_still_points_at_it(wired, anchor_row, monkeypatch):
+    monkeypatch.setattr(svc, "FRONTEND_URL", "")
+    anchor_row[1] = "Too short."
+    anchor_row[2] = None
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is True
+    content = wired.client.create_note.call_args.args[1]
+    assert 'Recurrence of "Checkout 5xx spike".\nRoot cause then: not determined.' in content
+    assert "/incidents/" not in content
+
+
+def test_recurrence_root_cause_is_capped():
+    long_sentence = "The pool was exhausted " + "because of load " * 40 + "today."
+    root = svc._short_root_cause("Intro paragraph that is long enough to count as prose.\n\nRoot cause: " + long_sentence)
+    assert len(root) <= svc.RECURRENCE_ROOT_CAUSE_MAX_CHARS + 3
+    assert root.endswith("...")
+
+
+def test_recurrence_note_title_is_plain_single_line():
+    content = svc.compose_recurrence_note("a0", "**CPU** high\non `api`", None, "x.", None)
+    assert 'Recurrence of "CPU high on api".' in content
+
+
+def test_anchor_note_path_unchanged_by_recurrence_support(wired, monkeypatch):
+    # Non-fold path: full RCA note, no anchor lookup
+    monkeypatch.setattr(svc, "FRONTEND_URL", "http://localhost:3000")
+    assert svc.send_pagerduty_incident_note("u1", _anchor()) is True
+    assert not any(sql.startswith("SELECT a.alert_title") for sql, _ in wired.pool.executes)
+    content = wired.client.create_note.call_args.args[1]
+    assert content.startswith("Aurora RCA\n\nRoot cause\n")
+    assert "recurrence" not in content.lower()
