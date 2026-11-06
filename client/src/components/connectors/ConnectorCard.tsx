@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -97,13 +97,22 @@ interface ConnectorCardProps {
   connectedOverride?: boolean;
 }
 
+// Otherwise the dialog reopens by itself when the card next mounts.
+function clearConnectParam() {
+  const url = new URL(globalThis.location.href);
+  if (!url.searchParams.has("connect")) return;
+  url.searchParams.delete("connect");
+  globalThis.history.replaceState(null, "", url.toString());
+}
+
 export default function ConnectorCard({ connector, connectedOverride }: ConnectorCardProps) {
   const router = useRouter();
   const { toast } = useToast();
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
   const userId = user?.id ?? null;
-  const [showGitHubDialog, setShowGitHubDialog] = useState(false);
+  const searchParams = useSearchParams();
+  const [showGitHubDialog, setShowGitHubDialog] = useState(connector.id === "github" && searchParams.get("connect") === "github");
   const [showBitbucketDialog, setShowBitbucketDialog] = useState(false);
   const [showGcpDialog, setShowGcpDialog] = useState(false);
   const [showOvhDialog, setShowOvhDialog] = useState(false);
@@ -520,6 +529,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         showNotionDialog={showNotionDialog}
         onGitHubDialogChange={(open) => {
           setShowGitHubDialog(open);
+          if (!open) clearConnectParam();
           if (!open) {
             checkGitHubStatus();
             window.dispatchEvent(new Event('providerStateChanged'));
@@ -536,7 +546,10 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         onOvhDialogChange={setShowOvhDialog}
         onScalewayDialogChange={setShowScalewayDialog}
         onNotionDialogChange={setShowNotionDialog}
-        onGitHubDialogClose={() => setShowGitHubDialog(false)}
+        onGitHubDialogClose={() => {
+          setShowGitHubDialog(false);
+          clearConnectParam();
+        }}
       />
 
       <DisconnectConfirmDialog
