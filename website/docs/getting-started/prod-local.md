@@ -50,7 +50,7 @@ Vault automatically initializes on first startup. The root token is stored in th
 ### Get the Root Token
 
 ```bash
-docker logs vault-init 2>&1 | grep "Root Token:"
+docker logs aurora-vault-init 2>&1 | grep "Root Token:"
 ```
 
 You'll see output like:
