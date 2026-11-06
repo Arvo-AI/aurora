@@ -1758,7 +1758,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 args_schema=ReadArtifactArgs,
             )
         elif name == 'write_artifact':
-            from .artifact_tool import WriteArtifactArgs
+            from .artifact_tool import WRITE_ARTIFACT_TOOL_SCHEMA
             tool = StructuredTool.from_function(
                 func=final_func,
                 name=name,
@@ -1776,7 +1776,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "if a fresh scan surfaces them again. If the existing doc was last edited by "
                     "the user, treat their version as authoritative and change it minimally."
                 ),
-                args_schema=WriteArtifactArgs,
+                args_schema=WRITE_ARTIFACT_TOOL_SCHEMA,
             )
         elif name == 'list_slack_channels':
             from .slack_tool import ListSlackChannelsArgs
