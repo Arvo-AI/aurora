@@ -56,7 +56,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--controls", type=int, default=5, help="never-reverted PRs to replay")
     parser.add_argument("--model", default=os.getenv("MAIN_MODEL"),
                         help="provider/model, e.g. openai/gpt-6-astra (default: $MAIN_MODEL)")
-    parser.add_argument("--json", dest="json_path", help="also write the full report here")
+    parser.add_argument("--format", choices=("markdown", "json"), default="markdown",
+                        help="print the scorecard as markdown (default) or the full report as JSON")
     parser.add_argument("--list-only", action="store_true",
                         help="only list the cases that would be replayed (no model calls)")
     args = parser.parse_args(argv)
@@ -100,10 +101,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     finally:
         reader.close()
 
-    if args.json_path:
-        with open(args.json_path, "w") as fh:
-            json.dump(report, fh, indent=2)
-    print(render_markdown(report))
+    # Output goes to stdout only; the CLI never writes files, so no path it
+    # is given can redirect a write (redirect with > to keep a copy).
+    print(json.dumps(report, indent=2) if args.format == "json" else render_markdown(report))
     return 0
 
 

@@ -351,3 +351,30 @@ def test_public_reader_never_writes_and_sends_no_auth_without_a_token():
         with pytest.raises(PermissionError):
             getattr(reader, method)(1, "x")
     assert github_adapter.PublicRepoReader(REPO, token="t")._headers()["Authorization"] == "Bearer t"
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def test_cli_prints_json_to_stdout_and_writes_no_files(monkeypatch, capsys, tmp_path):
+    from services.change_gating import github_adapter, replay_cli
+
+    class Reader:
+        def __init__(self, repo, token=None):
+            pass
+
+        def close(self):
+            pass
+
+    report = replay.build_report(REPO, [_result("reverted", "RISKY")])
+    monkeypatch.setattr(github_adapter, "PublicRepoReader", Reader)
+    monkeypatch.setattr(replay, "run_replay", lambda *a, **k: report)
+    monkeypatch.setattr(replay_cli, "_llm_reviewer", lambda model: None)
+    monkeypatch.chdir(tmp_path)
+
+    assert replay_cli.main([REPO, "--model", "openai/test", "--format", "json"]) == 0
+
+    assert json.loads(capsys.readouterr().out)["scores"]["reverted_flagged"] == 1
+    assert list(tmp_path.iterdir()) == []
