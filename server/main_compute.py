@@ -20,6 +20,9 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from utils.db.db_utils import ensure_database_exists, initialize_tables
 from utils.log_sanitizer import sanitize
 
+#This calls the incident replay api
+from routes.incident_replay import incident_replay_bp
+
 # Configure logging first, before importing any modules.
 #
 # IMPORTANT: sys.stdout must be passed explicitly to StreamHandler.
@@ -383,6 +386,9 @@ from routes.admin_routes import admin_bp
 app.register_blueprint(llm_config_bp)  # LLM provider configuration routes
 app.register_blueprint(auth_bp)  # Auth.js authentication routes
 app.register_blueprint(admin_bp)  # RBAC admin routes
+
+# Incident Replay: credential-free incident investigation
+app.register_blueprint(incident_replay_bp)
 
 # --- Organization Management Routes ---
 from routes.org_routes import org_bp
