@@ -1,0 +1,210 @@
+"""A repeat of an alert that already has an incident must not start another RCA.
+
+Metric samples and templated annotation text change on every evaluation.
+Those are not a new problem. A resolved incident firing again, a real change
+in title, service, severity, or labels, or an enqueue that never landed, is.
+"""
+
+from datetime import datetime, timedelta, timezone
+
+from services.incidents.repeat_investigation import (
+    ExistingIncident,
+    alert_signature,
+    enqueue_claim,
+    is_later_occurrence,
+    latest_occurrence,
+    metadata_labels,
+    repeat_needs_investigation,
+    should_start_investigation,
+    worker_owns_investigation,
+)
+
+
+def _sig(**overrides):
+    base = dict(
+        title="HighCPU",
+        service="api",
+        severity="critical",
+        labels={"alertname": "HighCPU", "service": "api"},
+    )
+    base.update(overrides)
+    return alert_signature(base["title"], base["service"], base["severity"], base["labels"])
+
+
+def _existing(**overrides):
+    fields = dict(
+        status="investigating",
+        title="HighCPU",
+        service="api",
+        severity="critical",
+        metadata={"labels": {"alertname": "HighCPU", "service": "api"}, "values": {"B": 1}},
+        session_id="session-1",
+        task_id="celery-1",
+    )
+    fields.update(overrides)
+    return ExistingIncident(**fields)
+
+
+class TestAlertSignature:
+    def test_metric_samples_and_annotation_text_are_not_identity(self):
+        first = metadata_labels({"labels": {"alertname": "HighCPU"}, "values": {"B": 1}, "summary": "CPU is 91%"})
+        second = metadata_labels({"labels": {"alertname": "HighCPU"}, "values": {"B": 99}, "summary": "CPU is 99%"})
+        assert alert_signature("HighCPU", "api", "critical", first) == alert_signature("HighCPU", "api", "critical", second)
+
+    def test_label_order_does_not_change_the_signature(self):
+        first = alert_signature("HighCPU", "api", "critical", {"service": "api", "alertname": "HighCPU"})
+        second = alert_signature("HighCPU", "api", "critical", {"alertname": "HighCPU", "service": "api"})
+        assert first == second
+
+    def test_metadata_json_string_parses(self):
+        parsed = metadata_labels('{"labels": {"alertname": "HighCPU", "service": "api"}, "values": {"B": 1}}')
+        assert alert_signature("HighCPU", "api", "critical", parsed) == _sig()
+
+
+class TestRepeatNeedsInvestigation:
+    def test_same_open_alert_does_not_need_another_rca(self):
+        signature = _sig()
+        assert repeat_needs_investigation("analyzed", signature, signature, session_id="s") is False
+        assert repeat_needs_investigation("investigating", signature, signature, session_id="s", task_id="t") is False
+
+    def test_resolved_incident_firing_again_needs_another_rca(self):
+        signature = _sig()
+        assert repeat_needs_investigation("resolved", signature, signature, session_id="s", task_id="t") is True
+
+    def test_severity_service_or_label_change_needs_another_rca(self):
+        assert repeat_needs_investigation("analyzed", _sig(severity="low"), _sig(severity="critical")) is True
+        assert repeat_needs_investigation("analyzed", _sig(service="api"), _sig(service="worker")) is True
+        before = _sig(labels={"alertname": "HighCPU", "pod": "a"})
+        after = _sig(labels={"alertname": "HighCPU", "pod": "b"})
+        assert repeat_needs_investigation("analyzed", before, after) is True
+
+    def test_enqueue_that_never_landed_is_retried(self):
+        signature = _sig()
+        assert repeat_needs_investigation(
+            "investigating", signature, signature, session_id=None, task_id=None,
+        ) is True
+
+    def test_a_real_task_id_without_a_session_is_already_enqueued(self):
+        signature = _sig()
+        assert repeat_needs_investigation(
+            "investigating", signature, signature, session_id=None, task_id="celery-1",
+        ) is False
+
+    def test_fresh_enqueue_claim_blocks_a_second_investigation(self):
+        signature = _sig()
+        now = datetime.now(timezone.utc)
+        assert repeat_needs_investigation(
+            "investigating", signature, signature,
+            session_id=None, task_id=enqueue_claim(now), now=now,
+        ) is False
+
+    def test_stale_enqueue_claim_is_retried(self):
+        signature = _sig()
+        now = datetime.now(timezone.utc)
+        claimed_at = now - timedelta(minutes=3)
+        assert repeat_needs_investigation(
+            "investigating", signature, signature,
+            session_id=None, task_id=enqueue_claim(claimed_at), now=now,
+        ) is True
+
+    def test_claim_without_a_timestamp_does_not_stick(self):
+        signature = _sig()
+        assert repeat_needs_investigation(
+            "investigating", signature, signature,
+            session_id=None, task_id="pending",
+        ) is True
+
+    def test_older_claim_format_still_ages_by_its_timestamp(self):
+        signature = _sig()
+        now = datetime.now(timezone.utc)
+        claimed_at = now - timedelta(minutes=3)
+        task_id = f"pending:{claimed_at.isoformat()}"
+        assert repeat_needs_investigation(
+            "investigating", signature, signature,
+            session_id=None, task_id=task_id, now=now,
+        ) is True
+
+    def test_each_retry_gets_its_own_claim(self):
+        first = enqueue_claim()
+        second = enqueue_claim()
+        assert first != second
+
+
+class TestWorkerOwnsInvestigation:
+    def test_this_retry_owns_its_claim(self):
+        claim = enqueue_claim()
+        assert worker_owns_investigation(claim, "task-2", claim) is True
+
+    def test_a_newer_claim_is_not_adopted(self):
+        older = enqueue_claim()
+        newer = enqueue_claim()
+        assert worker_owns_investigation(newer, "task-1", older) is False
+
+    def test_the_worker_that_already_wrote_its_task_id_still_owns_it(self):
+        assert worker_owns_investigation("task-1", "task-1", enqueue_claim()) is True
+
+    def test_an_empty_task_id_is_unowned(self):
+        assert worker_owns_investigation(None, "task-1", None) is True
+
+    def test_a_worker_without_a_claim_does_not_take_one(self):
+        assert worker_owns_investigation(enqueue_claim(), "task-1", None) is False
+
+
+class TestShouldStartInvestigation:
+    def test_a_new_incident_always_starts(self):
+        assert should_start_investigation(True, None, title="HighCPU", service="api", severity="critical") is True
+
+    def test_an_unobserved_conflict_does_not_start(self):
+        assert should_start_investigation(False, None, title="HighCPU", service="api", severity="critical") is False
+
+    def test_omitted_labels_do_not_look_like_a_changed_alert(self):
+        existing = _existing(status="analyzed")
+        assert should_start_investigation(
+            False, existing, title="HighCPU", service="api", severity="critical",
+        ) is False
+
+
+class TestFiringEpisodes:
+    """The same alert key fires for years. Only startsAt tells one episode from the next."""
+
+    def _analyzed(self, starts_at="2026-01-01T10:00:00Z"):
+        metadata = {"labels": {"alertname": "HighCPU", "service": "api"}, "startsAt": starts_at}
+        return _existing(status="analyzed", metadata=metadata)
+
+    def _decide(self, existing, occurrence):
+        return should_start_investigation(
+            False, existing, title="HighCPU", service="api", severity="critical",
+            labels={"alertname": "HighCPU", "service": "api"}, occurrence=occurrence,
+        )
+
+    def test_resend_of_the_same_episode_is_muted(self):
+        assert self._decide(self._analyzed(), "2026-01-01T10:00:00Z") is False
+
+    def test_new_episode_without_a_resolve_still_investigates(self):
+        assert self._decide(self._analyzed(), "2026-01-03T08:00:00Z") is True
+
+    def test_row_from_before_episodes_were_stored_keeps_the_old_rule(self):
+        existing = _existing(status="analyzed")
+        assert self._decide(existing, "2026-01-03T08:00:00Z") is False
+
+    def test_payload_without_starts_at_keeps_the_old_rule(self):
+        assert self._decide(self._analyzed(), None) is False
+
+    def test_resolved_incident_still_investigates_on_the_same_episode(self):
+        existing = self._analyzed()._replace(status="resolved")
+        assert self._decide(existing, "2026-01-01T10:00:00Z") is True
+
+    def test_delayed_resend_of_an_older_episode_is_muted_and_not_stored(self):
+        episode_a, episode_b = "2026-01-01T10:00:00Z", "2026-01-01T11:00:00Z"
+        stored_b = self._analyzed(starts_at=episode_b)
+        assert self._decide(stored_b, episode_a) is False
+        kept = latest_occurrence(episode_b, episode_a)
+        assert kept == episode_b
+        assert self._decide(self._analyzed(starts_at=kept), episode_b) is False
+
+    def test_offsets_are_compared_as_times_not_text(self):
+        assert is_later_occurrence("2026-01-01T06:00:00-05:00", "2026-01-01T10:59:00Z") is True
+        assert is_later_occurrence("2026-01-01T11:00:00+00:00", "2026-01-01T11:00:00Z") is False
+
+    def test_unreadable_times_that_differ_are_not_muted(self):
+        assert is_later_occurrence("not-a-time", "also-not-a-time") is True

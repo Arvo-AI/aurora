@@ -14,6 +14,13 @@ from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import apply_correlation_outcome
+from services.incidents.repeat_investigation import (
+    claim_enqueue,
+    lock_existing_incident,
+    replace_claim_with_task,
+    should_start_investigation,
+    try_reopen_incident,
+)
 from utils.payload_timestamp import extract_alert_fired_at
 
 # Exceptions that warrant retrying the task — DB connectivity hiccups,
@@ -290,6 +297,10 @@ def process_sentry_event(
                     ],
                 )
 
+                existing = lock_existing_incident(
+                    cursor, org_id=org_id, source_type="sentry",
+                    source_alert_id=source_alert_id, user_id=user_id,
+                )
                 cursor.execute(
                     """
                     INSERT INTO incidents
@@ -304,7 +315,7 @@ def process_sentry_event(
                         END,
                         alert_metadata = EXCLUDED.alert_metadata,
                         alert_fired_at = COALESCE(EXCLUDED.alert_fired_at, incidents.alert_fired_at)
-                    RETURNING id
+                    RETURNING id, (xmax = 0) AS inserted
                     """,
                     (
                         user_id,
@@ -322,41 +333,66 @@ def process_sentry_event(
                 )
                 incident_row = cursor.fetchone()
                 incident_id = incident_row[0] if incident_row else None
+                incident_was_inserted = bool(incident_row[1]) if incident_row else False
+                start_rca = should_start_investigation(
+                    incident_was_inserted, existing,
+                    title=title, service=service, severity=severity,
+                )
+                rca_claim = None
+                if incident_id and start_rca and not incident_was_inserted:
+                    rca_claim = try_reopen_incident(
+                        cursor, log_prefix="[SENTRY]",
+                        incident_id=incident_id, user_id=user_id, org_id=org_id,
+                        severity=severity, title=title, service=service,
+                        started_at=received_at,
+                        previous_status=existing.status if existing else None,
+                    )
+                    if not rca_claim:
+                        start_rca = False
+                if incident_id and incident_was_inserted and start_rca:
+                    rca_claim = claim_enqueue(cursor, incident_id)
                 conn.commit()
 
-                try:
-                    cursor.execute(
-                        """INSERT INTO incident_alerts
-                           (user_id, org_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
-                            alert_severity, correlation_strategy, correlation_score, alert_metadata)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                        (
-                            user_id,
-                            org_id,
-                            incident_id,
-                            "sentry",
-                            source_alert_id,
-                            title,
-                            service,
-                            severity,
-                            "primary",
-                            1.0,
-                            json.dumps(alert_metadata),
-                        ),
-                    )
-                    cursor.execute(
-                        "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
-                        (service, incident_id),
-                    )
-                    conn.commit()
-                except Exception as e:
-                    logger.warning("[SENTRY] Failed to record primary alert: %s", e)
+                # Another row per firing would flood the incident with copies of the same issue.
+                if start_rca:
+                    try:
+                        cursor.execute(
+                            """INSERT INTO incident_alerts
+                               (user_id, org_id, incident_id, source_type, source_alert_id, alert_title, alert_service,
+                                alert_severity, correlation_strategy, correlation_score, alert_metadata)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                            (
+                                user_id,
+                                org_id,
+                                incident_id,
+                                "sentry",
+                                source_alert_id,
+                                title,
+                                service,
+                                severity,
+                                "primary",
+                                1.0,
+                                json.dumps(alert_metadata),
+                            ),
+                        )
+                        cursor.execute(
+                            "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
+                            (service, incident_id),
+                        )
+                        conn.commit()
+                    except Exception as e:
+                        logger.warning("[SENTRY] Failed to record primary alert: %s", e)
 
                 if incident_id:
-                    logger.info(
-                        "[SENTRY][WEBHOOK] Created incident %s (alert=%s)",
-                        incident_id, source_alert_id,
-                    )
+                    if incident_was_inserted:
+                        logger.info(
+                            "[SENTRY][WEBHOOK] Created incident %s (alert=%s)",
+                            incident_id, source_alert_id,
+                        )
+                    elif start_rca:
+                        logger.info("[SENTRY][WEBHOOK] Reopening incident %s for a new RCA", incident_id)
+                    else:
+                        logger.info("[SENTRY][WEBHOOK] Repeat event for incident %s; keeping the existing RCA", incident_id)
 
                     try:
                         from routes.incidents_sse import broadcast_incident_update_to_user_connections
@@ -367,6 +403,10 @@ def process_sentry_event(
                         )
                     except Exception as e:
                         logger.warning("[SENTRY][WEBHOOK] Failed to notify SSE: %s", e)
+
+                    # Unchanged re-fire: the incident already has its investigation.
+                    if not start_rca:
+                        return
 
                     from chat.background.summarization import generate_incident_summary
                     generate_incident_summary.delay(
@@ -416,12 +456,10 @@ def process_sentry_event(
                                 },
                                 incident_id=str(incident_id),
                                 rail_text=rail_text,
+                                rca_claim=rca_claim,
                             )
 
-                            cursor.execute(
-                                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                                (task.id, str(incident_id)),
-                            )
+                            replace_claim_with_task(cursor, incident_id, task.id, rca_claim)
                             conn.commit()
 
                             logger.info(
