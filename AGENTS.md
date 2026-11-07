@@ -95,6 +95,8 @@ offending token is what lets the agent repair a command instead of retrying it:
 aws logs delete-log-group    → 'delete-log-group' is a write operation (it leads with 'delete')
 aws sts get-session-token    → it returns a credential, key, secret or token
 kubectl get pods | bash      → its output is piped into 'bash', which is not a text filter
+ssh host 'sed -i 1d /etc/motd' → 'sed -i' writes a file or runs a program
+kubectl get --raw /api/v1/namespaces/kube-system/secrets → it returns a credential, key, secret or token
 ```
 
 The credential reason is a fixed string that names no token on purpose: the
@@ -102,7 +104,7 @@ reason reaches a log line, and interpolating the matched credential word there
 trips CodeQL's clear-text-logging rule for no gain, since the agent can already
 see the command it sent.
 
-Six rules keep the gate fail-closed:
+Eight rules keep the gate fail-closed:
 1. **Credential/token reads are denied** even though they mutate nothing. Rather
    than an ever-incomplete per-service list, any credential word (`key`, `keys`,
    `secret`, `credential`, `password`, `token`, `sas`, …) in the operation path
@@ -141,6 +143,23 @@ Six rules keep the gate fail-closed:
    (unbalanced quotes) is blocked rather than guessed at.
 6. **Boolean switches don't swallow the verb** — `kubectl
    --insecure-skip-tls-verify get pods` stays read-only.
+7. **A text filter is cleared by what it does, not by its name.** `sed`, `awk`
+   and `yq` are filters, and each can also edit a file in place (`sed -i`,
+   `awk -i inplace`, `yq -i`), run a program (`sed 'e cmd'`,
+   `awk '{system("cmd")}'`, `print | "cmd"`), or read a script the gate cannot
+   see (`-f`). The flags and the script are inspected before the filter is
+   cleared, on the far side of ssh and downstream of a cloud read alike, and an
+   abbreviated long option (`sort --outp`) is matched as the option it expands
+   to. Plain `sed -n '1,20p'`, `sed 's/a/b/'` and `awk '{print $2}'` stay
+   read-only.
+8. **Option values can name what is read.** They still never supply the verb,
+   but `kubectl get --raw /api/v1/namespaces/x/secrets` fetches the same
+   Secret that `kubectl get secret` refuses, so the credential words are
+   matched against the `--raw` path; `-o go-template-file=PATH` reads an
+   arbitrary file as the template; and `kubectl config view --raw`/`--flatten`,
+   `gcloud config config-helper` and `aws configure get aws_secret_access_key`
+   return stored credentials. `kubectl get --raw /metrics` and inline
+   `-o go-template=...` stay read-only.
 
 Implementation: `server/utils/security/read_only_classifier.py`.
 Tests: `server/tests/security/test_read_only_classifier.py`.

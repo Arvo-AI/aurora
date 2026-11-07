@@ -692,3 +692,151 @@ def test_diagnostic_ssh_is_read_only(is_read_only, command):
 ])
 def test_ssh_writes_and_interactive_sessions_are_blocked(is_read_only, command):
     assert is_read_only(command) is False, command
+
+
+# ---------------------------------------------------------------------------
+# Text filters were cleared by name alone. `sed`, `awk` and `yq` write a file
+# or run a program through a flag or through their script, so both have to be
+# inspected before the filter is cleared, on the far side of ssh and in a
+# local pipeline alike.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("command", [
+    # In-place edits, including the glued and bundled spellings.
+    f"ssh {_HOST} 'sed -i 1d /etc/motd'",
+    f"ssh {_HOST} 'sed -i.bak 1d /etc/motd'",
+    f"ssh {_HOST} 'sed -ni 1p /etc/motd'",
+    f"ssh {_HOST} 'sed --in-place 1d /etc/motd'",
+    f"ssh {_HOST} 'awk -i inplace 1 /etc/motd'",
+    f"ssh {_HOST} 'yq -i .replicas=0 /etc/app/config.yaml'",
+    f"ssh {_HOST} 'yq --inplace .replicas=0 /etc/app/config.yaml'",
+    # A script read from a file cannot be checked.
+    f"ssh {_HOST} 'sed -f /tmp/script.sed /etc/motd'",
+    f"ssh {_HOST} 'awk -f /tmp/prog.awk /etc/motd'",
+    # sed commands that run a program or write a file.
+    "ssh %s \"cat /etc/hosts | sed 'e date'\"" % _HOST,
+    "ssh %s \"ls | sed -n 'w /tmp/x'\"" % _HOST,
+    "ssh %s \"sed 's/a/b/w /tmp/x' /etc/motd\"" % _HOST,
+    "ssh %s \"sed -e 's/a/b/e' /etc/motd\"" % _HOST,
+    "ssh %s \"sed -ne 's/a/b/e' /etc/motd\"" % _HOST,
+    # awk programs that run a program, read a file or write one.
+    "ssh %s \"ps aux | awk '{system(\\\"date\\\")}'\"" % _HOST,
+    "ssh %s \"awk 'BEGIN{system(\\\"date\\\")}'\"" % _HOST,
+    "ssh %s \"awk '{print | \\\"cat\\\"}' /etc/motd\"" % _HOST,
+    "ssh %s \"awk '{print > \\\"/tmp/x\\\"}' /etc/motd\"" % _HOST,
+    "ssh %s \"awk '{\\\"date\\\" | getline d; print d}'\"" % _HOST,
+    "ssh %s \"awk '@include \\\"/tmp/prog.awk\\\"'\"" % _HOST,
+    "ssh %s \"awk -W exec=/tmp/prog.awk /etc/motd\"" % _HOST,
+    # The program is wherever awk finds it: after a value option, or spelled
+    # like an assignment or a pattern.
+    "ssh %s \"awk -F: 'NR==1{system(\\\"date\\\")}' /etc/passwd\"" % _HOST,
+    "ssh %s \"awk 'x=1;{system(\\\"date\\\")}' /etc/motd\"" % _HOST,
+    "ssh %s \"awk -v n=1 -e '{system(\\\"date\\\")}'\"" % _HOST,
+    "ssh %s \"awk --source='{system(\\\"date\\\")}' /etc/motd\"" % _HOST,
+    # A value glued to -v or -F is not a letter bundle hiding -e.
+    "ssh %s \"awk -vsep=1 '{system(\\\"date\\\")}' /etc/motd\"" % _HOST,
+    "ssh %s \"sed -l 5 'e date' /etc/motd\"" % _HOST,
+    "ssh %s \"sed --expression='e date' /etc/motd\"" % _HOST,
+    "ssh %s \"sed -n '/a/{p;w /tmp/x' /etc/motd\"" % _HOST,
+    "ssh %s \"sed '/x/{e date}' /etc/motd\"" % _HOST,
+    "ssh %s \"sed -n '1{e date;}' /etc/motd\"" % _HOST,
+    "ssh %s \"sed '/x/Iw /tmp/out' /etc/motd\"" % _HOST,
+    # The same filters downstream of a cloud read, outside ssh.
+    "kubectl get pods -o name | awk '{system(\"date \" $1)}'",
+    "kubectl get pods | sed 'e date'",
+    "kubectl get cm app -o yaml | yq -i .data.x=1 /tmp/app.yaml",
+    # Downstream filters that write through a flag or an operand.
+    "kubectl get pods | sort -o /tmp/pods",
+    "kubectl get pods | uniq /etc/hosts /tmp/hosts",
+    # An abbreviated long option is the same option.
+    f"ssh {_HOST} 'sort --outp=/tmp/x /etc/hosts'",
+    f"ssh {_HOST} 'sed --in 1d /etc/motd'",
+])
+def test_text_filters_that_write_or_run_a_program_are_blocked(is_read_only, command):
+    assert is_read_only(command) is False, command
+
+
+@pytest.mark.parametrize("command", [
+    "ssh %s \"tail -n 50 /var/log/syslog | awk '{print $2}'\"" % _HOST,
+    # A comparison, not a redirect.
+    "ssh %s \"awk '$3 > 100' /var/log/app.log\"" % _HOST,
+    "ssh %s \"awk -F: '{print $1}' /etc/passwd\"" % _HOST,
+    "ssh %s \"awk -v n=5 'NR<=n' /etc/motd\"" % _HOST,
+    # A `|` in a separator is not a pipe in the program.
+    "ssh %s \"awk -F'|' '{print $1}' /var/log/app.log\"" % _HOST,
+    "ssh %s \"awk -v sep='|' '{print $1}' /etc/hosts\"" % _HOST,
+    # Operand assignments after the program are strings, not code.
+    "ssh %s \"awk '{print}' x=1 /etc/motd\"" % _HOST,
+    "ssh %s \"sed -l 5 's/a/b/' /etc/motd\"" % _HOST,
+    "ssh %s \"sed -n '/error/Ip' /var/log/app.log\"" % _HOST,
+    # A `;` inside a substitution is part of the pattern, not a separator.
+    "ssh %s \"sed 's/x/;e/' /etc/motd\"" % _HOST,
+    "ssh %s \"sed -n '/a/{p;q}' /etc/motd\"" % _HOST,
+    "ssh %s \"sed '2a extra line' /etc/motd\"" % _HOST,
+    "ssh %s \"sed -n '1,20p' /etc/motd\"" % _HOST,
+    "ssh %s \"sed 's/a/b/' /etc/motd\"" % _HOST,
+    "ssh %s \"sed -e 's/a/b/g' -e '/^#/d' /etc/motd\"" % _HOST,
+    "ssh %s \"grep x /etc/motd | sed 's/a/b/'\"" % _HOST,
+    "ssh %s \"cat /etc/app/config.yaml | yq .replicas\"" % _HOST,
+    f"ssh {_HOST} 'sort -k2 /etc/hosts'",
+    "kubectl get pods -o yaml | yq '.items[].metadata.name'",
+    "kubectl get events | sed -n '1,20p'",
+    "kubectl get nodes | awk 'NR>1 {print $1}'",
+])
+def test_text_filter_reads_stay_allowed(is_read_only, command):
+    assert is_read_only(command) is True, describe_rejection(command)
+
+
+# ---------------------------------------------------------------------------
+# Option values never supply a verb, but they can name what is read. The
+# credential rules have to see them, or the same Secret that `kubectl get
+# secret` refuses comes back through `--raw`.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("command", [
+    "kubectl get --raw /api/v1/namespaces/kube-system/secrets",
+    "kubectl get --raw=/api/v1/secrets",
+    "kubectl config view --raw",
+    "kubectl config view --flatten",
+    # An output template read from a file is a file read the gate cannot see.
+    "kubectl get pod x -o go-template-file=/etc/passwd",
+    "kubectl get pod x --output=go-template-file=/tmp/t.tpl",
+    "kubectl get pod x -o=go-template-file=/tmp/t.tpl",
+    "kubectl get pod x -ogo-template-file=/tmp/t.tpl",
+    "kubectl get pods -o jsonpath-file=/tmp/t.txt",
+    # Reads that return an access token or a stored key.
+    "gcloud config config-helper --format=json",
+    "aws configure get aws_secret_access_key",
+    "aws configure get default.aws_session_token",
+])
+def test_option_values_cannot_hide_a_credential_read(is_read_only, command):
+    assert is_read_only(command) is False, command
+
+
+@pytest.mark.parametrize("command", [
+    "kubectl get --raw /metrics",
+    "kubectl get --raw=/healthz",
+    "kubectl get --raw /api/v1/namespaces/kube-system/pods",
+    "kubectl config view",
+    "kubectl config view --minify",
+    "kubectl get pods -o go-template='{{range .items}}{{.metadata.name}}{{end}}'",
+    "kubectl get pods -o jsonpath='{.items[*].metadata.name}'",
+    "aws configure get region",
+    "aws configure list",
+])
+def test_raw_paths_and_inline_templates_stay_allowed(is_read_only, command):
+    assert is_read_only(command) is True, describe_rejection(command)
+
+
+@pytest.mark.parametrize("command,expected", [
+    (f"ssh {_HOST} 'sed -i 1d /etc/motd'",
+     "'sed -i' writes a file or runs a program"),
+    ("ssh %s \"ps aux | awk '{system(\\\"date\\\")}'\"" % _HOST,
+     'its awk program runs a command, reads a file or writes one'),
+    ("ssh %s \"ls | sed -n 'w /tmp/x'\"" % _HOST,
+     'its sed script runs a command or writes a file'),
+    ("kubectl get --raw /api/v1/namespaces/kube-system/secrets",
+     'it returns a credential, key, secret or token'),
+    ("kubectl get pod x -o go-template-file=/etc/passwd",
+     'it reads an output template from a file'),
+])
+def test_filter_and_option_value_reasons_name_the_cause(command, expected):
+    assert describe_rejection(command) == expected, command
