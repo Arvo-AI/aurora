@@ -68,9 +68,24 @@ _VALUE_TOKEN = re.compile(r"\b\d+(?:\.\d+)?")
 
 def _states_a_value(text: str) -> bool:
     return any(len(match) >= 2 for match in _VALUE_TOKEN.findall(text))
-#: ``<field>: <from> -> <to>`` as written into a deploy_change record. Both
-#: sides are single tokens, so the pattern cannot backtrack super-linearly.
-_CHANGE_RE = re.compile(r"([\w.]+):\s*(\S+)\s*->\s*(\S+)")
+#: A deploy_change record's content is written by :mod:`.evidence` as
+#: ``<file> <field>: <from> -> <to>``. Parsing it with ``partition`` keeps the
+#: extraction linear; a pattern with adjacent greedy groups over the same text
+#: made the analyzer (rightly) nervous about backtracking.
+_CHANGE_SEP = ": "
+_CHANGE_ARROW = " -> "
+
+
+def _parse_change(content: str) -> Optional[Tuple[str, str, str]]:
+    """Return ``(field, from, to)`` for a deploy_change record, else None."""
+    head, separator, tail = content.partition(_CHANGE_SEP)
+    if not separator:
+        return None
+    field = head.split()[-1] if head.split() else ""
+    old, arrow, new = tail.partition(_CHANGE_ARROW)
+    if not field or not arrow:
+        return None
+    return field, old.strip(), new.strip()
 
 #: Seconds of slack when comparing a timeline entry's own timestamp with the
 #: records it cites. Models routinely round "14:35:21" to "14:35:00"; a whole
@@ -186,10 +201,11 @@ def _supports_config_change(claim: str, records: List[Any]) -> Tuple[bool, str]:
     for record in records:
         if record.record_type != RECORD_DEPLOY_CHANGE:
             continue
-        match = _CHANGE_RE.search(record.content)
-        field = match.group(1) if match else ""
-        new_value = match.group(3).strip() if match else ""
-        if not field or field not in claimed_fields:
+        parsed = _parse_change(record.content)
+        if parsed is None:
+            continue
+        field, old_value, new_value = parsed
+        if field not in claimed_fields:
             continue
         if not states_a_value:
             return True, f"field {field} present in evidence [{record.id}]"
@@ -197,7 +213,7 @@ def _supports_config_change(claim: str, records: List[Any]) -> Tuple[bool, str]:
             return True, f"field {field} -> {new_value} matches evidence [{record.id}]"
         return False, (
             f"claim cites {field} but states a value the evidence does not record "
-            f"(evidence: {match.group(2).strip()} -> {new_value})"
+            f"(evidence: {old_value} -> {new_value})"
         )
     return False, "no cited deploy_change record names the field in the claim"
 
