@@ -1344,14 +1344,18 @@ class Workflow:
 
                 # Save durable learnings from this conversation to org memory (non-blocking).
                 # The collector is a new task, so a Slack guest pin does not follow it.
+                # A public PR preview is skipped: it reviews someone else's repository.
                 try:
+                    from services.change_gating.public_github import is_public_preview
                     from services.memory.collector import extract_memories_from_session
-                    access_as = (getattr(self, "_trigger_metadata", None) or {}).get("access_as")
-                    extract_memories_from_session.delay(
-                        session_id=session_id,
-                        user_id=user_id,
-                        access_as=access_as,
-                    )
+
+                    trigger_metadata = getattr(self, "_trigger_metadata", None) or {}
+                    if not is_public_preview(trigger_metadata):
+                        extract_memories_from_session.delay(
+                            session_id=session_id,
+                            user_id=user_id,
+                            access_as=trigger_metadata.get("access_as"),
+                        )
                 except Exception:
                     logger.debug("[WORKFLOW FINAL] Memory save enqueue failed")
 

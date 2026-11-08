@@ -266,6 +266,7 @@ def _read_final_assistant_message(user_id: str, session_id: str) -> Optional[str
     (``_send_response_to_slack``, ~L2216-2243): RLS context first, then a
     reversed scan for the last bot/assistant message.
     """
+    from services.change_gating.verdict import final_assistant_text
     from utils.auth.stateless_auth import set_rls_context
     from utils.db.connection_pool import db_pool
 
@@ -281,15 +282,7 @@ def _read_final_assistant_message(user_id: str, session_id: str) -> Optional[str
             cursor.execute(_RESET_RLS_SQL)
             if not row or not row[0]:
                 return None
-            messages = row[0]
-            if isinstance(messages, str):
-                messages = json.loads(messages)
-            if not isinstance(messages, list):
-                return None
-            for msg in reversed(messages):
-                if isinstance(msg, dict) and msg.get("sender") in ("bot", "assistant"):
-                    return msg.get("text") or msg.get("content")
-    return None
+            return final_assistant_text(row[0])
 
 
 @celery_app.task(
@@ -474,6 +467,88 @@ def _run_bitbucket_investigation(
         )
     finally:
         adapter.close()
+
+
+@celery_app.task(
+    bind=True,
+    name="tasks.change_gating.preview_public_pr",
+    time_limit=300,
+    soft_time_limit=240,
+)
+def preview_public_pr(
+    self,
+    user_id: str,
+    session_id: str,
+    repo_full_name: str,
+    pr_number: int,
+) -> dict[str, Any]:
+    """Review a public GitHub PR for a user who has not installed the App.
+
+    Backs ``POST /api/pr-preview``, which already created ``session_id``.
+    Reads the PR anonymously (:class:`PublicGitHubReader`), builds the same
+    prompt as :func:`_run_investigation_core` and starts the same read-only
+    PR-review agent run (``source="change_gating"`` selects its tool
+    lockdown). Unlike the installed flow it accepts any PR state and posts
+    nothing to GitHub: the verdict stays in the chat session.
+    """
+    return _run_public_preview(user_id, session_id, repo_full_name, pr_number)
+
+
+def _run_public_preview(
+    user_id: str,
+    session_id: str,
+    repo_full_name: str,
+    pr_number: int,
+) -> dict[str, Any]:
+    """Body of :func:`preview_public_pr`, kept plain so it can be unit tested."""
+    from chat.background.task import _update_session_status, run_background_chat
+    from services.change_gating.public_github import PublicGitHubReader
+    from services.change_gating.verdict import build_review_prompt
+
+    log_ctx = f"repo={repo_full_name} pr={pr_number} session_id={session_id}"
+    reader = PublicGitHubReader(repo_full_name)
+    try:
+        pr = reader.get_pull_request(pr_number)
+        files = reader.list_files(pr_number)
+        diff = reader.get_diff(pr_number)
+    except Exception as exc:
+        _, status_code = _classify_provider_exc(exc)
+        logger.warning(
+            "change_gating=preview_public_pr %s status=github_error code=%s error_class=%s",
+            log_ctx, status_code, type(exc).__name__,
+        )
+        _update_session_status(session_id, "failed", user_id=user_id)
+        return {"status": "github_error", "session_id": session_id}
+    finally:
+        reader.close()
+
+    trigger_metadata = {
+        "source": "change_gating",
+        "provider": "github",
+        "preview": True,
+        "repo": repo_full_name,
+        "pr_number": pr_number,
+        "head_sha": (pr.get("head") or {}).get("sha"),
+    }
+    # The user is watching the page, so the agent run takes the high queue
+    # too, ahead of any backlog of background work.
+    run_background_chat.apply_async(
+        kwargs={
+            "user_id": user_id,
+            "session_id": session_id,
+            "initial_message": build_review_prompt(repo_full_name, pr, files, diff),
+            "trigger_metadata": trigger_metadata,
+            "send_notifications": False,
+            "mode": "ask",
+            "rail_text": (pr.get("title") or "") + "\n\n" + (pr.get("body") or ""),
+        },
+        queue="high",
+    )
+    logger.info(
+        "change_gating=preview_public_pr %s status=agent_enqueued files=%d diff=%s",
+        log_ctx, len(files), diff is not None,
+    )
+    return {"status": "enqueued", "session_id": session_id}
 
 
 def _run_investigation_core(

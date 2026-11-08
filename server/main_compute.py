@@ -379,8 +379,10 @@ def enforce_user_org_binding():
 from routes.llm_config import llm_config_bp
 from routes.auth_routes import auth_bp
 from routes.admin_routes import admin_bp
+from routes.pr_preview import pr_preview_bp
 
 app.register_blueprint(llm_config_bp)  # LLM provider configuration routes
+app.register_blueprint(pr_preview_bp)  # No-install review of public GitHub PRs
 app.register_blueprint(auth_bp)  # Auth.js authentication routes
 app.register_blueprint(admin_bp)  # RBAC admin routes
 
