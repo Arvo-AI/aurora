@@ -1,6 +1,6 @@
-"use client";
+﻿"use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type Record_ = {
   id: number;
@@ -59,7 +59,7 @@ const STATUS_STYLE: Record<string, { label: string; className: string }> = {
   invalid_citation: { label: "Invalid citation", className: "bg-rose-500/15 text-rose-300 border-rose-500/30" },
 };
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status }: Readonly<{ status: string }>) {
   const style = STATUS_STYLE[status] ?? { label: status, className: "bg-neutral-700/40 text-neutral-300 border-neutral-600" };
   return (
     <span className={`rounded border px-2 py-0.5 text-[11px] font-medium ${style.className}`}>
@@ -68,7 +68,7 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function Metric({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function Metric({ label, value, hint }: Readonly<{ label: string; value: string; hint?: string }>) {
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-900/60 px-4 py-3">
       <div className="text-[11px] uppercase tracking-wide text-neutral-500">{label}</div>
@@ -129,12 +129,6 @@ export default function IncidentReplayPage() {
   }, [bundle]);
 
   const records = data?.evidence.records ?? [];
-  const byId = useMemo(() => {
-    const map = new Map<number, Record_>();
-    for (const record of records) map.set(record.id, record);
-    return map;
-  }, [records]);
-
   const elapsedShown = running && startedAt ? ((now - startedAt) / 1000).toFixed(0) : null;
 
   return (
@@ -175,10 +169,10 @@ export default function IncidentReplayPage() {
           disabled={running}
           className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500 disabled:opacity-50"
         >
-          {running ? `Investigating… ${elapsedShown ?? 0}s` : "Run investigation"}
+          {running ? `Investigatingâ€¦ ${elapsedShown ?? 0}s` : "Run investigation"}
         </button>
         <p className="text-[11px] text-neutral-500">
-          Uses the deployment&apos;s configured model. The call typically takes 30–60s.
+          Uses the deployment&apos;s configured model. The call typically takes 30â€“60s.
         </p>
       </section>
 
@@ -221,11 +215,11 @@ export default function IncidentReplayPage() {
 
           <section>
             <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-400">
-              Findings <span className="font-normal text-neutral-500">— {data.validation.findings.length}, each checked against the bundle</span>
+              Findings <span className="font-normal text-neutral-500">â€” {data.validation.findings.length}, each checked against the bundle</span>
             </h2>
             <ul className="space-y-3">
               {data.validation.findings.map((finding) => (
-                <li key={finding.index} className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
+                <li key={`${finding.claim_type}:${finding.claim}`} className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
                   <div className="mb-2 flex flex-wrap items-center gap-2">
                     <StatusBadge status={finding.status} />
                     <span className="text-[11px] uppercase tracking-wide text-neutral-500">
@@ -244,7 +238,7 @@ export default function IncidentReplayPage() {
                   <p className="text-sm text-neutral-200">{finding.claim}</p>
                   <ul className="mt-2 space-y-1">
                     {finding.reasons.map((reason, index) => (
-                      <li key={index} className="text-[11px] text-neutral-500">
+                      <li key={reason} className="text-[11px] text-neutral-500">
                         · {reason}
                       </li>
                     ))}
@@ -261,7 +255,7 @@ export default function IncidentReplayPage() {
               </h2>
               <ul className="space-y-1 rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-100/90">
                 {data.investigation.unverified_hypotheses.map((item, index) => (
-                  <li key={index}>· {item}</li>
+                  <li key={item}>· {item}</li>
                 ))}
               </ul>
             </section>
@@ -274,7 +268,7 @@ export default function IncidentReplayPage() {
               </h2>
               <ul className="space-y-1 rounded-lg border border-neutral-800 bg-neutral-900/40 p-4 text-sm text-neutral-300">
                 {data.investigation.missing_evidence.map((item, index) => (
-                  <li key={index}>· {item}</li>
+                  <li key={item}>· {item}</li>
                 ))}
               </ul>
             </section>
@@ -286,7 +280,7 @@ export default function IncidentReplayPage() {
             </h2>
             <ol className="space-y-1 border-l border-neutral-800 pl-4">
               {data.investigation.timeline.map((entry, index) => (
-                <li key={index} className="text-sm text-neutral-300">
+                <li key={`${entry.at}:${entry.event}`} className="text-sm text-neutral-300">
                   <span className="mr-2 font-mono text-[11px] text-neutral-500">{entry.at}</span>
                   {entry.event}
                   {entry.evidence_ids?.map((id) => (
@@ -301,7 +295,7 @@ export default function IncidentReplayPage() {
 
           <section>
             <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-400">
-              Evidence bundle <span className="font-normal text-neutral-500">— {records.length} records</span>
+              Evidence bundle <span className="font-normal text-neutral-500">â€” {records.length} records</span>
             </h2>
             <div className="max-h-96 overflow-auto rounded-lg border border-neutral-800">
               <table className="w-full text-left text-[12px]">
@@ -320,7 +314,7 @@ export default function IncidentReplayPage() {
                       <td className="px-3 py-1.5 font-mono text-neutral-500">{record.id}</td>
                       <td className="px-3 py-1.5 text-neutral-400">{record.record_type}</td>
                       <td className="whitespace-nowrap px-3 py-1.5 font-mono text-neutral-500">
-                        {record.at ?? "—"}
+                        {record.at ?? "â€”"}
                       </td>
                       <td className="whitespace-nowrap px-3 py-1.5 text-neutral-500">
                         {record.source}:{record.locator}
@@ -334,7 +328,7 @@ export default function IncidentReplayPage() {
             {data.evidence.warnings?.length ? (
               <ul className="mt-2 text-[11px] text-amber-300">
                 {data.evidence.warnings.map((warning, index) => (
-                  <li key={index}>· {warning}</li>
+                  <li key={warning}>· {warning}</li>
                 ))}
               </ul>
             ) : null}
@@ -344,3 +338,6 @@ export default function IncidentReplayPage() {
     </div>
   );
 }
+
+
+

@@ -1,4 +1,4 @@
-"""Deterministic evidence validation for a replay result.
+﻿"""Deterministic evidence validation for a replay result.
 
 The model is asked to classify every finding it makes, and this module decides
 what each classification is actually allowed to claim. It never asks the model
@@ -54,8 +54,8 @@ INFERENCE_TYPES = {"temporal_relationship", "causal_hypothesis"}
 
 KNOWN_CLAIM_TYPES = set(OBSERVABLE_TYPES) | INFERENCE_TYPES
 
-_FIELD_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+")
-_WORD_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.]{5,}")
+_FIELD_TOKEN = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+")
+_WORD_TOKEN = re.compile(r"[A-Za-z_][\w.]{5,}")
 _STATUS_CODE = re.compile(r"\b(4\d{2}|5\d{2})\b")
 
 
@@ -195,82 +195,77 @@ _SUPPORT_RULES = {
 }
 
 
-def validate(bundle: EvidenceBundle, result: Dict[str, Any]) -> ValidationReport:
-    report = ValidationReport()
-    findings = result.get("findings") or []
 
-    for index, raw in enumerate(findings):
-        if not isinstance(raw, dict):
-            continue
-        claim_type = str(raw.get("claim_type") or "").strip()
-        claim = str(raw.get("claim") or "").strip()
-        good_ids, bad_ids = _coerce_ids(raw.get("evidence_ids"))
 
-        verdict = FindingVerdict(
-            index=index, claim_type=claim_type, claim=claim, cited=good_ids,
-            status=UNVERIFIED_HYPOTHESIS,
+def _classify(claim_type: str, claim: str, resolved: List[Any], untimed: List[int]) -> Tuple[str, str]:
+    """Decide what one finding is allowed to claim. Pure.
+
+    The returned status is the strongest the evidence supports; a causal claim
+    has no path to ``verified_observation`` at all.
+    """
+    if claim_type == "causal_hypothesis":
+        return (
+            UNVERIFIED_HYPOTHESIS,
+            "causal claim: order and correlation cannot establish causation from "
+            "the evidence alone",
         )
-        report.total_citations += len(good_ids) + len(bad_ids)
-        report.resolved_citations += len([i for i in good_ids if bundle.by_id(i)])
+    if claim_type == "temporal_relationship":
+        if untimed:
+            return UNVERIFIED_HYPOTHESIS, f"cited record(s) without a timestamp: {untimed}"
+        return SUPPORTED_INFERENCE, "all cited records are timestamped and ordered"
 
+    required = OBSERVABLE_TYPES[claim_type]
+    if not any(record.record_type == required for record in resolved):
+        return UNVERIFIED_HYPOTHESIS, f"{claim_type} must cite at least one {required} record"
+    supported, why = _SUPPORT_RULES[claim_type](claim, resolved)
+    return (VERIFIED_OBSERVATION if supported else UNVERIFIED_HYPOTHESIS), why
+
+
+def _evaluate(bundle: EvidenceBundle, report: ValidationReport, index: int, raw: Any) -> Optional[FindingVerdict]:
+    """Turn one raw finding dict into a verdict, updating the report counters."""
+    if not isinstance(raw, dict):
+        return None
+
+    claim_type = str(raw.get("claim_type") or "").strip()
+    claim = str(raw.get("claim") or "").strip()
+    good_ids, bad_ids = _coerce_ids(raw.get("evidence_ids"))
+    verdict = FindingVerdict(
+        index=index, claim_type=claim_type, claim=claim, cited=good_ids,
+        status=UNVERIFIED_HYPOTHESIS,
+    )
+
+    report.total_citations += len(good_ids) + len(bad_ids)
+    missing = [i for i in good_ids if bundle.by_id(i) is None]
+    report.resolved_citations += len(good_ids) - len(missing)
+
+    if bad_ids or missing:
         if bad_ids:
             verdict.reasons.append(f"malformed evidence id(s): {bad_ids!r}")
-
-        missing = [i for i in good_ids if bundle.by_id(i) is None]
         if missing:
             verdict.reasons.append(f"cited id(s) not in the bundle: {missing}")
             report.missing_ids.extend(missing)
+        verdict.status = INVALID_CITATION
+        return verdict
 
-        if bad_ids or missing:
-            verdict.status = INVALID_CITATION
-            report.findings.append(verdict)
-            continue
+    if claim_type not in KNOWN_CLAIM_TYPES:
+        verdict.reasons.append(f"unknown claim_type {claim_type!r}")
+        report.unknown_claim_types.append(claim_type)
+        return verdict
 
-        if claim_type not in KNOWN_CLAIM_TYPES:
-            verdict.reasons.append(f"unknown claim_type {claim_type!r}")
-            report.unknown_claim_types.append(claim_type)
-            report.findings.append(verdict)
-            continue
+    resolved = [bundle.by_id(i) for i in good_ids]
+    if not resolved:
+        verdict.reasons.append("finding cites no evidence")
+        return verdict
 
-        resolved = [bundle.by_id(i) for i in good_ids]
-        if not resolved:
-            verdict.reasons.append("finding cites no evidence")
-            report.findings.append(verdict)
-            continue
+    status, reason = _classify(claim_type, claim, resolved, [r.id for r in resolved if not r.at])
+    verdict.status = status
+    verdict.reasons.append(reason)
+    if status in (VERIFIED_OBSERVATION, SUPPORTED_INFERENCE):
+        report.type_valid_findings += 1
+    return verdict
 
-        untimed = [r.id for r in resolved if not r.at]
-        if untimed:
-            verdict.reasons.append(f"cited record(s) without a parseable timestamp: {untimed}")
 
-        if claim_type == "causal_hypothesis":
-            verdict.status = UNVERIFIED_HYPOTHESIS
-            verdict.reasons.append(
-                "causal claim: order and correlation cannot establish causation from "
-                "the evidence alone"
-            )
-        elif claim_type == "temporal_relationship":
-            if untimed:
-                verdict.status = UNVERIFIED_HYPOTHESIS
-            else:
-                verdict.status = SUPPORTED_INFERENCE
-                report.type_valid_findings += 1
-                verdict.reasons.append("all cited records are timestamped and ordered")
-        else:
-            required = OBSERVABLE_TYPES[claim_type]
-            if not any(r.record_type == required for r in resolved):
-                verdict.reasons.append(
-                    f"{claim_type} must cite at least one {required} record"
-                )
-            else:
-                supported, why = _SUPPORT_RULES[claim_type](claim, resolved)
-                verdict.status = VERIFIED_OBSERVATION if supported else UNVERIFIED_HYPOTHESIS
-                verdict.reasons.append(why)
-                if supported:
-                    report.type_valid_findings += 1
-
-        report.findings.append(verdict)
-
-    timeline = result.get("timeline") or []
+def _check_timeline(bundle: EvidenceBundle, report: ValidationReport, timeline: List[Any]) -> None:
     previous = ""
     for index, entry in enumerate(timeline):
         if not isinstance(entry, dict):
@@ -294,6 +289,14 @@ def validate(bundle: EvidenceBundle, result: Dict[str, Any]) -> ValidationReport
             report.timeline_ok = False
             report.timeline_problems.append(f"timeline entry {index} has malformed ids {bad!r}")
 
+
+def validate(bundle: EvidenceBundle, result: Dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    for index, raw in enumerate(result.get("findings") or []):
+        verdict = _evaluate(bundle, report, index, raw)
+        if verdict is not None:
+            report.findings.append(verdict)
+    _check_timeline(bundle, report, result.get("timeline") or [])
     return report
 
 

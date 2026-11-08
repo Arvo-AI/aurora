@@ -16,18 +16,15 @@ from __future__ import annotations
 import logging
 import uuid
 
-from flask import jsonify, request
+from flask import Blueprint, jsonify, request
 
 from incident_replay.evidence import BUNDLE_NAMES, normalize_bundle
 from incident_replay.investigator import DEFAULT_TIMEOUT_S, run_replay
 from incident_replay.validator import validate
-from routes.artifact_routes import artifact_bp  # noqa: F401  (import order parity)
 from utils.auth.rbac_decorators import require_permission
 from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
-
-from flask import Blueprint  # noqa: E402  (after the imports above, kept explicit)
 
 incident_replay_bp = Blueprint("incident_replay", __name__)
 

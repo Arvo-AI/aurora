@@ -1,4 +1,4 @@
-"""Run one evidence-verified RCA through the deployment's configured model.
+﻿"""Run one evidence-verified RCA through the deployment's configured model.
 
 Boundaries this module is responsible for:
 
@@ -12,7 +12,7 @@ Boundaries this module is responsible for:
   not an instruction to the model.
 * **Failures are surfaced.** A timeout, an unavailable provider, or a response
   that is not a JSON object is reported as such. There is exactly one repair
-  attempt, and the repair is a fresh call — never a silent substitution.
+  attempt, and the repair is a fresh call â€” never a silent substitution.
 """
 
 from __future__ import annotations
@@ -89,13 +89,14 @@ _FENCE = re.compile(r"^```[a-zA-Z0-9_-]*[^\S\n]*\n(.*?)\n?```$", re.DOTALL)
 
 
 def parse_json_object(text: str) -> Optional[Dict[str, Any]]:
-    """Return the first balanced JSON object in ``text``, or None.
+    """Return the first JSON object in ``text``, or None.
 
     Tolerates a fenced block and leading prose, because models do both even when
-    asked not to. A truncated or malformed object returns None rather than a
-    partial guess.
+    asked not to. ``json.JSONDecoder.raw_decode`` does the bracket matching, so
+    braces inside strings and escaped quotes need no hand-written scanner. A
+    truncated or malformed object returns None rather than a partial guess.
     """
-    if not text:
+    if not text or not isinstance(text, str):
         return None
     candidate = text.strip()
     fenced = _FENCE.match(candidate)
@@ -104,32 +105,11 @@ def parse_json_object(text: str) -> Optional[Dict[str, Any]]:
     start = candidate.find("{")
     if start < 0:
         return None
-    depth = 0
-    in_string = False
-    escaped = False
-    for offset in range(start, len(candidate)):
-        char = candidate[offset]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_string = False
-            continue
-        if char == '"':
-            in_string = True
-        elif char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(candidate[start:offset + 1])
-                except json.JSONDecodeError:
-                    return None
-    return None
-
+    try:
+        parsed, _ = json.JSONDecoder().raw_decode(candidate[start:])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 def _flatten_content(content: Any) -> str:
     if isinstance(content, list):
@@ -237,3 +217,4 @@ def run_replay(
         "attempts": attempts,
         "result": parsed,
     }
+

@@ -1,4 +1,4 @@
-"""Evidence normalization for the evidence-verified RCA replay.
+﻿"""Evidence normalization for the evidence-verified RCA replay.
 
 An evidence bundle is a fixed directory of incident artifacts shipped with the
 repository. Normalization turns those files into numbered records with a stable
@@ -25,9 +25,8 @@ import csv
 import io
 import json
 import os
-import re
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 #: Only bundles named here can be run. A request may pick a bundle by name; it
@@ -54,42 +53,29 @@ RECORD_DEPLOY_EVENT = "deploy_event"
 RECORD_DEPLOY_CHANGE = "deploy_change"
 RECORD_RUNBOOK = "runbook"
 
-_ISO = re.compile(
-    r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$"
-)
-
 
 def parse_ts(raw: Optional[str]) -> Optional[datetime]:
-    """Parse an ISO-8601 timestamp with an explicit offset.
+    """Parse an ISO-8601 timestamp that carries a time component.
 
+    ``datetime.fromisoformat`` (3.11+) understands both ``Z`` and explicit
+    offsets, so no hand-rolled pattern is needed. A date with no time component
+    is rejected: a record that says only "2026-11-06" has no place on a timeline.
     A timestamp with no offset is treated as UTC only because every artifact in
-    these bundles is emitted by systems configured to UTC and says so; a value
-    that does not match the pattern at all returns ``None`` rather than being
-    assumed.
+    these bundles is emitted by systems configured to UTC and says so; anything
+    unparseable returns ``None`` rather than being assumed.
     """
-    if not raw:
+    if not raw or not isinstance(raw, str):
         return None
-    m = _ISO.match(raw.strip())
-    if not m:
+    candidate = raw.strip()
+    if "T" not in candidate and " " not in candidate:
         return None
-    year, month, day, hour, minute, second, frac, tz = m.groups()
-    # The offset must become the datetime's own tzinfo *before* construction;
-    # tagging it UTC first and then converting would shift the wall clock the
-    # wrong way.
-    tzinfo = timezone.utc
-    if tz and tz != "Z":
-        sign = 1 if tz[0] == "+" else -1
-        digits = tz[1:].replace(":", "")
-        tzinfo = timezone(sign * timedelta(hours=int(digits[:2]), minutes=int(digits[2:])))
     try:
-        dt = datetime(
-            int(year), int(month), int(day), int(hour), int(minute), int(second),
-            int((frac or "0").ljust(6, "0")[:6]),
-            tzinfo=tzinfo,
-        )
+        parsed = datetime.fromisoformat(candidate)
     except ValueError:
         return None
-    return dt.astimezone(timezone.utc)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 @dataclass
@@ -300,3 +286,4 @@ def normalize_bundle(name: str) -> EvidenceBundle:
     for position, record in enumerate(bundle.records, start=1):
         record.id = position
     return bundle
+
