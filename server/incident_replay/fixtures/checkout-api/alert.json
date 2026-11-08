@@ -1,0 +1,12 @@
+{
+  "alert_id": "PD-88213",
+  "service": "checkout-api",
+  "environment": "production",
+  "namespace": "payments",
+  "severity": "SEV-2",
+  "summary": "checkout-api HTTP 5xx error rate above 5%",
+  "fired_at": "2026-11-06T14:36:12Z",
+  "threshold": "5%",
+  "observed_value": "7.8%",
+  "runbook_ref": "runbook.md"
+}
