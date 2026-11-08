@@ -1,4 +1,4 @@
-﻿"""Evidence normalization for the evidence-verified RCA replay.
+"""Evidence normalization for the evidence-verified RCA replay.
 
 An evidence bundle is a fixed directory of incident artifacts shipped with the
 repository. Normalization turns those files into numbered records with a stable

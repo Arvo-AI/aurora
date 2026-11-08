@@ -35,6 +35,7 @@ from .evidence import (
     RECORD_LOG,
     RECORD_METRIC,
     EvidenceBundle,
+    parse_ts,
 )
 
 VERIFIED_OBSERVATION = "verified_observation"
@@ -57,6 +58,23 @@ KNOWN_CLAIM_TYPES = set(OBSERVABLE_TYPES) | INFERENCE_TYPES
 _FIELD_TOKEN = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+")
 _WORD_TOKEN = re.compile(r"[A-Za-z_][\w.]{5,}")
 _STATUS_CODE = re.compile(r"\b(4\d{2}|5\d{2})\b")
+#: A number that counts as a stated value. Deliberately loose on the trailing
+#: side so "2400ms" counts, and deliberately anchored on a word boundary so the
+#: digits inside "http_5xx_rate" and "p99_latency_ms" do not: those name
+#: metrics, they do not state values. Single digits are ignored, so "5xx" at the
+#: start of a sentence is not mistaken for a value either.
+_VALUE_TOKEN = re.compile(r"\b\d+(?:\.\d+)?")
+
+
+def _states_a_value(text: str) -> bool:
+    return any(len(match) >= 2 for match in _VALUE_TOKEN.findall(text))
+#: ``<field>: <from> -> <to>`` as written into a deploy_change record.
+_CHANGE_RE = re.compile(r"([\w.]+):\s*(.+?)\s*->\s*(.+)$")
+
+#: Seconds of slack when comparing a timeline entry's own timestamp with the
+#: records it cites. Models routinely round "14:35:21" to "14:35:00"; a whole
+#: minute of skew is imprecision, whereas citing a 14:32 event as 14:20 is not.
+_TIMELINE_TOLERANCE_S = 60.0
 
 
 @dataclass
@@ -154,13 +172,32 @@ def _supports_deployment(claim: str, records: List[Any]) -> Tuple[bool, str]:
 
 
 def _supports_config_change(claim: str, records: List[Any]) -> Tuple[bool, str]:
-    claimed = set(_FIELD_TOKEN.findall(claim))
+    """A config claim must name a field the evidence records, and any value it
+    states must be the value the evidence records.
+
+    Matching on the field name alone would let "maxPoolSize changed from 50 to
+    10" be confirmed by a record that says 50 -> 25. When the claim states a
+    number, the record's new value has to appear in it.
+    """
+    claimed_fields = set(_FIELD_TOKEN.findall(claim))
+    states_a_value = _states_a_value(claim)
+
     for record in records:
         if record.record_type != RECORD_DEPLOY_CHANGE:
             continue
-        present = set(_FIELD_TOKEN.findall(record.content))
-        if claimed & present:
-            return True, f"field {sorted(claimed & present)} present in evidence [{record.id}]"
+        match = _CHANGE_RE.search(record.content)
+        field = match.group(1) if match else ""
+        new_value = match.group(3).strip() if match else ""
+        if not field or field not in claimed_fields:
+            continue
+        if not states_a_value:
+            return True, f"field {field} present in evidence [{record.id}]"
+        if new_value and new_value in claim:
+            return True, f"field {field} -> {new_value} matches evidence [{record.id}]"
+        return False, (
+            f"claim cites {field} but states a value the evidence does not record "
+            f"(evidence: {match.group(2).strip()} -> {new_value})"
+        )
     return False, "no cited deploy_change record names the field in the claim"
 
 
@@ -178,12 +215,32 @@ def _supports_error(claim: str, records: List[Any]) -> Tuple[bool, str]:
 
 
 def _supports_metric(claim: str, records: List[Any]) -> Tuple[bool, str]:
+    """A metric claim must name the metric and, if it states numbers, use values
+    the cited samples actually contain.
+
+    Values are collected across *all* cited samples: a claim spanning a window
+    ("0.4 at 14:20 to 7.8 at 14:40") is legitimately checked against the earliest
+    and the latest sample, not only the first one.
+    """
+    states_a_value = _states_a_value(claim)
     for record in records:
-        if record.record_type != RECORD_METRIC:
+        if record.record_type != RECORD_METRIC or "=" not in record.content:
             continue
-        name = record.content.split("=", 1)[0].split()[-1] if "=" in record.content else ""
-        if name and name in claim:
+        name = record.content.split("=", 1)[0].split()[-1]
+        if not name or name not in claim:
+            continue
+        values = {
+            r.content.split("=", 1)[1].split()[0]
+            for r in records
+            if r.record_type == RECORD_METRIC and "=" in r.content
+            and r.content.split("=", 1)[0].split()[-1] == name
+        }
+        if not states_a_value or any(value in claim for value in values if value):
             return True, f"metric {name} cited as evidence [{record.id}]"
+        return False, (
+            f"claim names {name} but states values the cited samples do not contain "
+            f"(samples: {sorted(v for v in values if v)[:4]})"
+        )
     return False, "no cited metric record names the metric the claim describes"
 
 
@@ -268,11 +325,19 @@ def _evaluate(bundle: EvidenceBundle, report: ValidationReport, index: int, raw:
 def _timeline_entry_at(
     bundle: EvidenceBundle, report: ValidationReport, index: int, entry: Any
 ) -> str:
-    """Validate one timeline entry's citations; return its timestamp (or "")."""
+    """Validate one timeline entry; return its timestamp (or "").
+
+    The entry's own ``at`` is checked against the records it cites: a single
+    citation must match that record's timestamp exactly, and a multi-record
+    entry must fall inside the span of the citations. Without this, an entry
+    could cite a 14:32 deployment while claiming the event happened at 14:20,
+    and a monotonic list would still pass.
+    """
     if not isinstance(entry, dict):
         return ""
     at = str(entry.get("at") or "")
     ids, bad = _coerce_ids(entry.get("evidence_ids"))
+    cited = [bundle.by_id(record_id) for record_id in ids]
     for record_id in ids:
         if bundle.by_id(record_id) is None:
             report.timeline_ok = False
@@ -282,6 +347,33 @@ def _timeline_entry_at(
     if bad:
         report.timeline_ok = False
         report.timeline_problems.append(f"timeline entry {index} has malformed ids {bad!r}")
+
+    cited_ats = [record.at for record in cited if record and record.at]
+    entry_at = parse_ts(at)
+    if entry_at and len(cited_ats) == 1:
+        record = cited[0]
+        # A record can state more than one instant in its own content (a deploy
+        # records both its start and its completion). Quoting the second one is
+        # accurate, so a timestamp that appears verbatim in the record is not a
+        # mismatch even when it differs from the record's own stamp.
+        if at and record and at in (record.content or ""):
+            return at
+        cited_at = parse_ts(cited_ats[0])
+        if cited_at and abs((entry_at - cited_at).total_seconds()) > _TIMELINE_TOLERANCE_S:
+            report.timeline_ok = False
+            report.timeline_problems.append(
+                f"timeline entry {index} says {at} but its evidence is stamped {cited_ats[0]}"
+            )
+    elif entry_at and len(cited_ats) > 1:
+        stamps = sorted(s for s in (parse_ts(value) for value in cited_ats) if s)
+        if stamps and not (stamps[0].timestamp() - _TIMELINE_TOLERANCE_S
+                           <= entry_at.timestamp()
+                           <= stamps[-1].timestamp() + _TIMELINE_TOLERANCE_S):
+            report.timeline_ok = False
+            report.timeline_problems.append(
+                f"timeline entry {index} says {at}, outside its evidence span "
+                f"{cited_ats[0]}..{cited_ats[-1]}"
+            )
     return at
 
 
@@ -311,3 +403,5 @@ def validate(bundle: EvidenceBundle, result: Dict[str, Any]) -> ValidationReport
 def validate_payload(payload: Dict[str, Any], bundle: EvidenceBundle) -> Dict[str, Any]:
     """Convenience wrapper used by the route and the tests."""
     return validate(bundle, payload).to_dict()
+
+

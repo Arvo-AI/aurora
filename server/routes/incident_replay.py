@@ -23,6 +23,7 @@ from incident_replay.investigator import DEFAULT_TIMEOUT_S, run_replay
 from incident_replay.validator import validate
 from utils.auth.rbac_decorators import require_permission
 from utils.log_sanitizer import sanitize
+from utils.web.limiter_ext import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,10 @@ def list_bundles(user_id):
 
 
 @incident_replay_bp.route("/api/incident-replay/run", methods=["POST"])
+# Each request spends a model call, so it is budgeted like the other endpoints
+# that do: per user, minutes and hours. The limiter's key function already
+# derives the user id, and internal/localhost traffic is exempt via its filter.
+@limiter.limit("5 per minute;30 per hour")
 @require_permission("incident_replay", "write")
 def run(user_id):
     """Run one replay and return the investigation plus its validation report."""

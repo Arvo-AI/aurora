@@ -38,6 +38,17 @@ def _id_of(bundle, record_type: str, needle: str) -> int:
     raise AssertionError(f"no {record_type} record containing {needle!r}")
 
 
+def _ids_of(bundle, record_type: str, needle: str) -> list[int]:
+    """Every matching record id, for claims that span several samples."""
+    ids = [
+        record.id for record in bundle.records
+        if record.record_type == record_type and needle in record.content
+    ]
+    if not ids:
+        raise AssertionError(f"no {record_type} record containing {needle!r}")
+    return ids
+
+
 def _result(*findings, timeline=None):
     return {"findings": list(findings), "timeline": timeline or []}
 
@@ -125,13 +136,33 @@ class TestClaimSupport:
         assert report.findings[0].status == VERIFIED_OBSERVATION
 
     def test_metric_degradation_needs_the_metric_name_in_the_claim(self, bundle):
-        metric = _id_of(bundle, RECORD_METRIC, "p99_latency_ms")
+        # A claim spanning a window cites the samples it quotes from.
+        metrics = _ids_of(bundle, RECORD_METRIC, "p99_latency_ms")
         ok = validate(bundle, _result(_finding("metric_degradation",
-                                               "p99_latency_ms rose to 2400ms", [metric])))
+                                               "p99_latency_ms rose to 2400ms", metrics)))
         assert ok.findings[0].status == VERIFIED_OBSERVATION
         mismatch = validate(bundle, _result(_finding("metric_degradation",
-                                                     "cpu saturation rose", [metric])))
+                                                     "cpu saturation rose", metrics)))
         assert mismatch.findings[0].status == UNVERIFIED_HYPOTHESIS
+
+    def test_metric_claim_stating_a_value_the_samples_do_not_have(self, bundle):
+        metrics = _ids_of(bundle, RECORD_METRIC, "p99_latency_ms")
+        report = validate(
+            bundle,
+            _result(_finding("metric_degradation", "p99_latency_ms reached 9000ms", metrics)),
+        )
+        assert report.findings[0].status == UNVERIFIED_HYPOTHESIS
+        assert "values the cited samples do not contain" in " ".join(report.findings[0].reasons)
+
+    def test_config_claim_stating_the_wrong_new_value(self, bundle):
+        pool = _id_of(bundle, RECORD_DEPLOY_CHANGE, "maxPoolSize")
+        report = validate(
+            bundle,
+            _result(_finding("configuration_change",
+                             "db.pool.maxPoolSize changed from 50 to 25.", [pool])),
+        )
+        assert report.findings[0].status == UNVERIFIED_HYPOTHESIS
+        assert "value the evidence does not record" in " ".join(report.findings[0].reasons)
 
     def test_deployment_observed_cites_the_deploy_event(self, bundle):
         event = _id_of(bundle, RECORD_DEPLOY_EVENT, "deploy-4471")
@@ -178,6 +209,82 @@ class TestCausalityIsNeverPromoted:
 
 
 class TestTimeline:
+    @staticmethod
+    def _bundle(records):
+        from incident_replay.evidence import EvidenceBundle
+
+        bundle = EvidenceBundle(name="synthetic")
+        bundle.records = records
+        return bundle
+
+    @staticmethod
+    def _log(record_id, at):
+        from incident_replay.evidence import EvidenceRecord
+
+        return EvidenceRecord(
+            id=record_id, source="synthetic", locator=f"l{record_id}",
+            record_type=RECORD_LOG, at=at, at_raw=at, content="timeout",
+        )
+
+    def test_entry_timestamp_must_match_its_single_citation(self):
+        # An entry may not cite a 14:35 record while claiming the event was at
+        # 14:20; a monotonic list alone would not notice.
+        bundle = self._bundle([self._log(1, "2026-11-06T14:35:21Z")])
+        report = validate(
+            bundle,
+            _result(timeline=[{"at": "2026-11-06T14:20:00Z", "event": "x",
+                               "evidence_ids": [1]}]),
+        )
+        assert report.timeline_ok is False
+        assert "evidence is stamped" in " ".join(report.timeline_problems)
+
+    def test_quoting_a_second_timestamp_from_the_record_content_is_accepted(self):
+        # A deploy record states its start *and* its completion. An entry that
+        # quotes the completion is accurate even though the record's own stamp
+        # is the start.
+        from incident_replay.evidence import EvidenceRecord
+
+        bundle = self._bundle([
+            EvidenceRecord(
+                id=1, source="d", locator="l1", record_type=RECORD_DEPLOY_EVENT,
+                at="2026-11-06T14:32:08Z", at_raw="",
+                content="deploy deploy-4471 completed_at=2026-11-06T14:33:41Z",
+            )
+        ])
+        report = validate(
+            bundle,
+            _result(timeline=[{"at": "2026-11-06T14:33:41Z", "event": "x",
+                               "evidence_ids": [1]}]),
+        )
+        assert report.timeline_ok is True
+
+    def test_minute_level_rounding_is_tolerated(self):
+        bundle = self._bundle([self._log(1, "2026-11-06T14:35:21Z")])
+        report = validate(
+            bundle,
+            _result(timeline=[{"at": "2026-11-06T14:35:00Z", "event": "x",
+                               "evidence_ids": [1]}]),
+        )
+        assert report.timeline_ok is True
+
+    def test_multi_citation_entry_must_fall_inside_their_span(self):
+        bundle = self._bundle([
+            self._log(1, "2026-11-06T14:35:21Z"),
+            self._log(2, "2026-11-06T14:40:00Z"),
+        ])
+        inside = validate(
+            bundle,
+            _result(timeline=[{"at": "2026-11-06T14:38:00Z", "event": "x",
+                               "evidence_ids": [1, 2]}]),
+        )
+        assert inside.timeline_ok is True
+        outside = validate(
+            bundle,
+            _result(timeline=[{"at": "2026-11-06T15:30:00Z", "event": "x",
+                               "evidence_ids": [1, 2]}]),
+        )
+        assert outside.timeline_ok is False
+
     def test_out_of_order_timeline_is_flagged(self, bundle):
         report = validate(
             bundle,

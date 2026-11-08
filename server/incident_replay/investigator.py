@@ -1,4 +1,4 @@
-﻿"""Run one evidence-verified RCA through the deployment's configured model.
+"""Run one evidence-verified RCA through the deployment's configured model.
 
 Boundaries this module is responsible for:
 
@@ -24,7 +24,7 @@ import re
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from chat.backend.agent.llm import ModelConfig
 from chat.backend.agent.providers import create_chat_model
@@ -130,18 +130,54 @@ def _selector_model_name() -> str:
     return getattr(ModelConfig, "RCA_MODEL", None) or getattr(ModelConfig, "MAIN_MODEL", None)
 
 
+
+
+REPAIR_SYSTEM = (
+    "Your previous answer was not a single JSON object. Return only the JSON "
+    "object described earlier, with no prose and no code fences."
+)
+
+
+def _invoke_with_deadline(fn: Any, timeout_s: float) -> Tuple[Any, Any]:
+    """Run ``fn`` with a deadline. Returns ``(value, error)``.
+
+    On timeout the executor is shut down *without waiting*, because the point of
+    a deadline is that the response returns at it. That bounds the request, not
+    the work: the underlying HTTP call is not cancelled, and it keeps running in
+    its worker thread until the provider's own request timeout fires. Wrapping a
+    call in ``future.result(timeout=...)`` alone would not help — leaving a
+    ``with ThreadPoolExecutor()`` block waits for the worker regardless.
+    """
+    pool = futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="replay")
+    future = pool.submit(fn)
+    try:
+        return future.result(timeout=timeout_s), None
+    except futures.TimeoutError:
+        return None, "timeout"
+    except Exception as exc:  # provider 5xx, auth failure, network error
+        return None, exc
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 def run_replay(
     bundle: EvidenceBundle,
     *,
     user_id: str,
     timeout_s: float = DEFAULT_TIMEOUT_S,
 ) -> Dict[str, Any]:
-    """Execute the replay. Returns a dict with either ``result`` or ``error``."""
+    """Execute the replay. Returns a dict with either ``result`` or ``error``.
+
+    ``timeout_s`` is a wall-clock deadline for the whole replay, repair attempt
+    included, not a per-call timeout.
+    """
     model_name = _selector_model_name()
     if not model_name:
         return {"error": "no model configured", "error_kind": "configuration"}
 
-    started = time.time()
+    started = time.monotonic()
+    deadline = started + timeout_s
+
     try:
         llm = create_chat_model(model_name, temperature=0.2, streaming=False)
     except Exception as exc:  # provider missing or key absent
@@ -153,10 +189,15 @@ def run_replay(
 
     # Note: no bind_tools(). The model has no Aurora tool to call.
 
-    def _invoke(prompt: str) -> str:
+    def _invoke(system_prompt: str, user_prompt: str) -> str:
+        """The system prompt is a real SystemMessage, so the evidence fence sits
+        at instruction priority rather than inside the user turn."""
         response = tracked_invoke(
             llm,
-            [HumanMessage(content=prompt)],
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt),
+            ],
             user_id=user_id,
             session_id=None,
             model_name=model_name,
@@ -164,43 +205,49 @@ def run_replay(
         )
         return _flatten_content(response.content)
 
-    prompt = SYSTEM_PROMPT + "\n\n" + build_prompt(bundle)
-    attempts = 0
-    try:
-        with futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_invoke, prompt)
-            try:
-                raw = future.result(timeout=timeout_s)
-            except futures.TimeoutError:
-                return {
-                    "error": f"model did not answer within {timeout_s:.0f}s",
-                    "error_kind": "timeout",
-                    "model": model_name,
-                }
-            attempts += 1
-            parsed = parse_json_object(raw)
-            if parsed is None:
-                # One repair attempt: ask again for JSON only, with the bad
-                # answer quoted back. Never more than one.
-                repair = (
-                    SYSTEM_PROMPT
-                    + "\n\nYour previous answer was not a single JSON object. "
-                      "Return only the JSON object now.\n\n"
-                    + prompt
-                )
-                repair_future = pool.submit(_invoke, repair)
-                raw = repair_future.result(timeout=timeout_s)
-                attempts += 1
-                parsed = parse_json_object(raw)
-    except Exception as exc:  # network, auth, provider 5xx
-        logger.warning("[replay] model call failed: %s", exc)
+    user_prompt = build_prompt(bundle)
+    remaining = max(1.0, deadline - time.monotonic())
+    raw, error = _invoke_with_deadline(
+        lambda: _invoke(SYSTEM_PROMPT, user_prompt), remaining
+    )
+
+    if error == "timeout":
         return {
-            "error": f"model call failed: {exc}",
+            "error": f"model did not answer within {timeout_s:.0f}s",
+            "error_kind": "timeout",
+            "model": model_name,
+        }
+    if isinstance(error, Exception):
+        logger.warning("[replay] model call failed: %s", error)
+        return {
+            "error": f"model call failed: {error}",
             "error_kind": "provider_error",
             "model": model_name,
         }
 
-    elapsed = round(time.time() - started, 2)
+    attempts = 1
+    parsed = parse_json_object(raw)
+
+    if parsed is None:
+        remaining = deadline - time.monotonic()
+        if remaining < 5:
+            return {
+                "error": "model did not return a JSON object and no budget remained to retry",
+                "error_kind": "unparseable",
+                "model": model_name,
+                "elapsed_s": round(time.monotonic() - started, 2),
+                "attempts": attempts,
+            }
+        raw_retry, retry_error = _invoke_with_deadline(
+            lambda: _invoke(REPAIR_SYSTEM, user_prompt), remaining
+        )
+        attempts = 2
+        if retry_error is None:
+            parsed = parse_json_object(raw_retry)
+            if parsed is not None:
+                raw = raw_retry
+
+    elapsed = round(time.monotonic() - started, 2)
     if parsed is None:
         return {
             "error": "model did not return a JSON object",
@@ -208,7 +255,7 @@ def run_replay(
             "model": model_name,
             "elapsed_s": elapsed,
             "attempts": attempts,
-            "raw_text_head": raw[:400],
+            "raw_text_head": (raw or "")[:400],
         }
 
     return {
@@ -217,4 +264,3 @@ def run_replay(
         "attempts": attempts,
         "result": parsed,
     }
-
