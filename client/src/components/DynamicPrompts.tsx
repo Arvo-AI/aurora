@@ -6,8 +6,39 @@ interface DynamicPromptsProps {
   onPromptClick: (prompt: string) => void
   className?: string
 }
+const SAMPLE_INCIDENT_PROMPT = `
+  Investigate this sample production incident and identify the most likely root cause, the evidence supporting it, and the safest next action.
+
+  Alert:
+  Checkout API error rate increased from 0.4% to 18% at 14:32 UTC.
+
+  Recent change:
+  A deployment of checkout-service version v2.8.1 completed at 14:28 UTC.
+
+  Logs:
+  14:32:04 ERROR database connection timeout
+  14:32:06 ERROR database connection timeout
+  14:32:08 WARN connection pool exhausted
+  14:32:10 ERROR request failed: checkout unavailable
+
+  Metrics:
+  - checkout-service CPU: 42% -> 45%
+  - memory: stable at 61%
+  - DB active connections: 72 -> 100
+  - DB max connections: 100
+  - p95 latency: 220ms -> 4.8s
+
+  Deployment note:
+  v2.8.1 changed the database client configuration and increased the application connection pool from 20 to 80
+
+  Please explain the likely root cause and suggest the safest next step.
+`
 
 const promptSets = {
+  demo: {
+    title: "Try Aurora",
+    prompts: [SAMPLE_INCIDENT_PROMPT],
+  },
   compute: {
     title: "Compute & Clusters",
     prompts: [
@@ -61,7 +92,9 @@ const promptSets = {
 }
 
 export default function DynamicPrompts({ onPromptClick, className = "" }: DynamicPromptsProps) {
-  const [currentSet, setCurrentSet] = useState("compute")
+  // const [currentSet, setCurrentSet] = useState("compute")
+  const [currentSet, setCurrentSet] = useState("demo")
+
   const [displayedPrompts, setDisplayedPrompts] = useState<string[]>([])
   const [isRotating, setIsRotating] = useState(false)
 
@@ -91,6 +124,11 @@ export default function DynamicPrompts({ onPromptClick, className = "" }: Dynami
 
   return (
     <div className={`space-y-4 ${className}`}>
+      {currentSet === "demo" && (
+        <p className="text-center text-sm text-gray-500 dark:text-gray-400">
+          See Aurora investigate a realistic incident with no integrations or production credentials required.
+        </p>
+      )}
       {/* Dynamic Prompts - Side by side */}
       <div
         className={`transition-all duration-500 ${isRotating ? "opacity-0 translate-y-2" : "opacity-100 translate-y-0"}`}
@@ -104,8 +142,10 @@ export default function DynamicPrompts({ onPromptClick, className = "" }: Dynami
                 className="text-left text-gray-700 dark:text-gray-300 hover:text-blue-400 transition-all duration-200 hover:translate-x-1 animate-in slide-in-from-left-2"
                 style={{ animationDelay: `${index * 100}ms` }}
               >
+                {/* <span className="text-gray-500 mr-2">→</span>
+                {prompt} */}
                 <span className="text-gray-500 mr-2">→</span>
-                {prompt}
+                {currentSet === "demo" ? "Investigate a sample production incident" : prompt}
               </button>
             ))
           ) : (
