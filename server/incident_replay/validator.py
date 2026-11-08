@@ -1,4 +1,4 @@
-﻿"""Deterministic evidence validation for a replay result.
+"""Deterministic evidence validation for a replay result.
 
 The model is asked to classify every finding it makes, and this module decides
 what each classification is actually allowed to claim. It never asks the model
@@ -265,12 +265,30 @@ def _evaluate(bundle: EvidenceBundle, report: ValidationReport, index: int, raw:
     return verdict
 
 
+def _timeline_entry_at(
+    bundle: EvidenceBundle, report: ValidationReport, index: int, entry: Any
+) -> str:
+    """Validate one timeline entry's citations; return its timestamp (or "")."""
+    if not isinstance(entry, dict):
+        return ""
+    at = str(entry.get("at") or "")
+    ids, bad = _coerce_ids(entry.get("evidence_ids"))
+    for record_id in ids:
+        if bundle.by_id(record_id) is None:
+            report.timeline_ok = False
+            report.timeline_problems.append(
+                f"timeline entry {index} cites missing id {record_id}"
+            )
+    if bad:
+        report.timeline_ok = False
+        report.timeline_problems.append(f"timeline entry {index} has malformed ids {bad!r}")
+    return at
+
+
 def _check_timeline(bundle: EvidenceBundle, report: ValidationReport, timeline: List[Any]) -> None:
     previous = ""
     for index, entry in enumerate(timeline):
-        if not isinstance(entry, dict):
-            continue
-        at = str(entry.get("at") or "")
+        at = _timeline_entry_at(bundle, report, index, entry)
         if at and previous and at < previous:
             report.timeline_ok = False
             report.timeline_problems.append(
@@ -278,16 +296,6 @@ def _check_timeline(bundle: EvidenceBundle, report: ValidationReport, timeline: 
             )
         if at:
             previous = at
-        ids, bad = _coerce_ids(entry.get("evidence_ids"))
-        for record_id in ids:
-            if bundle.by_id(record_id) is None:
-                report.timeline_ok = False
-                report.timeline_problems.append(
-                    f"timeline entry {index} cites missing id {record_id}"
-                )
-        if bad:
-            report.timeline_ok = False
-            report.timeline_problems.append(f"timeline entry {index} has malformed ids {bad!r}")
 
 
 def validate(bundle: EvidenceBundle, result: Dict[str, Any]) -> ValidationReport:
