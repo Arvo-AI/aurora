@@ -68,8 +68,9 @@ _VALUE_TOKEN = re.compile(r"\b\d+(?:\.\d+)?")
 
 def _states_a_value(text: str) -> bool:
     return any(len(match) >= 2 for match in _VALUE_TOKEN.findall(text))
-#: ``<field>: <from> -> <to>`` as written into a deploy_change record.
-_CHANGE_RE = re.compile(r"([\w.]+):\s*(.+?)\s*->\s*(.+)$")
+#: ``<field>: <from> -> <to>`` as written into a deploy_change record. Both
+#: sides are single tokens, so the pattern cannot backtrack super-linearly.
+_CHANGE_RE = re.compile(r"([\w.]+):\s*(\S+)\s*->\s*(\S+)")
 
 #: Seconds of slack when comparing a timeline entry's own timestamp with the
 #: records it cites. Models routinely round "14:35:21" to "14:35:00"; a whole
@@ -322,22 +323,11 @@ def _evaluate(bundle: EvidenceBundle, report: ValidationReport, index: int, raw:
     return verdict
 
 
-def _timeline_entry_at(
-    bundle: EvidenceBundle, report: ValidationReport, index: int, entry: Any
-) -> str:
-    """Validate one timeline entry; return its timestamp (or "").
-
-    The entry's own ``at`` is checked against the records it cites: a single
-    citation must match that record's timestamp exactly, and a multi-record
-    entry must fall inside the span of the citations. Without this, an entry
-    could cite a 14:32 deployment while claiming the event happened at 14:20,
-    and a monotonic list would still pass.
-    """
-    if not isinstance(entry, dict):
-        return ""
-    at = str(entry.get("at") or "")
+def _check_entry_citations(
+    bundle: EvidenceBundle, report: ValidationReport, index: int, entry: Dict[str, Any]
+) -> List[Any]:
+    """Resolve an entry's citations, reporting the ones that do not resolve."""
     ids, bad = _coerce_ids(entry.get("evidence_ids"))
-    cited = [bundle.by_id(record_id) for record_id in ids]
     for record_id in ids:
         if bundle.by_id(record_id) is None:
             report.timeline_ok = False
@@ -347,33 +337,59 @@ def _timeline_entry_at(
     if bad:
         report.timeline_ok = False
         report.timeline_problems.append(f"timeline entry {index} has malformed ids {bad!r}")
+    return [bundle.by_id(record_id) for record_id in ids]
 
-    cited_ats = [record.at for record in cited if record and record.at]
+
+def _check_entry_timestamp(
+    report: ValidationReport,
+    index: int,
+    at: str,
+    cited: List[Any],
+) -> None:
+    """Compare an entry's own timestamp with the records it cites."""
     entry_at = parse_ts(at)
-    if entry_at and len(cited_ats) == 1:
+    cited_ats = [record.at for record in cited if record and record.at]
+    if not entry_at or not cited_ats:
+        return
+
+    if len(cited_ats) == 1:
         record = cited[0]
         # A record can state more than one instant in its own content (a deploy
         # records both its start and its completion). Quoting the second one is
         # accurate, so a timestamp that appears verbatim in the record is not a
         # mismatch even when it differs from the record's own stamp.
         if at and record and at in (record.content or ""):
-            return at
+            return
         cited_at = parse_ts(cited_ats[0])
         if cited_at and abs((entry_at - cited_at).total_seconds()) > _TIMELINE_TOLERANCE_S:
             report.timeline_ok = False
             report.timeline_problems.append(
                 f"timeline entry {index} says {at} but its evidence is stamped {cited_ats[0]}"
             )
-    elif entry_at and len(cited_ats) > 1:
-        stamps = sorted(s for s in (parse_ts(value) for value in cited_ats) if s)
-        if stamps and not (stamps[0].timestamp() - _TIMELINE_TOLERANCE_S
-                           <= entry_at.timestamp()
-                           <= stamps[-1].timestamp() + _TIMELINE_TOLERANCE_S):
-            report.timeline_ok = False
-            report.timeline_problems.append(
-                f"timeline entry {index} says {at}, outside its evidence span "
-                f"{cited_ats[0]}..{cited_ats[-1]}"
-            )
+        return
+
+    stamps = sorted(stamp for stamp in (parse_ts(value) for value in cited_ats) if stamp)
+    if not stamps:
+        return
+    low = stamps[0].timestamp() - _TIMELINE_TOLERANCE_S
+    high = stamps[-1].timestamp() + _TIMELINE_TOLERANCE_S
+    if not low <= entry_at.timestamp() <= high:
+        report.timeline_ok = False
+        report.timeline_problems.append(
+            f"timeline entry {index} says {at}, outside its evidence span "
+            f"{cited_ats[0]}..{cited_ats[-1]}"
+        )
+
+
+def _timeline_entry_at(
+    bundle: EvidenceBundle, report: ValidationReport, index: int, entry: Any
+) -> str:
+    """Validate one timeline entry; return its timestamp (or "")."""
+    if not isinstance(entry, dict):
+        return ""
+    at = str(entry.get("at") or "")
+    cited = _check_entry_citations(bundle, report, index, entry)
+    _check_entry_timestamp(report, index, at, cited)
     return at
 
 
