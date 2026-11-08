@@ -1,0 +1,131 @@
+[
+  {
+    "url": "https://github.com/prometheus/prometheus/pull/17349",
+    "kind": "Service discovery filter",
+    "incident": "Consul service discovery broke in Prometheus 3.11.0. In the issue, the PR's author wrote that the regression was caused by this PR: the filter it began passing to Consul's Health API is not one that API supports.",
+    "incident_url": "https://github.com/prometheus/prometheus/issues/18479",
+    "repo": "prometheus/prometheus",
+    "pr_number": 17349,
+    "title": "discovery/consul: Fix filter parameter not applied to health endpoint",
+    "head_sha": "d28d33afe06ff063520d927d18333288644e6592",
+    "status": "completed",
+    "verdict": {
+      "findings": [
+        {
+          "end_line": 502,
+          "explanation": "The catalog endpoint (`Catalog.ListServices`) validates the filter against `[]*structs.ServiceNode`, which has a flat `NodeMeta` field; the health endpoint (`Health.ServiceNodes`) validates against `[]CheckServiceNode`, which has NO `NodeMeta` field and instead exposes `Node.Meta` (verified in Consul source: structs.go ServiceNode vs CheckServiceNode). The config's own docs (consul.go:120) direct users to the catalog filter syntax, so any currently-working filter such as `NodeMeta.rack_name == \"2304\"` (exactly what the existing TestFilterOption uses) will be sent to the health endpoint, fail `bexpr.CreateFilter`/`Execute`, and cause `ServiceNodes` to return an error. Prometheus then logs 'Error refreshing service', increments rpcFailuresCount, retries every 15s, and emits NO targets for that service (consul.go:518-522) \u2014 the service's targets silently vanish from Prometheus until the user rewrites the filter. The new test masks this because the mock at consul_test.go:244 accepts the catalog-style `NodeMeta.rack_name` string on the health endpoint without validating it against the real schema.",
+          "file_path": "discovery/consul/consul.go",
+          "line": 502,
+          "severity": "HIGH",
+          "title": "Same filter string sent to catalog and health endpoints, which have incompatible filter field namespaces \u2014 breaks existing filter configs on upgrade"
+        }
+      ],
+      "summary": "This PR correctly identifies that the Consul `filter` was only applied to the catalog endpoint, but the fix sends the SAME filter string to both `/v1/catalog/services` and `/v1/health/service`, which have incompatible filter field namespaces. Existing, documented filter configs (the config comment at consul.go:120 points users to the catalog syntax, e.g. `NodeMeta.rack_name`) will now be rejected by the health endpoint, causing Prometheus to log 'Error refreshing service' and emit zero targets for that service \u2014 a target blackout on upgrade. The new test passes only because the hand-rolled mock accepts any filter string and does not validate field names against the real Consul schema.",
+      "verdict": "RISKY"
+    },
+    "model": "deepseek-chat (DeepSeek API via OpenAI-compatible gateway)",
+    "generated_at": "2026-11-08T21:15:27+00:00",
+    "duration_seconds": 201
+  },
+  {
+    "url": "https://github.com/argoproj/argo-cd/pull/25151",
+    "kind": "Cache side effect",
+    "incident": "After upgrading, the manifest-generate-paths annotation was ignored and the repo-server regenerated manifests on every commit, causing load spikes. The PR was reverted; its author wrote they had missed that UpdateRevisionForPaths updates the stored cache.",
+    "incident_url": "https://github.com/argoproj/argo-cd/pull/27241",
+    "repo": "argoproj/argo-cd",
+    "pr_number": 25151,
+    "title": "fix: avoid calling UpdateRevisionForPaths unnecessary",
+    "head_sha": "46cd4c7d43d464f6f804cbdb0632dba3c5bd1c39",
+    "status": "completed",
+    "verdict": {
+      "findings": [],
+      "summary": "This is a controller-side performance fix that narrows when the expensive repo-server UpdateRevisionForPaths call runs. It defaults to preserving current behavior via an env var (default true), adds a revision-changed guard, and skips the call only for manual-sync and pre-rendered (directory) apps \u2014 cases where the diff result is not consumed. It touches no schema, secrets, probes, replicas, pipelines, or deploy ordering, so it carries no deployment blast radius.",
+      "verdict": "SAFE"
+    },
+    "model": "deepseek-chat (DeepSeek API via OpenAI-compatible gateway)",
+    "generated_at": "2026-11-08T21:12:27+00:00",
+    "duration_seconds": 20
+  },
+  {
+    "url": "https://github.com/kubernetes/ingress-nginx/pull/12338",
+    "kind": "Toolchain upgrade",
+    "incident": "Controller v1.11.4 stopped loading CA secrets whose chain holds a certificate with a negative serial number, because Go 1.23's x509 rejects them. This PR moved the v1.11 line from Go 1.22.8 to 1.23.3; the issue blames the Go upgrade but does not name the PR.",
+    "incident_url": "https://github.com/kubernetes/ingress-nginx/issues/12620",
+    "repo": "kubernetes/ingress-nginx",
+    "pr_number": 12338,
+    "title": "Go: Bump to v1.23.3.",
+    "head_sha": "81fa069f6c64f75419ad05bd31b65d4d165dc31e",
+    "status": "completed",
+    "verdict": {
+      "findings": [],
+      "summary": "This is a consistent, complete Go toolchain bump (1.22.8 -> 1.23.3) applied in lockstep across GOLANG_VERSION, go.work, and all five go.mod files, and it is an automated cherry-pick of an already-merged and validated PR (#12320). It touches no Kubernetes manifests, probes, resource limits, network policy, secrets, migrations, or deploy ordering, so there is no infrastructure or deployment blast radius. No live alerts, incidents, or postmortems exist for ingress-nginx to correlate any elevated risk.",
+      "verdict": "SAFE"
+    },
+    "model": "deepseek-chat (DeepSeek API via OpenAI-compatible gateway)",
+    "generated_at": "2026-11-08T21:12:37+00:00",
+    "duration_seconds": 30
+  },
+  {
+    "url": "https://github.com/PostHog/posthog/pull/38686",
+    "kind": "Database timeout",
+    "incident": "Feature flags outage, Sep 29 2025: about 78% of US flag requests failed for 1h48m. The postmortem lists this deployment's cut of the database connection timeout from 1s to 300ms as the first contributing factor.",
+    "incident_url": "https://posthog.com/handbook/company/post-mortems/2025-09-29-flags-is-down.md",
+    "repo": "PostHog/posthog",
+    "pr_number": 38686,
+    "title": "chore(flags): Use PostgeSQL's session-level statement_timeout",
+    "head_sha": "73e7583f4d0a66229b2865bf28e746d2ae15f584",
+    "status": "completed",
+    "verdict": {
+      "findings": [
+        {
+          "end_line": 21,
+          "explanation": "DEFAULT_TIMEOUTS sets statement_timeout=300ms and is wired into after_connect in get_pool_with_timeouts, which get_pool() now uses by default. Because get_pool() lives in the shared common_database crate, every connection in every pool created through it inherits a 300ms statement timeout \u2014 including the feature-flags read queries (person-data DISTINCT/array-join query, flag definition query) that previously had no such limit. Any of these queries exceeding 300ms under load is cancelled (SQLSTATE 57014) and surfaces as a 503 to /flags callers. The PR frames 300ms as scoped to 'fast flag evaluation reads' but the mechanism is pool-wide, so the blast radius is every query on these pools.",
+          "file_path": "rust/common/database/src/lib.rs",
+          "line": 14,
+          "severity": "HIGH",
+          "title": "300ms statement_timeout applied session-wide to all get_pool() connections, not just flag reads"
+        },
+        {
+          "end_line": 18,
+          "explanation": "acquire_timeout drops from 1s to 200ms (a 5x reduction) while test_before_acquire(true) still runs a ping on every acquire. Under a transient connection-pool saturation \u2014 exactly the high-load condition this PR aims to survive \u2014 requests now fail after 200ms instead of waiting up to 1s for a connection, producing spurious 503s during load spikes that the old 1s tolerance would have ridden out. This is a reliability-primitive regression on the acquire path.",
+          "file_path": "rust/common/database/src/lib.rs",
+          "line": 18,
+          "severity": "MEDIUM",
+          "title": "Pool acquire_timeout reduced 1s \u2192 200ms converts normal load spikes into immediate 503s"
+        },
+        {
+          "end_line": 66,
+          "explanation": "For every TimeoutError carrying a type, the function allocates a new String via format!, boxes it, and Box::leak's it permanently to obtain a &'static str. This leaks ~20-40 bytes per timeout error, and the leak grows fastest precisely during a timeout storm \u2014 the failure mode this code exists to observe. Under sustained timeouts this becomes unbounded memory growth and a potential OOM, turning an observability helper into an amplifier of the incident it is measuring. A static label set or a pre-computed mapping would avoid the leak.",
+          "file_path": "rust/feature-flags/src/metrics/utils.rs",
+          "line": 60,
+          "severity": "MEDIUM",
+          "title": "Box::leak in parse_exception_for_prometheus_label leaks memory on every typed timeout error"
+        }
+      ],
+      "summary": "This PR replaces per-call tokio timeouts with PostgreSQL session-level timeouts applied via after_connect on the shared common_database::get_pool() path. The chosen defaults (300ms statement_timeout, 100ms lock_timeout, 200ms acquire_timeout) are applied to every connection in every pool created through get_pool(), not just the fast flag-read path the PR describes, so any query on those connections exceeding 300ms now fails with a 503. Two secondary issues compound the risk: a 5x reduction in pool acquire timeout (1s\u2192200ms) that converts normal load spikes into immediate failures, and a per-call Box::leak in the Prometheus label helper that leaks memory on the exact timeout-error path that fires during an incident. No live monitoring, incident, or service-graph data was available in this environment to confirm current query latencies, so these are deployment-blast-radius risks rather than confirmed active incidents.",
+      "verdict": "RISKY"
+    },
+    "model": "deepseek-chat (DeepSeek API via OpenAI-compatible gateway)",
+    "generated_at": "2026-11-08T21:12:47+00:00",
+    "duration_seconds": 40
+  },
+  {
+    "url": "https://github.com/prometheus/prometheus/pull/18323",
+    "kind": "Small bug fix (control)",
+    "incident": null,
+    "incident_url": null,
+    "repo": "prometheus/prometheus",
+    "pr_number": 18323,
+    "title": "discovery/azure: fix system managed identity when client_id is empty",
+    "head_sha": "7bbff490a3bd72054c153940512b25d65b8bf514",
+    "status": "completed",
+    "verdict": {
+      "findings": [],
+      "summary": "This PR is a 4-line bugfix in the Azure SD credential constructor plus a unit test. It only affects the ManagedIdentity auth branch, leaves the user-assigned path behaviorally identical, and touches no IaC, CI/CD pipeline, migrations, config, or secrets. It strictly widens the set of working configurations (system-assigned identity starts working) without breaking any currently-working path, so it carries no deployment blast radius.",
+      "verdict": "SAFE"
+    },
+    "model": "deepseek-chat (DeepSeek API via OpenAI-compatible gateway)",
+    "generated_at": "2026-11-08T21:12:52+00:00",
+    "duration_seconds": 45
+  }
+]
