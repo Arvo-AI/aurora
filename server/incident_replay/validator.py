@@ -116,6 +116,13 @@ class ValidationReport:
     type_valid_findings: int = 0
     timeline_ok: bool = True
     timeline_problems: List[str] = field(default_factory=list)
+    #: How many timeline entries were examined, and how many of those could
+    #: actually be tied to evidence (a resolvable citation *and* a parseable
+    #: timestamp). ``timeline_ok`` only reports whether the entries contradict
+    #: each other or their citations; an entry with no citation used to count as
+    #: fine, which made "consistent" sound stronger than it was.
+    timeline_entries: int = 0
+    timeline_evidenced: int = 0
 
     @property
     def citation_resolution_rate(self) -> float:
@@ -151,6 +158,16 @@ class ValidationReport:
             "evidence_type_validity": round(self.evidence_type_validity, 3),
             "timeline_ok": self.timeline_ok,
             "timeline_problems": self.timeline_problems,
+            "timeline_entries": self.timeline_entries,
+            "timeline_evidenced": self.timeline_evidenced,
+            # The model's own prose is *not* checked. Saying so here keeps the
+            # contract in the payload instead of only in the UI's wording.
+            "narration": {
+                "source": "model",
+                "verified": False,
+                "note": "prose written by the model; only the findings and the "
+                        "timeline below are checked against the evidence",
+            },
         }
 
 
@@ -399,20 +416,30 @@ def _check_entry_timestamp(
 
 def _timeline_entry_at(
     bundle: EvidenceBundle, report: ValidationReport, index: int, entry: Any
-) -> str:
-    """Validate one timeline entry; return its timestamp (or "")."""
+) -> Tuple[str, bool]:
+    """Validate one timeline entry.
+
+    Returns ``(timestamp, evidenced)``. ``evidenced`` means the entry carries a
+    parseable time *and* at least one citation that resolves; an entry with
+    neither is not "consistent", it is unsupported, and the caller counts it as
+    such rather than letting it pass silently.
+    """
     if not isinstance(entry, dict):
-        return ""
+        return "", False
     at = str(entry.get("at") or "")
     cited = _check_entry_citations(bundle, report, index, entry)
     _check_entry_timestamp(report, index, at, cited)
-    return at
+    evidenced = bool(parse_ts(at)) and any(record is not None for record in cited)
+    return at, evidenced
 
 
 def _check_timeline(bundle: EvidenceBundle, report: ValidationReport, timeline: List[Any]) -> None:
     previous = ""
     for index, entry in enumerate(timeline):
-        at = _timeline_entry_at(bundle, report, index, entry)
+        at, evidenced = _timeline_entry_at(bundle, report, index, entry)
+        report.timeline_entries += 1
+        if evidenced:
+            report.timeline_evidenced += 1
         if at and previous and at < previous:
             report.timeline_ok = False
             report.timeline_problems.append(

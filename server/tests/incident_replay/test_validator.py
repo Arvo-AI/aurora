@@ -285,6 +285,36 @@ class TestTimeline:
         )
         assert outside.timeline_ok is False
 
+    def test_entries_without_citations_are_counted_as_unevidenced(self, bundle):
+        # Order can be fine while nothing on the timeline is actually tied to
+        # evidence. Reporting only "consistent" hid that; the counts now show it.
+        report = validate(
+            bundle,
+            _result(timeline=[
+                {"at": "2026-11-06T14:35:00Z", "event": "a", "evidence_ids": []},
+                {"at": "2026-11-06T14:40:00Z", "event": "b", "evidence_ids": []},
+            ]),
+        )
+        assert report.timeline_ok is True
+        assert report.timeline_entries == 2
+        assert report.timeline_evidenced == 0
+
+    def test_entry_with_a_citation_and_a_time_is_evidenced(self, bundle):
+        log_id = _id_of(bundle, RECORD_LOG, "HikariPool")
+        report = validate(
+            bundle,
+            _result(timeline=[
+                {"at": "2026-11-06T14:35:21Z", "event": "a", "evidence_ids": [log_id]},
+            ]),
+        )
+        assert report.timeline_entries == 1
+        assert report.timeline_evidenced == 1
+
+    def test_payload_declares_the_narration_unverified(self, bundle):
+        payload = validate(bundle, _result()).to_dict()
+        assert payload["narration"]["verified"] is False
+        assert payload["narration"]["source"] == "model"
+
     def test_out_of_order_timeline_is_flagged(self, bundle):
         report = validate(
             bundle,

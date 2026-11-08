@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useCallback, useEffect, useState } from "react";
 
@@ -31,6 +31,9 @@ type Validation = {
   evidence_type_validity: number;
   timeline_ok: boolean;
   timeline_problems: string[];
+  timeline_entries: number;
+  timeline_evidenced: number;
+  narration: { source: string; verified: boolean; note: string };
 };
 
 type Investigation = {
@@ -199,18 +202,29 @@ export default function IncidentReplayPage() {
             />
             <Metric
               label="Timeline"
-              value={data.validation.timeline_ok ? "consistent" : "problem"}
-              hint={`${data.evidence.records.length} evidence records`}
+              value={data.validation.timeline_ok ? "ordered" : "problem"}
+              hint={`${data.validation.timeline_evidenced}/${data.validation.timeline_entries} entries evidenced`}
             />
           </div>
 
           <section>
-            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-400">
+            <h2 className="mb-2 flex items-baseline gap-2 text-sm font-semibold uppercase tracking-wide text-neutral-400">
               Summary
+              <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal text-amber-300">
+                model narrative — not verified
+              </span>
             </h2>
             <p className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4 text-sm leading-relaxed text-neutral-200">
               {data.investigation.incident_summary}
             </p>
+            {(data.validation.status_counts.unverified_hypothesis ?? 0) > 0 ? (
+              <p className="mt-2 text-[11px] text-amber-300/90">
+                This narrative is the model&apos;s own account and is not checked.{" "}
+                {data.validation.status_counts.unverified_hypothesis} claim
+                {data.validation.status_counts.unverified_hypothesis === 1 ? "" : "s"} below could not
+                be supported by the evidence, so a cause stated here may be one of them.
+              </p>
+            ) : null}
           </section>
 
           <section>
