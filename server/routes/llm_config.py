@@ -16,13 +16,14 @@ from utils.auth.rbac_decorators import require_permission
 
 logger = logging.getLogger(__name__)
 
-PROVIDER_NAMES = ["openrouter", "openai", "anthropic", "google", "vertex", "ollama", "bedrock"]
+PROVIDER_NAMES = ["openrouter", "openai", "anthropic", "google", "vertex", "ollama", "bedrock", "deepseek"]
 
 # Env vars that mean "this provider was actually configured" for the chat picker.
 # Bedrock ignores AWS_DEFAULT_REGION — that is set for cloud connectors, not LLM.
 _PICKER_ENV = (
     ("openai", "OPENAI_API_KEY"),
     ("anthropic", "ANTHROPIC_API_KEY"),
+    ("deepseek", "DEEPSEEK_API_KEY"),
     ("google", "GOOGLE_AI_API_KEY"),
     ("vertex", "VERTEX_AI_PROJECT"),
     ("ollama", "OLLAMA_BASE_URL"),

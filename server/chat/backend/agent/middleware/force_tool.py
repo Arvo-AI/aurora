@@ -158,7 +158,7 @@ class ForceToolChoice(AgentMiddleware):
             or ""
         ).lower()
 
-        if provider == "anthropic":
+        if provider in {"anthropic", "deepseek"}:
             return {"type": "tool", "name": self._tool_name}
         if provider in {"google", "vertex"}:
             return self._tool_name
@@ -221,6 +221,10 @@ class ForceToolChoice(AgentMiddleware):
 
     def _should_force(self, request: ModelRequest) -> bool:
         """Skip forcing entirely for a model already known to reject it."""
+        # DeepSeek explicitly rejects named tool_choice in thinking mode.
+        # Use the existing auto + instruction path without a guaranteed 400.
+        if self._provider == "deepseek":
+            return False
         label = _model_label(getattr(request, "model", None))
         return not (label and label in _FORCE_UNSUPPORTED)
 

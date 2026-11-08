@@ -30,6 +30,7 @@ from .base_provider import BaseLLMProvider
 from .openrouter_provider import OpenRouterProvider
 from .openai_provider import OpenAIProvider
 from .anthropic_provider import AnthropicProvider
+from .deepseek_provider import DeepSeekProvider
 from .google_provider import GoogleProvider
 from .vertex_provider import VertexAIProvider
 from .ollama_provider import OllamaProvider
@@ -42,6 +43,7 @@ logger = logging.getLogger(__name__)
 _ENV_VAR_HINTS = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
     "google": "GOOGLE_AI_API_KEY",
     "vertex": "VERTEX_AI_PROJECT",
     "ollama": "OLLAMA_BASE_URL",
@@ -66,6 +68,7 @@ class ProviderRegistry:
         # Initialize direct providers
         self._providers["openai"] = OpenAIProvider()
         self._providers["anthropic"] = AnthropicProvider()
+        self._providers["deepseek"] = DeepSeekProvider()
         self._providers["google"] = GoogleProvider()
         self._providers["vertex"] = VertexAIProvider()
         self._providers["ollama"] = OllamaProvider()
@@ -299,6 +302,7 @@ __all__ = [
     "OpenRouterProvider",
     "OpenAIProvider",
     "AnthropicProvider",
+    "DeepSeekProvider",
     "GoogleProvider",
     "VertexAIProvider",
     "OllamaProvider",

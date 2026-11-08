@@ -41,6 +41,10 @@ class LLMUsageTracker:
     """Tracks LLM usage including token counting and cost calculation"""
 
     MODEL_PRICING = {
+        # DeepSeek Flash peak-rate estimate per 1K tokens. Off-peak is half;
+        # Chinese holidays also affect the schedule, so this is an upper estimate.
+        "deepseek/deepseek-flash": {"input": 0.0003, "output": 0.0012, "cached_input": 0.000006},
+        "deepseek-flash": {"input": 0.0003, "output": 0.0012, "cached_input": 0.000006},
         # OpenAI (direct API pricing per 1K tokens)
         # cached_input = automatic prompt caching discount
         "openai/gpt-6-astra": {"input": 0.010, "output": 0.050, "cached_input": 0.001},

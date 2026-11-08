@@ -200,6 +200,50 @@ make prod-local
 
 ---
 
+### DeepSeek Flash (direct API)
+
+Aurora can call DeepSeek directly using its Anthropic-compatible Messages API.
+Run `make init` once to create `.env` and generate local secrets. Create an API key
+at [DeepSeek Platform](https://platform.deepseek.com/), then set the following in
+the repository root `.env`:
+
+```dotenv
+DEEPSEEK_API_KEY=your-deepseek-api-key
+LLM_PROVIDER_MODE=deepseek
+MAIN_MODEL=deepseek/deepseek-flash
+VISION_MODEL=deepseek/deepseek-flash
+RCA_MODEL=deepseek/deepseek-flash
+SUMMARIZATION_MODEL=deepseek/deepseek-flash
+MEMORY_SELECTOR_MODEL=deepseek/deepseek-flash
+ENRICHMENT_MODEL=deepseek/deepseek-flash
+GUARDRAILS_LLM_MODEL=deepseek/deepseek-flash
+RECURRENCE_AGENT_MODEL=deepseek/deepseek-flash
+```
+
+Build the changed source with `make prod-local` and complete the first-start Vault
+setup described above. After changing `.env`, use
+`make down` and `make prod-local` to recreate services with the new settings.
+The existing published images do not contain this source change.
+
+The provider uses `https://api.deepseek.com/anthropic`; no OpenAI, Anthropic, or
+OpenRouter key is needed for these configured model calls. Choose **DeepSeek
+Flash** in the chat model picker. The API model name is `deepseek-flash`, currently
+served by **DeepSeek-V4.1-Flash-1017**; this is a moving alias, not a pinned version.
+Thinking is enabled for investigation. Structured internal decisions (including
+the command-safety judge) disable thinking to use named tool calls, which DeepSeek
+rejects in thinking mode.
+
+If enabling the optional multi-agent orchestrator, also set both
+`RCA_ORCHESTRATOR_MODEL` and `RCA_SUBAGENT_MODEL` to `deepseek/deepseek-flash`.
+This integration covers chat-model calls, not embeddings: leave `EMBEDDING_MODEL`
+empty unless separately configuring an embedding provider.
+
+Token usage is recorded under DeepSeek. Displayed direct-API cost is a **peak-rate
+estimate**, including cache-read discounts; actual off-peak charges may be lower.
+See [DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing/).
+No published knowledge-cutoff date is assumed: web search keeps the existing
+conservative unknown-model behavior.
+
 ## Deploy
 
 | Method | Best for |

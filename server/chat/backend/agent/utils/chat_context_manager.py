@@ -27,6 +27,7 @@ class ChatContextManager:
     # Model context limits (tokens) - leaving some buffer for system prompts and tool calls
     # Keys use OpenRouter format (dot notation) since ModelMapper resolves to this
     MODEL_CONTEXT_LIMITS = {
+        "deepseek/deepseek-flash": 950000,  # 1M, reserving room for output/tools
         "openai/gpt-6-astra": 1000000,  # 1.05M - 50K buffer
         "openai/gpt-5.6-sol": 950000,  # 1M - 50K buffer
         "openai/gpt-5.6-terra": 950000,  # 1M - 50K buffer
