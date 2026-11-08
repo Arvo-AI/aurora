@@ -116,7 +116,7 @@ function SummarySection({ investigation, validation }: Readonly<{ investigation:
   return (
     <section>
       <h2 className="mb-2 flex items-baseline gap-2 text-sm font-semibold uppercase tracking-wide text-neutral-400">
-        Summary
+        Summary{" "}
         <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal text-amber-300">
           model narrative — not verified
         </span>
