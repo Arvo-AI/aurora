@@ -37,6 +37,16 @@ BUNDLE_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures
 
 BUNDLE_NAMES = ("checkout-api",)
 
+#: Bundle name -> directory, resolved once at import time.
+#:
+#: The request value is used only as a dictionary key. Building the path from it
+#: (``os.path.join(BUNDLE_ROOT, name)``) would let a caller learn whether a path
+#: exists by observing which error comes back, even with a whitelist in front of
+#: it. Here every path below is a module constant.
+_BUNDLE_DIRS = {
+    "checkout-api": os.path.join(BUNDLE_ROOT, "checkout-api"),
+}
+
 RECORD_ALERT = "alert"
 RECORD_METRIC = "metric"
 RECORD_LOG = "log"
@@ -261,12 +271,16 @@ _LOADERS = {
 
 
 def normalize_bundle(name: str) -> EvidenceBundle:
-    """Load and time-order the named bundle. Raises ValueError on a bad name."""
-    if name not in BUNDLE_NAMES:
-        raise ValueError(f"unknown evidence bundle: {name!r}")
-    directory = os.path.join(BUNDLE_ROOT, name)
-    if not os.path.isdir(directory):
-        raise ValueError(f"evidence bundle directory missing: {name}")
+    """Load and time-order the named bundle.
+
+    ``name`` selects from :data:`_BUNDLE_DIRS`; it never becomes part of a path.
+    An unknown name raises the same ``ValueError`` regardless of whether a
+    directory with that name happens to exist, so the response cannot be used
+    to probe the filesystem.
+    """
+    directory = _BUNDLE_DIRS.get(name) if isinstance(name, str) else None
+    if directory is None:
+        raise ValueError("unknown evidence bundle")
 
     bundle = EvidenceBundle(name=name)
     for filename, loader in _LOADERS.items():
@@ -277,7 +291,7 @@ def normalize_bundle(name: str) -> EvidenceBundle:
         loader(bundle, path)
 
     if not bundle.records:
-        raise ValueError(f"evidence bundle {name!r} produced no records")
+        raise ValueError("evidence bundle produced no records")
 
     # Sort before numbering so the IDs a model sees ascend with the timeline.
     # Records without a timestamp (the runbook) sort last: the runbook explains

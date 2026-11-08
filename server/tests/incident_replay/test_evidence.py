@@ -1,4 +1,4 @@
-"""Tests for evidence bundle normalization."""
+﻿"""Tests for evidence bundle normalization."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import pytest
 
 from incident_replay.evidence import (
     BUNDLE_NAMES,
+    BUNDLE_ROOT,
     RECORD_ALERT,
     RECORD_DEPLOY_CHANGE,
     RECORD_DEPLOY_EVENT,
@@ -43,6 +44,20 @@ class TestNormalizeBundle:
     def test_rejects_unknown_bundle_name(self):
         with pytest.raises(ValueError):
             normalize_bundle("../../etc/passwd")
+
+    def test_rejection_does_not_echo_the_supplied_value(self):
+        # Echoing the input back turns the endpoint into a filesystem oracle
+        # (does this path exist?) and a log-injection sink.
+        supplied = "../../etc/passwd"
+        with pytest.raises(ValueError) as excinfo:
+            normalize_bundle(supplied)
+        assert supplied not in str(excinfo.value)
+
+    def test_a_real_directory_is_still_just_an_unknown_key(self):
+        # The argument is a dictionary key, never a path. Passing the fixtures
+        # root itself must not resolve to anything.
+        with pytest.raises(ValueError):
+            normalize_bundle(BUNDLE_ROOT)
 
     def test_ships_the_checkout_bundle(self):
         assert "checkout-api" in BUNDLE_NAMES
@@ -101,3 +116,4 @@ class TestNormalizeBundle:
         bundle: EvidenceBundle = normalize_bundle("checkout-api")
         assert bundle.by_id(1) is not None
         assert bundle.by_id(99999) is None
+

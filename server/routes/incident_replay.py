@@ -50,13 +50,15 @@ def run(user_id):
     name = body.get("bundle")
     if not isinstance(name, str) or name not in BUNDLE_NAMES:
         # A path, an arbitrary name, or a nested value never reaches the loader.
+        # The rejection is a constant message: echoing the supplied value would
+        # turn the endpoint into a filesystem oracle and a log-injection sink.
         return jsonify({"error": "unknown bundle", "bundles": list(BUNDLE_NAMES)}), 400
 
     try:
         bundle = normalize_bundle(name)
-    except ValueError as exc:
-        logger.warning("[replay] normalize failed for %s: %s", sanitize(name), exc)
-        return jsonify({"error": str(exc)}), 400
+    except ValueError:
+        logger.warning("[replay] bundle rejected")
+        return jsonify({"error": "unknown bundle", "bundles": list(BUNDLE_NAMES)}), 400
 
     timeout_s = body.get("timeout_s", DEFAULT_TIMEOUT_S)
     try:
@@ -85,8 +87,12 @@ def run(user_id):
     report = validate(bundle, outcome["result"])
     logger.info(
         "[replay] %s bundle=%s model=%s findings=%d invalid_ids=%d elapsed=%ss",
-        replay_id, name, outcome.get("model"), len(report.findings),
-        len(report.missing_ids), outcome.get("elapsed_s"),
+        replay_id,
+        sanitize(name),
+        sanitize(str(outcome.get("model"))),
+        len(report.findings),
+        len(report.missing_ids),
+        outcome.get("elapsed_s"),
     )
     return jsonify(
         {
