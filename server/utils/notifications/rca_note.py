@@ -11,11 +11,12 @@ from typing import Optional, Tuple
 ROOT_CAUSE_MAX_CHARS = 1200
 IMPACT_MAX_CHARS = 500
 NEXT_STEPS_MAX = 3
-NEXT_STEP_MAX_CHARS = 160
+# The prompt asks for steps under 200 characters; this catches the outliers without cutting them all.
+NEXT_STEP_MAX_CHARS = 240
 # Upper bound of a composed note: root cause + impact + next steps + labels, link and disclaimer
-# (~2.3k with a long FRONTEND_URL). PagerDuty notes take ~16k UTF-8 characters and ServiceNow
+# (~2.7k with a long FRONTEND_URL). PagerDuty notes take ~16k UTF-8 characters and ServiceNow
 # close_notes are cut at 4000, so the cap fits every consumer with room to spare.
-NOTE_MAX_CHARS = 2500
+NOTE_MAX_CHARS = 2800
 MIN_SUMMARY_CHARS = 80
 
 _CITATION_RE = re.compile(r"\[\d+(?:,\s*\d+)*\]")

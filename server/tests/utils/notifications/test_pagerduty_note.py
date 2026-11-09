@@ -240,6 +240,15 @@ def test_long_next_step_is_cut_on_a_word():
     assert len(step) <= rca_note.NEXT_STEP_MAX_CHARS + 3
 
 
+def test_typical_next_step_is_not_cut():
+    """A real RCA step (~185 chars) used to lose its tail at the old 160 cap."""
+    real = (
+        "Identify where checkout-api runs (cluster, namespace, or resource group) and query "
+        "its 5xx error-rate metric for the window around 2026-11-09T21:37:13 in that metrics source."
+    )
+    assert rca_note.extract_next_steps("## Suggested Next Steps\n- " + real) == [real]
+
+
 # --- _compose_note ------------------------------------------------------------
 
 def test_note_ends_with_next_steps_block_before_link_and_disclaimer():
