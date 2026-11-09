@@ -71,7 +71,7 @@ function VerdictGauge({
   const MIN_SEG = CIRC * 0.1; // a single finding still shows as a visible sliver
 
   const label =
-    verdict === "RISKY" ? "Engine light ON" : verdict === "SAFE" ? "Engine light OFF" : "Nothing to check";
+    verdict === "RISKY" ? "Check Engine light ON" : verdict === "SAFE" ? "Check Engine light OFF" : "Nothing to check";
   const sub =
     verdict === "RISKY"
       ? "Incident preconditions found — see the risk map"

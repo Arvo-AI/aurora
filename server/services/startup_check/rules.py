@@ -189,7 +189,7 @@ def probe_port_undeclared(index: RepoIndex, ctx: UserContext) -> List[Dict]:
                                 title=f"{probe_kind} on '{w.name}' probes port {port}, not in container '{container.get('name')}' declared ports",
                                 explanation=(
                                     f"The {probe_kind} targets port {port} but the container "
-                                    f"declares {sorted(p.get('containerPort') for p in declared)}. "
+                                    f"declares {sorted(p.get('containerPort') for p in declared)}. " # type: ignore
                                     f"Apps can listen on undeclared ports, so verify first — but "
                                     f"if this is a typo (aurora-lab scenario 06 probes the wrong "
                                     f"port) the pod will CrashLoop or never go Ready. Declaring "
