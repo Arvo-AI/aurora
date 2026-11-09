@@ -173,6 +173,7 @@ celery_app.conf.update(
         'utils.repo_metadata',
         'services.actions.scheduler',
         'services.connectors.heal',
+        'services.sandbox',
     ],
     # Periodic task schedule
     beat_schedule={

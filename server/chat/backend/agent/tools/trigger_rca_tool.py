@@ -44,6 +44,7 @@ def trigger_rca(
     session_id: str | None = None,
     public_repo: str | None = None,
     incident_time: datetime | None = None,
+    sandbox_id: str | None = None,
     **kwargs,
 ) -> str:
     """
@@ -120,6 +121,8 @@ def trigger_rca(
     }
     if public_repo:
         alert_metadata["public_repo"] = public_repo
+    if sandbox_id:
+        alert_metadata["sandbox_id"] = sandbox_id
 
     from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context
     from utils.db.connection_pool import db_pool
@@ -202,6 +205,7 @@ def trigger_rca(
         rca_session_id = create_background_chat_session(
             user_id=user_id, title=chat_title,
             trigger_metadata=trigger_metadata, incident_id=incident_id,
+            sandbox_id=sandbox_id,
         )
 
         # Small enough to always pass verbatim (no truncation/get_alert_field needed)

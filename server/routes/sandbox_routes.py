@@ -10,6 +10,7 @@ Links are stored as text and never fetched server-side (no SSRF surface).
 """
 
 import io
+import json
 import logging
 import re
 from functools import wraps
@@ -78,6 +79,9 @@ def _serialize_artifact(row, *, full: bool) -> dict:
         "preview": content[:PREVIEW_CHARS],
         "truncated": len(content) > PREVIEW_CHARS,
     }
+    if row[1] == "image":
+        # NULL = still being described, '' = model could not describe it.
+        data["description"] = "pending" if row[3] is None else ("ready" if row[3] else "unavailable")
     if full:
         data["content"] = content
     return data
@@ -349,6 +353,16 @@ def add_artifact(user_id, sandbox_id, *, org_id, conn, cursor):
 
     _touch(cursor, sandbox_id)
     conn.commit()
+
+    if raw is not None:
+        # After commit, so the worker can see the row. Failure to enqueue leaves
+        # the image stored but undescribed; it still shows in the sandbox.
+        try:
+            from services.sandbox import describe_sandbox_image_task
+            describe_sandbox_image_task.delay(user_id, str(row[0]))
+        except Exception:
+            logger.warning("%s Could not enqueue image description for %s", _LOG_PREFIX, row[0])
+
     return jsonify({"artifact": _serialize_artifact(row, full=False)}), 201
 
 
@@ -411,3 +425,98 @@ def delete_artifact(user_id, sandbox_id, artifact_id, *, org_id, conn, cursor):
         except Exception:
             logger.warning("%s Could not delete stored file for artifact %s", _LOG_PREFIX, artifact_id)
     return jsonify({"deleted": True})
+
+
+# ── Chats, investigation, guidance ──────────────────────────────────
+
+
+@sandbox_bp.route("/api/sandboxes/<sandbox_id>/chats", methods=["GET"])
+@require_permission("incidents", "read")
+@with_sandbox
+def list_sandbox_chats(user_id, sandbox_id, *, org_id, conn, cursor):
+    """Chats grouped under this sandbox. Investigations are chats with an incident."""
+    cursor.execute(
+        """SELECT id, title, created_at, updated_at, status, incident_id
+           FROM chat_sessions
+           WHERE sandbox_id = %s AND org_id = %s AND is_active = true
+           ORDER BY updated_at DESC""",
+        (sandbox_id, org_id),
+    )
+    chats = [
+        {
+            "id": r[0],
+            "title": r[1],
+            "createdAt": iso_utc(r[2]),
+            "updatedAt": iso_utc(r[3]),
+            "status": r[4],
+            "incidentId": str(r[5]) if r[5] else None,
+            "isInvestigation": r[5] is not None,
+        }
+        for r in cursor.fetchall()
+    ]
+    return jsonify({"chats": chats})
+
+
+@sandbox_bp.route("/api/sandboxes/<sandbox_id>/suggestions", methods=["GET"])
+@require_permission("incidents", "read")
+@with_sandbox
+def get_suggestions(user_id, sandbox_id, *, org_id, conn, cursor):
+    """Which connector to ask for next, based on the evidence in this sandbox."""
+    from services.sandbox import connected_ids, suggest_connectors
+    cursor.execute(
+        "SELECT name, content FROM sandbox_artifacts WHERE sandbox_id = %s",
+        (sandbox_id,),
+    )
+    artifacts = [(r[0], (r[1] or "")) for r in cursor.fetchall()]
+    return jsonify({"suggestions": suggest_connectors(artifacts, connected_ids(user_id))})
+
+
+@sandbox_bp.route("/api/sandboxes/<sandbox_id>/investigate", methods=["POST"])
+@require_permission("incidents", "write")
+@with_sandbox
+def investigate(user_id, sandbox_id, *, org_id, conn, cursor):
+    """Run a full background RCA over the sandbox's evidence (and public repo).
+
+    The investigation's chat session is stamped with sandbox_id, so it is listed
+    with the sandbox's other chats and its follow-ups see the knowledge base.
+    """
+    from services.sandbox import context_for, fetch_sandbox
+    from utils.incidents import parse_incident_time
+
+    sandbox = fetch_sandbox(cursor, sandbox_id)
+    if not sandbox["artifacts"]:
+        return _err("Add at least one artifact before investigating", 400)
+
+    data = request.get_json(silent=True) or {}
+    question = str(data.get("question") or "").strip()[:2000]
+    description = (
+        (f"The user asks: {question}\n\n" if question else "")
+        + "Find the root cause of the incident described by the sandbox evidence below.\n\n"
+        + context_for(sandbox)
+    )
+    incident_time, _ = parse_incident_time(sandbox["incident_time"])
+
+    from chat.backend.agent.tools.trigger_rca_tool import trigger_rca
+    raw = trigger_rca(
+        issue_description=description,
+        title=f"Sandbox: {sandbox['name']}"[:200],
+        user_id=user_id,
+        public_repo=sandbox["public_repo"],
+        incident_time=incident_time,
+        sandbox_id=sandbox_id,
+    )
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return _err("Investigation dispatch returned an invalid response", 500)
+    if payload.get("error") and not payload.get("incident_id"):
+        # Rate limit (5 RCAs / 5 min) is the common case here.
+        return jsonify(payload), 429 if "Rate limited" in payload["error"] else 400
+
+    _touch(cursor, sandbox_id)
+    conn.commit()
+    logger.info(
+        "funnel_event=sandbox_investigation_started artifacts=%d has_repo=%s",
+        len(sandbox["artifacts"]), bool(sandbox["public_repo"]),
+    )
+    return jsonify(payload), 202

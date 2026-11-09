@@ -1448,7 +1448,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     public_repo = None
     if not github_connected and _open("github") and state_context is not None:
         from utils.incidents import fetch_incident_public_repo
-        public_repo = fetch_incident_public_repo(user_id, getattr(state_context, "incident_id", None))
+        public_repo = (
+            fetch_incident_public_repo(user_id, getattr(state_context, "incident_id", None))
+            or getattr(state_context, "sandbox_public_repo", None)  # interactive sandbox chat
+        )
 
     if github_connected:
         if not is_pr_review:
