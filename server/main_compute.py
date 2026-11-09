@@ -420,11 +420,14 @@ from routes.github.github_webhook import github_webhook_bp
 from routes.github.github_app import github_app_bp
 from routes.github.github_oauth import github_oauth_bp
 from routes.github.github_signup import github_signup_bp
+from routes.github.startup_check_routes import startup_check_bp
 app.register_blueprint(github_user_repos_bp, url_prefix="/github")
 app.register_blueprint(github_repo_selection_bp, url_prefix="/github")
 app.register_blueprint(github_webhook_bp, url_prefix="/github")
 app.register_blueprint(github_app_bp, url_prefix="/github")
 app.register_blueprint(github_oauth_bp, url_prefix="/github")
+# Startup Check (repo check-engine light) — read-only scans, results in Redis
+app.register_blueprint(startup_check_bp, url_prefix="/github/startup-check")
 # Public, unauthenticated entry points: /start mints a signed state per hit and
 # /callback fans out to GitHub + a provisioning transaction, so give them a
 # much tighter per-IP budget than the global default. Applied here (not in the
