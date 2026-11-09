@@ -334,6 +334,10 @@ LOCATION=northeurope
 az keyvault create -g $RG -n $KV -l $LOCATION \
   --enable-rbac-authorization true \
   --enable-purge-protection true      # soft-delete is on by default
+# RBAC mode: whoever creates the key needs a data-plane role on the vault
+az role assignment create --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+  --role "Key Vault Crypto Officer" --scope "$(az keyvault show -n $KV --query id -o tsv)"
+# role assignments can take a minute to apply; retry the next command on a 403
 az keyvault key create --vault-name $KV -n vault-unseal-key --kty RSA --size 2048
 ```
 
@@ -414,7 +418,7 @@ If Vault is already running with manual (Shamir) seals, migrate it in place. Sec
 
 1. Back up Vault data (the `vault-data` PVC, or a snapshot of its disk).
 2. Set up the KMS (steps 1-3 for your provider) and run `helm upgrade` with the new seal values. The Vault pod restarts sealed.
-3. Unseal once with the existing key, adding `-migrate`:
+3. Unseal with the existing Shamir keys, adding `-migrate` to every call. Run it once per distinct key share until the existing threshold is reached (Aurora's default install uses a single share, so once):
    ```bash
    kubectl -n aurora-oss exec -it statefulset/aurora-oss-vault -- vault operator unseal -migrate
    ```
