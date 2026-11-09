@@ -3967,6 +3967,14 @@ def initialize_tables():
                 migrate_kb_to_memory.delay()
                 logging.info("Triggered automatic KB → memory migration task")
 
+            # Idempotent one-time backfill of placeholder postmortem descriptions;
+            # a no-op (0 rows) once done, so enqueueing on each startup is cheap.
+            try:
+                from services.memory.postmortem_backfill import backfill_postmortem_descriptions
+                backfill_postmortem_descriptions.delay()
+            except Exception as e:
+                logging.warning(f"Could not enqueue postmortem description backfill: {e}")
+
             logging.info("Database tables initialized successfully.")
             cursor.close()
 

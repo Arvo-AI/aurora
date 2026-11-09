@@ -163,9 +163,13 @@ class Hit:
     heading: str
     chunk: str
     matched_terms: List[str] = field(default_factory=list)
+    # Every query term the chunk matched, strongest first. ``matched_terms`` is
+    # the display cut; abstention (change_check) needs all of them.
+    all_terms: List[str] = field(default_factory=list, repr=False)
 
     def to_dict(self) -> Dict:
         out = asdict(self)
+        out.pop("all_terms", None)
         out["score"] = round(self.score, 3)
         return out
 
@@ -205,6 +209,10 @@ class MemoryIndex:
 
     def idf(self, term: str) -> float:
         return self._idf.get(term, 0.0)
+
+    def query_idf(self, terms: Iterable[str]) -> float:
+        """Summed IDF of the distinct *terms* this bank knows: a query's total weight."""
+        return sum(self._idf[t] for t in dict.fromkeys(terms) if t in self._idf)
 
     def search(
         self,
@@ -248,7 +256,7 @@ class MemoryIndex:
             text = (entry.get("content") or "")[chunk.offset:chunk.end][:MAX_HIT_CHARS]
             if redact_chunks:
                 text = _redact(text)
-            top_terms = [t for _, t in sorted(chunk_terms[chunk_id], reverse=True)[:8]]
+            ordered = [t for _, t in sorted(chunk_terms[chunk_id], reverse=True)]
             hits.append(Hit(
                 entry_id=str(entry.get("id") or ""),
                 category=entry.get("category") or "",
@@ -258,7 +266,8 @@ class MemoryIndex:
                 offset=chunk.offset,
                 heading=chunk.heading,
                 chunk=text,
-                matched_terms=top_terms,
+                matched_terms=ordered[:8],
+                all_terms=ordered,
             ))
         return hits
 

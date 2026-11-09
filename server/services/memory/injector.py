@@ -71,6 +71,7 @@ _SURFACED_SET_TTL = 86400
 _SELECTOR_SYSTEM = """You are selecting memories that will be useful to Aurora (a cloud operations AI) as it processes a user's query. Aurora investigates incidents, runs root cause analysis, manages infrastructure, and assists with DevOps/SRE tasks. You will be given the user's message and a list of available memory entries with their category, title, and description.
 
 Return a list of entries that will clearly be useful to Aurora as it processes this query (up to 5). Only include memories that you are certain will be helpful based on their title and description.
+- Entries marked [body matches: ...] have content matching the user's message on those terms; treat that as evidence, not proof.
 - If you are unsure if a memory will be useful, do not include it. Be selective and discerning.
 - If there are no memories that would clearly be useful, return an empty list.
 - Do not select memories that merely repeat generic knowledge Aurora already has. DO still select memories containing org-specific context, warnings, known issues, past incident patterns, or team preferences — those always matter.
@@ -284,25 +285,34 @@ def _shortlist_entries(user_message: str, entries: List[Dict], limit: int) -> Li
 _CONTENT_SHORTLIST_TIMEOUT = 1.5
 
 
-async def _content_first_shortlist(
-    user_message: str, entries: List[Dict], limit: int, user_id: Optional[str],
-) -> List[Dict]:
-    """Shortlist with content-aware hits first, then the lexical ranking.
+_ANNOTATE_TOP_K = 10
+_ANNOTATE_MAX_TERMS = 4
+_ANNOTATE_TERM_CHARS = 40
 
-    Entries carry no body here, so BM25 over the stored content (retrieval.py)
-    is what finds a memory whose title/description never mention the query.
-    Any failure or timeout returns the plain lexical shortlist.
-    """
-    lexical = _shortlist_entries(user_message, entries, limit)
+
+async def _content_hits(user_message: str, k: int, user_id: Optional[str]) -> List:
+    """Run the content search once. Any failure or timeout returns []."""
     if not user_id:
-        return lexical
+        return []
     try:
         from services.memory.retrieval import search_memory_for_user
 
         hits = await asyncio.wait_for(
-            asyncio.to_thread(search_memory_for_user, user_id, user_message[:2000], k=limit),
+            asyncio.to_thread(search_memory_for_user, user_id, user_message[:2000], k=k),
             timeout=_CONTENT_SHORTLIST_TIMEOUT,
         )
+        return list(hits or [])
+    except Exception as e:
+        logger.warning("[MemoryInjector] Content search failed, using lexical: %s", e)
+        return []
+
+
+def _shortlist_with_hits(
+    user_message: str, entries: List[Dict], limit: int, hits: List,
+) -> List[Dict]:
+    """Shortlist with content hits first, then the lexical ranking."""
+    lexical = _shortlist_entries(user_message, entries, limit)
+    try:
         by_key = {_entry_key(e): e for e in entries}
         pool: List[Dict] = []
         seen: Set[str] = set()
@@ -326,6 +336,47 @@ async def _content_first_shortlist(
         return lexical
 
 
+async def _content_first_shortlist(
+    user_message: str, entries: List[Dict], limit: int, user_id: Optional[str],
+) -> List[Dict]:
+    """Shortlist with content-aware hits first, then the lexical ranking.
+
+    Entries carry no body here, so BM25 over the stored content (retrieval.py)
+    is what finds a memory whose title/description never mention the query.
+    Any failure or timeout returns the plain lexical shortlist.
+    """
+    hits = await _content_hits(user_message, limit, user_id)
+    return _shortlist_with_hits(user_message, entries, limit, hits)
+
+
+def _clean_term(term) -> str:
+    t = re.sub(r"[\r\n\[\]]+", " ", str(term))
+    return " ".join(t.split())[:_ANNOTATE_TERM_CHARS].strip()
+
+
+def _body_match_annotations(hits: List) -> Dict[str, str]:
+    """entry key -> ' [body matches: a, b]' for the top content hits."""
+    notes: Dict[str, str] = {}
+    try:
+        for hit in hits[:_ANNOTATE_TOP_K]:
+            key = f"{hit.category}/{hit.title}"
+            if key in notes:
+                continue
+            terms = []
+            for raw in (getattr(hit, "matched_terms", None) or []):
+                t = _clean_term(raw)
+                if t and t not in terms:
+                    terms.append(t)
+                if len(terms) >= _ANNOTATE_MAX_TERMS:
+                    break
+            if terms:
+                notes[key] = f" [body matches: {', '.join(terms)}]"
+    except Exception as e:
+        logger.warning("[MemoryInjector] Body-match annotation failed: %s", e)
+        return {}
+    return notes
+
+
 async def _select_relevant_memories_async(
     user_message: str, entries: List[Dict], user_id: Optional[str] = None,
 ) -> List[Dict]:
@@ -333,21 +384,22 @@ async def _select_relevant_memories_async(
 
     # A few hundred full descriptions blow the prefetch budget. Rank first.
     pool = entries
+    hits = await _content_hits(
+        user_message, max(_MAX_SELECTOR_CANDIDATES, _ANNOTATE_TOP_K), user_id,
+    )
     if len(entries) > _MAX_SELECTOR_CANDIDATES:
-        pool = await _content_first_shortlist(
-            user_message, entries, _MAX_SELECTOR_CANDIDATES,
-            user_id,
-        )
+        pool = _shortlist_with_hits(user_message, entries, _MAX_SELECTOR_CANDIDATES, hits)
         logger.info(
             "[MemoryInjector] Shortlisted %d/%d memories before selection",
             len(pool), len(entries),
         )
 
+    notes = _body_match_annotations(hits)
     manifest_lines = []
     for entry in pool:
         ts = entry["updated_at"].isoformat() if entry["updated_at"] else "unknown"
         desc = entry["description"][:150] if entry["description"] else "(no description)"
-        manifest_lines.append(f"- [{entry['category']}] \"{entry['title']}\" | updated: {ts} | {desc}")
+        manifest_lines.append(f"- [{entry['category']}] \"{entry['title']}\" | updated: {ts} | {desc}" + notes.get(_entry_key(entry), ""))
 
     prompt = _SELECTOR_USER.format(
         user_message=user_message[:2000],

@@ -30,7 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Memory: on banks over 100 entries the selector shortlist puts content
   matches first, then the existing title/description ranking.
 - Postmortem memory entries are described by their root cause rather than
-  "Postmortem for incident: <alert title>".
+  "Postmortem for incident: <alert title>"; an idempotent startup task
+  backfills existing entries that still carry the placeholder.
+- Memory: the selector sees `[body matches: …]` on entries whose content
+  matches the request, at every bank size.
 
 ## [1.5.19] - 2026-11-06
 

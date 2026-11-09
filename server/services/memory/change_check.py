@@ -7,8 +7,8 @@ matched. Deterministic and LLM-free, so it is cheap enough to run on every PR
 review and on every edit a coding agent makes over MCP.
 
 ``status`` is ``MATCHES_PAST_INCIDENT`` only when a postmortem, Incident Index
-line or guardrail matches on at least ``MIN_STRONG_TERMS`` distinctive terms
-with a score of at least ``MATCH_THRESHOLD``. Runbooks are returned as context
+line or guardrail clears the abstention rule below (distinctive terms plus
+query coverage, with an absolute-score backstop). Runbooks are returned as context
 but never set the status: a runbook for a service describes how to operate it,
 not that a change to it broke production.
 """
@@ -24,15 +24,21 @@ INCIDENT_CATEGORIES = ("postmortem", "artifact")
 GUARDRAIL_CATEGORIES = ("learned",)
 RUNBOOK_CATEGORIES = ("runbook", "context")
 
-# Calibrated on the aurora-lab leave-one-out replay
-# (tests/services/memory/test_check_change_replay.py; full grid via
-# `scripts/eval_memory_retrieval.py --sweep`). At 15 every scenario's own
-# incident still flags (hit@3 0.95 on change sentences, 1.00 on break.sh),
-# while a bank *without* it flags a neighbour 33% / 48% of the time (81% at
-# 6.0); many of those neighbours are genuinely related incidents. Long shell
-# scripts accumulate score over many terms -- length normalisation is the
-# obvious next refinement.
-MATCH_THRESHOLD = 15.0
+# A hit matches when it shares at least MIN_STRONG_TERMS distinctive terms
+# with the change AND either covers MIN_COVERAGE of the query's total IDF
+# weight, or scores at least MATCH_THRESHOLD outright.
+#
+# Coverage is the primary test because it is scale-free: an absolute BM25
+# cut-off shifts with bank size, entry length and query length. Tuned on the
+# 21 aurora-lab scenarios, a fixed score of 15 let leave-one-out false matches
+# climb from 0.33 to 0.71 once realistic postmortems and ~30 unrelated docs
+# joined the bank; this rule moves from 0.05 to 0.43 under the same changes,
+# and its tuned value barely moves across held-out halves (0.375 vs 0.4).
+# Coverage alone under-fires on long inputs (a whole change script spreads
+# its weight over many terms), so a high absolute score is the backstop.
+# Evidence: `scripts/eval_memory_retrieval.py --robustness`.
+MIN_COVERAGE = 0.35
+MATCH_THRESHOLD = 40.0
 MIN_STRONG_TERMS = 2
 # A term is distinctive when it is rarer than this in the org's bank (IDF).
 STRONG_TERM_IDF = 1.5
@@ -89,11 +95,20 @@ def extract_change_terms(
 
 
 def _strong_terms(index: MemoryIndex, hit: Hit) -> List[str]:
-    return [t for t in hit.matched_terms if index.idf(t) >= STRONG_TERM_IDF]
+    return [t for t in (hit.all_terms or hit.matched_terms) if index.idf(t) >= STRONG_TERM_IDF]
 
 
-def _is_match(index: MemoryIndex, hit: Hit) -> bool:
-    return hit.score >= MATCH_THRESHOLD and len(_strong_terms(index, hit)) >= MIN_STRONG_TERMS
+def coverage(index: MemoryIndex, hit: Hit, query_idf: float) -> float:
+    """Share of the query's IDF weight that *hit*'s chunk matched."""
+    if query_idf <= 0:
+        return 0.0
+    return sum(index.idf(t) for t in (hit.all_terms or hit.matched_terms)) / query_idf
+
+
+def _is_match(index: MemoryIndex, hit: Hit, query_idf: float) -> bool:
+    if len(_strong_terms(index, hit)) < MIN_STRONG_TERMS:
+        return False
+    return coverage(index, hit, query_idf) >= MIN_COVERAGE or hit.score >= MATCH_THRESHOLD
 
 
 def check_change(
@@ -112,8 +127,9 @@ def check_change(
     def group(categories: Iterable[str]) -> List[Hit]:
         return index.search(terms, categories=categories, k=k)
 
-    incidents = [h for h in group(INCIDENT_CATEGORIES) if _is_match(index, h)]
-    guardrails = [h for h in group(GUARDRAIL_CATEGORIES) if _is_match(index, h)]
+    query_idf = index.query_idf(terms)
+    incidents = [h for h in group(INCIDENT_CATEGORIES) if _is_match(index, h, query_idf)]
+    guardrails = [h for h in group(GUARDRAIL_CATEGORIES) if _is_match(index, h, query_idf)]
     runbooks = group(RUNBOOK_CATEGORIES)
     # Below the bar nothing is reported as related: a near-miss rendered as a
     # "past incident" in a PR review costs more attention than it saves.

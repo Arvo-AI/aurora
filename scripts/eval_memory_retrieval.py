@@ -13,6 +13,8 @@ the vendored aurora-lab fixtures:
     python scripts/eval_memory_retrieval.py              # both tables
     python scripts/eval_memory_retrieval.py --quality    # table 1 only
     python scripts/eval_memory_retrieval.py --sweep      # table 2 only
+    python scripts/eval_memory_retrieval.py --robustness # abstention criteria under distractors,
+                                                         # long postmortems, split-half calibration
 
 Needs the server's Python dependencies (run it in the server venv or the
 aurora-server container).
@@ -32,9 +34,15 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--quality", action="store_true", help="retrieval quality table only")
     ap.add_argument("--sweep", action="store_true", help="check_change sweep only")
+    ap.add_argument("--robustness", action="store_true",
+                    help="abstention-criteria robustness (conditions A-E); not part of the default run")
     args = ap.parse_args()
-    both = not (args.quality or args.sweep)
+    both = not (args.quality or args.sweep or args.robustness)
     scenarios = lab.load_scenarios()
+
+    if args.robustness:
+        print(lab.robustness_markdown(lab.robustness(scenarios), scenarios))
+        return
 
     if both or args.quality:
         print(f"### Retrieval quality ({len(scenarios)} aurora-lab runbooks, alert lines removed)\n")
