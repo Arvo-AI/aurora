@@ -1503,7 +1503,10 @@ async def _execute_background_chat(
         # Slack/Google Chat messages are user-authored and should NOT be hidden.
         # Action prompts should also be visible to the user in the chat UI.
         source = trigger_metadata.get("source", "") if trigger_metadata else ""
-        is_scaffold = source in _RCA_SOURCES and source not in ('slack', 'teams', 'google_chat', 'chat', 'action')
+        is_scaffold = bool((trigger_metadata or {}).get("initial_message_is_scaffold")) or (
+            source in _RCA_SOURCES
+            and source not in ('slack', 'teams', 'google_chat', 'chat', 'action')
+        )
         human_message = HumanMessage(
             content=initial_message,
             additional_kwargs={"is_rca_scaffold": is_scaffold},
