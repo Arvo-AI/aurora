@@ -240,3 +240,26 @@ class TestOrgCache:
         retrieval.clear_cache()
         get_org_index("org", (1,), load)
         assert len(calls) == 2
+
+
+class TestSmallBankMatching:
+    """A new org with one or two postmortems must still be able to match."""
+
+    def test_single_postmortem_bank_matches_its_change(self):
+        from services.memory import change_check as cc
+
+        index = MemoryIndex([_entry("pm", "Postmortem: billing outage",
+                                    "## Root Cause\nThe billing worker BATCH_SIZE was raised and it was OOMKilled.",
+                                    category="postmortem")])
+        diff = ("diff --git a/k8s/worker.yaml b/k8s/worker.yaml\n@@ -1,3 +1,3 @@\n"
+                "   - name: BATCH_SIZE\n-    value: \"500\"\n+    value: \"2500\"\n")
+        assert cc.check_change(index, diff=diff)["status"] == "MATCHES_PAST_INCIDENT"
+
+    def test_single_postmortem_bank_ignores_an_unrelated_change(self):
+        from services.memory import change_check as cc
+
+        index = MemoryIndex([_entry("pm", "Postmortem: billing outage",
+                                    "## Root Cause\nThe billing worker BATCH_SIZE was raised and it was OOMKilled.",
+                                    category="postmortem")])
+        diff = "diff --git a/README.md b/README.md\n@@ -1 +1 @@\n-# Shop\n+# Shop storefront\n"
+        assert cc.check_change(index, diff=diff)["status"] == "NO_MATCH"

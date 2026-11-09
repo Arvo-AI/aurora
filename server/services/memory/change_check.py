@@ -130,7 +130,12 @@ def extract_change_terms(
 
 
 def _strong_terms(index: MemoryIndex, hit: Hit) -> List[str]:
-    return [t for t in (hit.all_terms or hit.matched_terms) if index.idf(t) >= STRONG_TERM_IDF]
+    # In a small bank no term can reach STRONG_TERM_IDF: with one chunk, even a
+    # term nothing else contains scores ~0.29. There, "distinctive" means as
+    # rare as a term can be in this bank, or a new org with a few postmortems
+    # could never match anything. Banks above ~5 chunks keep the fixed bar.
+    bar = min(STRONG_TERM_IDF, index.max_idf - 1e-9)
+    return [t for t in (hit.all_terms or hit.matched_terms) if index.idf(t) >= bar]
 
 
 def coverage(index: MemoryIndex, hit: Hit, query_idf: float) -> float:

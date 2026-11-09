@@ -212,6 +212,12 @@ class MemoryIndex:
     def idf(self, term: str) -> float:
         return self._idf.get(term, 0.0)
 
+    @property
+    def max_idf(self) -> float:
+        """IDF of a term found in exactly one chunk: the rarest a term can be here."""
+        n = len(self._chunks)
+        return math.log(1 + (n - 0.5) / 1.5) if n else 0.0
+
     def query_idf(self, terms: Iterable[str]) -> float:
         """Summed IDF of the distinct *terms* this bank knows: a query's total weight."""
         return sum(self._idf[t] for t in dict.fromkeys(terms) if t in self._idf)
