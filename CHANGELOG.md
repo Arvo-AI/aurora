@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.21] - 2026-11-09
+
+### Added
+- Helm: Vault can auto-unseal with Azure Key Vault (`vault.seal.type:
+  azurekeyvault`), authenticating through AKS Workload Identity. The docs cover
+  Key Vault and identity setup, and migrating an existing manually unsealed
+  Vault in place with `vault operator unseal -migrate`.
+
 ## [1.5.20] - 2026-11-09
 
 ### Added
