@@ -1062,7 +1062,7 @@ ingress:
 # WARNING: If KMS key is deleted, Vault data is permanently unrecoverable.
 vault:
   seal:
-    # Options: "shamir" (default), "gcpckms", "awskms"
+    # Options: "shamir" (default), "gcpckms", "awskms", "azurekeyvault"
     type: "shamir"
     
     # GCP Cloud KMS Configuration
@@ -1085,3 +1085,15 @@ vault:
     #   #     --from-literal=access_key=AKIA... \
     #   #     --from-literal=secret_key=...
     #   # credentials: true
+
+    # Azure Key Vault Configuration
+    # See website/docs/deployment/vault-kms-setup.md for setup instructions
+    # Uses AKS Workload Identity: also set
+    #   serviceAccount.vault.annotations:
+    #     azure.workload.identity/client-id: "<managed identity client id>"
+    # azurekeyvault:
+    #   tenant_id: "00000000-0000-0000-0000-000000000000"
+    #   vault_name: "my-keyvault"        # Key Vault name, not its URL
+    #   key_name: "vault-unseal-key"     # RSA key in that Key Vault
+    #   # environment: "AzurePublicCloud" # or AzureUSGovernmentCloud, AzureChinaCloud
+    #   # workloadIdentity: false         # skip the pod label (e.g. node managed identity)
