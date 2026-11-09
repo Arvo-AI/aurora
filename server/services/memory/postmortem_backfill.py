@@ -74,10 +74,40 @@ def _backfill_org(cursor, conn, org_id: str, user_id: str) -> int:
 def backfill_postmortem_descriptions(self):
     """Backfill placeholder postmortem descriptions across all orgs."""
     try:
-        return run_backfill()
+        return run_backfill_once()
     except Exception as exc:
         logger.exception("[PostmortemBackfill] Fatal error")
         raise self.retry(exc=exc)
+
+
+DONE_KEY = "aurora:memory:postmortem_backfill:v1:done"
+
+
+def _redis():
+    try:
+        from utils.cache.redis_client import get_redis_client
+        return get_redis_client()
+    except Exception:
+        return None
+
+
+def run_backfill_once() -> dict:
+    """run_backfill guarded by a Redis done-marker (Redis failure -> just run)."""
+    try:
+        client = _redis()
+        if client is not None and client.get(DONE_KEY):
+            return {"skipped": True}
+    except Exception as e:
+        logger.warning("[PostmortemBackfill] marker check failed: %s", type(e).__name__)
+    stats = run_backfill()
+    if stats.get("errors") == 0:
+        try:
+            client = _redis()
+            if client is not None:
+                client.set(DONE_KEY, "1")
+        except Exception as e:
+            logger.warning("[PostmortemBackfill] marker set failed: %s", type(e).__name__)
+    return stats
 
 
 def run_backfill() -> dict:

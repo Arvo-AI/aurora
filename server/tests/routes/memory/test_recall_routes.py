@@ -83,7 +83,7 @@ def test_search_passes_through_and_pins_rls(memory_client):
     assert resp.get_json() == {"query": "redis", "hits": [{"title": "T", "category": "runbook", "offset": 7}]}
     args, kwargs = memory_client.search.call_args
     assert args[1:3] == (ORG_ID, "redis")
-    assert kwargs == {"categories": ["runbook", "context"], "k": 3}
+    assert kwargs == {"categories": ["runbook", "context"], "k": 3, "user_id": "user-test"}
     assert memory_client.rls.call_args.kwargs["org_id"] == ORG_ID
 
 
@@ -127,5 +127,5 @@ def test_check_change_passes_through_and_pins_rls(memory_client):
     assert resp.get_json()["status"] == "MATCHES_PAST_INCIDENT"
     args, kwargs = memory_client.check.call_args
     assert args[1] == ORG_ID
-    assert kwargs == {"diff": "d", "files": ["a.py"], "description": "x"}
+    assert kwargs == {"diff": "d", "files": ["a.py"], "description": "x", "user_id": "user-test"}
     assert memory_client.rls.call_args.kwargs["org_id"] == ORG_ID

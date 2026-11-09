@@ -134,13 +134,20 @@ def fetch_memory_fingerprint(cursor, org_id: str) -> tuple:
     return (row[0], row[1])
 
 
+# Characters of an entry's content the recall index covers. Uploads may hold
+# up to 50MB of extracted text; indexing all of it would cost GBs per process
+# for one document. The head of an entry is where its subject is stated, and
+# read_memory still pages through the whole thing.
+MAX_INDEXED_CHARS = 200_000
+
+
 def fetch_memory_corpus(cursor, org_id: str) -> List[Dict]:
-    """Every memory entry of the org, with content, for the recall index."""
+    """Every memory entry of the org, content capped at MAX_INDEXED_CHARS."""
     cursor.execute(
-        """SELECT id, category, title, description, content, updated_at
+        """SELECT id, category, title, description, LEFT(content, %s), updated_at
            FROM artifacts
            WHERE org_id = %s AND category = ANY(%s)""",
-        (org_id, list(MEMORY_CATEGORIES)),
+        (MAX_INDEXED_CHARS, org_id, list(MEMORY_CATEGORIES)),
     )
     return [
         {

@@ -582,31 +582,36 @@ class GrepMemoriesArgs(BaseModel):
     )
 
 
-def _rank_grep_rows(rows, pattern: str):
-    """Top _GREP_MAX_RESULTS of the recency-ordered candidate rows, best textual
-    match first; unscored rows follow in recency order. Any failure returns the
-    newest rows (the pre-ranking behaviour)."""
+def _rank_grep_ids(cursor, org_id, user_id, rows, pattern: str):
+    """Pick up to _GREP_MAX_RESULTS (id, title, category) rows from the
+    recency-ordered candidates: best match in the org's cached index first, then
+    the rest in recency order. Never builds an index inline; any failure or a
+    cold index returns the newest rows."""
     rows = list(rows or [])
     fallback = rows[:_GREP_MAX_RESULTS]
     if len(rows) <= 1:
         return fallback
     try:
-        from services.memory.retrieval import MemoryIndex, tokenize
+        from services.memory.retrieval import org_index_for_cursor, tokenize
 
         terms = tokenize(pattern)
         if not terms:
             return fallback
-        entries = [
-            {"id": f"{i}", "title": r[0], "category": r[1], "content": r[2] or ""}
-            for i, r in enumerate(rows)
-        ]
-        hits = MemoryIndex(entries).search(
-            terms, k=_GREP_MAX_RESULTS, redact_chunks=False,
+        index = org_index_for_cursor(cursor, org_id, user_id=user_id, block=False)
+        if index is None:
+            return fallback
+        by_id = {str(r[0]): r for r in rows}
+        hits = index.search(
+            terms, entry_ids=list(by_id), k=_GREP_MAX_RESULTS, redact_chunks=False,
         )
-        order = [int(h.entry_id) for h in hits]
-        seen = set(order)
-        order += [i for i in range(len(rows)) if i not in seen]
-        return [rows[i] for i in order[:_GREP_MAX_RESULTS]]
+        ordered, seen = [], set()
+        for h in hits:
+            eid = str(h.entry_id)
+            if eid in by_id and eid not in seen:
+                seen.add(eid)
+                ordered.append(by_id[eid])
+        ordered += [r for r in rows if str(r[0]) not in seen]
+        return ordered[:_GREP_MAX_RESULTS]
     except Exception:
         logger.warning("[MemoryTool:grep] Ranking failed, using recency order", exc_info=True)
         return fallback
@@ -634,7 +639,7 @@ def grep_memories(
                 cursor.execute("SAVEPOINT regex_attempt")
                 if category:
                     cursor.execute(
-                        """SELECT title, category, content FROM artifacts
+                        """SELECT id, title, category FROM artifacts
                            WHERE org_id = %s AND category = %s
                            AND content ~* %s
                            ORDER BY updated_at DESC
@@ -643,7 +648,7 @@ def grep_memories(
                     )
                 else:
                     cursor.execute(
-                        """SELECT title, category, content FROM artifacts
+                        """SELECT id, title, category FROM artifacts
                            WHERE org_id = %s AND category = ANY(%s)
                            AND content ~* %s
                            ORDER BY updated_at DESC
@@ -658,7 +663,7 @@ def grep_memories(
                 logger.debug(f"[MemoryTool:grep] Regex failed, falling back to ILIKE: {regex_err}")
                 if category:
                     cursor.execute(
-                        """SELECT title, category, content FROM artifacts
+                        """SELECT id, title, category FROM artifacts
                            WHERE org_id = %s AND category = %s
                            AND content ILIKE %s
                            ORDER BY updated_at DESC
@@ -667,7 +672,7 @@ def grep_memories(
                     )
                 else:
                     cursor.execute(
-                        """SELECT title, category, content FROM artifacts
+                        """SELECT id, title, category FROM artifacts
                            WHERE org_id = %s AND category = ANY(%s)
                            AND content ILIKE %s
                            ORDER BY updated_at DESC
@@ -676,7 +681,18 @@ def grep_memories(
                     )
                 rows = cursor.fetchall()
 
-        rows = _rank_grep_rows(rows, search_pattern)
+            rows = _rank_grep_ids(cursor, org_id, user_id, rows, search_pattern)
+            if rows:
+                ids = [r[0] for r in rows]
+                cursor.execute(
+                    "SELECT id, content FROM artifacts WHERE org_id = %s AND id = ANY(%s::uuid[])",
+                    (org_id, ids),
+                )
+                content_by_id = {str(r[0]): r[1] for r in cursor.fetchall()}
+                rows = [
+                    (r[1], r[2], content_by_id.get(str(r[0])))
+                    for r in rows if str(r[0]) in content_by_id
+                ]
 
         if not rows:
             return json.dumps({

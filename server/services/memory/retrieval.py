@@ -33,7 +33,9 @@ import logging
 import math
 import re
 import threading
+import time
 from collections import Counter, OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -221,21 +223,30 @@ class MemoryIndex:
         categories: Optional[Iterable[str]] = None,
         k: int = 5,
         redact_chunks: bool = True,
+        entry_ids: Optional[Iterable[str]] = None,
     ) -> List[Hit]:
-        """Top *k* entries for *query* (text or pre-tokenized terms)."""
+        """Top *k* entries for *query* (text or pre-tokenized terms).
+
+        *entry_ids* restricts ranking to those entries (e.g. the rows a regex
+        already matched), reusing this index instead of building another.
+        """
         terms = tokenize(query) if isinstance(query, str) else list(query)
         # Repeating a term in a long query (a diff) must not multiply its weight.
         terms = list(dict.fromkeys(t for t in terms if t in self._postings))
         if not terms or not self._chunks:
             return []
         allowed = set(categories) if categories else None
+        only_ids = {str(i) for i in entry_ids} if entry_ids is not None else None
 
         chunk_scores: Dict[int, float] = {}
         chunk_terms: Dict[int, List[Tuple[float, str]]] = {}
         for term in terms:
             idf = self._idf[term]
             for chunk_id, tf in self._postings[term]:
-                if allowed is not None and self.entries[self._chunk_owner[chunk_id]].get("category") not in allowed:
+                owner = self.entries[self._chunk_owner[chunk_id]]
+                if allowed is not None and owner.get("category") not in allowed:
+                    continue
+                if only_ids is not None and str(owner.get("id") or "") not in only_ids:
                     continue
                 norm = _BM25_K1 * (1 - _BM25_B + _BM25_B * self._chunk_len[chunk_id] / self._avg_len)
                 part = idf * tf * (_BM25_K1 + 1) / (tf + norm)
@@ -284,41 +295,163 @@ def _redact(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Per-org cache
 # ---------------------------------------------------------------------------
+#
+# Memory changes constantly: the collector writes after most turns. Rebuilding
+# on every change would put a full refetch + re-index on the chat, PR-review
+# and MCP hot paths, so the cache is stale-while-revalidate:
+#
+# * fingerprint unchanged      -> serve the cached index.
+# * fingerprint changed        -> serve the cached (stale) index now and rebuild
+#                                 in the background, at most once per
+#                                 ``REBUILD_MIN_INTERVAL`` seconds per org.
+# * nothing cached yet         -> build inline (``block=True``), one builder per
+#                                 org while concurrent callers wait for it; or
+#                                 schedule a build and return None
+#                                 (``block=False``, for latency-bound callers).
+#
+# Staleness is bounded (a new memory is searchable within about a rebuild
+# interval) and the rebuild cost no longer scales with write frequency.
 
 Fingerprint = Tuple
 
-_cache: "OrderedDict[str, Tuple[Fingerprint, MemoryIndex]]" = OrderedDict()
+REBUILD_MIN_INTERVAL = 30.0
+
+_cache: "OrderedDict[str, Tuple[Fingerprint, MemoryIndex, float]]" = OrderedDict()
 _cache_lock = threading.Lock()
+_build_locks: Dict[str, threading.Lock] = {}
+_scheduled: set = set()
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="recall-index")
+
+Loader = Callable[[], Tuple[Fingerprint, List[Dict]]]
+
+
+def _store(org_id: str, fingerprint: Fingerprint, index: MemoryIndex) -> None:
+    with _cache_lock:
+        _cache[org_id] = (fingerprint, index, time.monotonic())
+        _cache.move_to_end(org_id)
+        while len(_cache) > _CACHE_MAX_ORGS:
+            _cache.popitem(last=False)
+
+
+def _org_build_lock(org_id: str) -> threading.Lock:
+    with _cache_lock:
+        return _build_locks.setdefault(org_id, threading.Lock())
+
+
+def _background_rebuild(org_id: str, loader: Loader) -> None:
+    try:
+        with _org_build_lock(org_id):
+            fingerprint, entries = loader()
+            _store(org_id, fingerprint, MemoryIndex(entries))
+    except Exception:
+        logger.warning("[Recall] background rebuild failed for org %s", org_id, exc_info=True)
+    finally:
+        with _cache_lock:
+            _scheduled.discard(org_id)
+
+
+def _schedule_rebuild(org_id: str, loader: Loader) -> None:
+    with _cache_lock:
+        if org_id in _scheduled:
+            return
+        _scheduled.add(org_id)
+    try:
+        _executor.submit(_background_rebuild, org_id, loader)
+    except Exception:  # interpreter shutdown
+        with _cache_lock:
+            _scheduled.discard(org_id)
 
 
 def get_org_index(
     org_id: str,
     fingerprint: Fingerprint,
     load_entries: Callable[[], List[Dict]],
-) -> MemoryIndex:
-    """The org's index, rebuilt only when its bank's *fingerprint* changes.
+    *,
+    rebuild: Optional[Loader] = None,
+    block: bool = True,
+) -> Optional[MemoryIndex]:
+    """The org's index; see the cache notes above.
 
     Keyed by org id alone, so one org's index can never answer another's
     query; the fingerprint (entry count, latest ``updated_at``) is only the
-    staleness check.
+    staleness check. *load_entries* reads on the caller's (RLS-pinned) cursor
+    and is used inline only; *rebuild* opens its own connection and returns
+    ``(fingerprint, entries)`` for background refreshes. Without *rebuild*,
+    a stale index is rebuilt inline.
     """
     with _cache_lock:
         cached = _cache.get(org_id)
-        if cached and cached[0] == fingerprint:
+        if cached:
             _cache.move_to_end(org_id)
+    if cached and cached[0] == fingerprint:
+        return cached[1]
+    if cached and rebuild is not None:
+        if time.monotonic() - cached[2] >= REBUILD_MIN_INTERVAL:
+            _schedule_rebuild(org_id, rebuild)
+        return cached[1]
+    if not cached and not block:
+        if rebuild is not None:
+            _schedule_rebuild(org_id, rebuild)
+        return None
+
+    with _org_build_lock(org_id):
+        # Another caller may have built it while this one waited.
+        with _cache_lock:
+            cached = _cache.get(org_id)
+        if cached and cached[0] == fingerprint:
             return cached[1]
-    index = MemoryIndex(load_entries())
-    with _cache_lock:
-        _cache[org_id] = (fingerprint, index)
-        _cache.move_to_end(org_id)
-        while len(_cache) > _CACHE_MAX_ORGS:
-            _cache.popitem(last=False)
-    return index
+        index = MemoryIndex(load_entries())
+        _store(org_id, fingerprint, index)
+        return index
 
 
 def clear_cache() -> None:
     with _cache_lock:
         _cache.clear()
+        _scheduled.clear()
+
+
+def _own_connection_loader(user_id: str, org_id: str) -> Loader:
+    """Background loader: a fresh admin connection pinned to *org_id* under RLS."""
+
+    def load() -> Tuple[Fingerprint, List[Dict]]:
+        from services.memory.queries import fetch_memory_corpus, fetch_memory_fingerprint
+        from utils.auth.stateless_auth import set_rls_context
+        from utils.db.connection_pool import db_pool
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                pinned = set_rls_context(
+                    cursor, conn, user_id, org_id=org_id, log_prefix="[Recall:rebuild]",
+                )
+                if pinned != org_id:
+                    raise RuntimeError("RLS context not pinned to the cached org")
+                return fetch_memory_fingerprint(cursor, org_id), fetch_memory_corpus(cursor, org_id)
+
+    return load
+
+
+def org_index_for_cursor(
+    cursor,
+    org_id: str,
+    *,
+    user_id: Optional[str] = None,
+    block: bool = True,
+) -> Optional[MemoryIndex]:
+    """The org's index, reading through a cursor already pinned to it under RLS.
+
+    With *user_id*, a stale index is served immediately and refreshed in the
+    background; without it, it is rebuilt inline.
+    """
+    from services.memory.queries import fetch_memory_corpus, fetch_memory_fingerprint
+
+    return get_org_index(
+        org_id,
+        fetch_memory_fingerprint(cursor, org_id),
+        lambda: fetch_memory_corpus(cursor, org_id),
+        rebuild=_own_connection_loader(user_id, org_id) if user_id else None,
+        block=block,
+    )
 
 
 def search_org_memory(
@@ -328,19 +461,17 @@ def search_org_memory(
     *,
     categories: Optional[Iterable[str]] = None,
     k: int = 5,
+    user_id: Optional[str] = None,
+    block: bool = True,
 ) -> List[Hit]:
     """Search *org_id*'s memory on a cursor already pinned to it under RLS.
 
     For request handlers: pass the org RBAC authorized and pin RLS to it first
     (see the module docstring of ``services.memory.queries``).
     """
-    from services.memory.queries import fetch_memory_corpus, fetch_memory_fingerprint
-
-    index = get_org_index(
-        org_id,
-        fetch_memory_fingerprint(cursor, org_id),
-        lambda: fetch_memory_corpus(cursor, org_id),
-    )
+    index = org_index_for_cursor(cursor, org_id, user_id=user_id, block=block)
+    if index is None:
+        return []
     return index.search(query, categories=categories, k=k)
 
 
@@ -350,8 +481,13 @@ def search_memory_for_user(
     *,
     categories: Optional[Iterable[str]] = None,
     k: int = 5,
+    block: bool = True,
 ) -> List[Hit]:
-    """Background flavour: resolve the user's org and pin RLS, then search."""
+    """Background flavour: resolve the user's org and pin RLS, then search.
+
+    ``block=False`` never builds inline: a cold org returns [] and its index is
+    built in the background for the next call.
+    """
     from utils.auth.stateless_auth import set_rls_context
     from utils.db.connection_pool import db_pool
 
@@ -361,7 +497,10 @@ def search_memory_for_user(
                 org_id = set_rls_context(cursor, conn, user_id, log_prefix="[Recall]")
                 if not org_id:
                     return []
-                return search_org_memory(cursor, org_id, query, categories=categories, k=k)
+                return search_org_memory(
+                    cursor, org_id, query, categories=categories, k=k,
+                    user_id=user_id, block=block,
+                )
     except Exception:
         logger.warning("[Recall] search failed for user %s", user_id, exc_info=True)
         return []

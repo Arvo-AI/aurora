@@ -89,3 +89,22 @@ def test_large_bank_front_loads_and_searches_once(monkeypatch):
 
 def test_system_prompt_mentions_marker():
     assert "[body matches:" in injector._SELECTOR_SYSTEM
+
+
+def test_prefetch_budget_fits_agent_wait():
+    assert injector._CONTENT_SHORTLIST_TIMEOUT + injector.SELECTOR_TIMEOUT < 6.0
+
+
+def test_content_hits_do_not_block_on_cold_index(monkeypatch):
+    import asyncio
+    import services.memory.retrieval as r
+
+    seen = {}
+
+    def search(uid, q, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(r, "search_memory_for_user", search)
+    asyncio.run(injector._content_hits("q", 5, "u"))
+    assert seen.get("block") is False

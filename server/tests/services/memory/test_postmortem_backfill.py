@@ -146,3 +146,38 @@ def test_concurrent_edit_not_clobbered():
     stats = _run(db)
     assert db.orgs["o1"][0][2] == "user edit"
     assert stats["updated"] == 1
+
+
+class TestRunBackfillOnce:
+    def _go(self, redis, stats):
+        with patch.object(pb, "_redis", return_value=redis), \
+             patch.object(pb, "run_backfill", return_value=stats) as rb:
+            return pb.run_backfill_once(), rb
+
+    def test_marker_set_skips(self):
+        r = MagicMock()
+        r.get.return_value = b"1"
+        out, rb = self._go(r, {"errors": 0})
+        assert out == {"skipped": True}
+        rb.assert_not_called()
+
+    def test_clean_run_sets_marker(self):
+        r = MagicMock()
+        r.get.return_value = None
+        out, rb = self._go(r, {"orgs": 1, "updated": 0, "errors": 0})
+        rb.assert_called_once()
+        r.set.assert_called_once_with(pb.DONE_KEY, "1")
+
+    def test_errors_do_not_set_marker(self):
+        r = MagicMock()
+        r.get.return_value = None
+        self._go(r, {"errors": 2})
+        r.set.assert_not_called()
+
+    def test_redis_raising_still_runs(self):
+        r = MagicMock()
+        r.get.side_effect = RuntimeError("down")
+        r.set.side_effect = RuntimeError("down")
+        out, rb = self._go(r, {"errors": 0})
+        rb.assert_called_once()
+        assert out == {"errors": 0}

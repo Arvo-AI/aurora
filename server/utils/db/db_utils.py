@@ -3968,10 +3968,10 @@ def initialize_tables():
                 logging.info("Triggered automatic KB → memory migration task")
 
             # Idempotent one-time backfill of placeholder postmortem descriptions;
-            # a no-op (0 rows) once done, so enqueueing on each startup is cheap.
+            # the task is a no-op once done (Redis marker); fail fast if broker is down.
             try:
                 from services.memory.postmortem_backfill import backfill_postmortem_descriptions
-                backfill_postmortem_descriptions.delay()
+                backfill_postmortem_descriptions.apply_async(retry=False)
             except Exception as e:
                 logging.warning(f"Could not enqueue postmortem description backfill: {e}")
 

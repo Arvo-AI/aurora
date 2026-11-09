@@ -190,18 +190,25 @@ _MAX_FOCUS_TITLES = 5
 _MAX_CHUNK_CHARS = 600
 
 
-def _memory_hits(incident_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _hits(incident_context: Optional[Dict[str, Any]], *keys: str) -> List[Dict[str, Any]]:
     hits: List[Dict[str, Any]] = []
-    for key in ("related_incidents", "guardrails", "runbooks"):
-        hits.extend(h for h in (incident_context.get(key) or []) if isinstance(h, dict))
+    for key in keys:
+        hits.extend(
+            h for h in ((incident_context or {}).get(key) or []) if isinstance(h, dict)
+        )
     return hits
+
+
+def _memory_hits(incident_context: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Gated matches only (incidents + guardrails); runbooks are context."""
+    return _hits(incident_context, "related_incidents", "guardrails")
 
 
 def _build_pr_focus_header(
     repo_full_name: str,
     pr: Dict[str, Any],
     files: List[Dict[str, Any]],
-    incident_context: Dict[str, Any],
+    incident_context: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Short PR-specific preamble placed before the fixed review prompt."""
     paths = [
@@ -226,6 +233,26 @@ def _build_pr_focus_header(
     return "\n".join(lines)[:1200]
 
 
+def _render_memory_entry(h: Dict[str, Any], max_chunk: int) -> str:
+    cat = _escape_prompt_data(str(h.get("category") or ""))
+    name = _escape_prompt_data(str(h.get("title") or ""))
+    lines = [f"[{cat}] {name}"]
+    terms = h.get("matched_terms") or []
+    if terms:
+        lines.append(
+            "Matched terms: " + ", ".join(_escape_prompt_data(str(t)) for t in terms)
+        )
+    chunk = str(h.get("chunk") or "")[:max_chunk]
+    if chunk:
+        lines.append(_escape_prompt_data(chunk))
+    offset = h.get("offset") or 0
+    lines.append(f'(full text: read_memory("{cat}", "{name}", offset={offset}))')
+    return "\n".join(lines)
+
+
+_MAX_RUNBOOK_CHUNK_CHARS = 300
+
+
 def _build_org_memory_section(incident_context: Dict[str, Any]) -> str:
     title = (
         "PAST INCIDENTS AND GUARDRAILS MATCHING THIS DIFF "
@@ -235,26 +262,17 @@ def _build_org_memory_section(incident_context: Dict[str, Any]) -> str:
     if not hits:
         body = "No past incident in org memory matched this diff."
     else:
-        entries = []
-        for h in hits:
-            cat = _escape_prompt_data(str(h.get("category") or ""))
-            name = _escape_prompt_data(str(h.get("title") or ""))
-            lines = [f"[{cat}] {name}"]
-            terms = h.get("matched_terms") or []
-            if terms:
-                lines.append(
-                    "Matched terms: "
-                    + ", ".join(_escape_prompt_data(str(t)) for t in terms)
-                )
-            chunk = str(h.get("chunk") or "")[:_MAX_CHUNK_CHARS]
-            if chunk:
-                lines.append(_escape_prompt_data(chunk))
-            offset = h.get("offset") or 0
-            lines.append(f'(full text: read_memory("{cat}", "{name}", offset={offset}))')
-            entries.append("\n".join(lines))
+        entries = [_render_memory_entry(h, _MAX_CHUNK_CHARS) for h in hits]
         body = (
             "If a listed incident's mechanism applies to this diff, cite it in "
             "the finding.\n\n" + "\n\n".join(entries)
+        )
+    runbooks = _hits(incident_context, "runbooks")
+    if runbooks:
+        rb = [_render_memory_entry(h, _MAX_RUNBOOK_CHUNK_CHARS) for h in runbooks]
+        body += (
+            "\n\nRunbooks for the touched area (reference only \u2014 not "
+            "evidence that this change caused an incident):\n\n" + "\n\n".join(rb)
         )
     return f"{title}\n<org_memory>\n{body}\n</org_memory>"
 
@@ -319,13 +337,12 @@ def build_review_prompt(
         "moving to the next):\n" + per_file_diff
     )
 
-    sections = [_REVIEW_PROMPT]
-    if incident_context is not None:
-        # PR-specific header FIRST: the memory prefetch selector only sees the
-        # head of the message, which is otherwise the fixed review prompt.
-        sections.insert(
-            0, _build_pr_focus_header(repo_full_name, pr, files, incident_context)
-        )
+    # PR-specific header FIRST (always): the memory prefetch selector only sees
+    # the head of the message, which is otherwise the fixed review prompt.
+    sections = [
+        _build_pr_focus_header(repo_full_name, pr, files, incident_context),
+        _REVIEW_PROMPT,
+    ]
     if incremental:
         sections.append(_INCREMENTAL_NOTE)
     sections += [metadata, description, files_block]

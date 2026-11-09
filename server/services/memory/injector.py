@@ -282,7 +282,7 @@ def _shortlist_entries(user_message: str, entries: List[Dict], limit: int) -> Li
 
 # Budget for the content-level search that front-loads the shortlist. The
 # selector call keeps the rest of the prefetch window.
-_CONTENT_SHORTLIST_TIMEOUT = 1.5
+_CONTENT_SHORTLIST_TIMEOUT = 0.5
 
 
 _ANNOTATE_TOP_K = 10
@@ -298,7 +298,9 @@ async def _content_hits(user_message: str, k: int, user_id: Optional[str]) -> Li
         from services.memory.retrieval import search_memory_for_user
 
         hits = await asyncio.wait_for(
-            asyncio.to_thread(search_memory_for_user, user_id, user_message[:2000], k=k),
+            asyncio.to_thread(
+                search_memory_for_user, user_id, user_message[:2000], k=k, block=False,
+            ),
             timeout=_CONTENT_SHORTLIST_TIMEOUT,
         )
         return list(hits or [])

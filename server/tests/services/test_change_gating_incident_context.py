@@ -18,11 +18,15 @@ def _ctx(**kw):
     return base
 
 
-def test_none_is_identical_to_default():
+def test_none_is_default_with_header_only():
     a = build_review_prompt("acme/api", PR, FILES, "diff")
     b = build_review_prompt("acme/api", PR, FILES, "diff", incident_context=None)
     assert a == b
-    assert a.startswith(_REVIEW_PROMPT)
+    header = a[: a.index(_REVIEW_PROMPT) - 2]
+    assert a == header + "\n\n" + _REVIEW_PROMPT + a[a.index(_REVIEW_PROMPT) + len(_REVIEW_PROMPT):]
+    assert header.startswith("PR FOCUS: acme/api#42")
+    assert "svc/retry.py" in a[:2000]
+    assert "Possibly related" not in header
     assert "org_memory" not in a
 
 
@@ -58,3 +62,36 @@ def test_no_match_line():
     ctx = {"status": "NO_MATCH", "related_incidents": [], "guardrails": [], "runbooks": []}
     out = build_review_prompt("acme/api", PR, FILES, "diff", incident_context=ctx)
     assert "No past incident in org memory matched this diff." in out
+
+
+def _rb():
+    return {"entry_id": 9, "category": "runbooks", "title": "Retry Runbook",
+            "offset": 7, "chunk": "R" * 1000, "matched_terms": ["retry"]}
+
+
+def test_no_match_with_runbooks_separated():
+    ctx = {"status": "NO_MATCH", "related_incidents": [], "guardrails": [],
+           "runbooks": [_rb()]}
+    out = build_review_prompt("acme/api", PR, FILES, "diff", incident_context=ctx)
+    assert "No past incident in org memory matched this diff." in out
+    header = out[: out.index(_REVIEW_PROMPT)]
+    assert "Retry Runbook" not in header
+    assert "Possibly related" not in header
+    sub = "Runbooks for the touched area (reference only"
+    mem = out.split("<org_memory>")[1].split("</org_memory>")[0]
+    assert sub in mem
+    before, after = mem.split(sub)
+    assert "Retry Runbook" not in before
+    assert "Retry Runbook" in after
+    assert 'read_memory("runbooks", "Retry Runbook", offset=7)' in after
+    assert after.count("R") < 400
+
+
+def test_runbooks_not_in_header_with_incident_match():
+    out = build_review_prompt("acme/api", PR, FILES, "diff",
+                              incident_context=_ctx(runbooks=[_rb()]))
+    header = out[: out.index(_REVIEW_PROMPT)]
+    assert "Retry storm 2025" in header
+    assert "Retry Runbook" not in header
+    assert "No past incident" not in out
+    assert "cite it in the finding" in out

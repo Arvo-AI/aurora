@@ -119,11 +119,22 @@ def test_no_user_id_skips_search(monkeypatch):
 
 # ----------------------------- C. grep -----------------------------
 
-def _grep(monkeypatch, rows, query):
+def _grep(monkeypatch, rows, query, index="unset"):
+    """rows: (id, title, category, content). Candidate query returns id/title/cat only."""
+    import services.memory.retrieval as r
     from chat.backend.agent.tools import memory_tool as mod
 
     cursor = MagicMock()
-    cursor.fetchall.return_value = rows
+    cands = [x[:3] for x in rows]
+
+    def _fetchall():
+        sql = cursor.execute.call_args[0][0]
+        if "id = ANY" in sql:
+            wanted = set(cursor.execute.call_args[0][1][1])
+            return [(x[0], x[3]) for x in rows if x[0] in wanted]
+        return cands
+
+    cursor.fetchall.side_effect = _fetchall
 
     class _C:
         def __enter__(self):
@@ -133,22 +144,50 @@ def _grep(monkeypatch, rows, query):
             return False
 
     monkeypatch.setattr(mod, "_memory_connection", lambda *a, **k: _C())
-    return mod, cursor, json.loads(mod.grep_memories(query, user_id="u"))
+    calls = {}
+    if index == "unset":
+        def _idx(cur, org, *, user_id=None, block=True):
+            calls["block"] = block
+            entries = [{"id": x[0], "title": x[1], "category": x[2], "content": x[3]} for x in rows]
+            return r.MemoryIndex(entries)
+    else:
+        def _idx(cur, org, *, user_id=None, block=True):
+            calls["block"] = block
+            if isinstance(index, Exception):
+                raise index
+            return index
+    monkeypatch.setattr(r, "org_index_for_cursor", _idx)
+    return mod, cursor, json.loads(mod.grep_memories(query, user_id="u")), calls
 
 
 def test_grep_ranks_best_match_above_recency(monkeypatch):
-    rows = [(f"new-{i}", "learned", "mentions redis once in passing") for i in range(11)]
-    rows.append(("oldest", "learned", "redis failover redis sentinel redis primary redis replica " * 3))
-    mod, cursor, out = _grep(monkeypatch, rows, "redis")
+    rows = [(f"id{i}", f"new-{i}", "learned", "mentions redis once in passing") for i in range(11)]
+    rows.append(("idold", "oldest", "learned",
+                 "redis failover redis sentinel redis primary redis replica " * 3))
+    mod, cursor, out, calls = _grep(monkeypatch, rows, "redis")
     titles = [m["title"] for m in out["matches"]]
-    assert len(titles) == 10 and "oldest" in titles
+    assert len(titles) == 10 and titles[0] == "oldest"
+    assert calls["block"] is False
     assert cursor.execute.call_args_list[1][0][1][-1] == mod._GREP_CANDIDATES
+    assert "content" not in cursor.execute.call_args_list[1][0][0].split("FROM")[0]
 
 
-def test_grep_ranking_error_keeps_recency(monkeypatch):
-    import services.memory.retrieval as r
-
-    monkeypatch.setattr(r, "MemoryIndex", lambda *a, **k: 1 / 0)
-    rows = [(f"t{i}", "learned", "redis") for i in range(12)]
-    _, _, out = _grep(monkeypatch, rows, "redis")
+def test_grep_index_none_keeps_recency(monkeypatch):
+    rows = [(f"id{i}", f"t{i}", "learned", "redis") for i in range(12)]
+    _, _, out, _ = _grep(monkeypatch, rows, "redis", index=None)
     assert [m["title"] for m in out["matches"]] == [f"t{i}" for i in range(10)]
+
+
+def test_grep_index_error_keeps_recency(monkeypatch):
+    rows = [(f"id{i}", f"t{i}", "learned", "redis") for i in range(12)]
+    _, _, out, _ = _grep(monkeypatch, rows, "redis", index=RuntimeError("x"))
+    assert [m["title"] for m in out["matches"]] == [f"t{i}" for i in range(10)]
+
+
+def test_grep_fetches_content_only_for_chosen_ids(monkeypatch):
+    rows = [(f"id{i}", f"t{i}", "learned", "redis") for i in range(50)]
+    _, cursor, out, _ = _grep(monkeypatch, rows, "redis", index=None)
+    fetches = [c for c in cursor.execute.call_args_list if "id = ANY" in c[0][0]]
+    assert len(fetches) == 1
+    assert fetches[0][0][1][1] == [f"id{i}" for i in range(10)]
+    assert out["count"] == 10

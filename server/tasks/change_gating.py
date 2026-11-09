@@ -694,8 +694,11 @@ def _run_investigation_core(
             try:
                 from services.memory.change_check import check_change_for_user
 
+                # One headered section per file, so check_change can score each
+                # file on its own as well as the change as a whole.
                 patches = "\n".join(
-                    f.get("patch") for f in (files or []) if f.get("patch")
+                    f"diff --git a/{f.get('filename')} b/{f.get('filename')}\n{f.get('patch')}"
+                    for f in (files or []) if f.get("patch") and f.get("filename")
                 )
                 incident_context = check_change_for_user(
                     user_id,

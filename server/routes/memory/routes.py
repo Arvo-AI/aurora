@@ -107,7 +107,9 @@ def search_memory(user_id):
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
-            hits = search_org_memory(cursor, org_id, q, categories=categories, k=k)
+            hits = search_org_memory(
+                cursor, org_id, q, categories=categories, k=k, user_id=user_id,
+            )
         return jsonify({"query": q, "hits": [h.to_dict() for h in hits]}), 200
     except Exception as e:
         logger.error("[Memory] search failed: %s", e, exc_info=True)
@@ -141,7 +143,8 @@ def check_change_route(user_id):
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
             result = check_change_for_org(
-                cursor, org_id, diff=diff, files=files, description=description,
+                cursor, org_id, user_id=user_id,
+                diff=diff, files=files, description=description,
             )
         return jsonify(result), 200
     except Exception as e:
