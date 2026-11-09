@@ -1,0 +1,26 @@
+id: 20-nginx-502-upstream-closed-connection
+title: frontend returns 502 because the api closes the connection without answering; Service, endpoints and pods all healthy
+alert: "HighErrorRate [critical] namespace=shop service=frontend: 100% of requests to /api/ returned 502 over the last 5 minutes (threshold 5%). All pods are Running and Ready."
+change: >
+  The api-code ConfigMap was edited so that the /items handler reads a new
+  setting with int(os.environ.get("ITEM_LIMIT")), and the api Deployment was
+  restarted. The Deployment does not set ITEM_LIMIT.
+root_cause: >
+  Every non-health request to the api raises TypeError (int() of None) inside
+  the request handler. Python's http.server logs "Exception occurred during
+  processing of request" with the traceback and closes the connection without
+  sending a response. nginx in the frontend logs "upstream prematurely closed
+  connection while reading response header from upstream" and returns 502.
+  The api pods stay Running and Ready because /healthz returns before the new
+  line, and the api Service has endpoints, so the Service layer is healthy.
+must_identify:
+  - nginx connects to the api and the api closes the connection before sending a response (upstream prematurely closed connection), so the 502 comes from the api process, not from the Service or the network
+  - The api raises TypeError on int(os.environ.get("ITEM_LIMIT")) because ITEM_LIMIT is not set on the Deployment, introduced by the api-code ConfigMap change
+acceptable_fixes:
+  - Revert the api-code ConfigMap change and restart the api
+  - Set ITEM_LIMIT on the api Deployment (or give the code a default) and roll the api
+wrong_answers:
+  - Service selector, endpoints or targetPort as the cause
+  - NetworkPolicy or DNS as the cause
+  - redis as the cause
+  - Restarting the frontend or the api without changing the code or the env as the fix

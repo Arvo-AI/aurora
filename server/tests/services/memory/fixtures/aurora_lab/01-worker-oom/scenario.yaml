@@ -1,0 +1,17 @@
+id: 01-worker-oom
+title: Worker OOMKilled after a batch size change
+alert: "KubePodCrashLooping: pod worker in namespace shop is restarting repeatedly."
+change: "kubectl set env deploy/worker BATCH_SIZE=2500"
+root_cause: >
+  The worker's BATCH_SIZE was raised from 500 to 2500. Each item holds about
+  100 KiB, so a batch needs about 250 MB, above the container's 192Mi memory
+  limit. The kernel OOM-kills the container (reason OOMKilled, exit code 137).
+must_identify:
+  - The worker container is OOMKilled (terminated reason OOMKilled), not crashing for another reason
+  - The trigger is the BATCH_SIZE change from 500 to 2500 (or the larger batch exceeding the limit)
+acceptable_fixes:
+  - Revert BATCH_SIZE to 500
+  - Raise the memory limit above the batch's working set, with the reason stated
+wrong_answers:
+  - Memory leak
+  - Node memory pressure or eviction

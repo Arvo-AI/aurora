@@ -1,0 +1,19 @@
+id: 19-config-drift-partial-restart
+title: Half of frontend requests fail; one frontend pod loaded an edited ConfigMap, the other still runs the old config
+alert: "HighErrorRate [warning] namespace=shop service=frontend: 48% of requests to /api/ returned 5xx over the last 10 minutes (threshold 5%)."
+change: "The frontend-nginx ConfigMap upstream was edited from api:8080 to api:8000, and one of the two frontend pods was deleted (and recreated); the other was not restarted."
+root_cause: >
+  nginx reads its config only at start. The recreated frontend pod started with
+  the edited ConfigMap, upstream api:8000. The api Service only exposes port 8080,
+  so connections to api:8000 fail and that pod returns 502 or 504 on /api/
+  (connect refused or "upstream timed out" after the 2 s proxy_connect_timeout). The other frontend pod still runs the old config (api:8080) from
+  memory, although the file mounted in it now shows the new content. So about half
+  the requests fail. Restarting the other pod would make it fail too.
+must_identify:
+  - Only one of the two frontend pods fails (502/504, it cannot connect to its upstream), the other serves normally
+  - The cause is the frontend-nginx ConfigMap upstream changed to api:8000; only the restarted pod has loaded it, the other still runs the old config
+acceptable_fixes:
+  - Revert the ConfigMap upstream to api:8080 and restart the frontend
+wrong_answers:
+  - api pods failing as the cause
+  - Restarting the frontend as the fix without fixing the ConfigMap

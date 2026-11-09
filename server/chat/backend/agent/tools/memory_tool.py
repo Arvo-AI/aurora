@@ -27,6 +27,8 @@ _AGENT_WRITE_LIMIT = 500_000  # Max chars the agent can write in a single tool c
 _CATEGORY_HELP = ", ".join(sorted(MEMORY_CATEGORIES))
 _MAX_TITLE = 500
 _GREP_MAX_RESULTS = 10
+# Rows fetched per grep before ranking trims them to _GREP_MAX_RESULTS.
+_GREP_CANDIDATES = 200
 _GREP_SNIPPET_CHARS = 200
 
 _NO_USER_CTX = json.dumps({"error": "No user context available."})
@@ -580,6 +582,41 @@ class GrepMemoriesArgs(BaseModel):
     )
 
 
+def _rank_grep_ids(cursor, org_id, user_id, rows, pattern: str):
+    """Pick up to _GREP_MAX_RESULTS (id, title, category) rows from the
+    recency-ordered candidates: best match in the org's cached index first, then
+    the rest in recency order. Never builds an index inline; any failure or a
+    cold index returns the newest rows."""
+    rows = list(rows or [])
+    fallback = rows[:_GREP_MAX_RESULTS]
+    if len(rows) <= 1:
+        return fallback
+    try:
+        from services.memory.retrieval import org_index_for_cursor, tokenize
+
+        terms = tokenize(pattern)
+        if not terms:
+            return fallback
+        index = org_index_for_cursor(cursor, org_id, user_id=user_id, block=False)
+        if index is None:
+            return fallback
+        by_id = {str(r[0]): r for r in rows}
+        hits = index.search(
+            terms, entry_ids=list(by_id), k=_GREP_MAX_RESULTS, redact_chunks=False,
+        )
+        ordered, seen = [], set()
+        for h in hits:
+            eid = str(h.entry_id)
+            if eid in by_id and eid not in seen:
+                seen.add(eid)
+                ordered.append(by_id[eid])
+        ordered += [r for r in rows if str(r[0]) not in seen]
+        return ordered[:_GREP_MAX_RESULTS]
+    except Exception:
+        logger.warning("[MemoryTool:grep] Ranking failed, using recency order", exc_info=True)
+        return fallback
+
+
 def grep_memories(
     query: str,
     category: str = "",
@@ -602,21 +639,21 @@ def grep_memories(
                 cursor.execute("SAVEPOINT regex_attempt")
                 if category:
                     cursor.execute(
-                        """SELECT title, category, content FROM artifacts
+                        """SELECT id, title, category FROM artifacts
                            WHERE org_id = %s AND category = %s
                            AND content ~* %s
                            ORDER BY updated_at DESC
                            LIMIT %s""",
-                        (org_id, category, search_pattern, _GREP_MAX_RESULTS),
+                        (org_id, category, search_pattern, _GREP_CANDIDATES),
                     )
                 else:
                     cursor.execute(
-                        """SELECT title, category, content FROM artifacts
+                        """SELECT id, title, category FROM artifacts
                            WHERE org_id = %s AND category = ANY(%s)
                            AND content ~* %s
                            ORDER BY updated_at DESC
                            LIMIT %s""",
-                        (org_id, list(MEMORY_CATEGORIES), search_pattern, _GREP_MAX_RESULTS),
+                        (org_id, list(MEMORY_CATEGORIES), search_pattern, _GREP_CANDIDATES),
                     )
                 rows = cursor.fetchall()
                 cursor.execute("RELEASE SAVEPOINT regex_attempt")
@@ -626,23 +663,36 @@ def grep_memories(
                 logger.debug(f"[MemoryTool:grep] Regex failed, falling back to ILIKE: {regex_err}")
                 if category:
                     cursor.execute(
-                        """SELECT title, category, content FROM artifacts
+                        """SELECT id, title, category FROM artifacts
                            WHERE org_id = %s AND category = %s
                            AND content ILIKE %s
                            ORDER BY updated_at DESC
                            LIMIT %s""",
-                        (org_id, category, f"%{search_pattern}%", _GREP_MAX_RESULTS),
+                        (org_id, category, f"%{search_pattern}%", _GREP_CANDIDATES),
                     )
                 else:
                     cursor.execute(
-                        """SELECT title, category, content FROM artifacts
+                        """SELECT id, title, category FROM artifacts
                            WHERE org_id = %s AND category = ANY(%s)
                            AND content ILIKE %s
                            ORDER BY updated_at DESC
                            LIMIT %s""",
-                        (org_id, list(MEMORY_CATEGORIES), f"%{search_pattern}%", _GREP_MAX_RESULTS),
+                        (org_id, list(MEMORY_CATEGORIES), f"%{search_pattern}%", _GREP_CANDIDATES),
                     )
                 rows = cursor.fetchall()
+
+            rows = _rank_grep_ids(cursor, org_id, user_id, rows, search_pattern)
+            if rows:
+                ids = [r[0] for r in rows]
+                cursor.execute(
+                    "SELECT id, content FROM artifacts WHERE org_id = %s AND id = ANY(%s::uuid[])",
+                    (org_id, ids),
+                )
+                content_by_id = {str(r[0]): r[1] for r in cursor.fetchall()}
+                rows = [
+                    (r[1], r[2], content_by_id.get(str(r[0])))
+                    for r in rows if str(r[0]) in content_by_id
+                ]
 
         if not rows:
             return json.dumps({

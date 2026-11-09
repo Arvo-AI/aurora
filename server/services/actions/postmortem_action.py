@@ -57,7 +57,15 @@ Generate a structured markdown document with these sections:
 Incorporate conversation context alongside RCA data. Professional tone, no speculation beyond what data supports.
 
 **Step 4: Save**
-Call save_postmortem with the final markdown document."""
+Call save_postmortem with the final markdown document.
+
+**Step 5: Guardrail (only if a root cause was identified)**
+Also call write_memory(category="learned", title="Guardrail: <incident title>") with:
+- Incident: id, date
+- Triggering change: what changed
+- Files, config keys, services: exact names
+- Invariant: what "must not ..." happen again
+- How to check: a concrete check or command"""
 
 
 def dispatch_postmortem_action(

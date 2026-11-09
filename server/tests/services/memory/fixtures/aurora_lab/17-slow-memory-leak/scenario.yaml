@@ -1,0 +1,19 @@
+id: 17-slow-memory-leak
+title: Worker OOMKilled every few minutes by a slow leak in its code; logs look clean
+alert: "KubePodCrashLooping [warning] namespace=shop deployment=worker: Pod shop/worker (container worker) has restarted repeatedly in the last 30 minutes."
+change: "worker.py in ConfigMap api-code was changed to keep the tail of every batch in a module-level list that is never trimmed, and the worker was restarted."
+root_cause: >
+  The new worker code appends the last 50 items (about 5 MB) of every batch to a
+  list that is never trimmed. Memory grows about 5 MB every 5 seconds until the
+  container hits its 192Mi limit and is OOMKilled after a few minutes, then starts
+  over. BATCH_SIZE is unchanged at 500 and each batch alone fits. The logs show
+  only normal "processed batch" lines.
+must_identify:
+  - The worker container is OOMKilled (reason OOMKilled, exit code 137), not crashing on an error
+  - The cause is a memory leak in the new worker code (items retained across batches in a list that is never cleared), not the batch size
+acceptable_fixes:
+  - Fix or revert the worker code so it does not retain items across batches
+wrong_answers:
+  - BATCH_SIZE too large as the cause
+  - Raising the memory limit as the only fix
+  - Node memory pressure or eviction

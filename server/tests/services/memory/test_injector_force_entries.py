@@ -66,7 +66,7 @@ def test_forced_entry_not_duplicated_when_selector_also_picks_it():
     # so it can't double it. Assert the pool excludes it.
     captured = {}
 
-    async def fake_select(msg, entries):
+    async def fake_select(msg, entries, user_id=None):
         captured["pool"] = [f"{e['category']}/{e['title']}" for e in entries]
         return []
 

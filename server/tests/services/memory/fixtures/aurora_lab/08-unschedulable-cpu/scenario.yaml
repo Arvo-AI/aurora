@@ -1,0 +1,16 @@
+id: 08-unschedulable-cpu
+title: Worker pod Pending, CPU request larger than any node
+alert: "KubePodNotReady: worker pod in namespace shop has been Pending for over 5 minutes."
+change: "The worker CPU request was raised from 50m to 64 cores."
+root_cause: >
+  The worker requests 64 CPU, more than any node has allocatable. The scheduler
+  reports FailedScheduling "Insufficient cpu" on every node. The new pod stays
+  Pending; the old worker pod keeps running.
+must_identify:
+  - The pod is Pending with FailedScheduling Insufficient cpu
+  - The cause is the 64-core CPU request, above any node's allocatable CPU
+acceptable_fixes:
+  - Lower the CPU request back to a value that fits (50m)
+wrong_answers:
+  - Adding nodes as the primary fix without noting the request is the error
+  - Taints, node selectors or affinity

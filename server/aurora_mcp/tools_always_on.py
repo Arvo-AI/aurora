@@ -91,7 +91,10 @@ async def _do_read_memory(api_call: ApiCall, entry_id: str) -> Dict[str, Any]:
 
 
 async def _do_search_runbooks(api_call: ApiCall, query: str, limit: int) -> Dict[str, Any]:
-    mem_call = api_call("GET", "/api/memory/entries?category=runbook")
+    mem_call = api_call(
+        "GET", "/api/memory/search",
+        params={"q": query, "category": "runbook,context", "k": _clamp_k(limit)},
+    )
     sp_call = api_call("POST", "/sharepoint/search",
                        body={"query": query, "maxResults": limit})
     mem_res, sp_res = await asyncio.gather(mem_call, sp_call, return_exceptions=True)
@@ -103,21 +106,38 @@ async def _do_search_runbooks(api_call: ApiCall, query: str, limit: int) -> Dict
         )
         sources.append({"source": "memory", "error": "search_failed"})
     else:
-        # Filter memory results by query relevance — all query tokens must appear
-        # in the title or description (case-insensitive, any order)
-        entries = mem_res.get("entries", []) if isinstance(mem_res, dict) else []
-        tokens = query.lower().split()
-        filtered = []
-        for e in entries:
-            searchable = f"{e.get('title', '') or ''} {e.get('description', '') or ''}".lower()
-            if all(tok in searchable for tok in tokens):
-                filtered.append(e)
-        mem_res_filtered = {**mem_res, "entries": filtered[:limit]} if isinstance(mem_res, dict) else mem_res
-        sources.append({"source": "memory", "results": mem_res_filtered})
+        sources.append({"source": "memory", "results": mem_res})
     if not isinstance(sp_res, Exception):
         sources.append({"source": "sharepoint", "results": sp_res})
 
     return truncate_payload({"sources": sources}, tool_name="search_runbooks")
+
+
+def _clamp_k(limit: Any) -> int:
+    try:
+        return max(1, min(20, int(limit)))
+    except (TypeError, ValueError):
+        return 5
+
+
+async def _do_search_memory(api_call: ApiCall, query: str, category: str, limit: int) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"q": query, "k": _clamp_k(limit)}
+    if category:
+        params["category"] = category
+    return truncate_payload(
+        await api_call("GET", "/api/memory/search", params=params),
+        tool_name="search_memory",
+    )
+
+
+async def _do_check_change(
+    api_call: ApiCall, diff: str, files: Optional[List[str]], description: str,
+) -> Dict[str, Any]:
+    body = {"diff": diff or "", "files": list(files or []), "description": description or ""}
+    return truncate_payload(
+        await api_call("POST", "/api/memory/check-change", body=body),
+        tool_name="check_change",
+    )
 
 
 async def _do_get_infrastructure_context(api_call: ApiCall) -> Dict[str, Any]:
@@ -318,10 +338,29 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
 
     @mcp.tool()
     async def search_runbooks(query: str, limit: int = 5) -> Dict[str, Any]:
-        """Search runbooks/docs across org memory and SharePoint
-        (when connected). Confluence has no search endpoint — fetch specific
-        Confluence pages via call_tool('confluence_fetch_page', { url })."""
+        """Ranked full-text search of runbook and context memory, plus
+        SharePoint (when connected). Confluence has no search endpoint — fetch
+        specific Confluence pages via call_tool('confluence_fetch_page', { url })."""
         return await _do_search_runbooks(api_call, query, limit)
+
+    @mcp.tool()
+    async def search_memory(query: str, category: str = "", limit: int = 5) -> Dict[str, Any]:
+        """Ranked search over the full text of org memory (runbooks, postmortems,
+        learned, context, infrastructure, Incident Index). Each hit gives
+        category/title and a character offset for read_memory. Optional category
+        filter: comma-separated list."""
+        return await _do_search_memory(api_call, query, category, limit)
+
+    @mcp.tool()
+    async def check_change(
+        diff: str = "", files: Optional[List[str]] = None, description: str = "",
+    ) -> Dict[str, Any]:
+        """Call this BEFORE editing code or config, and again on your final diff:
+        returns past incidents, guardrails and runbooks from this org's production
+        memory that match the change (config keys, file paths, services, values).
+        status MATCHES_PAST_INCIDENT means a past incident or guardrail matched —
+        read it before proceeding."""
+        return await _do_check_change(api_call, diff, files, description)
 
     # The next three tools (get_infrastructure_context, list_services,
     # service_impact) are promoted from the Tier-3 dispatch allowlist to

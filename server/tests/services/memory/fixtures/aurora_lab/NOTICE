@@ -1,0 +1,13 @@
+Aurora Lab scenarios, used as a retrieval test corpus.
+
+Source: https://github.com/Arvo-AI/aurora-lab (branch main, scenarios/<id>/{README.md,scenario.yaml,break.sh})
+Each break.sh is stored as break.sh.txt (contents unchanged) so code scanners do not
+analyse the vendored lab scripts as shell code.
+Fetched: 2026-11-09
+License: Apache License 2.0, Copyright Arvo AI.
+The files in this directory are used unmodified.
+
+Also fetched 2026-11-09 from the same repository (branch main), unmodified:
+FINDINGS.md and REPORT.md. They are not scenarios: the robustness evaluation
+(`scripts/eval_memory_retrieval.py --robustness`) adds them, together with
+website/docs/**/*.md, to the memory bank as unrelated "context" distractors.

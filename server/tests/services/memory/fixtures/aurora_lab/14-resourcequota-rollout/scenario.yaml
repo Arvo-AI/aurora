@@ -1,0 +1,20 @@
+id: 14-resourcequota-rollout
+title: api rollout stuck because a ResourceQuota forbids the surge pod
+alert: "KubeDeploymentRolloutStuck [warning] namespace=shop deployment=api: Rollout of deployment shop/api is not progressing for longer than 15 minutes."
+change: "A ResourceQuota compute-resources with requests.memory=200Mi was created in namespace shop (the namespace already uses 200Mi), then the api was restarted with kubectl rollout restart."
+root_cause: >
+  The namespace's pods already request exactly 200Mi of memory, the quota's
+  limit. The rollout restart needs one surge api pod (32Mi more), so the
+  ReplicaSet controller cannot create it: FailedCreate on the new ReplicaSet,
+  'exceeded quota: compute-resources, requested: requests.memory=32Mi, used:
+  requests.memory=200Mi, limited: requests.memory=200Mi'. No new pod object
+  exists, so there are no pod events or logs to read. The old api pods keep
+  serving.
+must_identify:
+  - The new ReplicaSet cannot create pods (FailedCreate) because the ResourceQuota compute-resources requests.memory limit is exhausted
+  - It is a stuck rollout with the old pods still serving, not an outage and not a pod crash
+acceptable_fixes:
+  - Raise the quota's requests.memory, or free requests in the namespace, or set the rollout to maxSurge 0 / maxUnavailable 1
+wrong_answers:
+  - Node capacity or scheduling (FailedScheduling) as the cause
+  - Image pull or application crash

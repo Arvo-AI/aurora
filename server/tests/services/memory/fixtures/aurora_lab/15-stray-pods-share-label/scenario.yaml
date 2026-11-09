@@ -1,0 +1,19 @@
+id: 15-stray-pods-share-label
+title: One in three api requests fails because a stray Deployment's pods carry app=api
+alert: "HighErrorRate [warning] namespace=shop service=frontend: 31% of requests to /api/ returned 5xx over the last 10 minutes (threshold 5%)."
+change: "A second Deployment, shop-api (an old build whose config lacks DATABASE_URL), was applied with pod label app=api."
+root_cause: >
+  The Deployment shop-api runs one pod labeled app=api. The api Service selects
+  app=api, so it load-balances over three pods: the two healthy api pods and the
+  shop-api pod. The shop-api pod passes its /healthz readiness check but answers
+  every other request with 500 (KeyError: 'DATABASE_URL' in its logs). About one
+  request in three fails. The api Deployment itself is healthy.
+must_identify:
+  - The failing requests come from the pod of a separate Deployment shop-api, which shares the app=api label and is therefore an endpoint of the api Service
+  - That pod returns 500 because its config lacks DATABASE_URL (KeyError), while the real api pods are healthy
+acceptable_fixes:
+  - Delete or scale to zero the shop-api Deployment, or change its labels so the api Service no longer selects it
+wrong_answers:
+  - redis problems
+  - Restarting or scaling the api Deployment as the fix
+  - Intermittent network failure

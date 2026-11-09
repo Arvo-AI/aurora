@@ -1,0 +1,17 @@
+id: 07-service-selector-mismatch
+title: api Service selects no pods after a selector change
+alert: "HighErrorRate: frontend /api/ requests in namespace shop are failing with 5xx; all pods are Running."
+change: "The api Service selector was changed to app=api-v2; no pods carry that label."
+root_cause: >
+  The api Service selector is app=api-v2, but the api pods are labeled app=api.
+  The Service has no endpoints, so nginx in the frontend cannot reach the
+  upstream and returns errors on /api/. Every pod is Running and Ready.
+must_identify:
+  - The api Service has no endpoints
+  - Its selector (app=api-v2) does not match the pod labels (app=api)
+acceptable_fixes:
+  - Set the Service selector back to app=api
+wrong_answers:
+  - Restarting pods
+  - api application failure
+  - Network policy or DNS

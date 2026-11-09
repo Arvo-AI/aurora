@@ -8,6 +8,7 @@ incident_id linking them to the originating incident.
 
 import json
 import logging
+import re
 
 from pydantic import BaseModel, Field
 
@@ -26,6 +27,50 @@ class GetPostmortemArgs(BaseModel):
 class SavePostmortemArgs(BaseModel):
     incident_id: str = Field(description="The UUID of the incident to save the postmortem for")
     content: str = Field(description="The full markdown content of the postmortem document")
+
+
+_DESCRIPTION_CHARS = 200
+# Line-based on purpose: one anchored regex per line, no cross-line lazy
+# match, so the cost is linear in the document size.
+_HEADING_RE = re.compile(r"#{1,6}[ \t]")
+_ROOT_CAUSE_HEADING_RE = re.compile(r"#{1,6}[ \t]*\**[ \t]*root[ \t]+cause", re.IGNORECASE)
+
+
+def _root_cause_section(content: str) -> str | None:
+    """Text under the first "Root Cause" heading, up to the next heading."""
+    lines = (content or "").splitlines()
+    for i, line in enumerate(lines):
+        if _ROOT_CAUSE_HEADING_RE.match(line):
+            body = []
+            for nxt in lines[i + 1:]:
+                if _HEADING_RE.match(nxt):
+                    break
+                body.append(nxt)
+            return "\n".join(body)
+    return None
+
+
+def _postmortem_description(content: str, alert_title, incident_id) -> str:
+    """Selector-facing description: the cause, not "Postmortem for incident: X".
+
+    Deterministic (no LLM call on the save path): first ~200 chars of the
+    Root Cause section; falls back to the old string on any miss.
+    """
+    fallback = f"Postmortem for incident: {alert_title or incident_id}"
+    try:
+        section = _root_cause_section(content)
+        if section is None:
+            return fallback
+        text = re.sub(r"[*`#>]+", "", section)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) < 10:
+            return fallback
+        if len(text) > _DESCRIPTION_CHARS:
+            text = text[:_DESCRIPTION_CHARS].rsplit(" ", 1)[0].rstrip(",;:.") + "..."
+        return text
+    except Exception:
+        logger.warning("[PostmortemTool] Root-cause description failed; using default", exc_info=True)
+        return fallback
 
 
 def get_postmortem(
@@ -156,7 +201,7 @@ def save_postmortem(
                                      updated_at = CURRENT_TIMESTAMP
                        RETURNING id""",
                     (org_id, user_id, title, content,
-                     f"Postmortem for incident: {alert_title or incident_id}",
+                     _postmortem_description(content, alert_title, incident_id),
                      incident_id, session_id),
                 )
                 row = cursor.fetchone()

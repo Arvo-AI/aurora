@@ -1,0 +1,21 @@
+id: 12-two-faults-oom-and-selector
+title: Two faults at once, worker OOM and a frontend Service selecting no pods; the alert covers only the worker
+alert: "KubePodCrashLooping [warning] namespace=shop deployment=worker: Pod shop/worker (container worker) is in waiting state (reason: CrashLoopBackOff)."
+change: >
+  Two unrelated changes went out together: kubectl set env deploy/worker
+  BATCH_SIZE=2500, and the frontend Service selector was changed to
+  app=frontend,tier=web (no pod has tier=web).
+root_cause: >
+  Fault 1 (alerted): the worker's BATCH_SIZE went from 500 to 2500, about 250 MB
+  per batch against a 192Mi limit, so the container is OOMKilled. Fault 2 (not
+  alerted): the frontend Service selects app=frontend,tier=web, which no pod
+  carries, so it has no endpoints and every request to the frontend fails (the
+  loadgen shows timeouts / connection failures). The two faults are independent.
+must_identify:
+  - The worker is OOMKilled because BATCH_SIZE was raised from 500 to 2500
+  - Separately, the frontend Service has no endpoints because its selector (tier=web) matches no pods, so the frontend is down for users
+acceptable_fixes:
+  - Revert BATCH_SIZE to 500 (or raise the limit with the reason stated) and set the frontend Service selector back to app=frontend
+wrong_answers:
+  - Treating the frontend failure as a consequence of the worker crash
+  - Memory leak

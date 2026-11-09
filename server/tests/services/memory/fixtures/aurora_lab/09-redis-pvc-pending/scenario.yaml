@@ -1,0 +1,20 @@
+id: 09-redis-pvc-pending
+title: api failing because redis is Pending on an unbindable PVC
+alert: "KubePodCrashLooping: an api pod in namespace shop is restarting; frontend /api/ requests failing with 5xx."
+change: "redis was moved to a PersistentVolumeClaim with storageClassName fast-ssd, which does not exist in the cluster."
+root_cause: >
+  The symptom is in api but the cause is redis. redis now mounts a PVC
+  requesting storage class fast-ssd, which does not exist, so the PVC stays
+  Pending and the redis pod cannot be scheduled. With no redis endpoints, the
+  new api pod fails to connect at startup ("redis connection failed", then
+  "giving up") and exits 1, so it crash loops. The older api pods stay Running
+  and Ready (their health check does not touch redis) but return 503 on every
+  request ("redis error: Connection refused").
+must_identify:
+  - The api crash loop is caused by redis being unavailable, not by the api itself
+  - redis is Pending because its PVC requests storage class fast-ssd, which does not exist
+acceptable_fixes:
+  - Use an existing storage class (standard) for the PVC, or remove the PVC change
+wrong_answers:
+  - Fixing or restarting the api as the root cause fix
+  - Raising api resources

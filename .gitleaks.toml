@@ -28,6 +28,12 @@ paths = [
   # fixtures. These are never real credentials; the file exists to prove
   # the engine detects them.
   '''server/tests/test_output_redaction\.py$''',
+  # Recall-index tests reuse one of those published fakes to prove returned
+  # memory chunks are redacted.
+  '''server/tests/services/memory/test_retrieval\.py$''',
+  # Aurora Lab runbooks vendored unmodified as a retrieval corpus; their
+  # kubectl examples carry placeholders such as --docker-password=<password>.
+  '''server/tests/services/memory/fixtures/aurora_lab/''',
 
   # Frozen translation of the upstream Gitleaks rule corpus. Contains
   # illustrative example tokens from the upstream rule definitions, not

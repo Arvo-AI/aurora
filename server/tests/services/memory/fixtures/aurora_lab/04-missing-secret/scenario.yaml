@@ -1,0 +1,18 @@
+id: 04-missing-secret
+title: New api pods blocked on a Secret that does not exist
+alert: "KubeDeploymentRolloutStuck: deployment api in namespace shop has not progressed; new pods not starting."
+change: "An env var DB_PASSWORD from secretKeyRef api-secrets/db-password was added to the api deployment; the Secret was never created."
+root_cause: >
+  The api deployment now references Secret api-secrets (key db-password), which
+  does not exist in namespace shop. New pods stay in CreateContainerConfigError
+  with 'secret "api-secrets" not found'. The containers never start, so there
+  are no logs. Old pods keep serving.
+must_identify:
+  - New pods are in CreateContainerConfigError
+  - The cause is the missing Secret api-secrets referenced by the DB_PASSWORD env var
+acceptable_fixes:
+  - Create the api-secrets Secret with key db-password
+  - Roll back the deployment change
+wrong_answers:
+  - Application crash or bad code
+  - Image pull problem

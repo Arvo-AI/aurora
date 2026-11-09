@@ -1,0 +1,29 @@
+id: 21-api-slow-upstream-timeout
+title: frontend returns 504 because an api release waits on a dependency with no timeout; pods, Service and endpoints all healthy
+alert: "HighErrorRate [critical] namespace=shop service=frontend: requests to /api/ are failing with 504 or timing out over the last 5 minutes (threshold 5%). All pods are Running and Ready."
+change: >
+  The api-code ConfigMap was edited so that the /items handler calls a stock
+  service at http://192.0.2.10:8080/stock with urllib and no timeout, and the
+  api Deployment was restarted. 192.0.2.10 drops packets (TEST-NET-1, RFC 5737,
+  standing in for a firewalled or retired dependency).
+root_cause: >
+  Every /items request blocks in connect() to 192.0.2.10 until the kernel's SYN
+  retries run out, about 130 seconds. The api accepted nginx's connection at
+  once, so proxy_connect_timeout (2s) is never hit; nginx waits
+  proxy_read_timeout (default 60s) for a response header, logs "upstream timed
+  out (110: Operation timed out) while reading response header from upstream"
+  and returns 504. Clients that give up first (the loadgen waits 3s) show as
+  499 in the nginx log. /healthz does not make the call, so the api pods stay
+  Ready and the Service keeps its endpoints.
+must_identify:
+  - nginx connects to the api but the api does not send a response header within proxy_read_timeout, so the 504 is api latency, not an unreachable upstream, the Service or the network between frontend and api
+  - The api is stuck on a new outbound call to 192.0.2.10:8080 with no timeout, introduced by the api-code ConfigMap change
+acceptable_fixes:
+  - Revert the api-code ConfigMap change and restart the api
+  - Give the stock call a short timeout (and a fallback), or point it at a reachable stock service, and roll the api
+wrong_answers:
+  - Raising proxy_read_timeout as the fix
+  - Service selector, endpoints or targetPort as the cause
+  - redis as the cause
+  - NetworkPolicy blocking frontend to api
+  - Restarting the frontend or the api without changing the code as the fix

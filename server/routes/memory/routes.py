@@ -27,6 +27,9 @@ from services.memory import (
     SERVICENOW_MEMORY_CATEGORY,
     SERVICENOW_MEMORY_TITLE,
 )
+from services.memory import change_check
+from services.memory.retrieval import org_index_for_cursor
+from services.memory.change_check import check_change_for_org
 from services.memory.queries import fetch_entry_by_id, fetch_entry_by_title
 from services.memory.platform_memory import get_spec, seed_platform_memory
 from services.memory.jira_memory import seed_jira_memory
@@ -69,6 +72,88 @@ def _extract_pdf_text(content: bytes) -> str:
         if page_text and page_text.strip():
             text_parts.append(f"[Page {page_num + 1}]\n{page_text}")
     return "\n\n".join(text_parts)
+
+
+MAX_SEARCH_QUERY_CHARS = 2000
+
+
+@memory_bp.route("/search", methods=["GET"])
+@require_permission("memory", "read")
+def search_memory(user_id):
+    """Ranked full-text search over the org's memory bodies."""
+    org_id = get_org_id_from_request()
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"error": "q is required"}), 400
+    if len(q) > MAX_SEARCH_QUERY_CHARS:
+        return jsonify({"error": f"q must be at most {MAX_SEARCH_QUERY_CHARS} characters"}), 400
+
+    categories = None
+    raw_cat = request.args.get("category")
+    if raw_cat:
+        categories = [c.strip() for c in raw_cat.split(",") if c.strip()]
+        bad = [c for c in categories if c not in MEMORY_CATEGORIES]
+        if bad:
+            return jsonify({"error": f"Invalid category. Must be one of: {', '.join(MEMORY_CATEGORIES)}"}), 400
+        categories = categories or None
+
+    try:
+        k = int(request.args.get("k", 5))
+    except (TypeError, ValueError):
+        k = 5
+    k = max(1, min(20, k))
+
+    try:
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
+            index = org_index_for_cursor(
+                cursor, org_id, user_id=user_id, wait=change_check.ROUTE_WAIT_SECONDS,
+            )
+        if index is None:
+            # First build for this org is running in the background.
+            return jsonify({"query": q, "hits": [], "status": "warming", "retry_after_seconds": 5}), 200
+        hits = index.search(q, categories=categories, k=k)
+        return jsonify({"query": q, "hits": [h.to_dict() for h in hits]}), 200
+    except Exception as e:
+        logger.exception("[Memory] search failed: %s", e)
+        return jsonify({"error": "Failed to search memory"}), 500
+
+
+@memory_bp.route("/check-change", methods=["POST"])
+@require_permission("memory", "read")
+def check_change_route(user_id):
+    """Match a proposed change against past incidents, guardrails and runbooks."""
+    org_id = get_org_id_from_request()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON body required"}), 400
+    diff = data.get("diff") or ""
+    files = data.get("files") or []
+    description = data.get("description") or ""
+    if not isinstance(diff, str) or not isinstance(description, str):
+        return jsonify({"error": "diff and description must be strings"}), 400
+    if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
+        return jsonify({"error": "files must be a list of strings"}), 400
+    if not (diff.strip() or description.strip() or any(f.strip() for f in files)):
+        return jsonify({"error": "Provide at least one of diff, files, description"}), 400
+    if len(diff) > change_check.MAX_DIFF_CHARS:
+        return jsonify({"error": f"diff exceeds {change_check.MAX_DIFF_CHARS} characters"}), 413
+    if len(files) > change_check.MAX_FILES:
+        return jsonify({"error": f"files exceeds {change_check.MAX_FILES} entries"}), 413
+
+    try:
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
+            result = check_change_for_org(
+                cursor, org_id, user_id=user_id,
+                diff=diff, files=files, description=description,
+            )
+        return jsonify(result), 200
+    except Exception as e:
+        logger.exception("[Memory] check-change failed: %s", e)
+        return jsonify({"error": "Failed to check change"}), 500
 
 
 @memory_bp.route("/entries", methods=["GET"])

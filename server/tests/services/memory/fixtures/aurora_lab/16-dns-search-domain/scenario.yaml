@@ -1,0 +1,23 @@
+id: 16-dns-search-domain
+title: New api pods crash because their dnsConfig search domains are for another cluster domain
+alert: "KubePodCrashLooping [warning] namespace=shop deployment=api: Pod shop/api (container api) is in waiting state (reason: CrashLoopBackOff) after the latest rollout."
+change: >
+  The api pod template got dnsPolicy None with a dnsConfig copied from another
+  environment: nameserver the cluster DNS IP, searches shop.svc.cluster.internal,
+  svc.cluster.internal, cluster.internal, ndots 5. This cluster's domain is cluster.local.
+root_cause: >
+  With dnsPolicy None the pod's resolv.conf has only the given search list, all
+  under cluster.internal. The short name redis expands to redis.shop.svc.cluster.internal
+  and so on, none of which exist, so "redis" does not resolve ("Name does not
+  resolve"). The new api pods retry 5 times and exit 1. The rollout is stuck and the
+  old pods, created with the default DNS policy, keep serving. REDIS_HOST, the redis
+  Service and CoreDNS are all fine.
+must_identify:
+  - The new api pods exit because the name redis does not resolve
+  - The cause is the pod's dnsPolicy None / dnsConfig search domains (cluster.internal), not REDIS_HOST, the redis Service or CoreDNS
+acceptable_fixes:
+  - Remove the custom dnsConfig and restore dnsPolicy ClusterFirst, or fix the search domains to cluster.local, or roll back the deploy
+wrong_answers:
+  - REDIS_HOST is wrong
+  - redis is down
+  - CoreDNS failure

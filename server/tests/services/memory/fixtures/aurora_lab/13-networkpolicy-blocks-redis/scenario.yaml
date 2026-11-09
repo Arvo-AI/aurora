@@ -1,0 +1,19 @@
+id: 13-networkpolicy-blocks-redis
+title: frontend 5xx because a NetworkPolicy blocks api to redis
+alert: "HighErrorRate [critical] namespace=shop service=frontend: 100% of requests to /api/ returned 5xx over the last 5 minutes (threshold 5%)."
+change: "A NetworkPolicy named redis was applied in namespace shop; it allows ingress to redis pods on 6379 only from pods labeled app=worker."
+root_cause: >
+  The NetworkPolicy redis selects the redis pods and allows ingress only from
+  app=worker. The api pods are not allowed, so their per-request PING to
+  redis:6379 times out ("request failed: redis error: timed out") and the api
+  returns 503, which the frontend passes on. Every pod is Running and Ready, redis
+  is healthy and DNS works; only the api to redis path is blocked.
+must_identify:
+  - The api cannot reach redis (connection timeouts), which is why /api/ returns 5xx; redis itself is healthy
+  - The cause is the NetworkPolicy redis, which allows ingress to redis only from app=worker, not from the api
+acceptable_fixes:
+  - Add the api pods (app=api) to the NetworkPolicy's allowed ingress, or delete the policy
+wrong_answers:
+  - redis is down or overloaded
+  - DNS failure
+  - Restarting the api or redis as the fix

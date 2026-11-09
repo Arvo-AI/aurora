@@ -1,0 +1,17 @@
+id: 02-sidecar-oom
+title: Log shipper sidecar OOMKilled, app container healthy
+alert: "KubePodCrashLooping: pods of deployment api in namespace shop are restarting."
+change: "A log-shipper sidecar was added to the api deployment with a 16Mi memory limit."
+root_cause: >
+  The new log-shipper sidecar buffers about 40 MB in memory, above its 16Mi
+  limit, and is OOMKilled repeatedly. The api container itself is healthy and
+  has not restarted. Pod READY shows 1/2.
+must_identify:
+  - The container being killed is the log-shipper sidecar, not the api container
+  - The sidecar is OOMKilled because its 16Mi limit is below its usage
+acceptable_fixes:
+  - Raise the sidecar's memory limit or reduce its buffer
+  - Remove or roll back the sidecar
+wrong_answers:
+  - Raising the api container's memory limit
+  - Saying the api application is crashing

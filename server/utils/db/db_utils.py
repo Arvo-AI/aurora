@@ -3967,6 +3967,14 @@ def initialize_tables():
                 migrate_kb_to_memory.delay()
                 logging.info("Triggered automatic KB → memory migration task")
 
+            # Idempotent one-time backfill of placeholder postmortem descriptions;
+            # the task is a no-op once done (Redis marker); fail fast if broker is down.
+            try:
+                from services.memory.postmortem_backfill import backfill_postmortem_descriptions
+                backfill_postmortem_descriptions.apply_async(retry=False)
+            except Exception as e:
+                logging.warning(f"Could not enqueue postmortem description backfill: {e}")
+
             logging.info("Database tables initialized successfully.")
             cursor.close()
 

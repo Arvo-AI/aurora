@@ -1,0 +1,18 @@
+id: 10-wrong-redis-host
+title: api crash loop from a wrong REDIS_HOST
+alert: "KubePodCrashLooping: an api pod in namespace shop is restarting after the latest deploy."
+change: "kubectl set env deploy/api REDIS_HOST=redis-master"
+root_cause: >
+  The api's REDIS_HOST was changed to redis-master. No Service of that name
+  exists in namespace shop, so the name does not resolve ("Name does not
+  resolve" / "Name or service not known"). The api retries 5 times, gives up
+  and exits 1. The rollout is stuck with the old pods still serving. redis
+  itself is healthy.
+must_identify:
+  - The api exits because it cannot resolve redis-master
+  - REDIS_HOST is set to redis-master while the Service is named redis
+acceptable_fixes:
+  - Set REDIS_HOST back to redis, or roll back the deploy
+wrong_answers:
+  - redis is down
+  - Cluster DNS (CoreDNS) failure
