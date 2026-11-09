@@ -375,6 +375,10 @@ def enforce_user_org_binding():
 # Register Blueprints - Organized by Domain
 # ============================================================================
 
+# --- Quick CI Failure Triage ---
+from routes.quick_triage import quick_triage_bp
+app.register_blueprint(quick_triage_bp)
+
 # --- Core Service Routes ---
 from routes.llm_config import llm_config_bp
 from routes.auth_routes import auth_bp
