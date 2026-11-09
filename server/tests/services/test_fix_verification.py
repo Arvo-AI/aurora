@@ -59,3 +59,28 @@ def test_not_reproduced_when_repro_is_vacuous(repo):
 def test_inconclusive_on_timeout(repo):
     r = _verify(repo, {"calc.py": FIXED, "check.py": "import time; time.sleep(5)\n"}, timeout=1)
     assert r.verdict is Verdict.INCONCLUSIVE
+
+
+@pytest.fixture(autouse=True)
+def _allow_local_runner(monkeypatch):
+    monkeypatch.setenv("AURORA_FIX_VERIFY_ALLOW_LOCAL", "1")
+
+
+def test_option_like_ref_is_rejected(repo):
+    with pytest.raises(ValueError):
+        verify_fix(str(repo), "--upload-pack=touch /tmp/pwned", "HEAD", CMD, runner="local")
+
+
+def test_local_runner_is_disabled_by_default(repo, monkeypatch):
+    monkeypatch.delenv("AURORA_FIX_VERIFY_ALLOW_LOCAL")
+    base = _git(repo, "rev-parse", "HEAD")
+    head = _commit(repo, {"calc.py": FIXED, "check.py": CHECK}, "fix")
+    with pytest.raises(ValueError):
+        verify_fix(str(repo), base, head, CMD, overlay_paths=["check.py"], runner="local")
+
+
+def test_bad_docker_image_name_is_rejected(repo):
+    base = _git(repo, "rev-parse", "HEAD")
+    head = _commit(repo, {"calc.py": FIXED, "check.py": CHECK}, "fix")
+    with pytest.raises(ValueError):
+        verify_fix(str(repo), base, head, CMD, runner="docker", image="--privileged")

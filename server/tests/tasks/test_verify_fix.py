@@ -47,3 +47,8 @@ def test_path_traversal_is_inconclusive_not_a_write(repo, tmp_path):
 
 def test_missing_content_is_inconclusive(repo):
     assert _run(repo, {"id": 1, "file_path": "calc.py"})["verdict"] == "INCONCLUSIVE"
+
+
+@pytest.fixture(autouse=True)
+def _allow_local_runner(monkeypatch):
+    monkeypatch.setenv("AURORA_FIX_VERIFY_ALLOW_LOCAL", "1")

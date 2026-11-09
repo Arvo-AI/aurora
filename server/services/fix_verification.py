@@ -10,6 +10,7 @@ import enum
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -23,6 +24,13 @@ logger = logging.getLogger(__name__)
 
 _TAIL_CHARS = 4000
 _INFRA_EXIT_CODES = {125, 126, 127}  # docker daemon error / not executable / not found
+
+# Refs, repo paths and image names can originate from LLM output, so they are
+# validated before reaching git/docker. Leading "-" is rejected everywhere so a
+# value can never be parsed as an option.
+_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@^~+-]{0,199}$")
+_IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9._/:@-]{0,199}$")
+_ALLOW_LOCAL_ENV = "AURORA_FIX_VERIFY_ALLOW_LOCAL"
 
 
 class Verdict(str, enum.Enum):
@@ -57,10 +65,28 @@ class VerificationResult:
         return d
 
 
+def _check_ref(ref: str) -> str:
+    if not isinstance(ref, str) or not _REF_RE.match(ref) or ".." in ref:
+        raise ValueError(f"invalid git ref {ref!r}")
+    return ref
+
+
+def _check_repo(repo_path: str) -> str:
+    repo = Path(repo_path).resolve()
+    if not (repo / ".git").exists():
+        raise ValueError(f"not a git repository: {repo_path!r}")
+    return str(repo)
+
+
 def _git(repo: str, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", repo, *args], check=True, capture_output=True, text=True
     ).stdout.strip()
+
+
+def _resolve_commit(repo: str, ref: str) -> str:
+    """Resolve a validated ref to a full SHA (``--end-of-options`` as a backstop)."""
+    return _git(repo, "rev-parse", "--verify", "--end-of-options", _check_ref(ref) + "^{commit}")
 
 
 def _to_text(v) -> str:
@@ -72,14 +98,19 @@ def _to_text(v) -> str:
 def _run(cmd: str, cwd: Path, runner: str, timeout: int, image: str) -> RunResult:
     start = time.monotonic()
     if runner == "docker":
+        if not _IMAGE_RE.match(image):
+            raise ValueError(f"invalid image name {image!r}")
         argv = [
             "docker", "run", "--rm", "--network", "none", "--memory", "512m",
             "--cpus", "1", "--pids-limit", "256",
+            "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--user", f"{os.getuid()}:{os.getgid()}",
             "-v", f"{cwd}:/work", "-w", "/work", image, "sh", "-c", cmd,
         ]
         kwargs: dict = {}
-    elif runner == "local":  # dev/test only: NOT sandboxed
+    elif runner == "local":  # dev/test only: NOT sandboxed, must be opted into
+        if os.environ.get(_ALLOW_LOCAL_ENV) != "1":
+            raise ValueError(f"local runner is disabled (set {_ALLOW_LOCAL_ENV}=1 for tests/dev)")
         argv = shlex.split(cmd)
         kwargs = {"cwd": str(cwd)}
     else:
@@ -123,18 +154,18 @@ def verify_fix(
 ) -> VerificationResult:
     """``overlay_paths``: files copied from the fix into the base checkout,
     for when the fix PR adds the test that reproduces the bug."""
-    repo = str(Path(repo_path).resolve())
-    base_sha = _git(repo, "rev-parse", base_sha)
-    head_sha = _git(repo, "rev-parse", head_sha)
+    repo = _check_repo(repo_path)
+    base_sha = _resolve_commit(repo, base_sha)
+    head_sha = _resolve_commit(repo, head_sha)
     tmp = Path(tempfile.mkdtemp(prefix="fixverify-"))
     base_wt, head_wt = tmp / "base", tmp / "head"
     try:
         _git(repo, "worktree", "add", "--detach", str(base_wt), base_sha)
         _git(repo, "worktree", "add", "--detach", str(head_wt), head_sha)
         for rel in overlay_paths:
-            dst = base_wt / rel
+            dst = _safe_join(base_wt, rel)
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(head_wt / rel, dst)
+            shutil.copy2(_safe_join(head_wt, rel), dst)
         base = _run(repro_cmd, base_wt, runner, timeout, image)
         head = _run(repro_cmd, head_wt, runner, timeout, image)
     finally:
@@ -177,8 +208,8 @@ def verify_patch(
     ``extra_files`` (path -> content) are written to BOTH copies, e.g. a repro
     test generated during the investigation.
     """
-    repo = str(Path(repo_path).resolve())
-    base_sha = _git(repo, "rev-parse", base_ref)
+    repo = _check_repo(repo_path)
+    base_sha = _resolve_commit(repo, base_ref)
     tmp = Path(tempfile.mkdtemp(prefix="fixverify-"))
     base_wt, head_wt = tmp / "base", tmp / "head"
     try:
