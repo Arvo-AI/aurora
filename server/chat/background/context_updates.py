@@ -228,18 +228,16 @@ def drain_rca_context_updates(user_id: str, session_id: str) -> List[Dict[str, A
 
 def _format_updates_for_prompt(updates: List[Dict[str, Any]]) -> str:
     """Format context updates into a message that adds context without stopping investigation."""
-    # Extract the key info - title and details from various payload formats
-    titles = []
-    details = []
-    services = []
-    severities = []
-    sources = []
-    is_manual_merge = False
-    
+    parts = []
+
     for update in updates:
         source = update.get("source", "unknown")
-        sources.append(source)
         payload = update.get("payload", {})
+        title = ""
+        body_details = ""
+        service = ""
+        urgency = ""
+        is_manual_merge = False
         
         if isinstance(payload, dict):
             # Check if this is a manual merge with rich context
@@ -282,50 +280,35 @@ def _format_updates_for_prompt(updates: List[Dict[str, Any]]) -> str:
             if not urgency:
                 urgency = payload.get("alert_type", "") or payload.get("severity", "") or payload.get("status", "")
             
-            if title:
-                titles.append(title)
-            if body_details:
-                details.append(body_details)
-            if service:
-                services.append(service)
-            if urgency:
-                severities.append(urgency)
-    
-    title_str = titles[0] if titles else "Correlated incident"
-    details_str = details[0] if details else ""
-    service_str = services[0] if services else ""
-    severity_str = severities[0] if severities else ""
-    source_str = sources[0] if sources else "unknown"
-    
-    # Frame as new information to incorporate, NOT a stop signal
-    parts = [
-        f"**New Correlated Alert from {source_str.title()}**",
-        "",
-        f"**Alert:** {title_str}",
-    ]
-    
-    if service_str:
-        parts.append(f"**Service:** {service_str}")
-    
-    if severity_str:
-        parts.append(f"**Severity:** {severity_str}")
-    
-    # For manual merges with rich context (investigation progress, summary), include it all
-    if details_str:
-        if is_manual_merge and ("## " in details_str or "Investigation progress" in details_str or "Summary" in details_str):
-            # This is rich context from a manual merge - include it fully
-            parts.extend([
-                "",
-                "**Context from merged incident:**",
-                "",
-                details_str,
-            ])
-        else:
-            # Simple details
-            parts.extend([
-                "",
-                f"**Details:** {details_str}",
-            ])
+        # Keep each alert's fields and merge formatting in its own block.
+        if parts:
+            parts.append("")
+        parts.extend([
+            f"**New Correlated Alert from {source.title()}**",
+            "",
+            f"**Alert:** {title or 'Correlated incident'}",
+        ])
+
+        if service:
+            parts.append(f"**Service:** {service}")
+
+        if urgency:
+            parts.append(f"**Severity:** {urgency}")
+
+        # Preserve rich context for this manual merge only.
+        if body_details:
+            if is_manual_merge and ("## " in body_details or "Investigation progress" in body_details or "Summary" in body_details):
+                parts.extend([
+                    "",
+                    "**Context from merged incident:**",
+                    "",
+                    body_details,
+                ])
+            else:
+                parts.extend([
+                    "",
+                    f"**Details:** {body_details}",
+                ])
     
     parts.extend([
         "",

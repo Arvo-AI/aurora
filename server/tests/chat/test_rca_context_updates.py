@@ -76,7 +76,6 @@ def test_single_update_keeps_existing_payload_formats(context_updates, source, p
     assert expected in rendered
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="Bug 1: batch formatting discards later alert fields")
 def test_batch_keeps_each_alert_and_its_fields(context_updates):
     updates = [
         {"source": "grafana", "payload": {
@@ -95,6 +94,40 @@ def test_batch_keeps_each_alert_and_its_fields(context_updates):
     ) if value.lower() not in rendered.lower()]
     assert not missing, f"Consumed alert fields missing from the model message: {missing}"
     assert rendered.index("DETAIL-FIRST") < rendered.index("ALERT-SECOND")
+
+
+def test_missing_fields_are_not_borrowed_from_a_later_alert(context_updates):
+    rendered = context_updates._format_updates_for_prompt([
+        {"source": "grafana", "payload": {"title": "TITLE-ONLY"}},
+        {"source": "jenkins", "payload": {
+            "title": "DEPLOYMENT", "body": "BUILD-FAILED", "service": "checkout",
+        }},
+    ])
+    assert "DEPLOYMENT" in rendered
+    first, second = rendered.split("DEPLOYMENT", 1)
+    assert "TITLE-ONLY" in first
+    assert "BUILD-FAILED" not in first
+    assert "**Service:** checkout" not in first
+    assert "BUILD-FAILED" in second
+    assert "**Service:** checkout" in second
+
+
+def test_manual_merge_formatting_is_local_to_its_update(context_updates):
+    merged_body = "## Summary\nMERGED-EVIDENCE\n## Investigation progress\nQuery complete"
+    rendered = context_updates._format_updates_for_prompt([
+        {"source": "grafana", "payload": {
+            "title": "NORMAL-ALERT", "body": "Summary of an ordinary alert",
+        }},
+        {"source": "manual_merge", "payload": {
+            "title": "MERGED-ALERT", "merged_from_incident": "other", "body": merged_body,
+        }},
+    ])
+    assert "MERGED-ALERT" in rendered
+    ordinary, merged = rendered.split("MERGED-ALERT", 1)
+    assert "**Details:** Summary of an ordinary alert" in ordinary
+    assert "**Context from merged incident:**" not in ordinary
+    assert "**Context from merged incident:**" in merged
+    assert merged_body in merged
 
 
 def test_empty_queue_returns_no_updates(context_updates, monkeypatch):
