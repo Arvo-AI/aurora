@@ -24,7 +24,7 @@ interface StartupFinding {
   id: string;
   rule: string;
   severity: "HIGH" | "MEDIUM" | "LOW";
-  source: "baseline" | "context";
+  source: "baseline" | "context" | "agent";
   file_path: string;
   line: number | null;
   title: string;
@@ -46,6 +46,11 @@ interface ScanResult {
   context_applied?: boolean;
   branch?: string;
   context_refused?: { name: string; reason: string }[];
+  agent_used?: boolean;
+  agent_model?: string | null;
+  agent_summary?: string;
+  agent_observations?: StartupFinding[];
+  agent_error?: string | null;
 }
 
 const POLL_INTERVAL_MS = 2000;
@@ -156,6 +161,83 @@ function SeverityBadge({ severity }: { severity: StartupFinding["severity"] }) {
   const variant =
     severity === "HIGH" ? "destructive" : severity === "MEDIUM" ? "default" : "secondary";
   return <Badge variant={variant}>{severity}</Badge>;
+}
+
+function sourceTag(f: StartupFinding): string {
+  if (f.source === "context") return "from your facts";
+  if (f.source === "agent") return "advisory";
+  return "";
+}
+
+function githubFileUrl(
+  repo: string | undefined,
+  branch: string | undefined,
+  f: StartupFinding
+): string | null {
+  if (!repo || !branch) return null;
+  return `https://github.com/${repo}/blob/${branch}/${f.file_path}${f.line ? `#L${f.line}` : ""}`;
+}
+
+function FindingCard({
+  f,
+  fileUrl,
+  onDismiss,
+}: {
+  f: StartupFinding;
+  fileUrl: string | null;
+  onDismiss?: (id: string) => void;
+}) {
+  return (
+    <div className="rounded-lg border bg-card p-4 space-y-2">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <SeverityBadge severity={f.severity} />
+          <span className="text-sm font-medium">{f.title}</span>
+        </div>
+        {/* Clearing a code without fixing the fault hides a real risk —
+            destructive styling says so. Agent observations are advisory and
+            get no such button. */}
+        {onDismiss && (
+          <Button
+            size="sm"
+            variant="destructive"
+            className="h-7 px-3 text-xs shrink-0"
+            onClick={() => onDismiss(f.id)}
+          >
+            Clear code
+          </Button>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">{f.explanation}</p>
+      {fileUrl ? (
+        <a
+          href={fileUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 font-mono text-[11px] text-red-400 hover:text-red-300 hover:underline"
+          title="Open this file at the offending line on GitHub"
+        >
+          <ExternalLink size={12} />
+          <span className="truncate">
+            {f.file_path}
+            {f.line ? `:${f.line}` : ""}
+          </span>
+          <span className="font-sans text-[10px] uppercase tracking-wide text-muted-foreground">
+            step into
+          </span>
+        </a>
+      ) : (
+        <p className="font-mono text-[11px] text-muted-foreground">
+          {f.file_path}
+          {f.line ? `:${f.line}` : ""}
+        </p>
+      )}
+      <p className="text-[11px] text-muted-foreground">
+        {f.rule}
+        {sourceTag(f) ? ` · ${sourceTag(f)}` : ""}
+      </p>
+    </div>
+  );
 }
 
 export default function StartupCheckPage() {
@@ -536,61 +618,55 @@ export default function StartupCheckPage() {
           {visibleFindings.length > 0 && (
             <div className="space-y-3">
               <h2 className="text-sm font-semibold">Risk map</h2>
-              {visibleFindings.map((f) => {
-                // Deep link to the faulty "sensor": the exact file+line on GitHub.
-                const fileUrl = result.repo_full_name && result.branch
-                  ? `https://github.com/${result.repo_full_name}/blob/${result.branch}/${f.file_path}${f.line ? `#L${f.line}` : ""}`
-                  : null;
-                return (
-                <div key={f.id} className="rounded-lg border bg-card p-4 space-y-2">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <SeverityBadge severity={f.severity} />
-                      <span className="text-sm font-medium">{f.title}</span>
-                    </div>
-                    {/* Clearing a code without fixing the fault hides a real
-                        risk — destructive styling says so. */}
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      className="h-7 px-3 text-xs shrink-0"
-                      onClick={() => dismissFinding(f.id)}
-                    >
-                      Clear code
-                    </Button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">{f.explanation}</p>
-                  {fileUrl ? (
-                    <a
-                      href={fileUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 font-mono text-[11px] text-red-400 hover:text-red-300 hover:underline"
-                      title="Open this file at the offending line on GitHub"
-                    >
-                      <ExternalLink size={12} />
-                      <span className="truncate">
-                        {f.file_path}
-                        {f.line ? `:${f.line}` : ""}
-                      </span>
-                      <span className="font-sans text-[10px] uppercase tracking-wide text-muted-foreground">
-                        step into
-                      </span>
-                    </a>
-                  ) : (
-                    <p className="font-mono text-[11px] text-muted-foreground">
-                      {f.file_path}
-                      {f.line ? `:${f.line}` : ""}
-                    </p>
-                  )}
-                  <p className="text-[11px] text-muted-foreground">
-                    {f.rule}
-                    {f.source === "context" ? " · from your facts" : ""}
-                  </p>
-                </div>
-                );
-              })}
+              {visibleFindings.map((f) => (
+                <FindingCard
+                  key={f.id}
+                  f={f}
+                  fileUrl={githubFileUrl(result.repo_full_name, result.branch, f)}
+                  onDismiss={dismissFinding}
+                />
+              ))}
             </div>
+          )}
+
+          {/* Agent analysis — advisory Layer 2, never flips the verdict */}
+          {result.agent_used && (
+            <div className="space-y-3 rounded-lg border border-dashed bg-card/50 p-4">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold">Agent analysis</h2>
+                <Badge variant="outline">advisory</Badge>
+                {result.agent_model && (
+                  <span className="text-[11px] text-muted-foreground">
+                    {result.agent_model}
+                  </span>
+                )}
+              </div>
+              {result.agent_summary && (
+                <p className="text-sm text-muted-foreground">{result.agent_summary}</p>
+              )}
+              <p className="text-[11px] text-muted-foreground">
+                Read-only reasoning over the raw files (Docker Compose, config,
+                CI) — it surfaces what the static K8s rules miss but does not
+                change the check-engine verdict.
+              </p>
+              {(result.agent_observations || []).map((f) => (
+                <FindingCard
+                  key={f.id}
+                  f={f}
+                  fileUrl={githubFileUrl(result.repo_full_name, result.branch, f)}
+                />
+              ))}
+              {(result.agent_observations || []).length === 0 && (
+                <p className="text-xs text-muted-foreground">No additional concerns.</p>
+              )}
+            </div>
+          )}
+
+          {result.agent_error && (
+            <p className="text-xs text-muted-foreground">
+              Agent analysis unavailable this run ({result.agent_error}) — the
+              deterministic checks still completed.
+            </p>
           )}
 
           {(result.dismissed || []).length > 0 && (

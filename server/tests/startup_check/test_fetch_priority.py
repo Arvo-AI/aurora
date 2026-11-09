@@ -107,13 +107,14 @@ def test_priority_tiers():
     assert _manifest_priority("manifests/prod/svc.yaml") == 0
     assert _manifest_priority("infra/deploy/api.yaml") == 0
     assert _manifest_priority("helm/chart/values-note.yaml") == 0
-    # Tier 1: unknown YAML — fetched when budget allows
+    # Tier 1: unknown YAML — fetched when budget allows (docker-compose is
+    # fetched deliberately: the agentic Layer 2 reads it as raw deploy config).
     assert _manifest_priority("config/app-settings.yaml") == 1
     assert _manifest_priority("root-manifest.yaml") == 1
+    assert _manifest_priority("docker-compose.yml") == 1
     # Tier 2: never-manifest — excluded entirely
     assert _manifest_priority(".github/workflows/deploy.yml") == 2
     assert _manifest_priority("docs/example.yaml") == 2
-    assert _manifest_priority("docker-compose.yml") == 2
     assert _manifest_priority("mkdocs.yml") == 2
     assert _manifest_priority("some/dir/mkdocs.yml") == 2
 

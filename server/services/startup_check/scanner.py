@@ -49,10 +49,11 @@ _MANIFEST_DIR_HINTS = (
 _NEVER_MANIFEST_DIRS = (
     ".github/workflows/", ".gitlab/", "docs/", "doc/", "node_modules/",
 )
+# docker-compose files are fetched on purpose: they aren't K8s manifests, but
+# the agentic Layer 2 reads them as raw deploy config the deterministic rules
+# can't see (services, ports, healthchecks, resource limits).
 _NEVER_MANIFEST_FILES = (
-    "mkdocs.yml", "docker-compose.yml", "docker-compose.yaml",
-    "docker-compose.override.yml", "docker-compose.override.yaml",
-    "renovate.yml", "renovate.json5", ".yamllint", "readthedocs.yml",
+    "mkdocs.yml", "renovate.yml", "renovate.json5", ".yamllint", "readthedocs.yml",
 )
 _HELM_TEMPLATE_MARKERS = ("{{", "}}")
 
@@ -298,6 +299,14 @@ def scan_github_repo(
         repo_full_name, branch, len(files), len(candidates),
     )
     result = run_scan(files, context)
+
+    # Layer 2: advisory agent pass over the raw files. Fails closed (empty)
+    # on any model/tool error, so it never jeopardizes the deterministic
+    # verdict — which stands even when the agent is unavailable.
+    from services.startup_check.analysis import run_agent_analysis
+
+    result.update(run_agent_analysis(user_id, repo_full_name, files, context))
+
     result["repo_full_name"] = repo_full_name
     result["branch"] = branch
     result["scanned_file_count"] = len(files)
