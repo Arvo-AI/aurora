@@ -38,6 +38,25 @@ class WriteArtifactArgs(BaseModel):
     content: str = Field(description="The full markdown content of the document")
 
 
+# The tool is registered with this plain JSON schema instead of the pydantic
+# class. The model still sees ``content`` as required, but a call that arrives
+# without it (typically a tool call cut off by the model's output-token limit,
+# so the arguments JSON ends after ``title``) now reaches write_artifact and
+# gets an actionable error. With the pydantic class, validation failed inside
+# the ToolNode before the capture wrapper ran: the model only saw "content:
+# Field required", retried the same oversized call, and every attempt left an
+# execution_steps row stuck in 'running'.
+WRITE_ARTIFACT_TOOL_SCHEMA = WriteArtifactArgs.model_json_schema()
+
+_MISSING_CONTENT_ERROR = (
+    "content is missing from this write_artifact call, so nothing was saved. "
+    "If you did write content, the tool call was most likely cut off by the "
+    "output-token limit before the content argument finished. Retrying the "
+    "same document will be cut off again: send a shorter document (condense or "
+    "drop older entries) so the whole call fits in one response."
+)
+
+
 def list_artifacts(user_id: str | None = None, **kwargs) -> str:
     """List artifact metadata (title, version, last editor, updated time) for the org."""
     if not user_id:
@@ -130,8 +149,8 @@ def read_artifact(title: str, user_id: str | None = None, **kwargs) -> str:
 
 
 def write_artifact(
-    title: str,
-    content: str,
+    title: str | None = None,
+    content: str | None = None,
     user_id: str | None = None,
     session_id: str | None = None,
     **kwargs,
@@ -139,6 +158,9 @@ def write_artifact(
     """Create or update an artifact by title, recording a new version each time."""
     if not user_id:
         return _NO_USER_CTX
+
+    if content is None:
+        return json.dumps({"error": _MISSING_CONTENT_ERROR})
 
     if not title or not title.strip():
         return json.dumps({"error": "title is required."})
