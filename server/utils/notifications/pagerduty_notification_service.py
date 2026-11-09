@@ -15,7 +15,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from routes.pagerduty.pagerduty_helpers import PagerDutyAPIError, PagerDutyClient
@@ -170,8 +170,9 @@ def _fetch_anchor(user_id: str, anchor_id: str, incident_id: str, pd_incident_id
 
 def _short_root_cause(summary: Optional[str]) -> str:
     """The anchor's root-cause paragraph cut to its first sentences."""
+    # extract_note_body already drops stubs under MIN_PROSE_CHARS; a short factual cause stays.
     root_cause, _ = extract_note_body(summary)
-    if len(root_cause) < MIN_SUMMARY_CHARS:
+    if not root_cause:
         return ""
     sentences = _SENTENCE_END_RE.split(root_cause)
     return truncate(" ".join(sentences[:RECURRENCE_ROOT_CAUSE_SENTENCES]), RECURRENCE_ROOT_CAUSE_MAX_CHARS)
@@ -186,6 +187,9 @@ def compose_recurrence_note(
 ) -> str:
     """Plain-text note for a folded incident: what it repeats, the root cause then, and a link."""
     title = truncate(to_plain_text(anchor_title or "", max_chars=None).replace("\n", " "), ANCHOR_TITLE_MAX_CHARS)
+    if isinstance(anchor_fired_at, datetime) and anchor_fired_at.tzinfo is not None:
+        # The column is naive UTC; an aware value from a direct caller is converted to match the label.
+        anchor_fired_at = anchor_fired_at.astimezone(timezone.utc)
     when = f" ({anchor_fired_at:%Y-%m-%d %H:%M} UTC)" if isinstance(anchor_fired_at, datetime) else ""
     lines = [
         "Aurora RCA: recurrence",
@@ -215,10 +219,15 @@ def _credentials_client(user_id: str, incident_id: str) -> Tuple[Optional[PagerD
 
 def _claim_and_post(
     user_id: str, incident_id: str, pd_incident_id: str, content: str,
-    client: PagerDutyClient, creds: Dict[str, Any],
+    client: PagerDutyClient, creds: Dict[str, Any], shared: bool = False,
 ) -> bool:
-    """Claim the incident's note slot, post, record the note id. One note per Aurora incident."""
-    if not _claims.claim(incident_id, user_id):
+    """Claim the incident's note slot, post, record the note id. One note per Aurora incident;
+    with shared=True also one per PagerDuty incident (folded recurrences can share one)."""
+    claimed = (
+        _claims.claim_shared(incident_id, user_id, pd_incident_id) if shared
+        else _claims.claim(incident_id, user_id)
+    )
+    if not claimed:
         logger.info("%s Incident %s already has a note posted or in flight", _LOG, incident_id)
         return False
     try:
@@ -260,7 +269,7 @@ def _send_recurrence_note(user_id: str, incident_data: Dict[str, Any]) -> bool:
         anchor_id, anchor["title"] or incident_data.get("anchor_alert_title"),
         anchor["fired_at"], _short_root_cause(anchor["summary"]), FRONTEND_URL,
     )
-    return _claim_and_post(user_id, incident_id, pd_incident_id, content, client, creds)
+    return _claim_and_post(user_id, incident_id, pd_incident_id, content, client, creds, shared=True)
 
 
 def send_pagerduty_incident_note(user_id: str, incident_data: Dict[str, Any]) -> bool:

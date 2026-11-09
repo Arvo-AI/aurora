@@ -192,11 +192,13 @@ def extract_note_body(summary: Optional[str]) -> Tuple[str, str]:
 def extract_next_steps(summary: Optional[str]) -> list:
     """Up to NEXT_STEPS_MAX one-line steps from the report's next-steps section, as plain text.
 
-    Each list item (or bare line) under the heading is one step; [S:id] fix markers and
-    citations are dropped. [] when the report has no such section.
+    Each list item under the heading is one step, and an unmarked line after an item is
+    that item wrapping. Without list items, each bare line is a step. [S:id] fix markers
+    and citations are dropped. [] when the report has no such section.
     """
-    steps: list = []
+    raw: list = []
     in_section = False
+    seen_item = False
     for line in (summary or "").splitlines():
         line = line.strip()
         heading = heading_text(line) if line else None
@@ -207,8 +209,16 @@ def extract_next_steps(summary: Optional[str]) -> list:
             continue
         if not in_section or not line or _RULE_RE.match(line):
             continue
-        line = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", line)
-        step = to_plain_text(_SUGGESTION_MARKER_RE.sub("", line), max_chars=None)
+        if _LIST_ITEM_RE.match(line):
+            seen_item = True
+            raw.append(re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", line))
+        elif seen_item and raw:
+            raw[-1] += " " + line
+        else:
+            raw.append(line)
+    steps = []
+    for item in raw:
+        step = to_plain_text(_SUGGESTION_MARKER_RE.sub("", item), max_chars=None)
         if step:
             steps.append(truncate(step, NEXT_STEP_MAX_CHARS))
         if len(steps) == NEXT_STEPS_MAX:
@@ -237,12 +247,19 @@ def compose_note(
     base_url: Optional[str] = None,
     next_steps: Optional[list] = None,
 ) -> str:
-    """Plain-text note body (PagerDuty notes render no markup); base_url links the full investigation."""
+    """Plain-text note body (PagerDuty notes render no markup); base_url links the full investigation.
+
+    Every part is held to its own cap here, so the note stays within NOTE_MAX_CHARS
+    whatever the caller passes (the frontend URL is operator config, not input).
+    """
+    root_cause = truncate(root_cause or "", ROOT_CAUSE_MAX_CHARS)
+    impact = truncate(impact or "", IMPACT_MAX_CHARS)
+    steps = [truncate(step, NEXT_STEP_MAX_CHARS) for step in (next_steps or []) if step][:NEXT_STEPS_MAX]
     lines = ["Aurora RCA", ""]
     for label, body in _note_sections(root_cause, impact):
         lines += [label, body, ""]
-    if next_steps:
-        lines += ["Next steps", *(f"- {step}" for step in next_steps), ""]
+    if steps:
+        lines += ["Next steps", *(f"- {step}" for step in steps), ""]
     url = _investigation_url(incident_id, base_url)
     if url:
         lines += [f"Full investigation: {url}", ""]
