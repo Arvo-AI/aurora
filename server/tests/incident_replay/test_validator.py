@@ -15,6 +15,7 @@ from incident_replay.evidence import (
     RECORD_DEPLOY_EVENT,
     RECORD_LOG,
     RECORD_METRIC,
+    RECORD_RUNBOOK,
     normalize_bundle,
 )
 from incident_replay.validator import (
@@ -265,7 +266,9 @@ class TestCausalityIsNeverPromoted:
             "every citation resolves, and the claim is still not verified"
         )
 
-    def test_temporal_relationship_is_an_inference_not_a_fact(self, bundle):
+    def test_temporal_relationship_asserting_an_order_is_not_supported(self, bundle):
+        # The cited records are timestamped and the statement may well be true, but
+        # nothing here checks the direction, so it must not be vouched for.
         event = _id_of(bundle, RECORD_DEPLOY_EVENT, "deploy-4471")
         log = _id_of(bundle, RECORD_LOG, "HikariPool")
         report = validate(
@@ -273,7 +276,20 @@ class TestCausalityIsNeverPromoted:
             _result(_finding("temporal_relationship",
                              "the deploy preceded the timeouts", [event, log])),
         )
+        assert report.findings[0].status == UNVERIFIED_HYPOTHESIS
+        assert "not independently verified" in " ".join(report.findings[0].reasons)
+
+    def test_temporal_relationship_without_an_order_is_supported(self, bundle):
+        event = _id_of(bundle, RECORD_DEPLOY_EVENT, "deploy-4471")
+        log = _id_of(bundle, RECORD_LOG, "HikariPool")
+        report = validate(
+            bundle,
+            _result(_finding("temporal_relationship",
+                             "the deploy and the first timeout both fall in the incident window",
+                             [event, log])),
+        )
         assert report.findings[0].status == SUPPORTED_INFERENCE
+        assert "no ordering is asserted" in " ".join(report.findings[0].reasons)
 
 
 class TestTimeline:
@@ -382,6 +398,39 @@ class TestTimeline:
         payload = validate(bundle, _result()).to_dict()
         assert payload["narration"]["verified"] is False
         assert payload["narration"]["source"] == "model"
+
+    def test_entry_backed_only_by_a_timestamped_record_is_evidenced(self, bundle):
+        log_id = _id_of(bundle, RECORD_LOG, "HikariPool")
+        report = validate(
+            bundle,
+            _result(timeline=[{"at": "2026-11-06T14:35:21Z", "event": "a", "evidence_ids": [log_id]}]),
+        )
+        assert report.timeline_evidenced == 1
+
+    def test_runbook_only_entry_is_not_evidenced(self, bundle):
+        # Runbook lines carry no timestamp, so they cannot corroborate an entry's
+        # clock even though the citation resolves.
+        runbook = _id_of(bundle, RECORD_RUNBOOK, "checkout")
+        report = validate(
+            bundle,
+            _result(timeline=[{"at": "2026-11-06T14:35:00Z", "event": "a", "evidence_ids": [runbook]}]),
+        )
+        assert report.timeline_entries == 1
+        assert report.timeline_evidenced == 0
+
+    def test_runbook_beside_a_log_still_compares_against_the_log(self, bundle):
+        # The timestamp check must pick the record that has a time, not whichever
+        # one happens to be cited first.
+        runbook = _id_of(bundle, RECORD_RUNBOOK, "checkout")
+        log_id = _id_of(bundle, RECORD_LOG, "HikariPool")
+        report = validate(
+            bundle,
+            _result(timeline=[{"at": "2026-11-06T14:20:00Z", "event": "a",
+                               "evidence_ids": [runbook, log_id]}]),
+        )
+        assert report.timeline_evidenced == 1
+        assert report.timeline_ok is False
+        assert "evidence is stamped" in " ".join(report.timeline_problems)
 
     def test_out_of_order_timeline_is_flagged(self, bundle):
         report = validate(

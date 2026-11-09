@@ -66,6 +66,11 @@ _WORD_TOKEN = re.compile(r"[A-Za-z_][\w.]{5,}")
 _STATUS_CODE = re.compile(r"\b(4\d{2}|5\d{2})\b")
 #: An alert identifier such as ``PD-88213``: the one token two alerts cannot share.
 _ALERT_ID = re.compile(r"\b[A-Z]{2,}-\d+\b")
+
+#: Words that assert one event came before or after another. A temporal claim
+#: containing one is demoted, because direction is not machine-checked here.
+_ORDER_PHRASES = ("before", "preceded", "earlier than", "prior to", "ahead of",
+                  "after", "followed")
 #: A number that counts as a stated value. Deliberately loose on the trailing
 #: side so "2400ms" counts, and deliberately anchored on a word boundary so the
 #: digits inside "http_5xx_rate" and "p99_latency_ms" do not: those name
@@ -351,6 +356,18 @@ _SUPPORT_RULES = {
 
 
 
+def _check_ordering(claim: str) -> Optional[str]:
+    """Return the ordering phrase a temporal claim asserts, if any.
+
+    This does *not* try to judge whether the assertion is true — inferring which
+    side is the subject proved unreliable and demoted correct statements. It only
+    detects that an ordering is being asserted, so the validator can decline to
+    call that "supported" when it has no way to check the direction.
+    """
+    lowered = claim.lower()
+    return next((phrase for phrase in _ORDER_PHRASES if phrase in lowered), None)
+
+
 def _classify(claim_type: str, claim: str, resolved: List[Any], untimed: List[int]) -> Tuple[str, str]:
     """Decide what one finding is allowed to claim. Pure.
 
@@ -366,7 +383,17 @@ def _classify(claim_type: str, claim: str, resolved: List[Any], untimed: List[in
     if claim_type == "temporal_relationship":
         if untimed:
             return UNVERIFIED_HYPOTHESIS, f"cited record(s) without a timestamp: {untimed}"
-        return SUPPORTED_INFERENCE, "all cited records are timestamped and ordered"
+        phrase = _check_ordering(claim)
+        if phrase:
+            # The records are timestamped, but nothing here checks that they are in
+            # the order the sentence claims. Saying "supported" would vouch for a
+            # direction that was never examined.
+            return UNVERIFIED_HYPOTHESIS, (
+                f"the claim asserts an ordering ('{phrase}') that is not independently "
+                "verified; the cited records are timestamped, but their direction is "
+                "not checked"
+            )
+        return SUPPORTED_INFERENCE, "all cited records carry timestamps; no ordering is asserted"
 
     required = OBSERVABLE_TYPES[claim_type]
     if not any(record.record_type == required for record in resolved):
@@ -444,12 +471,15 @@ def _check_entry_timestamp(
 ) -> None:
     """Compare an entry's own timestamp with the records it cites."""
     entry_at = parse_ts(at)
-    cited_ats = [record.at for record in cited if record and record.at]
+    # Only records that actually carry a timestamp can corroborate one. A runbook
+    # line has none, so citing it must not make an entry look evidenced.
+    timed_records = [record for record in cited if record is not None and record.at]
+    cited_ats = [record.at for record in timed_records]
     if not entry_at or not cited_ats:
         return
 
     if len(cited_ats) == 1:
-        record = cited[0]
+        record = timed_records[0]
         # A record can state more than one instant in its own content (a deploy
         # records both its start and its completion). Quoting the second one is
         # accurate, so a timestamp that appears verbatim in the record is not a
@@ -483,16 +513,17 @@ def _timeline_entry_at(
     """Validate one timeline entry.
 
     Returns ``(timestamp, evidenced)``. ``evidenced`` means the entry carries a
-    parseable time *and* at least one citation that resolves; an entry with
-    neither is not "consistent", it is unsupported, and the caller counts it as
-    such rather than letting it pass silently.
+    parseable time *and* cites at least one record that itself carries a
+    timestamp. An entry backed only by a runbook line is not evidenced: the
+    runbook has no time, so nothing ties the entry's clock to the bundle.
     """
     if not isinstance(entry, dict):
         return "", False
     at = str(entry.get("at") or "")
     cited = _check_entry_citations(bundle, report, index, entry)
     _check_entry_timestamp(report, index, at, cited)
-    evidenced = bool(parse_ts(at)) and any(record is not None for record in cited)
+    has_timed_citation = any(record is not None and record.at for record in cited)
+    evidenced = bool(parse_ts(at)) and has_timed_citation
     return at, evidenced
 
 

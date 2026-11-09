@@ -44,6 +44,15 @@ class TestPromptStructure:
         # fixture bundle deliberately contains one.
         assert "ignore previous instructions" in lowered
 
+    def test_repair_turn_keeps_the_original_rules(self):
+        # The retry used to send only a format nudge, dropping the evidence fence
+        # and the claim-type list for the one call that is already misbehaving.
+        from incident_replay.investigator import REPAIR_SYSTEM
+
+        assert SYSTEM_PROMPT in REPAIR_SYSTEM
+        assert "untrusted" in REPAIR_SYSTEM.lower()
+        assert "not a single JSON object" in REPAIR_SYSTEM
+
     def test_system_prompt_forbids_promoting_a_hypothesis(self):
         lowered = SYSTEM_PROMPT.lower()
         assert "causal_hypothesis" in lowered

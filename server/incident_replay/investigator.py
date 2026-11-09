@@ -134,8 +134,13 @@ def _selector_model_name() -> str:
 
 
 REPAIR_SYSTEM = (
-    "Your previous answer was not a single JSON object. Return only the JSON "
-    "object described earlier, with no prose and no code fences."
+    # The repair turn must keep the original rules. Sending only a format nudge
+    # dropped the untrusted-evidence fence and the claim-type definitions for the
+    # one call that is already misbehaving — the prompt-injection experiment only
+    # covered the first turn, so it said nothing about this path.
+    SYSTEM_PROMPT
+    + "\n\nYour previous answer was not a single JSON object. Return only the JSON "
+    "object described above, with no prose and no code fences."
 )
 
 
