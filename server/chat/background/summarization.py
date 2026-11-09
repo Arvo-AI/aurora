@@ -302,7 +302,7 @@ WRITING RULES:
 - Never describe investigation process or tool failures ("Investigation revealed...", "Attempts to query...", "The investigation was unable...").
 - Tone: professional, factual, incident-record style. Calibrated certainty: state facts where supported, state uncertainty where not.
 
-After the report, add a "## Ruled Out" section as a bullet list — each bullet is a hypothesis that was eliminated, with the evidence that killed it after an em dash. Do NOT use a markdown table. Then add a "## Not Checked" section as a bullet list — each bullet is an area not examined and why (no symptoms pointed there, tool access unavailable, etc.). Finally add a "## Suggested Next Steps" section: at most 3 bullets, one line each, most important first. Each bullet starts with the action verb and names the concrete resource from the evidence ("Raise max_connections on orders-db to 400", not "Consider looking into the database"). If the root cause is undetermined, the steps are the checks that would confirm it, not fixes.
+After the report, add a "## Ruled Out" section as a bullet list — each bullet is a hypothesis that was eliminated, with the evidence that killed it after an em dash. Do NOT use a markdown table. Then add a "## Not Checked" section as a bullet list — each bullet is an area not examined and why (no symptoms pointed there, tool access unavailable, etc.). Finally add a "## Suggested Next Steps" section: at most 3 bullets, one line each and under 200 characters, most important first. Each bullet starts with the action verb and names the concrete resource from the evidence ("Raise max_connections on orders-db to 400", not "Consider looking into the database"). If the root cause is undetermined, the steps are the checks that would confirm it, not fixes.
 {fix_suggestions_block}"""
     else:
         # Transcript fallback — same anti-hallucination contract.
@@ -346,7 +346,7 @@ List hypotheses that were investigated and eliminated, with the evidence that ru
 List paths that were not investigated and briefly explain why (e.g., access denied, out of scope, insufficient data).
 
 ## Suggested Next Steps
-At most 3 bullets, one line each, most important first. Each bullet starts with the action verb and names the concrete resource from the transcript ("Raise max_connections on orders-db to 400", not "Consider looking into the database"). If the root cause is undetermined, the steps are the checks that would confirm it, not fixes.
+At most 3 bullets, one line each and under 200 characters, most important first. Each bullet starts with the action verb and names the concrete resource from the transcript ("Raise max_connections on orders-db to 400", not "Consider looking into the database"). If the root cause is undetermined, the steps are the checks that would confirm it, not fixes.
 {fix_suggestions_block}"""
     return prompt
 

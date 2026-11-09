@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - PagerDuty: the RCA note ends with up to three suggested next steps, read
   from a new "## Suggested Next Steps" section of the RCA summary (one line
-  each, action first). The note cap rises to 2,500 characters to fit them.
+  each, under 200 characters, action first). Each step is capped at 240
+  characters and the note cap rises to 2,800 characters to fit them.
 
 ### Fixed
 - PagerDuty: a page the recurrence agent folds into an earlier incident now
