@@ -143,10 +143,17 @@ class ValidationReport:
 
     @property
     def evidence_type_validity(self) -> float:
-        """Share of findings whose citations are of the type the claim requires."""
-        if not self.findings:
+        """Share of *checkable* findings whose citations are of the required type.
+
+        Causal claims are excluded from the denominator. They are never promoted
+        whatever they cite, so counting them as a miss made a report where every
+        verifiable claim was supported read as "83% valid" — the 17% being the two
+        hypotheses the design deliberately refuses to confirm.
+        """
+        checkable = [f for f in self.findings if f.claim_type != "causal_hypothesis"]
+        if not checkable:
             return 0.0
-        return self.type_valid_findings / len(self.findings)
+        return self.type_valid_findings / len(checkable)
 
     def status_counts(self) -> Dict[str, int]:
         counts: Dict[str, int] = {}
@@ -230,7 +237,7 @@ def _supports_config_change(claim: str, records: List[Any]) -> Tuple[bool, str]:
         if parsed is None:
             continue
         field, old_value, new_value = parsed
-        if field not in claimed_fields:
+        if not (_claim_mentions_name(claim, field) or field in claimed_fields):
             continue
         if not states_a_value:
             return True, f"field {field} present in evidence [{record.id}]"
@@ -276,25 +283,31 @@ def _supports_alert(claim: str, records: List[Any]) -> Tuple[bool, str]:
     return False, "no cited alert record names the alert the claim describes"
 
 
-def _metric_name_tokens(name: str) -> set:
-    """Distinctive words in a metric name, for tolerant matching.
+def _name_tokens(name: str) -> set:
+    """Distinctive words in an identifier, for tolerant matching.
 
-    A record calls a metric ``http_5xx_rate``; a model writing prose calls it "5xx
-    rate". Requiring the exact identifier demoted correct claims, so the words are
-    compared instead — but only the distinctive ones, and never a single word, so
-    that "rate" alone does not match every rate metric in the bundle.
+    A record calls a field ``image.tag`` and a metric ``http_5xx_rate``; a model
+    writing prose calls them "image tag" and "5xx rate". Requiring the exact
+    identifier demoted correct claims, so the words are compared instead — but
+    only the distinctive ones, and never a single word, so that "tag" alone does
+    not match every field ending in ".tag".
     """
     return {token for token in re.split(r"[^a-z0-9]+", name.lower()) if len(token) >= 3}
 
 
-def _claim_mentions_metric(claim: str, name: str) -> bool:
+def _claim_mentions_name(claim: str, name: str) -> bool:
+    """True when the claim names this identifier, verbatim or as prose words."""
     if name in claim:
         return True
-    tokens = _metric_name_tokens(name)
+    tokens = _name_tokens(name)
     if len(tokens) < 2:
         return False
     lowered = claim.lower()
     return sum(1 for token in tokens if token in lowered) >= 2
+
+
+def _claim_mentions_metric(claim: str, name: str) -> bool:
+    return _claim_mentions_name(claim, name)
 
 
 def _supports_metric(claim: str, records: List[Any]) -> Tuple[bool, str]:

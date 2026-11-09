@@ -195,6 +195,33 @@ class TestClaimSupport:
         assert report.findings[0].status == UNVERIFIED_HYPOTHESIS
         assert "values the cited samples do not contain" in " ".join(report.findings[0].reasons)
 
+    def test_causal_claims_do_not_dilute_the_validity_rate(self, bundle):
+        # A report where every checkable claim is supported should read as fully
+        # valid, not as 50% because two causal hypotheses were (correctly) refused.
+        pool = _id_of(bundle, RECORD_DEPLOY_CHANGE, "maxPoolSize")
+        report = validate(
+            bundle,
+            _result(
+                _finding("configuration_change",
+                         "db.pool.maxPoolSize changed from 50 to 10.", [pool]),
+                _finding("causal_hypothesis", "The change caused the outage.", [pool]),
+            ),
+        )
+        assert report.evidence_type_validity == 1.0
+        assert report.status_counts()["unverified_hypothesis"] == 1
+
+    def test_field_named_in_prose_rather_than_by_identifier(self, bundle):
+        # The record says image.tag; the model writes "image tag". Exact-identifier
+        # matching demoted that, the same way it did for metric names.
+        tag = _id_of(bundle, RECORD_DEPLOY_CHANGE, "image.tag")
+        report = validate(
+            bundle,
+            _result(_finding("configuration_change",
+                             "The deployment changed the checkout-api image tag from 1.42.0 to 1.43.0.",
+                             [tag])),
+        )
+        assert report.findings[0].status == VERIFIED_OBSERVATION
+
     def test_config_claim_stating_the_wrong_new_value(self, bundle):
         pool = _id_of(bundle, RECORD_DEPLOY_CHANGE, "maxPoolSize")
         report = validate(
