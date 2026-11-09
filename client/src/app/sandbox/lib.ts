@@ -89,20 +89,22 @@ export const sandboxApi = {
 // Like Claude's "pasted content": a log-looking or long paste becomes an
 // artifact chip instead of flooding the composer.
 
+// No pattern may let a quantifier cross a newline or run unbounded before a
+// literal: pasted logs can be 200k chars, and backtracking there is quadratic.
 const LOG_SIGNALS: RegExp[] = [
-  /^\s*\[?\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}/m,                    // ISO timestamp at line start
-  /^\s*\[?\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\]?\s/m,                          // time-only prefix
+  /^[ \t]*\[?\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}/m,                 // ISO timestamp at line start
+  /^[ \t]*\[?\d{2}:\d{2}:\d{2}(?:[.,]\d{1,9})?\]?[ \t]/m,              // time-only prefix
   /^[A-Z][a-z]{2}\s+\d{1,2}\s\d{2}:\d{2}:\d{2}\s/m,                      // syslog "Jun 19 09:26:00"
   /\b(?:ERROR|WARN(?:ING)?|FATAL|CRITICAL|DEBUG|TRACE|PANIC|SEVERE)\b/,   // upper-case levels
   /\blevel=(?:error|warn|warning|info|debug)\b|"(?:level|severity)"\s*:\s*"/i, // logfmt / JSON logs
-  /^\s+at\s+[\w$.<>/]+\s?\(.*:\d+(?::\d+)?\)\s*$/m,                      // JS/Java stack frame
+  /^[ \t]+at [\w$.<>/]{1,300} ?\([^()\n]{0,500}:\d+(?::\d+)?\)[ \t]*$/m, // JS/Java stack frame
   /^Traceback \(most recent call last\):/m,                              // Python traceback
-  /^\s*File ".+", line \d+/m,
+  /^[ \t]*File "[^"\n]{1,500}", line \d+/m,                             // Python frame
   /^(?:goroutine \d+ \[|panic: )/m,                                      // Go panic
   /\b(?:CrashLoopBackOff|OOMKilled|ImagePullBackOff|Back-off restarting|Evicted)\b/, // Kubernetes
   /^NAME\s+READY\s+STATUS\s+RESTARTS\s+AGE/m,                            // kubectl get pods
   /"\s?(?:GET|POST|PUT|DELETE|PATCH) \S+ HTTP\/\d(?:\.\d)?"\s+[1-5]\d\d\b/, // access log
-  /^\s*\{.*"(?:timestamp|ts|time|@timestamp)"\s*:/m,                    // JSON lines
+  /^[ \t]*\{[^\n]{0,500}?"(?:timestamp|ts|time|@timestamp)"[ \t]*:/m,  // JSON lines
   /\b(?:Exception|Error):\s.+\n\s+at\s/,                                // exception + frame
   /^##\[(?:error|warning|group)\]/m,                                     // GitHub Actions log
 ];

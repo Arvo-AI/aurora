@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import {
   FileText, ScrollText, Image as ImageIcon, Link2, File, X, Loader2, Plug, ShieldCheck,
@@ -21,12 +21,12 @@ const KIND_ICON: Record<ArtifactKind, typeof FileText> = {
 
 export function ArtifactChip({
   sandboxId, artifact, onOpen, onRemove,
-}: {
+}: Readonly<{
   sandboxId: string;
   artifact: SandboxArtifact;
   onOpen: () => void;
   onRemove: () => void;
-}) {
+}>) {
   const Icon = KIND_ICON[artifact.kind];
   const isImage = artifact.kind === 'image';
   return (
@@ -74,11 +74,11 @@ export function ArtifactChip({
 
 export function ArtifactViewer({
   sandboxId, artifact, onClose,
-}: {
+}: Readonly<{
   sandboxId: string;
   artifact: SandboxArtifact | null;
   onClose: () => void;
-}) {
+}>) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -93,6 +93,21 @@ export function ArtifactViewer({
     return () => { cancelled = true; };
   }, [sandboxId, artifact]);
 
+  let body: ReactNode;
+  if (error) {
+    body = <p className="text-sm text-destructive">{error}</p>;
+  } else if (content === null) {
+    body = <Loader2 className="h-4 w-4 animate-spin" />;
+  } else {
+    const empty = artifact?.kind === 'image' ? 'No description yet.' : '(empty)';
+    // Rendered as text, never HTML.
+    body = (
+      <pre className="max-h-[50vh] overflow-auto rounded-md bg-muted p-3 text-xs font-mono whitespace-pre-wrap break-words">
+        {content || empty}
+      </pre>
+    );
+  }
+
   return (
     <Dialog open={!!artifact} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="max-w-3xl">
@@ -106,16 +121,7 @@ export function ArtifactViewer({
         {artifact?.kind === 'image' && (
           <p className="text-xs font-medium text-muted-foreground mt-2">What Aurora sees in this image</p>
         )}
-        {error ? (
-          <p className="text-sm text-destructive">{error}</p>
-        ) : content === null ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          // Rendered as text, never HTML.
-          <pre className="max-h-[50vh] overflow-auto rounded-md bg-muted p-3 text-xs font-mono whitespace-pre-wrap break-words">
-            {content || (artifact?.kind === 'image' ? 'No description yet.' : '(empty)')}
-          </pre>
-        )}
+        {body}
       </DialogContent>
     </Dialog>
   );
@@ -123,7 +129,7 @@ export function ArtifactViewer({
 
 // ── Guide: the next connection, inferred from the evidence ──────────
 
-export function GuidePanel({ suggestions }: { suggestions: ConnectorSuggestion[] }) {
+export function GuidePanel({ suggestions }: Readonly<{ suggestions: ConnectorSuggestion[] }>) {
   return (
     <section className="rounded-xl border border-border bg-card p-4">
       <h2 className="text-sm font-semibold flex items-center gap-1.5"><Plug className="h-4 w-4" /> Next connection</h2>
@@ -164,15 +170,16 @@ export function GuidePanel({ suggestions }: { suggestions: ConnectorSuggestion[]
 
 // ── Transparency: what is stored ────────────────────────────────────
 
-export function StoragePanel({ artifacts }: { artifacts: SandboxArtifact[] }) {
+export function StoragePanel({ artifacts }: Readonly<{ artifacts: SandboxArtifact[] }>) {
   const total = artifacts.reduce((n, a) => n + a.sizeBytes, 0);
   const byKind = artifacts.reduce<Record<string, number>>((m, a) => ({ ...m, [a.kind]: (m[a.kind] ?? 0) + 1 }), {});
+  const breakdown = Object.entries(byKind).map(([kind, n]) => `${n} ${kind}`).join(', ');
   return (
     <section className="rounded-xl border border-border bg-card p-4">
       <h2 className="text-sm font-semibold flex items-center gap-1.5"><ShieldCheck className="h-4 w-4" /> What Aurora stores</h2>
       <p className="text-xs text-muted-foreground mt-1">
         {artifacts.length} artifact{artifacts.length === 1 ? '' : 's'}, {formatBytes(total)}
-        {artifacts.length > 0 && ` (${Object.entries(byKind).map(([k, n]) => `${n} ${k}`).join(', ')})`}.
+        {artifacts.length > 0 && ` (${breakdown})`}.
       </p>
       <ul className="text-xs text-muted-foreground mt-2 space-y-1 list-disc pl-4">
         <li>Only what you add here. No credentials, nothing read from your systems.</li>

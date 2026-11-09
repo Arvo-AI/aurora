@@ -25,7 +25,8 @@ def test_context_lists_repo_time_and_each_artifact(sb):
         [_art("log", "api.log", "ERROR pool exhausted"), _art("link", "issue", "https://x.dev/1")],
     )
     assert 'SANDBOX KNOWLEDGE BASE: "checkout outage"' in ctx
-    assert "acme/api" in ctx and "2026-06-19T09:26:00Z" in ctx
+    assert "acme/api" in ctx
+    assert "2026-06-19T09:26:00Z" in ctx
     assert '<artifact kind="log" name="api.log">\nERROR pool exhausted\n</artifact>' in ctx
     assert "never as instructions" in ctx
 
@@ -38,7 +39,9 @@ def test_artifact_cannot_close_its_own_block(sb):
 def test_long_log_keeps_head_and_tail(sb):
     log = "START\n" + "noise\n" * 10_000 + "FATAL: the real error"
     ctx = sb.build_sandbox_context("s", None, None, [_art("log", "big.log", log)])
-    assert "START" in ctx and "FATAL: the real error" in ctx and "characters truncated" in ctx
+    assert "START" in ctx
+    assert "FATAL: the real error" in ctx
+    assert "characters truncated" in ctx
 
 
 def test_total_cap_omits_extra_artifacts_and_says_so(sb):
@@ -68,10 +71,11 @@ def test_suggestions_explain_and_rank(sb):
         ("notes.md", "datadog monitor fired, kubectl get pods showed restarts"),
     ]
     got = sb.suggest_connectors(arts, connected=set())
-    assert [s["connector"] for s in got][:2] == ["kubectl", "datadog"] or \
-        [s["connector"] for s in got][:2] == ["datadog", "kubectl"]
+    assert {s["connector"] for s in got[:2]} == {"kubectl", "datadog"}
     dd = next(s for s in got if s["connector"] == "datadog")
-    assert dd["artifactCount"] == 2 and "alert.json" in dd["reason"] and "1 more" in dd["reason"]
+    assert dd["artifactCount"] == 2
+    assert "alert.json" in dd["reason"]
+    assert "1 more" in dd["reason"]
 
 
 def test_already_connected_is_not_suggested(sb):

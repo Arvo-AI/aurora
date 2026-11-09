@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { FlaskConical, Plus, GitBranch, FileStack, Loader2 } from 'lucide-react';
@@ -34,6 +34,19 @@ export default function SandboxListPage() {
     }
   };
 
+  let content: ReactNode;
+  if (isLoading && !data) {
+    content = (
+      <div className="text-sm text-muted-foreground flex items-center gap-2">
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+      </div>
+    );
+  } else if (sandboxes.length === 0) {
+    content = <EmptyState />;
+  } else {
+    content = <SandboxGrid sandboxes={sandboxes} />;
+  }
+
   return (
     <div className="max-w-[1100px] mx-auto py-8 px-4 sm:px-6">
       <div className="flex items-start justify-between gap-4 mb-8">
@@ -45,54 +58,52 @@ export default function SandboxListPage() {
             Investigate with the evidence you already have. No connections, no credentials.
           </p>
         </div>
-        <Button onClick={create} disabled={creating}>
+        <Button onClick={() => void create()} disabled={creating}>
           {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
           <span className="ml-1.5">New sandbox</span>
         </Button>
       </div>
 
-      {isLoading && !data ? (
-        <div className="text-sm text-muted-foreground flex items-center gap-2">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading…
-        </div>
-      ) : sandboxes.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border p-8">
-          <p className="font-medium mb-4">Get a root cause in minutes, before connecting anything.</p>
-          <ol className="grid gap-4 sm:grid-cols-3">
-            {STEPS.map(([title, body], i) => (
-              <li key={title} className="rounded-lg bg-card border border-border p-4">
-                <div className="text-xs text-muted-foreground mb-1">Step {i + 1}</div>
-                <div className="text-sm font-medium">{title}</div>
-                <div className="text-sm text-muted-foreground mt-1">{body}</div>
-              </li>
-            ))}
-          </ol>
-        </div>
-      ) : (
-        <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {sandboxes.map((s) => (
-            <li key={s.id}>
-              <Link
-                href={`/sandbox/${s.id}`}
-                className="block rounded-xl border border-border bg-card p-4 hover:border-foreground/30 transition-colors"
-              >
-                <div className="font-medium truncate">{s.name}</div>
-                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1">
-                    <FileStack className="h-3.5 w-3.5" /> {s.artifactCount} artifact{s.artifactCount === 1 ? '' : 's'}
-                  </span>
-                  {s.publicRepo && (
-                    <span className="flex items-center gap-1 truncate">
-                      <GitBranch className="h-3.5 w-3.5" /> {s.publicRepo}
-                    </span>
-                  )}
-                </div>
-                <div className="mt-2 text-xs text-muted-foreground">Updated {formatTimeAgo(s.updatedAt)}</div>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
+      {content}
     </div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="rounded-xl border border-dashed border-border p-8">
+      <p className="font-medium mb-4">Get a root cause in minutes, before connecting anything.</p>
+      <ol className="grid gap-4 sm:grid-cols-3">
+        {STEPS.map(([title, body], i) => (
+          <li key={title} className="rounded-lg bg-card border border-border p-4">
+            <div className="text-xs text-muted-foreground mb-1">Step {i + 1}</div>
+            <div className="text-sm font-medium">{title}</div>
+            <div className="text-sm text-muted-foreground mt-1">{body}</div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function SandboxGrid({ sandboxes }: Readonly<{ sandboxes: Sandbox[] }>) {
+  return (
+    <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {sandboxes.map((s) => (
+        <li key={s.id}>
+          <Link
+            href={`/sandbox/${s.id}`}
+            className="block rounded-xl border border-border bg-card p-4 hover:border-foreground/30 transition-colors"
+          >
+            <div className="font-medium truncate">{s.name}</div>
+            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <FileStack className="h-3.5 w-3.5" /> {s.artifactCount} artifact{s.artifactCount === 1 ? '' : 's'}
+              </span>
+              {s.publicRepo && (
+                <span className="flex items-center gap-1 truncate">
+                  <GitBranch className="h-3.5 w-3.5" /> {s.publicRepo}
+                </span>
+        
   );
 }

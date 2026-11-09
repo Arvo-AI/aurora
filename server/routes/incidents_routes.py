@@ -1906,6 +1906,27 @@ def get_incident_action_runs(user_id, incident_id: str):
         return jsonify({"error": "Failed to retrieve action runs"}), 500
 
 
+def _parse_retro_inputs(data: dict) -> tuple:
+    """Optional public repo + past incident time for a retroactive RCA.
+
+    Returns (repo, incident_time, error). The repo, if given, must be a public
+    GitHub repo (canonicalised); the agent may then read its history without a
+    GitHub connection. Validated here, the only place it can be set.
+    """
+    from chat.backend.agent.tools.github_rca_tool import check_public_repo
+    from utils.incidents import parse_incident_time
+
+    repo = str(data.get("repo") or "").strip()
+    if repo:
+        repo = check_public_repo(repo)
+        if not repo:
+            return None, None, "repo must be a public GitHub repository as owner/repo"
+    incident_time, time_error = parse_incident_time(data.get("incident_time"))
+    if time_error:
+        return None, None, time_error
+    return repo or None, incident_time, None
+
+
 @incidents_bp.route("/api/incidents/trigger-rca", methods=["POST"])
 @require_permission("incidents", "write")
 def trigger_rca_from_chat(user_id):
@@ -1930,20 +1951,9 @@ def trigger_rca_from_chat(user_id):
             "error": f"Invalid severity. Must be one of: {', '.join(sorted(_ALLOWED_SEVERITIES))}"
         }), 400
 
-    # Optional public-repo sandbox: the agent may read this repo's history
-    # without a GitHub connection. Validated here, the only place it can be set.
-    repo = str(data.get("repo") or "").strip()
-    if repo:
-        from chat.backend.agent.tools.github_rca_tool import check_public_repo
-        canonical = check_public_repo(repo)
-        if not canonical:
-            return jsonify({"error": "repo must be a public GitHub repository as owner/repo"}), 400
-        repo = canonical
-
-    from utils.incidents import parse_incident_time
-    incident_time, time_error = parse_incident_time(data.get("incident_time"))
-    if time_error:
-        return jsonify({"error": time_error}), 400
+    repo, incident_time, input_error = _parse_retro_inputs(data)
+    if input_error:
+        return jsonify({"error": input_error}), 400
 
     from chat.backend.agent.tools.trigger_rca_tool import trigger_rca as _agent_trigger_rca
     try:
@@ -1953,7 +1963,7 @@ def trigger_rca_from_chat(user_id):
             service=service,
             severity=severity,
             user_id=user_id,
-            public_repo=repo or None,
+            public_repo=repo,
             incident_time=incident_time,
         )
     except Exception:

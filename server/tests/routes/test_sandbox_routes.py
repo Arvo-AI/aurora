@@ -47,7 +47,8 @@ def _upload(app, sr, data: bytes, filename: str, mimetype: str):
 def test_pasted_log_is_stored_as_log(app, sr):
     parsed, status = _json(app, sr, {"kind": "log", "content": "ERROR db timeout\n"})
     assert status is None
-    assert parsed[0] == "log" and parsed[2] == "ERROR db timeout"
+    assert parsed[0] == "log"
+    assert parsed[2] == "ERROR db timeout"
 
 
 @pytest.mark.parametrize("body", [
@@ -95,7 +96,9 @@ def test_parse_incident_time():
     from utils.incidents import parse_incident_time
     assert parse_incident_time("") == (None, None)
     value, err = parse_incident_time("2026-06-19T09:26:00Z")
-    assert err is None and value == datetime(2026, 6, 19, 9, 26) and value.tzinfo is None
+    assert err is None
+    assert value == datetime(2026, 6, 19, 9, 26)
+    assert value.tzinfo is None
     future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
     assert parse_incident_time(future)[1] is not None
     assert parse_incident_time("yesterday")[1] is not None

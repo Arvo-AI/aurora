@@ -20,6 +20,7 @@ from flask import Blueprint, jsonify, request, send_file
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 from utils.query_helpers import iso_utc
 from utils.validation import is_valid_uuid, strip_nul
 
@@ -40,6 +41,7 @@ DOC_EXTENSIONS = {"pdf", "txt", "md", "log", "json", "yaml", "yml", "csv"}
 # No SVG: it can carry script, and these bytes are served back to the browser.
 IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 _URL_RE = re.compile(r"https?://[^\s<>\"']{1,2000}")
+_INVALID_ARTIFACT_ID = "Invalid artifact ID"
 
 
 def _err(message: str, status: int):
@@ -66,6 +68,13 @@ def _serialize_sandbox(row) -> dict:
 _ARTIFACT_COLS = "id, kind, name, content, mime_type, size_bytes, created_at"
 
 
+def _description_status(content) -> str:
+    """Image description state: NULL = still being described, '' = model could not."""
+    if content is None:
+        return "pending"
+    return "ready" if content else "unavailable"
+
+
 def _serialize_artifact(row, *, full: bool) -> dict:
     """Row: (id, kind, name, content, mime_type, size_bytes, created_at)."""
     content = row[3] or ""
@@ -80,8 +89,7 @@ def _serialize_artifact(row, *, full: bool) -> dict:
         "truncated": len(content) > PREVIEW_CHARS,
     }
     if row[1] == "image":
-        # NULL = still being described, '' = model could not describe it.
-        data["description"] = "pending" if row[3] is None else ("ready" if row[3] else "unavailable")
+        data["description"] = _description_status(row[3])
     if full:
         data["content"] = content
     return data
@@ -98,19 +106,18 @@ def with_sandbox(fn):
             return _err("Invalid sandbox ID", 400)
         org_id = get_org_id_from_request()
         try:
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cursor:
-                    if set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX) is None:
-                        return _err("Unable to resolve organization context", 500)
-                    cursor.execute(
-                        "SELECT id FROM sandboxes WHERE id = %s AND org_id = %s",
-                        (sandbox_id, org_id),
-                    )
-                    if not cursor.fetchone():
-                        return _err("Sandbox not found", 404)
-                    return fn(user_id, sandbox_id, *args, org_id=org_id, conn=conn, cursor=cursor, **kwargs)
+            with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+                if set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX) is None:
+                    return _err("Unable to resolve organization context", 500)
+                cursor.execute(
+                    "SELECT id FROM sandboxes WHERE id = %s AND org_id = %s",
+                    (sandbox_id, org_id),
+                )
+                if not cursor.fetchone():
+                    return _err("Sandbox not found", 404)
+                return fn(user_id, sandbox_id, *args, org_id=org_id, conn=conn, cursor=cursor, **kwargs)
         except Exception:
-            logger.exception("%s %s failed for sandbox %s", _LOG_PREFIX, fn.__name__, sandbox_id)
+            logger.exception("%s %s failed for sandbox %s", _LOG_PREFIX, fn.__name__, sanitize(sandbox_id))
             return _err(f"Failed to {fn.__name__.replace('_', ' ')}", 500)
 
     return wrapper
@@ -128,18 +135,17 @@ def _touch(cursor, sandbox_id: str) -> None:
 def list_sandboxes(user_id):
     org_id = get_org_id_from_request()
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
-                cursor.execute(
-                    """SELECT s.id, s.name, s.public_repo, s.incident_time, s.created_at, s.updated_at,
-                              (SELECT COUNT(*) FROM sandbox_artifacts a WHERE a.sandbox_id = s.id)
-                       FROM sandboxes s
-                       WHERE s.org_id = %s
-                       ORDER BY s.updated_at DESC""",
-                    (org_id,),
-                )
-                rows = cursor.fetchall()
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+            cursor.execute(
+                """SELECT s.id, s.name, s.public_repo, s.incident_time, s.created_at, s.updated_at,
+                          (SELECT COUNT(*) FROM sandbox_artifacts a WHERE a.sandbox_id = s.id)
+                   FROM sandboxes s
+                   WHERE s.org_id = %s
+                   ORDER BY s.updated_at DESC""",
+                (org_id,),
+            )
+            rows = cursor.fetchall()
         return jsonify({"sandboxes": [_serialize_sandbox(r) for r in rows]})
     except Exception:
         logger.exception("%s Failed to list sandboxes", _LOG_PREFIX)
@@ -153,16 +159,15 @@ def create_sandbox(user_id):
     name = str(data.get("name") or "").strip()[:MAX_SANDBOX_NAME] or "Untitled sandbox"
     org_id = get_org_id_from_request()
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                if set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX) is None:
-                    return _err("Unable to resolve organization context", 500)
-                cursor.execute(
-                    """INSERT INTO sandboxes (org_id, user_id, name) VALUES (%s, %s, %s)
-                       RETURNING id, name, public_repo, incident_time, created_at, updated_at, 0""",
-                    (org_id, user_id, name),
-                )
-                row = cursor.fetchone()
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            if set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX) is None:
+                return _err("Unable to resolve organization context", 500)
+            cursor.execute(
+                """INSERT INTO sandboxes (org_id, user_id, name) VALUES (%s, %s, %s)
+                   RETURNING id, name, public_repo, incident_time, created_at, updated_at, 0""",
+                (org_id, user_id, name),
+            )
+            row = cursor.fetchone()
             conn.commit()
         return jsonify({"sandbox": _serialize_sandbox(row)}), 201
     except Exception:
@@ -194,6 +199,36 @@ def get_sandbox(user_id, sandbox_id, *, org_id, conn, cursor):
     return jsonify({"sandbox": _load_sandbox(cursor, sandbox_id)})
 
 
+def _parse_name(raw) -> tuple:
+    name = str(raw or "").strip()[:MAX_SANDBOX_NAME]
+    return (name, None) if name else (None, "name cannot be empty")
+
+
+def _parse_public_repo(raw) -> tuple:
+    """Empty clears it; anything else must be a public GitHub repo (canonicalised)."""
+    repo = str(raw or "").strip()
+    if not repo:
+        return None, None
+    from chat.backend.agent.tools.github_rca_tool import check_public_repo
+    canonical = check_public_repo(repo)
+    if not canonical:
+        return None, "publicRepo must be a public GitHub repository as owner/repo"
+    return canonical, None
+
+
+def _parse_incident_time(raw) -> tuple:
+    from utils.incidents import parse_incident_time
+    return parse_incident_time(raw)
+
+
+# request field -> (column, parser returning (value, error))
+_UPDATABLE_FIELDS = {
+    "name": ("name", _parse_name),
+    "publicRepo": ("public_repo", _parse_public_repo),
+    "incidentTime": ("incident_time", _parse_incident_time),
+}
+
+
 @sandbox_bp.route("/api/sandboxes/<sandbox_id>", methods=["PATCH"])
 @require_permission("incidents", "write")
 @with_sandbox
@@ -201,31 +236,14 @@ def update_sandbox(user_id, sandbox_id, *, org_id, conn, cursor):
     """Rename, set/clear the public repo, set/clear the incident time."""
     data = request.get_json(silent=True) or {}
     sets, params = [], []
-
-    if "name" in data:
-        name = str(data.get("name") or "").strip()[:MAX_SANDBOX_NAME]
-        if not name:
-            return _err("name cannot be empty", 400)
-        sets.append("name = %s")
-        params.append(name)
-
-    if "publicRepo" in data:
-        repo = str(data.get("publicRepo") or "").strip()
-        if repo:
-            from chat.backend.agent.tools.github_rca_tool import check_public_repo
-            repo = check_public_repo(repo)
-            if not repo:
-                return _err("publicRepo must be a public GitHub repository as owner/repo", 400)
-        sets.append("public_repo = %s")
-        params.append(repo or None)
-
-    if "incidentTime" in data:
-        from utils.incidents import parse_incident_time
-        incident_time, time_error = parse_incident_time(data.get("incidentTime"))
-        if time_error:
-            return _err(time_error, 400)
-        sets.append("incident_time = %s")
-        params.append(incident_time)
+    for key, (column, parse) in _UPDATABLE_FIELDS.items():
+        if key not in data:
+            continue
+        value, error = parse(data[key])
+        if error:
+            return _err(error, 400)
+        sets.append(f"{column} = %s")  # column comes from the fixed table above, never the request
+        params.append(value)
 
     if not sets:
         return _err("Nothing to update", 400)
@@ -250,7 +268,7 @@ def delete_sandbox(user_id, sandbox_id, *, org_id, conn, cursor):
     except Exception:
         # Rows are gone; orphaned image bytes are unreachable (path is unguessable
         # and the raw route checks the row). Log and move on.
-        logger.warning("%s Could not delete stored files for sandbox %s", _LOG_PREFIX, sandbox_id)
+        logger.warning("%s Could not delete stored files for sandbox %s", _LOG_PREFIX, sanitize(sandbox_id))
     return jsonify({"deleted": True})
 
 
@@ -347,7 +365,7 @@ def add_artifact(user_id, sandbox_id, *, org_id, conn, cursor):
             get_storage_manager().upload_bytes(raw, path, content_type=mime)
         except Exception:
             conn.rollback()
-            logger.exception("%s Image upload failed for sandbox %s", _LOG_PREFIX, sandbox_id)
+            logger.exception("%s Image upload failed for sandbox %s", _LOG_PREFIX, sanitize(sandbox_id))
             return _err("Failed to store image", 500)
         cursor.execute("UPDATE sandbox_artifacts SET storage_path = %s WHERE id = %s", (path, row[0]))
 
@@ -371,7 +389,7 @@ def add_artifact(user_id, sandbox_id, *, org_id, conn, cursor):
 @with_sandbox
 def get_artifact(user_id, sandbox_id, artifact_id, *, org_id, conn, cursor):
     if not is_valid_uuid(artifact_id):
-        return _err("Invalid artifact ID", 400)
+        return _err(_INVALID_ARTIFACT_ID, 400)
     cursor.execute(
         f"SELECT {_ARTIFACT_COLS} FROM sandbox_artifacts WHERE id = %s AND sandbox_id = %s",
         (artifact_id, sandbox_id),
@@ -388,7 +406,7 @@ def get_artifact(user_id, sandbox_id, artifact_id, *, org_id, conn, cursor):
 def get_artifact_raw(user_id, sandbox_id, artifact_id, *, org_id, conn, cursor):
     """Serve an image artifact's bytes (for thumbnails)."""
     if not is_valid_uuid(artifact_id):
-        return _err("Invalid artifact ID", 400)
+        return _err(_INVALID_ARTIFACT_ID, 400)
     cursor.execute(
         "SELECT storage_path, mime_type FROM sandbox_artifacts WHERE id = %s AND sandbox_id = %s AND kind = 'image'",
         (artifact_id, sandbox_id),
@@ -408,7 +426,7 @@ def get_artifact_raw(user_id, sandbox_id, artifact_id, *, org_id, conn, cursor):
 @with_sandbox
 def delete_artifact(user_id, sandbox_id, artifact_id, *, org_id, conn, cursor):
     if not is_valid_uuid(artifact_id):
-        return _err("Invalid artifact ID", 400)
+        return _err(_INVALID_ARTIFACT_ID, 400)
     cursor.execute(
         "DELETE FROM sandbox_artifacts WHERE id = %s AND sandbox_id = %s RETURNING storage_path",
         (artifact_id, sandbox_id),
@@ -423,7 +441,7 @@ def delete_artifact(user_id, sandbox_id, artifact_id, *, org_id, conn, cursor):
             from utils.storage.storage import get_storage_manager
             get_storage_manager().delete_file(row[0])
         except Exception:
-            logger.warning("%s Could not delete stored file for artifact %s", _LOG_PREFIX, artifact_id)
+            logger.warning("%s Could not delete stored file for artifact %s", _LOG_PREFIX, sanitize(artifact_id))
     return jsonify({"deleted": True})
 
 

@@ -25,7 +25,7 @@ const toLocalInput = (iso: string | null) => {
   return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 };
 
-export default function SandboxPage({ params }: { params: Promise<{ id: string }> }) {
+export default function SandboxPage({ params }: Readonly<{ params: Promise<{ id: string }> }>) {
   const { id } = use(params);
   const router = useRouter();
   const { toast } = useToast();
@@ -47,10 +47,14 @@ export default function SandboxPage({ params }: { params: Promise<{ id: string }
   const { data: chatData } = useQuery<{ chats: SandboxChat[] }>(chatsKey, jsonFetcher);
   const { data: sugData } = useQuery<{ suggestions: ConnectorSuggestion[] }>(suggestionsKey, jsonFetcher);
 
-  const refresh = useCallback(() => {
-    queryClient.invalidate(sandboxKey, jsonFetcher);
-    queryClient.invalidate(suggestionsKey, jsonFetcher);
-  }, [sandboxKey, suggestionsKey]);
+  // Returned, not fired-and-forgotten: callers await it so a failed refresh is reported.
+  const refresh = useCallback(
+    () => Promise.all([
+      queryClient.invalidate(sandboxKey, jsonFetcher),
+      queryClient.invalidate(suggestionsKey, jsonFetcher),
+    ]),
+    [sandboxKey, suggestionsKey],
+  );
 
   // ── Composer ────────────────────────────────────────────────────
   const [draft, setDraft] = useState('');
@@ -58,13 +62,21 @@ export default function SandboxPage({ params }: { params: Promise<{ id: string }
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
+  // Never rejects: every failure becomes a toast. Call sites can safely `void` it.
   const track = async (work: Promise<unknown>, label: string) => {
     setBusy((n) => n + 1);
-    try { await work; refresh(); } catch (e) { fail(label, e); } finally { setBusy((n) => n - 1); }
+    try {
+      await work;
+      await refresh();
+    } catch (e) {
+      fail(label, e);
+    } finally {
+      setBusy((n) => n - 1);
+    }
   };
 
   const addFiles = (files: FileList | File[]) => {
-    for (const f of Array.from(files)) track(sandboxApi.addFile(id, f), `Could not add ${f.name}`);
+    for (const f of Array.from(files)) void track(sandboxApi.addFile(id, f), `Could not add ${f.name}`);
   };
 
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -78,17 +90,15 @@ export default function SandboxPage({ params }: { params: Promise<{ id: string }
     if (!kind) return; // short prose stays in the composer
     e.preventDefault();
     const name = kind === 'link' ? undefined : pasteName(kind, text);
-    track(sandboxApi.addText(id, kind, text.trim(), name), 'Could not add pasted content');
+    void track(sandboxApi.addText(id, kind, text.trim(), name), 'Could not add pasted content');
   };
 
   const saveDraft = () => {
     const text = draft.trim();
     if (!text) return;
     const kind = classifyPaste(text) ?? 'text';
-    track(
-      sandboxApi.addText(id, kind, text, kind === 'link' ? undefined : pasteName(kind === 'log' ? 'log' : 'text', text)),
-      'Could not add note',
-    );
+    const name = kind === 'link' ? undefined : pasteName(kind, text);
+    void track(sandboxApi.addText(id, kind, text, name), 'Could not add note');
     setDraft('');
   };
 
@@ -153,12 +163,15 @@ export default function SandboxPage({ params }: { params: Promise<{ id: string }
         <Input
           value={name ?? sandbox.name}
           onChange={(e) => setName(e.target.value)}
-          onBlur={() => name !== null && name.trim() && name !== sandbox.name && save({ name: name.trim() })}
+          onBlur={() => {
+            const next = name?.trim();
+            if (next && next !== sandbox.name) void save({ name: next });
+          }}
           onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
           className="text-xl font-semibold border-transparent hover:border-input focus:border-input bg-transparent px-2 -ml-2 h-auto py-1"
           aria-label="Sandbox name"
         />
-        <Button variant="ghost" size="icon" onClick={deleteSandbox} aria-label="Delete sandbox">
+        <Button variant="ghost" size="icon" onClick={() => void deleteSandbox()} aria-label="Delete sandbox">
           <Trash2 className="h-4 w-4" />
         </Button>
       </div>
@@ -192,7 +205,12 @@ export default function SandboxPage({ params }: { params: Promise<{ id: string }
                   multiple
                   hidden
                   accept=".pdf,.txt,.md,.log,.json,.yaml,.yml,.csv,image/png,image/jpeg,image/gif,image/webp"
-                  onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ''; }}
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      addFiles(e.target.files);
+                    }
+                    e.target.value = ''; // let the same file be picked again
+                  }}
                 />
                 <Button variant="ghost" size="sm" onClick={() => fileInput.current?.click()}>
                   <Paperclip className="h-4 w-4 mr-1" /> Attach files
@@ -226,9 +244,11 @@ export default function SandboxPage({ params }: { params: Promise<{ id: string }
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
                 placeholder="Optional: what do you want to know? e.g. why did checkout start timing out?"
-                onKeyDown={(e) => e.key === 'Enter' && artifacts.length && !starting && investigate()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && artifacts.length > 0 && !starting) void investigate();
+                }}
               />
-              <Button onClick={investigate} disabled={starting || artifacts.length === 0}>
+              <Button onClick={() => void investigate()} disabled={starting || artifacts.length === 0}>
                 {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                 <span className="ml-1.5">Run investigation</span>
               </Button>
@@ -239,7 +259,7 @@ export default function SandboxPage({ params }: { params: Promise<{ id: string }
 
             <div className="flex items-center justify-between mt-6 mb-2">
               <h3 className="text-sm font-semibold">Chats in this sandbox</h3>
-              <Button variant="outline" size="sm" onClick={newChat}>
+              <Button variant="outline" size="sm" onClick={() => void newChat()}>
                 <Plus className="h-4 w-4 mr-1" /> New chat
               </Button>
             </div>
@@ -276,7 +296,9 @@ export default function SandboxPage({ params }: { params: Promise<{ id: string }
               <Input
                 value={repo ?? sandbox.publicRepo ?? ''}
                 onChange={(e) => setRepo(e.target.value)}
-                onBlur={() => repo !== null && repo !== (sandbox.publicRepo ?? '') && save({ publicRepo: repo.trim() })}
+                onBlur={() => {
+                  if (repo !== null && repo !== (sandbox.publicRepo ?? '')) void save({ publicRepo: repo.trim() });
+                }}
                 onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
                 placeholder="owner/repo"
                 className="mt-1 h-8 text-sm"
@@ -289,7 +311,11 @@ export default function SandboxPage({ params }: { params: Promise<{ id: string }
                 type="datetime-local"
                 value={when ?? toLocalInput(sandbox.incidentTime)}
                 onChange={(e) => setWhen(e.target.value)}
-                onBlur={() => when !== null && save({ incidentTime: when ? new Date(when).toISOString() : '' })}
+                onBlur={() => {
+                  if (when === null) return;
+                  const incidentTime = when ? new Date(when).toISOString() : '';
+                  void save({ incidentTime });
+                }}
                 className="mt-1 h-8 text-sm"
               />
               <span className="text-[11px] text-muted-foreground">Aurora looks at changes shortly before this.</span>

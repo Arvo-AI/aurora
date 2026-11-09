@@ -118,14 +118,13 @@ def load_session_sandbox(user_id: str, session_id: Optional[str]) -> Optional[Di
     try:
         from utils.auth.stateless_auth import set_rls_context
         from utils.db.connection_pool import db_pool
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[Sandbox:session]")
-                cur.execute("SELECT sandbox_id FROM chat_sessions WHERE id = %s", (session_id,))
-                row = cur.fetchone()
-                if not row or not row[0]:
-                    return None
-                sandbox = fetch_sandbox(cur, str(row[0]))
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[Sandbox:session]")
+            cur.execute("SELECT sandbox_id FROM chat_sessions WHERE id = %s", (session_id,))
+            row = cur.fetchone()
+            if not row or not row[0]:
+                return None
+            sandbox = fetch_sandbox(cur, str(row[0]))
         if sandbox:
             sandbox["context"] = context_for(sandbox)
         return sandbox
@@ -166,7 +165,8 @@ def describe_image(raw: bytes, mime: str) -> Optional[str]:
         return None
 
 
-from celery_config import celery_app  # noqa: E402  (after the pure helpers, which tests import)
+# Imported after the pure helpers so tests can import those without Celery.
+from celery_config import celery_app  # noqa: E402
 
 
 @celery_app.task(name="services.sandbox.describe_sandbox_image")
@@ -181,14 +181,13 @@ def describe_sandbox_image_task(user_id: str, artifact_id: str) -> str:
     from utils.db.connection_pool import db_pool
     from utils.storage.storage import get_storage_manager
 
-    with db_pool.get_admin_connection() as conn:
-        with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[Sandbox:describe]")
-            cur.execute(
-                "SELECT storage_path, mime_type FROM sandbox_artifacts WHERE id = %s AND kind = 'image'",
-                (artifact_id,),
-            )
-            row = cur.fetchone()
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        set_rls_context(cur, conn, user_id, log_prefix="[Sandbox:describe]")
+        cur.execute(
+            "SELECT storage_path, mime_type FROM sandbox_artifacts WHERE id = %s AND kind = 'image'",
+            (artifact_id,),
+        )
+        row = cur.fetchone()
     if not row or not row[0]:
         return "missing"
 
@@ -198,13 +197,12 @@ def describe_sandbox_image_task(user_id: str, artifact_id: str) -> str:
     except Exception:
         logger.warning("[Sandbox] Could not read image %s for description", artifact_id, exc_info=True)
 
-    with db_pool.get_admin_connection() as conn:
-        with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[Sandbox:describe]")
-            cur.execute(
-                "UPDATE sandbox_artifacts SET content = %s WHERE id = %s AND content IS NULL",
-                (description or "", artifact_id),
-            )
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        set_rls_context(cur, conn, user_id, log_prefix="[Sandbox:describe]")
+        cur.execute(
+            "UPDATE sandbox_artifacts SET content = %s WHERE id = %s AND content IS NULL",
+            (description or "", artifact_id),
+        )
         conn.commit()
     return "ready" if description else "unavailable"
 

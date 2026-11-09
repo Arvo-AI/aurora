@@ -626,6 +626,35 @@ def _format_output(
     return json.dumps(output, indent=2, default=str)
 
 
+def _resolve_rca_auth(
+    user_id: str, repo_full_name: str, public_repo: Optional[str], action: str
+) -> Tuple[Any, Optional[str]]:
+    """Return (auth, error_json).
+
+    ``(None, None)`` means the public-repo sandbox: the repo is the incident's
+    pinned public repo and there is no GitHub connection, so reads go unauthenticated.
+    """
+    try:
+        return get_auth_for_user_repo(user_id, repo_full_name), None
+    except NoGitHubAuthError:
+        if public_repo and public_repo.lower() == repo_full_name.lower():
+            return None, None
+        return None, json.dumps({
+            "status": "error",
+            "error": "GitHub not connected for this user. Install the GitHub App or connect via OAuth.",
+            "action": action,
+            "repository": repo_full_name,
+        })
+    except Exception as e:
+        logger.exception("Error resolving GitHub auth for user %s repo %s", user_id, repo_full_name)
+        return None, json.dumps({
+            "status": "error",
+            "error": f"Failed to resolve GitHub auth: {e}",
+            "action": action,
+            "repository": repo_full_name,
+        })
+
+
 def github_rca(
     action: str,
     incident_time: Optional[str] = None,
@@ -693,33 +722,14 @@ def github_rca(
     logger.info(f"Resolved repository: {owner}/{repo_name} (source: {repo_source})")
 
     repo_full_name = f"{owner}/{repo_name}"
-    try:
-        auth = get_auth_for_user_repo(user_id, repo_full_name)
-    except NoGitHubAuthError:
-        if not public_repo or public_repo.lower() != repo_full_name.lower():
-            return json.dumps({
-                "status": "error",
-                "error": "GitHub not connected for this user. Install the GitHub App or connect via OAuth.",
-                "action": action,
-                "repository": repo_full_name,
-            })
-        auth = None  # public-repo sandbox: unauthenticated, read-only
-    except Exception as e:
-        logger.exception(
-            "Error resolving GitHub auth for user %s repo %s",
-            user_id, repo_full_name,
-        )
-        return json.dumps({
-            "status": "error",
-            "error": f"Failed to resolve GitHub auth: {e}",
-            "action": action,
-            "repository": repo_full_name,
-        })
-
+    auth, auth_error = _resolve_rca_auth(user_id, repo_full_name, public_repo, action)
+    if auth_error:
+        return auth_error
+    auth_method = auth.method if auth else "public"
+    installation_id = auth.installation_id if auth else None
     logger.info(
         f"Resolved GitHub auth for {user_id} {repo_full_name}: "
-        f"method={auth.method if auth else 'public'} "
-        f"installation_id={auth.installation_id if auth else None}"
+        f"method={auth_method} installation_id={installation_id}"
     )
 
     # Calculate time windows
@@ -758,8 +768,8 @@ def github_rca(
             repo_name,
             repo_source,
             time_window,
-            auth_method=auth.method if auth else "public",
-            installation_id=auth.installation_id if auth else None,
+            auth_method=auth_method,
+            installation_id=installation_id,
         )
 
     except Exception as e:
