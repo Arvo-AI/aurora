@@ -1453,6 +1453,41 @@ def initialize_tables():
                         ON artifact_versions(artifact_id, version_number DESC);
                     CREATE INDEX IF NOT EXISTS idx_artifact_versions_org ON artifact_versions(org_id);
                 """,
+                # NEW: Sandboxes are a workspace of pasted/uploaded evidence which an investigation runs against.
+                "sandboxes": """
+                    CREATE TABLE IF NOT EXISTS sandboxes (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        name VARCHAR(200) NOT NULL,
+                        public_repo VARCHAR(200),
+                        incident_time TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_sandboxes_org_updated
+                        ON sandboxes(org_id, updated_at DESC);
+                """,
+                "sandbox_artifacts": """
+                    CREATE TABLE IF NOT EXISTS sandbox_artifacts (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        sandbox_id UUID NOT NULL REFERENCES sandboxes(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        kind VARCHAR(20) NOT NULL
+                            CHECK (kind IN ('log', 'text', 'document', 'image', 'link')),
+                        name VARCHAR(255) NOT NULL,
+                        content TEXT,
+                        storage_path TEXT,
+                        mime_type VARCHAR(100),
+                        size_bytes INTEGER NOT NULL DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_sandbox_artifacts_sandbox
+                        ON sandbox_artifacts(sandbox_id, created_at);
+                """,
                 "incident_lifecycle_events": """
                     CREATE TABLE IF NOT EXISTS incident_lifecycle_events (
                         id SERIAL PRIMARY KEY,
@@ -1738,7 +1773,8 @@ def initialize_tables():
             rls_tables.append("artifact_versions")
             rls_tables.append("hpa_vpa_recommendations")
             rls_tables.append("recurrence_verdicts")
-
+            rls_tables.append("sandboxes")
+            rls_tables.append("sandbox_artifacts")
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
             try:
@@ -2365,6 +2401,20 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error adding security_tainted column: {e}")
+                conn.rollback()
+            # Migration: group chats under a sandbox (a project).
+            try:
+                cursor.execute("""
+                    ALTER TABLE chat_sessions
+                    ADD COLUMN IF NOT EXISTS sandbox_id UUID
+                        REFERENCES sandboxes(id) ON DELETE SET NULL;
+                    CREATE INDEX IF NOT EXISTS idx_chat_sessions_sandbox
+                        ON chat_sessions(sandbox_id) WHERE sandbox_id IS NOT NULL;
+                """)
+                logging.info("Added sandbox_id column to chat_sessions table (if not exists).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding sandbox_id column to chat_sessions: {e}")
                 conn.rollback()
 
             # Migration: Add surcharge fields to llm_usage_tracking table if they don't exist

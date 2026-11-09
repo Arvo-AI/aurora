@@ -2,7 +2,6 @@
 
 import json
 import logging
-from datetime import datetime, timezone
 from routes.audit_routes import record_audit_event as _record_audit_event
 from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
@@ -1941,18 +1940,10 @@ def trigger_rca_from_chat(user_id):
             return jsonify({"error": "repo must be a public GitHub repository as owner/repo"}), 400
         repo = canonical
 
-    incident_time = None
-    raw_time = str(data.get("incident_time") or "").strip()
-    if raw_time:
-        try:
-            parsed = datetime.fromisoformat(raw_time)
-        except ValueError:
-            return jsonify({"error": "incident_time must be ISO 8601"}), 400
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        if parsed > datetime.now(timezone.utc):
-            return jsonify({"error": "incident_time cannot be in the future"}), 400
-        incident_time = parsed.astimezone(timezone.utc).replace(tzinfo=None)  # started_at is naive UTC
+    from utils.incidents import parse_incident_time
+    incident_time, time_error = parse_incident_time(data.get("incident_time"))
+    if time_error:
+        return jsonify({"error": time_error}), 400
 
     from chat.backend.agent.tools.trigger_rca_tool import trigger_rca as _agent_trigger_rca
     try:

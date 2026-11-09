@@ -1,8 +1,8 @@
 """Helpers for reading incident state from the DB."""
 
 import logging
-from datetime import timezone
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,26 @@ def fetch_incident_start_time(user_id: str, incident_id: Optional[str], log_pref
     except Exception as exc:
         logger.warning("%s Could not fetch incident started_at for %s: %s", log_prefix, incident_id, exc)
         return None
+
+
+def parse_incident_time(raw) -> Tuple[Optional[datetime], Optional[str]]:
+    """Parse an ISO 8601 incident time into naive UTC (the column type).
+
+    Returns (value, None) on success, (None, None) for empty input,
+    and (None, error_message) when invalid or in the future.
+    """
+    raw = str(raw or "").strip()
+    if not raw:
+        return None, None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None, "incident_time must be ISO 8601"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    if parsed > datetime.now(timezone.utc):
+        return None, "incident_time cannot be in the future"
+    return parsed.astimezone(timezone.utc).replace(tzinfo=None), None
 
 
 def fetch_incident_public_repo(user_id: str, incident_id: Optional[str], log_prefix: str = "[incidents]") -> Optional[str]:
