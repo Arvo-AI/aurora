@@ -21,6 +21,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
+import { isIncidentPreventionEnabled } from '@/lib/feature-flags';
 
 const ALERT_CATEGORIES = new Set(['Monitoring', 'Incident Management']);
 
@@ -374,6 +375,16 @@ function ConnectPlatformCTA() {
           <span className="text-xs font-medium text-muted-foreground">Suggest</span>
         </button>
       </div>
+
+      {isIncidentPreventionEnabled() && (
+        <p className="text-sm text-muted-foreground mt-6">
+          No alerts yet?{' '}
+          <Link href="/pr-preview" className="underline underline-offset-4 text-foreground">
+            Review a public pull request
+          </Link>{' '}
+          and see what Aurora flags, with nothing connected.
+        </p>
+      )}
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-sm">
