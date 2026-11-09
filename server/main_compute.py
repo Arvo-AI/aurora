@@ -625,6 +625,10 @@ app.register_blueprint(incidents_sse_bp)
 from routes.incidents_findings import findings_bp
 app.register_blueprint(findings_bp)
 
+# --- Public repository reliability preview ---
+from routes.public_repo_preview_routes import public_repo_preview_bp
+app.register_blueprint(public_repo_preview_bp)
+
 from routes.actions import actions_bp
 app.register_blueprint(actions_bp, url_prefix="/api/actions")
 
