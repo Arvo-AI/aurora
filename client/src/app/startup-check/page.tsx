@@ -345,7 +345,7 @@ export default function StartupCheckPage() {
     } finally {
       setIsStarting(false);
     }
-  }, [repoFullName, buildContext, poll]);
+  }, [repoFullName, buildContext, poll, facts]);
 
   const dismissFinding = useCallback(
     async (findingId: string) => {
