@@ -37,7 +37,7 @@ def _new_description(old: str, content: str) -> str | None:
     return new
 
 
-def _backfill_org(cursor, conn, org_id: str, user_id: str) -> int:
+def _backfill_org(cursor) -> int:
     """Backfill one org (RLS context must already be set). Returns rows updated."""
     updated = 0
     last_id = None
@@ -129,7 +129,7 @@ def run_backfill() -> dict:
                     ):
                         stats["errors"] += 1
                         continue
-                    n = _backfill_org(cursor, conn, org_id, user_id)
+                    n = _backfill_org(cursor)
                     conn.commit()
                     stats["orgs"] += 1
                     stats["updated"] += n

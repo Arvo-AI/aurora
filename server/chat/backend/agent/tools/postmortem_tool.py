@@ -30,10 +30,24 @@ class SavePostmortemArgs(BaseModel):
 
 
 _DESCRIPTION_CHARS = 200
-_ROOT_CAUSE_RE = re.compile(
-    r"^#{1,6}[ \t]*\**[ \t]*root[ \t]+cause[^\n]*\n(.*?)(?=^#{1,6}[ \t]|\Z)",
-    re.IGNORECASE | re.MULTILINE | re.DOTALL,
-)
+# Line-based on purpose: one anchored regex per line, no cross-line lazy
+# match, so the cost is linear in the document size.
+_HEADING_RE = re.compile(r"#{1,6}[ \t]")
+_ROOT_CAUSE_HEADING_RE = re.compile(r"#{1,6}[ \t]*\**[ \t]*root[ \t]+cause", re.IGNORECASE)
+
+
+def _root_cause_section(content: str) -> str | None:
+    """Text under the first "Root Cause" heading, up to the next heading."""
+    lines = (content or "").splitlines()
+    for i, line in enumerate(lines):
+        if _ROOT_CAUSE_HEADING_RE.match(line):
+            body = []
+            for nxt in lines[i + 1:]:
+                if _HEADING_RE.match(nxt):
+                    break
+                body.append(nxt)
+            return "\n".join(body)
+    return None
 
 
 def _postmortem_description(content: str, alert_title, incident_id) -> str:
@@ -44,10 +58,10 @@ def _postmortem_description(content: str, alert_title, incident_id) -> str:
     """
     fallback = f"Postmortem for incident: {alert_title or incident_id}"
     try:
-        m = _ROOT_CAUSE_RE.search(content or "")
-        if not m:
+        section = _root_cause_section(content)
+        if section is None:
             return fallback
-        text = re.sub(r"[*`#>]+", "", m.group(1))
+        text = re.sub(r"[*`#>]+", "", section)
         text = re.sub(r"\s+", " ", text).strip()
         if len(text) < 10:
             return fallback

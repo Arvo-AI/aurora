@@ -112,7 +112,7 @@ def search_memory(user_id):
             )
         return jsonify({"query": q, "hits": [h.to_dict() for h in hits]}), 200
     except Exception as e:
-        logger.error("[Memory] search failed: %s", e, exc_info=True)
+        logger.exception("[Memory] search failed: %s", e)
         return jsonify({"error": "Failed to search memory"}), 500
 
 
@@ -148,7 +148,7 @@ def check_change_route(user_id):
             )
         return jsonify(result), 200
     except Exception as e:
-        logger.error("[Memory] check-change failed: %s", e, exc_info=True)
+        logger.exception("[Memory] check-change failed: %s", e)
         return jsonify({"error": "Failed to check change"}), 500
 
 

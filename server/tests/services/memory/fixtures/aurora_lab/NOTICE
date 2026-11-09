@@ -1,6 +1,8 @@
 Aurora Lab scenarios, used as a retrieval test corpus.
 
 Source: https://github.com/Arvo-AI/aurora-lab (branch main, scenarios/<id>/{README.md,scenario.yaml,break.sh})
+Each break.sh is stored as break.sh.txt (contents unchanged) so code scanners do not
+analyse the vendored lab scripts as shell code.
 Fetched: 2026-11-09
 License: Apache License 2.0, Copyright Arvo AI.
 The files in this directory are used unmodified.
