@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.20] - 2026-11-09
+
+### Added
+- RabbitMQ: read-only connector for the management HTTP API. It signs in with
+  a `monitoring` user and lets the agent read cluster overview, node alarms,
+  queue depth, consumers, exchanges, bindings, connections and health checks.
+  It cannot publish, purge or dequeue messages. TLS verification is controlled
+  by `RABBITMQ_SSL_VERIFY`.
+- incident.io: the agent can look up an alert by its incident.io alert id or by
+  the source system's id (`deduplication_key`), and gets back the alert and any
+  incident it is attached to.
+
+### Fixed
+- Azure: an Ask-mode token refresh no longer overwrites the stored agent
+  principal with the read-only one, and a refresh no longer schedules
+  infrastructure prediscovery.
+
 ## [1.5.19] - 2026-11-06
 
 ### Fixed
