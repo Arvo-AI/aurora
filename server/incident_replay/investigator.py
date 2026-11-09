@@ -56,6 +56,7 @@ Every claim must cite the numeric evidence IDs that support it in
 Classify each finding with exactly one claim_type:
   deployment_observed    - a specific deployment ran (cite the deploy event)
   configuration_change   - a specific config field changed value (cite that change)
+  alert_observed         - an alert or threshold fired (cite that alert)
   error_observed         - a specific error appears in the logs (cite that log line)
   metric_degradation     - a metric moved outside its baseline (cite those samples)
   temporal_relationship  - one event preceded another (ordering only, NOT causation)

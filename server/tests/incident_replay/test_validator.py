@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from incident_replay.evidence import (
+    RECORD_ALERT,
     RECORD_DEPLOY_CHANGE,
     RECORD_DEPLOY_EVENT,
     RECORD_LOG,
@@ -144,6 +145,46 @@ class TestClaimSupport:
         mismatch = validate(bundle, _result(_finding("metric_degradation",
                                                      "cpu saturation rose", metrics)))
         assert mismatch.findings[0].status == UNVERIFIED_HYPOTHESIS
+
+    def test_alert_claim_is_verified_against_an_alert_record(self, bundle):
+        # Without this claim type the only bucket that fits an alert is
+        # error_observed, which demands a log line and demotes a correct claim.
+        alert = _id_of(bundle, RECORD_ALERT, "PD-88213")
+        report = validate(
+            bundle,
+            _result(_finding("alert_observed",
+                             "PD-88213 fired for checkout-api HTTP 5xx rate 7.8%.", [alert])),
+        )
+        assert report.findings[0].status == VERIFIED_OBSERVATION
+
+    def test_alert_claim_citing_a_log_is_refused(self, bundle):
+        log_id = _id_of(bundle, RECORD_LOG, "HikariPool")
+        report = validate(
+            bundle,
+            _result(_finding("alert_observed", "PD-88213 fired.", [log_id])),
+        )
+        assert report.findings[0].status == UNVERIFIED_HYPOTHESIS
+        assert "must cite at least one alert record" in " ".join(report.findings[0].reasons)
+
+    def test_metric_named_in_prose_rather_than_by_identifier(self, bundle):
+        # A record calls it http_5xx_rate; a model writing prose calls it "5xx
+        # rate". Requiring the exact identifier demoted correct claims.
+        metrics = _ids_of(bundle, RECORD_METRIC, "http_5xx_rate")
+        report = validate(
+            bundle,
+            _result(_finding("metric_degradation",
+                             "5xx rate rose from 0.4% to 7.8% during the window.", metrics)),
+        )
+        assert report.findings[0].status == VERIFIED_OBSERVATION
+
+    def test_one_shared_word_is_not_enough_to_match_a_metric(self, bundle):
+        # "rate" alone appears in several metrics; that must not count as naming one.
+        metrics = _ids_of(bundle, RECORD_METRIC, "http_5xx_rate")
+        report = validate(
+            bundle,
+            _result(_finding("metric_degradation", "the rate was elevated.", metrics)),
+        )
+        assert report.findings[0].status == UNVERIFIED_HYPOTHESIS
 
     def test_metric_claim_stating_a_value_the_samples_do_not_have(self, bundle):
         metrics = _ids_of(bundle, RECORD_METRIC, "p99_latency_ms")

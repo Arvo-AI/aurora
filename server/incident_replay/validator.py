@@ -30,6 +30,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from .evidence import (
+    RECORD_ALERT,
     RECORD_DEPLOY_CHANGE,
     RECORD_DEPLOY_EVENT,
     RECORD_LOG,
@@ -47,6 +48,11 @@ INVALID_CITATION = "invalid_citation"
 OBSERVABLE_TYPES = {
     "deployment_observed": RECORD_DEPLOY_EVENT,
     "configuration_change": RECORD_DEPLOY_CHANGE,
+    # An alert firing is an observation in its own right. Without this type the
+    # only bucket that fits is error_observed, which demands a log line — so a
+    # correctly-cited alert was being demoted for citing a record of the wrong
+    # kind when it was the taxonomy that was wrong, not the claim.
+    "alert_observed": RECORD_ALERT,
     "error_observed": RECORD_LOG,
     "metric_degradation": RECORD_METRIC,
 }
@@ -58,6 +64,8 @@ KNOWN_CLAIM_TYPES = set(OBSERVABLE_TYPES) | INFERENCE_TYPES
 _FIELD_TOKEN = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+")
 _WORD_TOKEN = re.compile(r"[A-Za-z_][\w.]{5,}")
 _STATUS_CODE = re.compile(r"\b(4\d{2}|5\d{2})\b")
+#: An alert identifier such as ``PD-88213``: the one token two alerts cannot share.
+_ALERT_ID = re.compile(r"\b[A-Z]{2,}-\d+\b")
 #: A number that counts as a stated value. Deliberately loose on the trailing
 #: side so "2400ms" counts, and deliberately anchored on a word boundary so the
 #: digits inside "http_5xx_rate" and "p99_latency_ms" do not: those name
@@ -248,6 +256,47 @@ def _supports_error(claim: str, records: List[Any]) -> Tuple[bool, str]:
     return False, "no cited log record contains the error the claim describes"
 
 
+def _supports_alert(claim: str, records: List[Any]) -> Tuple[bool, str]:
+    """An alert claim must cite an alert record that names the same alert.
+
+    The alert identifier is checked first because it is the one token that cannot
+    be shared by accident; the word overlap is the fallback for alerts described
+    without their id.
+    """
+    claimed_ids = set(_ALERT_ID.findall(claim))
+    claimed_words = {token.lower() for token in _WORD_TOKEN.findall(claim)}
+    for record in records:
+        if record.record_type != RECORD_ALERT:
+            continue
+        if claimed_ids & set(_ALERT_ID.findall(record.content)):
+            return True, f"alert evidence [{record.id}] names the same alert"
+        words = {token.lower() for token in _WORD_TOKEN.findall(record.content)}
+        if claimed_words & words:
+            return True, f"alert evidence [{record.id}] contains the described alert"
+    return False, "no cited alert record names the alert the claim describes"
+
+
+def _metric_name_tokens(name: str) -> set:
+    """Distinctive words in a metric name, for tolerant matching.
+
+    A record calls a metric ``http_5xx_rate``; a model writing prose calls it "5xx
+    rate". Requiring the exact identifier demoted correct claims, so the words are
+    compared instead — but only the distinctive ones, and never a single word, so
+    that "rate" alone does not match every rate metric in the bundle.
+    """
+    return {token for token in re.split(r"[^a-z0-9]+", name.lower()) if len(token) >= 3}
+
+
+def _claim_mentions_metric(claim: str, name: str) -> bool:
+    if name in claim:
+        return True
+    tokens = _metric_name_tokens(name)
+    if len(tokens) < 2:
+        return False
+    lowered = claim.lower()
+    return sum(1 for token in tokens if token in lowered) >= 2
+
+
 def _supports_metric(claim: str, records: List[Any]) -> Tuple[bool, str]:
     """A metric claim must name the metric and, if it states numbers, use values
     the cited samples actually contain.
@@ -261,7 +310,7 @@ def _supports_metric(claim: str, records: List[Any]) -> Tuple[bool, str]:
         if record.record_type != RECORD_METRIC or "=" not in record.content:
             continue
         name = record.content.split("=", 1)[0].split()[-1]
-        if not name or name not in claim:
+        if not name or not _claim_mentions_metric(claim, name):
             continue
         values = {
             r.content.split("=", 1)[1].split()[0]
@@ -281,6 +330,7 @@ def _supports_metric(claim: str, records: List[Any]) -> Tuple[bool, str]:
 _SUPPORT_RULES = {
     "deployment_observed": _supports_deployment,
     "configuration_change": _supports_config_change,
+    "alert_observed": _supports_alert,
     "error_observed": _supports_error,
     "metric_degradation": _supports_metric,
 }
