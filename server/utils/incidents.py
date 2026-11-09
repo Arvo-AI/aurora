@@ -36,3 +36,24 @@ def fetch_incident_start_time(user_id: str, incident_id: Optional[str], log_pref
     except Exception as exc:
         logger.warning("%s Could not fetch incident started_at for %s: %s", log_prefix, incident_id, exc)
         return None
+
+
+def fetch_incident_public_repo(user_id: str, incident_id: Optional[str], log_prefix: str = "[incidents]") -> Optional[str]:
+    """Return the public 'owner/repo' a sandbox RCA was started with, or None."""
+    if not incident_id:
+        return None
+    try:
+        from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix=log_prefix)
+                cur.execute(
+                    "SELECT alert_metadata->>'public_repo' FROM incidents WHERE id = %s",
+                    (incident_id,),
+                )
+                row = cur.fetchone()
+                return row[0] if row and row[0] else None
+    except Exception as exc:
+        logger.warning("%s Could not fetch public_repo for %s: %s", log_prefix, incident_id, exc)
+        return None

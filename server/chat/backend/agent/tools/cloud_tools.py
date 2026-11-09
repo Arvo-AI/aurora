@@ -1444,7 +1444,13 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             )
             return False
 
-    if _safe_connected(is_github_connected, "GitHub") and _open("github"):
+    github_connected = _safe_connected(is_github_connected, "GitHub") and _open("github")
+    public_repo = None
+    if not github_connected and _open("github") and state_context is not None:
+        from utils.incidents import fetch_incident_public_repo
+        public_repo = fetch_incident_public_repo(user_id, getattr(state_context, "incident_id", None))
+
+    if github_connected:
         if not is_pr_review:
             tool_functions.append((github_commit, "github_commit"))
         tool_functions.append((get_connected_repos, "get_connected_repos"))
@@ -1456,6 +1462,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         if is_rca_context:
             tool_functions.append((github_fix, "github_fix"))
         logging.info(f"Added GitHub tools for user {user_id} (github_fix={'included' if is_rca_context else 'excluded (not RCA)'})")
+    elif public_repo:
+        # Public-repo sandbox: history reads only. No github_commit / github_fix.
+        tool_functions.append((github_rca, "github_rca"))
+        logging.info(f"Added public-repo github_rca for user {user_id} (repo={public_repo})")
 
     if _safe_connected(is_tailscale_connected, "Tailscale") and _open("tailscale") and not is_pr_review:
         tool_functions.append((tailscale_ssh, "tailscale_ssh"))
@@ -1547,7 +1557,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         # through with_completion_notification and wrap_func_with_capture.
         effective_func = func
         if name == 'github_rca':
-            def _github_rca_pinned(*args, _inner=func, **kwargs):
+            def _github_rca_pinned(*args, _inner=func, _public_repo=public_repo, **kwargs):
                 state_ctx = get_state_context()
                 incident_id_ctx = getattr(state_ctx, "incident_id", None) if state_ctx else None
                 pinned = getattr(state_ctx, "incident_start_time", None) if state_ctx else None
@@ -1558,6 +1568,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     })
                 if pinned:
                     kwargs["incident_time"] = pinned
+                if _public_repo:
+                    kwargs["public_repo"] = _public_repo
+                    if not kwargs.get("repo"):
+                        kwargs["repo"] = _public_repo
                 return _inner(*args, **kwargs)
             effective_func = _github_rca_pinned
 

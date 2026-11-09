@@ -42,6 +42,8 @@ def trigger_rca(
     severity: str = "medium",
     user_id: str | None = None,
     session_id: str | None = None,
+    public_repo: str | None = None,
+    incident_time: datetime | None = None,
     **kwargs,
 ) -> str:
     """
@@ -116,6 +118,8 @@ def trigger_rca(
         "triggered_from_session": session_id,
         "triggered_at": timestamp_str,
     }
+    if public_repo:
+        alert_metadata["public_repo"] = public_repo
 
     from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context
     from utils.db.connection_pool import db_pool
@@ -141,7 +145,7 @@ def trigger_rca(
                     (
                         user_id, org_id, "chat", source_alert_id, incident_title,
                         service or "unknown", severity, "investigating",
-                        now, json.dumps(alert_metadata),
+                        incident_time or now, json.dumps(alert_metadata),
                     ),
                 )
                 incident_row = cursor.fetchone()
@@ -208,6 +212,13 @@ def trigger_rca(
             "service": service,
             "severity": severity,
         }
+        if public_repo:
+            payload["repository"] = public_repo
+            payload["investigation_hint"] = (
+                f"Public GitHub repository {public_repo} is available read-only via github_rca. "
+                "Use 'pull_requests' and 'commits' to find the change that caused this, then 'diff' to confirm. "
+                "If nothing fits in the default 24h window, retry with time_window_hours=168."
+            )
 
         rca_prompt, rail_text = build_rca_prompt(
             "chat", incident_title, payload, user_id=user_id,
