@@ -5,6 +5,10 @@ prompts:
     # for thinking before emitting the Yes/No answer. 512 covers the thinking
     # overhead on short inputs while staying negligible in cost.
     max_tokens: 512
+    # NeMo's default parser (is_content_safe) only checks the first two
+    # whitespace tokens, so "**Answer: No** ..." reads as a block. Registered
+    # in guardrails/input_rail.py; see guardrails/self_check_parser.py.
+    output_parser: aurora_self_check_verdict
     content: |
       You are a security classifier for a cloud operations AI assistant.
 
@@ -51,5 +55,5 @@ prompts:
 
       User message: "{{ user_input }}"
 
-      Question: Should the user message be blocked (Yes or No)?
+      Question: Should the user message be blocked? Reply with exactly one word, Yes or No, and nothing else.
       Answer:

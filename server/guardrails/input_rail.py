@@ -232,9 +232,15 @@ def _build_rails_sync():
 
     from nemoguardrails import LLMRails, RailsConfig
 
+    from guardrails.self_check_parser import PARSER_NAME, parse_self_check_verdict
+
     config_path = os.path.join(os.path.dirname(__file__), "config")
     rails_config = RailsConfig.from_path(config_path)
-    return LLMRails(config=rails_config, llm=_build_llm())
+    rails = LLMRails(config=rails_config, llm=_build_llm())
+    # prompts.yml names this parser for self_check_input. Without it NeMo falls
+    # back to is_content_safe, which reads "**Answer: No**" as a block.
+    rails.register_output_parser(parse_self_check_verdict, PARSER_NAME)
+    return rails
 
 
 def _ensure_rails_in_thread():

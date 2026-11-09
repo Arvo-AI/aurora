@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Guardrails: the input rail no longer blocks harmless messages when the
+  classifier answers in Markdown. NeMo's default parser only reads the first
+  two words, so "**Answer: No**" (allow) was treated as a block. On default
+  self-hosted installs, where the rail runs on the main model, 12 of 20 recent
+  merged PR descriptions were blocked and their PR reviews were never posted.
+  The rail now reads the verdict after Markdown and an optional label, still
+  blocks on "Yes" or anything unclear, and asks for a one-word answer.
+
 ## [1.5.20] - 2026-11-09
 
 ### Added
