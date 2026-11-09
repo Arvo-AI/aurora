@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { title, messages, uiState } = body;
+    const { title, messages, uiState, sandboxId } = body;
 
     const response = await makeAuthenticatedRequest(
       `${API_BASE_URL}/chat_api/sessions`,
@@ -63,7 +63,9 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({
           title,
           messages: messages || [],
-          ui_state: uiState || {}
+          ui_state: uiState || {},
+          // Optional: start the chat inside a sandbox (project). Backend validates it.
+          ...(sandboxId ? { sandbox_id: sandboxId } : {}),
         }),
       }
     );

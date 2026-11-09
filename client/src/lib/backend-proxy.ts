@@ -64,6 +64,17 @@ function formatSuccessResponse(response: Response, errorLabel: string): Promise<
     );
   }
 
+  // Raster images pass through as bytes (text() would corrupt them). SVG is
+  // excluded: it is script-capable, so it falls through to the text branch.
+  if (/^image\/(png|jpeg|gif|webp)\b/.test(ct)) {
+    return response.arrayBuffer().then((buf) =>
+      new NextResponse(buf, {
+        status: response.status,
+        headers: { 'Content-Type': ct, 'X-Content-Type-Options': 'nosniff' },
+      }),
+    );
+  }
+
   // Fall back to plain text
   return response.text().then((text) =>
     new NextResponse(text, {
