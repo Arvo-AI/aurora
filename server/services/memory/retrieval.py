@@ -31,11 +31,16 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import re
+import functools
+import itertools
 import threading
 import time
+from array import array
 from collections import Counter, OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -125,30 +130,49 @@ class Chunk:
     heading: str
 
 
+@functools.lru_cache(maxsize=200_000)
+def _word_terms(word: str) -> Tuple[str, ...]:
+    """Terms of one whitespace-free word, cached: banks repeat words heavily.
+
+    Identifiers never contain whitespace, so tokenizing word by word yields
+    exactly what tokenizing the whole text would.
+    """
+    return tuple(tokenize(word))
+
+
+def _sections(content: str):
+    """(heading, [(start, end) word spans]) per heading-delimited section."""
+    starts = [m.start() for m in _HEADING_START_RE.finditer(content)]
+    if not starts or starts[0] != 0:
+        starts.insert(0, 0)
+    for sec_start, sec_end in zip(starts, starts[1:] + [len(content)]):
+        section = content[sec_start:sec_end]
+        first_line = section.split("\n", 1)[0].strip()
+        heading = first_line.lstrip("#").strip() if first_line.startswith("#") else ""
+        spans = [(sec_start + m.start(), sec_start + m.end()) for m in _WORD_SPAN_RE.finditer(section)]
+        if spans:
+            yield heading, spans
+
+
+def _windows(n_words: int):
+    """(first, last_exclusive) word indexes of each chunk window in a section."""
+    step = max(1, CHUNK_WORDS - CHUNK_OVERLAP)
+    for i in range(0, n_words, step):
+        yield i, min(i + CHUNK_WORDS, n_words)
+        if i + CHUNK_WORDS >= n_words:
+            break
+
+
 def chunk_content(content: str) -> List[Chunk]:
     """Heading-aware windows over *content* with their character spans."""
     content = content or ""
     if not content.strip():
         return [Chunk(0, 0, "")]
-    starts = [m.start() for m in _HEADING_START_RE.finditer(content)]
-    if not starts or starts[0] != 0:
-        starts.insert(0, 0)
-    bounds = list(zip(starts, starts[1:] + [len(content)]))
-
-    chunks: List[Chunk] = []
-    step = max(1, CHUNK_WORDS - CHUNK_OVERLAP)
-    for sec_start, sec_end in bounds:
-        section = content[sec_start:sec_end]
-        first_line = section.split("\n", 1)[0].strip()
-        heading = first_line.lstrip("#").strip() if first_line.startswith("#") else ""
-        spans = [(sec_start + m.start(), sec_start + m.end()) for m in _WORD_SPAN_RE.finditer(section)]
-        if not spans:
-            continue
-        for i in range(0, len(spans), step):
-            window = spans[i:i + CHUNK_WORDS]
-            chunks.append(Chunk(window[0][0], window[-1][1], heading))
-            if i + CHUNK_WORDS >= len(spans):
-                break
+    chunks = [
+        Chunk(spans[a][0], spans[b - 1][1], heading)
+        for heading, spans in _sections(content)
+        for a, b in _windows(len(spans))
+    ]
     return chunks or [Chunk(0, len(content), "")]
 
 
@@ -180,31 +204,82 @@ class MemoryIndex:
     """BM25 over the chunks of one org's memory entries."""
 
     def __init__(self, entries: Sequence[Dict]):
+        # Compact columns, not per-chunk objects: a 500-entry bank is ~8.5k
+        # chunks and ~1M postings, and Python tuples/Counters per posting cost
+        # several times the text itself.
         self.entries: List[Dict] = list(entries)
-        self._chunk_owner: List[int] = []
-        self._chunks: List[Chunk] = []
-        self._chunk_len: List[int] = []
-        self._postings: Dict[str, List[Tuple[int, int]]] = {}
+        self._entry_category: List[str] = [e.get("category") or "" for e in self.entries]
+        self._entry_id: List[str] = [str(e.get("id") or "") for e in self.entries]
+        self._chunk_owner = array("I")
+        self._chunk_start = array("I")
+        self._chunk_end = array("I")
+        self._chunk_len = array("I")
+        self._chunk_heading = array("I")
+        self._headings: List[str] = [""]
+        heading_ids: Dict[str, int] = {"": 0}
+        postings: Dict[str, Tuple[array, array]] = {}
+
         for entry_idx, entry in enumerate(self.entries):
             content = entry.get("content") or ""
             # The title and description belong to every chunk: they are what
             # the entry is *about*, even when a chunk never repeats them.
             header = tokenize(f"{entry.get('title') or ''}\n{entry.get('description') or ''}")
-            for chunk in chunk_content(content):
-                counts = Counter(header)
-                counts.update(tokenize(content[chunk.offset:chunk.end]))
-                chunk_id = len(self._chunks)
-                self._chunks.append(chunk)
-                self._chunk_owner.append(entry_idx)
-                self._chunk_len.append(sum(counts.values()))
-                for term, tf in counts.items():
-                    self._postings.setdefault(term, []).append((chunk_id, tf))
-        n = len(self._chunks)
+            sections = list(_sections(content)) if content.strip() else []
+            if not sections:
+                self._add_chunk(postings, entry_idx, 0, len(content), 0, Counter(header))
+                continue
+            for heading, spans in sections:
+                hid = heading_ids.setdefault(heading, len(heading_ids))
+                if hid == len(self._headings):
+                    self._headings.append(heading)
+                # Each word is tokenized once per section, then shared by
+                # every overlapping window that contains it.
+                word_terms = [_word_terms(content[a:b]) for a, b in spans]
+                for first, last in _windows(len(spans)):
+                    counts = Counter(header)
+                    counts.update(itertools.chain.from_iterable(word_terms[first:last]))
+                    self._add_chunk(postings, entry_idx, spans[first][0], spans[last - 1][1], hid, counts)
+
+        self._postings = postings
+        n = len(self._chunk_owner)
         self._avg_len = (sum(self._chunk_len) / n) if n else 0.0
         self._idf = {
-            term: math.log(1 + (n - len(posts) + 0.5) / (len(posts) + 0.5))
-            for term, posts in self._postings.items()
+            term: math.log(1 + (n - len(ids) + 0.5) / (len(ids) + 0.5))
+            for term, (ids, _) in postings.items()
         }
+
+    def _add_chunk(self, postings, entry_idx: int, start: int, end: int, heading_id: int, counts: Counter) -> None:
+        chunk_id = len(self._chunk_owner)
+        self._chunk_owner.append(entry_idx)
+        self._chunk_start.append(start)
+        self._chunk_end.append(end)
+        self._chunk_heading.append(heading_id)
+        self._chunk_len.append(sum(counts.values()))
+        for term, tf in counts.items():
+            ids_tfs = postings.get(term)
+            if ids_tfs is None:
+                ids_tfs = postings[term] = (array("I"), array("H"))
+            ids_tfs[0].append(chunk_id)
+            ids_tfs[1].append(min(tf, 65535))
+
+    @property
+    def n_chunks(self) -> int:
+        return len(self._chunk_owner)
+
+    def chunk(self, chunk_id: int) -> Chunk:
+        return Chunk(self._chunk_start[chunk_id], self._chunk_end[chunk_id],
+                     self._headings[self._chunk_heading[chunk_id]])
+
+    def chunks_with(self, term: str):
+        """Chunk ids containing *term* (empty if unknown)."""
+        ids_tfs = self._postings.get(term)
+        return ids_tfs[0] if ids_tfs else ()
+
+    def approx_bytes(self) -> int:
+        """Rough resident size: indexed text plus posting and chunk columns."""
+        text = sum(len(e.get("content") or "") for e in self.entries)
+        postings = sum(len(ids) * 6 + 120 for ids, _ in self._postings.values())
+        return text + postings + self.n_chunks * 20 + len(self._idf) * 90
 
     def __len__(self) -> int:
         return len(self.entries)
@@ -215,7 +290,7 @@ class MemoryIndex:
     @property
     def max_idf(self) -> float:
         """IDF of a term found in exactly one chunk: the rarest a term can be here."""
-        n = len(self._chunks)
+        n = self.n_chunks
         return math.log(1 + (n - 0.5) / 1.5) if n else 0.0
 
     def query_idf(self, terms: Iterable[str]) -> float:
@@ -239,22 +314,24 @@ class MemoryIndex:
         terms = tokenize(query) if isinstance(query, str) else list(query)
         # Repeating a term in a long query (a diff) must not multiply its weight.
         terms = list(dict.fromkeys(t for t in terms if t in self._postings))
-        if not terms or not self._chunks:
+        if not terms or not self.n_chunks:
             return []
         allowed = set(categories) if categories else None
         only_ids = {str(i) for i in entry_ids} if entry_ids is not None else None
 
         chunk_scores: Dict[int, float] = {}
         chunk_terms: Dict[int, List[Tuple[float, str]]] = {}
+        cats, eids, owners, lens = self._entry_category, self._entry_id, self._chunk_owner, self._chunk_len
         for term in terms:
             idf = self._idf[term]
-            for chunk_id, tf in self._postings[term]:
-                owner = self.entries[self._chunk_owner[chunk_id]]
-                if allowed is not None and owner.get("category") not in allowed:
+            ids, tfs = self._postings[term]
+            for chunk_id, tf in zip(ids, tfs):
+                owner = owners[chunk_id]
+                if allowed is not None and cats[owner] not in allowed:
                     continue
-                if only_ids is not None and str(owner.get("id") or "") not in only_ids:
+                if only_ids is not None and eids[owner] not in only_ids:
                     continue
-                norm = _BM25_K1 * (1 - _BM25_B + _BM25_B * self._chunk_len[chunk_id] / self._avg_len)
+                norm = _BM25_K1 * (1 - _BM25_B + _BM25_B * lens[chunk_id] / self._avg_len)
                 part = idf * tf * (_BM25_K1 + 1) / (tf + norm)
                 chunk_scores[chunk_id] = chunk_scores.get(chunk_id, 0.0) + part
                 chunk_terms.setdefault(chunk_id, []).append((part, term))
@@ -269,7 +346,7 @@ class MemoryIndex:
         hits: List[Hit] = []
         for entry_idx, (score, chunk_id) in ranked:
             entry = self.entries[entry_idx]
-            chunk = self._chunks[chunk_id]
+            chunk = self.chunk(chunk_id)
             text = (entry.get("content") or "")[chunk.offset:chunk.end][:MAX_HIT_CHARS]
             if redact_chunks:
                 text = _redact(text)
@@ -310,33 +387,42 @@ def _redact(text: str) -> str:
 # * fingerprint changed        -> serve the cached (stale) index now and rebuild
 #                                 in the background, at most once per
 #                                 ``REBUILD_MIN_INTERVAL`` seconds per org.
-# * nothing cached yet         -> build inline (``block=True``), one builder per
-#                                 org while concurrent callers wait for it; or
-#                                 schedule a build and return None
-#                                 (``block=False``, for latency-bound callers).
+# * nothing cached yet         -> build in the background, one build per org,
+#                                 and wait up to ``wait`` seconds for it. A
+#                                 caller that cannot afford the build gets None
+#                                 (routes answer "warming", prefetch skips) and
+#                                 the next call finds the index ready.
 #
 # Staleness is bounded (a new memory is searchable within about a rebuild
-# interval) and the rebuild cost no longer scales with write frequency.
+# interval) and the rebuild cost no longer scales with write frequency. The
+# cache is bounded by approximate size as well as by org count, so a few large
+# banks cannot grow a worker without limit.
 
 Fingerprint = Tuple
 
 REBUILD_MIN_INTERVAL = 30.0
+_CACHE_MAX_BYTES = int(float(os.getenv("RECALL_CACHE_MAX_MB", "256")) * 1024 * 1024)
 
-_cache: "OrderedDict[str, Tuple[Fingerprint, MemoryIndex, float]]" = OrderedDict()
+_cache: "OrderedDict[str, Tuple[Fingerprint, MemoryIndex, float, int]]" = OrderedDict()
 _cache_lock = threading.Lock()
 _build_locks: Dict[str, threading.Lock] = {}
-_scheduled: set = set()
+# org id -> the Future of its in-flight build (None while it is being submitted).
+_pending: Dict[str, Optional[Future]] = {}
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="recall-index")
 
 Loader = Callable[[], Tuple[Fingerprint, List[Dict]]]
 
 
 def _store(org_id: str, fingerprint: Fingerprint, index: MemoryIndex) -> None:
+    size = index.approx_bytes()
     with _cache_lock:
-        _cache[org_id] = (fingerprint, index, time.monotonic())
+        _cache[org_id] = (fingerprint, index, time.monotonic(), size)
         _cache.move_to_end(org_id)
-        while len(_cache) > _CACHE_MAX_ORGS:
-            _cache.popitem(last=False)
+        total = sum(v[3] for v in _cache.values())
+        # Evict least recently used orgs; always keep the one just stored.
+        while len(_cache) > 1 and (len(_cache) > _CACHE_MAX_ORGS or total > _CACHE_MAX_BYTES):
+            _, evicted = _cache.popitem(last=False)
+            total -= evicted[3]
 
 
 def _org_build_lock(org_id: str) -> threading.Lock:
@@ -353,19 +439,26 @@ def _background_rebuild(org_id: str, loader: Loader) -> None:
         logger.warning("[Recall] background rebuild failed for org %s", org_id, exc_info=True)
     finally:
         with _cache_lock:
-            _scheduled.discard(org_id)
+            _pending.pop(org_id, None)
 
 
-def _schedule_rebuild(org_id: str, loader: Loader) -> None:
+def _schedule_rebuild(org_id: str, loader: Loader) -> Optional[Future]:
+    """The org's in-flight build, starting one if none is running."""
     with _cache_lock:
-        if org_id in _scheduled:
-            return
-        _scheduled.add(org_id)
+        if org_id in _pending:
+            return _pending[org_id]
+        _pending[org_id] = None
     try:
-        _executor.submit(_background_rebuild, org_id, loader)
+        future = _executor.submit(_background_rebuild, org_id, loader)
     except Exception:  # interpreter shutdown
         with _cache_lock:
-            _scheduled.discard(org_id)
+            _pending.pop(org_id, None)
+        return None
+    with _cache_lock:
+        # A build that already finished has removed its own entry: leave it gone.
+        if org_id in _pending:
+            _pending[org_id] = future
+    return future
 
 
 def get_org_index(
@@ -375,16 +468,20 @@ def get_org_index(
     *,
     rebuild: Optional[Loader] = None,
     block: bool = True,
+    wait: Optional[float] = None,
 ) -> Optional[MemoryIndex]:
     """The org's index; see the cache notes above.
 
     Keyed by org id alone, so one org's index can never answer another's
     query; the fingerprint (entry count, latest ``updated_at``) is only the
     staleness check. *load_entries* reads on the caller's (RLS-pinned) cursor
-    and is used inline only; *rebuild* opens its own connection and returns
-    ``(fingerprint, entries)`` for background refreshes. Without *rebuild*,
-    a stale index is rebuilt inline.
+    and is used only when no *rebuild* loader is given (tests, offline eval).
+    *rebuild* opens its own connection and returns ``(fingerprint, entries)``;
+    with it, every build runs in the background and a cold caller waits at
+    most *wait* seconds (None: until done; ``block=False`` means 0).
     """
+    if not block:
+        wait = 0.0
     with _cache_lock:
         cached = _cache.get(org_id)
         if cached:
@@ -395,10 +492,16 @@ def get_org_index(
         if time.monotonic() - cached[2] >= REBUILD_MIN_INTERVAL:
             _schedule_rebuild(org_id, rebuild)
         return cached[1]
-    if not cached and not block:
-        if rebuild is not None:
-            _schedule_rebuild(org_id, rebuild)
-        return None
+    if rebuild is not None:
+        future = _schedule_rebuild(org_id, rebuild)
+        if future is not None and wait != 0:
+            try:
+                future.result(timeout=wait)
+            except FutureTimeout:
+                pass
+        with _cache_lock:
+            ready = _cache.get(org_id)
+        return ready[1] if ready else None
 
     with _org_build_lock(org_id):
         # Another caller may have built it while this one waited.
@@ -414,7 +517,7 @@ def get_org_index(
 def clear_cache() -> None:
     with _cache_lock:
         _cache.clear()
-        _scheduled.clear()
+        _pending.clear()
 
 
 def _own_connection_loader(user_id: str, org_id: str) -> Loader:
@@ -443,6 +546,7 @@ def org_index_for_cursor(
     *,
     user_id: Optional[str] = None,
     block: bool = True,
+    wait: Optional[float] = None,
 ) -> Optional[MemoryIndex]:
     """The org's index, reading through a cursor already pinned to it under RLS.
 
@@ -457,6 +561,7 @@ def org_index_for_cursor(
         lambda: fetch_memory_corpus(cursor, org_id),
         rebuild=_own_connection_loader(user_id, org_id) if user_id else None,
         block=block,
+        wait=wait,
     )
 
 
@@ -469,13 +574,14 @@ def search_org_memory(
     k: int = 5,
     user_id: Optional[str] = None,
     block: bool = True,
+    wait: Optional[float] = None,
 ) -> List[Hit]:
     """Search *org_id*'s memory on a cursor already pinned to it under RLS.
 
     For request handlers: pass the org RBAC authorized and pin RLS to it first
     (see the module docstring of ``services.memory.queries``).
     """
-    index = org_index_for_cursor(cursor, org_id, user_id=user_id, block=block)
+    index = org_index_for_cursor(cursor, org_id, user_id=user_id, block=block, wait=wait)
     if index is None:
         return []
     return index.search(query, categories=categories, k=k)

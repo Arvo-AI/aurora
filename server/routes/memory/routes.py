@@ -28,7 +28,7 @@ from services.memory import (
     SERVICENOW_MEMORY_TITLE,
 )
 from services.memory import change_check
-from services.memory.retrieval import search_org_memory
+from services.memory.retrieval import org_index_for_cursor
 from services.memory.change_check import check_change_for_org
 from services.memory.queries import fetch_entry_by_id, fetch_entry_by_title
 from services.memory.platform_memory import get_spec, seed_platform_memory
@@ -107,9 +107,13 @@ def search_memory(user_id):
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
-            hits = search_org_memory(
-                cursor, org_id, q, categories=categories, k=k, user_id=user_id,
+            index = org_index_for_cursor(
+                cursor, org_id, user_id=user_id, wait=change_check.ROUTE_WAIT_SECONDS,
             )
+        if index is None:
+            # First build for this org is running in the background.
+            return jsonify({"query": q, "hits": [], "status": "warming", "retry_after_seconds": 5}), 200
+        hits = index.search(q, categories=categories, k=k)
         return jsonify({"query": q, "hits": [h.to_dict() for h in hits]}), 200
     except Exception as e:
         logger.exception("[Memory] search failed: %s", e)

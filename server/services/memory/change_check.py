@@ -18,9 +18,14 @@ from __future__ import annotations
 import re
 from typing import Dict, Iterable, List, Optional, Sequence
 
+from services.memory import INCIDENT_INDEX_CATEGORY, INCIDENT_INDEX_TITLE
 from services.memory.retrieval import Hit, MemoryIndex, org_index_for_cursor, tokenize
 
-INCIDENT_CATEGORIES = ("postmortem", "artifact")
+# Past incidents are postmortems plus the one Incident Index entry. The rest of
+# the system "artifact" category holds every agent-written artifact (reports,
+# living documents); those describe work, not failures, and must never be
+# reported as a past incident.
+INCIDENT_CATEGORIES = ("postmortem", INCIDENT_INDEX_CATEGORY)
 GUARDRAIL_CATEGORIES = ("learned",)
 RUNBOOK_CATEGORIES = ("runbook", "context")
 
@@ -177,9 +182,18 @@ def _queries(diff: str, files: Optional[Sequence[str]], description: str) -> Lis
     return [q for q in queries if q]
 
 
+def _incident_entry_ids(index: MemoryIndex) -> List[str]:
+    """Ids of the entries that count as past incidents (see INCIDENT_CATEGORIES)."""
+    return [
+        str(e.get("id") or "") for e in index.entries
+        if e.get("category") == "postmortem"
+        or (e.get("category") == INCIDENT_INDEX_CATEGORY and e.get("title") == INCIDENT_INDEX_TITLE)
+    ]
+
+
 def _matches(
     index: MemoryIndex, queries: List[List[str]], categories, k: int,
-    soft_terms: frozenset = frozenset(),
+    soft_terms: frozenset = frozenset(), entry_ids: Optional[List[str]] = None,
 ) -> List[Hit]:
     """Entries that clear the bar on any query, best score kept, best first.
 
@@ -193,7 +207,7 @@ def _matches(
     for i, terms in enumerate(queries):
         query_idf = index.query_idf(terms)
         backstop = not (multi and i == 0)
-        for hit in index.search(terms, categories=categories, k=k):
+        for hit in index.search(terms, categories=categories, k=k, entry_ids=entry_ids):
             if _is_match(index, hit, query_idf, backstop=backstop, soft_terms=soft_terms):
                 prev = best.get(hit.entry_id)
                 if prev is None or hit.score > prev.score:
@@ -221,7 +235,7 @@ def check_change(
     soft = frozenset(
         t for t in tokenize(description or "") if t not in change_terms
     ) if change_terms else frozenset()
-    incidents = _matches(index, queries, INCIDENT_CATEGORIES, k, soft)
+    incidents = _matches(index, queries, INCIDENT_CATEGORIES, k, soft, _incident_entry_ids(index))
     guardrails = _matches(index, queries, GUARDRAIL_CATEGORIES, k, soft)
     # Runbooks are context, never evidence of a past failure, so they are not
     # gated; consumers must present them as such.
@@ -247,17 +261,32 @@ def _result(status, terms, incidents, guardrails, runbooks) -> Dict:
     }
 
 
-def check_change_for_org(cursor, org_id: str, *, user_id: Optional[str] = None, **kwargs) -> Dict:
+# How long a caller waits for a cold org's first index build.
+ROUTE_WAIT_SECONDS = 2.0
+PR_REVIEW_WAIT_SECONDS = 20.0
+
+
+def check_change_for_org(
+    cursor, org_id: str, *, user_id: Optional[str] = None,
+    wait: Optional[float] = ROUTE_WAIT_SECONDS, **kwargs,
+) -> Dict:
     """Request flavour: *cursor* is already pinned to *org_id* under RLS.
 
-    With *user_id*, a stale index is served and refreshed in the background.
+    With *user_id*, a stale index is served and refreshed in the background,
+    and a cold org's first build runs in the background too. If it is not
+    ready within *wait* seconds the result says ``INDEX_WARMING`` instead of
+    claiming NO_MATCH.
     """
-    index = org_index_for_cursor(cursor, org_id, user_id=user_id)
+    index = org_index_for_cursor(cursor, org_id, user_id=user_id, wait=wait)
+    if index is None:
+        return {**_result("INDEX_WARMING", [], [], [], []),
+                "retry_after_seconds": 5}
     return check_change(index, **kwargs)
 
 
 def check_change_for_user(user_id: str, **kwargs) -> Optional[Dict]:
-    """Background flavour (PR review). Returns None when memory is unreachable."""
+    """Background flavour (PR review). Returns None when memory is unreachable
+    or the org's index is still being built."""
     import logging
 
     from utils.auth.stateless_auth import set_rls_context
@@ -269,7 +298,11 @@ def check_change_for_user(user_id: str, **kwargs) -> Optional[Dict]:
                 org_id = set_rls_context(cursor, conn, user_id, log_prefix="[Recall:check_change]")
                 if not org_id:
                     return None
-                return check_change_for_org(cursor, org_id, user_id=user_id, **kwargs)
+                result = check_change_for_org(
+                    cursor, org_id, user_id=user_id, wait=PR_REVIEW_WAIT_SECONDS, **kwargs,
+                )
+                # A review must not read "no past incident" while the index warms.
+                return None if result.get("status") == "INDEX_WARMING" else result
     except Exception:
         logging.getLogger(__name__).warning(
             "[Recall] check_change failed for user %s", user_id, exc_info=True,

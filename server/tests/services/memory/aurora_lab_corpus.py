@@ -410,12 +410,12 @@ class _FeatureIndex:
     def __init__(self, index):
         self.ix = index
         self._ent = {str(e.get("id") or ""): i for i, e in enumerate(index.entries)}
-        self._chunk_of = {(o, c.offset): i for i, (o, c) in enumerate(zip(index._chunk_owner, index._chunks))}
+        self._chunk_of = {(index._chunk_owner[i], index.chunk(i).offset): i for i in range(index.n_chunks)}
         self._posting_sets: Dict[str, set] = {}
 
     def _chunks_with(self, term: str) -> set:
         if term not in self._posting_sets:
-            self._posting_sets[term] = {c for c, _ in self.ix._postings.get(term, ())}
+            self._posting_sets[term] = set(self.ix.chunks_with(term))
         return self._posting_sets[term]
 
     def features(self, terms: Sequence[str]) -> List[Tuple[Any, Dict[str, float]]]:

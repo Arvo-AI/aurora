@@ -36,8 +36,11 @@ def memory_client(monkeypatch):
     rls = MagicMock()
     monkeypatch.setattr(memory_routes, "set_rls_context", rls)
     search = MagicMock(return_value=[])
+    index = MagicMock()
+    index.search = search
+    lookup = MagicMock(return_value=index)
     check = MagicMock(return_value={"status": "NO_MATCH"})
-    monkeypatch.setattr(memory_routes, "search_org_memory", search)
+    monkeypatch.setattr(memory_routes, "org_index_for_cursor", lookup)
     monkeypatch.setattr(memory_routes, "check_change_for_org", check)
     seed = MagicMock(return_value=True)
     monkeypatch.setattr(memory_routes, "seed_platform_memory", seed)
@@ -56,6 +59,7 @@ def memory_client(monkeypatch):
     client.cursor = cursor
     client.rls = rls
     client.search = search
+    client.lookup = lookup
     client.check = check
     return client
 
@@ -82,9 +86,23 @@ def test_search_passes_through_and_pins_rls(memory_client):
     assert resp.status_code == 200
     assert resp.get_json() == {"query": "redis", "hits": [{"title": "T", "category": "runbook", "offset": 7}]}
     args, kwargs = memory_client.search.call_args
-    assert args[1:3] == (ORG_ID, "redis")
-    assert kwargs == {"categories": ["runbook", "context"], "k": 3, "user_id": "user-test"}
+    assert args == ("redis",)
+    assert kwargs == {"categories": ["runbook", "context"], "k": 3}
+    lookup_args, lookup_kwargs = memory_client.lookup.call_args
+    assert lookup_args[1] == ORG_ID
+    assert lookup_kwargs["user_id"] == "user-test"
+    assert lookup_kwargs["wait"] == 2.0
     assert memory_client.rls.call_args.kwargs["org_id"] == ORG_ID
+
+
+def test_search_answers_warming_while_a_cold_org_builds(memory_client):
+    memory_client.lookup.return_value = None
+    resp = memory_client.get("/search?q=redis", headers=HEADERS)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "warming"
+    assert body["hits"] == []
+    memory_client.search.assert_not_called()
 
 
 @pytest.mark.parametrize("raw,expected", [("999", 20), ("0", 1), ("-4", 1), ("abc", 5)])

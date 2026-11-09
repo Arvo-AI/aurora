@@ -1,5 +1,7 @@
 """Unit tests for services.memory.retrieval (tokenizer, chunking, BM25 index, per-org cache)."""
 
+import time
+
 import pytest
 
 from services.memory import retrieval
@@ -263,3 +265,115 @@ class TestSmallBankMatching:
                                     category="postmortem")])
         diff = "diff --git a/README.md b/README.md\n@@ -1 +1 @@\n-# Shop\n+# Shop storefront\n"
         assert cc.check_change(index, diff=diff)["status"] == "NO_MATCH"
+
+
+class TestIncidentScope:
+    """Only postmortems and the Incident Index count as past incidents."""
+
+    DIFF = ("diff --git a/k8s/worker.yaml b/k8s/worker.yaml\n@@ -1,3 +1,3 @@\n"
+            "   - name: BATCH_SIZE\n-    value: \"500\"\n+    value: \"2500\"\n")
+    TEXT = "The worker BATCH_SIZE was raised from 500 to 2500 and the worker was OOMKilled."
+
+    # Enough unrelated entries that a term shared by two entries is still rare,
+    # as it is in any real bank (hundreds of chunks).
+    PADDING = [
+        _entry(f"pad{i}", f"Runbook {i}", f"Service svc{i} handles queue q{i} and region r{i}. "
+               f"Restart pod p{i} when latency on endpoint e{i} exceeds its SLO.")
+        for i in range(40)
+    ]
+
+    def _bank(self, *extra):
+        return MemoryIndex(FILLER + self.PADDING + list(extra))
+
+    def test_ordinary_artifact_report_is_not_a_past_incident(self):
+        from services.memory import change_check as cc
+
+        report = _entry("rep", "Weekly capacity report", self.TEXT, category="artifact")
+        res = cc.check_change(self._bank(report), diff=self.DIFF)
+        assert res["status"] == "NO_MATCH"
+        assert res["related_incidents"] == []
+
+    def test_incident_index_line_is_a_past_incident(self):
+        from services.memory import change_check as cc
+
+        idx_entry = _entry("ii", "Incident Index",
+                           f"- [INC 1a2b | 2026-10-02 | worker | resolved] {self.TEXT}", category="artifact")
+        res = cc.check_change(self._bank(idx_entry), diff=self.DIFF)
+        assert res["status"] == "MATCHES_PAST_INCIDENT"
+        assert [h["entry_id"] for h in res["related_incidents"]] == ["ii"]
+
+    def test_postmortem_still_matches_alongside_a_report(self):
+        from services.memory import change_check as cc
+
+        pm = _entry("pm", "Postmortem: worker OOM", f"## Root Cause\n{self.TEXT}", category="postmortem")
+        report = _entry("rep", "Weekly capacity report", self.TEXT, category="artifact")
+        res = cc.check_change(self._bank(pm, report), diff=self.DIFF)
+        assert [h["entry_id"] for h in res["related_incidents"]] == ["pm"]
+
+
+class TestColdBuildsAndBudget:
+    @pytest.fixture(autouse=True)
+    def _clean(self):
+        retrieval.clear_cache()
+        yield
+        retrieval.clear_cache()
+
+    @staticmethod
+    def _slow_loader(entries, delay, calls):
+        def load():
+            calls.append(1)
+            time.sleep(delay)
+            return ("fp", entries)
+        return load
+
+    def test_cold_org_does_not_block_a_caller_that_cannot_wait(self):
+        calls = []
+        loader = self._slow_loader(FILLER, 0.3, calls)
+        t = time.monotonic()
+        got = retrieval.get_org_index("o", "fp", lambda: FILLER, rebuild=loader, wait=0)
+        assert got is None
+        assert time.monotonic() - t < 0.1
+        for _ in range(50):
+            time.sleep(0.05)
+            got = retrieval.get_org_index("o", "fp", lambda: FILLER, rebuild=loader, wait=0)
+            if got is not None:
+                break
+        assert got is not None and len(got) == len(FILLER)
+
+    def test_bounded_wait_returns_the_index_when_it_is_ready_in_time(self):
+        calls = []
+        got = retrieval.get_org_index("o", "fp", lambda: FILLER,
+                                      rebuild=self._slow_loader(FILLER, 0.05, calls), wait=2.0)
+        assert got is not None
+
+    def test_concurrent_cold_callers_share_one_build(self):
+        import threading
+
+        calls = []
+        loader = self._slow_loader(FILLER, 0.2, calls)
+        results = []
+        threads = [threading.Thread(target=lambda: results.append(
+            retrieval.get_org_index("o", "fp", lambda: FILLER, rebuild=loader, wait=2.0)))
+            for _ in range(5)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        assert len(calls) == 1
+        assert all(r is not None for r in results)
+
+    def test_size_budget_evicts_least_recently_used_orgs(self, monkeypatch):
+        big = [_entry(f"b{i}", f"T{i}", "word " * 2000) for i in range(5)]
+        one = MemoryIndex(big).approx_bytes()
+        monkeypatch.setattr(retrieval, "_CACHE_MAX_BYTES", int(one * 2.5))
+        for org in ("a", "b", "c"):
+            retrieval.get_org_index(org, "fp", lambda: big)
+        assert set(retrieval._cache) == {"b", "c"}
+
+    def test_check_change_reports_warming_instead_of_no_match(self, monkeypatch):
+        from services.memory import change_check as cc
+
+        monkeypatch.setattr(cc, "org_index_for_cursor", lambda *a, **k: None)
+        res = cc.check_change_for_org(object(), "o", user_id="u", diff="x")
+        assert res["status"] == "INDEX_WARMING"
+        assert res["related_incidents"] == []
