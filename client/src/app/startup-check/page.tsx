@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight, ExternalLink, GitBranch, Loader2, SearchCheck } from "lucide-react";
 import { useGitHubStatus } from "@/hooks/use-github-status";
+import { GitHubIntegrationService } from "@/components/github-provider-integration";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -160,6 +161,8 @@ function SeverityBadge({ severity }: { severity: StartupFinding["severity"] }) {
 export default function StartupCheckPage() {
   const { isAuthenticated: githubAuthed } = useGitHubStatus();
   const [repoFullName, setRepoFullName] = useState("");
+  const [connectedRepos, setConnectedRepos] = useState<string[]>([]);
+  const [picker, setPicker] = useState<string>("");
   const [scanId, setScanId] = useState<string | null>(null);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [isStarting, setIsStarting] = useState(false);
@@ -181,6 +184,18 @@ export default function StartupCheckPage() {
     },
     []
   );
+
+  useEffect(() => {
+    let mounted = true;
+    GitHubIntegrationService.fetchRepoSelections()
+      .then((repos) => {
+        if (mounted) setConnectedRepos(repos.map((r) => r.repo_full_name));
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const buildContext = useCallback((): Record<string, unknown> => {
     const context: Record<string, unknown> = {};
@@ -313,16 +328,40 @@ export default function StartupCheckPage() {
       {/* Run bar */}
       <div className="rounded-lg border bg-card p-5 space-y-4">
         <div className="flex flex-col sm:flex-row gap-2">
-          <Input
-            placeholder="owner/repo"
-            value={repoFullName}
-            onChange={(e) => setRepoFullName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !isBusy) runScan();
-            }}
-            className="text-sm h-10"
-            aria-label="Repository owner/repo"
-          />
+          {connectedRepos.length > 0 && (
+            <select
+              value={picker}
+              onChange={(e) => {
+                const v = e.target.value;
+                setPicker(v);
+                setRepoFullName(v === "__other__" ? "" : v);
+              }}
+              className="text-sm h-10 rounded-md border border-input bg-transparent px-3"
+              aria-label="Repository"
+            >
+              <option value="" disabled>
+                Connected repositories…
+              </option>
+              {connectedRepos.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+              <option value="__other__">Other repository (type owner/repo)…</option>
+            </select>
+          )}
+          {(picker === "__other__" || connectedRepos.length === 0) && (
+            <Input
+              placeholder="owner/repo"
+              value={repoFullName}
+              onChange={(e) => setRepoFullName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !isBusy) runScan();
+              }}
+              className="text-sm h-10"
+              aria-label="Repository owner/repo"
+            />
+          )}
           <Button onClick={runScan} disabled={isBusy} className="h-10 px-6">
             {isBusy ? (
               <>
