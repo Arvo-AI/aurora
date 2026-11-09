@@ -523,7 +523,12 @@ ANCHOR_SUMMARY = (
     "Root cause: the payments-db connection pool was exhausted after a deploy doubled the worker count [3]. "
     "Postgres max_connections was never raised. A third sentence the note leaves out."
 )
-FOLD_CLAIM = ("UPDATE incidents SET pagerduty_note_id = %s WHERE id = %s AND pagerduty_note_id IS NULL", ("pending", "c1"))
+FOLD_CLAIM = (
+    "UPDATE incidents SET pagerduty_note_id = %s WHERE id = %s AND pagerduty_note_id IS NULL "
+    "AND NOT EXISTS (SELECT 1 FROM incidents o WHERE o.id <> %s AND o.source_type = 'pagerduty' "
+    "AND o.pagerduty_note_id IS NOT NULL AND o.alert_metadata->>'incidentId' = %s)",
+    ("pending", "c1", "c1", "PREP456"),
+)
 FOLD_RECORD = ("UPDATE incidents SET pagerduty_note_id = %s WHERE id = %s", ("PWL7QXS", "c1"))
 
 
@@ -660,3 +665,70 @@ def test_anchor_note_path_unchanged_by_recurrence_support(wired, monkeypatch):
     content = wired.client.create_note.call_args.args[1]
     assert content.startswith("Aurora RCA\n\nRoot cause\n")
     assert "recurrence" not in content.lower()
+
+
+# --- review follow-ups ----------------------------------------------------------
+
+def test_recurrence_claim_locks_the_shared_pd_incident_first(wired, anchor_row, monkeypatch):
+    """Two folded incidents on one PagerDuty incident serialise on (org, PD incident)."""
+    from utils.notifications import postback_claim
+    monkeypatch.setattr(postback_claim, "db_pool", wired.pool.pool)
+    monkeypatch.setattr(postback_claim, "set_rls_context", lambda *a, **k: "org-1")
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is True
+    executes = wired.pool.executes
+    lock = executes.index(("SELECT pg_advisory_xact_lock(hashtext(%s))", ("pagerduty_note_id:org-1:PREP456",)))
+    assert executes[lock + 1] == FOLD_CLAIM
+
+
+def test_second_folded_incident_on_the_same_pd_incident_loses(wired, anchor_row, monkeypatch):
+    """The second claimer's NOT EXISTS sees the first claim, so it posts nothing."""
+    from utils.notifications import postback_claim
+    monkeypatch.setattr(postback_claim, "db_pool", wired.pool.pool)
+    monkeypatch.setattr(postback_claim, "set_rls_context", lambda *a, **k: "org-1")
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is True
+    wired.pool.cursor.rowcount = 0
+    assert svc.send_pagerduty_incident_note("u1", _folded(incident_id="c2")) is False
+    wired.client.create_note.assert_called_once()
+
+
+def test_short_factual_root_cause_is_kept_in_the_recurrence_note():
+    summary = "Root cause: a bad deploy of payments-api v2.3 broke auth."
+    assert len(summary) < rca_note.MIN_SUMMARY_CHARS + 20
+    assert svc._short_root_cause(summary) == "a bad deploy of payments-api v2.3 broke auth."
+
+
+def test_aware_fired_at_is_shown_in_utc():
+    from datetime import timedelta, timezone
+    fired = datetime(2026, 11, 3, 14, 5, tzinfo=timezone(timedelta(hours=2)))
+    note = svc.compose_recurrence_note("a0", "Checkout 5xx", fired, "")
+    assert "(2026-11-03 12:05 UTC)" in note
+
+
+def test_wrapped_next_step_lines_join_their_item():
+    summary = (
+        "## Suggested Next Steps\n"
+        "- Raise max_connections on orders-db to 400 and redeploy\n"
+        "  the orders-api workers\n"
+        "- Add a pool-exhaustion alert on orders-api\n"
+        "- Roll back deploy 2.3\n"
+    )
+    assert rca_note.extract_next_steps(summary) == [
+        "Raise max_connections on orders-db to 400 and redeploy the orders-api workers",
+        "Add a pool-exhaustion alert on orders-api",
+        "Roll back deploy 2.3",
+    ]
+
+
+def test_bare_next_step_lines_are_still_one_step_each():
+    summary = "## Next steps\nRaise max_connections on orders-db\nRoll back deploy 2.3\n"
+    assert rca_note.extract_next_steps(summary) == ["Raise max_connections on orders-db", "Roll back deploy 2.3"]
+
+
+def test_compose_note_caps_caller_supplied_steps():
+    steps = ["word " * 100] * 5
+    note = rca_note.compose_note("Because X happened.", "i1", "", None, steps)
+    bullets = [line for line in note.splitlines() if line.startswith("- ")]
+    assert len(bullets) == rca_note.NEXT_STEPS_MAX
+    assert all(len(b) <= rca_note.NEXT_STEP_MAX_CHARS + 5 for b in bullets)
+    huge = rca_note.compose_note("x " * 5000, "i1", "y " * 5000, "https://a.example.com", steps)
+    assert len(huge) <= rca_note.NOTE_MAX_CHARS
