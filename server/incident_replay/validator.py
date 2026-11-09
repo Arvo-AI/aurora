@@ -66,11 +66,6 @@ _WORD_TOKEN = re.compile(r"[A-Za-z_][\w.]{5,}")
 _STATUS_CODE = re.compile(r"\b(4\d{2}|5\d{2})\b")
 #: An alert identifier such as ``PD-88213``: the one token two alerts cannot share.
 _ALERT_ID = re.compile(r"\b[A-Z]{2,}-\d+\b")
-
-#: Words that assert one event came before or after another. A temporal claim
-#: containing one is demoted, because direction is not machine-checked here.
-_ORDER_PHRASES = ("before", "preceded", "earlier than", "prior to", "ahead of",
-                  "after", "followed")
 #: A number that counts as a stated value. Deliberately loose on the trailing
 #: side so "2400ms" counts, and deliberately anchored on a word boundary so the
 #: digits inside "http_5xx_rate" and "p99_latency_ms" do not: those name
@@ -81,6 +76,21 @@ _VALUE_TOKEN = re.compile(r"\b\d+(?:\.\d+)?")
 
 def _states_a_value(text: str) -> bool:
     return any(len(match) >= 2 for match in _VALUE_TOKEN.findall(text))
+
+
+def _contains_number(claim: str, value: str) -> bool:
+    """True when ``value`` appears in the claim as a number, not as a substring.
+
+    Plain ``in`` made 10 match 100, 7.8 match 17.8 and 2400 match 12400 — a claim
+    stating the wrong value was confirmed against the right one.
+
+    The lookbehind rejects a preceding digit *or* a decimal point, so 8 does not
+    match inside 7.8; the lookahead rejects a following digit, so 10 does not
+    match inside 100, but a sentence-final "to 10." still matches.
+    """
+    if not value:
+        return False
+    return bool(re.search(rf"(?<![\d.]){re.escape(value)}(?![\d])", claim))
 #: A deploy_change record's content is written by :mod:`.evidence` as
 #: ``<file> <field>: <from> -> <to>``. Parsing it with ``partition`` keeps the
 #: extraction linear; a pattern with adjacent greedy groups over the same text
@@ -246,7 +256,7 @@ def _supports_config_change(claim: str, records: List[Any]) -> Tuple[bool, str]:
             continue
         if not states_a_value:
             return True, f"field {field} present in evidence [{record.id}]"
-        if new_value and new_value in claim:
+        if _contains_number(claim, new_value):
             return True, f"field {field} -> {new_value} matches evidence [{record.id}]"
         return False, (
             f"claim cites {field} but states a value the evidence does not record "
@@ -336,7 +346,7 @@ def _supports_metric(claim: str, records: List[Any]) -> Tuple[bool, str]:
             if r.record_type == RECORD_METRIC and "=" in r.content
             and r.content.split("=", 1)[0].split()[-1] == name
         }
-        if not states_a_value or any(value in claim for value in values if value):
+        if not states_a_value or any(_contains_number(claim, value) for value in values if value):
             return True, f"metric {name} cited as evidence [{record.id}]"
         return False, (
             f"claim names {name} but states values the cited samples do not contain "
@@ -356,18 +366,6 @@ _SUPPORT_RULES = {
 
 
 
-def _check_ordering(claim: str) -> Optional[str]:
-    """Return the ordering phrase a temporal claim asserts, if any.
-
-    This does *not* try to judge whether the assertion is true — inferring which
-    side is the subject proved unreliable and demoted correct statements. It only
-    detects that an ordering is being asserted, so the validator can decline to
-    call that "supported" when it has no way to check the direction.
-    """
-    lowered = claim.lower()
-    return next((phrase for phrase in _ORDER_PHRASES if phrase in lowered), None)
-
-
 def _classify(claim_type: str, claim: str, resolved: List[Any], untimed: List[int]) -> Tuple[str, str]:
     """Decide what one finding is allowed to claim. Pure.
 
@@ -383,17 +381,15 @@ def _classify(claim_type: str, claim: str, resolved: List[Any], untimed: List[in
     if claim_type == "temporal_relationship":
         if untimed:
             return UNVERIFIED_HYPOTHESIS, f"cited record(s) without a timestamp: {untimed}"
-        phrase = _check_ordering(claim)
-        if phrase:
-            # The records are timestamped, but nothing here checks that they are in
-            # the order the sentence claims. Saying "supported" would vouch for a
-            # direction that was never examined.
-            return UNVERIFIED_HYPOTHESIS, (
-                f"the claim asserts an ordering ('{phrase}') that is not independently "
-                "verified; the cited records are timestamped, but their direction is "
-                "not checked"
-            )
-        return SUPPORTED_INFERENCE, "all cited records carry timestamps; no ordering is asserted"
+        # Nothing here can check a relation between two events: whether one came
+        # before the other, or that a window exists at all, is not something these
+        # records establish. Ordering words were detected for a while, but any
+        # phrasing that slipped past them ("subsequently", "then", "later") would
+        # have been reported as supported, so every temporal claim is demoted.
+        return UNVERIFIED_HYPOTHESIS, (
+            "the cited records carry timestamps, but the temporal relationship itself "
+            "is not machine-verified"
+        )
 
     required = OBSERVABLE_TYPES[claim_type]
     if not any(record.record_type == required for record in resolved):
@@ -528,19 +524,22 @@ def _timeline_entry_at(
 
 
 def _check_timeline(bundle: EvidenceBundle, report: ValidationReport, timeline: List[Any]) -> None:
-    previous = ""
+    previous = None
     for index, entry in enumerate(timeline):
         at, evidenced = _timeline_entry_at(bundle, report, index, entry)
         report.timeline_entries += 1
         if evidenced:
             report.timeline_evidenced += 1
-        if at and previous and at < previous:
+        entry_at = parse_ts(at)
+        # Compare parsed instants, not the strings: "14:00:00-05:00" sorts after
+        # "18:30:00Z" as text but is actually earlier.
+        if entry_at and previous and entry_at < previous:
             report.timeline_ok = False
             report.timeline_problems.append(
-                f"timeline entry {index} is out of order: {at} < {previous}"
+                f"timeline entry {index} is out of order: {at} < {previous.isoformat()}"
             )
-        if at:
-            previous = at
+        if entry_at:
+            previous = entry_at
 
 
 def validate(bundle: EvidenceBundle, result: Dict[str, Any]) -> ValidationReport:

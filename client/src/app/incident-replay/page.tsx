@@ -93,19 +93,19 @@ function MetricGrid({ data }: Readonly<{ data: RunResponse }>) {
       <Metric label="Model" value={data.model} />
       <Metric label="Elapsed" value={`${data.elapsed_s}s`} />
       <Metric
-        label="Citation resolution"
+        label="Finding citations"
         value={`${Math.round(validation.citation_resolution_rate * 100)}%`}
-        hint={`${validation.resolved_citations}/${validation.total_citations} ids exist`}
+        hint={`${validation.resolved_citations}/${validation.total_citations} ids exist; timeline citations counted separately`}
       />
       <Metric
         label="Evidence type validity"
         value={`${Math.round(validation.evidence_type_validity * 100)}%`}
-        hint="claim cites the right record kind"
+        hint="deterministic checks passed; not semantic verification"
       />
       <Metric
         label="Timeline"
         value={validation.timeline_ok ? "ordered" : "problem"}
-        hint={`${validation.timeline_evidenced}/${validation.timeline_entries} entries evidenced`}
+        hint={`${validation.timeline_evidenced}/${validation.timeline_entries} entries cite a timestamped record`}
       />
     </div>
   );

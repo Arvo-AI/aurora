@@ -266,30 +266,47 @@ class TestCausalityIsNeverPromoted:
             "every citation resolves, and the claim is still not verified"
         )
 
-    def test_temporal_relationship_asserting_an_order_is_not_supported(self, bundle):
-        # The cited records are timestamped and the statement may well be true, but
-        # nothing here checks the direction, so it must not be vouched for.
+    def test_temporal_relationship_is_never_supported(self, bundle):
+        # Nothing here can check whether one event preceded another, or that a
+        # window exists, so no temporal claim is confirmed — not even one that
+        # names no ordering phrase, because any phrasing could assert one.
         event = _id_of(bundle, RECORD_DEPLOY_EVENT, "deploy-4471")
         log = _id_of(bundle, RECORD_LOG, "HikariPool")
+        for claim in (
+            "the deploy preceded the timeouts",
+            "the deploy and the first timeout both fall in the incident window",
+            "the timeout happened subsequently to the deployment",
+        ):
+            report = validate(
+                bundle,
+                _result(_finding("temporal_relationship", claim, [event, log])),
+            )
+            assert report.findings[0].status == UNVERIFIED_HYPOTHESIS, claim
+            assert "not machine-verified" in " ".join(report.findings[0].reasons)
+
+    def test_a_wrong_number_is_not_confirmed_by_a_substring(self, bundle):
+        # "to 100" used to be confirmed against evidence that says 10, because the
+        # check was `"10" in claim`.
+        pool = _id_of(bundle, RECORD_DEPLOY_CHANGE, "maxPoolSize")
         report = validate(
             bundle,
-            _result(_finding("temporal_relationship",
-                             "the deploy preceded the timeouts", [event, log])),
+            _result(_finding("configuration_change",
+                             "db.pool.maxPoolSize changed from 50 to 100.", [pool])),
         )
         assert report.findings[0].status == UNVERIFIED_HYPOTHESIS
-        assert "not independently verified" in " ".join(report.findings[0].reasons)
 
-    def test_temporal_relationship_without_an_order_is_supported(self, bundle):
-        event = _id_of(bundle, RECORD_DEPLOY_EVENT, "deploy-4471")
-        log = _id_of(bundle, RECORD_LOG, "HikariPool")
-        report = validate(
+    def test_metric_value_is_matched_as_a_number(self, bundle):
+        p99 = _ids_of(bundle, RECORD_METRIC, "p99_latency_ms")
+        wrong = validate(
             bundle,
-            _result(_finding("temporal_relationship",
-                             "the deploy and the first timeout both fall in the incident window",
-                             [event, log])),
+            _result(_finding("metric_degradation", "p99_latency_ms rose to 12400ms.", p99)),
         )
-        assert report.findings[0].status == SUPPORTED_INFERENCE
-        assert "no ordering is asserted" in " ".join(report.findings[0].reasons)
+        assert wrong.findings[0].status == UNVERIFIED_HYPOTHESIS
+        right = validate(
+            bundle,
+            _result(_finding("metric_degradation", "p99_latency_ms rose to 2400ms.", p99)),
+        )
+        assert right.findings[0].status == VERIFIED_OBSERVATION
 
 
 class TestTimeline:
@@ -431,6 +448,23 @@ class TestTimeline:
         assert report.timeline_evidenced == 1
         assert report.timeline_ok is False
         assert "evidence is stamped" in " ".join(report.timeline_problems)
+
+    def test_ordering_is_compared_as_instants_not_strings(self):
+        # "14:00:00-05:00" sorts after "18:30:00Z" as text but is 19:00Z, so the
+        # second entry is genuinely earlier and the timeline is out of order.
+        bundle = self._bundle([
+            self._log(1, "2026-11-06T14:00:00-05:00"),
+            self._log(2, "2026-11-06T18:30:00Z"),
+        ])
+        report = validate(
+            bundle,
+            _result(timeline=[
+                {"at": "2026-11-06T14:00:00-05:00", "event": "a", "evidence_ids": [1]},
+                {"at": "2026-11-06T18:30:00Z", "event": "b", "evidence_ids": [2]},
+            ]),
+        )
+        assert report.timeline_ok is False
+        assert "out of order" in " ".join(report.timeline_problems)
 
     def test_out_of_order_timeline_is_flagged(self, bundle):
         report = validate(
