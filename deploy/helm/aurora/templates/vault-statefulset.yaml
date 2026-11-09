@@ -20,6 +20,10 @@ spec:
         app.kubernetes.io/name: {{ include "aurora.name" . }}-vault
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/part-of: aurora
+        {{- if and .Values.vault.seal (eq .Values.vault.seal.type "azurekeyvault") (ne (toString ((.Values.vault.seal.azurekeyvault | default dict).workloadIdentity)) "false") }}
+        # AKS Workload Identity injects the federated token Vault uses to reach Key Vault.
+        azure.workload.identity/use: "true"
+        {{- end }}
     spec:
       serviceAccountName: {{ include "aurora.fullname" . }}-vault
       automountServiceAccountToken: false
