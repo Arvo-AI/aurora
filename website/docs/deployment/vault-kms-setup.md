@@ -334,7 +334,9 @@ LOCATION=northeurope
 az keyvault create -g $RG -n $KV -l $LOCATION \
   --enable-rbac-authorization true \
   --enable-purge-protection true      # soft-delete is on by default
-# RBAC mode: whoever creates the key needs a data-plane role on the vault
+# RBAC mode: whoever creates the key needs a data-plane role on the vault.
+# Signed in as a service principal? Replace the --assignee lookup with
+#   "$(az ad sp show --id <app id> --query id -o tsv)"
 az role assignment create --assignee "$(az ad signed-in-user show --query id -o tsv)" \
   --role "Key Vault Crypto Officer" --scope "$(az keyvault show -n $KV --query id -o tsv)"
 # role assignments can take a minute to apply; retry the next command on a 403
