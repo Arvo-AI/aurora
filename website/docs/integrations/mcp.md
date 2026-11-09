@@ -30,8 +30,9 @@ This page is about external clients calling **into** Aurora. For the reverse —
 | `get_action` | One action's config plus its 20 most recent runs |
 | `list_action_runs` | An action's run history: status, timing, errors (`limit`, `offset`) |
 | `trigger_rca` | Start a new RCA from a free-text description |
-| `knowledge_base_search` | Semantic search across Aurora's ingested docs |
-| `search_runbooks` | Unified runbook search across the knowledge base, Confluence, SharePoint |
+| `search_memory` | Ranked full-text search over org memory (runbooks, postmortems, learned, context, infrastructure); hits give a character offset for `read_memory` |
+| `check_change` | Call before editing code or config: matches a diff/files/description against past incidents, guardrails and runbooks in production memory |
+| `search_runbooks` | Ranked runbook search across org memory and SharePoint |
 | `search_tools` | Discover additional tools available behind the long-tail dispatch |
 | `call_tool` | Invoke a tool returned by `search_tools` |
 

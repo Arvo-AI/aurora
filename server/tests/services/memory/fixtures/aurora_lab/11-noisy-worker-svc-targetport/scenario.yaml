@@ -1,0 +1,22 @@
+id: 11-noisy-worker-svc-targetport
+title: frontend 5xx from a wrong api Service targetPort, next to a noisy but harmless worker
+alert: "HighErrorRate [critical] namespace=shop service=frontend: 100% of requests to /api/ returned 5xx over the last 5 minutes (threshold 5%)."
+change: >
+  Two changes about the same time. (1) A harmless one: the worker was redeployed
+  with code that logs a DeprecationWarning on every batch and a metrics push ERROR every third.
+  (2) The real one: the api Service targetPort was changed from 8080 to 9090.
+root_cause: >
+  The api Service now sends traffic to targetPort 9090, where nothing listens (the
+  api listens on 8080). The api pods are Running and Ready and the Service has
+  endpoints, but every connection is refused, so nginx in the frontend returns 502
+  on /api/. The worker's DeprecationWarning and "metrics push failed" lines are
+  noise: the worker is healthy and is not on the request path.
+must_identify:
+  - The api Service targetPort is 9090 while the api container listens on 8080, so connections from the frontend are refused (502)
+  - The worker's warnings and errors are not the cause of the frontend 5xx
+acceptable_fixes:
+  - Set the api Service targetPort back to 8080
+wrong_answers:
+  - The worker, its deprecation warning or its metrics push errors as the cause
+  - DNS failure as the cause of the 5xx
+  - Restarting the api or the frontend as the fix

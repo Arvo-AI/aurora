@@ -1,0 +1,18 @@
+id: 03-bad-image-tag
+title: Frontend rollout stuck on a mistyped image tag
+alert: "KubeDeploymentRolloutStuck: deployment frontend in namespace shop has not progressed."
+change: "kubectl set image deploy/frontend nginx=nginx:1.27-alpne"
+root_cause: >
+  The frontend image was changed to nginx:1.27-alpne, a tag that does not exist
+  (typo for 1.27-alpine). The new ReplicaSet's pods sit in ImagePullBackOff
+  with "not found" from the registry. The old ReplicaSet keeps serving, so
+  traffic is still up but the rollout cannot complete.
+must_identify:
+  - Pods are in ImagePullBackOff / ErrImagePull because the tag nginx:1.27-alpne does not exist
+  - The old pods are still serving (rollout stuck, not an outage)
+acceptable_fixes:
+  - Fix the tag to nginx:1.27-alpine
+  - kubectl rollout undo deploy/frontend
+wrong_answers:
+  - Registry credentials or imagePullSecrets problem
+  - Network or DNS problem reaching the registry

@@ -1,0 +1,6 @@
+Aurora Lab scenarios, used as a retrieval test corpus.
+
+Source: https://github.com/Arvo-AI/aurora-lab (branch main, scenarios/<id>/{README.md,scenario.yaml,break.sh})
+Fetched: 2026-11-09
+License: Apache License 2.0, Copyright Arvo AI.
+The files in this directory are used unmodified.

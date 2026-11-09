@@ -1,0 +1,18 @@
+id: 06-liveness-wrong-port
+title: api restarts because the liveness probe targets the wrong port
+alert: "KubePodCrashLooping: api pods in namespace shop restart every minute or so."
+change: "The api liveness probe port was changed from 8080 to 8081."
+root_cause: >
+  The api liveness probe now checks port 8081, where nothing listens. The probe
+  fails ("connect: connection refused"), and after 3 failures the kubelet kills
+  the container. The app itself is healthy and readiness on 8080 passes between
+  restarts. The restarts are probe kills, not crashes and not OOM.
+must_identify:
+  - The kubelet is restarting the container because the liveness probe fails
+  - The probe targets port 8081 while the app listens on 8080
+acceptable_fixes:
+  - Set the liveness probe port back to 8080
+wrong_answers:
+  - OOMKilled or memory
+  - Application crash
+  - Removing the liveness probe as the fix

@@ -118,6 +118,39 @@ def get_memory_content(
         return None
 
 
+def fetch_memory_fingerprint(cursor, org_id: str) -> tuple:
+    """Cheap staleness key for the org's recall index: (entry count, newest edit).
+
+    Every write goes through ``create_version`` / an UPDATE that bumps
+    ``updated_at``, and a delete lowers the count, so either changing means the
+    index must be rebuilt.
+    """
+    cursor.execute(
+        """SELECT COUNT(*), MAX(updated_at) FROM artifacts
+           WHERE org_id = %s AND category = ANY(%s)""",
+        (org_id, list(MEMORY_CATEGORIES)),
+    )
+    row = cursor.fetchone() or (0, None)
+    return (row[0], row[1])
+
+
+def fetch_memory_corpus(cursor, org_id: str) -> List[Dict]:
+    """Every memory entry of the org, with content, for the recall index."""
+    cursor.execute(
+        """SELECT id, category, title, description, content, updated_at
+           FROM artifacts
+           WHERE org_id = %s AND category = ANY(%s)""",
+        (org_id, list(MEMORY_CATEGORIES)),
+    )
+    return [
+        {
+            "id": str(r[0]), "category": r[1], "title": r[2],
+            "description": r[3] or "", "content": r[4] or "", "updated_at": r[5],
+        }
+        for r in cursor.fetchall()
+    ]
+
+
 def get_memory_entries(user_id: str, limit: int = 200) -> List[Dict]:
     """Fetch memory entry metadata (no content) for the user's org.
 

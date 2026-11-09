@@ -176,7 +176,9 @@ class MemoryPrefetch:
             selector_missed = False
             if available:
                 try:
-                    llm_selected = await _select_relevant_memories_async(self.user_message, available)
+                    llm_selected = await _select_relevant_memories_async(
+                        self.user_message, available, user_id=self.user_id,
+                    )
                 except _SelectorFailed:
                     selector_missed = True
                     llm_selected = []
@@ -277,13 +279,65 @@ def _shortlist_entries(user_message: str, entries: List[Dict], limit: int) -> Li
     return ranked[:limit]
 
 
-async def _select_relevant_memories_async(user_message: str, entries: List[Dict]) -> List[Dict]:
+# Budget for the content-level search that front-loads the shortlist. The
+# selector call keeps the rest of the prefetch window.
+_CONTENT_SHORTLIST_TIMEOUT = 1.5
+
+
+async def _content_first_shortlist(
+    user_message: str, entries: List[Dict], limit: int, user_id: Optional[str],
+) -> List[Dict]:
+    """Shortlist with content-aware hits first, then the lexical ranking.
+
+    Entries carry no body here, so BM25 over the stored content (retrieval.py)
+    is what finds a memory whose title/description never mention the query.
+    Any failure or timeout returns the plain lexical shortlist.
+    """
+    lexical = _shortlist_entries(user_message, entries, limit)
+    if not user_id:
+        return lexical
+    try:
+        from services.memory.retrieval import search_memory_for_user
+
+        hits = await asyncio.wait_for(
+            asyncio.to_thread(search_memory_for_user, user_id, user_message[:2000], k=limit),
+            timeout=_CONTENT_SHORTLIST_TIMEOUT,
+        )
+        by_key = {_entry_key(e): e for e in entries}
+        pool: List[Dict] = []
+        seen: Set[str] = set()
+        for hit in hits:
+            key = f"{hit.category}/{hit.title}"
+            if key in by_key and key not in seen:
+                seen.add(key)
+                pool.append(by_key[key])
+        if not pool:
+            return lexical
+        for entry in _shortlist_entries(user_message, entries, len(entries)):
+            if len(pool) >= limit:
+                break
+            key = _entry_key(entry)
+            if key not in seen:
+                seen.add(key)
+                pool.append(entry)
+        return pool[:limit]
+    except Exception as e:
+        logger.warning("[MemoryInjector] Content shortlist failed, using lexical: %s", e)
+        return lexical
+
+
+async def _select_relevant_memories_async(
+    user_message: str, entries: List[Dict], user_id: Optional[str] = None,
+) -> List[Dict]:
     """One strict async LLM call: select up to 5 from the index."""
 
     # A few hundred full descriptions blow the prefetch budget. Rank first.
     pool = entries
     if len(entries) > _MAX_SELECTOR_CANDIDATES:
-        pool = _shortlist_entries(user_message, entries, _MAX_SELECTOR_CANDIDATES)
+        pool = await _content_first_shortlist(
+            user_message, entries, _MAX_SELECTOR_CANDIDATES,
+            user_id,
+        )
         logger.info(
             "[MemoryInjector] Shortlisted %d/%d memories before selection",
             len(pool), len(entries),

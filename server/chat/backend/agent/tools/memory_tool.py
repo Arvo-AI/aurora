@@ -27,6 +27,8 @@ _AGENT_WRITE_LIMIT = 500_000  # Max chars the agent can write in a single tool c
 _CATEGORY_HELP = ", ".join(sorted(MEMORY_CATEGORIES))
 _MAX_TITLE = 500
 _GREP_MAX_RESULTS = 10
+# Rows fetched per grep before ranking trims them to _GREP_MAX_RESULTS.
+_GREP_CANDIDATES = 200
 _GREP_SNIPPET_CHARS = 200
 
 _NO_USER_CTX = json.dumps({"error": "No user context available."})
@@ -580,6 +582,36 @@ class GrepMemoriesArgs(BaseModel):
     )
 
 
+def _rank_grep_rows(rows, pattern: str):
+    """Top _GREP_MAX_RESULTS of the recency-ordered candidate rows, best textual
+    match first; unscored rows follow in recency order. Any failure returns the
+    newest rows (the pre-ranking behaviour)."""
+    rows = list(rows or [])
+    fallback = rows[:_GREP_MAX_RESULTS]
+    if len(rows) <= 1:
+        return fallback
+    try:
+        from services.memory.retrieval import MemoryIndex, tokenize
+
+        terms = tokenize(pattern)
+        if not terms:
+            return fallback
+        entries = [
+            {"id": f"{i}", "title": r[0], "category": r[1], "content": r[2] or ""}
+            for i, r in enumerate(rows)
+        ]
+        hits = MemoryIndex(entries).search(
+            terms, k=_GREP_MAX_RESULTS, redact_chunks=False,
+        )
+        order = [int(h.entry_id) for h in hits]
+        seen = set(order)
+        order += [i for i in range(len(rows)) if i not in seen]
+        return [rows[i] for i in order[:_GREP_MAX_RESULTS]]
+    except Exception:
+        logger.warning("[MemoryTool:grep] Ranking failed, using recency order", exc_info=True)
+        return fallback
+
+
 def grep_memories(
     query: str,
     category: str = "",
@@ -607,7 +639,7 @@ def grep_memories(
                            AND content ~* %s
                            ORDER BY updated_at DESC
                            LIMIT %s""",
-                        (org_id, category, search_pattern, _GREP_MAX_RESULTS),
+                        (org_id, category, search_pattern, _GREP_CANDIDATES),
                     )
                 else:
                     cursor.execute(
@@ -616,7 +648,7 @@ def grep_memories(
                            AND content ~* %s
                            ORDER BY updated_at DESC
                            LIMIT %s""",
-                        (org_id, list(MEMORY_CATEGORIES), search_pattern, _GREP_MAX_RESULTS),
+                        (org_id, list(MEMORY_CATEGORIES), search_pattern, _GREP_CANDIDATES),
                     )
                 rows = cursor.fetchall()
                 cursor.execute("RELEASE SAVEPOINT regex_attempt")
@@ -631,7 +663,7 @@ def grep_memories(
                            AND content ILIKE %s
                            ORDER BY updated_at DESC
                            LIMIT %s""",
-                        (org_id, category, f"%{search_pattern}%", _GREP_MAX_RESULTS),
+                        (org_id, category, f"%{search_pattern}%", _GREP_CANDIDATES),
                     )
                 else:
                     cursor.execute(
@@ -640,9 +672,11 @@ def grep_memories(
                            AND content ILIKE %s
                            ORDER BY updated_at DESC
                            LIMIT %s""",
-                        (org_id, list(MEMORY_CATEGORIES), f"%{search_pattern}%", _GREP_MAX_RESULTS),
+                        (org_id, list(MEMORY_CATEGORIES), f"%{search_pattern}%", _GREP_CANDIDATES),
                     )
                 rows = cursor.fetchall()
+
+        rows = _rank_grep_rows(rows, search_pattern)
 
         if not rows:
             return json.dumps({

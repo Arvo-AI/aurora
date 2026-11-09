@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Memory: Production Recall, a per-org index over the full text of memory
+  entries (heading-aware chunks ranked with BM25). It is derived from the
+  `artifacts` table, cached per org, read under RLS, and its returned chunks
+  are secret-redacted. `GET /api/memory/search` exposes it.
+- Memory: `POST /api/memory/check-change` and the MCP tool `check_change`
+  take a diff, files and a description and return the past incidents,
+  guardrails and runbooks that match the change, with the chunk that matched
+  and its `read_memory` offset. MCP also gains `search_memory`.
+- PR review: the reviewer prompt lists org-memory incidents and guardrails
+  that match the diff, and opens with a short PR focus header so memory
+  prefetch selects on the PR rather than on the fixed review instructions.
+- Postmortems also write a `learned` "Guardrail: …" entry when a root cause is
+  known.
+
+### Changed
+- MCP `search_runbooks` ranks runbook and context entries by content instead
+  of requiring every query word in the title or description.
+- Memory: `grep_memories` ranks up to 200 regex matches by relevance before
+  returning ten, instead of returning the ten most recently edited.
+- Memory: on banks over 100 entries the selector shortlist puts content
+  matches first, then the existing title/description ranking.
+- Postmortem memory entries are described by their root cause rather than
+  "Postmortem for incident: <alert title>".
+
 ## [1.5.19] - 2026-11-06
 
 ### Fixed

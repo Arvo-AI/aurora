@@ -690,9 +690,37 @@ def _run_investigation_core(
             # file's patch (the raw diff is only a no-patch fallback) and
             # suppresses the prior-findings appendix whenever incremental=True,
             # so prior_findings is passed as-is.
+            incident_context = None
+            try:
+                from services.memory.change_check import check_change_for_user
+
+                patches = "\n".join(
+                    f.get("patch") for f in (files or []) if f.get("patch")
+                )
+                incident_context = check_change_for_user(
+                    user_id,
+                    diff=patches or diff or "",
+                    files=[f.get("filename") for f in (files or []) if f.get("filename")],
+                    description=pr.get("title") or "",
+                )
+                if incident_context:
+                    logger.info(
+                        "change_gating=%s %s incident_check status=%s incidents=%d guardrails=%d runbooks=%d",
+                        log_key, log_ctx, incident_context.get("status"),
+                        len(incident_context.get("related_incidents") or []),
+                        len(incident_context.get("guardrails") or []),
+                        len(incident_context.get("runbooks") or []),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "change_gating=%s %s incident_check_failed err=%s",
+                    log_key, log_ctx, exc,
+                )
+                incident_context = None
             prompt = build_review_prompt(
                 repo_full_name, pr, files, diff,
                 prior_findings=prior_findings, incremental=incremental,
+                incident_context=incident_context,
             )
 
             # Session + synchronous agent run. rail_text carries only the

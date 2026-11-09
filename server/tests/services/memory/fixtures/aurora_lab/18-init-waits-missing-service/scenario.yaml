@@ -1,0 +1,19 @@
+id: 18-init-waits-missing-service
+title: api rollout stuck on an init container waiting for a Service that does not exist
+alert: "KubeDeploymentRolloutStuck [warning] namespace=shop deployment=api: Rollout of deployment shop/api is not progressing for longer than 15 minutes."
+change: "An init container wait-for-db was added to the api; it loops until postgres:5432 accepts connections. There is no postgres Service in namespace shop."
+root_cause: >
+  The new api pods run init container wait-for-db, which loops on
+  "nc -z postgres 5432" and prints "waiting for postgres:5432" (nc: bad address
+  'postgres'). No Service named postgres exists, so the init container never
+  finishes and the pods stay in Init:0/1. The api container never starts, so it has
+  no logs. The old api pods keep serving.
+must_identify:
+  - New api pods are stuck in Init:0/1 because the init container wait-for-db never completes
+  - It waits for postgres:5432, and no Service named postgres exists in namespace shop
+acceptable_fixes:
+  - Remove the init container (the api does not use postgres), or point it at a real dependency, or roll back the deploy
+wrong_answers:
+  - Image pull problem
+  - Scheduling or resources
+  - Creating a postgres database as the fix without noting the api does not need one
