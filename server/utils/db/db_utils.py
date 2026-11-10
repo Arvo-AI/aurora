@@ -2723,6 +2723,28 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Pre-RCA check (model routing): which route/model each RCA took and
+            # why, so token cost can be compared per route (services/rca_routing.py).
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS rca_route VARCHAR(16),
+                    ADD COLUMN IF NOT EXISTS rca_model_tier VARCHAR(16),
+                    ADD COLUMN IF NOT EXISTS rca_model VARCHAR(255),
+                    ADD COLUMN IF NOT EXISTS rca_route_reason TEXT,
+                    ADD COLUMN IF NOT EXISTS rca_routed_at TIMESTAMP;
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_incidents_rca_prior
+                        ON incidents(org_id, source_type, started_at DESC)
+                        WHERE aurora_status = 'complete';
+                """)
+                logging.info("Added RCA routing columns to incidents table (if not exists).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding RCA routing columns to incidents: {e}")
+                conn.rollback()
+
             # Add visualization columns to incidents table
             try:
                 cursor.execute("""
