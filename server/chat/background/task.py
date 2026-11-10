@@ -1568,6 +1568,19 @@ async def _execute_background_chat(
         # Use centralized model configuration for RCA with provider mode awareness
         _is_pr_review = _tm_source == "change_gating"
 
+        # Pre-RCA check: repeat/simple alert RCAs may run on a cheaper model.
+        # Off by default; never raises and falls back to RCA_MODEL when unsure.
+        rca_model = ModelConfig.RCA_MODEL
+        if rca_context:
+            from services.rca_routing import prior_rca_context, route_rca, should_route
+            if should_route(_tm_source, incident_id):
+                _routing = route_rca(user_id, str(incident_id), ModelConfig.RCA_MODEL)
+                if _routing:
+                    rca_model = _routing.model
+                    _prior = prior_rca_context(_routing)
+                    if _prior:
+                        rca_context["prior_rca"] = _prior
+
         state = State(
             user_id=user_id,
             session_id=session_id,
@@ -1577,7 +1590,7 @@ async def _execute_background_chat(
             selected_project_id=None,
             messages=[human_message],
             question=rail_question,
-            model=ModelConfig.RCA_MODEL,
+            model=rca_model,
             mode=mode,
             is_background=True,
             is_postmortem_action=_is_postmortem_action,

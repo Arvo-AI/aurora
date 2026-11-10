@@ -55,6 +55,23 @@ def _append_segment(
         parts.append("")
 
 
+def _format_prior_rca(prior: Dict[str, Any]) -> str:
+    """Prior-RCA reference block for a repeat incident (see services/rca_routing)."""
+    lines = [
+        "PRIOR RCA FOR THIS ALERT (reference only):",
+        f"This alert repeats incident {prior.get('incident_id')}"
+        + (f" ({prior.get('title')})" if prior.get('title') else "")
+        + ", which already has a completed root-cause analysis.",
+        "Start by checking whether that root cause still explains this occurrence. "
+        "Verify it against current data with your tools; do not copy it without evidence, "
+        "and investigate fully if the evidence points elsewhere.",
+    ]
+    summary = (prior.get('summary') or '').strip()
+    if summary:
+        lines.extend(["<<PRIOR_RCA_SUMMARY>>", summary, "<<END_PRIOR_RCA_SUMMARY>>"])
+    return "\n".join(lines)
+
+
 def build_background_mode_segment(state: Optional[Any]) -> str:
     """Build background mode instructions for RCA or prediscovery chats."""
     if not state:
@@ -124,6 +141,11 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
         leading_blank=True,
         trailing_blank=True,
     )
+
+    # Pre-RCA check routed this repeat to the cheap model: hand it the prior RCA.
+    prior = rca_context.get('prior_rca')
+    if isinstance(prior, dict) and prior.get('incident_id'):
+        parts.extend(["", _format_prior_rca(prior), ""])
 
     # Critical requirements - MUST complete all before stopping
     _source_segment = _SOURCE_SEGMENTS.get(source)
