@@ -211,7 +211,7 @@ def test_read_only_mode_fails_closed_without_distinct_identity():
 
 
 # ---------------------------------------------------------------------------
-# Fan-out at Pinnacle scale.
+# Fan-out across many subscriptions.
 #
 # _cloud_exec_azure_multi_subscription is real concurrency with on-disk state,
 # so it is exercised with real threads and real temp directories. Only the two
