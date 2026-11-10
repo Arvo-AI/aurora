@@ -638,6 +638,10 @@ app.register_blueprint(artifact_bp)
 from routes.metrics_routes import metrics_bp
 app.register_blueprint(metrics_bp)
 
+# --- Revert Backtest (zero-install pre-merge review on public repos) ---
+from routes.backtest_routes import backtest_bp
+app.register_blueprint(backtest_bp)
+
 # --- Visualization Streaming Routes ---
 from routes.visualization_stream import visualization_bp
 app.register_blueprint(visualization_bp)
