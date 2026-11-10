@@ -115,7 +115,7 @@ def _format_incident_response(
     that user's integration settings, so the key must include the user.
     """
     recurrence_of_incident_id = recurrence_of_title = None  # only the merge-target row carries them
-    rca_routing: list = []  # pre-RCA check columns, only on the merge-target row
+    rca_routing: list = []  # model routing columns, only on the merge-target row
     if include_merge_target:
         (
             incident_id,
@@ -283,7 +283,7 @@ def _format_incident_response(
     if recurrence_of_incident_id is not None:
         result["recurrenceOfTitle"] = recurrence_of_title
 
-    # Pre-RCA check (model routing): which route and model this RCA took, and why.
+    # RCA model routing: which route and model this RCA took, and why.
     rca_route, rca_model_tier, rca_model, rca_route_reason = (list(rca_routing) + [None] * 4)[:4]
     result["rcaRouting"] = (
         {"route": rca_route, "tier": rca_model_tier, "model": rca_model, "reason": rca_route_reason}

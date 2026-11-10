@@ -2723,7 +2723,7 @@ def initialize_tables():
                 )
                 conn.rollback()
 
-            # Pre-RCA check (model routing): which route/model each RCA took and
+            # RCA model routing: which route/model each RCA took and
             # why, so token cost can be compared per route (services/rca_routing.py).
             try:
                 cursor.execute("""

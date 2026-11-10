@@ -160,7 +160,7 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
         trailing_blank=True,
     )
 
-    # Pre-RCA check routed this repeat to the cheap model: hand it the prior RCA.
+    # Model routing sent this repeat to the cheap model: hand it the prior RCA.
     prior = rca_context.get('prior_rca')
     if isinstance(prior, dict) and prior.get('incident_id'):
         parts.extend(["", _format_prior_rca(prior), ""])
