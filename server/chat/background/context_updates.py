@@ -211,9 +211,12 @@ def drain_rca_context_updates(user_id: str, session_id: str) -> List[Dict[str, A
 
     key = _make_update_key(user_id, session_id)
     try:
-        raw_updates = redis_client.lrange(key, 0, -1)
-        if raw_updates:
-            redis_client.delete(key)
+        # Consume one snapshot atomically: a later RPUSH must survive for the
+        # next drain, and concurrent consumers must not read the same batch.
+        with redis_client.pipeline(transaction=True) as pipe:
+            pipe.lrange(key, 0, -1)
+            pipe.delete(key)
+            raw_updates, _ = pipe.execute()
         updates = []
         for raw in raw_updates or []:
             try:

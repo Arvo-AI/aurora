@@ -1,8 +1,8 @@
 # RCA context delivery: reproduction and repair progress
 
 Original baseline: `8cf9573`; stage-0 test commit: `39eab99`.
-Stage 1 fixes batch formatting only. Queue atomicity and context persistence
-remain known failures. No model API calls, production incidents, or account
+Stages 1 and 2 fix batch formatting and queue atomicity. Context persistence
+remains a known failure. No model API calls, production incidents, or account
 changes are needed to run the tests.
 
 ## Run locally against the existing Docker stack
@@ -13,12 +13,12 @@ From PowerShell in `E:\Projects\Aurora`:
 docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'RCA_TEST_REDIS_URL="$REDIS_URL" PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -q --runxfail --tb=short -p no:cacheprovider'
 ```
 
-After stage 1, expect **2 failed, 9 passed**. `--runxfail` deliberately exposes
-the two remaining defects. At the original stage-0 commit this command instead
-reported **3 failed, 6 passed**.
+After stage 2, expect **1 failed, 14 passed**. `--runxfail` deliberately exposes
+the remaining context-persistence defect. At stage 1 the command reported
+**2 failed, 9 passed**; at stage 0 it reported **3 failed, 6 passed**.
 
-Without `--runxfail`, expect **9 passed, 2 xfailed**. Strict xfail markers
-document the remaining unfixed behavior without weakening the assertions. A
+Without `--runxfail`, expect **14 passed, 1 xfailed**. A strict xfail marker
+documents the remaining unfixed behavior without weakening the assertions. A
 repaired case becomes an unexpected pass and fails the suite until its marker
 is removed in the corresponding fix stage. Only assertion failures qualify as
 these expected failures.
@@ -26,17 +26,25 @@ these expected failures.
 To verify only the repaired formatting behavior and its adjacent cases:
 
 ```powershell
-docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -k "batch or missing_fields or manual_merge_formatting or single_update" -q -p no:cacheprovider'
+docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -k "batch_keeps or missing_fields or manual_merge_formatting or single_update" -q -p no:cacheprovider'
 ```
 
-Expect **7 passed, 4 deselected**.
+Expect **7 passed, 8 deselected**.
+
+To verify the queue repair, including the original losing interleaving:
+
+```powershell
+docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'RCA_TEST_REDIS_URL="$REDIS_URL" PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -k "queue or drain or consumers" -q -p no:cacheprovider'
+```
+
+Expect **6 passed, 9 deselected**.
 
 The temporary container uses the existing worker image and network with source
 mounted read-only. The Redis test uses an explicitly selected URL, a random
 `rca-regression-` user/session key, a short TTL, and exact-key cleanup. It does
 not flush Redis or read existing queues. The database dependencies and session
-status are replaced in-process. Without `RCA_TEST_REDIS_URL`, only the Redis
-race case skips. The graph case requires the real LangChain/LangGraph packages.
+status are replaced in-process. Without `RCA_TEST_REDIS_URL`, the five real
+Redis cases skip. The graph case requires the real LangChain/LangGraph packages.
 
 ## 1. Later alerts in a batch lose their fields
 
@@ -64,8 +72,8 @@ The original failing assertion now passes without an xfail marker. Two added
 tests cover missing-field association and mixed manual/ordinary updates.
 
 Seven representative single-update outputs were also compared byte-for-byte
-with the stage-0 formatter and were identical. Queue consumption and the model
-middleware are unchanged. The running services have not been rebuilt or
+with the stage-0 formatter and were identical. Stage 1 did not change queue
+consumption or model middleware. The running services have not been rebuilt or
 restarted; verification uses the changed source in a temporary test container.
 
 ## 2. A concurrent enqueue can disappear during consumption
@@ -73,7 +81,7 @@ restarted; verification uses the changed source in a temporary test container.
 Test: `test_update_arriving_during_drain_is_not_lost`.
 
 Use two real Redis clients. Queue A, then schedule the producer to append B
-immediately after the consumer's first network round trip. With the current
+immediately after the consumer's first network round trip. With the original
 `LRANGE` followed by `DELETE`, the return value contains only A and B is absent
 from the remaining queue. The desired assertion is that B remains available.
 
@@ -88,6 +96,19 @@ Relevant source: `chat/background/context_updates.py`,
 This is a confirmed losing interleaving, not a measurement of its production
 frequency. The impact is silent loss of an accepted correlated alert or
 deployment update.
+
+Stage-2 repair: execute `LRANGE` and `DELETE` within one Redis transaction
+(`pipeline(transaction=True)`). Producers cannot write between the transaction's
+commands. An enqueue ordered after the transaction stays queued for the next
+drain; a second consumer sees an empty queue rather than the first batch.
+No retries, sleeps, new Redis dependency, or queue format changes were added.
+
+The original controlled-interleaving regression now passes without an xfail
+marker. Additional real-Redis tests cover initially empty queues, one/multiple
+entries in order, repeated drains, session isolation, and two consumers starting
+together. The latter checks concurrent behavior with a barrier; the original
+producer interleaving remains the deterministic reproduction of message loss.
+These tests do not claim crash-safe or exactly-once delivery after consumption.
 
 ## 3. Context is temporary in the inner agent graph
 
@@ -126,9 +147,10 @@ remain to be verified during later integration checks.
 
 The new tests plus `test_investigation_timeout.py`, `test_session_heartbeat.py`
 and `test_deepseek_provider.py` ran in the existing worker image:
-**23 passed, 3 xfailed** at stage 0 and **26 passed, 2 xfailed** after stage 1.
-These checks are scoped; they are not the full suite. Stage 1 did not perform
-live Celery, browser, database write-back, or real-model verification.
+**23 passed, 3 xfailed** at stage 0, **26 passed, 2 xfailed** after stage 1,
+and **31 passed, 1 xfailed** after stage 2.
+These checks are scoped; they are not the full suite. Stages 1 and 2 did not
+perform live Celery, browser, database write-back, or real-model verification.
 
 ## Next stages
 

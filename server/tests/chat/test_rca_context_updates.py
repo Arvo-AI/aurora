@@ -8,8 +8,11 @@ requires RCA_TEST_REDIS_URL and touches only its own random test key.
 import asyncio
 import importlib.util
 import json
+import os
 import sys
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -132,15 +135,14 @@ def test_manual_merge_formatting_is_local_to_its_update(context_updates):
 
 def test_empty_queue_returns_no_updates(context_updates, monkeypatch):
     client = MagicMock()
-    client.lrange.return_value = []
+    transaction = client.pipeline.return_value.__enter__.return_value
+    transaction.execute.return_value = [[], 0]
     monkeypatch.setattr(context_updates, "get_redis_client", lambda: client)
     assert context_updates.drain_rca_context_updates("user", "session") == []
+    transaction.execute.assert_called_once()
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="Bug 2: a producer write between LRANGE and DELETE is lost")
 def test_update_arriving_during_drain_is_not_lost(context_updates, monkeypatch):
-    import os
-
     url = os.getenv("RCA_TEST_REDIS_URL")
     if not url:
         pytest.skip("Set RCA_TEST_REDIS_URL to an isolated/local test Redis")
@@ -198,6 +200,82 @@ def test_update_arriving_during_drain_is_not_lost(context_updates, monkeypatch):
         producer.delete(key)
         consumer.close()
         producer.close()
+
+
+@pytest.fixture
+def redis_queue(context_updates, monkeypatch):
+    url = os.getenv("RCA_TEST_REDIS_URL")
+    if not url:
+        pytest.skip("Set RCA_TEST_REDIS_URL to an isolated/local test Redis")
+    from redis import Redis
+
+    client = Redis.from_url(url, decode_responses=True)
+    user_id = "rca-regression-" + uuid.uuid4().hex
+    session_id = str(uuid.uuid4())
+    key = context_updates._make_update_key(user_id, session_id)
+    monkeypatch.setattr(context_updates, "get_redis_client", lambda: client)
+    try:
+        yield SimpleNamespace(client=client, user_id=user_id, session_id=session_id, key=key)
+    finally:
+        client.delete(key)
+        client.close()
+
+
+@pytest.mark.parametrize("count", [1, 3])
+def test_queue_drains_in_order_and_only_once(context_updates, redis_queue, count):
+    queue = redis_queue
+    assert context_updates.drain_rca_context_updates(queue.user_id, queue.session_id) == []
+    updates = [{"source": "grafana", "payload": {"message": f"alert-{i}"}} for i in range(count)]
+    queue.client.rpush(queue.key, *(json.dumps(update) for update in updates))
+    queue.client.expire(queue.key, 60)
+
+    assert context_updates.drain_rca_context_updates(queue.user_id, queue.session_id) == updates
+    assert context_updates.drain_rca_context_updates(queue.user_id, queue.session_id) == []
+    assert not queue.client.exists(queue.key)
+
+
+def test_drain_does_not_touch_another_session(context_updates, redis_queue):
+    queue = redis_queue
+    other_session = str(uuid.uuid4())
+    other_key = context_updates._make_update_key(queue.user_id, other_session)
+    first = {"payload": {"message": "FIRST-SESSION"}}
+    other = {"payload": {"message": "OTHER-SESSION"}}
+    try:
+        for key, update in ((queue.key, first), (other_key, other)):
+            queue.client.rpush(key, json.dumps(update))
+            queue.client.expire(key, 60)
+        assert context_updates.drain_rca_context_updates(queue.user_id, queue.session_id) == [first]
+        assert [json.loads(raw) for raw in queue.client.lrange(other_key, 0, -1)] == [other]
+    finally:
+        queue.client.delete(other_key)
+
+
+def test_two_consumers_do_not_duplicate_the_batch(context_updates, redis_queue, monkeypatch):
+    from redis import Redis
+
+    queue = redis_queue
+    updates = [{"payload": {"message": f"alert-{i}"}} for i in range(3)]
+    queue.client.rpush(queue.key, *(json.dumps(update) for update in updates))
+    queue.client.expire(queue.key, 60)
+    clients = [Redis(connection_pool=queue.client.connection_pool) for _ in range(2)]
+    local = threading.local()
+    ready = threading.Barrier(2, timeout=5)
+    monkeypatch.setattr(context_updates, "get_redis_client", lambda: local.client)
+
+    def drain(client):
+        local.client = client
+        ready.wait()
+        return context_updates.drain_rca_context_updates(queue.user_id, queue.session_id)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            batches = list(pool.map(drain, clients))
+        assert [update for batch in batches for update in batch] == updates
+        assert sorted(len(batch) for batch in batches) == [0, len(updates)]
+        assert not queue.client.exists(queue.key)
+    finally:
+        for client in clients:
+            client.close()
 
 
 def test_foreground_chat_does_not_consume_rca_updates(context_updates, monkeypatch):
