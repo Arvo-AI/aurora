@@ -32,6 +32,7 @@ _SOURCE_TABLE_MAP = {
     "jenkins": "jenkins_deployment_events",
     "cloudbees": "jenkins_deployment_events",
     "spinnaker": "spinnaker_deployment_events",
+    "pipeline": "pipeline_failure_events",
 }
 
 _PAYLOAD_LOOKUP_WINDOW = timedelta(minutes=10)

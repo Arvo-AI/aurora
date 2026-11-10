@@ -320,7 +320,11 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'elastic', 'slack', 'teams', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'jira', 'servicenow', 'action'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'elastic', 'slack', 'teams', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'jira', 'servicenow', 'action', 'pipeline'}
+
+# Sources whose investigations never reach a channel outside Aurora (no
+# on_incident actions, no Jira filing). See access/outbound_policy.py.
+from chat.backend.agent.access.outbound_policy import allows_outbound as _allows_outbound  # noqa: E402
 
 _GUARDRAIL_BLOCKED_MSG = 'Action blocked by safety guardrails'
 _GUARDRAIL_USER_MSG = (
@@ -690,7 +694,7 @@ def run_background_chat(
                         # Dispatch on_incident actions for this incident (fire-and-forget)
                         source = trigger_metadata.get('source', '') if trigger_metadata else ''
                         # Prevent infinite loops: actions must not trigger other on_incident actions
-                        if source and source != 'action':
+                        if source and source != 'action' and _allows_outbound(trigger_metadata):
                             try:
                                 from services.actions.executor import dispatch_on_incident_actions
                                 dispatch_on_incident_actions(user_id, str(incident_id), timing='immediate')
@@ -935,7 +939,8 @@ def run_background_chat(
 
         # Dispatch on_incident actions configured for after_rca timing.
         # Guarded: skip if already dispatched inside _execute_background_chat.
-        if not result.get('after_rca_dispatched') and incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
+        if (not result.get('after_rca_dispatched') and incident_id and trigger_metadata
+                and trigger_metadata.get('source') != 'action' and _allows_outbound(trigger_metadata)):
             try:
                 from services.actions.executor import dispatch_on_incident_actions
                 dispatch_on_incident_actions(user_id, str(incident_id), timing='after_rca')
@@ -1105,6 +1110,8 @@ _JIRA_TOOL_NAMES = frozenset(('jira_add_comment', 'jira_create_issue'))
 def _should_file_in_jira(rca_context: Optional[Dict[str, Any]], session_id: str, user_id: str) -> bool:
     """Whether the post-investigation Jira filing step should run."""
     if not (rca_context and rca_context.get('integrations', {}).get('jira')):
+        return False
+    if not _allows_outbound(rca_context.get('trigger_metadata')):
         return False
     # Connected Jira is a context source until the org turns comment-back on.
     from routes.jira.jira_routes import jira_comment_back_enabled
@@ -1766,7 +1773,8 @@ async def _execute_background_chat(
                     logger.warning(f"[BackgroundChat] Failed to send action completed notification: {e}")
 
         # Dispatch after_rca actions before returning (same reason as above).
-        if incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
+        if (incident_id and trigger_metadata and trigger_metadata.get('source') != 'action'
+                and _allows_outbound(trigger_metadata)):
             try:
                 from services.actions.executor import dispatch_on_incident_actions
                 dispatch_on_incident_actions(user_id, str(incident_id), timing='after_rca')

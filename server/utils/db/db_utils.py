@@ -1041,6 +1041,26 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_jenkins_deploy_trace ON jenkins_deployment_events(trace_id) WHERE trace_id IS NOT NULL;
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_jenkins_deploy_dedup ON jenkins_deployment_events(user_id, COALESCE(job_name, ''), COALESCE(build_number, -1));
                 """,
+                "pipeline_failure_events": """
+                    CREATE TABLE IF NOT EXISTS pipeline_failure_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        source_kind VARCHAR(20) NOT NULL,
+                        intake VARCHAR(20) NOT NULL,
+                        pipeline_name VARCHAR(255),
+                        run_id VARCHAR(255),
+                        title TEXT,
+                        category VARCHAR(32),
+                        node_keys TEXT[],
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_pipeline_failure_user ON pipeline_failure_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_pipeline_failure_nodes ON pipeline_failure_events USING GIN (node_keys);
+                """,
                 "spinnaker_deployment_events": """
                     CREATE TABLE IF NOT EXISTS spinnaker_deployment_events (
                         id SERIAL PRIMARY KEY,
@@ -1709,6 +1729,7 @@ def initialize_tables():
             rls_tables.append("incidentio_alerts")
             rls_tables.append("bigpanda_events")
             rls_tables.append("jenkins_deployment_events")
+            rls_tables.append("pipeline_failure_events")
             rls_tables.append("spinnaker_deployment_events")
             rls_tables.append("dynatrace_problems")
             rls_tables.append("opsgenie_events")

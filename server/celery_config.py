@@ -148,6 +148,7 @@ celery_app.conf.update(
         'routes.newrelic.tasks',
         'routes.sentry.tasks',
         'routes.jenkins.tasks',
+        'routes.pipeline.tasks',
         'routes.jira.tasks',
         'routes.spinnaker.tasks',
         'routes.incidentio.tasks',
@@ -279,6 +280,12 @@ try:
     logging.info("Jenkins tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import Jenkins tasks: {e}")
+
+try:
+    import routes.pipeline.tasks  # noqa: F401
+    logging.info("Pipeline tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import Pipeline tasks: {e}")
 
 try:
     import routes.spinnaker.tasks  # noqa: F401

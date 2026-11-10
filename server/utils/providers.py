@@ -37,6 +37,10 @@ CONNECTOR_DIRS: frozenset = frozenset({
     "opsgenie",
     "ovh",
     "pagerduty",
+    # Not a vendor connector: the zero-credential pipeline failure door. Listed
+    # so the RBAC architectural test covers its routes and so its Aurora-issued
+    # webhook secret is a known user_tokens provider.
+    "pipeline",
     "rabbitmq",
     "scaleway",
     "sentry",
