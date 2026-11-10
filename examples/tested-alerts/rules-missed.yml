@@ -1,0 +1,9 @@
+# Synthetic example: this delay misses the six-minute incident.
+groups:
+  - name: checkout
+    rules:
+      - alert: CheckoutErrors
+        expr: checkout_error_ratio > 0.05
+        for: 10m
+        labels:
+          severity: page

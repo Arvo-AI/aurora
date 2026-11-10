@@ -1,3 +1,7 @@
+# Local Prometheus rule evaluation; the multi-platform manifest is pinned so
+# API, chatbot, and worker images use the same promtool release on every arch.
+FROM prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996 AS prometheus-tools
+
 # ============================================
 # Build GitHub MCP Server from source (pinned)
 # ============================================
@@ -13,6 +17,9 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /github-mcp-server ./cm
 # Base Stage - Common dependencies
 # ============================================
 FROM python:3.12-slim AS base
+
+COPY --from=prometheus-tools /bin/promtool /usr/local/bin/promtool
+COPY --from=prometheus-tools /LICENSE /NOTICE /usr/local/share/licenses/prometheus/
 
 ENV PYTHONPATH="/app"
 # Set uv cache directory to a writable location for non-root users

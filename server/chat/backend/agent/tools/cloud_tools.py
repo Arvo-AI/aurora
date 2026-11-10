@@ -9,6 +9,7 @@ from datetime import datetime
 import time
 
 from .output_sanitizer import truncate_json_fields
+from .prometheus_alert_tool import verify_prometheus_alert, build_prometheus_alert_tool
 from utils.security.config import config as _guardrails_config
 from utils.security.output_redaction import redact as _redact
 from utils.security.audit_events import emit_redaction_event as _emit_redaction
@@ -1415,6 +1416,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     tool_functions = [
         (terminal_exec, "terminal_exec"),
         (analyze_zip_file, "analyze_zip_file"),
+        # Local, bounded evaluation of supplied rules and test data. No connector
+        # or production credentials are needed, including in Ask mode.
+        (verify_prometheus_alert, "verify_prometheus_alert"),
         # (web_search, "web_search"),  # Moved to dedicated registration below with explicit args_schema
     ]
 
@@ -1583,7 +1587,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         final_func.__name__ = name
             
         # Create StructuredTool with proper args_schema for tools with complex parameters
-        if name == 'github_commit':
+        if name == 'verify_prometheus_alert':
+            tool = build_prometheus_alert_tool(final_func)
+        elif name == 'github_commit':
             tool = StructuredTool.from_function(
                 func=final_func,
                 name=name,
