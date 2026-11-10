@@ -1,27 +1,22 @@
 # RCA context delivery: reproduction and repair progress
 
 Original baseline: `8cf9573`; stage-0 test commit: `39eab99`.
-Stages 1 and 2 fix batch formatting and queue atomicity. Context persistence
-remains a known failure. No model API calls, production incidents, or account
-changes are needed to run the tests.
+Stages 1-3 fix batch formatting, queue atomicity and context persistence.
+No model API calls, production incidents, or account changes are needed to
+run the tests.
 
 ## Run locally against the existing Docker stack
 
 From PowerShell in `E:\Projects\Aurora`:
 
 ```powershell
-docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'RCA_TEST_REDIS_URL="$REDIS_URL" PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -q --runxfail --tb=short -p no:cacheprovider'
+docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'RCA_TEST_REDIS_URL="$REDIS_URL" PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -q --tb=short -p no:cacheprovider'
 ```
 
-After stage 2, expect **1 failed, 14 passed**. `--runxfail` deliberately exposes
-the remaining context-persistence defect. At stage 1 the command reported
-**2 failed, 9 passed**; at stage 0 it reported **3 failed, 6 passed**.
-
-Without `--runxfail`, expect **14 passed, 1 xfailed**. A strict xfail marker
-documents the remaining unfixed behavior without weakening the assertions. A
-repaired case becomes an unexpected pass and fails the suite until its marker
-is removed in the corresponding fix stage. Only assertion failures qualify as
-these expected failures.
+After stage 3, expect **18 passed** with no expected-failure markers remaining.
+Historically, adding `--runxfail` exposed **1 failed, 14 passed** after stage 2,
+**2 failed, 9 passed** after stage 1 and **3 failed, 6 passed** at stage 0.
+Each strict xfail marker was removed only when its original reproduction passed.
 
 To verify only the repaired formatting behavior and its adjacent cases:
 
@@ -29,7 +24,7 @@ To verify only the repaired formatting behavior and its adjacent cases:
 docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -k "batch_keeps or missing_fields or manual_merge_formatting or single_update" -q -p no:cacheprovider'
 ```
 
-Expect **7 passed, 8 deselected**.
+Expect **7 passed, 11 deselected**.
 
 To verify the queue repair, including the original losing interleaving:
 
@@ -37,7 +32,15 @@ To verify the queue repair, including the original losing interleaving:
 docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'RCA_TEST_REDIS_URL="$REDIS_URL" PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -k "queue or drain or consumers" -q -p no:cacheprovider'
 ```
 
-Expect **6 passed, 9 deselected**.
+Expect **6 passed, 12 deselected**.
+
+To verify context persistence, non-RCA isolation and the existing trim behavior:
+
+```powershell
+docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -k "later_agent_model_turns or safety_trim" -q -p no:cacheprovider'
+```
+
+Expect **4 passed, 14 deselected**.
 
 The temporary container uses the existing worker image and network with source
 mounted read-only. The Redis test uses an explicitly selected URL, a random
@@ -120,7 +123,7 @@ The test uses `astream_events`, as `Agent.agentic_tool_flow()` does. A scripted
 model makes three turns, with a new context update arriving during the first
 tool execution. The tools contain no copy of that update in their outputs.
 
-At this baseline:
+Before the stage-3 repair:
 
 - Turn 1 has no update, as expected.
 - Turn 2 has the update, as expected.
@@ -129,10 +132,8 @@ At this baseline:
   the message in the inner graph.
 
 Relevant source: `chat/backend/agent/middleware/context_trim.py`,
-`ContextSafetyMiddleware.awrap_model_call()`. Its request override modifies
-the current model input, not the graph's accumulated messages. The final
-graph history assertion will also be exercised once the earlier turn-3
-assertion passes after a repair.
+`ContextSafetyMiddleware.awrap_model_call()`. Its original request override
+modified the current model input, not the graph's accumulated messages.
 
 This does not prove that all derived information is forgotten. A model can
 copy part of the update into a tool argument or answer, and outer state can
@@ -143,18 +144,34 @@ This test covers the actual model/tool graph path, not the full Celery task,
 database persistence, guardrail evaluation, or browser UI. Those boundaries
 remain to be verified during later integration checks.
 
+Stage-3 repair: prepare queued context in the existing middleware's native
+`abefore_model` hook and return a message-state update for the graph reducer.
+The message is now present in the second and third model requests and the
+final graph history, exactly once. The helper keeps UI metadata but no longer
+pre-appends the message to outer `State.messages`; `Agent.agentic_tool_flow()`
+already collects final graph messages into that list.
+
+Tests retain earlier tool evidence and check tool-call/result associations.
+Two additional graph cases verify that foreground chat and background non-RCA
+work do not consume or receive queued RCA context. A real message-trimming test
+checks the existing token budget, retained current question and absence of
+orphaned tool results. The wrapper still trims requests as before; the repair
+does not promise indefinite retention beyond the context window or recovery
+across worker restarts.
+
 ## Baseline regression checks
 
 The new tests plus `test_investigation_timeout.py`, `test_session_heartbeat.py`
 and `test_deepseek_provider.py` ran in the existing worker image:
 **23 passed, 3 xfailed** at stage 0, **26 passed, 2 xfailed** after stage 1,
-and **31 passed, 1 xfailed** after stage 2.
-These checks are scoped; they are not the full suite. Stages 1 and 2 did not
-perform live Celery, browser, database write-back, or real-model verification.
+**31 passed, 1 xfailed** after stage 2 and **35 passed** after stage 3.
+Stage 3 also ran `test_force_tool_choice.py` and `test_prompt_cache_control.py`:
+**70 passed**, with one third-party Google auth/grpc deprecation warning.
+These checks are scoped; they are not the full suite. Stages 1-3 did not perform
+live Celery, browser, database write-back, or real-model verification.
 
 ## Next stages
 
-Fix each defect separately, remove only its strict xfail marker after the
-original reproduction passes, and preserve the other expected failures until
-their respective repairs. Do not add UI, pause/resume, connectors, retries, or
-a new queue framework as part of these fixes. Stop and report at each stage.
+The three source repairs are complete. Stage 4 remains: combined integration
+verification and final delivery. Do not add UI, pause/resume, connectors,
+retries, or a new queue framework. Stop and report at each stage.

@@ -327,11 +327,11 @@ def _format_updates_for_prompt(updates: List[Dict[str, Any]]) -> str:
 
 
 def apply_rca_context_updates(state: Any) -> Optional[HumanMessage]:
-    """Inject queued updates into the in-flight RCA state as a HumanMessage.
-    
-    This function is called on EVERY LLM call. We check Redis for new updates
-    each time, but track which updates we've already injected to avoid duplicates.
-    Each new correlated alert gets injected once.
+    """Prepare a queued update for the graph's before-model state update.
+
+    The graph owns message persistence. Keep UI metadata here without also
+    appending to outer State.messages: agentic_tool_flow collects the graph's
+    final messages into that list when the investigation finishes.
     """
     if not state:
         logger.debug("[RCA-UPDATE] No state context available")
@@ -383,12 +383,9 @@ def apply_rca_context_updates(state: Any) -> Optional[HumanMessage]:
 
     try:
         if hasattr(state, "messages") and isinstance(state.messages, list):
-            state.messages.append(update_message)
             logger.info(
-                "[RCA-UPDATE] Injected context update into state.messages "
-                "(session=%s, messages=%d)",
+                "[RCA-UPDATE] Prepared context update for graph (session=%s)",
                 session_id,
-                len(state.messages)
             )
             
             # Store UI update payload for injection during UI conversion

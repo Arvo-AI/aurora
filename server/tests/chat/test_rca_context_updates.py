@@ -1,8 +1,7 @@
 """Regression cases for live RCA context delivery; no model API calls.
 
-Known failures are strict xfails until the corresponding repair stage. Run
-with --runxfail to see the original failures. The queue race test additionally
-requires RCA_TEST_REDIS_URL and touches only its own random test key.
+Real-Redis cases require RCA_TEST_REDIS_URL and touch only random test keys.
+Graph cases use installed LangChain/LangGraph with a scripted model.
 """
 
 import asyncio
@@ -285,14 +284,33 @@ def test_foreground_chat_does_not_consume_rca_updates(context_updates, monkeypat
     drain.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="Bug 3: request override does not persist a context message in the agent graph")
-def test_context_survives_later_agent_model_turns(context_updates, monkeypatch):
+@pytest.fixture
+def context_middleware(context_updates, monkeypatch):
     for package in ("langchain", "langgraph", "langchain-core"):
         try:
             version(package)
         except PackageNotFoundError:
             pytest.skip(f"{package} is required for the real graph regression")
 
+    # Only model-size lookup is replaced; graph and middleware behavior are real.
+    manager = ModuleType("chat.backend.agent.utils.chat_context_manager")
+    manager.ChatContextManager = SimpleNamespace(get_context_limit=lambda _: 128000)
+    monkeypatch.setitem(sys.modules, manager.__name__, manager)
+    return _load_module(
+        monkeypatch,
+        "chat.backend.agent.middleware.context_trim",
+        SERVER / "chat/backend/agent/middleware/context_trim.py",
+    )
+
+
+@pytest.mark.parametrize("is_background,rca_context,receives_update", [
+    (True, {"source": "grafana"}, True),
+    (False, None, False),
+    (True, None, False),
+])
+def test_context_survives_later_agent_model_turns(
+    context_updates, context_middleware, monkeypatch, is_background, rca_context, receives_update,
+):
     from langchain.agents import create_agent
     from langchain_core.language_models.chat_models import BaseChatModel
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -301,17 +319,8 @@ def test_context_survives_later_agent_model_turns(context_updates, monkeypatch):
     from chat.backend.agent.utils.state import State
     from utils.cloud import cloud_utils
 
-    # Only model-size lookup is replaced; graph and middleware behavior are real.
-    manager = ModuleType("chat.backend.agent.utils.chat_context_manager")
-    manager.ChatContextManager = SimpleNamespace(get_context_limit=lambda _: 128000)
-    monkeypatch.setitem(sys.modules, manager.__name__, manager)
-    middleware = _load_module(
-        monkeypatch,
-        "chat.backend.agent.middleware.context_trim",
-        SERVER / "chat/backend/agent/middleware/context_trim.py",
-    )
     state = State(question="Investigate synthetic order failures", user_id="test-user",
-                  session_id="test-session", is_background=True, rca_context={"source": "grafana"})
+                  session_id="test-session", is_background=is_background, rca_context=rca_context)
     token = cloud_utils._state_var.set(state)
     pending = []
     seen = []
@@ -345,7 +354,7 @@ def test_context_survives_later_agent_model_turns(context_updates, monkeypatch):
 
     async def run():
         agent = create_agent(model=ScriptedModel(), tools=[read_evidence],
-                             middleware=[middleware.ContextSafetyMiddleware("test-model")])
+                             middleware=[context_middleware.ContextSafetyMiddleware("test-model")])
         result = None
         # Match agentic_tool_flow's astream_events path, not only ainvoke.
         async for event in agent.astream_events(
@@ -365,8 +374,54 @@ def test_context_survives_later_agent_model_turns(context_updates, monkeypatch):
     def contains_note(messages):
         return any(isinstance(m, HumanMessage) and note in str(m.content) for m in messages)
     assert not contains_note(seen[0])
+    if not receives_update:
+        assert not any(contains_note(messages) for messages in seen)
+        assert not contains_note(output["messages"])
+        assert not state.rca_ui_updates
+        assert pending == [update], "Non-RCA runs must not consume the update"
+        return
+
     assert contains_note(seen[1]), "The update must reach its first eligible request"
-    assert state.rca_ui_updates, "The production helper must create its UI record"
+    assert len(state.rca_ui_updates) == 1, "One update must produce one UI record"
     assert any(isinstance(m, ToolMessage) and m.content == "SYNTHETIC-EVIDENCE-1" for m in seen[2])
     assert contains_note(seen[2]), "The original context vanished on the following model turn"
     assert contains_note(output["messages"])
+    for messages in (seen[1], seen[2], output["messages"]):
+        notes = [m for m in messages if isinstance(m, HumanMessage) and note in str(m.content)]
+        assert len(notes) == 1, "The same update must not be injected repeatedly"
+        call_ids = {call["id"] for m in messages if isinstance(m, AIMessage) for call in m.tool_calls}
+        assert all(m.tool_call_id in call_ids for m in messages if isinstance(m, ToolMessage))
+    assert not contains_note(state.messages), "The final graph collector owns the outer message append"
+
+
+def test_context_safety_trim_still_removes_orphaned_tool_results(context_middleware):
+    from langchain.agents.middleware.types import ModelRequest
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    from langchain_core.messages.utils import count_tokens_approximately
+
+    middleware = context_middleware.ContextSafetyMiddleware("test-model")
+    middleware.max_tokens = 20
+    messages = [
+        HumanMessage(content="Old context " * 2000),
+        AIMessage(content="Read evidence", tool_calls=[{
+            "name": "read_evidence", "args": {}, "id": "old-call", "type": "tool_call",
+        }]),
+        ToolMessage(content="Old evidence", tool_call_id="old-call"),
+        HumanMessage(content="Current question"),
+    ]
+    request = ModelRequest(model=MagicMock(), messages=messages)
+    captured = []
+    response = object()
+
+    async def handler(updated):
+        captured.append(updated.messages)
+        return response
+
+    assert asyncio.run(middleware.awrap_model_call(request, handler)) is response
+    assert len(captured) == 1
+    trimmed = captured[0]
+    assert count_tokens_approximately(trimmed) <= middleware.max_tokens
+    assert trimmed[-1].content == "Current question"
+    assert messages[0] not in trimmed
+    call_ids = {call["id"] for m in trimmed if isinstance(m, AIMessage) for call in m.tool_calls}
+    assert all(m.tool_call_id in call_ids for m in trimmed if isinstance(m, ToolMessage))
