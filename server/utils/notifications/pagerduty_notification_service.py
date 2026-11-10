@@ -146,8 +146,12 @@ def _recurrence_eligibility(incident_data: Dict[str, Any]) -> Tuple[bool, str, O
     return True, "", pd_incident_id
 
 
+# An anchor in one of these states has not written its RCA yet; its root cause is pending, not unknown.
+_ANCHOR_IN_PROGRESS = frozenset({"pending", "queued", "running", "summarizing"})
+
+
 def _fetch_anchor(user_id: str, anchor_id: str, incident_id: str, pd_incident_id: str) -> Optional[Dict[str, Any]]:
-    """The anchor's title, first-fire time and RCA, plus whether another Aurora
+    """The anchor's title, first-fire time, RCA and status, plus whether another Aurora
     incident already put a note on this PagerDuty incident (a re-triggered page
     folded onto its own anchor shares the anchor's PagerDuty incident)."""
     with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
@@ -158,14 +162,18 @@ def _fetch_anchor(user_id: str, anchor_id: str, incident_id: str, pd_incident_id
                       EXISTS (SELECT 1 FROM incidents o
                               WHERE o.id <> %s AND o.source_type = 'pagerduty'
                                 AND o.pagerduty_note_id IS NOT NULL
-                                AND o.alert_metadata->>'incidentId' = %s)
+                                AND o.alert_metadata->>'incidentId' = %s),
+                      a.aurora_status
                FROM incidents a WHERE a.id = %s""",
             (incident_id, pd_incident_id, anchor_id),
         )
         row = cursor.fetchone()
     if not row:
         return None
-    return {"title": row[0], "summary": row[1], "fired_at": row[2], "pd_incident_has_note": bool(row[3])}
+    return {
+        "title": row[0], "summary": row[1], "fired_at": row[2], "pd_incident_has_note": bool(row[3]),
+        "in_progress": (row[4] if len(row) > 4 else None) in _ANCHOR_IN_PROGRESS,
+    }
 
 
 def _short_root_cause(summary: Optional[str]) -> str:
@@ -184,8 +192,13 @@ def compose_recurrence_note(
     anchor_fired_at: Optional[datetime],
     root_cause: str,
     base_url: Optional[str] = None,
+    anchor_in_progress: bool = False,
 ) -> str:
-    """Plain-text note for a folded incident: what it repeats, the root cause then, and a link."""
+    """Plain-text note for a folded incident: what it repeats, the root cause then, and a link.
+
+    A note cannot be edited once posted, so an anchor still under investigation is said to be
+    in progress rather than reported as having no root cause.
+    """
     title = truncate(to_plain_text(anchor_title or "", max_chars=None).replace("\n", " "), ANCHOR_TITLE_MAX_CHARS)
     if isinstance(anchor_fired_at, datetime) and anchor_fired_at.tzinfo is not None:
         # The column is naive UTC; an aware value from a direct caller is converted to match the label.
@@ -195,7 +208,7 @@ def compose_recurrence_note(
         "Aurora RCA: recurrence",
         "",
         f'Recurrence of "{title or "an earlier incident"}"{when}.',
-        f"Root cause then: {root_cause}" if root_cause else "Root cause then: not determined.",
+        _root_cause_line(root_cause, anchor_in_progress),
         "",
     ]
     base_url = (base_url or "").rstrip("/")
@@ -203,6 +216,14 @@ def compose_recurrence_note(
         lines += [f"Earlier investigation: {base_url}/incidents/{anchor_id}", ""]
     lines.append("Generated automatically by Aurora. Verify before acting.")
     return "\n".join(lines)
+
+
+def _root_cause_line(root_cause: str, anchor_in_progress: bool) -> str:
+    if root_cause:
+        return f"Root cause then: {root_cause}"
+    if anchor_in_progress:
+        return "Root cause then: still under investigation; the earlier investigation will have it."
+    return "Root cause then: not determined."
 
 
 def _credentials_client(user_id: str, incident_id: str) -> Tuple[Optional[PagerDutyClient], Dict[str, Any]]:
@@ -268,6 +289,7 @@ def _send_recurrence_note(user_id: str, incident_data: Dict[str, Any]) -> bool:
     content = compose_recurrence_note(
         anchor_id, anchor["title"] or incident_data.get("anchor_alert_title"),
         anchor["fired_at"], _short_root_cause(anchor["summary"]), FRONTEND_URL,
+        anchor_in_progress=anchor["in_progress"],
     )
     return _claim_and_post(user_id, incident_id, pd_incident_id, content, client, creds, shared=True)
 

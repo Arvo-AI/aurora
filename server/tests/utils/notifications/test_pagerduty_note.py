@@ -732,3 +732,27 @@ def test_compose_note_caps_caller_supplied_steps():
     assert all(len(b) <= rca_note.NEXT_STEP_MAX_CHARS + 5 for b in bullets)
     huge = rca_note.compose_note("x " * 5000, "i1", "y " * 5000, "https://a.example.com", steps)
     assert len(huge) <= rca_note.NOTE_MAX_CHARS
+
+
+def test_recurrence_of_a_running_anchor_says_it_is_still_under_investigation(wired, anchor_row):
+    """A note cannot be edited, so an unfinished anchor is not reported as having no root cause."""
+    anchor_row[1] = None  # the anchor's summary is not written yet
+    anchor_row.append("running")
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is True
+    _, content = wired.client.create_note.call_args.args
+    assert "Root cause then: still under investigation" in content
+    assert "not determined" not in content
+
+
+def test_recurrence_of_a_finished_anchor_without_a_cause_says_not_determined(wired, anchor_row):
+    anchor_row[1] = None
+    anchor_row.append("complete")
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is True
+    _, content = wired.client.create_note.call_args.args
+    assert "Root cause then: not determined." in content
+
+
+def test_anchor_lookup_reads_the_anchor_status(wired, anchor_row):
+    svc.send_pagerduty_incident_note("u1", _folded())
+    sql = next(sql for sql, _ in wired.pool.executes if sql.startswith("SELECT a.alert_title"))
+    assert "a.aurora_status" in sql
