@@ -1,4 +1,4 @@
-"""Pre-RCA check: route each alert-triggered RCA to a cheap or main model.
+"""RCA model routing: route each alert-triggered RCA to a cheap or main model.
 
 Before the background investigation starts, the incident is classified with a
 few cheap SQL lookups (no LLM call):
@@ -67,7 +67,7 @@ _PRIOR_SUMMARY_MAX_CHARS = 1500
 
 @dataclass
 class RoutingDecision:
-    """Outcome of the pre-RCA check for one incident."""
+    """Outcome of RCA model routing for one incident."""
 
     route: str                # repeat | simple | hard
     tier: str                 # model tier actually used: cheap | main
@@ -329,7 +329,7 @@ def _persist(cursor, incident_id: str, decision: RoutingDecision) -> None:
 # ---------------------------------------------------------------------------
 
 def route_rca(user_id: str, incident_id: str, main_model: str) -> Optional[RoutingDecision]:
-    """Run the pre-RCA check for one incident.
+    """Run RCA model routing for one incident.
 
     Returns None when routing is off. Otherwise returns the decision (already
     persisted on the incident). Never raises: on any failure the main model is
@@ -372,7 +372,7 @@ def route_rca(user_id: str, incident_id: str, main_model: str) -> Optional[Routi
         logger.warning("%s Check failed for incident %s; using main model: %s",
                        _LOG_PREFIX, incident_id, type(e).__name__)
         return RoutingDecision(ROUTE_HARD, TIER_MAIN, main_model,
-                               "pre-RCA check failed; using the main model", mode)
+                               "model routing check failed; using the main model", mode)
 
     logger.info(
         "%s incident=%s mode=%s route=%s tier=%s model=%s reason=%s",

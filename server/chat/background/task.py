@@ -1568,7 +1568,7 @@ async def _execute_background_chat(
         # Use centralized model configuration for RCA with provider mode awareness
         _is_pr_review = _tm_source == "change_gating"
 
-        # Pre-RCA check: repeat/simple alert RCAs may run on a cheaper model.
+        # Model routing: repeat/simple alert RCAs may run on a cheaper model.
         # Off by default; never raises and falls back to RCA_MODEL when unsure.
         rca_model = ModelConfig.RCA_MODEL
         if rca_context:

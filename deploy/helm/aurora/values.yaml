@@ -456,7 +456,7 @@ config:
   RECURRENCE_AGENT_TIMEOUT_SECONDS: "120"
   # Model for the recurrence agent. Empty = falls back to MAIN_MODEL.
   RECURRENCE_AGENT_MODEL: ""
-  # --- Pre-RCA check (model routing) ---
+  # --- RCA model routing ---
   # Before each alert-triggered RCA, SQL-only lookups classify the incident:
   # repeat (a prior incident with the same alert has a completed main-model
   # RCA), simple (severity in RCA_ROUTING_SIMPLE_SEVERITIES) or hard. repeat and

@@ -1,4 +1,4 @@
-"""Pre-RCA check (services/rca_routing.py): classify, tier choice and persistence."""
+"""RCA model routing (services/rca_routing.py): classify, tier choice and persistence."""
 
 import os
 import sys
