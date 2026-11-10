@@ -26,6 +26,7 @@ joining ``llm_usage_tracking.session_id`` to ``incidents.aurora_chat_session_id`
 
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -66,6 +67,8 @@ _PRIOR_SUMMARY_MAX_CHARS = 1500
 
 @dataclass
 class RoutingDecision:
+    """Outcome of the pre-RCA check for one incident."""
+
     route: str                # repeat | simple | hard
     tier: str                 # model tier actually used: cheap | main
     model: str                # model actually used for the RCA
@@ -90,10 +93,12 @@ def get_routing_mode() -> str:
 
 
 def get_cheap_model() -> str:
+    """RCA_ROUTING_CHEAP_MODEL, stripped; empty when unset."""
     return (os.getenv("RCA_ROUTING_CHEAP_MODEL") or "").strip()
 
 
 def _severity_set(var: str, default: str) -> FrozenSet[str]:
+    """Parse a comma-separated, case-insensitive severity list; empty string = none."""
     raw = os.getenv(var)
     if raw is None:
         raw = default
@@ -101,14 +106,17 @@ def _severity_set(var: str, default: str) -> FrozenSet[str]:
 
 
 def get_simple_severities() -> FrozenSet[str]:
+    """Severities routed as simple (RCA_ROUTING_SIMPLE_SEVERITIES)."""
     return _severity_set("RCA_ROUTING_SIMPLE_SEVERITIES", _DEFAULT_SIMPLE_SEVERITIES)
 
 
 def get_main_severities() -> FrozenSet[str]:
+    """Severities that always use the main model (RCA_ROUTING_MAIN_SEVERITIES)."""
     return _severity_set("RCA_ROUTING_MAIN_SEVERITIES", _DEFAULT_MAIN_SEVERITIES)
 
 
 def _float_env(var: str, default: float, lo: float, hi: float) -> float:
+    """Float env var within [lo, hi]; invalid, NaN or out-of-range values use default."""
     raw = os.getenv(var)
     if raw is None or not raw.strip():
         return default
@@ -117,21 +125,24 @@ def _float_env(var: str, default: float, lo: float, hi: float) -> float:
     except ValueError:
         logger.warning("%s Invalid %s=%r; using %s", _LOG_PREFIX, var, raw, default)
         return default
-    if value != value or value < lo or value > hi:  # NaN or out of range
+    if math.isnan(value) or value < lo or value > hi:
         logger.warning("%s Out-of-range %s=%r; using %s", _LOG_PREFIX, var, raw, default)
         return default
     return value
 
 
 def get_repeat_lookback_hours() -> float:
+    """RCA_ROUTING_REPEAT_LOOKBACK_HOURS (0 disables the title/service match)."""
     return _float_env("RCA_ROUTING_REPEAT_LOOKBACK_HOURS", _DEFAULT_LOOKBACK_HOURS, 0.0, _MAX_LOOKBACK_HOURS)
 
 
 def get_repeat_min_score() -> float:
+    """RCA_ROUTING_REPEAT_MIN_SCORE: minimum correlator score for a hinted repeat."""
     return _float_env("RCA_ROUTING_REPEAT_MIN_SCORE", _DEFAULT_MIN_SCORE, 0.0, 1.0)
 
 
 def _orchestrator_enabled() -> bool:
+    """True when the multi-agent orchestrator (own model choice) handles RCA."""
     return os.getenv("ORCHESTRATOR_ENABLED", "false").strip().lower() == "true"
 
 
@@ -189,6 +200,7 @@ def _resolve_tier(route: str, mode: str, main_model: str) -> tuple:
 # ---------------------------------------------------------------------------
 
 def _load_incident(cursor, incident_id: str) -> Optional[Dict[str, Any]]:
+    """Fields the classifier needs for one incident, or None if not visible."""
     cursor.execute(
         """SELECT id, source_type, severity, alert_title, alert_service,
                   alert_metadata, started_at
@@ -225,36 +237,46 @@ _PRIOR_QUALIFIES = """
 """
 
 
-def _find_prior_rca(cursor, incident: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Find a completed main-model RCA this incident repeats, or None."""
-    hint = (incident.get("alert_metadata") or {}).get("correlation_hint") or {}
-    hinted_id = hint.get("incident_id") if isinstance(hint, dict) else None
+def _hint_score(hint: Any) -> float:
+    """Correlator score from a correlation_hint dict; 0.0 when absent or invalid."""
+    if not isinstance(hint, dict):
+        return 0.0
     try:
-        score = float(hint.get("score") or 0.0) if isinstance(hint, dict) else 0.0
+        return float(hint.get("score") or 0.0)
     except (TypeError, ValueError):
-        score = 0.0
+        return 0.0
 
-    if hinted_id and score >= get_repeat_min_score():
-        # Follow a folded hint target to its group anchor.
-        cursor.execute(
-            f"""SELECT i.id, i.alert_title, i.aurora_summary
-                  FROM incidents i
-                 WHERE i.id = (SELECT COALESCE(recurrence_of_incident_id, id)
-                                 FROM incidents WHERE id = %s)
-                   AND {_PRIOR_QUALIFIES}""",
-            (hinted_id, incident["id"]),
-        )
-        row = cursor.fetchone()
-        if row:
-            return {
-                "id": str(row[0]), "title": row[1], "summary": row[2],
-                "evidence": f"correlator score {score:.2f}",
-            }
 
+def _prior_from_hint(cursor, incident: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Prior RCA named by the rule correlator's hint, if its score clears the bar."""
+    hint = (incident.get("alert_metadata") or {}).get("correlation_hint")
+    hinted_id = hint.get("incident_id") if isinstance(hint, dict) else None
+    score = _hint_score(hint)
+    if not hinted_id or score < get_repeat_min_score():
+        return None
+    # Follow a folded hint target to its group anchor.
+    cursor.execute(
+        f"""SELECT i.id, i.alert_title, i.aurora_summary
+              FROM incidents i
+             WHERE i.id = (SELECT COALESCE(recurrence_of_incident_id, id)
+                             FROM incidents WHERE id = %s)
+               AND {_PRIOR_QUALIFIES}""",
+        (hinted_id, incident["id"]),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return {"id": str(row[0]), "title": row[1], "summary": row[2],
+            "evidence": f"correlator score {score:.2f}"}
+
+
+def _prior_from_fingerprint(cursor, incident: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Most recent prior RCA with the same source, alert title and service."""
     title = (incident.get("alert_title") or "").strip()
     lookback = get_repeat_lookback_hours()
     if not title or lookback <= 0:
         return None
+    anchor = incident.get("started_at") or datetime.now(timezone.utc).replace(tzinfo=None)
     cursor.execute(
         f"""SELECT i.id, i.alert_title, i.aurora_summary
               FROM incidents i
@@ -266,26 +288,23 @@ def _find_prior_rca(cursor, incident: Dict[str, Any]) -> Optional[Dict[str, Any]
                AND i.started_at <= %s
              ORDER BY i.started_at DESC
              LIMIT 1""",
-        (
-            incident["id"],
-            incident.get("source_type"),
-            title,
-            incident.get("alert_service"),
-            incident.get("started_at") or datetime.now(timezone.utc).replace(tzinfo=None),
-            lookback * 3600.0,
-            incident.get("started_at") or datetime.now(timezone.utc).replace(tzinfo=None),
-        ),
+        (incident["id"], incident.get("source_type"), title,
+         incident.get("alert_service"), anchor, lookback * 3600.0, anchor),
     )
     row = cursor.fetchone()
-    if row:
-        return {
-            "id": str(row[0]), "title": row[1], "summary": row[2],
-            "evidence": "same alert title and service",
-        }
-    return None
+    if not row:
+        return None
+    return {"id": str(row[0]), "title": row[1], "summary": row[2],
+            "evidence": "same alert title and service"}
+
+
+def _find_prior_rca(cursor, incident: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Find a completed main-model RCA this incident repeats, or None."""
+    return _prior_from_hint(cursor, incident) or _prior_from_fingerprint(cursor, incident)
 
 
 def _persist(cursor, incident_id: str, decision: RoutingDecision) -> None:
+    """Record the routing decision on the incident row."""
     cursor.execute(
         """UPDATE incidents
               SET rca_route = %s,
@@ -340,11 +359,12 @@ def route_rca(user_id: str, incident_id: str, main_model: str) -> Optional[Routi
                 tier, model, note = _resolve_tier(route, mode, main_model)
                 if note:
                     reason = f"{reason} ({note})"
+                repeat_of = prior if route == ROUTE_REPEAT else {}
                 decision = RoutingDecision(
                     route=route, tier=tier, model=model, reason=reason, mode=mode,
-                    prior_incident_id=prior["id"] if prior and route == ROUTE_REPEAT else None,
-                    prior_title=prior.get("title") if prior and route == ROUTE_REPEAT else None,
-                    prior_summary=(prior.get("summary") or None) if prior and route == ROUTE_REPEAT else None,
+                    prior_incident_id=repeat_of.get("id"),
+                    prior_title=repeat_of.get("title"),
+                    prior_summary=repeat_of.get("summary") or None,
                 )
                 _persist(cursor, incident_id, decision)
             conn.commit()
