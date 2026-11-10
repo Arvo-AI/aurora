@@ -2127,6 +2127,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 graph_get_service, GraphGetServiceArgs,
                 postmortem_list, PostmortemListArgs,
                 grafana_list_alerts, GrafanaListAlertsArgs,
+                search_tool_calls, SearchToolCallsArgs,
             )
 
             _INTROSPECTION_TOOLS = [
@@ -2265,6 +2266,16 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "List Grafana alerts ingested via webhook. Optionally filter by state "
                     "(alerting, ok, pending). Returns title, state, rule info, and dashboard link.",
                     GrafanaListAlertsArgs,
+                ),
+                (
+                    search_tool_calls,
+                    "search_tool_calls",
+                    "Search Aurora's own past tool calls across all chats and RCAs in this org. "
+                    "Defaults to failed calls in the last 7 days. Returns each call's tool, "
+                    "redacted input/command, failure reason, timestamp and the chat or incident "
+                    "it came from, plus failure counts per tool. Use to answer 'which tool calls "
+                    "failed last week and why' or to spot missing permissions. Read-only.",
+                    SearchToolCallsArgs,
                 ),
             ]
 
