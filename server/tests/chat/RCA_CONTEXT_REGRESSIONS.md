@@ -262,7 +262,7 @@ the repository in all six backend containers.
 
 A real background session was then created with the existing user:
 
-- Title: `验证：上下文修复（模拟数据）`.
+- Session title (translated from Chinese): `Verification: context fixes (synthetic data)`.
 - Session: `ec13cdf1-0f15-4ac6-ad4c-0cdd5386edf4`.
 - Celery task: `0bb5f1c6-996b-45d8-9277-7df7badaa61f`.
 - Open after signing in: <http://localhost:3000/chat?sessionId=ec13cdf1-0f15-4ac6-ad4c-0cdd5386edf4>.
