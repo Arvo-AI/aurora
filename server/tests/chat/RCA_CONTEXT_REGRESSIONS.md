@@ -236,7 +236,7 @@ Production frequency, elapsed-time savings and incident severity were not
 measured. Redis consumption is atomic, not a claim of crash-safe exactly-once
 processing after the batch is consumed.
 
-The running application services have not been rebuilt or restarted. Tests use
+At the stage-4 checkpoint the running services had not been rebuilt or restarted. Tests used
 the changed source mounted read-only into temporary containers; they do not
 establish that the running application has adopted the fixes. Deployment and
 full application validation remain separate steps. No push or PR was performed.
@@ -245,3 +245,61 @@ The source fixes are in commits `5f67c93`, `3c34a86` and `3ba4112`; their test-o
 baseline is `39eab99`. The branch also inherits pre-existing local DeepSeek and
 Windows fixes. If preparing an upstream PR later, isolate the task commits
 rather than silently including those unrelated changes.
+
+## Follow-up: deployed local runtime verification (2026-11-09)
+
+The user subsequently requested verification in the running local application.
+Read-only checks found no in-progress investigation or active/reserved Celery
+task. The old containers' two changed source files did not match the repository.
+
+The six backend application images were rebuilt from current source with
+`docker-compose.prod-local.yml`. Before replacing running services, the scoped
+regression suite was rerun in the rebuilt image: **132 passed, 1 skipped**.
+Only backend application services were recreated; PostgreSQL, Redis, storage
+and frontend services were not recreated. All services remained running, and
+the backend API and MCP health checks passed. The two changed file hashes match
+the repository in all six backend containers.
+
+A real background session was then created with the existing user:
+
+- Title: `验证：上下文修复（模拟数据）`.
+- Session: `ec13cdf1-0f15-4ac6-ad4c-0cdd5386edf4`.
+- Celery task: `0bb5f1c6-996b-45d8-9277-7df7badaa61f`.
+- Open after signing in: <http://localhost:3000/chat?sessionId=ec13cdf1-0f15-4ac6-ad4c-0cdd5386edf4>.
+
+This run used the actual session creation helper, Celery worker, configured
+DeepSeek model, context queue, middleware, database reads/writes, history
+serialization and session HTTP endpoint. There were no test replacements in
+this runtime probe. It ran in Ask mode, with notifications disabled and the
+existing general-viewer access pin. The run's memory-edit permission was checked
+to be false before creation, preventing synthetic findings from being saved as
+organizational knowledge. No account or existing session was modified, and no
+business incident was created. The new verification session is retained for
+inspection.
+
+Two synthetic updates were queued before dispatch. After the running task
+consumed that batch, two more updates were queued while it was in progress.
+The actual built-in `list_incidents` tool queried `investigating`, `analyzed`
+and `resolved` separately, with limit 1; it did not access external platforms.
+
+Observed results:
+
+- Celery result `SUCCESS`; database session status `completed`.
+- Saved model history contains 10 messages. Each of `RUNTIME-ORDER-42`,
+  `RUNTIME-REGION-CA`, `RUNTIME-DEPLOY-17` and `RUNTIME-TRACE-9` appears in exactly
+  one HumanMessage.
+- Saved UI messages contain two `rca_context_update` tool records.
+- An authenticated, organization-scoped request from the worker to
+  `/chat_api/sessions/<session_id>` returns HTTP 200 and all four markers.
+- The verification queue and regression-test keys are empty afterward.
+- Frontend HTTP access returns 200 at the sign-in page for an unauthenticated
+  request. Existing non-test session counts remain active 1/completed 2; the
+  retained test session adds one completed session. Business incidents remain 0.
+
+This extends verification to the actual Celery/database/API path after local
+deployment. It still does not validate authenticated browser rendering,
+third-party webhook ingestion, production cloud queries, cross-tenant denial,
+or recovery after worker failure. The deterministic component test, rather
+than this ordinary runtime run, reproduces the precise Redis interleaving.
+No production code or configuration files changed during this follow-up; no
+push or PR was performed.
