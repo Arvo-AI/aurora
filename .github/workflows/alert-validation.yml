@@ -44,7 +44,8 @@ jobs:
           python-version: '3.12'
 
       - name: Install focused test dependencies
-        run: python -m pip install --only-binary :all: pytest==9.0.3 PyYAML==6.0.1 pydantic==2.13.3 langchain-core==1.6.13
+        run: >-
+          python -m pip install --only-binary :all: pytest==9.0.3 PyYAML==6.0.1 pydantic==2.13.3 langchain-core==1.6.13
 
       - name: Install the same promtool used by Aurora
         shell: bash
