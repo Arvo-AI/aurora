@@ -596,8 +596,9 @@ def _has_active_token_row(cursor, org_id: Optional[str], provider: str) -> bool:
         logger.debug("[STORE-TOKENS] Existing-token lookup failed: %s", type(e).__name__)
         try:
             cursor.execute("ROLLBACK TO SAVEPOINT sp_token_row_check")
-        except Exception:
-            pass
+        except Exception as rollback_error:
+            # The SAVEPOINT itself failed, so there is nothing to roll back to.
+            logger.debug("[STORE-TOKENS] Savepoint rollback skipped: %s", type(rollback_error).__name__)
         return False
 
 
