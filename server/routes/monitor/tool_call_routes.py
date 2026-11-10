@@ -1,4 +1,4 @@
-"""Tool-call search for the monitor page (DEV-1729).
+"""Tool-call search for the monitor page.
 
 Lists the agent's tool calls across every chat and RCA in the org, filterable by
 status, time window, tool, source and free text, so failures can be reviewed

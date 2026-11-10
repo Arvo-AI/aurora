@@ -1,4 +1,4 @@
-"""GET /api/monitor/tool-calls (DEV-1729)."""
+"""GET /api/monitor/tool-calls."""
 
 from unittest.mock import MagicMock
 

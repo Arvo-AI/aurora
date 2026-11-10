@@ -1,4 +1,4 @@
-"""The agent's read-only search_tool_calls tool (DEV-1729)."""
+"""The agent's read-only search_tool_calls tool."""
 
 import json
 from contextlib import contextmanager
