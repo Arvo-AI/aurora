@@ -1,4 +1,4 @@
-"""Regular-chat tool calls are recorded in execution_steps (DEV-1729).
+"""Regular-chat tool calls are recorded in execution_steps.
 
 Before, only incident (RCA) sessions persisted steps, so a failed tool call in
 an ordinary chat could only be found by opening that chat.

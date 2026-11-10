@@ -3378,7 +3378,7 @@ def initialize_tables():
                 logging.warning(f"Error adding tool_call_id to execution_steps: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_es_tcid")
 
-            # Regular chats record their tool calls too (DEV-1729), so incident_id
+            # Regular chats record their tool calls too, so incident_id
             # is optional. The monitor's tool-call search filters on status/time.
             try:
                 cursor.execute("SAVEPOINT sp_es_chat")

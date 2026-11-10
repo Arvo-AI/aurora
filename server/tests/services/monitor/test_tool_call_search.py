@@ -1,4 +1,4 @@
-"""Tool-call search shared by the monitor page and the agent (DEV-1729)."""
+"""Tool-call search shared by the monitor page and the agent."""
 
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
