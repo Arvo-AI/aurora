@@ -749,6 +749,10 @@ app.register_blueprint(debug_bp)
 from routes.onboarding_routes import onboarding_bp
 app.register_blueprint(onboarding_bp, url_prefix="/api/onboarding")
 
+# --- Retro Review Routes (pre-merge review replayed on a public repo's past PRs) ---
+from routes.retro_review_routes import retro_review_bp
+app.register_blueprint(retro_review_bp)
+
 # ============================================================================
 # Global Error Handlers
 # ============================================================================
