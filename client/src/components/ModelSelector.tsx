@@ -72,6 +72,7 @@ const providerLabels: Record<string, string> = {
   anthropic: 'Anthropic',
   google: 'Google',
   vertex: 'Vertex',
+  ollama: 'Ollama',
 };
 
 // Catalog rows: [id, displayName, tier, overrides?]. `name`, `provider`, and the
@@ -117,31 +118,55 @@ const modelOptions: ModelOption[] = modelCatalog.map(([id, displayName, tier, ov
 
 interface PickerConfig {
   prefixes: string[] | null;
+  /** Ollama model ids this deployment runs; the cloud catalog has none. */
+  localModels?: string[];
 }
 
-function modelsForPrefixes(prefixes: string[] | null): ModelOption[] {
+function localModelOption(id: string): ModelOption {
+  const name = id.split('/').slice(1).join('/');
+  return {
+    id,
+    name,
+    displayName: name,
+    provider: providerLabels.ollama,
+    tier: 'free',
+    contextLength: 'Local',
+    hasReasoning: false,
+  };
+}
+
+/** The picker entries one catalog model contributes under the active provider prefixes. */
+function catalogOptions(model: ModelOption, prefixes: string[]): ModelOption[] {
+  const prefix = model.id.split('/')[0];
+  const out: ModelOption[] = [];
+  if (prefix === 'openai' && prefixes.includes('openai')) {
+    out.push(model);
+  } else if (prefix === 'anthropic' && (prefixes.includes('anthropic') || prefixes.includes('bedrock'))) {
+    out.push(model);
+  } else if (prefix === 'google') {
+    if (prefixes.includes('google')) out.push(model);
+    if (prefixes.includes('vertex')) {
+      out.push({ ...model, id: `vertex/${model.name}` });
+    }
+  } else if (prefix === 'vertex' && prefixes.includes('vertex')) {
+    out.push(model);
+  }
+  return out;
+}
+
+function localModelOptions(prefixes: string[], localModels: string[]): ModelOption[] {
+  if (!prefixes.includes('ollama')) return [];
+  return localModels.filter((id) => id.startsWith('ollama/')).map(localModelOption);
+}
+
+function modelsForPrefixes(prefixes: string[] | null, localModels: string[] = []): ModelOption[] {
   // OpenRouter / no keys: full catalog minus Vertex-only ids (those are not Google AI / OpenRouter picks).
   if (!prefixes) {
     return modelOptions.filter((m) => m.id.split('/')[0] !== 'vertex');
   }
 
-  const out: ModelOption[] = [];
-  for (const model of modelOptions) {
-    const prefix = model.id.split('/')[0];
-    if (prefix === 'openai' && prefixes.includes('openai')) {
-      out.push(model);
-    } else if (prefix === 'anthropic' && (prefixes.includes('anthropic') || prefixes.includes('bedrock'))) {
-      out.push(model);
-    } else if (prefix === 'google') {
-      if (prefixes.includes('google')) out.push(model);
-      if (prefixes.includes('vertex')) {
-        out.push({ ...model, id: `vertex/${model.name}` });
-      }
-    } else if (prefix === 'vertex' && prefixes.includes('vertex')) {
-      out.push(model);
-    }
-  }
-  return out;
+  const out = modelOptions.flatMap((model) => catalogOptions(model, prefixes));
+  return [...out, ...localModelOptions(prefixes, localModels)];
 }
 
 export default function ModelSelector({ 
@@ -159,7 +184,7 @@ export default function ModelSelector({
   const visibleModels = useMemo(() => {
     if (pickerError) return modelsForPrefixes(null);
     if (!picker) return [];
-    return modelsForPrefixes(picker.prefixes);
+    return modelsForPrefixes(picker.prefixes, picker.localModels);
   }, [picker, pickerError]);
 
   // Load saved model from localStorage on mount, then drop anything this
