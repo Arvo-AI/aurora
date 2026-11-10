@@ -1584,6 +1584,29 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_action_runs_action ON action_runs(action_id);
                     CREATE INDEX IF NOT EXISTS idx_action_runs_status ON action_runs(org_id, status);
                 """,
+                # Retro review jobs: Aurora's pre-merge review replayed on a public
+                # repo's past PRs (reverted vs. never-reverted). One row per job;
+                # per-PR results live in `items` and are rewritten as each PR
+                # finishes, so the UI can show progress. status: pending | running
+                # | completed | failed.
+                "retro_reviews": """
+                    CREATE TABLE IF NOT EXISTS retro_reviews (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        repo VARCHAR(255) NOT NULL,
+                        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+                        max_reverted INTEGER NOT NULL,
+                        max_controls INTEGER NOT NULL,
+                        items JSONB NOT NULL DEFAULT '[]',
+                        summary JSONB,
+                        error TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        started_at TIMESTAMP,
+                        completed_at TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_retro_reviews_org ON retro_reviews(org_id, created_at DESC);
+                """,
                 # Right-sizing recommendations proposed by the hpa_vpa_rightsizing action.
                 # One live row per (org, workload) while a PR is open; dismissal starts a
                 # cooldown so the action does not re-propose a change a human rejected.
@@ -1728,6 +1751,7 @@ def initialize_tables():
             rls_tables.append("org_tool_permissions")
             rls_tables.append("org_connector_access")
             rls_tables.append("org_teams")
+            rls_tables.append("retro_reviews")
             rls_tables.append("org_team_members")
             rls_tables.append("org_team_grants")
             rls_tables.append("rca_findings")
