@@ -61,8 +61,29 @@ _SECRET_KV_RE = re.compile(
 )
 
 
+# Fixed, user-facing messages for each invalid filter. Responses look these up
+# by code rather than echoing the exception, so no exception text reaches a client.
+FILTER_ERRORS = {
+    "status": "status must be one of: failed, succeeded, running, all",
+    "period": f"period must be one of: {', '.join(PERIOD_INTERVALS)}",
+    "range": "since must be before until",
+    "source": "source must be one of: chat, incident, all",
+    "since": "since must be an ISO-8601 timestamp",
+    "until": "until must be an ISO-8601 timestamp",
+}
+
+
 class InvalidFilter(ValueError):
-    """A filter value the caller can fix; message is safe to show."""
+    """A filter value the caller can fix; ``code`` is a key of FILTER_ERRORS."""
+
+    def __init__(self, code: str):
+        super().__init__(FILTER_ERRORS[code])
+        self.code = code
+
+
+def filter_error_message(exc: InvalidFilter) -> str:
+    """The constant message for an invalid filter, safe to return to a caller."""
+    return FILTER_ERRORS.get(getattr(exc, "code", ""), "Invalid filter")
 
 
 @dataclass
@@ -84,22 +105,22 @@ class ToolCallFilters:
         if status in ("all",):
             status = None
         if status and status not in STATUS_VALUES:
-            raise InvalidFilter("status must be one of: failed, succeeded, running, all")
+            raise InvalidFilter("status")
 
         period = (raw.get("period") or "").strip().lower() or DEFAULT_PERIOD
         if period not in PERIOD_INTERVALS:
-            raise InvalidFilter(f"period must be one of: {', '.join(PERIOD_INTERVALS)}")
+            raise InvalidFilter("period")
 
         since = _parse_ts(raw.get("since"), "since")
         until = _parse_ts(raw.get("until"), "until")
         if since and until and since > until:
-            raise InvalidFilter("since must be before until")
+            raise InvalidFilter("range")
 
         source = (raw.get("source") or "").strip().lower() or None
         if source in ("all",):
             source = None
         if source and source not in SOURCES:
-            raise InvalidFilter("source must be one of: chat, incident, all")
+            raise InvalidFilter("source")
 
         tool = (raw.get("tool") or "").strip() or None
         query = (raw.get("q") or raw.get("query") or "").strip() or None
@@ -127,7 +148,7 @@ def _parse_ts(value, field: str) -> Optional[datetime]:
     try:
         return datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
     except ValueError:
-        raise InvalidFilter(f"{field} must be an ISO-8601 timestamp") from None
+        raise InvalidFilter(field) from None
 
 
 def _escape_like(text: str) -> str:

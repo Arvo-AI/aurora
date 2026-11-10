@@ -893,6 +893,7 @@ def search_tool_calls(
     from services.monitor.tool_call_search import (
         InvalidFilter,
         ToolCallFilters,
+        filter_error_message,
         search_tool_calls as _search,
     )
 
@@ -902,7 +903,7 @@ def search_tool_calls(
             "source": source, "page": 1, "per_page": clamp(limit, 1, 50),
         })
     except InvalidFilter as exc:
-        raise IntrospectionError(str(exc)) from None
+        raise IntrospectionError(filter_error_message(exc)) from None
 
     with _cursor(user_id) as (cur, org_id):
         result = _search(cur, org_id, filters)

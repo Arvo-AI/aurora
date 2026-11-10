@@ -13,6 +13,7 @@ from flask import Blueprint, jsonify, request
 from services.monitor.tool_call_search import (
     InvalidFilter,
     ToolCallFilters,
+    filter_error_message,
     search_tool_calls,
 )
 from utils.auth.rbac_decorators import require_permission
@@ -36,7 +37,7 @@ def list_tool_calls(user_id):
     try:
         filters = ToolCallFilters.parse(request.args.to_dict())
     except InvalidFilter as exc:
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": filter_error_message(exc)}), 400
 
     org_id = get_org_id_from_request()
     if not org_id:

@@ -64,3 +64,12 @@ def test_db_failure_is_500_without_details(call):
     body, status, _, _ = call(raises=RuntimeError("password=leak"))
     assert status == 500
     assert "leak" not in body["error"]
+
+
+def test_bad_filter_message_is_a_constant_not_the_exception(call):
+    from services.monitor.tool_call_search import FILTER_ERRORS
+
+    body, status, _, _ = call("?since=<script>")
+    assert status == 400
+    assert body["error"] == FILTER_ERRORS["since"]
+    assert "<script>" not in body["error"]

@@ -9,7 +9,8 @@ from unittest.mock import MagicMock
 import pytest
 
 import chat.backend.agent.utils.tool_context_capture as mod
-from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
+
+ToolContextCapture = mod.ToolContextCapture
 
 
 @pytest.fixture
