@@ -1,13 +1,15 @@
-"""Regression cases for live RCA context delivery; no model API calls.
+"""Regression cases for live RCA context delivery; no model API calls by default.
 
 Real-Redis cases require RCA_TEST_REDIS_URL and touch only random test keys.
 Graph cases use installed LangChain/LangGraph with a scripted model.
+The opt-in live variant requires RCA_TEST_LIVE_MODEL=1 and configured model auth.
 """
 
 import asyncio
 import importlib.util
 import json
 import os
+import re
 import sys
 import threading
 import uuid
@@ -425,3 +427,166 @@ def test_context_safety_trim_still_removes_orphaned_tool_results(context_middlew
     assert messages[0] not in trimmed
     call_ids = {call["id"] for m in trimmed if isinstance(m, AIMessage) for call in m.tool_calls}
     assert all(m.tool_call_id in call_ids for m in trimmed if isinstance(m, ToolMessage))
+
+
+@pytest.mark.parametrize("model_kind", ["scripted", "live"])
+def test_combined_queue_and_graph_delivery(
+    context_updates, context_middleware, redis_queue, monkeypatch, model_kind,
+):
+    """Exercise enqueue, atomic batches, formatting and graph persistence together."""
+    if model_kind == "live" and os.getenv("RCA_TEST_LIVE_MODEL") != "1":
+        pytest.skip("Set RCA_TEST_LIVE_MODEL=1 to allow a small paid model test")
+
+    from langchain.agents import create_agent
+    from langchain.agents.middleware import AgentMiddleware
+    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    from langchain_core.outputs import ChatGeneration, ChatResult
+    from langchain_core.tools import tool
+    from chat.backend.agent.utils.state import State
+    from utils.cloud import cloud_utils
+
+    queue = redis_queue
+    state = State(question="Investigate a synthetic checkout failure", user_id=queue.user_id,
+                  session_id=queue.session_id, is_background=True, rca_context={"source": "grafana"})
+    notes = {
+        "order_id": "SYNTHETIC-ORDER-42",
+        "region": "SYNTHETIC-CA",
+        "deployment": "SYNTHETIC-DEPLOY-17",
+        "trace_id": "SYNTHETIC-TRACE-9",
+    }
+    seen = []
+    calls = []
+    first_batch_ready = False
+    late_inserted = False
+
+    def enqueue(source, payload):
+        assert context_updates.enqueue_rca_context_update(
+            queue.user_id, queue.session_id, source, payload,
+        ), "The synthetic update must be accepted"
+
+    pipeline = queue.client.pipeline
+
+    def interleave_pipeline(*args, **kwargs):
+        batch = pipeline(*args, **kwargs)
+        execute = batch.execute
+
+        def execute_batch(*a, **kw):
+            nonlocal late_inserted
+            result = execute(*a, **kw)
+            if first_batch_ready and not late_inserted:
+                late_inserted = True
+                enqueue("jenkins", {"title": "Deployment", "body": f"deployment={notes['deployment']}"})
+            return result
+
+        batch.execute = execute_batch
+        return batch
+
+    monkeypatch.setattr(queue.client, "pipeline", interleave_pipeline)
+
+    @tool
+    def inspect_demo(step: int, order_id: str = "", region: str = "",
+                     deployment: str = "", trace_id: str = "") -> str:
+        """Read synthetic evidence. Run steps 1, 2 and 3 in order, using context identifiers."""
+        nonlocal first_batch_ready
+        calls.append(dict(step=step, order_id=order_id, region=region,
+                          deployment=deployment, trace_id=trace_id))
+        if step == 1:
+            enqueue("grafana", {"title": "Order", "message": f"order_id={notes['order_id']}"})
+            enqueue("pagerduty", {"event": {"data": {
+                "title": "Region", "body": {"details": f"region={notes['region']}"},
+            }}})
+            first_batch_ready = True
+        elif step == 2:
+            enqueue("manual_merge", {"title": "Trace", "merged_from_incident": "synthetic",
+                                      "body": f"## Summary\ntrace_id={notes['trace_id']}"})
+        return f"SYNTHETIC-EVIDENCE-{step}"
+
+    class CaptureRequests(AgentMiddleware):
+        async def awrap_model_call(self, request, handler):
+            seen.append(list(request.messages))
+            return await handler(request)
+
+    class ScriptedModel(BaseChatModel):
+        @property
+        def _llm_type(self):
+            return "rca-combined-regression-scripted"
+
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            step = len(seen)
+            args = {"step": step}
+            text = "\n".join(str(m.content) for m in messages if isinstance(m, HumanMessage))
+            for key in notes:
+                match = re.search(rf"\b{key}=(SYNTHETIC-[A-Z0-9-]+)", text)
+                if match:
+                    args[key] = match.group(1)
+            tool_calls = [] if step == 4 else [{
+                "name": "inspect_demo", "args": args, "id": f"combined-{step}", "type": "tool_call",
+            }]
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(
+                content="Synthetic investigation complete" if not tool_calls else "Read synthetic evidence",
+                tool_calls=tool_calls,
+            ))])
+
+    model = ScriptedModel()
+    if model_kind == "live":
+        from chat.backend.agent.providers import create_chat_model
+
+        model = create_chat_model(
+            model=os.environ["MAIN_MODEL"], provider_mode=os.environ["LLM_PROVIDER_MODE"],
+            temperature=0, streaming=False, max_tokens=4096, timeout=45.0,
+        )
+
+    async def run():
+        agent = create_agent(
+            model=model, tools=[inspect_demo],
+            middleware=[context_middleware.ContextSafetyMiddleware("test-model"), CaptureRequests()],
+            system_prompt=(
+                "This is a synthetic integration test, not a production incident. "
+                "Call inspect_demo exactly three times in order: step 1 with no identifiers; "
+                "step 2 with order_id and region from the new context; step 3 with all four "
+                "identifiers from context: order_id, region, deployment and trace_id. "
+                "Read identifiers only from supplied context; do not invent them. "
+                "After step 3, summarize briefly and state that all evidence is synthetic."
+            ),
+        )
+        result = None
+        async for event in agent.astream_events(
+            {"messages": [HumanMessage(content=state.question)]},
+            config={"recursion_limit": 20}, version="v2",
+        ):
+            if event["event"] == "on_chain_end" and event["name"] == "LangGraph":
+                result = event["data"]["output"]
+        return result
+
+    token = cloud_utils._state_var.set(state)
+    try:
+        output = asyncio.run(asyncio.wait_for(run(), timeout=180))
+    finally:
+        cloud_utils._state_var.reset(token)
+
+    assert late_inserted
+    assert len(seen) == 4
+    assert [call["step"] for call in calls] == [1, 2, 3]
+    assert calls[1]["order_id"] == notes["order_id"]
+    assert calls[1]["region"] == notes["region"]
+    assert {key: calls[2][key] for key in notes} == notes
+    assert not queue.client.exists(queue.key)
+    assert [update["update_count"] for update in state.rca_ui_updates] == [2, 2]
+    assert not state.messages, "Only the final graph collector should append outer messages"
+    for index, messages in enumerate([*seen, output["messages"]]):
+        for key, value in notes.items():
+            actual = sum(value in str(m.content) for m in messages if isinstance(m, HumanMessage))
+            expected = 0 if index == 0 or (index == 1 and key in ("deployment", "trace_id")) else 1
+            assert actual == expected, f"Unexpected delivery count for {key} at snapshot {index}"
+        call_ids = {call["id"] for m in messages if isinstance(m, AIMessage) for call in m.tool_calls}
+        assert all(m.tool_call_id in call_ids for m in messages if isinstance(m, ToolMessage))
+    evidence = [m.content for m in output["messages"] if isinstance(m, ToolMessage)]
+    assert evidence == [f"SYNTHETIC-EVIDENCE-{step}" for step in (1, 2, 3)]
+    if model_kind == "live":
+        print(json.dumps({"model": os.environ["MAIN_MODEL"], "tool_steps": [c["step"] for c in calls],
+                          "model_requests": len(seen), "context_batches": [2, 2],
+                          "all_context_retained": True, "synthetic_evidence_only": True}))
