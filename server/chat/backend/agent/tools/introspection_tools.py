@@ -851,3 +851,69 @@ def grafana_list_alerts(state=None, limit=50, *, user_id, **_) -> dict:
         for r in rows
     ]
     return {"alerts": alerts, "count": len(alerts)}
+
+
+# ---------------------------------------------------------------------------
+# Tool calls (self-audit)
+# ---------------------------------------------------------------------------
+
+class SearchToolCallsArgs(BaseModel):
+    status: Optional[str] = Field(
+        default="failed",
+        description="failed (default), succeeded, running, or all.",
+    )
+    period: Optional[str] = Field(
+        default="7d",
+        description="Time window ending now: 24h, 7d (default, 'last week'), 30d, or 90d.",
+    )
+    tool: Optional[str] = Field(
+        default=None,
+        description="Exact tool name to filter on, e.g. cloud_exec, terminal_exec.",
+    )
+    query: Optional[str] = Field(
+        default=None,
+        description="Free text matched against the tool name, its input (command) and its error.",
+    )
+    source: Optional[str] = Field(
+        default=None,
+        description="chat (regular chats), incident (RCA investigations), or omit for both.",
+    )
+    limit: int = Field(default=20, description="Max tool calls to return (1–50, default 20).")
+
+
+@introspection_tool
+def search_tool_calls(
+    status="failed", period="7d", tool=None, query=None, source=None, limit=20, *, user_id, **_
+) -> dict:
+    """Search this org's past agent tool calls, e.g. failures and their reasons.
+
+    Read-only, and shares its query with the monitor page; secrets in inputs and
+    errors are redacted before they are returned.
+    """
+    from services.monitor.tool_call_search import (
+        InvalidFilter,
+        ToolCallFilters,
+        search_tool_calls as _search,
+    )
+
+    try:
+        filters = ToolCallFilters.parse({
+            "status": status, "period": period, "tool": tool, "q": query,
+            "source": source, "page": 1, "per_page": clamp(limit, 1, 50),
+        })
+    except InvalidFilter as exc:
+        raise IntrospectionError(str(exc)) from None
+
+    with _cursor(user_id) as (cur, org_id):
+        result = _search(cur, org_id, filters)
+
+    # The chat doesn't need the full error body; reason + a short excerpt suffice.
+    for item in result["items"]:
+        item["error"] = item["error"][:OUTPUT_EXCERPT_MAX_CHARS]
+    return {
+        "tool_calls": result["items"],
+        "total_matching": result["total"],
+        "summary": result["summary"],
+        "by_tool": result["tools"][:15],
+        "filters": result["filters"],
+    }

@@ -68,13 +68,15 @@ class ToolContextCapture:
         self.user_id = user_id
         self.incident_id = incident_id
         self.org_id = org_id
-        if self.incident_id and not self.org_id:
+        if not self.org_id:
             try:
                 from utils.auth.stateless_auth import get_org_id_for_user
                 self.org_id = get_org_id_for_user(user_id)
             except Exception as e:
                 logger.warning(f"Failed to resolve org_id for user {user_id}, execution-step persistence disabled: {e}")
-        self._persist_steps = bool(self.incident_id and self.org_id)
+        # Every agent tool call is recorded — incident (RCA) and regular chat alike —
+        # so the monitor page can search failures without opening each chat.
+        self._persist_steps = bool(self.org_id)
         self.current_tool_calls = {}  # Track ongoing tool calls
         # Append-only audit log of completed tool calls. current_tool_calls is GC'd
         # after 60s of staleness, so consumers that run later (e.g. orchestrator
@@ -90,7 +92,7 @@ class ToolContextCapture:
         self.execution_lock = threading.Lock()
 
     # ------------------------------------------------------------------
-    # execution_steps persistence (only for incident-linked sessions)
+    # execution_steps persistence (incident_id is NULL for regular chats)
     # ------------------------------------------------------------------
 
     def _record_step_start(self, tool_name: str, tool_input: Any, tool_call_id: str | None = None) -> Optional[int]:
@@ -102,18 +104,24 @@ class ToolContextCapture:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
                     set_rls_context(cur, conn, self.user_id, log_prefix="[ToolCapture:start]")
+                    # step_index counts per incident; a chat has no incident,
+                    # so it counts per session instead.
+                    scope_sql, scope_val = (
+                        ("incident_id = %s", self.incident_id) if self.incident_id
+                        else ("incident_id IS NULL AND session_id = %s", self.session_id)
+                    )
                     cur.execute(
-                        """INSERT INTO execution_steps
+                        f"""INSERT INTO execution_steps
                            (incident_id, session_id, org_id, step_index, tool_name,
                             tool_call_id, tool_input, status, started_at)
                            SELECT %s, %s, %s,
                                   COALESCE(MAX(step_index), 0) + 1,
                                   %s, %s, %s, 'running', %s
-                           FROM execution_steps WHERE incident_id = %s
+                           FROM execution_steps WHERE {scope_sql}
                            RETURNING id""",
                         (self.incident_id, self.session_id, self.org_id,
                          tool_name, tool_call_id, input_json,
-                         datetime.now(timezone.utc), self.incident_id),
+                         datetime.now(timezone.utc), scope_val),
                     )
                     row_id = cur.fetchone()[0]
                 conn.commit()

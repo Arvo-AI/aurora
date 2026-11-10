@@ -899,7 +899,8 @@ def initialize_tables():
                 "execution_steps": """
                     CREATE TABLE IF NOT EXISTS execution_steps (
                         id SERIAL PRIMARY KEY,
-                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        -- NULL for tool calls made in a regular chat (no incident)
+                        incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE,
                         session_id VARCHAR(50) NOT NULL,
                         org_id VARCHAR(255),
                         step_index INTEGER NOT NULL,
@@ -3377,6 +3378,22 @@ def initialize_tables():
                 logging.warning(f"Error adding tool_call_id to execution_steps: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_es_tcid")
 
+            # Regular chats record their tool calls too (DEV-1729), so incident_id
+            # is optional. The monitor's tool-call search filters on status/time.
+            try:
+                cursor.execute("SAVEPOINT sp_es_chat")
+                cursor.execute(
+                    "ALTER TABLE execution_steps ALTER COLUMN incident_id DROP NOT NULL;"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_execution_steps_org_status_time "
+                    "ON execution_steps(org_id, status, started_at DESC);"
+                )
+                cursor.execute("RELEASE SAVEPOINT sp_es_chat")
+            except Exception as e:
+                logging.warning(f"Error relaxing execution_steps.incident_id: {e}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_es_chat")
+
             # DB triggers: auto-inherit org_id from parent incident on INSERT.
             # This means no INSERT statement in the codebase ever needs to set
             # org_id on these tables — the trigger handles it unconditionally.
@@ -3389,8 +3406,11 @@ def initialize_tables():
                         CREATE OR REPLACE FUNCTION {fn_name}()
                         RETURNS TRIGGER AS $trg$
                         BEGIN
-                            NEW.org_id := (
-                                SELECT org_id FROM incidents WHERE id = NEW.incident_id
+                            -- Rows without a parent incident (chat tool calls in
+                            -- execution_steps) keep the org_id they were inserted with.
+                            NEW.org_id := COALESCE(
+                                (SELECT org_id FROM incidents WHERE id = NEW.incident_id),
+                                NEW.org_id
                             );
                             RETURN NEW;
                         END;
