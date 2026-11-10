@@ -1,305 +1,59 @@
-# RCA context delivery: reproduction and repair progress
+# RCA context delivery
 
-Original baseline: `8cf9573`; stage-0 test commit: `39eab99`.
-Stages 1-3 fix batch formatting, queue atomicity and context persistence.
-Stage 4 verifies the fixes together. Default tests make no model API calls and
-create no business incidents or accounts. The optional live variant explicitly
-uses the configured model and synthetic data only.
+## Problem and fix
 
-## Run locally against the existing Docker stack
+An ongoing RCA could acknowledge new evidence without retaining it for the agent.
+This affects correlated alerts, Jenkins deployment updates and manual merges.
+The fixes change two production files:
 
-From PowerShell in `E:\Projects\Aurora`:
+- **Batch formatting:** queue two alerts with different fields before the next
+  model call. The old formatter omitted later alerts and could mix their fields.
+  Render each update independently in `chat/background/context_updates.py`.
+- **Queue consumption:** append B between the consumer's `LRANGE` and `DELETE`.
+  B was deleted without being returned. Execute both commands in one Redis
+  transaction so later enqueues remain available for the next drain.
+- **Graph history:** deliver an update during a tool call, then run two more
+  model turns. The update appeared in the next request but disappeared afterward.
+  Persist it through `ContextSafetyMiddleware.abefore_model`; let the existing
+  graph collector append final messages to outer state to avoid duplicates.
 
-```powershell
-docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'RCA_TEST_REDIS_URL="$REDIS_URL" PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -q --tb=short -p no:cacheprovider'
-```
+The corresponding regressions are `test_batch_keeps_each_alert_and_its_fields`,
+`test_update_arriving_during_drain_is_not_lost`, and
+`test_context_survives_later_agent_model_turns` in
+[test_rca_context_updates.py](test_rca_context_updates.py). The original cases
+were reproduced before their fixes; the Redis interleaving is deterministic.
 
-After stage 4, expect **19 passed, 1 skipped**. The skip is the live model test,
-which requires explicit opt-in; no expected-failure markers remain.
-After stage 3 there were **18 passed**.
-Historically, adding `--runxfail` exposed **1 failed, 14 passed** after stage 2,
-**2 failed, 9 passed** after stage 1 and **3 failed, 6 passed** at stage 0.
-Each strict xfail marker was removed only when its original reproduction passed.
+## Run the regression tests
 
-To verify only the repaired formatting behavior and its adjacent cases:
-
-```powershell
-docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -k "batch_keeps or missing_fields or manual_merge_formatting or single_update" -q -p no:cacheprovider'
-```
-
-Expect **7 passed, 13 deselected**.
-
-To verify the queue repair, including the original losing interleaving:
+With the local Docker stack available, run from the repository root:
 
 ```powershell
-docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'RCA_TEST_REDIS_URL="$REDIS_URL" PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -k "(queue or drain or consumers) and not combined" -q -p no:cacheprovider'
+docker compose run --rm --no-deps --entrypoint sh -v ./server:/app:ro -w /app celery_worker -c 'RCA_TEST_REDIS_URL="$REDIS_URL" PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -q -p no:cacheprovider'
 ```
 
-Expect **6 passed, 14 deselected**.
+Expected: **19 passed, 1 skipped**. No model credentials are required. The live
+model case requires explicit `RCA_TEST_LIVE_MODEL=1` opt-in. Redis cases use
+random temporary keys and exact-key cleanup; without `RCA_TEST_REDIS_URL`, they
+skip. Graph cases require the installed LangChain/LangGraph dependencies.
 
-To verify context persistence, non-RCA isolation and the existing trim behavior:
+## Verification evidence
 
-```powershell
-docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -k "later_agent_model_turns or safety_trim" -q -p no:cacheprovider'
-```
+- The broader related regression run passed **179 tests**, with the live model
+  case skipped. Environment-variable validation also passed.
+- Combined real-Redis/graph coverage retains four context identifiers across
+  four model turns and three tool calls, with two UI batches and no duplicates.
+  The opt-in DeepSeek run passed the same scenario using synthetic evidence.
+- After rebuilding the backend, a real local Celery investigation completed.
+  Saved database history contained all four supplied identifiers exactly once;
+  two UI update records were saved, and the authenticated session API returned
+  HTTP 200 with all four identifiers. Notifications were disabled and diagnostic
+  tools were read-only; no business incident was created.
 
-Expect **4 passed, 16 deselected**.
+## Limits
 
-The temporary container uses the existing worker image and network with source
-mounted read-only. The Redis test uses an explicitly selected URL, a random
-`rca-regression-` user/session key, a short TTL, and exact-key cleanup. It does
-not flush Redis or read existing queues. The database dependencies and session
-status are replaced in-process. Without `RCA_TEST_REDIS_URL`, the real
-Redis cases skip. The graph case requires the real LangChain/LangGraph packages.
-
-## 1. Later alerts in a batch lose their fields
-
-Test: `test_batch_keeps_each_alert_and_its_fields`.
-
-Provide two supported alert formats, each with a distinct title, body and
-service. The formatter consumes the whole batch but selects the first elements
-from its collected arrays. The test reports that the second alert's title,
-body, service and source are missing. It also requires the output to keep
-related fields together, rather than mixing fields from separate alerts.
-
-Relevant source: `chat/background/context_updates.py`,
-`_format_updates_for_prompt()`.
-
-Existing callers include alert correlation and Jenkins deployment context.
-When multiple updates accumulate before the next model call, a later alert's
-evidence can disappear even though the UI record counts all consumed updates.
-No claim is made that this happens on every investigation.
-
-Stage-1 repair: extract and render each update within its own loop iteration,
-then append the shared investigation instructions once. Later updates are
-preserved in order, missing fields are not borrowed from another alert, and a
-manual merge does not change the formatting of ordinary alerts in the batch.
-The original failing assertion now passes without an xfail marker. Two added
-tests cover missing-field association and mixed manual/ordinary updates.
-
-Seven representative single-update outputs were also compared byte-for-byte
-with the stage-0 formatter and were identical. Stage 1 did not change queue
-consumption or model middleware. The running services have not been rebuilt or
-restarted; verification uses the changed source in a temporary test container.
-
-## 2. A concurrent enqueue can disappear during consumption
-
-Test: `test_update_arriving_during_drain_is_not_lost`.
-
-Use two real Redis clients. Queue A, then schedule the producer to append B
-immediately after the consumer's first network round trip. With the original
-`LRANGE` followed by `DELETE`, the return value contains only A and B is absent
-from the remaining queue. The desired assertion is that B remains available.
-
-Instrumentation also covers transaction pipeline execution so the test does
-not prescribe whether a future minimal fix uses a transaction or a single
-atomic command. No sleeps, statistical timing assumptions, or threads are
-required for the reproduction.
-
-Relevant source: `chat/background/context_updates.py`,
-`drain_rca_context_updates()`.
-
-This is a confirmed losing interleaving, not a measurement of its production
-frequency. The impact is silent loss of an accepted correlated alert or
-deployment update.
-
-Stage-2 repair: execute `LRANGE` and `DELETE` within one Redis transaction
-(`pipeline(transaction=True)`). Producers cannot write between the transaction's
-commands. An enqueue ordered after the transaction stays queued for the next
-drain; a second consumer sees an empty queue rather than the first batch.
-No retries, sleeps, new Redis dependency, or queue format changes were added.
-
-The original controlled-interleaving regression now passes without an xfail
-marker. Additional real-Redis tests cover initially empty queues, one/multiple
-entries in order, repeated drains, session isolation, and two consumers starting
-together. The latter checks concurrent behavior with a barrier; the original
-producer interleaving remains the deterministic reproduction of message loss.
-These tests do not claim crash-safe or exactly-once delivery after consumption.
-
-## 3. Context is temporary in the inner agent graph
-
-Test: `test_context_survives_later_agent_model_turns`.
-
-Use the complete production context helper and middleware, the real `State`
-class and execution context, and the installed LangChain `create_agent` graph.
-The test uses `astream_events`, as `Agent.agentic_tool_flow()` does. A scripted
-model makes three turns, with a new context update arriving during the first
-tool execution. The tools contain no copy of that update in their outputs.
-
-Before the stage-3 repair:
-
-- Turn 1 has no update, as expected.
-- Turn 2 has the update, as expected.
-- Turn 3 still has prior tool evidence, but no original context message.
-- The outer `State` has a UI update record; this is different from retaining
-  the message in the inner graph.
-
-Relevant source: `chat/backend/agent/middleware/context_trim.py`,
-`ContextSafetyMiddleware.awrap_model_call()`. Its original request override
-modified the current model input, not the graph's accumulated messages.
-
-This does not prove that all derived information is forgotten. A model can
-copy part of the update into a tool argument or answer, and outer state can
-retain it. It proves that subsequent calls in the same loop cannot rely on
-the original context remaining available below the trim threshold.
-
-This test covers the actual model/tool graph path, not the full Celery task,
-database persistence, guardrail evaluation, or browser UI. Those boundaries
-remain to be verified during later integration checks.
-
-Stage-3 repair: prepare queued context in the existing middleware's native
-`abefore_model` hook and return a message-state update for the graph reducer.
-The message is now present in the second and third model requests and the
-final graph history, exactly once. The helper keeps UI metadata but no longer
-pre-appends the message to outer `State.messages`; `Agent.agentic_tool_flow()`
-already collects final graph messages into that list.
-
-Tests retain earlier tool evidence and check tool-call/result associations.
-Two additional graph cases verify that foreground chat and background non-RCA
-work do not consume or receive queued RCA context. A real message-trimming test
-checks the existing token budget, retained current question and absence of
-orphaned tool results. The wrapper still trims requests as before; the repair
-does not promise indefinite retention beyond the context window or recovery
-across worker restarts.
-
-## Baseline regression checks
-
-The new tests plus `test_investigation_timeout.py`, `test_session_heartbeat.py`
-and `test_deepseek_provider.py` ran in the existing worker image:
-**23 passed, 3 xfailed** at stage 0, **26 passed, 2 xfailed** after stage 1,
-**31 passed, 1 xfailed** after stage 2 and **35 passed** after stage 3.
-Stage 3 also ran `test_force_tool_choice.py` and `test_prompt_cache_control.py`:
-**70 passed**, with one third-party Google auth/grpc deprecation warning.
-These checks are scoped; they are not the full suite. Stages 1-3 did not perform
-live Celery, browser, database write-back, or real-model verification.
-
-## Stage 4: combined verification and delivery
-
-`test_combined_queue_and_graph_delivery` exercises the actual enqueue helper,
-real Redis transaction, formatter, middleware and LangChain graph together:
-
-1. The first synthetic tool call queues an order ID and a region as two updates.
-2. Immediately after their consumption transaction, a deployment update arrives.
-3. The second model request receives both initial updates and uses them for the
-   next tool call; the deployment update remains pending.
-4. The second tool call adds trace context. The next model request consumes the
-   deployment and trace updates together.
-5. All four identifiers remain available exactly once in subsequent requests
-   and final graph history. The three tool results stay associated with their
-   calls, the two UI records each count two updates, and the test queue is empty.
-
-The scripted version derives tool arguments from the context it actually sees;
-it does not manufacture missing identifiers. It runs without model credentials:
-
-```powershell
-docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'RCA_TEST_REDIS_URL="$REDIS_URL" PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -k combined_queue_and_graph_delivery -q -p no:cacheprovider'
-```
-
-Expect **1 passed, 1 skipped, 18 deselected**.
-
-The same scenario was also run with the configured `deepseek/deepseek-flash`
-through Aurora's actual provider factory. It made four model requests and
-three synthetic tool calls, used the supplied identifiers, and retained both
-context batches. This opt-in command repeats both variants and incurs model use:
-
-```powershell
-docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'RCA_TEST_REDIS_URL="$REDIS_URL" RCA_TEST_LIVE_MODEL=1 PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py -k combined_queue_and_graph_delivery -q -s -p no:cacheprovider'
-```
-
-Observed: **2 passed, 18 deselected**. Only fabricated order, region, deployment,
-trace identifiers and tool evidence were sent to the model; no customer or
-production infrastructure was queried.
-
-Final scoped regression run:
-
-```powershell
-docker compose run --rm --no-deps --entrypoint sh -v E:/Projects/Aurora/server:/app:ro -w /app celery_worker -c 'RCA_TEST_REDIS_URL="$REDIS_URL" PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/chat/test_rca_context_updates.py tests/chat/test_investigation_timeout.py tests/chat/test_session_heartbeat.py tests/chat/test_deepseek_provider.py tests/chat/test_force_tool_choice.py tests/chat/test_prompt_cache_control.py tests/services/correlation/test_correlation_outcome.py tests/services/correlation/test_alert_correlator.py -q -p no:cacheprovider'
-```
-
-Observed: **132 passed, 1 skipped**, with the same third-party Google auth/grpc
-deprecation warning. The skip is the intentionally disabled live model case.
-
-Call-path review confirms that alert correlation and Jenkins deployment handling
-still call `enqueue_rca_context_update` with the existing user/session/source/
-payload contract. Background execution sets the outer state context before the
-agent runs; the final graph collector remains responsible for appending graph
-messages to outer state. No production source changed during stage 4.
-
-### Verification limits and deployment status
-
-These are component integration tests with a real queue/graph and an opt-in
-real model, not a full application acceptance test. Database session status,
-workflow context metadata and model-size lookup are test replacements. No
-Celery business task, actual webhook ingestion, database history write-back,
-UI rendering, tenant authorization or worker-restart recovery was exercised.
-Production frequency, elapsed-time savings and incident severity were not
-measured. Redis consumption is atomic, not a claim of crash-safe exactly-once
-processing after the batch is consumed.
-
-At the stage-4 checkpoint the running services had not been rebuilt or restarted. Tests used
-the changed source mounted read-only into temporary containers; they do not
-establish that the running application has adopted the fixes. Deployment and
-full application validation remain separate steps. No push or PR was performed.
-
-The source fixes are in commits `5f67c93`, `3c34a86` and `3ba4112`; their test-only
-baseline is `39eab99`. The branch also inherits pre-existing local DeepSeek and
-Windows fixes. If preparing an upstream PR later, isolate the task commits
-rather than silently including those unrelated changes.
-
-## Follow-up: deployed local runtime verification (2026-11-09)
-
-The user subsequently requested verification in the running local application.
-Read-only checks found no in-progress investigation or active/reserved Celery
-task. The old containers' two changed source files did not match the repository.
-
-The six backend application images were rebuilt from current source with
-`docker-compose.prod-local.yml`. Before replacing running services, the scoped
-regression suite was rerun in the rebuilt image: **132 passed, 1 skipped**.
-Only backend application services were recreated; PostgreSQL, Redis, storage
-and frontend services were not recreated. All services remained running, and
-the backend API and MCP health checks passed. The two changed file hashes match
-the repository in all six backend containers.
-
-A real background session was then created with the existing user:
-
-- Session title (translated from Chinese): `Verification: context fixes (synthetic data)`.
-- Session: `ec13cdf1-0f15-4ac6-ad4c-0cdd5386edf4`.
-- Celery task: `0bb5f1c6-996b-45d8-9277-7df7badaa61f`.
-- Open after signing in: <http://localhost:3000/chat?sessionId=ec13cdf1-0f15-4ac6-ad4c-0cdd5386edf4>.
-
-This run used the actual session creation helper, Celery worker, configured
-DeepSeek model, context queue, middleware, database reads/writes, history
-serialization and session HTTP endpoint. There were no test replacements in
-this runtime probe. It ran in Ask mode, with notifications disabled and the
-existing general-viewer access pin. The run's memory-edit permission was checked
-to be false before creation, preventing synthetic findings from being saved as
-organizational knowledge. No account or existing session was modified, and no
-business incident was created. The new verification session is retained for
-inspection.
-
-Two synthetic updates were queued before dispatch. After the running task
-consumed that batch, two more updates were queued while it was in progress.
-The actual built-in `list_incidents` tool queried `investigating`, `analyzed`
-and `resolved` separately, with limit 1; it did not access external platforms.
-
-Observed results:
-
-- Celery result `SUCCESS`; database session status `completed`.
-- Saved model history contains 10 messages. Each of `RUNTIME-ORDER-42`,
-  `RUNTIME-REGION-CA`, `RUNTIME-DEPLOY-17` and `RUNTIME-TRACE-9` appears in exactly
-  one HumanMessage.
-- Saved UI messages contain two `rca_context_update` tool records.
-- An authenticated, organization-scoped request from the worker to
-  `/chat_api/sessions/<session_id>` returns HTTP 200 and all four markers.
-- The verification queue and regression-test keys are empty afterward.
-- Frontend HTTP access returns 200 at the sign-in page for an unauthenticated
-  request. Existing non-test session counts remain active 1/completed 2; the
-  retained test session adds one completed session. Business incidents remain 0.
-
-This extends verification to the actual Celery/database/API path after local
-deployment. It still does not validate authenticated browser rendering,
-third-party webhook ingestion, production cloud queries, cross-tenant denial,
-or recovery after worker failure. The deterministic component test, rather
-than this ordinary runtime run, reproduces the precise Redis interleaving.
-No production code or configuration files changed during this follow-up; no
-push or PR was performed.
+Component tests replace database/session dependencies. The separate local runtime
+check covers Celery, database persistence and the session API, but does not verify
+third-party webhooks, authenticated browser rendering, production cloud queries,
+cross-tenant denial or worker-failure recovery. Atomic queue consumption does not
+provide crash-safe exactly-once processing. Retention remains subject to normal
+context trimming; production diagnosis accuracy and time savings were not measured.
