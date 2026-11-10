@@ -28,7 +28,7 @@ prove production coverage or a production false-positive rate.
 
 ## Run the real demo
 
-Requirements: Python 3.12+ and `promtool` 3.5.0 on PATH. Use the official
+Requirements: Python 3.12 and `promtool` 3.5.0 on PATH. Use the official
 [Prometheus release](https://github.com/prometheus/prometheus/releases/tag/v3.5.0)
 for your platform and verify the archive against its `sha256sums.txt` before
 extracting `promtool`. The Aurora server Docker image includes the Linux binary
@@ -37,8 +37,8 @@ from a digest-pinned, multi-platform Prometheus image.
 From the repository root:
 
 ```sh
-python3 -m venv .venv
-.venv/bin/python -m pip install pytest==9.0.3 PyYAML==6.0.1 pydantic==2.13.3 langchain-core==1.6.13
+python3.12 -m venv .venv
+.venv/bin/python -m pip install --only-binary :all: pytest==9.0.3 PyYAML==6.0.1 pydantic==2.13.3 langchain-core==1.6.13
 promtool --version
 .venv/bin/python scripts/demo_tested_alerts.py --output-dir /tmp/aurora-alert-demo
 .venv/bin/python -m pytest server/tests/services/test_alert_validation.py server/tests/chat/test_prometheus_alert_tool.py -v
