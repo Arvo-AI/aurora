@@ -485,6 +485,34 @@ _CONTAINER_READS = frozenset({
     'port', 'diff', 'history',
 })
 
+# Management groups whose subcommand sits one token further
+# (`docker container ls`, `docker compose logs`).
+_CONTAINER_GROUPS = frozenset({
+    'container', 'image', 'network', 'volume', 'system', 'compose',
+})
+
+# The verb scan trusts a read verb in *any* positional and drops option values.
+# That is sound for a CLI whose arguments are operations, and for nothing else:
+# `python3 -c '<code>' status`, `psql -c 'DROP TABLE t' logs` and
+# `shutdown now status` each carry a read verb and are not reads. On a remote
+# host the program is whatever the command names, so only these CLIs (the ones
+# the scan was written for) may be cleared by a verb.
+_REMOTE_VERB_CLIS = frozenset({
+    'kubectl', 'oc', 'helm', 'aws', 'az', 'gcloud', 'gsutil', 'bq',
+})
+# systemd tools take operands after the subcommand (`systemctl kill nginx
+# status`), so the read has to be the subcommand itself. Exact names, because
+# the leading-word match would pass `systemctl log-level debug`.
+_SYSTEMD_CLIS = frozenset({
+    'systemctl', 'timedatectl', 'hostnamectl', 'loginctl', 'networkctl',
+    'resolvectl',
+})
+_SYSTEMD_READS = frozenset({'status', 'show', 'list'})
+_ENV_PREFIX_REASON = (
+    'it sets an environment variable for the remote program, which can change '
+    'what that program runs'
+)
+
 # A binary in SHELL_READ_PROGRAMS can still mutate through a flag or a
 # positional (`journalctl --vacuum-time`, `ip route del`, `date -s`).
 _SHELL_MUTATING_EXACT = {
@@ -704,6 +732,59 @@ def _shell_c_script(tokens: list[str]) -> Optional[str]:
     return ''
 
 
+def _program_args(operation: tuple) -> tuple:
+    """The positionals after the program, past any `VAR=value` prefix."""
+    for i, token in enumerate(operation):
+        if '=' in token and not token.startswith('/'):
+            continue
+        return tuple(operation[i + 1:])
+    return ()
+
+
+def _container_subcommand_reads(args: tuple) -> bool:
+    """Whether a container CLI's subcommand only inspects."""
+    if len(args) >= 2 and args[0] in _CONTAINER_GROUPS:
+        return args[1] in _CONTAINER_READS or args[1] in ('ls', 'list')
+    return bool(args) and args[0] in _CONTAINER_READS
+
+
+def _remote_program_rejection(fact: SegmentFacts) -> str:
+    """Why a read verb does not clear this remote program, or '' when it does.
+
+    Called once the verb scan has found a read verb and no write. That verdict
+    only means something for a program whose positionals are operations, so the
+    program is checked here and anything unrecognised is refused. An org
+    read-only allow rule is the way to permit a host-specific tool.
+    """
+    exe = fact.executable or ''
+    args = _program_args(fact.operation)
+    # Nested ssh was classified by its own remote command, not by a verb.
+    if exe == 'ssh' or exe in _REMOTE_VERB_CLIS:
+        return ''
+    # Host tools and filters read whatever their operands are called
+    # (`cat config`, `grep status`). Their mutating flags already returned.
+    if exe in SHELL_READ_PROGRAMS or exe in DOWNSTREAM_FILTERS:
+        return ''
+    subcommand_reads = None
+    if exe in _CONTAINER_CLIS:
+        subcommand_reads = _container_subcommand_reads(args)
+    elif exe in _SYSTEMD_CLIS:
+        subcommand_reads = bool(args) and (
+            args[0] in _SYSTEMD_READS or args[0].startswith('list-')
+        )
+    elif exe == 'service':
+        # `service <unit> status`. Any other action starts or stops the unit.
+        subcommand_reads = len(args) == 2 and args[1] == 'status'
+    if subcommand_reads is None:
+        return ("'%s' is not a program Ask mode can verify as read-only on a "
+                "remote host (a read verb among its arguments does not make "
+                "it one)" % (exe or '?'))
+    if subcommand_reads:
+        return ''
+    return "'%s' does not run a read-only '%s' subcommand" % (
+        ' '.join((exe,) + args), exe)
+
+
 def _is_shell_diagnostic(command: str) -> bool:
     """Whether every program in *command* only reads."""
     segments, _reason = _split_segments_or_reason(command)
@@ -718,8 +799,7 @@ def _is_shell_diagnostic(command: str) -> bool:
         return False
     # Container CLIs mutate with subcommands that are not write verbs (`pull`).
     if facts[0].executable in _CONTAINER_CLIS:
-        op = facts[0].operation
-        return len(op) >= 2 and op[1] in _CONTAINER_READS
+        return _container_subcommand_reads(_program_args(facts[0].operation))
     for seg, fact in zip(segments, facts):
         exe = fact.executable or ''
         # Short options stay cased: `hostname -F` writes, `hostname -f` only prints.
@@ -744,15 +824,20 @@ def _is_shell_diagnostic(command: str) -> bool:
 
 def _one_segment_rejection(tokens: list[str], depth: int) -> str:
     """Why this one segment isn't a read, or '' when it is."""
+    # `LESSOPEN='|cmd' less f` and `LD_PRELOAD=x.so ls` run code through a
+    # program that is itself a read.
+    if tokens and _is_assignment(tokens[0]):
+        return _ENV_PREFIX_REASON
     one = shlex.join(tokens)
     reason = describe_rejection(one, _ssh_depth=depth)
     # A recognised read verb used to clear the rest of the line. `sort -o`
     # is still a write, and it has no write verb for that check to see.
     if _segment_mutates(tokens):
         return reason or 'it does not run a read-only remote command'
-    if not reason:
-        return ''
     fact = analyze_segment(tokens)
+    # A read verb clears a CLI that has verbs, not whatever program carries one.
+    if not reason:
+        return _remote_program_rejection(fact)
     # Host tools and text filters have no cloud verb. Mutating flags already returned.
     if reason == 'no recognised read verb was found in it' and (
         _is_shell_diagnostic(one) or fact.executable in DOWNSTREAM_FILTERS
@@ -770,6 +855,9 @@ def _remote_command_rejection(remote: str, depth: int, shell_depth: int = 0) -> 
     if not segments:
         return parse_reason
     for seg in segments:
+        # `BASH_ENV=/tmp/x bash -c uptime` sources the file before the script.
+        if _is_assignment(seg[0]):
+            return _ENV_PREFIX_REASON
         script = _shell_c_script(seg)
         # The script is what runs. The shell binary itself is not a read verb.
         if script is not None:

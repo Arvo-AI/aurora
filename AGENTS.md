@@ -87,6 +87,21 @@ and namespace every later read resolves against, so they are writes. `config` is
 in `SUBCOMMAND_GROUPS`, which carries the scan one positional further —
 `config view` / `get-contexts` / `current-context` stay read-only.
 
+**Over ssh the program is checked as well as the verb.** The verb scan accepts a
+read verb in *any* positional and drops option values. That describes a CLI whose
+arguments are operations, and nothing else: `ssh host "python3 -c '<code>' status"`,
+`ssh host "psql -c 'DROP TABLE t' logs"` and `ssh host 'shutdown now status'` all
+carry a read verb, and all classified as reads. On the remote side a read verb now
+clears only the CLIs the scan was written for (`_REMOTE_VERB_CLIS`: kubectl, helm,
+aws, az, gcloud, ...). Host tools and filters keep their own rules, container and
+systemd CLIs must have the read as the *subcommand* (`docker kill web logs` and
+`systemctl kill nginx status` are refused), and any other program is refused by
+name. A leading `VAR=value` is refused too, since `LESSOPEN='|cmd' less f` runs
+code through a program that is itself a read. This is a program allowlist, which
+the cloud path avoids on purpose (OVH's bare `cloud project list`). The remote
+path already kept name lists, it fails closed, and an org read-only allow rule
+is how a host-specific tool gets permitted. `cloud_exec` commands are unaffected.
+
 `describe_rejection()` returns why a command was refused, and
 `ensure_cloud_command_allowed()` puts it in the error the agent sees — naming the
 offending token is what lets the agent repair a command instead of retrying it:
