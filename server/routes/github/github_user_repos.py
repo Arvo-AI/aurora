@@ -142,6 +142,11 @@ def _simplify_repo(
     }
 
 
+# An import must see every repo or none: a truncated list would be taken as
+# the whole installation. 1,000 pages is 100,000 repos.
+_STRICT_PAGE_LIMIT = 1000
+
+
 class InstallationRepoListError(Exception):
     """GitHub did not return the full repo list for an installation."""
 
@@ -199,18 +204,24 @@ def _fetch_installation_repos(
             if strict:
                 raise InstallationRepoListError("non-JSON response")
             break
-        repos = payload.get("repositories", []) if isinstance(payload, dict) else []
+        repos = payload.get("repositories") if isinstance(payload, dict) else None
+        if not isinstance(repos, list):
+            if strict:
+                raise InstallationRepoListError("unexpected response shape")
+            repos = []
         if not repos:
             break
         all_repos.extend(repos)
         if len(repos) < _PER_PAGE:
             break
         page += 1
-        if page > _REPOS_PAGE_LIMIT:
+        if page > (_STRICT_PAGE_LIMIT if strict else _REPOS_PAGE_LIMIT):
             logger.warning(
                 "[USER-REPOS] App-mode pagination safety limit hit for installation_id=%d",
                 installation_id,
             )
+            if strict:
+                raise InstallationRepoListError("pagination limit hit")
             break
     return all_repos
 

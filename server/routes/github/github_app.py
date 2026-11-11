@@ -259,7 +259,8 @@ def _reconcile_user_installations(user_id: str) -> None:
                 with conn.cursor() as cur:
                     cur.execute(
                         """UPDATE user_github_installations
-                              SET disconnected_at = NOW()
+                              SET disconnected_at = NOW(),
+                                  repos_imported_at = NULL
                             WHERE user_id = %s
                               AND installation_id = ANY(%s)
                               AND disconnected_at IS NULL""",
@@ -761,6 +762,18 @@ def github_app_claim_installation(user_id, installation_id):
             "error": "install is already linked to a different organization",
             "code": "CROSS_ORG_CLAIM_REFUSED",
         }), 403
+    if requesting_org_id not in owning_orgs:
+        # Claim joins an install a teammate already linked (what discovery
+        # lists). Nothing here proves the caller can access an install no
+        # one linked, and linking it would import every repo it covers.
+        logger.warning(
+            "[GITHUB-APP-CLAIM] claim of unlinked install refused user=%s installation_id=%d",
+            user_id, installation_id,
+        )
+        return jsonify({
+            "error": "install is not linked to your organization; install it from Connectors",
+            "code": "INSTALL_NOT_IN_ORG",
+        }), 403
 
     try:
         app_jwt = mint_app_jwt()
@@ -1217,7 +1230,8 @@ def github_disconnect(user_id):
             with conn.cursor() as cur:
                 cur.execute(
                     """UPDATE user_github_installations
-                          SET disconnected_at = NOW()
+                          SET disconnected_at = NOW(),
+                              repos_imported_at = NULL
                         WHERE user_id = %s
                           AND disconnected_at IS NULL""",
                     (user_id,),

@@ -535,6 +535,32 @@ def _validate_install_metadata(install_data: dict) -> bool:
     )
 
 
+def _linked_elsewhere(cur, installation_id: int, org_id: str | None) -> bool:
+    """True when an org other than ``org_id`` has this installation linked.
+
+    The callback proves the installer can see the installation, not that
+    they own the Aurora org that linked it. Linking it again would hand a
+    new org every repo the installation covers, private ones included.
+    """
+    cur.execute(
+        """SELECT DISTINCT org_id
+             FROM user_github_installations
+            WHERE installation_id = %s
+              AND disconnected_at IS NULL""",
+        (installation_id,),
+    )
+    owners = {row[0] for row in cur.fetchall()}
+    return bool(owners) and org_id not in owners
+
+
+def _linked_elsewhere_redirect() -> flask.Response:
+    # Usually the owning org's own member (an in-app installer changing the
+    # repo selection on GitHub): their session, or sign-in, takes it from
+    # Connectors.
+    logger.warning("[GITHUB-SIGNUP] installation already linked to another org; not provisioning")
+    return flask.redirect(f"{FRONTEND_URL}/connectors?installed=github", code=302)
+
+
 def _provision_and_handoff(identity: dict, install_data: dict):
     """Find-or-create the Aurora account, link the install, mint the handoff.
 
@@ -566,6 +592,8 @@ def _provision_and_handoff(identity: dict, install_data: dict):
                     )
                     org_row = cur.fetchone()
                     org_id = org_row[0] if org_row else None
+                    if _linked_elsewhere(cur, installation_id, org_id):
+                        return (_linked_elsewhere_redirect(), None, None, False)
                 else:
                     # Normalized comparison so an existing mixed-case account
                     # is still detected as a collision rather than duplicated.
@@ -593,6 +621,9 @@ def _provision_and_handoff(identity: dict, install_data: dict):
                             None,
                             False,
                         )
+
+                    if _linked_elsewhere(cur, installation_id, None):
+                        return (_linked_elsewhere_redirect(), None, None, False)
 
                     created = True
                     # Unusable password: random bytes hashed and discarded.
@@ -818,9 +849,9 @@ def github_app_signup_callback():
     )
 
     # Auto-import granted repos with PR review on: the user picked them on
-    # GitHub's install screen, which is what makes the flow one-click. Only
-    # rows the import creates are enrolled; a returning user's existing
-    # per-repo choices are left as they were.
+    # GitHub's install screen, which is what makes the flow one-click. The
+    # import runs once per link, so a returning user's login does not bring
+    # back repos they removed.
     try:
         from routes.github.github_repo_metadata import import_installation_repos
 

@@ -91,3 +91,23 @@ def test_tampered_token_is_refused(env):
     resp, status, conn, task = _claim(env, env[2] + "x", [])
     assert status == 400
     task.delay.assert_not_called()
+
+
+@pytest.mark.parametrize("owners, expected", [(set(), 403), ({"org-2"}, 403)])
+def test_claim_of_an_install_the_org_never_linked_is_refused(env, owners, expected):
+    # Claim joins an install a teammate linked. An install id nobody in the
+    # org linked proves nothing about the caller, and claiming it would
+    # import every repo it covers.
+    app, mod, _ = env
+    pool, conn, _cur = _db([])
+    with app.test_request_context(), \
+         patch.object(mod, "db_pool", pool), \
+         patch.object(mod, "get_org_id_for_user", return_value="org-1"), \
+         patch.object(mod, "_orgs_owning_install", return_value=owners), \
+         patch.object(mod, "mint_app_jwt") as jwt, \
+         patch("routes.github.github_repo_metadata.import_installation_repos") as task:
+        out = mod.github_app_claim_installation.__wrapped__("user-1", 777)
+    assert out[1] == expected
+    jwt.assert_not_called()
+    conn.commit.assert_not_called()
+    task.delay.assert_not_called()

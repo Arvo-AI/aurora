@@ -572,6 +572,32 @@ class TestProvisioning:
         ]
         assert inserts == []
 
+    @pytest.mark.parametrize(
+        "fetchone_seq",
+        [
+            [("user-9",), ("org-9",)],  # their GitHub id matches a user in another org
+            [None, None],  # no Aurora account for this GitHub user yet
+        ],
+    )
+    def test_install_linked_by_another_org_is_never_provisioned(
+        self, signup_app, fetchone_seq
+    ):
+        # Anyone who can see one repo passes GitHub's access check; linking
+        # the install into their org would hand them every repo it covers.
+        app, mod = signup_app
+        db_pool, conn, cur = _mock_db(mod, fetchone_seq)
+        cur.fetchall.return_value = [("org-owner",)]
+        with app.test_request_context(), patch.object(mod, "db_pool", db_pool):
+            response, user_id, _, created = mod._provision_and_handoff(
+                self._IDENTITY, _install_payload()
+            )
+        assert user_id is None and created is False
+        assert response.location.endswith("/connectors?installed=github")
+        sql = " ".join(c.args[0] for c in cur.execute.call_args_list)
+        assert "INSERT INTO users" not in sql
+        assert "user_github_installations (user_id" not in sql
+        conn.commit.assert_not_called()
+
     def test_new_user_creates_org_and_handoff(self, signup_app):
         app, mod = signup_app
         # fetchone seq: no gh match; no email match; INSERT users

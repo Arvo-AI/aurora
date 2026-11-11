@@ -196,6 +196,64 @@ def _retry_import(task, installation_id: int, what: str) -> None:
         )
 
 
+def _repos_imported_at(cur, installation_id: int):
+    """When the installation's first full import landed, or None."""
+    cur.execute(
+        """SELECT MAX(repos_imported_at)
+             FROM user_github_installations
+            WHERE installation_id = %s
+              AND disconnected_at IS NULL""",
+        (installation_id,),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
+def _import_not_wanted(installation_id: int, once_only: bool, require_enrollment: bool) -> bool:
+    """True when the import should not run (see ``_import_installation_repos``)."""
+    from utils.db.connection_pool import db_pool
+
+    if once_only:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            if _repos_imported_at(cur, installation_id) is not None:
+                logger.info(
+                    "[RepoImport] already imported, skipping full import installation_id=%s",
+                    installation_id,
+                )
+                return True
+    if require_enrollment:
+        from tasks.github_webhook_tasks import auto_enroll_owner
+
+        if auto_enroll_owner(installation_id) is None:
+            logger.info(
+                "[RepoImport] review turned off on a repo, leaving installation_id=%s",
+                installation_id,
+            )
+            return True
+    return False
+
+
+def _apply_exclusions(cur, org_id: str, repos: list[dict], regranted: bool) -> list[dict]:
+    """Drop repos the org removed in the picker, or clear them when regranted."""
+    names = [r.get("full_name") for r in repos if r.get("full_name")]
+    if not names:
+        return repos
+    if regranted:
+        cur.execute(
+            """DELETE FROM github_repo_exclusions
+                WHERE org_id = %s AND repo_full_name = ANY(%s)""",
+            (org_id, names),
+        )
+        return repos
+    cur.execute(
+        """SELECT repo_full_name FROM github_repo_exclusions
+            WHERE org_id = %s AND repo_full_name = ANY(%s)""",
+        (org_id, names),
+    )
+    excluded = {row[0] for row in cur.fetchall()}
+    return [r for r in repos if r.get("full_name") not in excluded]
+
+
 def _import_installation_repos(
     self,
     user_id: str,
@@ -203,29 +261,40 @@ def _import_installation_repos(
     enroll_change_gating: bool = False,
     only_repos: list[str] | None = None,
     created_after: str | None = None,
+    force: bool = False,
+    require_enrollment: bool = False,
 ):
     """Auto-import a GitHub App installation's repos into ``connected_repos``.
 
     Runs after a user installs/links the App so they do not have to re-select,
-    inside Aurora, the repos they already granted on GitHub (the redundant
-    second selection). Idempotent: each repo is UPSERTed with its
-    ``installation_id`` set and ``change_gating_enabled`` left at its default
-    (FALSE — change gating is still opt-in per repo), unless
-    ``enroll_change_gating`` is passed (one-click website signup, where the
-    user curated the repo list on GitHub's own install screen and expects the
-    bot live immediately). Unlike the manual save
-    path this NEVER deletes, so prior manual selections and other installations
-    are preserved; the user can still trim the set from the repo picker.
+    inside Aurora, the repos they already granted on GitHub. Each repo is
+    UPSERTed with its ``installation_id`` set; new rows get
+    ``change_gating_enabled = enroll_change_gating`` and existing rows keep
+    theirs. This NEVER deletes.
 
-    ``only_repos`` limits the import to those full names (an
-    ``installation_repositories.added`` webhook). ``created_after`` (ISO 8601)
-    limits it to repos created on GitHub after that time, so the hourly sync
-    can pick up new repos without re-adding ones a user removed.
+    A full import (no ``only_repos`` / ``created_after``) runs once per
+    link: after it lands, ``user_github_installations.repos_imported_at`` is
+    set and later full imports are skipped unless ``force``. That keeps a
+    returning user's login, a relink or a claim from bringing back repos
+    they removed. New repos after that arrive through ``only_repos`` (an
+    ``installation_repositories.added`` webhook) or ``created_after`` (the
+    hourly sync).
+
+    Repos the org removed from the picker (``github_repo_exclusions``) are
+    skipped, except ``only_repos``: granting a repo on GitHub again is an
+    explicit choice, so it clears the exclusion.
+
+    ``require_enrollment`` re-checks ``enrollment_state`` when the task
+    runs, so review turned off on a repo after the task was queued is
+    respected.
 
     Metadata generation is dispatched only for genuinely new rows, and the
     LLM-usage hook inside :func:`generate_repo_metadata` still gates cost.
     """
+    import time
+
     from utils.auth.github_app_token import (
+        GitHubAppInstallationNotFound,
         GitHubAppInstallationSuspended,
         get_installation_token,
     )
@@ -236,11 +305,21 @@ def _import_installation_repos(
     from utils.auth.stateless_auth import set_rls_context
     from utils.db.connection_pool import db_pool
 
+    full_import = only_repos is None and created_after is None
+    if _import_not_wanted(installation_id, full_import and not force, require_enrollment):
+        return
+
     try:
         token = get_installation_token(installation_id)
     except GitHubAppInstallationSuspended:
         logger.info(
             "[RepoImport] installation suspended, skipping import installation_id=%s",
+            installation_id,
+        )
+        return
+    except GitHubAppInstallationNotFound:
+        logger.info(
+            "[RepoImport] installation gone, skipping import installation_id=%s",
             installation_id,
         )
         return
@@ -252,6 +331,7 @@ def _import_installation_repos(
         _retry_import(self, installation_id, "token mint")
         return
 
+    listed_at = time.monotonic()
     try:
         repos = _fetch_installation_repos(token, installation_id, strict=True)
     except InstallationRepoListError as exc:
@@ -270,12 +350,6 @@ def _import_installation_repos(
         # GitHub's created_at is ISO 8601 UTC ("...Z"); same-format strings
         # compare correctly as text.
         repos = [r for r in repos if str(r.get("created_at") or "") > created_after]
-    if not repos:
-        logger.info(
-            "[RepoImport] no repos to import installation_id=%s user=%s",
-            installation_id, user_id,
-        )
-        return
 
     newly_added: list[str] = []
     with db_pool.get_admin_connection() as conn:
@@ -286,6 +360,7 @@ def _import_installation_repos(
                     "[RepoImport] no org for user=%s — cannot import (RLS)", user_id,
                 )
                 return
+            repos = _apply_exclusions(cur, org_id, repos, regranted=only_repos is not None)
             # Org-wide existing map (RLS scopes the SELECT to this org) ->
             # {repo_full_name: owner_user_id}. Mirrors save_repo_selections:
             # a repo already connected by another org member keeps its original
@@ -323,6 +398,18 @@ def _import_installation_repos(
                 if full_name not in existing:
                     existing[full_name] = user_id
                     newly_added.append(full_name)
+            if full_import:
+                # The listing's start is the baseline: repos created after
+                # it are the hourly sync's to pick up.
+                cur.execute(
+                    """UPDATE user_github_installations
+                          SET repos_imported_at =
+                              NOW() - make_interval(secs => %s)
+                        WHERE installation_id = %s
+                          AND disconnected_at IS NULL
+                          AND repos_imported_at IS NULL""",
+                    (time.monotonic() - listed_at, installation_id),
+                )
             conn.commit()
 
     logger.info(
@@ -350,6 +437,8 @@ def import_installation_repos(
     enroll_change_gating: bool = False,
     only_repos: list[str] | None = None,
     created_after: str | None = None,
+    force: bool = False,
+    require_enrollment: bool = False,
 ):
     """Celery entry point for the App repo auto-import.
 
@@ -360,16 +449,8 @@ def import_installation_repos(
     return _import_installation_repos(
         self, user_id, installation_id, enroll_change_gating,
         only_repos=only_repos, created_after=created_after,
+        force=force, require_enrollment=require_enrollment,
     )
-
-
-# A repo created on GitHub inside this window and still not connected missed
-# its webhook. Longer than the hourly beat so one late run loses nothing.
-_SYNC_LOOKBACK_SEC = 3 * 3600
-# An install with nothing connected gets a full import only this soon after
-# linking (its first import failed). Later, zero repos means someone removed
-# them all in Aurora, and that choice stands.
-_SYNC_EMPTY_INSTALL_WINDOW_SEC = 24 * 3600
 
 
 def _iso_utc(dt) -> str:
@@ -381,65 +462,51 @@ def _iso_utc(dt) -> str:
 
 
 @celery_app.task(name="routes.github.github_repo_metadata.sync_installation_repos")
-def sync_installation_repos(backfill: bool = False):
+def sync_installation_repos():
     """Celery entry point; see :func:`_sync_installation_repos`."""
-    return _sync_installation_repos(backfill)
+    return _sync_installation_repos()
 
 
-def _sync_installation_repos(backfill: bool = False):
+def _sync_installation_repos():
     """Hourly safety net: enroll repos that a webhook or an import missed.
 
     For every linked, unsuspended installation that qualifies for
-    auto-enrollment (see ``enrollment_state``):
+    auto-enrollment (see ``auto_enroll_owner``):
 
-    * no connected repos at all and linked in the last day (the import never
-      landed, e.g. GitHub was down at signup), or any age with ``backfill``:
-      queue the full import;
-    * otherwise: import only repos created on GitHub in the last few hours,
-      or, with ``backfill``, since the installation's first import. Repos
-      that already existed are never re-added, so a repo someone removed
-      from Aurora stays removed.
+    * the first full import never landed (GitHub was down at signup, the
+      worker was lost): queue it again;
+    * otherwise: import repos created on GitHub after that import. Repos
+      that existed then were imported, so any that are missing now were
+      removed on purpose and stay removed.
 
     Installations where someone turned review off on a repo are skipped.
     """
-    from datetime import datetime, timedelta, timezone
-
-    from tasks.github_webhook_tasks import enrollment_state
+    from tasks.github_webhook_tasks import auto_enroll_owner
     from utils.db.connection_pool import db_pool
 
     with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT gi.installation_id,
-                      MAX(ugi.linked_at) > NOW() - make_interval(secs => %s)
+            """SELECT gi.installation_id, MAX(ugi.repos_imported_at)
                  FROM github_installations gi
                  JOIN user_github_installations ugi
                    ON ugi.installation_id = gi.installation_id
                 WHERE ugi.disconnected_at IS NULL
                   AND gi.suspended_at IS NULL
                 GROUP BY gi.installation_id
-                ORDER BY gi.installation_id""",
-            (_SYNC_EMPTY_INSTALL_WINDOW_SEC,),
+                ORDER BY gi.installation_id"""
         )
-        installations = [(row[0], bool(row[1])) for row in cur.fetchall()]
+        installations = cur.fetchall()
 
-    recent = datetime.now(timezone.utc) - timedelta(seconds=_SYNC_LOOKBACK_SEC)
     queued = 0
-    for installation_id, linked_recently in installations:
+    for installation_id, imported_at in installations:
         try:
-            owner, total, first_connected_at = enrollment_state(installation_id)
+            owner = auto_enroll_owner(installation_id)
             if not owner:
                 continue
-            if total == 0:
-                if not (backfill or linked_recently):
-                    continue
-                created_after = None
-            elif backfill and first_connected_at is not None:
-                created_after = _iso_utc(first_connected_at)
-            else:
-                created_after = _iso_utc(recent)
             import_installation_repos.delay(
                 owner, installation_id, enroll_change_gating=True,
-                created_after=created_after,
+                created_after=_iso_utc(imported_at) if imported_at else None,
+                require_enrollment=True,
             )
             queued += 1
         except Exception:
@@ -447,6 +514,73 @@ def _sync_installation_repos(backfill: bool = False):
                 "[RepoSync] skipped installation_id=%s", installation_id, exc_info=True,
             )
     logger.info(
-        "[RepoSync] queued %d of %d linked installation(s) backfill=%s",
-        queued, len(installations), backfill,
+        "[RepoSync] queued %d of %d linked installation(s)", queued, len(installations),
+    )
+
+
+@celery_app.task(name="routes.github.github_repo_metadata.backfill_installation_repos")
+def backfill_installation_repos(
+    installation_ids: list[int],
+    enable_review: bool = True,
+):
+    """Celery entry point; see :func:`_backfill_installation_repos`."""
+    return _backfill_installation_repos(installation_ids, enable_review)
+
+
+def _backfill_installation_repos(installation_ids: list[int], enable_review: bool = True):
+    """One-off repair for named installations, run by hand after a deploy.
+
+    For each installation: turn review on for its connected repos (installs
+    that predate review-on-by-default never had one), then run a full
+    import even if one already landed, so repos a failed or partial import
+    missed come in enrolled. Repos the org removed in the picker since the
+    exclusions table existed stay out. The ids are explicit because an old
+    installation with nothing connected may have been emptied on purpose.
+    """
+    from utils.auth.stateless_auth import set_rls_context
+    from utils.db.connection_pool import db_pool
+
+    queued = 0
+    for installation_id in installation_ids:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT ugi.user_id
+                     FROM user_github_installations ugi
+                     JOIN github_installations gi
+                       ON gi.installation_id = ugi.installation_id
+                    WHERE ugi.installation_id = %s
+                      AND ugi.disconnected_at IS NULL
+                      AND gi.suspended_at IS NULL
+                    ORDER BY ugi.linked_at ASC, ugi.user_id ASC
+                    LIMIT 1""",
+                (installation_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                logger.warning(
+                    "[RepoBackfill] no active link installation_id=%s", installation_id,
+                )
+                continue
+            owner = row[0]
+            if enable_review:
+                if not set_rls_context(cur, conn, owner, log_prefix="[RepoBackfill]"):
+                    continue
+                cur.execute(
+                    """UPDATE connected_repos
+                          SET change_gating_enabled = TRUE, updated_at = NOW()
+                        WHERE installation_id = %s
+                          AND change_gating_enabled IS DISTINCT FROM TRUE""",
+                    (installation_id,),
+                )
+                logger.info(
+                    "[RepoBackfill] review turned on for %d repo(s) installation_id=%s",
+                    cur.rowcount, installation_id,
+                )
+                conn.commit()
+        import_installation_repos.delay(
+            owner, installation_id, enroll_change_gating=True, force=True,
+        )
+        queued += 1
+    logger.info(
+        "[RepoBackfill] queued %d of %d installation(s)", queued, len(installation_ids),
     )

@@ -10,7 +10,7 @@ import { useDarkPageBackground } from "@/hooks/useDarkPageBackground"
 import { usePasswordReset, usePasswordResetAvailable } from "@/hooks/usePasswordReset"
 import { ForgotPasswordPanel, ResetPasswordPanel } from "./PasswordResetPanels"
 import { SLACK_HANDOFF_MIN_MS, SlackHandoffPanel, ContinueWithSlack, AddAuroraToSlack, useSlackSignInAvailable, SLACK_ERRORS, SLACK_RESUME_KEY, resumeSlackConnect } from "./SlackSignIn"
-import { resumeGithubClaim, stashGithubClaim } from "./githubClaim"
+import { resumeGithubClaim, stashGithubClaim } from "@/app/sign-in/githubClaim"
 
 const AuroraShader = dynamic(() => import('@/app/components/AuroraShader'), { ssr: false })
 
@@ -77,7 +77,7 @@ const QUERY_ERRORS: Record<string, string> = {
 
 // ?notice=<code>: informational, not an error. Fixed strings only.
 const QUERY_NOTICES: Record<string, string> = {
-  github_install_requested: "Your request to install Aurora was sent to your GitHub organization's owners. Once one of them approves it, sign in here with GitHub to start getting PR reviews.",
+  github_install_requested: "Your request to install Aurora was sent to your GitHub organization's owners. When one of them approves it, their install sets up Aurora for your organization and they can invite you. Already have an account? Sign in below.",
 }
 
 function errorFromQuery(code: string | null): string | null {
@@ -214,6 +214,14 @@ function AuthPage() {
         const result = await signIn("handoff", { token: handoffToken, redirect: false })
         if (result?.ok) {
           await panelShown
+          // A pending GitHub link from this tab finishes before navigating.
+          const claim = await resumeGithubClaim()
+          if (claim.status === "linked") return
+          if (claim.status === "failed") {
+            setHandoffInFlight(false)
+            setError(claim.message)
+            return
+          }
           globalThis.location.href = handoffDestination(handoffVia, handoffSlackAuth)
         } else {
           setHandoffInFlight(false)
@@ -254,8 +262,12 @@ function AuthPage() {
   }, [searchParams])
 
   // Already signed in when GitHub sent them here: link the install straight away.
+  // A handoff redeems the claim itself before it navigates.
   useEffect(() => {
-    if (session?.user) void resumeGithubClaim()
+    if (!session?.user || handoffAttempted.current) return
+    void resumeGithubClaim().then((claim) => {
+      if (claim.status === "failed") setError(claim.message)
+    })
   }, [session?.user])
 
   useEffect(() => {
@@ -305,7 +317,12 @@ function AuthPage() {
         setError("Invalid email or password")
       } else if (result?.ok) {
         if (await resumeSlackConnect()) return
-        if (await resumeGithubClaim()) return
+        const claim = await resumeGithubClaim()
+        if (claim.status === "linked") return
+        if (claim.status === "failed") {
+          setError(claim.message)
+          return
+        }
         router.push(callbackUrl)
         router.refresh()
       }

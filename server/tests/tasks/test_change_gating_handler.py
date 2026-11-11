@@ -74,8 +74,10 @@ class _FakeCursor:
     def fetchone(self):
         if "FROM github_installations" in self._last_sql:
             return ("2026-01-01",) if self._state["suspended"] else (None,)
+        if "MAX(repos_imported_at)" in self._last_sql:
+            return (self._state.get("imported_at"),)
         if "COUNT(*)" in self._last_sql:
-            return (*self._state["repo_counts"], None)
+            return self._state["repo_counts"]
         if "FROM connected_repos" in self._last_sql:
             return (1,) if self._state["enrolled"] else None
         return None
@@ -301,19 +303,29 @@ class TestReposAddedAfterInstall:
         assert importer.delay.called is expect_import
         gating_env.update_status.assert_called_once_with(_DELIVERY_ID, status="processed")
 
-    def test_imports_only_the_added_repos(self, gating_env, importer):
+    _ADDED = {
+        "action": "added",
+        "installation": {"id": _INSTALLATION_ID},
+        "repository_selection": "all",
+        "repositories_added": [{"full_name": "acme/new"}, {"full_name": "acme/two"}],
+    }
+
+    def test_imports_only_the_added_repos_once_the_install_was_imported(
+        self, gating_env, importer
+    ):
         # A full import would also bring back repos removed in Aurora's picker.
-        gating_env.state["linked_users"] = [_USER_ID]
-        payload = {
-            "action": "added",
-            "installation": {"id": _INSTALLATION_ID},
-            "repository_selection": "all",
-            "repositories_added": [{"full_name": "acme/new"}, {"full_name": "acme/two"}],
-        }
-
-        webhook_tasks._handle_installation_repositories_event(payload, "added", _DELIVERY_ID)
-
+        gating_env.state["imported_at"] = "2026-11-01"
+        webhook_tasks._handle_installation_repositories_event(self._ADDED, "added", _DELIVERY_ID)
         assert importer.delay.call_args.kwargs["only_repos"] == ["acme/new", "acme/two"]
+
+    def test_install_whose_first_import_failed_gets_the_full_import(
+        self, gating_env, importer
+    ):
+        # Importing only the added repos would leave the repos that were
+        # there at install out for good.
+        gating_env.state["repo_counts"] = (0, 0)
+        webhook_tasks._handle_installation_repositories_event(self._ADDED, "added", _DELIVERY_ID)
+        assert importer.delay.call_args.kwargs["only_repos"] is None
 
 
 class TestProgressComment:

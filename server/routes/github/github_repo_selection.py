@@ -204,6 +204,7 @@ def save_repo_selections(user_id):
                         "DELETE FROM connected_repos WHERE provider = 'github' AND repo_full_name = ANY(%s)",
                         (list(removed),),
                     )
+                _record_exclusions(cur, org_id, removed, incoming)
 
                 conn.commit()
 
@@ -225,6 +226,28 @@ def save_repo_selections(user_id):
         return jsonify({"error": "Failed to save repository selections"}), 500
 
 
+def _record_exclusions(cur, org_id, removed: set, kept: set) -> None:
+    """Remember repos removed in the picker so automatic imports skip them.
+
+    Picking a repo again clears its exclusion.
+    """
+    if not org_id:
+        return
+    if removed:
+        cur.executemany(
+            """INSERT INTO github_repo_exclusions (org_id, repo_full_name)
+               VALUES (%s, %s)
+               ON CONFLICT (org_id, repo_full_name) DO UPDATE SET excluded_at = NOW()""",
+            [(org_id, name) for name in sorted(removed)],
+        )
+    if kept:
+        cur.execute(
+            """DELETE FROM github_repo_exclusions
+                WHERE org_id = %s AND repo_full_name = ANY(%s)""",
+            (org_id, sorted(kept)),
+        )
+
+
 @github_repo_selection_bp.route("/repo-selections", methods=["DELETE"])
 @require_permission("connectors", "write")
 def clear_repo_selections(user_id):
@@ -235,7 +258,10 @@ def clear_repo_selections(user_id):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:clear_repo_selections]")
-                cur.execute("DELETE FROM connected_repos WHERE provider = 'github'")
+                cur.execute(
+                    "DELETE FROM connected_repos WHERE provider = 'github' RETURNING repo_full_name"
+                )
+                _record_exclusions(cur, org_id, {r[0] for r in cur.fetchall()}, set())
                 conn.commit()
         return jsonify({"message": "All repository selections cleared"})
     except Exception as e:

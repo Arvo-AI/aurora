@@ -466,11 +466,13 @@ def _handle_installation_repositories_event(
         if owner and added_names:
             from routes.github.github_repo_metadata import import_installation_repos
 
-            # Only the repos GitHub just granted: a full import would also
-            # bring back repos someone removed from Aurora's repo picker.
+            # Once the first full import has landed, only the repos GitHub
+            # just granted. Before that, the full import, so the repos that
+            # were there at install come in too.
             import_installation_repos.delay(
                 owner, installation_id, enroll_change_gating=True,
-                only_repos=added_names,
+                only_repos=added_names if _repos_imported(installation_id) else None,
+                require_enrollment=True,
             )
         else:
             owner = None
@@ -719,11 +721,10 @@ def _resolve_change_gating_owner(installation_id: int, repo_full_name: str) -> t
     return ("ok", owner) if owner else ("not_enrolled", None)
 
 
-def enrollment_state(installation_id: int) -> tuple[str | None, int, Any]:
-    """``(owner, connected_count, first_connected_at)`` for auto-enrollment.
+def auto_enroll_owner(installation_id: int) -> str | None:
+    """Linked user to import newly added repos for, or None to leave them alone.
 
-    ``owner`` is the linked user to import newly added repos for, or None to
-    leave them alone. New repos are enrolled only when every repo already
+    New repos are enrolled only when every repo already
     connected on this installation is enrolled. One repo with change gating
     off means someone chose per-repo control, so the choice stays theirs. An
     installation with no connected repos qualifies: installing the App is the
@@ -754,24 +755,34 @@ def enrollment_state(installation_id: int) -> tuple[str | None, int, Any]:
                     continue
                 cur.execute(
                     """SELECT COUNT(*),
-                              COUNT(*) FILTER (WHERE change_gating_enabled = TRUE),
-                              MIN(created_at)
+                              COUNT(*) FILTER (WHERE change_gating_enabled = TRUE)
                          FROM connected_repos
                         WHERE installation_id = %s""",
                     (installation_id,),
                 )
-                total, enrolled, first_connected_at = cur.fetchone()
+                total, enrolled = cur.fetchone()
                 if total == enrolled:
-                    return linked_user_id, total, first_connected_at
+                    return linked_user_id
         finally:
             if linked_users:
                 cur.execute(_RESET_RLS_SQL)
-    return None, 0, None
+    return None
 
 
-def auto_enroll_owner(installation_id: int) -> str | None:
-    """Linked user to enroll newly added repos for (see ``enrollment_state``)."""
-    return enrollment_state(installation_id)[0]
+def _repos_imported(installation_id: int) -> bool:
+    """Whether the installation's first full repo import has landed."""
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT MAX(repos_imported_at)
+                 FROM user_github_installations
+                WHERE installation_id = %s
+                  AND disconnected_at IS NULL""",
+            (installation_id,),
+        )
+        row = cur.fetchone()
+        return bool(row) and row[0] is not None
 
 
 def _record_gating_outcome(delivery_id: str, repo: str | None, outcome: str) -> None:
