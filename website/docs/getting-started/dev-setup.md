@@ -281,7 +281,7 @@ Aurora uses PostgreSQL for persistent storage.
 ### Access Database
 
 ```bash
-docker exec -it aurora-postgres-1 psql -U aurora -d aurora_db
+docker exec -it aurora-postgres psql -U aurora -d aurora_db
 ```
 
 ### Common Queries
@@ -412,7 +412,7 @@ make rebuild-server
 docker ps | grep postgres
 
 # Check postgres logs
-docker logs aurora-postgres-1
+docker logs aurora-postgres
 ```
 
 ### Port Conflicts

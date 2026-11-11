@@ -23,7 +23,7 @@ make prod-prebuilt   # or: make prod-local to build from source
 ### 2. Get the Root Token
 
 ```bash
-docker logs vault-init 2>&1 | grep "Root Token:"
+docker logs aurora-vault-init 2>&1 | grep "Root Token:"
 ```
 
 Output:
@@ -64,13 +64,13 @@ VAULT_KV_BASE_PATH=users
 
 ```bash
 # Write a secret
-docker exec -it vault vault kv put aurora/users/test-secret value='hello'
+docker exec -it aurora-vault vault kv put aurora/users/test-secret value='hello'
 
 # Read a secret
-docker exec -it vault vault kv get aurora/users/test-secret
+docker exec -it aurora-vault vault kv get aurora/users/test-secret
 
 # List secrets
-docker exec -it vault vault kv list aurora/users/
+docker exec -it aurora-vault vault kv list aurora/users/
 ```
 
 ### Via UI
@@ -120,7 +120,7 @@ If your deployment requires AWS Secrets Manager instead of Vault (e.g., EKS envi
 The `vault-init` container should auto-unseal. If not:
 
 ```bash
-docker restart vault-init
+docker restart aurora-vault-init
 ```
 
 ### "Permission denied"
@@ -128,7 +128,7 @@ docker restart vault-init
 Check your token has the correct policies:
 
 ```bash
-docker exec -it vault vault token capabilities aurora/users/
+docker exec -it aurora-vault vault token capabilities aurora/users/
 ```
 
 ### Connection refused

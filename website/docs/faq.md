@@ -129,7 +129,7 @@ See the [Troubleshooting Guide](/docs/troubleshooting). Common causes:
 
 After first startup, you need to extract the root token:
 ```bash
-docker logs vault-init 2>&1 | grep "Root Token:"
+docker logs aurora-vault-init 2>&1 | grep "Root Token:"
 ```
 Add it to `.env` as `VAULT_TOKEN` and restart.
 

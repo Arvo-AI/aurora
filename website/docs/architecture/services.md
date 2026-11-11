@@ -123,7 +123,7 @@ User: postgres
 
 ### Access
 ```bash
-docker exec -it aurora-postgres-1 psql -U postgres -d aurora_db
+docker exec -it aurora-postgres psql -U postgres -d aurora_db
 ```
 
 ## Redis
@@ -152,7 +152,7 @@ Secrets management.
 ### Access
 ```bash
 # CLI
-docker exec -it vault vault kv list aurora/users/
+docker exec -it aurora-vault vault kv list aurora/users/
 
 # UI
 http://localhost:8200

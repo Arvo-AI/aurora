@@ -53,7 +53,7 @@ If older, update Docker Desktop or install the latest Docker Compose.
 
 1. Get the root token:
 ```bash
-docker logs vault-init 2>&1 | grep "Root Token:"
+docker logs aurora-vault-init 2>&1 | grep "Root Token:"
 ```
 
 2. Add to `.env`:
@@ -71,7 +71,7 @@ make down && make prod-prebuilt   # or: make prod-local
 **Solution**:
 
 ```bash
-docker restart vault-init
+docker restart aurora-vault-init
 ```
 
 The init container will auto-unseal Vault.
@@ -81,7 +81,7 @@ The init container will auto-unseal Vault.
 **Solution**: Your token may lack required policies. Use the root token or check token capabilities:
 
 ```bash
-docker exec -it vault vault token capabilities aurora/users/
+docker exec -it aurora-vault vault token capabilities aurora/users/
 ```
 
 ## Port Conflicts
@@ -151,7 +151,7 @@ docker ps | grep postgres
 
 2. Check logs:
 ```bash
-docker logs aurora-postgres-1
+docker logs aurora-postgres
 ```
 
 3. Verify connection settings in `.env`:

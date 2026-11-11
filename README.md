@@ -152,7 +152,7 @@ Open **http://localhost:3000**. The first user to register becomes admin.
 
 ```bash
 # Get the auto-generated root token
-docker logs vault-init 2>&1 | grep "Root Token:"
+docker logs aurora-vault-init 2>&1 | grep "Root Token:"
 
 # Add it to .env
 echo "VAULT_TOKEN=hvs.your-token-here" >> .env
