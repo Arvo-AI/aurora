@@ -2,6 +2,10 @@
 after the gate returns; a hash set inside the try is cleared by the reset.
 """
 
+import shlex
+
+import pytest
+
 from utils.auth import command_gate
 from utils.auth.command_gate import _policy_reason
 
@@ -182,6 +186,48 @@ def test_approval_is_not_carried_onto_an_argv_the_signature_matcher_flags(monkey
         blocked = _check_guardrails(exec_args)
         assert blocked is not None and blocked.returncode == 126
         assert checked == [shlex.join(exec_args)]
+    finally:
+        _clear_approval()
+
+
+@pytest.mark.parametrize("gated, exec_args", [
+    # The AWS fan-out prefixes by substring, the gate by first word.
+    ("aws aws_completer --debug", ["aws_completer", "--debug", "--region", "us-east-1"]),
+    ("kubectl get pods", ["aws", "kubectl", "get", "pods", "--region", "us-east-1"]),
+    ("aws s3 ls", []),
+    ('aws s3 ls "unterminated', ["aws", "s3", "ls"]),
+], ids=["bare sibling of the judged CLI", "prefixed with another CLI", "nothing to run", "judged form does not parse"])
+def test_approval_is_not_carried_onto_a_different_program(monkeypatch, gated, exec_args):
+    """The judge approved one program. Flags may be added to it; when what runs
+    starts another program, the executor's full check stays in place."""
+    from types import SimpleNamespace
+    from utils.terminal.terminal_run import _check_guardrails
+
+    checked = []
+
+    def _full_check(cmd, **_kwargs):
+        checked.append(cmd)
+        return SimpleNamespace(blocked=False)
+
+    monkeypatch.setattr("utils.security.command_safety.evaluate_command", _full_check)
+    command_gate._guardrails_approved_command.set(command_gate._hash(gated))
+    try:
+        assert command_gate.carry_guardrails_approval(gated, exec_args) is None
+        assert command_gate.guardrails_approved_hash() == command_gate._hash(gated)
+        if exec_args:
+            assert _check_guardrails(exec_args) is None
+            assert checked == [shlex.join(exec_args)]
+    finally:
+        _clear_approval()
+
+
+def test_approval_is_carried_when_only_flags_were_added_to_the_same_program():
+    gated = "aws ec2 describe-instances"
+    exec_args = ["aws", "ec2", "describe-instances", "--region", "us-east-1", "--output", "json"]
+    command_gate._guardrails_approved_command.set(command_gate._hash(gated))
+    try:
+        assert command_gate.carry_guardrails_approval(gated, exec_args) is not None
+        assert command_gate.guardrails_approved_hash() == command_gate._hash(shlex.join(exec_args))
     finally:
         _clear_approval()
 

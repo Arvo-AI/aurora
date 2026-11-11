@@ -106,6 +106,15 @@ def _trips_signature_floor(command: str) -> bool:
         return True
 
 
+def _executable(command: Union[str, List[str]]) -> Optional[str]:
+    """The program *command* starts, or None when it is empty or does not parse."""
+    try:
+        argv = shlex.split(command) if isinstance(command, str) else [str(a) for a in command]
+    except ValueError:
+        return None
+    return argv[0] if argv else None
+
+
 def carry_guardrails_approval(
     gated_command: str, exec_args: Union[str, List[str]],
 ) -> Optional[contextvars.Token]:
@@ -115,14 +124,21 @@ def carry_guardrails_approval(
     ``--project``/``--format`` and re-splits the quoting), so ``terminal_run``
     hashes a different string and judges the same command a second time.
     Only an approval the gate set for *gated_command* in this context moves,
-    and only when the form that runs passes the signature matcher: the judge
-    read the command as written, the matcher has to read it as executed.
-    Anything else leaves the executor's full check in place.
+    only onto the same program, and only when the form that runs passes the
+    signature matcher: the judge read the command as written, the matcher has
+    to read it as executed. Anything else leaves the executor's full check in
+    place.
 
     Returns a token for :func:`release_guardrails_approval`, or None when
     nothing was carried.
     """
     if _guardrails_approved_command.get() != _hash(gated_command):
+        return None
+    # A tool may add flags to the program the judge approved, not swap it for
+    # another: the AWS fan-out prefixes by substring, so the gate can judge
+    # `aws aws_completer` while the worker runs `aws_completer`.
+    gated_executable = _executable(gated_command)
+    if gated_executable is None or _executable(exec_args) != gated_executable:
         return None
     # Same rendering terminal_run._check_guardrails hashes.
     exec_form = exec_args if isinstance(exec_args, str) else shlex.join(str(a) for a in exec_args)

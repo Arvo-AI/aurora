@@ -1361,6 +1361,31 @@ def test_aws_fanout_does_not_judge_a_gate_approved_command_again(monkeypatch):
     assert full_checks == [], "a gate-approved command was judged again in the fan-out"
 
 
+def test_aws_fanout_keeps_the_full_check_when_the_worker_runs_another_program(monkeypatch):
+    """`aws_completer` starts with "aws", so the worker runs it bare while the
+    gate judged `aws aws_completer`. The judge never read what runs, so every
+    account's executor check has to run."""
+    from utils.auth import command_gate
+
+    full_checks = _count_full_checks(monkeypatch)
+    ran = []
+    fanout = _load_aws_fanout(_guarded_runner(ran))
+    conns = [{"account_id": "111111111111", "region": "us-east-1"},
+             {"account_id": "222222222222", "region": "eu-west-1"}]
+    gated = "aws aws_completer"
+    command_gate._guardrails_approved_command.set(command_gate._hash(gated))
+    try:
+        json.loads(fanout("u", conns, "aws_completer", gated_command=gated))
+    finally:
+        command_gate._guardrails_approved_command.set(None)
+
+    assert {argv[0] for argv in ran} == {"aws_completer"}
+    assert sorted(full_checks) == [
+        "aws_completer --region eu-west-1",
+        "aws_completer --region us-east-1",
+    ]
+
+
 def test_aws_fanout_without_a_gate_approval_keeps_the_full_check_per_account(monkeypatch):
     full_checks = _count_full_checks(monkeypatch)
     ran = []
