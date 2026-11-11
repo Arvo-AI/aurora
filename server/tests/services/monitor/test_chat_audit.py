@@ -288,3 +288,35 @@ def test_snippet_window_is_taken_around_the_match():
     sql, params = cur.calls[0]
     assert "strpos(lower(e.m->>'text'), %s)" in sql
     assert params[:3] == ("permission", ca.SNIPPET_WINDOW // 2, ca.SNIPPET_WINDOW)
+
+
+# --- role scoping of the agent tool's query --------------------------------
+
+def _scoped_search(owner):
+    cur = Cursor([("COUNT(DISTINCT", ["category", "calls", "chats"], [])])
+    out = ca.search_failed_tool_calls(cur, "org-1", {"period": "7d"}, owner_user_id=owner)
+    return out, cur.calls
+
+
+def test_org_scope_has_no_owner_restriction():
+    out, calls = _scoped_search(None)
+    assert out["scope"] == "org"
+    assert all("own.user_id" not in sql and "cs.user_id" not in sql for sql, _ in calls)
+
+
+def test_own_scope_restricts_calls_and_issue_counts():
+    out, calls = _scoped_search("viewer-1")
+    assert out["scope"] == "own"
+    (list_sql, list_params), (totals_sql, totals_params) = calls
+    assert "own.user_id = %s" in list_sql and "own.org_id = es.org_id" in list_sql and "viewer-1" in list_params
+    assert "cs.user_id = %s" in totals_sql and "viewer-1" in totals_params   # counts can't leak org totals
+    for _, params in calls:
+        assert "org-1" in params                                            # still org-scoped
+
+
+def test_owner_cannot_come_from_the_model_arguments():
+    cur = Cursor([])
+    out = ca.search_failed_tool_calls(
+        cur, "org-1", {"owner_user_id": "someone", "scope": "org", "user": "other"}, owner_user_id="viewer-1")
+    assert out["scope"] == "own"
+    assert all("someone" not in p and "other" not in p for _, p in cur.calls)

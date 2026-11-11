@@ -360,10 +360,18 @@ def _chat_where(f: ChatFilters, org_id: str, *, skip: tuple[str, ...] = ()) -> t
 # Failed tool calls (shared by the page and the agent tool)
 # ---------------------------------------------------------------------------
 
+# Restricts execution_steps ``es`` to chats (and RCA sessions) owned by one user.
+_OWNED_BY_SQL = (
+    "EXISTS (SELECT 1 FROM chat_sessions own WHERE own.id = split_part(es.session_id, '::', 1) "
+    "AND own.org_id = es.org_id AND own.user_id = %s)"
+)
+
+
 def _failed_tool_calls(
     cur, org_id: str, *, chat_ids: Optional[list[str]] = None, period: Optional[str] = None,
     category: Optional[str] = None, tool: Optional[str] = None, query: Optional[str] = None,
-    source: Optional[str] = None, per_chat: Optional[int] = None, limit: int = 50,
+    source: Optional[str] = None, owner_user_id: Optional[str] = None,
+    per_chat: Optional[int] = None, limit: int = 50,
 ) -> list[dict]:
     """Failed ``execution_steps`` rows, classified, redacted and anchored to their message.
 
@@ -385,6 +393,9 @@ def _failed_tool_calls(
     if tool:
         clauses.append("es.tool_name = %s")
         params.append(tool)
+    if owner_user_id:
+        clauses.append(_OWNED_BY_SQL)
+        params.append(owner_user_id)
     if source == "chat":
         clauses.append("es.incident_id IS NULL")
     elif source == "incident":
@@ -458,19 +469,32 @@ def _issue_totals(cur, org_id: str, period: str, chat_where: str = "TRUE", chat_
     ]
 
 
-def search_failed_tool_calls(cur, org_id: str, raw: dict, limit: int = 20) -> dict:
-    """Agent tool entry point: failed tool calls with reasons, plus counts per issue."""
+def search_failed_tool_calls(
+    cur, org_id: str, raw: dict, limit: int = 20, *, owner_user_id: Optional[str] = None,
+) -> dict:
+    """Agent tool entry point: failed tool calls with reasons, plus counts per issue.
+
+    ``owner_user_id`` limits every part of the result, counts included, to that
+    user's own chats and RCA sessions. The caller decides it from the role, never
+    from ``raw`` (the model's arguments).
+    """
     period = _parse_period(raw)
     source = (_opt(raw, "source") or "").lower() or None
     if source and source not in ("chat", "incident"):
         raise InvalidFilter("source")
     calls = _failed_tool_calls(
         cur, org_id, period=period, category=_parse_issue(raw), tool=_opt(raw, "tool"),
-        query=_parse_query(raw), source=source, limit=limit,
+        query=_parse_query(raw), source=source, owner_user_id=owner_user_id, limit=limit,
     )
     for c in calls:
         c["link"] = f"/incidents/{c['incident_id']}" if c["incident_id"] else f"/chat?sessionId={c['chat_id']}"
-    return {"tool_calls": calls, "by_issue": _issue_totals(cur, org_id, period), "period": period}
+    owner_where, owner_params = ("cs.user_id = %s", [owner_user_id]) if owner_user_id else ("TRUE", [])
+    return {
+        "scope": "own" if owner_user_id else "org",
+        "tool_calls": calls,
+        "by_issue": _issue_totals(cur, org_id, period, owner_where, owner_params),
+        "period": period,
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -2270,12 +2270,14 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 (
                     search_tool_calls,
                     "search_tool_calls",
-                    "Search Aurora's own failed tool calls across all chats and RCAs in this org "
+                    "Search Aurora's own failed tool calls in chats and RCAs "
                     "(default: last 7 days). Returns each failure's tool, redacted command, reason, "
                     "issue type (missing_permission, blocked_command, not_connected, timeout, "
                     "unavailable), timestamp and a link to its chat or incident, plus counts per "
                     "issue type. Use to answer 'which tool calls failed last week and why' or "
-                    "'which permissions is Aurora missing'. Read-only.",
+                    "'which permissions is Aurora missing'. Org admins see every chat in the org; "
+                    "other users see only their own chats and RCAs. The result's 'scope' field is "
+                    "'org' or 'own', so say which one the answer covers. Read-only.",
                     SearchToolCallsArgs,
                 ),
             ]

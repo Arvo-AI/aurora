@@ -888,10 +888,12 @@ class SearchToolCallsArgs(BaseModel):
 def search_tool_calls(
     period="7d", issue=None, tool=None, query=None, source=None, limit=20, *, user_id, **_
 ) -> dict:
-    """This org's failed agent tool calls with their reasons and issue type.
+    """Failed agent tool calls with their reasons and issue type.
 
-    Read-only, and shares its query layer with the monitor page's Conversations
-    tab; secrets in inputs and errors are redacted before they are returned.
+    Admins see the whole org, like the monitor page's Conversations tab; everyone
+    else sees only their own chats and RCA sessions. The scope comes from the
+    caller's role, never from the arguments. Read-only; secrets in inputs and
+    errors are redacted before they are returned.
     """
     from services.monitor.chat_audit import (
         InvalidFilter,
@@ -901,7 +903,20 @@ def search_tool_calls(
 
     raw = {"period": period, "issue": issue, "tool": tool, "q": query, "source": source}
     with _cursor(user_id) as (cur, org_id):
+        owner = None if _is_org_admin(user_id, org_id) else user_id
         try:
-            return search_failed_tool_calls(cur, org_id, raw, limit=clamp(limit, 1, 50))
+            return search_failed_tool_calls(
+                cur, org_id, raw, limit=clamp(limit, 1, 50), owner_user_id=owner,
+            )
         except InvalidFilter as exc:
             raise IntrospectionError(filter_error_message(exc)) from None
+
+
+def _is_org_admin(user_id: str, org_id: str) -> bool:
+    """Same admin check as the Conversations routes; fails closed to own-chats scope."""
+    try:
+        from utils.auth.enforcer import enforce_with_reload
+        return bool(enforce_with_reload(user_id, org_id, "admin", "access"))
+    except Exception:
+        logger.warning("%s admin check failed; limiting search_tool_calls to own chats", _LOG_PREFIX)
+        return False
