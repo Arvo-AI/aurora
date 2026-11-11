@@ -28,14 +28,11 @@ STORAGE_SECRET_KEY=admin
 ## Configuration
 
 ```bash
-# Storage type: seaweedfs, s3, r2, minio
-STORAGE_TYPE=seaweedfs
-
 # Bucket name
-STORAGE_BUCKET=aurora
+STORAGE_BUCKET=aurora-storage
 
-# Endpoint (for S3-compatible backends)
-STORAGE_ENDPOINT=http://seaweedfs-filer:8333
+# Endpoint (leave empty for AWS S3)
+STORAGE_ENDPOINT_URL=http://seaweedfs-filer:8333
 
 # Credentials
 STORAGE_ACCESS_KEY=admin
@@ -54,7 +51,6 @@ Aurora supports any S3-compatible storage:
 #### With static credentials
 
 ```bash
-STORAGE_TYPE=s3
 STORAGE_BUCKET=your-bucket-name
 STORAGE_REGION=us-east-1
 STORAGE_ACCESS_KEY=AKIA...
@@ -66,7 +62,6 @@ STORAGE_SECRET_KEY=...
 When running on EKS with IRSA, credentials are injected automatically via the ServiceAccount. Leave access keys empty:
 
 ```bash
-STORAGE_TYPE=s3
 STORAGE_BUCKET=your-bucket-name
 STORAGE_REGION=us-east-1
 # STORAGE_ACCESS_KEY and STORAGE_SECRET_KEY are omitted —
@@ -78,9 +73,8 @@ See the [EKS setup guide](../deployment/eks-setup#step-3-configure-s3-storage) f
 ### Cloudflare R2
 
 ```bash
-STORAGE_TYPE=r2
 STORAGE_BUCKET=your-bucket-name
-STORAGE_ENDPOINT=https://accountid.r2.cloudflarestorage.com
+STORAGE_ENDPOINT_URL=https://accountid.r2.cloudflarestorage.com
 STORAGE_ACCESS_KEY=...
 STORAGE_SECRET_KEY=...
 ```
@@ -103,9 +97,8 @@ managed options above.
 :::
 
 ```bash
-STORAGE_TYPE=minio
 STORAGE_BUCKET=aurora
-STORAGE_ENDPOINT=http://minio:9000
+STORAGE_ENDPOINT_URL=http://minio:9000
 STORAGE_ACCESS_KEY=minioadmin
 STORAGE_SECRET_KEY=minioadmin
 ```
@@ -113,9 +106,8 @@ STORAGE_SECRET_KEY=minioadmin
 ### Backblaze B2
 
 ```bash
-STORAGE_TYPE=s3
 STORAGE_BUCKET=your-bucket-name
-STORAGE_ENDPOINT=https://s3.us-west-000.backblazeb2.com
+STORAGE_ENDPOINT_URL=https://s3.us-west-000.backblazeb2.com
 STORAGE_REGION=us-west-000
 STORAGE_ACCESS_KEY=...
 STORAGE_SECRET_KEY=...
@@ -126,9 +118,8 @@ STORAGE_SECRET_KEY=...
 Create HMAC keys in GCP Console: Cloud Storage → Settings → Interoperability → Create a key.
 
 ```bash
-STORAGE_TYPE=s3
 STORAGE_BUCKET=your-bucket-name
-STORAGE_ENDPOINT=https://storage.googleapis.com
+STORAGE_ENDPOINT_URL=https://storage.googleapis.com
 STORAGE_ACCESS_KEY=...  # HMAC key
 STORAGE_SECRET_KEY=...  # HMAC secret
 ```

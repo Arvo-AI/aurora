@@ -61,9 +61,9 @@ server/main_compute.py
 ### Environment Variables
 ```bash
 FLASK_SECRET_KEY=<secret>
-FLASK_ENV=production
+AURORA_ENV=production
 POSTGRES_HOST=postgres
-REDIS_HOST=redis
+REDIS_URL=redis://redis:6379/0
 ```
 
 ### Rebuild

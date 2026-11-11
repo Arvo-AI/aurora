@@ -17,14 +17,14 @@ OAuth 2.0 authentication for OVH Cloud (multi-region).
    ```json
    {
      "callbackUrls": [
-       "https://your-ngrok-url.ngrok-free.dev/ovh/oauth2/callback"
+       "https://your-ngrok-url.ngrok-free.dev/ovh_api/ovh/oauth2/callback"
      ],
      "description": "Aurora Cloud Platform",
      "flow": "AUTHORIZATION_CODE",
      "name": "Aurora"
    }
    ```
-   - For local dev: Replace with your ngrok tunnel URL (e.g., `https://your-ngrok-url.ngrok-free.dev/ovh/oauth2/callback`)
+   - For local dev: Replace with your ngrok tunnel URL (e.g., `https://your-ngrok-url.ngrok-free.dev/ovh_api/ovh/oauth2/callback`)
    - For production: Use your production URL (e.g., `https://aurora.example.com/ovh_api/ovh/oauth2/callback`)
 4. Copy the **Client ID** and **Client Secret** from the response
 
@@ -34,18 +34,19 @@ OAuth 2.0 authentication for OVH Cloud (multi-region).
 # Europe region (configure at least one region)
 OVH_EU_CLIENT_ID=your-eu-client-id
 OVH_EU_CLIENT_SECRET=your-eu-client-secret
-OVH_EU_REDIRECT_URI=https://your-tunnel-or-prod-url.com/ovh_api/ovh/oauth2/callback
 
 # Canada region (optional)
 OVH_CA_CLIENT_ID=your-ca-client-id
 OVH_CA_CLIENT_SECRET=your-ca-client-secret
-OVH_CA_REDIRECT_URI=https://your-tunnel-or-prod-url.com/ovh_api/ovh/oauth2/callback
 
 # US region (optional)
 OVH_US_CLIENT_ID=your-us-client-id
 OVH_US_CLIENT_SECRET=your-us-client-secret
-OVH_US_REDIRECT_URI=https://your-tunnel-or-prod-url.com/ovh_api/ovh/oauth2/callback
 ```
+
+There is no redirect-URI variable. Aurora builds the callback as
+`{NEXT_PUBLIC_BACKEND_URL}/ovh_api/ovh/oauth2/callback`, using `NGROK_URL` instead
+when `NEXT_PUBLIC_BACKEND_URL` starts with `http://localhost`.
 
 ### Local Development with Ngrok
 
@@ -56,7 +57,7 @@ To run locally with OVH OAuth:
    ngrok http 5080
    ```
 2. Copy the generated HTTPS URL (e.g., `https://your-ngrok-url.ngrok-free.dev`)
-3. Update your `.env` redirect URIs with the tunnel URL
+3. Set `NGROK_URL` in `.env` to the tunnel URL
 4. Update your OVH OAuth app callback URL via the API console if needed
 
 **Alternative**: You can also use [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/tunnel-guide/local/) instead of ngrok.
