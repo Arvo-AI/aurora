@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle, ChevronLeft, ChevronRight, KeyRound, MessagesSquare, PlugZap,
   Search, ShieldBan, TerminalSquare, Timer, X, XCircle,
@@ -40,6 +40,7 @@ interface IssueCount { category: string; label: string; calls: number; chats: nu
 interface ChatsResponse {
   chats: ChatRow[];
   total: number;
+  all_chats: number;
   page: number;
   total_pages: number;
   issue_counts: IssueCount[];
@@ -59,6 +60,77 @@ const ISSUE_ICONS: Record<string, React.ComponentType<{ className?: string }>> =
 
 const PER_PAGE = 25;
 const selectCls = 'bg-zinc-800/50 border border-zinc-700/50 rounded-md px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:ring-1 focus:ring-zinc-600 max-w-[180px]';
+
+interface IssueCard {
+  value: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  count: number | undefined;
+  sub: string;
+  tone?: string;
+}
+
+/**
+ * Single-select issue filter: exactly one card is always checked ("All chats"
+ * by default). A radiogroup with roving focus, so arrow keys move the selection
+ * and Tab enters and leaves the group as one stop.
+ */
+function IssueCardGroup({ cards, value, onChange }: { cards: IssueCard[]; value: string; onChange: (v: string) => void }) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const selected = Math.max(0, cards.findIndex(c => c.value === value));
+
+  const move = (index: number) => {
+    const next = (index + cards.length) % cards.length;
+    onChange(cards[next].value);
+    refs.current[next]?.focus();
+  };
+  const onKeyDown = (e: React.KeyboardEvent, index: number) => {
+    const keys: Record<string, () => void> = {
+      ArrowRight: () => move(index + 1), ArrowDown: () => move(index + 1),
+      ArrowLeft: () => move(index - 1), ArrowUp: () => move(index - 1),
+      Home: () => move(0), End: () => move(cards.length - 1),
+      Enter: () => onChange(cards[index].value), ' ': () => onChange(cards[index].value),
+    };
+    if (keys[e.key]) { e.preventDefault(); keys[e.key](); }
+  };
+
+  return (
+    <div role="radiogroup" aria-label="Filter conversations by issue"
+      className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
+      {cards.map((c, i) => {
+        const checked = i === selected;
+        const Icon = c.icon;
+        return (
+          <button
+            key={c.value || 'all'}
+            ref={el => { refs.current[i] = el; }}
+            role="radio"
+            aria-checked={checked}
+            tabIndex={checked ? 0 : -1}
+            onClick={() => onChange(c.value)}
+            onKeyDown={e => onKeyDown(e, i)}
+            className={`text-left border rounded-xl p-3.5 transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 ${
+              checked
+                ? 'bg-zinc-800/80 border-zinc-400 ring-1 ring-zinc-400/50'
+                : 'bg-zinc-900/60 border-zinc-800/80 hover:border-zinc-700'
+            }`}
+          >
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <Icon className={`h-3.5 w-3.5 ${c.count ? (c.tone ?? 'text-zinc-300') : 'text-zinc-600'}`} />
+              <span className={`text-[11px] font-medium uppercase tracking-wider truncate ${checked ? 'text-zinc-200' : 'text-zinc-500'}`}>
+                {c.label}
+              </span>
+            </div>
+            <p className="text-2xl font-semibold text-zinc-100" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {c.count ?? '—'}
+            </p>
+            <p className="text-[11px] text-zinc-500 mt-0.5">{c.sub}</p>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value);
@@ -98,30 +170,21 @@ export default function ChatsTab({ period }: { period: Period }) {
 
   return (
     <div className="space-y-6">
-      {/* Failed tool calls per issue type in the period; click to filter */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-        {(data?.issue_counts ?? []).map(c => {
-          const Icon = ISSUE_ICONS[c.category] ?? AlertTriangle;
-          const active = issue === c.category;
-          return (
-            <button
-              key={c.category}
-              onClick={() => setIssue(active ? '' : c.category)}
-              aria-pressed={active}
-              className={`text-left bg-zinc-900/60 border rounded-xl p-3.5 transition-all duration-200 ${
-                active ? 'border-zinc-500 ring-1 ring-zinc-500/40' : 'border-zinc-800/80 hover:border-zinc-700'
-              }`}
-            >
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <Icon className={`h-3.5 w-3.5 ${c.calls ? ISSUE_STYLES[c.category]?.text : 'text-zinc-600'}`} />
-                <span className="text-[11px] text-zinc-500 font-medium uppercase tracking-wider truncate">{c.label}</span>
-              </div>
-              <p className="text-2xl font-semibold text-zinc-100" style={{ fontVariantNumeric: 'tabular-nums' }}>{c.calls}</p>
-              <p className="text-[11px] text-zinc-500 mt-0.5">failed calls in {c.chats} {c.chats === 1 ? 'chat' : 'chats'}</p>
-            </button>
-          );
-        })}
-      </div>
+      <IssueCardGroup
+        value={issue}
+        onChange={setIssue}
+        cards={[
+          { value: '', label: 'All chats', icon: MessagesSquare, count: data?.all_chats, sub: 'conversations in the period' },
+          {
+            value: 'any', label: 'All failures', icon: AlertTriangle,
+            count: data?.issue_counts.reduce((n, c) => n + c.calls, 0), sub: 'failed tool calls',
+          },
+          ...(data?.issue_counts ?? []).map(c => ({
+            value: c.category, label: c.label, icon: ISSUE_ICONS[c.category] ?? AlertTriangle, count: c.calls,
+            sub: `failed calls in ${c.chats} ${c.chats === 1 ? 'chat' : 'chats'}`, tone: ISSUE_STYLES[c.category]?.text,
+          })),
+        ]}
+      />
 
       <ChartPanel
         title="Conversations"
@@ -136,13 +199,6 @@ export default function ChatsTab({ period }: { period: Period }) {
           <select aria-label="Status" value={status} onChange={e => setStatus(e.target.value)} className={selectCls}>
             <option value="">Any status</option>
             {Object.entries(labels?.statuses ?? {}).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
-          </select>
-          <select aria-label="Issue" value={issue} onChange={e => setIssue(e.target.value)} className={selectCls}>
-            <option value="">All chats</option>
-            <option value="any">Any failed tool call</option>
-            {Object.entries(labels?.issues ?? {}).map(([k, label]) => (
-              <option key={k} value={k}>{label}</option>
-            ))}
           </select>
           <select aria-label="User" value={user} onChange={e => setUser(e.target.value)} className={selectCls}>
             <option value="">All users</option>

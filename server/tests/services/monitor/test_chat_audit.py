@@ -320,3 +320,16 @@ def test_owner_cannot_come_from_the_model_arguments():
         cur, "org-1", {"owner_user_id": "someone", "scope": "org", "user": "other"}, owner_user_id="viewer-1")
     assert out["scope"] == "own"
     assert all("someone" not in p and "other" not in p for _, p in cur.calls)
+
+
+def test_all_chats_count_ignores_only_the_issue_filter():
+    cur = Cursor([("SELECT COUNT(*) FROM chat_sessions", ["count"], [(4,)])])
+    out = ca.list_chats(cur, "org-1", ChatFilters.parse({"issue": "timeout", "source": "slack"}))
+    filtered_sql, all_sql = cur.calls[0][0], cur.calls[1][0]
+    assert "EXISTS (SELECT 1 FROM execution_steps" in filtered_sql
+    assert "EXISTS (SELECT 1 FROM execution_steps" not in all_sql and "= %s" in all_sql  # source kept
+    assert out["all_chats"] == 4
+
+    cur = Cursor([("SELECT COUNT(*) FROM chat_sessions", ["count"], [(9,)])])
+    assert ca.list_chats(cur, "org-1", ChatFilters.parse({}))["all_chats"] == 9
+    assert sum("SELECT COUNT(*) FROM chat_sessions" in sql for sql, _ in cur.calls) == 1

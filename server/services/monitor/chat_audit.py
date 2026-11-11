@@ -567,6 +567,12 @@ def list_chats(cur, org_id: str, f: ChatFilters) -> dict:
     where, params = _chat_where(f, org_id)
     cur.execute(f"SELECT COUNT(*) FROM chat_sessions cs WHERE {where}", tuple(params))
     total = cur.fetchone()[0] or 0
+    # The "All chats" card: the same filters minus the issue type.
+    all_chats = total
+    if f.issue:
+        all_where, all_params = _chat_where(f, org_id, skip=("issue",))
+        cur.execute(f"SELECT COUNT(*) FROM chat_sessions cs WHERE {all_where}", tuple(all_params))
+        all_chats = cur.fetchone()[0] or 0
 
     cur.execute(
         f"""SELECT {_CHAT_COLUMNS}
@@ -608,6 +614,7 @@ def list_chats(cur, org_id: str, f: ChatFilters) -> dict:
     return {
         "chats": chats,
         "total": total,
+        "all_chats": all_chats,
         "page": f.page,
         "per_page": f.per_page,
         "total_pages": max(1, -(-total // f.per_page)),
