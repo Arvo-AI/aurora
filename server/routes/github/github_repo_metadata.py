@@ -241,7 +241,8 @@ def _apply_exclusions(
 
     When GitHub granted these repos again (``regranted``), exclusions older
     than the grant's webhook are cleared and the repos come back; one
-    recorded after it still wins. Both times come from the database clock.
+    recorded after it still wins. Both times come from the database clock;
+    without a known delivery the exclusion stands.
     """
     names = [r.get("full_name") for r in repos if r.get("full_name")]
     if not names:
@@ -252,7 +253,7 @@ def _apply_exclusions(
                 WHERE org_id = %s AND repo_full_name = ANY(%s)
                   AND excluded_at < COALESCE(
                       (SELECT received_at FROM webhook_deliveries WHERE delivery_id = %s),
-                      NOW())""",
+                      '-infinity'::timestamp)""",
             (org_id, names, grant_delivery_id),
         )
     cur.execute(
@@ -579,17 +580,18 @@ def _sync_installation_repos():
 @celery_app.task(name="routes.github.github_repo_metadata.backfill_installation_repos")
 def backfill_installation_repos(
     installation_ids: list[int],
-    enable_review: bool = True,
+    enable_review: bool = False,
 ):
     """Celery entry point; see :func:`_backfill_installation_repos`."""
     return _backfill_installation_repos(installation_ids, enable_review)
 
 
-def _backfill_installation_repos(installation_ids: list[int], enable_review: bool = True):
+def _backfill_installation_repos(installation_ids: list[int], enable_review: bool = False):
     """One-off repair for named installations, run by hand after a deploy.
 
-    For each installation: turn review on for its connected repos (installs
-    that predate review-on-by-default never had one), then run a full
+    For each installation: with ``enable_review``, turn review on for every
+    connected repo, overriding anyone who turned it off (for installs that
+    predate review-on-by-default and never had a review), then run a full
     import even if one already landed, so repos a failed or partial import
     missed come in enrolled. Repos the org removed in the picker since the
     exclusions table existed stay out. The ids are explicit because an old

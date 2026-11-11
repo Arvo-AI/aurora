@@ -57,7 +57,7 @@ class _FakeDb:
         elif s.startswith("SELECT repo_full_name FROM github_repo_exclusions"):
             self._result = [(n,) for n in params[1] if n in self.excluded]
         elif s.startswith("DELETE FROM github_repo_exclusions"):
-            granted = self.delivery_received.get(params[2], float("inf"))
+            granted = self.delivery_received.get(params[2], float("-inf"))
             for name in params[1]:
                 if name in self.excluded and self.excluded[name] < granted:
                     del self.excluded[name]
@@ -196,9 +196,10 @@ class TestImportRunsOncePerLink:
         assert db.gated() == {"acme/missed"}
 
     def test_granting_a_removed_repo_again_on_github_brings_it_back(self):
-        db = _FakeDb(imported_at=datetime(2026, 9, 1), excluded={"acme/back"})
+        db = _FakeDb(imported_at=datetime(2026, 9, 1), excluded={"acme/back": 3})
+        db.delivery_received["d-1"] = 5
         db, _, _ = _run([_repo("acme/back")], db=db, enroll_change_gating=True,
-                        only_repos=["acme/back"])
+                        only_repos=["acme/back"], grant_delivery_id="d-1")
         assert db.gated() == {"acme/back"}
         assert db.excluded == {}
 
@@ -209,6 +210,12 @@ class TestImportRunsOncePerLink:
         db.delivery_received["d-1"] = 5
         db, _, _ = _run([_repo("acme/back")], db=db, enroll_change_gating=True,
                         only_repos=["acme/back"], grant_delivery_id="d-1")
+        assert db.connected == {}
+
+    def test_grant_with_no_known_delivery_does_not_clear_a_removal(self):
+        db = _FakeDb(imported_at=datetime(2026, 9, 1), excluded={"acme/back": 3})
+        db, _, _ = _run([_repo("acme/back")], db=db, enroll_change_gating=True,
+                        only_repos=["acme/back"])
         assert db.connected == {}
 
     def test_review_turned_off_after_queueing_is_respected(self):
@@ -337,6 +344,6 @@ class TestBackfill:
         with patch("utils.db.connection_pool.db_pool", db.pool()), \
              patch("utils.auth.stateless_auth.set_rls_context", return_value=_ORG), \
              patch.object(mod, "import_installation_repos", task):
-            mod._backfill_installation_repos([_INSTALL])
+            mod._backfill_installation_repos([_INSTALL], enable_review=True)
         assert db.gated() == {"acme/api"}
         assert task.delay.call_args.kwargs["force"] is True

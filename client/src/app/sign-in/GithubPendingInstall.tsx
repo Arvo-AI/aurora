@@ -14,7 +14,6 @@ const BUTTON_SECONDARY = "w-full py-2.5 px-4 rounded-lg border border-white/[0.1
 
 const LINK_ERRORS: Record<string, string> = {
   CLAIM_INVALID: "This install link expired. Install Aurora again from Connectors.",
-  CROSS_ORG_CLAIM_REFUSED: "That GitHub install is already connected to another Aurora organization.",
 }
 
 function completeUrl(token: string): string {
@@ -28,14 +27,18 @@ function Spinner() {
   )
 }
 
-export function GithubPendingInstall({
-  token,
-  githubLogin,
-  githubAccount,
-}: Readonly<{ token: string; githubLogin: string | null; githubAccount: string | null }>) {
+type LinkStart = { state: string; account_login: string; installer_login: string }
+
+function confirmUrl(token: string, state: string): string {
+  const base = getEnv("NEXT_PUBLIC_BACKEND_URL") || ""
+  return `${base}/github/app/link-pending/confirm?t=${encodeURIComponent(token)}&s=${encodeURIComponent(state)}`
+}
+
+export function GithubPendingInstall({ token }: Readonly<{ token: string }>) {
   const { data: session, status } = useSession()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
+  const [link, setLink] = useState<LinkStart | null>(null)
   const leaving = useRef(false)
 
   useEffect(() => {
@@ -43,6 +46,28 @@ export function GithubPendingInstall({
     leaving.current = true
     globalThis.location.replace(completeUrl(token))
   }, [status, token])
+
+  // Signed in: the card's names come from the signed token, read server-side.
+  useEffect(() => {
+    if (status !== "authenticated" || link) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch("/api/proxy/github/app/link-pending/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
+        })
+        const body = await res.json().catch(() => null)
+        if (cancelled) return
+        if (res.ok && body && typeof body.state === "string") setLink(body as LinkStart)
+        else setError(LINK_ERRORS[body?.code] ?? "GitHub could not be connected. Install Aurora again from Connectors.")
+      } catch {
+        if (!cancelled) setError("We couldn't reach Aurora. Please reload to try again.")
+      }
+    })()
+    return () => { cancelled = true }
+  }, [status, token, link])
 
   if (status !== "authenticated") {
     return (
@@ -57,28 +82,17 @@ export function GithubPendingInstall({
   }
 
   const orgName = session?.user?.orgName || "your organization"
-  const target = githubAccount || githubLogin || "GitHub"
 
-  const connectHere = async () => {
+  if (!link) {
+    return error
+      ? <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3"><p className="text-sm text-red-400">{error}</p></div>
+      : <div className="flex items-center gap-3 text-white/70 text-sm"><Spinner />Checking your GitHub install…</div>
+  }
+
+  const connectHere = () => {
     setBusy(true)
-    setError("")
-    try {
-      const res = await fetch("/api/proxy/github/app/link-pending", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      })
-      if (res.ok) {
-        globalThis.location.href = "/connectors?installed=github"
-        return
-      }
-      const body = await res.json().catch(() => null)
-      const code = body && typeof body.code === "string" ? body.code : ""
-      setError(LINK_ERRORS[code] ?? "GitHub could not be connected. Try again from Connectors.")
-    } catch {
-      setError("We couldn't reach Aurora. Please try again.")
-    }
-    setBusy(false)
+    leaving.current = true
+    globalThis.location.href = confirmUrl(token, link.state)
   }
 
   const createSeparate = async () => {
@@ -93,12 +107,11 @@ export function GithubPendingInstall({
       <div>
         <h2 className="text-2xl font-semibold text-white">Connect GitHub to {orgName}?</h2>
         <p className="mt-2 text-[#888] text-sm">
-          You installed Aurora on <span className="text-white">{target}</span>
-          {githubLogin ? <> as <span className="text-white">@{githubLogin}</span></> : null}.
+          You installed Aurora on <span className="text-white">{link.account_login || "GitHub"}</span>
+          {" "}as <span className="text-white">@{link.installer_login}</span>.
           {" "}You&apos;re signed in to <span className="text-white">{orgName}</span>, so we can add it there and start reviewing its pull requests.
         </p>
       </div>
-      {error && <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3"><p className="text-sm text-red-400">{error}</p></div>}
       <div className="space-y-3">
         <button type="button" className={BUTTON_PRIMARY} disabled={busy} onClick={connectHere}>
           {busy ? "Connecting…" : `Connect to ${orgName}`}

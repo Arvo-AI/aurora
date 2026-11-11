@@ -13,7 +13,7 @@ Prevention bot AND get an Aurora account in a single GitHub screen:
                                         created here, one hop later, so a
                                         browser already signed in can link
                                         the install to that org instead
-                                        (``POST /github/app/link-pending``).
+                                        (``GET /github/app/link-pending/confirm``).
 
 Requires the GitHub App setting "Request user authorization (OAuth)
 during installation" — the combined Install & Authorize screen is what
@@ -103,6 +103,8 @@ _CLAIM_TOKEN_SALT = "aurora.github.app.pending-claim.v1"
 _PENDING_SIGNUP_TTL_SEC = 10 * 60
 _PENDING_SIGNUP_SALT = "aurora.github.app.pending-signup.v1"
 _PENDING_SIGNUP_USED_KEY = "github:pending-signup-used:"
+_PENDING_BIND_COOKIE = "aurora_gh_pending"
+_PENDING_BIND_PATH = "/github/app"
 
 # Hard-coded user-facing error strings. NEVER substitute query params.
 _ERROR_NOT_AVAILABLE = "One-click signup is not available on this deployment"
@@ -114,6 +116,10 @@ _ERROR_INSTALL_NOT_AUTHORIZED = (
     "Your GitHub account does not have access to this installation"
 )
 _ERROR_INTERNAL = "An internal error occurred while creating your account"
+_ERROR_LINK_EXPIRED = (
+    "This GitHub install link expired or was opened in a different browser. "
+    "Install Aurora again from Connectors."
+)
 
 # GET /user/installations pagination bound. 100 per page is GitHub's max;
 # 10 pages (1,000 installations) is far beyond any real user and keeps a
@@ -192,15 +198,22 @@ def verify_claim_token(token: str) -> dict | None:
     return payload
 
 
-def _sign_pending_signup(installation_id: int, identity: dict, attribution: dict) -> str:
+def _sign_pending_signup(
+    installation_id: int, identity: dict, attribution: dict, account_login: str, bind: str
+) -> str:
     """Signed note that a verified, brand-new installer is waiting for an account.
 
-    Minted only after invariants 1, 3 and 6 passed.
+    Minted only after invariants 1, 3 and 6 passed. ``bind`` is the random
+    value of the cookie set on the installer's browser; only its hash goes
+    in the token, so the token alone (forwarded, or read from a log) cannot
+    be redeemed anywhere else.
     """
     return _state_serializer(_PENDING_SIGNUP_SALT).dumps({
         "iid": installation_id,
+        "acct": account_login,
         "identity": {k: identity[k] for k in ("id", "login", "name", "email")},
         "attr": attribution or {},
+        "b": hashlib.sha256(bind.encode()).hexdigest(),
     })
 
 
@@ -217,6 +230,7 @@ def verify_pending_signup(token: str | None) -> dict | None:
     identity = payload.get("identity") if isinstance(payload, dict) else None
     if not (
         isinstance(payload.get("iid"), int)
+        and isinstance(payload.get("b"), str)
         and isinstance(identity, dict)
         and isinstance(identity.get("id"), int)
         and isinstance(identity.get("login"), str)
@@ -228,27 +242,59 @@ def verify_pending_signup(token: str | None) -> dict | None:
     return payload
 
 
-def consume_pending_signup(token: str | None) -> dict | None:
-    """Like :func:`verify_pending_signup`, but each token works once.
+def pending_bound_to_this_browser(payload: dict) -> bool:
+    """Whether the request carries the cookie set where the install happened.
 
-    Creating the account is a login, so a token that leaked from a URL must
-    not log anyone in a second time. Without Redis the TTL is the only limit.
+    Stops a pending signup link from working in any other browser: opened
+    signed out it would log that browser in as the installer (login CSRF),
+    opened signed in it would connect the installer's install to the wrong
+    org.
     """
-    payload = verify_pending_signup(token)
-    if payload is None:
-        return None
+    cookie = request.cookies.get(_PENDING_BIND_COOKIE) or ""
+    digest = hashlib.sha256(cookie.encode()).hexdigest()
+    return bool(cookie) and secrets.compare_digest(digest, payload["b"])
+
+
+def _replay_key(token: str) -> str:
+    return _PENDING_SIGNUP_USED_KEY + hashlib.sha256(token.encode()).hexdigest()
+
+
+def reserve_pending_signup(token: str) -> bool:
+    """Mark ``token`` in use; False if it was already used.
+
+    Without Redis (or if the call fails) this allows the request: the
+    browser cookie is still required and is cleared once the token is spent,
+    so a replay needs the installer's own browser within the 10 minutes.
+    """
+    try:
+        from utils.cache.redis_client import get_redis_client
+
+        rc = get_redis_client()
+        if rc is None:
+            return True
+        if not rc.set(_replay_key(token), "1", nx=True, ex=_PENDING_SIGNUP_TTL_SEC + 60):
+            logger.warning("[GITHUB-SIGNUP] pending signup token replayed")
+            return False
+    except Exception:
+        logger.warning("[GITHUB-SIGNUP] pending signup replay check unavailable", exc_info=True)
+    return True
+
+
+def release_pending_signup(token: str) -> None:
+    """Undo :func:`reserve_pending_signup` after a failure, so a retry works."""
     try:
         from utils.cache.redis_client import get_redis_client
 
         rc = get_redis_client()
         if rc is not None:
-            key = _PENDING_SIGNUP_USED_KEY + hashlib.sha256(token.encode()).hexdigest()
-            if not rc.set(key, "1", nx=True, ex=_PENDING_SIGNUP_TTL_SEC + 60):
-                logger.warning("[GITHUB-SIGNUP] pending signup token replayed")
-                return None
+            rc.delete(_replay_key(token))
     except Exception:
-        logger.warning("[GITHUB-SIGNUP] pending signup replay check unavailable", exc_info=True)
-    return payload
+        logger.warning("[GITHUB-SIGNUP] pending signup release failed", exc_info=True)
+
+
+def clear_pending_cookie(response: flask.Response) -> flask.Response:
+    response.delete_cookie(_PENDING_BIND_COOKIE, path=_PENDING_BIND_PATH)
+    return response
 
 
 def _sign_signup_state(attribution: dict | None = None) -> str:
@@ -638,15 +684,20 @@ def _linked_elsewhere_redirect() -> flask.Response:
 def _pending_signup_redirect(
     identity: dict, install_data: dict, attribution: dict | None
 ) -> flask.Response:
-    token = _sign_pending_signup(install_data["id"], identity, attribution or {})
+    bind = secrets.token_urlsafe(24)
     account = install_data.get("account") or {}
-    shown = {
-        "gh_new": token,
-        # Display only; the token is what the server trusts.
-        "gh_login": identity["login"],
-        "gh_account": account.get("login") if isinstance(account, dict) else "",
-    }
-    return flask.redirect(f"{FRONTEND_URL}/sign-in?{urlencode(shown)}", code=302)
+    token = _sign_pending_signup(
+        install_data["id"], identity, attribution or {},
+        account.get("login") if isinstance(account, dict) else "", bind,
+    )
+    response = flask.redirect(f"{FRONTEND_URL}/sign-in?{urlencode({'gh_new': token})}", code=302)
+    response.set_cookie(
+        _PENDING_BIND_COOKIE, bind,
+        max_age=_PENDING_SIGNUP_TTL_SEC, path=_PENDING_BIND_PATH,
+        httponly=True, samesite="Lax",
+        secure=request.is_secure or FRONTEND_URL.startswith("https://"),
+    )
+    return response
 
 
 def _provision_and_handoff(
@@ -985,19 +1036,55 @@ def github_app_signup_complete():
     """Second hop for a brand-new installer whose browser is not signed in.
 
     The callback already verified the installation, the installer and their
-    access to it, and signed that into the token. Re-checks the installation
-    (it may have been removed or linked meanwhile), then creates the account.
+    access to it, and signed that into the token. Requires the cookie the
+    callback set on this browser, re-checks the installation (it may have
+    been removed or linked meanwhile), then creates the account.
     """
     if not _signup_ready():
         return _render_error(_ERROR_NOT_AVAILABLE)
-    pending = consume_pending_signup(request.args.get("t"))
-    if pending is None:
+    token = request.args.get("t") or ""
+    pending = verify_pending_signup(token)
+    if pending is None or not pending_bound_to_this_browser(pending):
+        return flask.redirect(f"{FRONTEND_URL}/sign-in?error=github_signup_expired", code=302)
+    if not reserve_pending_signup(token):
         return flask.redirect(f"{FRONTEND_URL}/sign-in?error=github_signup_expired", code=302)
     install_data = _verify_installation(pending["iid"])
     if install_data is None:
+        release_pending_signup(token)
         return _render_error(_ERROR_GITHUB_API)
     if install_data.get("id") != pending["iid"] or not _validate_install_metadata(install_data):
-        return _render_error(_ERROR_BAD_INSTALL_ID)
+        return clear_pending_cookie(_render_error(_ERROR_BAD_INSTALL_ID))
     identity = dict(pending["identity"])
     identity["name"] = identity.get("name") or identity["login"]
-    return _complete_signup(identity, install_data, pending["attr"], confirmed=True)
+    response = _complete_signup(identity, install_data, pending["attr"], confirmed=True)
+    if response.status_code == 302:
+        return clear_pending_cookie(response)
+    # An error page (e.g. a DB failure): let the same browser retry.
+    release_pending_signup(token)
+    return response
+
+
+@github_signup_bp.route("/app/link-pending/confirm", methods=["GET"])
+def github_app_link_pending_confirm():
+    """Connect a new install to the signed-in user's org (the card's Connect).
+
+    A top-level navigation from the app, so it carries both proofs: the
+    cookie set on the browser that did the install, and a link state the
+    app minted for the signed-in user (``POST /github/app/link-pending/start``).
+    """
+    from routes.github.github_app import link_pending_install, verify_link_state
+
+    token = request.args.get("t") or ""
+    pending = verify_pending_signup(token)
+    user_id = verify_link_state(request.args.get("s") or "", token)
+    if pending is None or user_id is None or not pending_bound_to_this_browser(pending):
+        return _render_error(_ERROR_LINK_EXPIRED)
+    if not reserve_pending_signup(token):
+        return _render_error(_ERROR_LINK_EXPIRED)
+    error = link_pending_install(user_id, pending)
+    if error is not None:
+        release_pending_signup(token)
+        return _render_error(error)
+    return clear_pending_cookie(
+        flask.redirect(f"{FRONTEND_URL}/connectors?installed=github", code=302)
+    )

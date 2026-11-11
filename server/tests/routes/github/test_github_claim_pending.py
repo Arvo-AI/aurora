@@ -114,26 +114,30 @@ def test_claim_of_an_install_the_org_never_linked_is_refused(env, owners, expect
     task.delay.assert_not_called()
 
 
-def test_signed_in_user_links_a_new_install_without_taking_its_github_identity(env):
-    # The connect-to-my-org choice links the installation only. Attaching
-    # the GitHub id would make a forwarded install link a way to log in as
-    # this account.
-    app, mod, _ = env
+def _pending(env):
+    app, _mod, _ = env
     from routes.github import github_signup
 
     with app.test_request_context():
-        token = github_signup._sign_pending_signup(777, _IDENTITY, {})
+        token = github_signup._sign_pending_signup(777, _IDENTITY, {}, "octo-org", "bind-1")
+        return token, github_signup.verify_pending_signup(token)
+
+
+def test_signed_in_user_links_a_new_install_without_taking_its_github_identity(env):
+    # Connect links the installation only. Attaching the GitHub id would make
+    # a pending install a way to log in as this account.
+    app, mod, _ = env
+    _token, pending = _pending(env)
     pool, conn, cur = _db([])
-    with app.test_request_context(json={"token": token}), \
+    with app.test_request_context(), \
          patch.object(mod, "db_pool", pool), \
+         patch.object(mod, "validate_user_exists", return_value=True), \
          patch.object(mod, "get_org_id_for_user", return_value="org-1"), \
-         patch.object(mod, "_orgs_owning_install", return_value=set()), \
          patch("routes.github.github_signup._verify_installation", return_value=_INSTALL), \
          patch("routes.github.github_repo_metadata.import_installation_repos") as task, \
          patch("utils.auth.tool_registry.seed_org_tool_permissions"):
-        out = mod.github_app_link_pending.__wrapped__("user-1")
-    status = out[1] if isinstance(out, tuple) else 200
-    assert status == 200
+        cur.fetchall.return_value = []
+        assert mod.link_pending_install("user-1", pending) is None
     sql = " ".join(c.args[0] for c in cur.execute.call_args_list)
     assert "user_github_installations" in sql
     assert "github_user_id" not in sql
@@ -142,17 +146,26 @@ def test_signed_in_user_links_a_new_install_without_taking_its_github_identity(e
 
 def test_link_pending_refuses_an_install_another_org_has(env):
     app, mod, _ = env
-    from routes.github import github_signup
-
-    with app.test_request_context():
-        token = github_signup._sign_pending_signup(777, _IDENTITY, {})
-    pool, conn, _cur = _db([])
-    with app.test_request_context(json={"token": token}), \
+    _token, pending = _pending(env)
+    pool, conn, cur = _db([])
+    cur.fetchall.return_value = [("org-2",)]
+    with app.test_request_context(), \
          patch.object(mod, "db_pool", pool), \
+         patch.object(mod, "validate_user_exists", return_value=True), \
          patch.object(mod, "get_org_id_for_user", return_value="org-1"), \
-         patch.object(mod, "_orgs_owning_install", return_value={"org-2"}), \
+         patch("routes.github.github_signup._verify_installation", return_value=_INSTALL), \
          patch("routes.github.github_repo_metadata.import_installation_repos") as task:
-        out = mod.github_app_link_pending.__wrapped__("user-1")
-    assert out[1] == 403
+        assert mod.link_pending_install("user-1", pending) is not None
     conn.commit.assert_not_called()
     task.delay.assert_not_called()
+
+
+def test_link_state_only_works_for_the_token_it_was_minted_for(env):
+    app, mod, _ = env
+    token, _pending_payload = _pending(env)
+    with app.test_request_context(json={"token": token}):
+        out = mod.github_app_link_pending_start.__wrapped__("user-1")
+        state = out.get_json()["state"]
+        assert out.get_json()["account_login"] == "octo-org"
+        assert mod.verify_link_state(state, token) == "user-1"
+        assert mod.verify_link_state(state, token + "x") is None

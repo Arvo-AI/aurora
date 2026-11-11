@@ -71,9 +71,10 @@ export default auth((req) => {
   // (but not if they're on verify-email or change-password modes)
   const signInMode = nextUrl.searchParams.get('mode')
   // A pending GitHub install (gh_claim, gh_new) is finished on /sign-in, also
-  // for someone already signed in.
+  // for someone already signed in, and the install-request notice shows there.
   const isGithubClaim = nextUrl.pathname.startsWith('/sign-in')
-    && (nextUrl.searchParams.has('gh_claim') || nextUrl.searchParams.has('gh_new'))
+    && (nextUrl.searchParams.has('gh_claim') || nextUrl.searchParams.has('gh_new')
+        || nextUrl.searchParams.get('notice') === 'github_install_requested')
   if (isAuthRoute && isLoggedIn && !isGithubClaim && signInMode !== 'verify-email' && signInMode !== 'change-password') {
     return sanitizeResponse(NextResponse.redirect(new URL("/", nextUrl)))
   }

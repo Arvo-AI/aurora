@@ -47,7 +47,7 @@ function dropClaim(): void {
 function failed(reason: string): GithubClaimResult {
   return {
     status: "failed",
-    message: `You're signed in, but GitHub could not be connected. ${reason} Connect it from Connectors.`,
+    message: `You're signed in, but GitHub could not be connected. ${reason} Open Connectors and install the GitHub App to try again.`,
   }
 }
 

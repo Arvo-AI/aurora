@@ -228,6 +228,7 @@ _OPEN_PREFIXES = (
     "/github/app/signup/start",
     "/github/app/signup/callback",
     "/github/app/signup/complete",
+    "/github/app/link-pending/confirm",
     # SAML SSO — browser/IdP hit these directly. /acs is verified by the IdP's
     # signature plus a request ID bound to this browser; /discover is not open.
     "/api/auth/saml/login/",

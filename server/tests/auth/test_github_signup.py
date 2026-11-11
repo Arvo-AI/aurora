@@ -612,6 +612,8 @@ class TestProvisioning:
             )
         assert user_id is None and created is False
         assert "/sign-in?gh_new=" in response.location
+        assert "gh_login" not in response.location  # names come from the token only
+        assert mod._PENDING_BIND_COOKIE in response.headers.get("Set-Cookie", "")
         sql = " ".join(c.args[0] for c in cur.execute.call_args_list)
         assert "INSERT INTO users" not in sql
         conn.commit.assert_not_called()
@@ -622,21 +624,10 @@ class TestProvisioning:
         assert pending["identity"]["id"] == 42
         assert pending["attr"] == {"utm_source": "hn"}
 
-    def test_pending_signup_token_works_once(self, signup_app):
-        app, mod = signup_app
-        seen = set()
-        rc = MagicMock()
-        rc.set.side_effect = lambda key, *a, **k: not (key in seen or seen.add(key))
-        with app.test_request_context(), \
-             patch("utils.cache.redis_client.get_redis_client", return_value=rc):
-            token = mod._sign_pending_signup(777, self._IDENTITY, {})
-            assert mod.consume_pending_signup(token) is not None
-            assert mod.consume_pending_signup(token) is None
-
     def test_pending_signup_and_claim_tokens_are_not_interchangeable(self, signup_app):
         app, mod = signup_app
         with app.test_request_context():
-            pending = mod._sign_pending_signup(777, self._IDENTITY, {})
+            pending = mod._sign_pending_signup(777, self._IDENTITY, {}, "octo-org", "bind")
             claim = mod._sign_claim_token(777, self._IDENTITY)
             assert mod.verify_claim_token(pending) is None
             assert mod.verify_pending_signup(claim) is None
@@ -758,3 +749,58 @@ class TestOrgIdentity:
         name, slug = mod._unique_org_identity(cur, "Acme Corp")
         assert name == "Acme Corp"
         assert slug == "acme-corp"
+
+
+class TestSignupComplete:
+    """/signup/complete: the signed-out second hop that creates the account."""
+
+    _IDENTITY = {"id": 42, "login": "octocat", "name": "Octo Cat", "email": "octo@cat.dev"}
+
+    @pytest.fixture
+    def redis(self):
+        used = set()
+        rc = MagicMock()
+        rc.set.side_effect = lambda key, *a, **k: not (key in used or used.add(key))
+        rc.delete.side_effect = lambda key: used.discard(key)
+        with patch("utils.cache.redis_client.get_redis_client", return_value=rc):
+            yield used
+
+    def _token(self, app, mod, bind="bind-1"):
+        with app.test_request_context():
+            return mod._sign_pending_signup(777, self._IDENTITY, {}, "octo-org", bind)
+
+    def _get(self, app, mod, token, cookie="bind-1", complete=None):
+        client = app.test_client()
+        if cookie:
+            client.set_cookie(mod._PENDING_BIND_COOKIE, cookie, path=mod._PENDING_BIND_PATH)
+        done = complete or MagicMock(return_value=mod.flask.redirect("/sign-in?handoff=h", code=302))
+        with patch.object(mod, "_verify_installation", return_value=_install_payload()), \
+             patch.object(mod, "_complete_signup", done):
+            return client.get(f"/github/app/signup/complete?t={token}"), done
+
+    def test_link_opened_in_another_browser_creates_nothing(self, signup_app, redis):
+        # Without the install's cookie a forwarded link would log that
+        # browser in as the installer.
+        app, mod = signup_app
+        resp, done = self._get(app, mod, self._token(app, mod), cookie="other")
+        assert "error=github_signup_expired" in resp.location
+        done.assert_not_called()
+
+    def test_creates_the_account_once(self, signup_app, redis):
+        app, mod = signup_app
+        token = self._token(app, mod)
+        resp, done = self._get(app, mod, token)
+        assert "handoff=" in resp.location
+        assert done.call_args.kwargs == {"confirmed": True}
+        again, done2 = self._get(app, mod, token)
+        assert "error=github_signup_expired" in again.location
+        done2.assert_not_called()
+
+    def test_a_failed_attempt_can_be_retried(self, signup_app, redis):
+        app, mod = signup_app
+        token = self._token(app, mod)
+        failing = MagicMock(return_value=mod.flask.Response("err", status=500))
+        resp, _ = self._get(app, mod, token, complete=failing)
+        assert resp.status_code == 500
+        resp, done = self._get(app, mod, token)
+        assert "handoff=" in resp.location
