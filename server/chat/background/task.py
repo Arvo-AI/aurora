@@ -754,18 +754,22 @@ def run_background_chat(
 
         # Run the async workflow in the sync Celery context
         logger.info(f"[BackgroundChat] Starting workflow execution for session {session_id}, incident {incident_id}")
+        from chat.background.liveness import session_heartbeat
         try:
-            result = asyncio.run(_execute_background_chat(
-                user_id=user_id,
-                session_id=session_id,
-                initial_message=initial_message,
-                trigger_metadata=trigger_metadata,
-                provider_preference=provider_preference,
-                incident_id=incident_id,
-                mode=mode,
-                rail_text=rail_text,
-                send_notifications=send_notifications,
-            ))
+            # The cleanup sweep reads the session's updated_at to tell a live worker
+            # from a dead one. The heartbeat keeps it fresh through a long model step.
+            with session_heartbeat(session_id, user_id):
+                result = asyncio.run(_execute_background_chat(
+                    user_id=user_id,
+                    session_id=session_id,
+                    initial_message=initial_message,
+                    trigger_metadata=trigger_metadata,
+                    provider_preference=provider_preference,
+                    incident_id=incident_id,
+                    mode=mode,
+                    rail_text=rail_text,
+                    send_notifications=send_notifications,
+                ))
         except Exception as e:
             logger.error(f"[BackgroundChat] Exception in asyncio.run(_execute_background_chat): {e}", exc_info=True)
             raise
@@ -2628,15 +2632,22 @@ def _record_rca_error(cursor, incident_id: str, user_id: str) -> None:
 def _is_task_dead(task_id: str, last_activity, threshold, cursor=None, incident_id=None) -> bool:
     """Check whether a Celery task is no longer running.
 
-    For STARTED tasks past the threshold, look for evidence the workflow is
-    still progressing before declaring it dead: any running ``execution_steps``
-    tool call OR any running ``rca_findings`` sub-agent counts as a heartbeat.
-    Multi-agent reasoning models can spend several minutes between tool calls
-    on the reasoning step alone, so checking only tool activity false-positives.
+    A live worker beats the session every 30 seconds for as long as the task
+    runs (``chat.background.liveness``), whatever the model or the tools are
+    doing. A beat newer than *threshold* therefore means the task is running,
+    and that holds through a long model step, where nothing else moves.
+
+    Without a recent beat, the older evidence still counts, for a worker that
+    predates the heartbeat: a running ``execution_steps`` tool call or a running
+    ``rca_findings`` sub-agent.
     """
     result = celery_app.AsyncResult(task_id)
     if result.state in ('FAILURE', 'REVOKED'):
         return True
+    if last_activity and last_activity >= threshold:
+        # Also covers a task that outlives result_expires: its stored state
+        # falls back to PENDING while the worker is still running it.
+        return False
     if result.state == 'PENDING' and result.result is None:
         return True
     if result.state == 'STARTED' and last_activity and last_activity < threshold:
@@ -2741,7 +2752,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         continue
 
                     # --- 1. Stale sessions (no heartbeat for 20 min) ---
-                    # A live worker touches updated_at every 5 minutes. Silence means it is gone.
+                    # A live worker touches updated_at every 30 seconds. Silence means it is gone.
                     cursor.execute("""
                         SELECT cs.id, i.id as incident_id
                         FROM chat_sessions cs
