@@ -512,7 +512,10 @@ it up before closing the tab.
 These are read from whichever backend `SECRETS_BACKEND` selects, at the path
 `aurora/system/github-app/*`. Use the commands for your backend.
 
-Vault (`SECRETS_BACKEND=vault`, default):
+Vault (`SECRETS_BACKEND=vault`, default). These commands need a `vault` CLI
+with `VAULT_ADDR` and a write-capable `VAULT_TOKEN` set; with Docker Compose,
+run them in the `vault` container. On a Helm install, follow
+[Writing the secrets on Kubernetes](#github-app-secrets-kubernetes) instead.
 
 ```bash
 vault kv put aurora/system/github-app/webhook-secret value=<the secret>
@@ -562,13 +565,68 @@ The private key (PEM) is **not** an env var — it lives in your secrets
 backend at `aurora/system/github-app/private-key` (Step 3).
 
 :::note Kubernetes (Helm)
-A Helm deployment has no `.env`. All the `GITHUB_APP_*` keys (including
-`GITHUB_APP_WEBHOOK_SECRET`) already live under `config:` in the chart's
-`values.yaml` — fill in your values there and apply with `helm upgrade`.
-The private key is **not** a values field — it is read from your secrets
-backend at `aurora/system/github-app/private-key`, so store it there
-(`vault kv put` or `aws secretsmanager create-secret`) exactly as in Step 3.
+A Helm deployment has no `.env`. All the `GITHUB_APP_*` keys (plus
+`GITHUB_AUTH_MODE` and `NEXT_PUBLIC_GITHUB_APP_SLUG`) live under
+`secrets.backend:` in the chart's `values.yaml`, not under `config:`. They
+render into the `<release>-secrets-backend` Secret, which the server,
+celery-worker, celery-beat and chatbot pods load as env. Fill in your values
+there and apply with `helm upgrade`.
+
+The private key has **no** values or env fallback: Aurora reads it only from
+your secrets backend at `aurora/system/github-app/private-key`. The webhook
+secret is read from `aurora/system/github-app/webhook-secret` first and falls
+back to `secrets.backend.GITHUB_APP_WEBHOOK_SECRET` when it is missing there.
+See [Writing the secrets on Kubernetes](#github-app-secrets-kubernetes).
 :::
+
+##### Writing the secrets on Kubernetes {#github-app-secrets-kubernetes}
+
+With `SECRETS_BACKEND=aws_secrets_manager`, run the `aws secretsmanager`
+commands from Step 3 from any machine with access to the account. Nothing
+runs in the cluster.
+
+With the chart's bundled Vault, run `vault` inside the Vault pod. The pod is
+`<release>-vault-0` (`aurora-oss-vault-0` for release `aurora-oss`). It
+already sets `VAULT_ADDR=http://127.0.0.1:8200` but has no `VAULT_TOKEN`, so
+export one. The app token in `secrets.backend.VAULT_TOKEN` cannot write these
+paths; use the root token from `vault operator init`, or another token allowed
+to write `aurora/data/system/github-app/*`.
+
+```bash
+# Copy the key into the pod
+kubectl -n aurora-oss cp ./app-private-key.pem aurora-oss-vault-0:/tmp/key.pem -c vault
+
+# Open a shell in the pod
+kubectl -n aurora-oss exec -it aurora-oss-vault-0 -c vault -- sh
+
+# Inside the pod
+export VAULT_TOKEN=<ROOT_TOKEN>
+vault kv put aurora/system/github-app/private-key value=@/tmp/key.pem
+vault kv put aurora/system/github-app/webhook-secret value=<the secret>
+rm -f /tmp/key.pem
+exit
+```
+
+Exporting the token inside the pod shell keeps it out of your local shell
+history.
+
+The `aurora-app` policy from the [Kubernetes guide](../deployment/kubernetes.md#6-initialize-vault)
+only grants `aurora/data/users/*`, so the app token the pods use cannot
+**read** these paths either. Add read access to `aurora/data/system/*` by
+rewriting the policy from the same root-token shell:
+
+```bash
+vault policy write aurora-app - <<EOF
+path "aurora/data/users/*" { capabilities = ["create","read","update","delete","list"] }
+path "aurora/metadata/users/*" { capabilities = ["list","read","delete"] }
+path "aurora/metadata/" { capabilities = ["list"] }
+path "aurora/metadata/users" { capabilities = ["list"] }
+path "aurora/data/system/*" { capabilities = ["read"] }
+EOF
+```
+
+Then restart the Aurora pods (`kubectl -n aurora-oss rollout restart deployment`):
+Aurora caches both secrets in memory after the first successful read.
 
 **Per-environment Apps**: create separate `aurora-<customer>-prod`,
 `aurora-<customer>-staging`, `aurora-<customer>-dev` Apps. Aurora reads

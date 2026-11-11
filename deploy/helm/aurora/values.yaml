@@ -575,10 +575,12 @@ secrets:
     GITHUB_APP_ID: ""                      # Numeric App ID from App settings
     GITHUB_APP_CLIENT_ID: ""               # Starts with Iv23l...
     NEXT_PUBLIC_GITHUB_APP_SLUG: ""        # URL slug (e.g. aurora-acme-prod)
-    GITHUB_APP_WEBHOOK_URL: ""             # https://<your-host>/github/webhook
-    GITHUB_APP_SETUP_URL: ""               # https://<your-host>/github
+    GITHUB_APP_WEBHOOK_URL: ""             # https://<api-host>/github/webhook (API host, not the frontend host)
+    GITHUB_APP_SETUP_URL: ""               # https://<api-host>/github/app/install/callback (API host, not the frontend host)
     GITHUB_APP_CLIENT_SECRET: ""            # OAuth client secret (for hosted signup flow)
-    GITHUB_APP_WEBHOOK_SECRET: ""          # openssl rand -hex 32 (also stored in secrets backend)
+    GITHUB_APP_WEBHOOK_SECRET: ""          # openssl rand -hex 32. Fallback only: the secrets backend copy at aurora/system/github-app/webhook-secret wins.
+    # The GitHub App private key has no values/env field. Write it to the secrets
+    # backend at aurora/system/github-app/private-key (see the GitHub connector docs).
 
     # --- GitHub OAuth (only when GITHUB_AUTH_MODE=oauth or hybrid) ---
     GH_OAUTH_CLIENT_ID: ""       # Get from: https://github.com/settings/developers
