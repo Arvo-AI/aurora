@@ -59,8 +59,9 @@ from __future__ import annotations
 import contextvars
 import hashlib
 import logging
+import shlex
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,23 @@ def _hash(command: str) -> str:
 def guardrails_approved_hash() -> Optional[str]:
     """Accessor for ``terminal_run._check_guardrails`` to skip duplicate checks."""
     return _guardrails_approved_command.get()
+
+
+def carry_guardrails_approval(gated_command: str, exec_args: Union[str, List[str]]) -> bool:
+    """Move the gate's approval of *gated_command* onto the argv the tool runs.
+
+    A tool rewrites a command after the gate allowed it (``cloud_exec`` adds
+    ``--project``/``--format`` and re-splits the quoting), so ``terminal_run``
+    hashes a different string and judges the same command a second time.
+    Only an approval the gate set for *gated_command* in this context moves;
+    anything else leaves the executor's full check in place.
+    """
+    if _guardrails_approved_command.get() != _hash(gated_command):
+        return False
+    # Same rendering terminal_run._check_guardrails hashes.
+    exec_form = exec_args if isinstance(exec_args, str) else shlex.join(str(a) for a in exec_args)
+    _guardrails_approved_command.set(_hash(exec_form))
+    return True
 
 
 @dataclass(frozen=True)

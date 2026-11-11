@@ -24,12 +24,21 @@ from chat.backend.agent.utils.tool_output_cap import (  # noqa: E402
     MAX_SUMMARIZATION_INPUT_CHARS,
     PASS_THROUGH_CHARS,
     cap_tool_output,
+    summarize_tool_output_once,
 )
 
 
 _SUMMARIZE_MARKER = "\n\n[Summarized from larger output]"
 _TRUNCATE_BEFORE_MARKER = "\n\n[Output truncated before summarization]"
 _FALLBACK_MARKER = "\n\n[Output truncated — summarization failed]"
+
+
+@pytest.fixture(autouse=True)
+def _empty_summary_memo():
+    """Summaries are remembered per session; no test may see another's."""
+    tool_output_cap._summary_memo.clear()
+    yield
+    tool_output_cap._summary_memo.clear()
 
 
 @pytest.fixture()
@@ -199,6 +208,66 @@ class TestSummarizationFailureFallback:
 
         assert result.endswith(_FALLBACK_MARKER)
         assert result.startswith("h" * PASS_THROUGH_CHARS)
+
+
+# ---------------------------------------------------------------------------
+# One summary per output
+# ---------------------------------------------------------------------------
+
+
+class TestOneSummaryPerOutput:
+    """capture_tool_end and cap_tool_output both summarize a tool's output,
+    back to back. The second one reuses the first summary."""
+
+    def test_same_output_in_the_same_session_is_summarized_once(self, fake_llm):
+        payload = "k" * (PASS_THROUGH_CHARS + 1)
+
+        for_history = summarize_tool_output_once(payload, user_id="u-1", session_id="s-1")
+        for_model = cap_tool_output(payload, tool_name="t")
+
+        fake_llm.summarize.assert_called_once()
+        assert for_history == "SUMMARY"
+        assert for_model == "SUMMARY" + _SUMMARIZE_MARKER
+
+    def test_oversize_output_is_summarized_once(self, fake_llm):
+        payload = "n" * (MAX_SUMMARIZATION_INPUT_CHARS + 1)
+
+        summarize_tool_output_once(payload, user_id="u-1", session_id="s-1")
+        cap_tool_output(payload, tool_name="t")
+
+        fake_llm.summarize.assert_called_once()
+        assert fake_llm.summarize.call_args.args[0].endswith(_TRUNCATE_BEFORE_MARKER)
+
+    def test_another_session_gets_its_own_summary(self, fake_llm):
+        payload = "m" * (PASS_THROUGH_CHARS + 1)
+
+        summarize_tool_output_once(payload, user_id="u-1", session_id="s-1")
+        summarize_tool_output_once(payload, user_id="u-2", session_id="s-2")
+
+        assert fake_llm.summarize.call_count == 2
+
+    def test_a_different_output_is_summarized_again(self, fake_llm):
+        summarize_tool_output_once("p" * (PASS_THROUGH_CHARS + 1), user_id="u-1", session_id="s-1")
+        summarize_tool_output_once("q" * (PASS_THROUGH_CHARS + 1), user_id="u-1", session_id="s-1")
+
+        assert fake_llm.summarize.call_count == 2
+
+    def test_a_failed_summary_is_not_reused(self, fake_llm):
+        fake_llm.summarize.return_value = "abc... [truncated due to summarization error]"
+        payload = "r" * (PASS_THROUGH_CHARS + 1)
+
+        summarize_tool_output_once(payload, user_id="u-1", session_id="s-1")
+        summarize_tool_output_once(payload, user_id="u-1", session_id="s-1")
+
+        assert fake_llm.summarize.call_count == 2
+
+    def test_remembered_summaries_are_bounded(self, fake_llm):
+        limit = tool_output_cap._SUMMARY_MEMO_MAX_ENTRIES
+
+        for i in range(limit + 5):
+            summarize_tool_output_once(f"{i}-" + "s" * PASS_THROUGH_CHARS, user_id="u-1", session_id="s-1")
+
+        assert len(tool_output_cap._summary_memo) == limit
 
 
 # ---------------------------------------------------------------------------

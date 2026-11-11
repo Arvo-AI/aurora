@@ -2570,6 +2570,11 @@ Security & Compliance
             # The command's --project_id can differ from the connected project
             bq_project = bq_query_project(prepared.argv, bq_project)
 
+        # The gate judged gated_cmd; the flags added since then changed the
+        # string, so without this terminal_run judges the command again.
+        from utils.auth.command_gate import carry_guardrails_approval
+        carry_guardrails_approval(gated_cmd, exec_command)
+
         # Execute the command
         exec_start = time.perf_counter()
         exec_started_at = time.time()
