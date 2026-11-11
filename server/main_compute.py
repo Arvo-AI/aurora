@@ -646,9 +646,11 @@ app.register_blueprint(visualization_bp)
 from routes.monitor.fleet_routes import fleet_bp
 from routes.monitor.waterfall_routes import waterfall_bp
 from routes.monitor.tool_call_routes import tool_calls_bp
+from routes.monitor.chat_audit_routes import chat_audit_bp
 app.register_blueprint(fleet_bp)
 app.register_blueprint(waterfall_bp)
 app.register_blueprint(tool_calls_bp)
+app.register_blueprint(chat_audit_bp)
 
 # --- Audit Log Routes ---
 from routes.audit_routes import audit_bp

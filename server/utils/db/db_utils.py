@@ -3394,6 +3394,25 @@ def initialize_tables():
                 logging.warning(f"Error relaxing execution_steps.incident_id: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_es_chat")
 
+            # Chat audit (monitor page): find a chat's tool calls by root session
+            # (sub-agents run as "<chat>::sa_N"), and full-text search message texts.
+            try:
+                from services.monitor.chat_audit import SEARCH_INDEX_SQL
+                cursor.execute("SAVEPOINT sp_chat_audit_idx")
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_execution_steps_root_session "
+                    "ON execution_steps (org_id, (split_part(session_id, '::', 1)));"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_chat_sessions_org_updated "
+                    "ON chat_sessions (org_id, updated_at DESC);"
+                )
+                cursor.execute(SEARCH_INDEX_SQL)
+                cursor.execute("RELEASE SAVEPOINT sp_chat_audit_idx")
+            except Exception as e:
+                logging.warning(f"Error creating chat audit indexes: {e}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_chat_audit_idx")
+
             # DB triggers: auto-inherit org_id from parent incident on INSERT.
             # This means no INSERT statement in the codebase ever needs to set
             # org_id on these tables — the trigger handles it unconditionally.

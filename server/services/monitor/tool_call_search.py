@@ -238,7 +238,7 @@ def scrub(text: Optional[str]) -> str:
     return cleaned
 
 
-def _input_summary(tool_input) -> str:
+def summarize_input(tool_input) -> str:
     if isinstance(tool_input, str):
         try:
             tool_input = json.loads(tool_input)
@@ -308,7 +308,7 @@ def _shape(row: dict) -> dict:
         "id": row["id"],
         "tool_name": row.get("tool_name") or "unknown",
         "provider": (row["tool_input"].get("provider") if isinstance(row.get("tool_input"), dict) else None),
-        "input_summary": scrub(_input_summary(row.get("tool_input"))),
+        "input_summary": scrub(summarize_input(row.get("tool_input"))),
         "status": {"error": "failed", "success": "succeeded"}.get(status, status),
         "reason": scrub(failure_reason(row.get("error_message"))) if status == "error" else "",
         "error": error if status == "error" else "",

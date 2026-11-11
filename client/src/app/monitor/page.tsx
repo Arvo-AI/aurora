@@ -1,7 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { Radar, HeartPulse, Timer, ShieldCheck, BookOpen, Wrench } from 'lucide-react';
+import { Radar, HeartPulse, Timer, ShieldCheck, BookOpen, Wrench, MessagesSquare } from 'lucide-react';
+import { useUser } from '@/hooks/useAuthHooks';
+import { isAdmin } from '@/lib/roles';
 import { PeriodSelector, type Period } from './components/charts';
 import FleetTab from './components/fleet-tab';
 import SreTab from './components/sre-tab';
@@ -9,12 +11,14 @@ import WaterfallTab from './components/waterfall-tab';
 import AuditTab from './components/audit-tab';
 import ArtifactsTab from './components/artifacts-tab';
 import ToolCallsTab from './components/tool-calls-tab';
+import ChatsTab from './components/chats-tab';
 
 const TABS = [
   { id: 'fleet', label: 'Fleet', icon: Radar },
   { id: 'sre', label: 'SRE Metrics', icon: HeartPulse },
   { id: 'waterfall', label: 'Execution', icon: Timer },
   { id: 'tool-calls', label: 'Tool Calls', icon: Wrench },
+  { id: 'chats', label: 'Conversations', icon: MessagesSquare, adminOnly: true },
   { id: 'artifacts', label: 'Artifacts', icon: BookOpen },
   { id: 'audit', label: 'Audit Log', icon: ShieldCheck },
 ] as const;
@@ -24,6 +28,10 @@ type TabId = typeof TABS[number]['id'];
 export default function MonitorPage() {
   const [tab, setTab] = useState<TabId>('fleet');
   const [period, setPeriod] = useState<Period>('30d');
+  const { user } = useUser();
+  // Conversations lists every user's chats; the backend enforces admin too.
+  const admin = isAdmin(user?.role);
+  const tabs = TABS.filter(t => !('adminOnly' in t && t.adminOnly) || admin);
 
   return (
     <div className="max-w-[1400px] mx-auto py-8 px-4 sm:px-6">
@@ -34,12 +42,12 @@ export default function MonitorPage() {
           <p className="text-sm text-zinc-500 mt-1">Observability, cost tracking, and compliance</p>
         </div>
         {/* Tool Calls and Artifacts have their own time controls (or none) */}
-        {tab !== 'tool-calls' && tab !== 'artifacts' && <PeriodSelector value={period} onChange={setPeriod} />}
+        {tab !== 'tool-calls' && tab !== 'chats' && tab !== 'artifacts' && <PeriodSelector value={period} onChange={setPeriod} />}
       </div>
 
       {/* Tab bar */}
       <div className="flex items-center gap-1 border-b border-zinc-800/80 mb-6">
-        {TABS.map(t => {
+        {tabs.map(t => {
           const Icon = t.icon;
           const active = tab === t.id;
           return (
@@ -65,6 +73,7 @@ export default function MonitorPage() {
         {tab === 'sre' && <SreTab period={period} />}
         {tab === 'waterfall' && <WaterfallTab period={period} />}
         {tab === 'tool-calls' && <ToolCallsTab />}
+        {tab === 'chats' && admin && <ChatsTab />}
         {tab === 'artifacts' && <ArtifactsTab />}
         {tab === 'audit' && <AuditTab period={period} />}
       </div>
