@@ -9,6 +9,11 @@ Prevention bot AND get an Aurora account in a single GitHub screen:
                                         Incident Prevention, then redirects
                                         to the app with a one-time handoff
                                         token that logs the browser in.
+    GET /github/app/signup/complete  -> a brand-new installer's account is
+                                        created here, one hop later, so a
+                                        browser already signed in can link
+                                        the install to that org instead
+                                        (``POST /github/app/link-pending``).
 
 Requires the GitHub App setting "Request user authorization (OAuth)
 during installation" — the combined Install & Authorize screen is what
@@ -58,6 +63,7 @@ states are handed to ``github_app.github_app_install_callback`` unchanged.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -91,6 +97,12 @@ _SIGNUP_STATE_SALT = "aurora.github.app.signup-state.v1"
 # account: carried through password sign-in, redeemed by /app/claim-pending.
 _CLAIM_TOKEN_TTL_SEC = 30 * 60
 _CLAIM_TOKEN_SALT = "aurora.github.app.pending-claim.v1"
+# A brand-new installer is created on a second hop through the app, so a
+# browser already signed in to Aurora can attach the install to that org
+# instead of getting a second account. Single use, short-lived.
+_PENDING_SIGNUP_TTL_SEC = 10 * 60
+_PENDING_SIGNUP_SALT = "aurora.github.app.pending-signup.v1"
+_PENDING_SIGNUP_USED_KEY = "github:pending-signup-used:"
 
 # Hard-coded user-facing error strings. NEVER substitute query params.
 _ERROR_NOT_AVAILABLE = "One-click signup is not available on this deployment"
@@ -177,6 +189,65 @@ def verify_claim_token(token: str) -> dict | None:
         and isinstance(payload.get("email"), str)
     ):
         return None
+    return payload
+
+
+def _sign_pending_signup(installation_id: int, identity: dict, attribution: dict) -> str:
+    """Signed note that a verified, brand-new installer is waiting for an account.
+
+    Minted only after invariants 1, 3 and 6 passed.
+    """
+    return _state_serializer(_PENDING_SIGNUP_SALT).dumps({
+        "iid": installation_id,
+        "identity": {k: identity[k] for k in ("id", "login", "name", "email")},
+        "attr": attribution or {},
+    })
+
+
+def verify_pending_signup(token: str | None) -> dict | None:
+    """Payload of a valid, unexpired pending-signup token, else None."""
+    if not isinstance(token, str) or not token:
+        return None
+    try:
+        payload = _state_serializer(_PENDING_SIGNUP_SALT).loads(
+            token, max_age=_PENDING_SIGNUP_TTL_SEC
+        )
+    except Exception:
+        return None
+    identity = payload.get("identity") if isinstance(payload, dict) else None
+    if not (
+        isinstance(payload.get("iid"), int)
+        and isinstance(identity, dict)
+        and isinstance(identity.get("id"), int)
+        and isinstance(identity.get("login"), str)
+        and isinstance(identity.get("email"), str)
+    ):
+        return None
+    attr = payload.get("attr")
+    payload["attr"] = _attribution_from(attr) if isinstance(attr, dict) else {}
+    return payload
+
+
+def consume_pending_signup(token: str | None) -> dict | None:
+    """Like :func:`verify_pending_signup`, but each token works once.
+
+    Creating the account is a login, so a token that leaked from a URL must
+    not log anyone in a second time. Without Redis the TTL is the only limit.
+    """
+    payload = verify_pending_signup(token)
+    if payload is None:
+        return None
+    try:
+        from utils.cache.redis_client import get_redis_client
+
+        rc = get_redis_client()
+        if rc is not None:
+            key = _PENDING_SIGNUP_USED_KEY + hashlib.sha256(token.encode()).hexdigest()
+            if not rc.set(key, "1", nx=True, ex=_PENDING_SIGNUP_TTL_SEC + 60):
+                logger.warning("[GITHUB-SIGNUP] pending signup token replayed")
+                return None
+    except Exception:
+        logger.warning("[GITHUB-SIGNUP] pending signup replay check unavailable", exc_info=True)
     return payload
 
 
@@ -561,11 +632,36 @@ def _linked_elsewhere_redirect() -> flask.Response:
     return flask.redirect(f"{FRONTEND_URL}/connectors?installed=github", code=302)
 
 
-def _provision_and_handoff(identity: dict, install_data: dict):
+def _pending_signup_redirect(
+    identity: dict, install_data: dict, attribution: dict | None
+) -> flask.Response:
+    token = _sign_pending_signup(install_data["id"], identity, attribution or {})
+    account = install_data.get("account") or {}
+    shown = {
+        "gh_new": token,
+        # Display only; the token is what the server trusts.
+        "gh_login": identity["login"],
+        "gh_account": account.get("login") if isinstance(account, dict) else "",
+    }
+    return flask.redirect(f"{FRONTEND_URL}/sign-in?{urlencode(shown)}", code=302)
+
+
+def _provision_and_handoff(
+    identity: dict,
+    install_data: dict,
+    confirmed: bool = False,
+    attribution: dict | None = None,
+):
     """Find-or-create the Aurora account, link the install, mint the handoff.
 
     Returns ``(redirect_response, user_id, installation_id, created)`` on
     success or ``(error_response, None, None, False)``.
+
+    A brand-new installer is not created until ``confirmed``: first the
+    browser goes to ``/sign-in?gh_new=<token>``. Signed out, the app sends it
+    straight on to ``/signup/complete`` (no click). Signed in, the person is
+    offered to connect the install to their current org instead of getting
+    a second account.
     """
     gh_id, login = identity["id"], identity["login"]
     installation_id = install_data["id"]
@@ -624,6 +720,9 @@ def _provision_and_handoff(identity: dict, install_data: dict):
 
                     if _linked_elsewhere(cur, installation_id, None):
                         return (_linked_elsewhere_redirect(), None, None, False)
+                    if not confirmed:
+                        return (_pending_signup_redirect(identity, install_data, attribution),
+                                None, None, False)
 
                     created = True
                     # Unusable password: random bytes hashed and discarded.
@@ -834,12 +933,22 @@ def github_app_signup_callback():
     if not _user_authorized_for_installation(access_token, installation_id):
         return _render_error(_ERROR_INSTALL_NOT_AUTHORIZED)
 
+    return _complete_signup(
+        identity, install_data,
+        _signup_state_attribution(state) if state else {},
+        confirmed=False,
+    )
+
+
+def _complete_signup(
+    identity: dict, install_data: dict, attribution: dict, confirmed: bool
+) -> flask.Response:
     response, user_id, linked_installation_id, created = _provision_and_handoff(
-        identity, install_data
+        identity, install_data, confirmed=confirmed, attribution=attribution,
     )
-    response = _with_attribution(
-        response, _signup_state_attribution(state) if state else {}
-    )
+    if "gh_new=" not in (response.headers.get("Location") or ""):
+        # The pending-signup token already carries attribution.
+        response = _with_attribution(response, attribution)
     if user_id is None:
         return response
 
@@ -866,3 +975,26 @@ def github_app_signup_callback():
         )
 
     return response
+
+
+@github_signup_bp.route("/app/signup/complete", methods=["GET"])
+def github_app_signup_complete():
+    """Second hop for a brand-new installer whose browser is not signed in.
+
+    The callback already verified the installation, the installer and their
+    access to it, and signed that into the token. Re-checks the installation
+    (it may have been removed or linked meanwhile), then creates the account.
+    """
+    if not _signup_ready():
+        return _render_error(_ERROR_NOT_AVAILABLE)
+    pending = consume_pending_signup(request.args.get("t"))
+    if pending is None:
+        return flask.redirect(f"{FRONTEND_URL}/sign-in?error=github_signup_expired", code=302)
+    install_data = _verify_installation(pending["iid"])
+    if install_data is None:
+        return _render_error(_ERROR_GITHUB_API)
+    if install_data.get("id") != pending["iid"] or not _validate_install_metadata(install_data):
+        return _render_error(_ERROR_BAD_INSTALL_ID)
+    identity = dict(pending["identity"])
+    identity["name"] = identity.get("name") or identity["login"]
+    return _complete_signup(identity, install_data, pending["attr"], confirmed=True)

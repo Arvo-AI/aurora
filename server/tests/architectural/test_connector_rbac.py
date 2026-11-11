@@ -61,6 +61,8 @@ EXEMPT_FUNCTIONS: Set[str] = {
     # state; callback validates that state + GitHub-verified installation.
     "github_app_signup_start",
     "github_app_signup_callback",
+    # Second hop of the same flow: a signed, single-use token from the callback.
+    "github_app_signup_complete",
     # Website "Add to Slack" — start redirects to Slack with a signed state;
     # the signup branch of slack_callback validates it.
     "slack_signup_start",

@@ -11,6 +11,7 @@ import { usePasswordReset, usePasswordResetAvailable } from "@/hooks/usePassword
 import { ForgotPasswordPanel, ResetPasswordPanel } from "./PasswordResetPanels"
 import { SLACK_HANDOFF_MIN_MS, SlackHandoffPanel, ContinueWithSlack, AddAuroraToSlack, useSlackSignInAvailable, SLACK_ERRORS, SLACK_RESUME_KEY, resumeSlackConnect } from "./SlackSignIn"
 import { resumeGithubClaim, stashGithubClaim } from "@/app/sign-in/githubClaim"
+import { GithubPendingInstall } from "@/app/sign-in/GithubPendingInstall"
 
 const AuroraShader = dynamic(() => import('@/app/components/AuroraShader'), { ssr: false })
 
@@ -71,6 +72,7 @@ const SSO_ERRORS: Record<string, string> = {
 const QUERY_ERRORS: Record<string, string> = {
   // GitHub email already has an (unlinked) Aurora account — sign in normally instead
   account_exists: "Your GitHub email already has an Aurora account. Sign in below and we'll finish connecting GitHub.",
+  github_signup_expired: "That GitHub install link expired or was already used. Sign in below, or install Aurora again from GitHub.",
   ...SSO_ERRORS,
   ...SLACK_ERRORS,
 }
@@ -198,6 +200,11 @@ function AuthPage() {
   // not flip to another flow's text while the browser is navigating away.
   const [handoffVia] = useState(() => searchParams.get("via"))
   const [handoffSlackAuth] = useState(() => searchParams.get("slack_auth"))
+  // A brand-new GitHub installer, account not created yet (see GithubPendingInstall).
+  const [githubPending] = useState(() => {
+    const token = searchParams.get("gh_new")
+    return token ? { token, login: searchParams.get("gh_login"), account: searchParams.get("gh_account") } : null
+  })
   const isSsoHandoff = handoffVia === "sso"
   const isSlackHandoff = handoffVia?.startsWith("slack") ?? false
   useEffect(() => {
@@ -559,6 +566,10 @@ function AuthPage() {
             </div>
           </div>
 
+          {githubPending && (
+            <GithubPendingInstall token={githubPending.token} githubLogin={githubPending.login} githubAccount={githubPending.account} />
+          )}
+
           {handoffInFlight && isSlackHandoff && <SlackHandoffPanel via={handoffVia} />}
 
           {handoffInFlight && !isSlackHandoff && (
@@ -574,7 +585,7 @@ function AuthPage() {
             </div>
           )}
 
-          <div className={`${handoffInFlight ? 'hidden' : ''} transition-opacity duration-300 ease-in-out ${formVisible ? 'opacity-100' : 'opacity-0'}`}>
+          <div className={`${handoffInFlight || githubPending ? 'hidden' : ''} transition-opacity duration-300 ease-in-out ${formVisible ? 'opacity-100' : 'opacity-0'}`}>
             {mode === 'signin' && (
               <div className="space-y-8">
                 <div>

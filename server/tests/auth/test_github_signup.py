@@ -24,6 +24,7 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
+from urllib.parse import parse_qs, urlparse
 
 
 @pytest.fixture
@@ -598,6 +599,49 @@ class TestProvisioning:
         assert "user_github_installations (user_id" not in sql
         conn.commit.assert_not_called()
 
+    def test_new_installer_is_not_created_before_the_app_checks_for_a_session(
+        self, signup_app
+    ):
+        # A browser already signed in to Aurora must get the choice to connect
+        # the install to that org, so nothing is created on the first hop.
+        app, mod = signup_app
+        db_pool, conn, cur = _mock_db(mod, [None, None])
+        with app.test_request_context(), patch.object(mod, "db_pool", db_pool):
+            response, user_id, _, created = mod._provision_and_handoff(
+                self._IDENTITY, _install_payload(), attribution={"utm_source": "hn"}
+            )
+        assert user_id is None and created is False
+        assert "/sign-in?gh_new=" in response.location
+        sql = " ".join(c.args[0] for c in cur.execute.call_args_list)
+        assert "INSERT INTO users" not in sql
+        conn.commit.assert_not_called()
+        token = parse_qs(urlparse(response.location).query)["gh_new"][0]
+        with app.test_request_context():
+            pending = mod.verify_pending_signup(token)
+        assert pending["iid"] == 777
+        assert pending["identity"]["id"] == 42
+        assert pending["attr"] == {"utm_source": "hn"}
+
+    def test_pending_signup_token_works_once(self, signup_app):
+        app, mod = signup_app
+        seen = set()
+        rc = MagicMock()
+        rc.set.side_effect = lambda key, *a, **k: not (key in seen or seen.add(key))
+        with app.test_request_context(), \
+             patch("utils.cache.redis_client.get_redis_client", return_value=rc):
+            token = mod._sign_pending_signup(777, self._IDENTITY, {})
+            assert mod.consume_pending_signup(token) is not None
+            assert mod.consume_pending_signup(token) is None
+
+    def test_pending_signup_and_claim_tokens_are_not_interchangeable(self, signup_app):
+        app, mod = signup_app
+        with app.test_request_context():
+            pending = mod._sign_pending_signup(777, self._IDENTITY, {})
+            claim = mod._sign_claim_token(777, self._IDENTITY)
+            assert mod.verify_claim_token(pending) is None
+            assert mod.verify_pending_signup(claim) is None
+            assert mod._verify_signup_state(pending) is False
+
     def test_new_user_creates_org_and_handoff(self, signup_app):
         app, mod = signup_app
         # fetchone seq: no gh match; no email match; INSERT users
@@ -612,7 +656,7 @@ class TestProvisioning:
              patch("utils.auth.tool_registry.seed_org_tool_permissions"), \
              patch("routes.audit_routes.record_audit_event"):
             response, user_id, install_id, created = mod._provision_and_handoff(
-                self._IDENTITY, _install_payload()
+                self._IDENTITY, _install_payload(), confirmed=True
             )
         assert user_id == "new-user"
         assert created is True
@@ -638,7 +682,7 @@ class TestProvisioning:
              patch("utils.auth.tool_registry.seed_org_tool_permissions"), \
              patch("routes.audit_routes.record_audit_event"):
             _, user_id, _, created = mod._provision_and_handoff(
-                self._IDENTITY, _install_payload()
+                self._IDENTITY, _install_payload(), confirmed=True
             )
         # Pin the success path: on the failure path the INSERT is still
         # recorded, so the hash assertion alone could pass vacuously.
@@ -664,7 +708,7 @@ class TestProvisioning:
              patch("utils.auth.command_policy.seed_default_command_policy"), \
              patch("utils.auth.tool_registry.seed_org_tool_permissions"), \
              patch("routes.audit_routes.record_audit_event"):
-            return mod._provision_and_handoff(self._IDENTITY, _install_payload())
+            return mod._provision_and_handoff(self._IDENTITY, _install_payload(), confirmed=True)
 
     def test_new_user_fires_after_user_created(self, signup_app):
         hook = MagicMock()

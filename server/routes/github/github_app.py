@@ -1014,6 +1014,71 @@ def github_app_claim_pending(user_id):
     return jsonify({"success": True, "installation_id": installation_id})
 
 
+@github_app_bp.route("/app/link-pending", methods=["POST", "OPTIONS"])
+@require_permission("connectors", "write")
+def github_app_link_pending(user_id):
+    """Connect a just-installed GitHub App to the signed-in user's org.
+
+    The signup callback verified the installation, the installer and their
+    access to it, but the installer had no Aurora account by GitHub id or
+    email. Their browser was signed in, so instead of creating a second
+    account the app asked whether to connect the install here, and they
+    said yes. Only the installation is linked: the GitHub identity is not
+    attached to this account, so the token can never become a way to log
+    in as it.
+    """
+    from routes.github.github_signup import (
+        _link_installation,
+        _verify_installation,
+        verify_pending_signup,
+    )
+
+    if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
+        return jsonify({"error": _APP_NOT_CONFIGURED}), 503
+
+    body = request.get_json(silent=True) or {}
+    pending = verify_pending_signup(body.get("token") if isinstance(body, dict) else None)
+    if pending is None:
+        return jsonify({"error": "Install link expired", "code": "CLAIM_INVALID"}), 400
+
+    installation_id = pending["iid"]
+    org_id = get_org_id_for_user(user_id)
+    if not org_id:
+        return jsonify({"error": "No organization", "code": "MISSING_ORG_CONTEXT"}), 403
+    if _orgs_owning_install(installation_id) - {org_id}:
+        return jsonify({"error": "Installation belongs to another organization",
+                        "code": "CROSS_ORG_CLAIM_REFUSED"}), 403
+
+    install_data = _verify_installation(installation_id)
+    if install_data is None or install_data.get("id") != installation_id:
+        return jsonify({"error": "Could not verify installation with GitHub"}), 502
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                _link_installation(cur, user_id, org_id, install_data)
+                conn.commit()
+    except Exception:
+        logger.exception(
+            "[GITHUB-APP-LINK-PENDING] DB write failed user=%s installation_id=%d",
+            user_id, installation_id,
+        )
+        return jsonify({"error": "Failed to link installation"}), 500
+
+    logger.info(
+        "[GITHUB-APP-LINK-PENDING] user=%s linked installation_id=%d",
+        user_id, installation_id,
+    )
+    _enqueue_enrolled_import(user_id, installation_id, "[GITHUB-APP-LINK-PENDING]")
+    try:
+        from utils.auth.tool_registry import seed_org_tool_permissions
+
+        seed_org_tool_permissions(org_id, user_id)
+    except Exception:
+        logger.warning("[GITHUB-APP-LINK-PENDING] tool permission seeding failed", exc_info=True)
+    return jsonify({"success": True, "installation_id": installation_id})
+
+
 @github_app_bp.route(
     "/app/installations/<int:installation_id>", methods=["DELETE"]
 )

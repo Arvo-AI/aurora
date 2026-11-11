@@ -111,3 +111,47 @@ def test_claim_of_an_install_the_org_never_linked_is_refused(env, owners, expect
     jwt.assert_not_called()
     conn.commit.assert_not_called()
     task.delay.assert_not_called()
+
+
+def test_signed_in_user_links_a_new_install_without_taking_its_github_identity(env):
+    # The connect-to-my-org choice links the installation only. Attaching
+    # the GitHub id would make a forwarded install link a way to log in as
+    # this account.
+    app, mod, _ = env
+    from routes.github import github_signup
+
+    with app.test_request_context():
+        token = github_signup._sign_pending_signup(777, _IDENTITY, {})
+    pool, conn, cur = _db([])
+    with app.test_request_context(json={"token": token}), \
+         patch.object(mod, "db_pool", pool), \
+         patch.object(mod, "get_org_id_for_user", return_value="org-1"), \
+         patch.object(mod, "_orgs_owning_install", return_value=set()), \
+         patch("routes.github.github_signup._verify_installation", return_value=_INSTALL), \
+         patch("routes.github.github_repo_metadata.import_installation_repos") as task, \
+         patch("utils.auth.tool_registry.seed_org_tool_permissions"):
+        out = mod.github_app_link_pending.__wrapped__("user-1")
+    status = out[1] if isinstance(out, tuple) else 200
+    assert status == 200
+    sql = " ".join(c.args[0] for c in cur.execute.call_args_list)
+    assert "user_github_installations" in sql
+    assert "github_user_id" not in sql
+    task.delay.assert_called_once_with("user-1", 777, enroll_change_gating=True)
+
+
+def test_link_pending_refuses_an_install_another_org_has(env):
+    app, mod, _ = env
+    from routes.github import github_signup
+
+    with app.test_request_context():
+        token = github_signup._sign_pending_signup(777, _IDENTITY, {})
+    pool, conn, _cur = _db([])
+    with app.test_request_context(json={"token": token}), \
+         patch.object(mod, "db_pool", pool), \
+         patch.object(mod, "get_org_id_for_user", return_value="org-1"), \
+         patch.object(mod, "_orgs_owning_install", return_value={"org-2"}), \
+         patch("routes.github.github_repo_metadata.import_installation_repos") as task:
+        out = mod.github_app_link_pending.__wrapped__("user-1")
+    assert out[1] == 403
+    conn.commit.assert_not_called()
+    task.delay.assert_not_called()

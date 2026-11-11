@@ -70,9 +70,10 @@ export default auth((req) => {
   // If user is logged in and tries to access auth pages, redirect to home
   // (but not if they're on verify-email or change-password modes)
   const signInMode = nextUrl.searchParams.get('mode')
-  // A pending GitHub install link (gh_claim) is finished on /sign-in, also
+  // A pending GitHub install (gh_claim, gh_new) is finished on /sign-in, also
   // for someone already signed in.
-  const isGithubClaim = nextUrl.pathname.startsWith('/sign-in') && nextUrl.searchParams.has('gh_claim')
+  const isGithubClaim = nextUrl.pathname.startsWith('/sign-in')
+    && (nextUrl.searchParams.has('gh_claim') || nextUrl.searchParams.has('gh_new'))
   if (isAuthRoute && isLoggedIn && !isGithubClaim && signInMode !== 'verify-email' && signInMode !== 'change-password') {
     return sanitizeResponse(NextResponse.redirect(new URL("/", nextUrl)))
   }
