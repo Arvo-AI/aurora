@@ -1,5 +1,6 @@
 """pagerduty_notification_service + PagerDuty write-capability detection (no DB, no network)."""
 
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -95,14 +96,19 @@ def test_plain_text_keeps_paragraph_breaks_and_drops_heading_marks():
 
 
 def test_plain_text_truncates_on_a_word_boundary():
-    out = rca_note.to_plain_text("word " * 200)
+    out = rca_note.to_plain_text("word " * 600)
     assert out.endswith("word...")
     assert len(out) <= rca_note.NOTE_MAX_CHARS + 3
 
 
 def test_truncate_hard_cuts_when_no_early_space():
-    out = rca_note.truncate("x" * 900)
+    out = rca_note.truncate("x" * (rca_note.NOTE_MAX_CHARS + 200))
     assert out == "x" * rca_note.NOTE_MAX_CHARS + "..."
+
+
+def test_truncate_keeps_word_boundary_for_short_limits():
+    out = rca_note.truncate("word " * 60, rca_note.NEXT_STEP_MAX_CHARS)
+    assert out.endswith("word...")
 
 
 # --- _should_post -------------------------------------------------------------
@@ -193,7 +199,79 @@ def test_bullet_sections_never_leak_when_no_prose_precedes_them():
     assert rca_note.extract_note_body("## Ruled Out\n\n- **Hypothesis** — killed by evidence [1].\n") == ("", "")
 
 
+# --- extract_next_steps ------------------------------------------------------
+
+NEXT_STEPS_REPORT = REPORT + (
+    "\n## Suggested Next Steps\n\n"
+    "- **Redeploy** the checkout frontend so clients drop stale Server Action IDs [7] [S:4]\n"
+    "- Add a 5xx alert on `checkout-api` scoped to the deploy window\n"
+    "2. Confirm the Fleet Server agent count recovered [28]\n"
+    "- A fourth step the note leaves out\n"
+)
+NEXT_STEPS = [
+    "Redeploy the checkout frontend so clients drop stale Server Action IDs",
+    "Add a 5xx alert on checkout-api scoped to the deploy window",
+    "Confirm the Fleet Server agent count recovered",
+]
+
+
+def test_next_steps_are_read_as_plain_one_liners_capped_at_three():
+    assert rca_note.extract_next_steps(NEXT_STEPS_REPORT) == NEXT_STEPS
+
+
+def test_next_steps_do_not_change_root_cause_or_impact():
+    assert rca_note.extract_note_body(NEXT_STEPS_REPORT) == (REPORT_ROOT_CAUSE, REPORT_IMPACT)
+
+
+@pytest.mark.parametrize("heading", ["## Next steps", "**Next Steps**", "### Recommendations"])
+def test_next_steps_heading_variants(heading):
+    summary = SUMMARY + f"\n\n{heading}\n- Raise max_connections on orders-db to 400\n\n## Not Checked\n- DNS"
+    assert rca_note.extract_next_steps(summary) == ["Raise max_connections on orders-db to 400"]
+
+
+def test_no_next_steps_section_gives_none():
+    assert rca_note.extract_next_steps(REPORT) == []
+    assert rca_note.extract_next_steps(None) == []
+
+
+def test_long_next_step_is_cut_on_a_word():
+    step = rca_note.extract_next_steps("## Next steps\n- " + "word " * 60)[0]
+    assert step.endswith("word...")
+    assert len(step) <= rca_note.NEXT_STEP_MAX_CHARS + 3
+
+
+def test_typical_next_step_is_not_cut():
+    """A real RCA step (~185 chars) used to lose its tail at the old 160 cap."""
+    real = (
+        "Identify where checkout-api runs (cluster, namespace, or resource group) and query "
+        "its 5xx error-rate metric for the window around 2026-11-09T21:37:13 in that metrics source."
+    )
+    assert rca_note.extract_next_steps("## Suggested Next Steps\n- " + real) == [real]
+
+
 # --- _compose_note ------------------------------------------------------------
+
+def test_note_ends_with_next_steps_block_before_link_and_disclaimer():
+    root, impact = rca_note.extract_note_body(NEXT_STEPS_REPORT)
+    steps = rca_note.extract_next_steps(NEXT_STEPS_REPORT)
+    note = rca_note.compose_note(root, "i1", impact, "https://aurora.example.com", steps)
+    assert note.endswith(
+        "Next steps\n- " + "\n- ".join(NEXT_STEPS) + "\n\n"
+        "Full investigation: https://aurora.example.com/incidents/i1\n\n"
+        "Generated automatically by Aurora. Verify before acting."
+    )
+    assert "[S:" not in note
+    assert len(note) <= rca_note.NOTE_MAX_CHARS
+
+
+def test_largest_possible_note_fits_the_cap():
+    root = rca_note.truncate("word " * 400, rca_note.ROOT_CAUSE_MAX_CHARS)
+    impact = rca_note.truncate("word " * 200, rca_note.IMPACT_MAX_CHARS)
+    steps = [rca_note.truncate("word " * 60, rca_note.NEXT_STEP_MAX_CHARS)] * rca_note.NEXT_STEPS_MAX
+    base_url = "https://aurora." + "x" * 80 + ".example.com"
+    note = rca_note.compose_note(root, "0" * 36, impact, base_url, steps)
+    assert len(note) <= rca_note.NOTE_MAX_CHARS
+
 
 def test_note_has_root_cause_impact_link_and_disclaimer():
     note = rca_note.compose_note("Because X.", "i1", "Nobody noticed.", "https://aurora.example.com/")
@@ -354,6 +432,12 @@ def test_happy_path_claims_posts_then_records(wired, monkeypatch):
     wired.stored.assert_not_called()
 
 
+def test_posted_note_includes_next_steps(wired):
+    assert svc.send_pagerduty_incident_note("u1", _anchor(aurora_summary=NEXT_STEPS_REPORT)) is True
+    _, content = wired.client.create_note.call_args.args
+    assert "\n\nNext steps\n- " + "\n- ".join(NEXT_STEPS) + "\n\n" in content
+
+
 def test_lost_claim_posts_nothing(wired):
     wired.pool.cursor.rowcount = 0
     assert svc.send_pagerduty_incident_note("u1", _anchor()) is False
@@ -409,7 +493,7 @@ def test_forbidden_flips_write_capability_off(wired):
 
 
 def test_ineligible_incident_never_touches_db_or_pagerduty(wired):
-    assert svc.send_pagerduty_incident_note("u1", _anchor(recurrence_of="root-1")) is False
+    assert svc.send_pagerduty_incident_note("u1", _anchor(source_type="datadog")) is False
     assert wired.pool.updates == []
     wired.client.create_note.assert_not_called()
 
@@ -428,3 +512,247 @@ def test_empty_frontend_url_omits_the_link_line(wired, monkeypatch):
     content = wired.client.create_note.call_args.args[1]
     assert "Full investigation" not in content
     assert "/incidents/" not in content
+
+
+# --- recurrence note (folded incidents) ---------------------------------------
+
+ANCHOR_ID = "a0"
+ANCHOR_FIRED = datetime(2026, 11, 3, 14, 5, 9)
+ANCHOR_SUMMARY = (
+    "What happened: checkout 5xx paged the on-call at 14:05.\n\n"
+    "Root cause: the payments-db connection pool was exhausted after a deploy doubled the worker count [3]. "
+    "Postgres max_connections was never raised. A third sentence the note leaves out."
+)
+FOLD_CLAIM = (
+    "UPDATE incidents SET pagerduty_note_id = %s WHERE id = %s AND pagerduty_note_id IS NULL "
+    "AND NOT EXISTS (SELECT 1 FROM incidents o WHERE o.id <> %s AND o.source_type = 'pagerduty' "
+    "AND o.pagerduty_note_id IS NOT NULL AND o.alert_metadata->>'incidentId' = %s)",
+    ("pending", "c1", "c1", "PREP456"),
+)
+FOLD_RECORD = ("UPDATE incidents SET pagerduty_note_id = %s WHERE id = %s", ("PWL7QXS", "c1"))
+
+
+def _folded(**over):
+    data = {
+        "incident_id": "c1", "source_type": "pagerduty", "recurrence_of": ANCHOR_ID, "pagerduty_note_id": None,
+        "alert_metadata": {"incidentId": "PREP456"}, "aurora_summary": SUMMARY,
+        "anchor_alert_title": "Checkout 5xx spike",
+    }
+    data.update(over)
+    return data
+
+
+@pytest.fixture
+def anchor_row(wired, monkeypatch):
+    """Rows _fetch_anchor reads: anchor title, summary, first fire, and whether the PD incident has a note."""
+    row = ["Checkout 5xx spike", ANCHOR_SUMMARY, ANCHOR_FIRED, False]
+    monkeypatch.setattr(svc, "db_pool", wired.pool.pool)
+    monkeypatch.setattr(svc, "set_rls_context", lambda *a, **k: "org-1")
+    wired.pool.cursor.fetchone.side_effect = lambda: tuple(row)
+    return row
+
+
+def test_folded_incident_posts_one_recurrence_note(wired, anchor_row, monkeypatch):
+    monkeypatch.setattr(svc, "FRONTEND_URL", "https://aurora.acme.com/")
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is True
+    assert wired.pool.updates == [FOLD_CLAIM, FOLD_RECORD]
+    wired.client.create_note.assert_called_once()
+    pd_incident_id, content = wired.client.create_note.call_args.args
+    assert pd_incident_id == "PREP456"  # the folded incident's own PagerDuty incident, not the anchor's
+    assert content == (
+        "Aurora RCA: recurrence\n\n"
+        'Recurrence of "Checkout 5xx spike" (2026-11-03 14:05 UTC).\n'
+        "Root cause then: the payments-db connection pool was exhausted after a deploy doubled the worker count. "
+        "Postgres max_connections was never raised.\n\n"
+        "Earlier investigation: https://aurora.acme.com/incidents/a0\n\n"
+        "Generated automatically by Aurora. Verify before acting."
+    )
+
+
+def test_anchor_lookup_is_scoped_to_the_anchor_and_this_pd_incident(wired, anchor_row):
+    svc.send_pagerduty_incident_note("u1", _folded())
+    selects = [(sql, params) for sql, params in wired.pool.executes if sql.startswith("SELECT a.alert_title")]
+    assert len(selects) == 1
+    sql, params = selects[0]
+    assert params == ("c1", "PREP456", ANCHOR_ID)
+    assert "o.pagerduty_note_id IS NOT NULL" in sql and "o.id <> %s" in sql
+
+
+def test_retried_completion_posts_no_second_recurrence_note(wired, anchor_row):
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is True
+    # The retry re-reads the incident: the claim column now holds the note id
+    assert svc.send_pagerduty_incident_note("u1", _folded(pagerduty_note_id="PWL7QXS")) is False
+    wired.client.create_note.assert_called_once()
+
+
+def test_concurrent_recurrence_note_loses_the_claim(wired, anchor_row):
+    wired.pool.cursor.rowcount = 0
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is False
+    assert wired.pool.updates == [FOLD_CLAIM]
+    wired.client.create_note.assert_not_called()
+
+
+def test_pd_incident_already_noted_by_another_aurora_incident_is_skipped(wired, anchor_row):
+    # A re-triggered page folded onto its own anchor shares the anchor's PagerDuty incident
+    anchor_row[3] = True
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is False
+    assert wired.pool.updates == []
+    wired.client.create_note.assert_not_called()
+
+
+def test_missing_anchor_posts_nothing(wired, anchor_row):
+    wired.pool.cursor.fetchone.side_effect = lambda: None
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is False
+    wired.client.create_note.assert_not_called()
+
+
+@pytest.mark.parametrize("over", [
+    {"source_type": "datadog"},
+    {"pagerduty_note_id": "pending"},
+    {"alert_metadata": {}},
+    {"alert_metadata": {"incidentId": "../users/PX"}},
+])
+def test_ineligible_folded_incident_never_touches_db_or_pagerduty(wired, anchor_row, over):
+    assert svc.send_pagerduty_incident_note("u1", _folded(**over)) is False
+    assert wired.pool.executes == []
+    wired.client.create_note.assert_not_called()
+
+
+def test_read_only_credentials_post_no_recurrence_note(wired, anchor_row, monkeypatch):
+    creds = {**wired.creds, "capabilities": {"can_write_incidents": False}}
+    monkeypatch.setattr(svc, "get_token_data", lambda user_id, provider: creds)
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is False
+    assert wired.pool.executes == []
+    wired.client.create_note.assert_not_called()
+
+
+def test_rejected_recurrence_note_releases_the_claim(wired, anchor_row):
+    wired.client.create_note.side_effect = PagerDutyAPIError("Rate limited", status_code=429)
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is False
+    assert wired.pool.updates == [
+        FOLD_CLAIM,
+        ("UPDATE incidents SET pagerduty_note_id = NULL WHERE id = %s AND pagerduty_note_id = %s", ("c1", "pending")),
+    ]
+
+
+def test_anchor_without_a_usable_root_cause_still_points_at_it(wired, anchor_row, monkeypatch):
+    monkeypatch.setattr(svc, "FRONTEND_URL", "")
+    anchor_row[1] = "Too short."
+    anchor_row[2] = None
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is True
+    content = wired.client.create_note.call_args.args[1]
+    assert 'Recurrence of "Checkout 5xx spike".\nRoot cause then: not determined.' in content
+    assert "/incidents/" not in content
+
+
+def test_recurrence_root_cause_is_capped():
+    long_sentence = "The pool was exhausted " + "because of load " * 40 + "today."
+    root = svc._short_root_cause("Intro paragraph that is long enough to count as prose.\n\nRoot cause: " + long_sentence)
+    assert len(root) <= svc.RECURRENCE_ROOT_CAUSE_MAX_CHARS + 3
+    assert root.endswith("...")
+
+
+def test_recurrence_note_title_is_plain_single_line():
+    content = svc.compose_recurrence_note("a0", "**CPU** high\non `api`", None, "x.", None)
+    assert 'Recurrence of "CPU high on api".' in content
+
+
+def test_anchor_note_path_unchanged_by_recurrence_support(wired, monkeypatch):
+    # Non-fold path: full RCA note, no anchor lookup
+    monkeypatch.setattr(svc, "FRONTEND_URL", "http://localhost:3000")
+    assert svc.send_pagerduty_incident_note("u1", _anchor()) is True
+    assert not any(sql.startswith("SELECT a.alert_title") for sql, _ in wired.pool.executes)
+    content = wired.client.create_note.call_args.args[1]
+    assert content.startswith("Aurora RCA\n\nRoot cause\n")
+    assert "recurrence" not in content.lower()
+
+
+# --- review follow-ups ----------------------------------------------------------
+
+def test_recurrence_claim_locks_the_shared_pd_incident_first(wired, anchor_row, monkeypatch):
+    """Two folded incidents on one PagerDuty incident serialise on (org, PD incident)."""
+    from utils.notifications import postback_claim
+    monkeypatch.setattr(postback_claim, "db_pool", wired.pool.pool)
+    monkeypatch.setattr(postback_claim, "set_rls_context", lambda *a, **k: "org-1")
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is True
+    executes = wired.pool.executes
+    lock = executes.index(("SELECT pg_advisory_xact_lock(hashtext(%s))", ("pagerduty_note_id:org-1:PREP456",)))
+    assert executes[lock + 1] == FOLD_CLAIM
+
+
+def test_second_folded_incident_on_the_same_pd_incident_loses(wired, anchor_row, monkeypatch):
+    """The second claimer's NOT EXISTS sees the first claim, so it posts nothing."""
+    from utils.notifications import postback_claim
+    monkeypatch.setattr(postback_claim, "db_pool", wired.pool.pool)
+    monkeypatch.setattr(postback_claim, "set_rls_context", lambda *a, **k: "org-1")
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is True
+    wired.pool.cursor.rowcount = 0
+    assert svc.send_pagerduty_incident_note("u1", _folded(incident_id="c2")) is False
+    wired.client.create_note.assert_called_once()
+
+
+def test_short_factual_root_cause_is_kept_in_the_recurrence_note():
+    summary = "Root cause: a bad deploy of payments-api v2.3 broke auth."
+    assert len(summary) < rca_note.MIN_SUMMARY_CHARS + 20
+    assert svc._short_root_cause(summary) == "a bad deploy of payments-api v2.3 broke auth."
+
+
+def test_aware_fired_at_is_shown_in_utc():
+    from datetime import timedelta, timezone
+    fired = datetime(2026, 11, 3, 14, 5, tzinfo=timezone(timedelta(hours=2)))
+    note = svc.compose_recurrence_note("a0", "Checkout 5xx", fired, "")
+    assert "(2026-11-03 12:05 UTC)" in note
+
+
+def test_wrapped_next_step_lines_join_their_item():
+    summary = (
+        "## Suggested Next Steps\n"
+        "- Raise max_connections on orders-db to 400 and redeploy\n"
+        "  the orders-api workers\n"
+        "- Add a pool-exhaustion alert on orders-api\n"
+        "- Roll back deploy 2.3\n"
+    )
+    assert rca_note.extract_next_steps(summary) == [
+        "Raise max_connections on orders-db to 400 and redeploy the orders-api workers",
+        "Add a pool-exhaustion alert on orders-api",
+        "Roll back deploy 2.3",
+    ]
+
+
+def test_bare_next_step_lines_are_still_one_step_each():
+    summary = "## Next steps\nRaise max_connections on orders-db\nRoll back deploy 2.3\n"
+    assert rca_note.extract_next_steps(summary) == ["Raise max_connections on orders-db", "Roll back deploy 2.3"]
+
+
+def test_compose_note_caps_caller_supplied_steps():
+    steps = ["word " * 100] * 5
+    note = rca_note.compose_note("Because X happened.", "i1", "", None, steps)
+    bullets = [line for line in note.splitlines() if line.startswith("- ")]
+    assert len(bullets) == rca_note.NEXT_STEPS_MAX
+    assert all(len(b) <= rca_note.NEXT_STEP_MAX_CHARS + 5 for b in bullets)
+    huge = rca_note.compose_note("x " * 5000, "i1", "y " * 5000, "https://a.example.com", steps)
+    assert len(huge) <= rca_note.NOTE_MAX_CHARS
+
+
+def test_recurrence_of_a_running_anchor_says_it_is_still_under_investigation(wired, anchor_row):
+    """A note cannot be edited, so an unfinished anchor is not reported as having no root cause."""
+    anchor_row[1] = None  # the anchor's summary is not written yet
+    anchor_row.append("running")
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is True
+    _, content = wired.client.create_note.call_args.args
+    assert "Root cause then: still under investigation" in content
+    assert "not determined" not in content
+
+
+def test_recurrence_of_a_finished_anchor_without_a_cause_says_not_determined(wired, anchor_row):
+    anchor_row[1] = None
+    anchor_row.append("complete")
+    assert svc.send_pagerduty_incident_note("u1", _folded()) is True
+    _, content = wired.client.create_note.call_args.args
+    assert "Root cause then: not determined." in content
+
+
+def test_anchor_lookup_reads_the_anchor_status(wired, anchor_row):
+    svc.send_pagerduty_incident_note("u1", _folded())
+    sql = next(sql for sql, _ in wired.pool.executes if sql.startswith("SELECT a.alert_title"))
+    assert "a.aurora_status" in sql

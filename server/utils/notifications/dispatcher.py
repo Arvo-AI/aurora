@@ -516,7 +516,8 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
             except Exception:
                 logger.exception("[Dispatcher] Google Chat completed notification failed")
 
-        # --- PagerDuty note --- (completion only, anchors only, once; opt-in per org;
+        # --- PagerDuty note --- (completion only, once; opt-in per org; a folded
+        # recurrence gets a short note pointing at its anchor instead of the RCA;
         # the service itself checks the stored credentials can write, default-deny)
         pd_enabled = bool(get_org_preference(org_id, 'pagerduty_incident_notes', default=False))
         if pd_enabled and not refresh_only:
