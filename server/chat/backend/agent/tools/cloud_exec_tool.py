@@ -1267,6 +1267,7 @@ def _cloud_exec_aws_multi_account(
     timeout: Optional[int] = None,
     output_file: Optional[str] = None,
     fn_start: float = 0,
+    gated_command: Optional[str] = None,
 ) -> str:
     """Execute an AWS CLI command across all connected accounts and merge results.
 
@@ -1322,10 +1323,19 @@ def _cloud_exec_aws_multi_account(
 
             effective_timeout = get_command_timeout(cmd, timeout)
             cmd_args = shlex.split(cmd)
-            result = terminal_run(
-                cmd_args, capture_output=True, text=True,
-                timeout=effective_timeout, env=isolated_env,
-            )
+            # The gate judged the command once, before the fan-out. The region and
+            # output flags added here change its hash, so without the carry every
+            # account judges it again. This worker runs in its own copy of the
+            # context, so the approval moves for this account only.
+            from utils.auth.command_gate import carry_guardrails_approval, release_guardrails_approval
+            carried = carry_guardrails_approval(gated_command, cmd_args) if gated_command else None
+            try:
+                result = terminal_run(
+                    cmd_args, capture_output=True, text=True,
+                    timeout=effective_timeout, env=isolated_env,
+                )
+            finally:
+                release_guardrails_approval(carried)
             return {
                 "account_id": account_id,
                 "region": region,
@@ -1456,7 +1466,8 @@ def _apply_azure_subscription(command: str, subscription_id: str) -> str:
     return f"{cmd} --subscription {shlex.quote(subscription_id)}"
 
 
-def _run_azure_on_subscription(conn: dict, command: str, isolated_env: dict, timeout: Optional[int]) -> dict:
+def _run_azure_on_subscription(conn: dict, command: str, isolated_env: dict, timeout: Optional[int],
+                               gated_command: Optional[str] = None) -> dict:
     """Run one subscription-pinned command against the shared, already-authenticated config dir.
 
     The command is pinned to the subscription, so concurrent workers never contend
@@ -1470,11 +1481,20 @@ def _run_azure_on_subscription(conn: dict, command: str, isolated_env: dict, tim
         except ValueError as e:
             return {"subscription_id": sub_id, "success": False,
                     "error": f"Command parsing failed: {e}"}
-        result = terminal_run(
-            cmd_args,
-            capture_output=True, text=True,
-            timeout=get_command_timeout(cmd, timeout), env=isolated_env,
-        )
+        # The gate judged the command once, before the fan-out. --subscription
+        # changes its hash, so without the carry every subscription judges it
+        # again. This worker runs in its own copy of the context, so the approval
+        # moves for this subscription only.
+        from utils.auth.command_gate import carry_guardrails_approval, release_guardrails_approval
+        carried = carry_guardrails_approval(gated_command, cmd_args) if gated_command else None
+        try:
+            result = terminal_run(
+                cmd_args,
+                capture_output=True, text=True,
+                timeout=get_command_timeout(cmd, timeout), env=isolated_env,
+            )
+        finally:
+            release_guardrails_approval(carried)
         return {
             "subscription_id": sub_id,
             "success": result.returncode == 0,
@@ -1772,6 +1792,7 @@ def _cloud_exec_azure_multi_subscription(
     timeout: Optional[int] = None,
     output_file: Optional[str] = None,
     fn_start: float = 0,
+    gated_command: Optional[str] = None,
 ) -> str:
     """Execute an Azure CLI command across all connected subscriptions and merge results.
 
@@ -1842,7 +1863,7 @@ def _cloud_exec_azure_multi_subscription(
             })
 
         def _run_one(conn: dict) -> dict:
-            return _run_azure_on_subscription(conn, command, isolated_env, timeout)
+            return _run_azure_on_subscription(conn, command, isolated_env, timeout, gated_command)
 
         fan_out_started_at = time.time()
         results = _fan_out_azure(connections, _run_one)
@@ -2051,6 +2072,7 @@ Security & Compliance
                         timeout=timeout,
                         output_file=output_file,
                         fn_start=fn_start,
+                        gated_command=gated_cmd,
                     )
                 if len(all_subs) == 1:
                     target_subscription = str(all_subs[0].get("account_id") or "") or None
@@ -2084,6 +2106,7 @@ Security & Compliance
                         timeout=timeout,
                         output_file=output_file,
                         fn_start=fn_start,
+                        gated_command=gated_cmd,
                     )
             # Single account path -- either account_id was given or only 1 connection
             success, region, auth_method, isolated_env = setup_aws_environment_isolated(
@@ -2572,8 +2595,8 @@ Security & Compliance
 
         # The gate judged gated_cmd; the flags added since then changed the
         # string, so without this terminal_run judges the command again.
-        from utils.auth.command_gate import carry_guardrails_approval
-        carry_guardrails_approval(gated_cmd, exec_command)
+        from utils.auth.command_gate import carry_guardrails_approval, release_guardrails_approval
+        carried_approval = carry_guardrails_approval(gated_cmd, exec_command)
 
         # Execute the command
         exec_start = time.perf_counter()
@@ -2661,6 +2684,9 @@ Security & Compliance
                 "resource_name": resource_id,
                 "auth_method": auth_method
             })
+        finally:
+            # Live through the Azure relogin retry above, gone once the command has run.
+            release_guardrails_approval(carried_approval)
         
         # Add debug logging for specific commands and failed Scaleway commands
         if any(keyword in command for keyword in ["compute instances", "ec2 describe-instances", "ecs list-clusters"]):

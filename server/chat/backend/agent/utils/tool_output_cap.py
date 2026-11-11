@@ -26,11 +26,33 @@ MAX_SUMMARIZATION_INPUT_CHARS = 400_000
 # (for the stored context history) and cap_tool_output (for what the model
 # reads). The second caller reuses the first summary instead of paying for a
 # second LLM call on the same text.
+#
+# The two do not receive the same string. cloud_exec and iac_tool capture their
+# own output before the tool wrapper redacts it, and cap_tool_output runs after.
+# The helper therefore summarizes the redacted copy, whoever calls it: both
+# callers then hold one text, and the summarizer never reads a secret the
+# wrapper is about to strip.
 _SUMMARY_MEMO_MAX_ENTRIES = 32
 # LLMManager.summarize() swallows its own errors and returns this instead.
 _SUMMARIZATION_ERROR_SUFFIX = "[truncated due to summarization error]"
 _summary_memo: "OrderedDict[tuple, str]" = OrderedDict()
 _summary_memo_lock = threading.Lock()
+
+
+def _redacted_copy(output: str) -> str:
+    """*output* as the tool wrapper's output redaction leaves it (fail-open, like the wrapper)."""
+    try:
+        from utils.security.config import config as guardrails_config
+
+        if not guardrails_config.enabled:
+            return output
+        from utils.security.output_redaction import redact
+
+        redacted, _findings = redact(output)
+        return redacted
+    except Exception:
+        logger.warning("[ToolOutputCap] output redaction unavailable before summarization", exc_info=True)
+        return output
 
 
 def summarize_tool_output_once(
@@ -41,10 +63,15 @@ def summarize_tool_output_once(
 ) -> str:
     """Summarize a large tool output, once per distinct output per session.
 
+    The redacted copy is what gets summarized and remembered. No audit event
+    is emitted here; the tool wrapper emits it when it redacts the result.
+
     Returns the summary without a marker. Raises if the summarizer cannot be
     loaded or raises; callers keep their own fallback.
     """
     from ..llm import LLMManager, ModelConfig
+
+    output = _redacted_copy(output)
 
     if user_id is None and session_id is None:
         from utils.cloud.cloud_utils import get_user_context

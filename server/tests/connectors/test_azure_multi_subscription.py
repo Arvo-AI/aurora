@@ -1216,3 +1216,159 @@ def test_login_deactivates_subscriptions_that_lost_access():
         "login never deactivates subscriptions that are no longer accessible"
     assert "not in enabled_ids" in body, \
         "deactivation is not keyed on absence from the current enabled set"
+
+
+# --- one safety check per fanned-out command ----------------------------------
+
+def _guarded_runner(ran):
+    """terminal_run stand-in that runs the executor's real guardrail check.
+
+    The real terminal_run skips that check for trusted calls (the az login) and
+    turns a block into exit 126; this does the same.
+    """
+    from utils.terminal.terminal_run import _check_guardrails
+
+    def run_command(argv, **kw):
+        if not kw.get("trusted"):
+            blocked = _check_guardrails(argv)
+            if blocked is not None:
+                return type("R", (), {"returncode": 126, "stdout": "", "stderr": blocked.stderr})()
+            ran.append(list(argv))
+        return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+
+    return run_command
+
+
+def _count_full_checks(monkeypatch, blocked=False):
+    """Count the executor's signature + judge calls (utils.security.command_safety.evaluate_command)."""
+    calls, lock = [], threading.Lock()
+
+    def evaluate_command(cmd, **_kwargs):
+        with lock:
+            calls.append(cmd)
+        return types.SimpleNamespace(blocked=blocked, reason="blocked by test")
+
+    monkeypatch.setattr("utils.security.command_safety.evaluate_command", evaluate_command)
+    return calls
+
+
+def test_fanout_does_not_judge_a_gate_approved_command_again(monkeypatch):
+    """The gate judged `az vm list` once. Each worker adds --subscription, which
+    used to change the hash and send every subscription back to the judge."""
+    import json as _json
+    from utils.auth import command_gate
+
+    full_checks = _count_full_checks(monkeypatch)
+    ran, config_dirs = [], []
+    fanout, _ = _load_fanout(_guarded_runner(ran), config_dirs)
+    conns = [{"account_id": f"sub-{i}"} for i in range(4)]
+    gated = "az vm list"
+    command_gate._guardrails_approved_command.set(command_gate._hash(gated))
+    try:
+        out = _json.loads(fanout("u", conns, "vm list", gated_command=gated))
+        # Worker contexts are copies: the caller still holds the gate's own approval.
+        assert command_gate.guardrails_approved_hash() == command_gate._hash(gated)
+    finally:
+        command_gate._guardrails_approved_command.set(None)
+
+    assert out["success"] is True
+    assert len(ran) == 4 and all("--subscription" in argv for argv in ran)
+    assert full_checks == [], "a gate-approved command was judged again in the fan-out"
+
+
+def test_fanout_without_a_gate_approval_keeps_the_full_check_per_subscription(monkeypatch):
+    import json as _json
+
+    full_checks = _count_full_checks(monkeypatch)
+    ran, config_dirs = [], []
+    fanout, _ = _load_fanout(_guarded_runner(ran), config_dirs)
+    conns = [{"account_id": f"sub-{i}"} for i in range(3)]
+
+    out = _json.loads(fanout("u", conns, "vm list", gated_command="az vm list"))
+
+    assert out["success"] is True
+    assert sorted(full_checks) == sorted(f"az vm list --subscription sub-{i}" for i in range(3))
+
+
+def test_fanout_does_not_carry_an_approval_onto_a_command_the_signature_matcher_flags(monkeypatch):
+    """Quote-splitting hides `rm -rf /` from a check of the raw string. The argv
+    each worker runs has it back together, so every worker keeps the full check."""
+    import json as _json
+    from utils.auth import command_gate
+    from utils.security.signature_match import check_signature
+
+    command = "vm run-command invoke --scripts 'r''m -rf /'"
+    gated = "az " + command
+    assert check_signature(gated).matched is False
+    full_checks = _count_full_checks(monkeypatch, blocked=True)
+    ran, config_dirs = [], []
+    # Agent mode: this test is about the guardrail, not the Ask-mode classifier.
+    fanout, _ = _load_fanout(_guarded_runner(ran), config_dirs, mode="agent")
+    conns = [{"account_id": "sub-a"}, {"account_id": "sub-b"}]
+    command_gate._guardrails_approved_command.set(command_gate._hash(gated))
+    try:
+        out = _json.loads(fanout("u", conns, command, gated_command=gated))
+    finally:
+        command_gate._guardrails_approved_command.set(None)
+
+    assert ran == [], "a signature-flagged command ran on a carried approval"
+    assert len(full_checks) == 2
+    assert out["success"] is False
+    assert all(r["return_code"] == 126 for r in out["results_by_subscription"].values())
+
+
+def _load_aws_fanout(run_command):
+    """Exec the real AWS multi-account fan-out with faked module-level dependencies."""
+    src = _read(CLOUD_EXEC)
+    match = re.search(r"^def _cloud_exec_aws_multi_account\(.*?(?=^def )", src, re.S | re.M)
+    assert match, "_cloud_exec_aws_multi_account not found"
+    ns = {
+        "shlex": shlex, "json": json, "time": time, "contextvars": __import__("contextvars"),
+        "Optional": typing.Optional, "logger": logging.getLogger("test"),
+        "get_mode_from_context": lambda: "agent",
+        "ModeAccessController": type("M", (), {
+            "ensure_cloud_command_allowed": staticmethod(lambda m, ro, c, reason="": (True, "")),
+        }),
+        "ask_mode_permits": lambda _user_id, _command: True,
+        "describe_rejection": lambda _command: "",
+        "setup_aws_environment_isolated": lambda user_id, selected_region=None, target_account_id=None: (
+            True, selected_region, "assume_role", {"AWS_ACCESS_KEY_ID": "test"},
+        ),
+        "get_command_timeout": lambda c, t: t or 60,
+        "terminal_run": run_command,
+    }
+    exec(match.group(0), ns)
+    return ns["_cloud_exec_aws_multi_account"]
+
+
+def test_aws_fanout_does_not_judge_a_gate_approved_command_again(monkeypatch):
+    from utils.auth import command_gate
+
+    full_checks = _count_full_checks(monkeypatch)
+    ran = []
+    fanout = _load_aws_fanout(_guarded_runner(ran))
+    conns = [{"account_id": "111111111111", "region": "us-east-1"},
+             {"account_id": "222222222222", "region": "eu-west-1"}]
+    gated = "aws ec2 describe-instances"
+    command_gate._guardrails_approved_command.set(command_gate._hash(gated))
+    try:
+        out = json.loads(fanout("u", conns, "ec2 describe-instances", gated_command=gated))
+    finally:
+        command_gate._guardrails_approved_command.set(None)
+
+    assert out["success"] is True and out["accounts_queried"] == 2
+    assert sorted(argv[argv.index("--region") + 1] for argv in ran) == ["eu-west-1", "us-east-1"]
+    assert full_checks == [], "a gate-approved command was judged again in the fan-out"
+
+
+def test_aws_fanout_without_a_gate_approval_keeps_the_full_check_per_account(monkeypatch):
+    full_checks = _count_full_checks(monkeypatch)
+    ran = []
+    fanout = _load_aws_fanout(_guarded_runner(ran))
+    conns = [{"account_id": "111111111111", "region": "us-east-1"},
+             {"account_id": "222222222222", "region": "eu-west-1"}]
+
+    out = json.loads(fanout("u", conns, "ec2 describe-instances"))
+
+    assert out["success"] is True
+    assert len(full_checks) == 2

@@ -271,6 +271,80 @@ class TestOneSummaryPerOutput:
 
 
 # ---------------------------------------------------------------------------
+# A tool that captures its own output
+# ---------------------------------------------------------------------------
+
+
+class TestSelfCapturedOutputSharesOneSummary:
+    """cloud_exec and iac_tool hand their output to capture_tool_end before the
+    tool wrapper redacts it; cap_tool_output gets the redacted copy. Both must
+    end up with one summary, made from the redacted text."""
+
+    _SECRET = "AKIA6ODU7H4ZLXKDNQ3X"
+
+    @pytest.fixture(autouse=True)
+    def _guardrails_on(self, monkeypatch):
+        monkeypatch.setattr("utils.security.config.config", types.SimpleNamespace(enabled=True))
+
+    def _raw(self):
+        # Enough distinct tokens to pass capture_tool_end's 10,000-token threshold too.
+        return "AWS_ACCESS_KEY_ID=" + self._SECRET + "\n" + " ".join(str(i) for i in range(30_000))
+
+    def test_capture_then_redact_then_cap_makes_one_llm_call(self, fake_llm):
+        from utils.security.output_redaction import redact
+
+        raw = self._raw()
+        assert len(raw) > PASS_THROUGH_CHARS
+        # 1. The tool captures its own raw output (what capture_tool_end calls).
+        for_history = summarize_tool_output_once(raw, user_id="u-1", session_id="s-1", tool_name="cloud_exec")
+        # 2. The tool wrapper redacts what the tool returned.
+        redacted, findings = redact(raw)
+        assert findings and self._SECRET not in redacted
+        # 3. The wrapper caps the redacted copy for the model.
+        for_model = cap_tool_output(redacted, tool_name="cloud_exec")
+
+        fake_llm.summarize.assert_called_once()
+        assert self._SECRET not in fake_llm.summarize.call_args.args[0]
+        assert for_model == for_history + _SUMMARIZE_MARKER
+
+    def test_real_capture_tool_end_then_redact_then_cap_makes_one_llm_call(self, fake_llm):
+        """Same sequence through the real ToolContextCapture, where the agent stack is installed."""
+        capture_mod = pytest.importorskip("chat.backend.agent.utils.tool_context_capture")
+        from utils.security.output_redaction import redact
+
+        raw = self._raw()
+        capture = capture_mod.ToolContextCapture(session_id="s-1", user_id="u-1")
+        call_id = capture.capture_tool_start("cloud_exec", {"provider": "aws", "command": "x"}, tool_call_id="call-1")
+        capture.capture_tool_end(call_id, raw, is_error=False)
+        redacted, _findings = redact(raw)
+        for_model = cap_tool_output(redacted, tool_name="cloud_exec")
+
+        fake_llm.summarize.assert_called_once()
+        assert self._SECRET not in fake_llm.summarize.call_args.args[0]
+        stored = capture.summarized_tool_results[call_id]["summarized_output"]
+        assert stored.startswith("SUMMARY") and for_model.startswith("SUMMARY")
+
+    def test_with_guardrails_off_nothing_is_redacted_and_the_summary_is_still_shared(self, fake_llm, monkeypatch):
+        monkeypatch.setattr("utils.security.config.config", types.SimpleNamespace(enabled=False))
+        raw = self._raw()
+
+        summarize_tool_output_once(raw, user_id="u-1", session_id="s-1")
+        cap_tool_output(raw, tool_name="cloud_exec")  # the wrapper does not redact either
+
+        fake_llm.summarize.assert_called_once()
+        assert self._SECRET in fake_llm.summarize.call_args.args[0]
+
+    def test_a_redaction_failure_falls_back_to_the_text_as_given(self, fake_llm, monkeypatch):
+        def _boom(_text):
+            raise RuntimeError("redaction engine down")
+
+        monkeypatch.setattr("utils.security.output_redaction.redact", _boom)
+        payload = "v" * (PASS_THROUGH_CHARS + 1)
+
+        assert cap_tool_output(payload, tool_name="t") == "SUMMARY" + _SUMMARIZE_MARKER
+
+
+# ---------------------------------------------------------------------------
 # Threshold constants
 # ---------------------------------------------------------------------------
 
