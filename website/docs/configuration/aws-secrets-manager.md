@@ -151,6 +151,8 @@ helm upgrade --install aurora ./deploy/helm/aurora -f values.generated.yaml
 | `AWS_SM_PREFIX` | No | `aurora/users` | Path prefix for secret names |
 | `AWS_ACCESS_KEY_ID` | No* | — | AWS access key (*not needed with IRSA) |
 | `AWS_SECRET_ACCESS_KEY` | No* | — | AWS secret key (*not needed with IRSA) |
+| `AWS_SM_ACCESS_KEY_ID` | No | — | Dedicated access key for Secrets Manager. When both `AWS_SM_*` keys are set they are used instead of the default boto3 credential chain, keeping Secrets Manager auth separate from the AWS connector's keys |
+| `AWS_SM_SECRET_ACCESS_KEY` | No | — | Secret key paired with `AWS_SM_ACCESS_KEY_ID` |
 
 ## Secret Reference Format
 
