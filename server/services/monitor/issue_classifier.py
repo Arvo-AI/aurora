@@ -79,7 +79,7 @@ REPLY_PATTERNS: tuple[tuple[str, str], ...] = (
     (MISSING_PERMISSION, r"accessdenied|access denied|is not authorized to perform|"
                          r"(lack|lacks|missing|don't have|do not have|doesn't have|does not have) "
                          r"(the )?(required |necessary )?(iam |rbac )?permissions?"),
-    (NOT_CONNECTED, r"(is|isn't|is not) connected|not connected|credentials (have )?expired|"
+    (NOT_CONNECTED, r"(isn't|is not|not|no longer) connected|credentials (have )?expired|"
                     r"token (has )?expired"),
 )
 

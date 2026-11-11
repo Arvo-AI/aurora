@@ -48,6 +48,7 @@ DEFAULT_PER_PAGE = 25
 MAX_PER_PAGE = 100
 QUERY_MAX_CHARS = 200
 SNIPPET_RADIUS = 120
+SNIPPET_WINDOW = 4000  # chars fetched around a search match
 USERS_FACET_LIMIT = 200
 FAILURES_PER_CHAT = 5
 USER_ID_MAX_CHARS = 255
@@ -156,9 +157,13 @@ def failure_reason(error: Optional[str]) -> str:
     return truncate(first, REASON_MAX_CHARS)
 
 
+def _terms(query: str) -> list[str]:
+    return [t for t in re.findall(r"[\w.-]+", query.lower()) if len(t) > 1 and t not in ("or", "and")]
+
+
 def _snippet(text: str, query: str) -> str:
     """A redacted window of ``text`` around the first query term (or its start)."""
-    terms = [t for t in re.findall(r"[\w.-]+", query.lower()) if len(t) > 1 and t not in ("or", "and")]
+    terms = _terms(query)
     lower = text.lower()
     pos = min((p for p in (lower.find(t) for t in terms) if p >= 0), default=0)
     start, end = max(0, pos - SNIPPET_RADIUS), min(len(text), pos + SNIPPET_RADIUS)
@@ -334,10 +339,14 @@ def _chat_where(f: ChatFilters, org_id: str, *, skip: tuple[str, ...] = ()) -> t
         clauses.append(f"{SEARCH_DOC_SQL} @@ websearch_to_tsquery('simple', %s)")
         params.append(f.query)
     if f.issue and "issue" not in skip:
+        # Same window as the counts and badges: a failure from before the
+        # period doesn't match just because the chat had new activity since.
         exists = (
             "EXISTS (SELECT 1 FROM execution_steps es "
-            f"WHERE es.org_id = cs.org_id AND {ROOT_SESSION_SQL} = cs.id AND es.status = 'error'"
+            f"WHERE es.org_id = cs.org_id AND {ROOT_SESSION_SQL} = cs.id AND es.status = 'error' "
+            "AND es.started_at >= NOW() - %s::interval"
         )
+        params.append(PERIOD_INTERVALS[f.period])
         if f.issue == "any":
             clauses.append(exists + ")")
         else:
@@ -468,14 +477,15 @@ def search_failed_tool_calls(cur, org_id: str, raw: dict, limit: int = 20) -> di
 # Conversations list
 # ---------------------------------------------------------------------------
 
-def _issue_counts_for(cur, org_id: str, chat_ids: list[str]) -> dict[str, dict[str, int]]:
+def _issue_counts_for(cur, org_id: str, chat_ids: list[str], period: str) -> dict[str, dict[str, int]]:
     case_sql, case_params = sql_category_case("es.error_message")
     cur.execute(
         f"""SELECT {ROOT_SESSION_SQL}, {case_sql}, COUNT(*)
             FROM execution_steps es
             WHERE es.org_id = %s AND es.status = 'error' AND {ROOT_SESSION_SQL} = ANY(%s)
+              AND es.started_at >= NOW() - %s::interval
             GROUP BY 1, 2""",
-        tuple(case_params + [org_id, chat_ids]),
+        tuple(case_params + [org_id, chat_ids, PERIOD_INTERVALS[period]]),
     )
     out: dict[str, dict[str, int]] = {}
     for sid, category, count in cur.fetchall():
@@ -489,15 +499,17 @@ def _snippets_for(cur, org_id: str, chat_ids: list[str], query: str) -> dict[str
         f"""SELECT cs.id, hit.msg_index, hit.sender, hit.text
             FROM chat_sessions cs
             JOIN LATERAL (
+                -- A bounded window around the first term, wherever it is in the message.
                 SELECT (e.idx - 1)::int AS msg_index, e.m->>'sender' AS sender,
-                       LEFT(e.m->>'text', %s) AS text
+                       substr(e.m->>'text',
+                              greatest(strpos(lower(e.m->>'text'), %s) - %s, 1), %s) AS text
                 FROM jsonb_array_elements({_MESSAGES_ARRAY}) WITH ORDINALITY AS e(m, idx)
                 WHERE to_tsvector('simple', COALESCE(e.m->>'text', ''))
                       @@ websearch_to_tsquery('simple', %s)
                 ORDER BY e.idx LIMIT 1
             ) hit ON true
             WHERE cs.org_id = %s AND cs.id = ANY(%s)""",
-        (MESSAGE_TEXT_MAX_CHARS, query, org_id, chat_ids),
+        ((_terms(query) or [""])[0], SNIPPET_WINDOW // 2, SNIPPET_WINDOW, query, org_id, chat_ids),
     )
     return {
         sid: {"message_index": idx, "sender": "user" if sender == "user" else "aurora",
@@ -514,7 +526,7 @@ _CHAT_COLUMNS = f"""cs.id, cs.title, cs.user_id, u.email AS user_email, u.name A
 def _chat_summary(r: dict) -> dict:
     return {
         "id": r["id"],
-        "title": r.get("title") or "Untitled chat",
+        "title": scrub(r.get("title")) or "Untitled chat",
         "user": {"id": r.get("user_id"), "email": r.get("user_email"), "name": r.get("user_name")},
         "source": r["source"],
         "trigger_source": r.get("trigger_source") or None,
@@ -545,12 +557,12 @@ def list_chats(cur, org_id: str, f: ChatFilters) -> dict:
 
     issues, failures, snippets = {}, {}, {}
     if ids:
-        issues = _issue_counts_for(cur, org_id, ids)
+        issues = _issue_counts_for(cur, org_id, ids, f.period)
         # Only fetch failure detail for chats that have failures.
         failing = [i for i in ids if issues.get(i)]
         if failing:
             for fail in _failed_tool_calls(
-                cur, org_id, chat_ids=failing, category=f.issue, per_chat=FAILURES_PER_CHAT,
+                cur, org_id, chat_ids=failing, period=f.period, category=f.issue, per_chat=FAILURES_PER_CHAT,
                 limit=FAILURES_PER_CHAT * len(failing),
             ):
                 failures.setdefault(fail["chat_id"], []).append(fail)

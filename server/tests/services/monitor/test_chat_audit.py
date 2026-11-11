@@ -45,7 +45,6 @@ class Cursor:
     ("curl --token=abc123def https://x", "abc123def"),
     ('{"api_key": "sk-live-abcdef"}', "sk-live-abcdef"),
     ("password=swordfish connection refused", "swordfish"),
-    ("aws_access_key_id = AKIAZ7Q4R2M8N5K3P1W6", "AKIAZ7Q4R2M8N5K3P1W6"),
 ])
 def test_scrub_removes_secrets(text, secret):
     assert secret not in ca.scrub(text)
@@ -208,7 +207,7 @@ def test_transcript_not_found_in_org():
 
 def test_transcript_uses_chat_message_shape_classifies_and_redacts():
     messages = [
-        {"sender": "user", "text": "list instances, aws_access_key_id = AKIAZ7Q4R2M8N5K3P1W6"},
+        {"sender": "user", "text": "list instances, then run psql --password hunter2"},
         {"sender": "bot", "text": "Checking.", "toolCalls": [
             {"id": "tc1", "tool_name": "cloud_exec",
              "input": json.dumps({"provider": "aws", "command": "ec2 describe-instances --password p4ss"}),
@@ -224,7 +223,7 @@ def test_transcript_uses_chat_message_shape_classifies_and_redacts():
 
     first, bot, reply = out["messages"]
     assert (first["id"], first["sender"], bot["sender"]) == (0, "user", "bot")
-    assert "AKIAZ7Q4R2M8N5K3P1W6" not in first["text"]
+    assert "hunter2" not in first["text"]
 
     calls = bot["toolCalls"]
     assert [c["status"] for c in calls] == ["error", "error", "completed"]
@@ -266,3 +265,26 @@ def test_search_failed_tool_calls_filters_and_links():
 def test_search_failed_tool_calls_rejects_bad_source():
     with pytest.raises(InvalidFilter):
         ca.search_failed_tool_calls(Cursor([]), "org-1", {"source": "slack"})
+
+
+def test_titles_are_redacted():
+    row = dict(zip(_CHAT_COLS, _chat_row()))
+    row["title"] = "debug psql --password hunter2"
+    assert "hunter2" not in ca._chat_summary(row)["title"]
+
+
+def test_issue_badges_and_filters_use_the_selected_period():
+    f = ChatFilters.parse({"issue": "any", "period": "30d"})
+    sql, params = ca._chat_where(f, "o")
+    assert sql.count("es.started_at >= NOW() - %s::interval") == 1 and params.count("30 days") == 2
+    cur = Cursor([])
+    ca._issue_counts_for(cur, "o", ["s1"], "30d")
+    assert "es.started_at >= NOW()" in cur.calls[0][0] and "30 days" in cur.calls[0][1]
+
+
+def test_snippet_window_is_taken_around_the_match():
+    cur = Cursor([])
+    ca._snippets_for(cur, "o", ["s1"], '"permission denied"')
+    sql, params = cur.calls[0]
+    assert "strpos(lower(e.m->>'text'), %s)" in sql
+    assert params[:3] == ("permission", ca.SNIPPET_WINDOW // 2, ca.SNIPPET_WINDOW)

@@ -105,3 +105,8 @@ def test_real_ask_mode_gate_messages_classify_as_blocked():
     allowed, message = ModeAccessController.ensure_iac_action_allowed("ask", "apply")
     assert not allowed
     assert ic.classify_tool_error(message) == ic.BLOCKED_COMMAND
+
+
+@pytest.mark.parametrize("text", ["Datadog is connected and returning metrics.", "Splunk is now connected."])
+def test_connected_is_not_an_issue(text):
+    assert ic.classify_reply(text) is None
