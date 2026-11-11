@@ -317,7 +317,7 @@ def _run_sweep(monkeypatch, task, script):
     ))
     import utils.notifications.dispatcher as dispatcher
     monkeypatch.setattr(dispatcher, "notify_investigation_failed", lambda *a, **k: None)
-    task.cleanup_stale_background_chats()
+    task._sweep_stale_background_chats()
     return cursor, revoked
 
 

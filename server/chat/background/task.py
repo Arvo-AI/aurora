@@ -2834,6 +2834,11 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
     """Cleanup background chat sessions stuck in 'in_progress' and incidents
     whose Celery task is no longer alive. Runs every 5 minutes.
     """
+    return _sweep_stale_background_chats()
+
+
+def _sweep_stale_background_chats() -> Dict[str, Any]:
+    """The sweep itself, kept off the task decorator so tests can call it."""
     try:
         with db_pool.get_admin_connection() as conn:
             cleaned_count = 0
