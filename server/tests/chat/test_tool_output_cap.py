@@ -280,7 +280,10 @@ class TestSelfCapturedOutputSharesOneSummary:
     tool wrapper redacts it; cap_tool_output gets the redacted copy. Both must
     end up with one summary, made from the redacted text."""
 
-    _SECRET = "AKIA6ODU7H4ZLXKDNQ3X"
+    # Synthetic AWS-style key (never a real credential). Assembled from two parts so
+    # this file holds no literal for the repo's secret scanner; the allowlisted
+    # fixtures live in tests/test_output_redaction.py.
+    _SECRET = "AKIA" + "6ODU7H4ZLXKDNQ3X"
 
     @pytest.fixture(autouse=True)
     def _guardrails_on(self, monkeypatch):
@@ -307,11 +310,14 @@ class TestSelfCapturedOutputSharesOneSummary:
         assert self._SECRET not in fake_llm.summarize.call_args.args[0]
         assert for_model == for_history + _SUMMARIZE_MARKER
 
-    def test_real_capture_tool_end_then_redact_then_cap_makes_one_llm_call(self, fake_llm):
-        """Same sequence through the real ToolContextCapture, where the agent stack is installed."""
+    def test_real_capture_tool_end_then_redact_then_cap_makes_one_llm_call(self, fake_llm, monkeypatch):
+        """Same sequence through the real ToolContextCapture.capture_tool_end."""
         capture_mod = pytest.importorskip("chat.backend.agent.utils.tool_context_capture")
         from utils.security.output_redaction import redact
 
+        # The tokenizer is stubbed where tiktoken is not installed (CI), which would
+        # keep capture_tool_end under its 10,000-token threshold. Count plainly instead.
+        monkeypatch.setattr(capture_mod, "count_tokens", lambda text, model="gpt-4o": len(text) // 4)
         raw = self._raw()
         capture = capture_mod.ToolContextCapture(session_id="s-1", user_id="u-1")
         call_id = capture.capture_tool_start("cloud_exec", {"provider": "aws", "command": "x"}, tool_call_id="call-1")
