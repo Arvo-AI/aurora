@@ -273,7 +273,12 @@ class Agent:
             from langchain.agents import create_agent
             from langchain_core.callbacks import BaseCallbackHandler
             from .tools.cloud_tools import get_cloud_tools, set_user_context, set_tool_capture
-            from .middleware import BedrockPromptCacheMiddleware, ContextTrimMiddleware, _ForceToolChoice
+            from .middleware import (
+                BedrockPromptCacheMiddleware,
+                ContextTrimMiddleware,
+                _ForceToolChoice,
+                retry_timed_out_step,
+            )
 
             logging.info(f"agentic_tool_flow: State has user_id {state.user_id} and session_id {state.session_id}")
             # Set user context for tools
@@ -661,7 +666,9 @@ class Agent:
             # Tool outputs are capped/summarized upstream (utils/tool_output_cap.py).
             # ContextSafetyMiddleware is a lightweight safety net that also injects
             # correlated RCA context updates into background sessions.
-            middlewares = [ContextTrimMiddleware(model_name=model_name)]
+            # A model step that times out is sent again on its own, so the tool
+            # work before it is kept. Any other error is raised as before.
+            middlewares = [ContextTrimMiddleware(model_name=model_name), retry_timed_out_step()]
             # Label the forced tool_choice by the provider that actually *serves* the
             # model, not its id prefix: under LLM_PROVIDER_MODE=<provider> a clean
             # anthropic/ model is served by e.g. Bedrock, whose client needs a different

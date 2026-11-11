@@ -331,6 +331,7 @@ MAIN_MODEL=anthropic/claude-sonnet-5    # auto-translated to us.anthropic.claude
 | `RCA_ORCHESTRATOR_MODEL` | - | *Only when `ORCHESTRATOR_ENABLED=true`.* Brain model for triage + synthesis. Format: `provider/model`. |
 | `RCA_SUBAGENT_MODEL` | - | *Only when `ORCHESTRATOR_ENABLED=true`.* Sub-agent investigator model. Per-role overrides in `orchestrator/roles/*.md` frontmatter take precedence. Format: `provider/model`. |
 | `GEMINI_DISABLE_THINKING` | - | Disable Gemini thinking mode |
+| `GEMINI_REQUEST_TIMEOUT_SECONDS` | `600` | Longest one Gemini model call may take, in seconds, counting the whole streamed answer. An agent step that hits the limit is sent again. `0` turns the limit off |
 
 ### AI Safety Guardrails
 

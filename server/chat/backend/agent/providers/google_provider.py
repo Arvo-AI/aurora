@@ -13,7 +13,11 @@ import os
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from .base_provider import BaseLLMProvider, apply_gemini_thinking_config
+from .base_provider import (
+    BaseLLMProvider,
+    apply_gemini_request_timeout,
+    apply_gemini_thinking_config,
+)
 from ..model_mapper import ModelMapper
 
 try:
@@ -112,6 +116,7 @@ class GoogleProvider(BaseLLMProvider):
         }
 
         apply_gemini_thinking_config(config, resolved_model)
+        apply_gemini_request_timeout(config, kwargs)
 
         config.update(kwargs)
 

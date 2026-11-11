@@ -418,6 +418,7 @@ config:
   AURORA_CACHE_TOKEN_IN_REDIS: "false"
   RCA_OPTIMIZE_COSTS: "false"
   GEMINI_DISABLE_THINKING: "false"
+  GEMINI_REQUEST_TIMEOUT_SECONDS: "600" # Longest one Gemini model call may take, in seconds, counting the whole streamed answer. An agent step that hits the limit is sent again. "0" turns the limit off.
 
   # --- Embedding model for alert correlation (optional) ---
   # Improves alert-to-incident grouping with semantic similarity.

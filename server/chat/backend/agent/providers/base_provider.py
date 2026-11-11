@@ -6,6 +6,7 @@ Each provider is responsible for creating properly configured LangChain chat mod
 """
 
 import logging
+import math
 import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
@@ -61,6 +62,43 @@ def apply_gemini_thinking_config(config: dict, model_name: str) -> None:
             logger.info(f"Enabled thinking mode (level=high) for {model_name}")
         else:
             logger.info(f"Enabled thinking mode (default level) for {model_name}")
+
+
+# The Google client counts the whole streamed answer against the timeout, not
+# only the wait for the first byte. A healthy step on a large context has taken
+# close to seven minutes, so the default sits above that.
+GEMINI_DEFAULT_REQUEST_TIMEOUT_SECONDS = 600.0
+
+
+def apply_gemini_request_timeout(config: dict, caller_kwargs: dict) -> None:
+    """Give a Gemini model a request timeout unless the caller chose one.
+
+    Without one the Google client waits for as long as the server says nothing,
+    so a stalled call holds its investigation until the investigation's own
+    time limit. GEMINI_REQUEST_TIMEOUT_SECONDS changes the limit; 0 turns it off.
+
+    Args:
+        config: Model configuration dict to update.
+        caller_kwargs: What the caller passed to get_chat_model.
+    """
+    if "timeout" in caller_kwargs or "request_timeout" in caller_kwargs:
+        return
+
+    seconds = GEMINI_DEFAULT_REQUEST_TIMEOUT_SECONDS
+    raw = os.getenv("GEMINI_REQUEST_TIMEOUT_SECONDS", "").strip()
+    if raw:
+        try:
+            seconds = float(raw)
+        except ValueError:
+            seconds = float("nan")
+        if not math.isfinite(seconds):
+            logger.warning(
+                "Ignoring GEMINI_REQUEST_TIMEOUT_SECONDS=%r: not a number of seconds", raw
+            )
+            seconds = GEMINI_DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+    if seconds > 0:
+        config["timeout"] = seconds
 
 
 class BaseLLMProvider(ABC):
