@@ -31,7 +31,6 @@ import logging
 import threading
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
-from ..llm import LLMManager
 from .llm_usage_tracker import LLMUsageTracker
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
@@ -318,19 +317,12 @@ class ToolContextCapture:
         if content_tokens > SUMMARIZATION_THRESHOLD_TOKENS:
             logger.info(f" Tool output length {content_tokens} tokens exceeds {SUMMARIZATION_THRESHOLD_TOKENS} token threshold, summarizing for LLM context")
             try:
-                from ..llm import ModelConfig
-                # Cap content before sending to summarization to prevent context overflow.
-                # LLMManager.summarize() also caps internally, but truncating here avoids
-                # passing multi-MB strings through the call stack unnecessarily.
-                MAX_SUMMARIZATION_INPUT_CHARS = 400_000  # ~100K tokens
-                content_to_summarize = original_content
-                if len(content_to_summarize) > MAX_SUMMARIZATION_INPUT_CHARS:
-                    logger.warning(f"Truncating tool output from {len(content_to_summarize)} to {MAX_SUMMARIZATION_INPUT_CHARS} chars before summarization")
-                    content_to_summarize = content_to_summarize[:MAX_SUMMARIZATION_INPUT_CHARS] + "\n\n[Truncated before summarization]"
-                llm = LLMManager()
-                summary = llm.summarize(
-                    content_to_summarize, model=ModelConfig.TOOL_OUTPUT_SUMMARIZATION_MODEL,
-                    user_id=self.user_id, session_id=self.session_id,
+                # cap_tool_output summarizes this same output right after, for the
+                # model. The shared helper makes that one LLM call, not two.
+                from .tool_output_cap import summarize_tool_output_once
+                summary = summarize_tool_output_once(
+                    original_content, user_id=self.user_id, session_id=self.session_id,
+                    tool_name=tool_name,
                 )
                 summarized_content = summary + '\n\n[Summarized from longer output]'
                 summary_tokens = count_tokens(summarized_content)
