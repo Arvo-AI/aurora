@@ -264,7 +264,7 @@ def test_tailscale_local_ssh_reports_its_timeout(monkeypatch, tracker):
     assert deadline - started == 1800 + 120
     assert label == "command 'ssh'"
     # The server environment is not inherited.
-    assert set(seen["env"]) == {"PATH", "HOME"}
+    assert set(seen["env"]) <= {"PATH", "HOME"} and "PATH" in seen["env"]
     assert tracker._bounds == {}
 
 

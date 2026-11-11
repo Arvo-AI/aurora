@@ -36,6 +36,14 @@ def _is_pod_isolation_enabled() -> bool:
     return os.getenv('ENABLE_POD_ISOLATION', 'true').lower() == 'true'
 
 
+def _ssh_env() -> dict:
+    """PATH, and HOME when set (ssh's default keys live under it). Nothing else."""
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+    if os.environ.get("HOME"):
+        env["HOME"] = os.environ["HOME"]
+    return env
+
+
 def _execute_ssh_local(
     device_hostname: str,
     command: str,
@@ -102,10 +110,7 @@ def _execute_ssh_local(
                 timeout=timeout,
                 # Only what ssh needs to find its binary and default keys; the
                 # server environment (and any credentials in it) stays out.
-                env={
-                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                    "HOME": os.environ.get("HOME", "/tmp"),
-                },
+                env=_ssh_env(),
             )
 
         output = result.stdout if result.returncode == 0 else (result.stderr or result.stdout)
