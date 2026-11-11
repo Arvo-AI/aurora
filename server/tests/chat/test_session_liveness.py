@@ -102,10 +102,13 @@ def test_a_failed_beat_is_logged_and_the_next_one_still_runs(monkeypatch):
 
 
 def test_an_error_in_the_task_stops_the_heartbeat_and_propagates(beats):
-    with pytest.raises(ValueError):
+    def _workflow_fails():
         with liveness.session_heartbeat(SESSION, USER, interval=0.01):
             assert _wait_for(lambda: len(beats) >= 1)
             raise ValueError("workflow failed")
+
+    with pytest.raises(ValueError):
+        _workflow_fails()
     count_at_exit = len(beats)
     time.sleep(0.05)
     assert len(beats) == count_at_exit

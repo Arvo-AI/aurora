@@ -1036,19 +1036,26 @@ def run_background_chat(
         # Google Chat mention never hangs on "Thinking…" forever.
         try:
             src = (trigger_metadata or {}).get("source")
+            # A failed run (an error, a timeout, a stall) may have saved a partial
+            # draft; that is not the answer, so the error is sent instead. A run
+            # that finished but could not post still sends what it saved.
+            _fallback_kwargs = (
+                {"fallback_text": _CHAT_ERROR_FALLBACK} if completed_successfully
+                else {"force_text": _CHAT_ERROR_FALLBACK}
+            )
             if src in ("slack", "slack_button") and not _chat_reply_sent:
                 logger.warning("[BackgroundChat] Reply not sent on happy path for session %s; "
                                "sending fallback so Slack isn't stuck on 'Thinking…'", session_id)
                 _send_response_to_slack(
                     user_id, session_id, trigger_metadata,
-                    fallback_text=_CHAT_ERROR_FALLBACK,
+                    **_fallback_kwargs,
                 )
             elif src in ("google_chat", "google_chat_button") and not _chat_reply_sent:
                 logger.warning("[BackgroundChat] Reply not sent on happy path for session %s; "
                                "sending fallback so Google Chat isn't stuck on 'Thinking…'", session_id)
                 _send_response_to_google_chat(
                     user_id, session_id, trigger_metadata,
-                    fallback_text=_CHAT_ERROR_FALLBACK,
+                    **_fallback_kwargs,
                 )
             elif src == "teams" and not _chat_reply_sent:
                 logger.warning(
@@ -1058,7 +1065,7 @@ def run_background_chat(
                 )
                 _send_response_to_teams(
                     user_id, session_id, trigger_metadata,
-                    fallback_text=_CHAT_ERROR_FALLBACK,
+                    **_fallback_kwargs,
                 )
         except Exception as _final_reply_err:
             logger.error("[BackgroundChat] Fallback chat reply failed for session %s: %s",
@@ -2683,6 +2690,29 @@ def _db_now(cursor) -> datetime:
     return cursor.fetchone()[0]
 
 
+# A session whose worker is gone: it stopped beating, or it was never picked up
+# within the queue allowance. Parameters: dead-worker threshold, never-started threshold.
+_WORKER_GONE_SQL = """(
+    (heartbeat_at IS NOT NULL AND GREATEST(heartbeat_at, updated_at) < %s)
+    OR (heartbeat_at IS NULL AND updated_at < %s)
+)"""
+
+
+def _beat_since(cursor, session_id: str, threshold: datetime) -> bool:
+    """Lock the session row and say whether its worker beat since *threshold*.
+
+    The lock holds until the sweep commits, so a beat cannot land between this
+    check and the session being failed: the worker's UPDATE waits, then finds
+    the session no longer in progress.
+    """
+    cursor.execute(
+        "SELECT heartbeat_at >= %s FROM chat_sessions WHERE id = %s FOR UPDATE",
+        (threshold, session_id),
+    )
+    row = cursor.fetchone()
+    return bool(row and row[0])
+
+
 def _revoke_dead_task(task_id: Optional[str]) -> None:
     """Stop a task the sweep has given up on, if a worker is still running it.
 
@@ -2918,8 +2948,13 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                           )
                     """, (uid, dead_worker_threshold, stale_threshold))
                     for session_id, incident_id, stale_task_id in cursor.fetchall():
+                        # The claim repeats the staleness test: Postgres re-evaluates an
+                        # UPDATE's WHERE after locking the row, so a beat that landed since
+                        # the SELECT keeps the session alive.
                         claimed = _claim_orphaned_sessions(
-                            cursor, "id = %s AND status = 'in_progress'", (session_id,),
+                            cursor,
+                            "id = %s AND status = 'in_progress' AND " + _WORKER_GONE_SQL,
+                            (session_id, dead_worker_threshold, stale_threshold),
                         )
                         if not claimed:
                             continue
@@ -2953,6 +2988,10 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                     for inc_id, task_id, session_id, last_activity in cursor.fetchall():
                         if not _is_task_dead(task_id, last_activity, dead_task_threshold,
                                              cursor=cursor, incident_id=inc_id):
+                            continue
+                        if session_id and _beat_since(cursor, str(session_id), dead_task_threshold):
+                            # The worker beat after the check above: it is alive.
+                            conn.commit()
                             continue
                         cursor.execute(
                             "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id",

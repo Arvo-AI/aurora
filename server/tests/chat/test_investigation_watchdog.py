@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import signal
-import sys
 import threading
 import time
 from datetime import datetime, timedelta
@@ -357,3 +356,32 @@ def test_a_live_task_is_not_revoked(monkeypatch, task):
         "i.rca_celery_task_id IS NOT NULL": [("inc-1", "task-1", SESSION, fresh)],
     })
     assert revoked == []
+
+
+def test_the_stale_session_claim_rechecks_the_heartbeat(monkeypatch, task):
+    """A beat landing between the sweep's SELECT and its UPDATE must keep the
+    session alive, so the claim repeats the staleness test the SELECT used."""
+    cursor, _ = _run_sweep(monkeypatch, task, {
+        "cs.heartbeat_at IS NOT NULL": [(SESSION, None, None)],
+    })
+    sql, params = next(e for e in cursor.executed if e[0].startswith("UPDATE chat_sessions"))
+    assert "GREATEST(heartbeat_at, updated_at) < %s" in sql
+    assert "heartbeat_at IS NULL AND updated_at < %s" in sql
+    assert params[1:] == (SESSION, DB_NOW - timedelta(minutes=5), DB_NOW - timedelta(minutes=20))
+
+
+def test_a_task_that_beats_after_the_dead_check_is_left_alone(monkeypatch, task):
+    """The session row is locked and its beat rechecked before the incident is
+    failed or the task revoked."""
+    stale = DB_NOW - timedelta(minutes=6)
+    monkeypatch.setattr(task.celery_app, "AsyncResult", lambda _t: SimpleNamespace(state="STARTED", result=None))
+    cursor, revoked = _run_sweep(monkeypatch, task, {
+        "i.rca_celery_task_id IS NOT NULL": [("inc-1", "task-1", SESSION, stale)],
+        "FROM execution_steps": [],
+        "FROM rca_findings": [],
+        "FOR UPDATE": [(True,)],  # the worker beat in the meantime
+    })
+    lock_sql, lock_params = next(e for e in cursor.executed if "FOR UPDATE" in e[0])
+    assert lock_params == (DB_NOW - timedelta(minutes=3), SESSION)
+    assert revoked == []
+    assert not any(e[0].startswith("UPDATE incidents SET aurora_status = 'error'") for e in cursor.executed)
