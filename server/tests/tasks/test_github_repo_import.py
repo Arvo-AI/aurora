@@ -195,3 +195,43 @@ class TestImportScope:
         # purpose; only ones created since come back.
         _, cur, gen, _ = _run(self._REPOS, created_after="2026-09-26T20:04:00Z")
         assert [c.args[1][2] for c in _insert_calls(cur)] == ["acme/new"]
+
+
+class TestHourlySync:
+    """The safety net repairs failed imports without undoing removals."""
+
+    def _sync(self, rows, state, backfill=False):
+        db_pool, _, cur = _mock_db()
+        cur.fetchall.return_value = rows
+        task = MagicMock()
+        with patch("utils.db.connection_pool.db_pool", db_pool), \
+             patch("tasks.github_webhook_tasks.enrollment_state", return_value=state), \
+             patch.object(mod, "import_installation_repos", task):
+            mod._sync_installation_repos(backfill=backfill)
+        return task
+
+    def test_new_install_with_nothing_connected_gets_full_import(self):
+        task = self._sync([(_INSTALL, True)], (_USER, 0, None))
+        task.delay.assert_called_once_with(
+            _USER, _INSTALL, enroll_change_gating=True, created_after=None
+        )
+
+    def test_old_install_with_nothing_connected_is_left_alone(self):
+        # Zero repos long after linking means they were all removed in Aurora.
+        task = self._sync([(_INSTALL, False)], (_USER, 0, None))
+        task.delay.assert_not_called()
+
+    def test_backfill_repairs_old_empty_install(self):
+        task = self._sync([(_INSTALL, False)], (_USER, 0, None), backfill=True)
+        assert task.delay.call_args.kwargs["created_after"] is None
+
+    def test_backfill_imports_repos_created_since_first_import(self):
+        from datetime import datetime
+
+        first = datetime(2026, 9, 27, 0, 4)
+        task = self._sync([(_INSTALL, False)], (_USER, 55, first), backfill=True)
+        assert task.delay.call_args.kwargs["created_after"] == "2026-09-27T00:04:00Z"
+
+    def test_install_with_review_turned_off_is_skipped(self):
+        task = self._sync([(_INSTALL, True)], (None, 0, None))
+        task.delay.assert_not_called()

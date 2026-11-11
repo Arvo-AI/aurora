@@ -366,6 +366,10 @@ def import_installation_repos(
 # A repo created on GitHub inside this window and still not connected missed
 # its webhook. Longer than the hourly beat so one late run loses nothing.
 _SYNC_LOOKBACK_SEC = 3 * 3600
+# An install with nothing connected gets a full import only this soon after
+# linking (its first import failed). Later, zero repos means someone removed
+# them all in Aurora, and that choice stands.
+_SYNC_EMPTY_INSTALL_WINDOW_SEC = 24 * 3600
 
 
 def _iso_utc(dt) -> str:
@@ -378,13 +382,19 @@ def _iso_utc(dt) -> str:
 
 @celery_app.task(name="routes.github.github_repo_metadata.sync_installation_repos")
 def sync_installation_repos(backfill: bool = False):
+    """Celery entry point; see :func:`_sync_installation_repos`."""
+    return _sync_installation_repos(backfill)
+
+
+def _sync_installation_repos(backfill: bool = False):
     """Hourly safety net: enroll repos that a webhook or an import missed.
 
     For every linked, unsuspended installation that qualifies for
     auto-enrollment (see ``enrollment_state``):
 
-    * no connected repos at all (the import never landed, e.g. GitHub was
-      down at signup): queue the full import;
+    * no connected repos at all and linked in the last day (the import never
+      landed, e.g. GitHub was down at signup), or any age with ``backfill``:
+      queue the full import;
     * otherwise: import only repos created on GitHub in the last few hours,
       or, with ``backfill``, since the installation's first import. Repos
       that already existed are never re-added, so a repo someone removed
@@ -399,24 +409,29 @@ def sync_installation_repos(backfill: bool = False):
 
     with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT DISTINCT gi.installation_id
+            """SELECT gi.installation_id,
+                      MAX(ugi.linked_at) > NOW() - make_interval(secs => %s)
                  FROM github_installations gi
                  JOIN user_github_installations ugi
                    ON ugi.installation_id = gi.installation_id
                 WHERE ugi.disconnected_at IS NULL
                   AND gi.suspended_at IS NULL
-                ORDER BY gi.installation_id"""
+                GROUP BY gi.installation_id
+                ORDER BY gi.installation_id""",
+            (_SYNC_EMPTY_INSTALL_WINDOW_SEC,),
         )
-        installation_ids = [row[0] for row in cur.fetchall()]
+        installations = [(row[0], bool(row[1])) for row in cur.fetchall()]
 
     recent = datetime.now(timezone.utc) - timedelta(seconds=_SYNC_LOOKBACK_SEC)
     queued = 0
-    for installation_id in installation_ids:
+    for installation_id, linked_recently in installations:
         try:
             owner, total, first_connected_at = enrollment_state(installation_id)
             if not owner:
                 continue
             if total == 0:
+                if not (backfill or linked_recently):
+                    continue
                 created_after = None
             elif backfill and first_connected_at is not None:
                 created_after = _iso_utc(first_connected_at)
@@ -433,5 +448,5 @@ def sync_installation_repos(backfill: bool = False):
             )
     logger.info(
         "[RepoSync] queued %d of %d linked installation(s) backfill=%s",
-        queued, len(installation_ids), backfill,
+        queued, len(installations), backfill,
     )
