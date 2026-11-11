@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Folded pages used to get no note. One note per incident, only when PagerDuty
   notes are on for the org, and none when another Aurora incident already
   noted the same PagerDuty incident.
+- Investigations: a long model step or a long command no longer gets an
+  investigation reported as a dead worker. A running investigation refreshes
+  its session every 30 seconds, so a killed worker is caught within 3 minutes
+  (incidents) or 5 minutes (chats), and one stuck on a call that never returns
+  is stopped after 10 minutes without progress instead of at the time limit.
+- Chat: a reply left on "Thinking…" because its worker was killed (out of
+  memory, eviction) or stopped is replaced with an error in Slack, Google Chat,
+  Teams and the chat transcript.
 
 ## [1.5.21] - 2026-11-09
 
