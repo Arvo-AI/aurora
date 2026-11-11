@@ -85,6 +85,11 @@ path "${VAULT_KV_MOUNT}/metadata/" {
 path "${VAULT_KV_MOUNT}/metadata/users" {
   capabilities = ["list"]
 }
+
+# Operator-provisioned system secrets (e.g. GitHub App key), read-only
+path "${VAULT_KV_MOUNT}/data/system/*" {
+  capabilities = ["read"]
+}
 EOF
 echo "  Aurora policy created"
 echo ""

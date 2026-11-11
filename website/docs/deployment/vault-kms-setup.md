@@ -195,6 +195,7 @@ path "aurora/data/users/*" { capabilities = ["create","read","update","delete","
 path "aurora/metadata/users/*" { capabilities = ["list","read","delete"] }
 path "aurora/metadata/" { capabilities = ["list"] }
 path "aurora/metadata/users" { capabilities = ["list"] }
+path "aurora/data/system/*" { capabilities = ["read"] }
 POLICY'
 ```
 

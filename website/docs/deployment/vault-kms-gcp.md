@@ -318,6 +318,10 @@ path "aurora/metadata/" {
 path "aurora/metadata/users" {
   capabilities = ["list"]
 }
+# Operator-provisioned system secrets (e.g. GitHub App key), read-only
+path "aurora/data/system/*" {
+  capabilities = ["read"]
+}
 EOF'
 
 # Create token with aurora-app policy

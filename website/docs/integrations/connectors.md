@@ -611,22 +611,23 @@ Exporting the token inside the pod shell keeps it out of your local shell
 history.
 
 The `aurora-app` policy from the [Kubernetes guide](../deployment/kubernetes.md#6-initialize-vault)
-only grants `aurora/data/users/*`, so the app token the pods use cannot
-**read** these paths either. Add read access to `aurora/data/system/*` by
-rewriting the policy from the same root-token shell:
+grants the app token read access to `aurora/data/system/*`, which is where
+the server reads these secrets. Installs whose Vault was initialized before
+that rule was added only grant `aurora/data/users/*`, so the server cannot
+read the key and the GitHub install fails. Check it from the same root-token
+shell, and add the rule if it is missing:
 
 ```bash
-vault policy write aurora-app - <<EOF
-path "aurora/data/users/*" { capabilities = ["create","read","update","delete","list"] }
-path "aurora/metadata/users/*" { capabilities = ["list","read","delete"] }
-path "aurora/metadata/" { capabilities = ["list"] }
-path "aurora/metadata/users" { capabilities = ["list"] }
-path "aurora/data/system/*" { capabilities = ["read"] }
-EOF
+vault policy read aurora-app | grep 'data/system' || {
+  vault policy read aurora-app > /tmp/aurora-app.hcl
+  printf '\npath "aurora/data/system/*" { capabilities = ["read"] }\n' >> /tmp/aurora-app.hcl
+  vault policy write aurora-app /tmp/aurora-app.hcl
+  rm -f /tmp/aurora-app.hcl
+}
 ```
 
-Then restart the Aurora pods (`kubectl -n aurora-oss rollout restart deployment`):
-Aurora caches both secrets in memory after the first successful read.
+Vault applies policy changes to existing tokens immediately, so no restart or
+new token is needed.
 
 **Per-environment Apps**: create separate `aurora-<customer>-prod`,
 `aurora-<customer>-staging`, `aurora-<customer>-dev` Apps. Aurora reads

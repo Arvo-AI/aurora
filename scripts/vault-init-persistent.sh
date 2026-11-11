@@ -151,7 +151,7 @@ echo ""
 echo "Creating Aurora policy..."
 POLICY_DATA=$(cat <<EOF
 {
-  "policy": "# Aurora application policy\n# Allows full CRUD on the aurora KV mount\n\n# Allow all operations on user secrets\npath \"${VAULT_KV_MOUNT}/data/users/*\" {\n  capabilities = [\"create\", \"read\", \"update\", \"delete\", \"list\"]\n}\n\npath \"${VAULT_KV_MOUNT}/metadata/users/*\" {\n  capabilities = [\"list\", \"read\", \"delete\"]\n}\n\n# Allow listing secrets\npath \"${VAULT_KV_MOUNT}/metadata/\" {\n  capabilities = [\"list\"]\n}\n\npath \"${VAULT_KV_MOUNT}/metadata/users\" {\n  capabilities = [\"list\"]\n}"
+  "policy": "# Aurora application policy\n# Allows full CRUD on the aurora KV mount\n\n# Allow all operations on user secrets\npath \"${VAULT_KV_MOUNT}/data/users/*\" {\n  capabilities = [\"create\", \"read\", \"update\", \"delete\", \"list\"]\n}\n\npath \"${VAULT_KV_MOUNT}/metadata/users/*\" {\n  capabilities = [\"list\", \"read\", \"delete\"]\n}\n\n# Allow listing secrets\npath \"${VAULT_KV_MOUNT}/metadata/\" {\n  capabilities = [\"list\"]\n}\n\npath \"${VAULT_KV_MOUNT}/metadata/users\" {\n  capabilities = [\"list\"]\n}\n\n# Operator-provisioned system secrets (e.g. GitHub App key), read-only\npath \"${VAULT_KV_MOUNT}/data/system/*\" {\n  capabilities = [\"read\"]\n}"
 }
 EOF
 )

@@ -437,6 +437,7 @@ path "aurora/data/users/*" { capabilities = ["create","read","update","delete","
 path "aurora/metadata/users/*" { capabilities = ["list","read","delete"] }
 path "aurora/metadata/" { capabilities = ["list"] }
 path "aurora/metadata/users" { capabilities = ["list"] }
+path "aurora/data/system/*" { capabilities = ["read"] }
 EOF'
 
   APP_TOKEN=$(kubectl -n "$NAMESPACE" exec statefulset/aurora-oss-vault -- sh -c "export VAULT_ADDR=http://127.0.0.1:8200 && vault token create -policy=aurora-app -ttl=0 -format=json 2>/dev/null" | python3 -c "import sys,json; print(json.load(sys.stdin)['auth']['client_token'])")
