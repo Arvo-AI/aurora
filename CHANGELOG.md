@@ -7,11 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.22] - 2026-11-11
+
 ### Added
 - PagerDuty: the RCA note ends with up to three suggested next steps, read
   from a new "## Suggested Next Steps" section of the RCA summary (one line
   each, under 200 characters, action first). Each step is capped at 240
   characters and the note cap rises to 2,800 characters to fit them.
+
+### Changed
+- Agent: each cloud command goes through the LLM safety judge once instead of
+  twice, and each large tool output is summarized once instead of twice. That
+  removes an LLM call from every cloud command and every oversized tool output
+  in RCAs, actions, web chat and Slack answers. With a rule marked "Always
+  allowed", the judge is now skipped end to end.
 
 ### Fixed
 - PagerDuty: a page the recurrence agent folds into an earlier incident now
