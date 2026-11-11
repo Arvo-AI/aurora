@@ -148,7 +148,7 @@ def save_repo_selections(user_id):
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:save_repo_selections]")
+                rls_org = set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:save_repo_selections]")
                 cur.execute(
                     "SELECT repo_full_name, user_id FROM connected_repos WHERE provider = 'github'",
                 )
@@ -204,7 +204,7 @@ def save_repo_selections(user_id):
                         "DELETE FROM connected_repos WHERE provider = 'github' AND repo_full_name = ANY(%s)",
                         (list(removed),),
                     )
-                _record_exclusions(cur, org_id, removed, incoming)
+                _record_exclusions(cur, rls_org or org_id, removed, incoming)
 
                 conn.commit()
 
@@ -257,11 +257,11 @@ def clear_repo_selections(user_id):
         predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:clear_repo_selections]")
+                rls_org = set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:clear_repo_selections]")
                 cur.execute(
                     "DELETE FROM connected_repos WHERE provider = 'github' RETURNING repo_full_name"
                 )
-                _record_exclusions(cur, org_id, {r[0] for r in cur.fetchall()}, set())
+                _record_exclusions(cur, rls_org or org_id, {r[0] for r in cur.fetchall()}, set())
                 conn.commit()
         return jsonify({"message": "All repository selections cleared"})
     except Exception as e:

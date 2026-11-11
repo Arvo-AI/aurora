@@ -473,6 +473,7 @@ def _handle_installation_repositories_event(
                 owner, installation_id, enroll_change_gating=True,
                 only_repos=added_names if _repos_imported(installation_id) else None,
                 require_enrollment=True,
+                grant_delivery_id=delivery_id,
             )
         else:
             owner = None

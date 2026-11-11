@@ -233,18 +233,28 @@ def _import_not_wanted(installation_id: int, once_only: bool, require_enrollment
     return False
 
 
-def _apply_exclusions(cur, org_id: str, repos: list[dict], regranted: bool) -> list[dict]:
-    """Drop repos the org removed in the picker, or clear them when regranted."""
+def _apply_exclusions(
+    cur, org_id: str, repos: list[dict], regranted: bool,
+    grant_delivery_id: str | None = None,
+) -> list[dict]:
+    """Drop repos the org removed in the picker.
+
+    When GitHub granted these repos again (``regranted``), exclusions older
+    than the grant's webhook are cleared and the repos come back; one
+    recorded after it still wins. Both times come from the database clock.
+    """
     names = [r.get("full_name") for r in repos if r.get("full_name")]
     if not names:
         return repos
     if regranted:
         cur.execute(
             """DELETE FROM github_repo_exclusions
-                WHERE org_id = %s AND repo_full_name = ANY(%s)""",
-            (org_id, names),
+                WHERE org_id = %s AND repo_full_name = ANY(%s)
+                  AND excluded_at < COALESCE(
+                      (SELECT received_at FROM webhook_deliveries WHERE delivery_id = %s),
+                      NOW())""",
+            (org_id, names, grant_delivery_id),
         )
-        return repos
     cur.execute(
         """SELECT repo_full_name FROM github_repo_exclusions
             WHERE org_id = %s AND repo_full_name = ANY(%s)""",
@@ -252,6 +262,27 @@ def _apply_exclusions(cur, org_id: str, repos: list[dict], regranted: bool) -> l
     )
     excluded = {row[0] for row in cur.fetchall()}
     return [r for r in repos if r.get("full_name") not in excluded]
+
+
+def _disconnect_installation(installation_id: int) -> None:
+    from utils.db.connection_pool import db_pool
+
+    try:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE user_github_installations
+                      SET disconnected_at = NOW(),
+                          repos_imported_at = NULL,
+                          repos_import_legacy = FALSE
+                    WHERE installation_id = %s
+                      AND disconnected_at IS NULL""",
+                (installation_id,),
+            )
+            conn.commit()
+    except Exception:
+        logger.warning(
+            "[RepoImport] disconnect failed installation_id=%s", installation_id, exc_info=True,
+        )
 
 
 def _import_installation_repos(
@@ -263,6 +294,8 @@ def _import_installation_repos(
     created_after: str | None = None,
     force: bool = False,
     require_enrollment: bool = False,
+    reconcile: bool = False,
+    grant_delivery_id: str | None = None,
 ):
     """Auto-import a GitHub App installation's repos into ``connected_repos``.
 
@@ -284,7 +317,16 @@ def _import_installation_repos(
     skipped, except ``only_repos``: granting a repo on GitHub again is an
     explicit choice, so it clears the exclusion.
 
-    ``require_enrollment`` re-checks ``enrollment_state`` when the task
+    ``reconcile`` (the hourly sync) imports every granted repo that is not
+    connected and not excluded, without the once-per-link guard. It is
+    safe once the link's removals are all recorded, i.e. not for links that
+    predate the exclusions table (``repos_import_legacy``).
+
+    ``grant_delivery_id`` is the ``installation_repositories.added`` webhook
+    that granted ``only_repos``. A picker removal recorded after that
+    webhook arrived wins: the queued grant is older.
+
+    ``require_enrollment`` re-checks ``auto_enroll_owner`` when the task
     runs, so review turned off on a repo after the task was queued is
     respected.
 
@@ -305,7 +347,7 @@ def _import_installation_repos(
     from utils.auth.stateless_auth import set_rls_context
     from utils.db.connection_pool import db_pool
 
-    full_import = only_repos is None and created_after is None
+    full_import = only_repos is None and created_after is None and not reconcile
     if _import_not_wanted(installation_id, full_import and not force, require_enrollment):
         return
 
@@ -318,10 +360,13 @@ def _import_installation_repos(
         )
         return
     except GitHubAppInstallationNotFound:
+        # Uninstalled on GitHub. Drop the links so the sync stops picking it
+        # and auth falls back to OAuth (the token helper's 404 contract).
         logger.info(
-            "[RepoImport] installation gone, skipping import installation_id=%s",
+            "[RepoImport] installation gone, disconnecting installation_id=%s",
             installation_id,
         )
+        _disconnect_installation(installation_id)
         return
     except Exception as exc:
         logger.warning(
@@ -360,7 +405,11 @@ def _import_installation_repos(
                     "[RepoImport] no org for user=%s — cannot import (RLS)", user_id,
                 )
                 return
-            repos = _apply_exclusions(cur, org_id, repos, regranted=only_repos is not None)
+            repos = _apply_exclusions(
+                cur, org_id, repos,
+                regranted=only_repos is not None,
+                grant_delivery_id=grant_delivery_id,
+            )
             # Org-wide existing map (RLS scopes the SELECT to this org) ->
             # {repo_full_name: owner_user_id}. Mirrors save_repo_selections:
             # a repo already connected by another org member keeps its original
@@ -404,7 +453,8 @@ def _import_installation_repos(
                 cur.execute(
                     """UPDATE user_github_installations
                           SET repos_imported_at =
-                              NOW() - make_interval(secs => %s)
+                              NOW() - make_interval(secs => %s),
+                              repos_import_legacy = FALSE
                         WHERE installation_id = %s
                           AND disconnected_at IS NULL
                           AND repos_imported_at IS NULL""",
@@ -439,6 +489,8 @@ def import_installation_repos(
     created_after: str | None = None,
     force: bool = False,
     require_enrollment: bool = False,
+    reconcile: bool = False,
+    grant_delivery_id: str | None = None,
 ):
     """Celery entry point for the App repo auto-import.
 
@@ -450,6 +502,7 @@ def import_installation_repos(
         self, user_id, installation_id, enroll_change_gating,
         only_repos=only_repos, created_after=created_after,
         force=force, require_enrollment=require_enrollment,
+        reconcile=reconcile, grant_delivery_id=grant_delivery_id,
     )
 
 
@@ -475,9 +528,12 @@ def _sync_installation_repos():
 
     * the first full import never landed (GitHub was down at signup, the
       worker was lost): queue it again;
-    * otherwise: import repos created on GitHub after that import. Repos
-      that existed then were imported, so any that are missing now were
-      removed on purpose and stay removed.
+    * otherwise: reconcile, i.e. import every granted repo that is neither
+      connected nor removed in the picker. That also catches a repo granted
+      on GitHub whose ``added`` webhook was lost;
+    * links from before removals were recorded (``repos_import_legacy``):
+      only repos created on GitHub after the marker, since a repo missing
+      from those may have been removed on purpose.
 
     Installations where someone turned review off on a repo are skipped.
     """
@@ -486,7 +542,8 @@ def _sync_installation_repos():
 
     with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT gi.installation_id, MAX(ugi.repos_imported_at)
+            """SELECT gi.installation_id, MAX(ugi.repos_imported_at),
+                      BOOL_OR(ugi.repos_import_legacy)
                  FROM github_installations gi
                  JOIN user_github_installations ugi
                    ON ugi.installation_id = gi.installation_id
@@ -498,14 +555,15 @@ def _sync_installation_repos():
         installations = cur.fetchall()
 
     queued = 0
-    for installation_id, imported_at in installations:
+    for installation_id, imported_at, legacy in installations:
         try:
             owner = auto_enroll_owner(installation_id)
             if not owner:
                 continue
             import_installation_repos.delay(
                 owner, installation_id, enroll_change_gating=True,
-                created_after=_iso_utc(imported_at) if imported_at else None,
+                created_after=_iso_utc(imported_at) if imported_at and legacy else None,
+                reconcile=bool(imported_at) and not legacy,
                 require_enrollment=True,
             )
             queued += 1

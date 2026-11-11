@@ -41,7 +41,10 @@ class _FakeDb:
             for name, (owner, gating) in (connected or {}).items()
         }
         self.imported_at = imported_at
-        self.excluded = set(excluded)
+        # {repo_full_name: excluded_at}; a bare name was excluded at time 0.
+        self.excluded = dict(excluded) if isinstance(excluded, dict) else dict.fromkeys(excluded, 0)
+        self.delivery_received = {}
+        self.disconnected = False
         self.commits = 0
         self._result = []
 
@@ -54,7 +57,10 @@ class _FakeDb:
         elif s.startswith("SELECT repo_full_name FROM github_repo_exclusions"):
             self._result = [(n,) for n in params[1] if n in self.excluded]
         elif s.startswith("DELETE FROM github_repo_exclusions"):
-            self.excluded -= set(params[1])
+            granted = self.delivery_received.get(params[2], float("inf"))
+            for name in params[1]:
+                if name in self.excluded and self.excluded[name] < granted:
+                    del self.excluded[name]
         elif s.startswith("SELECT repo_full_name, user_id FROM connected_repos"):
             self._result = [(n, r["owner"]) for n, r in self.connected.items()]
         elif s.startswith("INSERT INTO connected_repos"):
@@ -64,6 +70,8 @@ class _FakeDb:
         elif s.startswith("UPDATE user_github_installations SET repos_imported_at"):
             if self.imported_at is None:
                 self.imported_at = "now"
+        elif s.startswith("UPDATE user_github_installations SET disconnected_at = NOW()"):
+            self.disconnected = True
         elif s.startswith("UPDATE connected_repos SET change_gating_enabled = TRUE"):
             for row in self.connected.values():
                 row["gating"] = True
@@ -149,18 +157,21 @@ class TestImportInstallationRepos:
         assert db.connected == {}
         assert db.imported_at is not None
 
-    def test_suspended_or_uninstalled_installation_is_left_alone(self):
+    def test_suspended_or_uninstalled_installation_is_not_retried(self):
         from utils.auth.github_app_token import (
             GitHubAppInstallationNotFound,
             GitHubAppInstallationSuspended,
         )
 
-        for exc in (GitHubAppInstallationSuspended("x"), GitHubAppInstallationNotFound("x")):
+        for exc, disconnects in ((GitHubAppInstallationSuspended("x"), False),
+                                 (GitHubAppInstallationNotFound("x"), True)):
             task = _task_self()
             db, _, fetch = _run([_repo("acme/api")], token_exc=exc, task=task)
             fetch.assert_not_called()
             task.retry.assert_not_called()
             assert db.imported_at is None
+            # Uninstalled on GitHub: the link goes so the sync stops picking it.
+            assert db.disconnected is disconnects
 
     def test_no_org_aborts_before_writing(self):
         db, gen, _ = _run([_repo("acme/api")], org=None)
@@ -189,7 +200,16 @@ class TestImportRunsOncePerLink:
         db, _, _ = _run([_repo("acme/back")], db=db, enroll_change_gating=True,
                         only_repos=["acme/back"])
         assert db.gated() == {"acme/back"}
-        assert db.excluded == set()
+        assert db.excluded == {}
+
+    def test_removal_made_after_the_grant_wins_over_the_queued_grant(self):
+        # The added webhook arrived at t=5, the user removed the repo in the
+        # picker at t=9, then the queued import ran.
+        db = _FakeDb(imported_at=datetime(2026, 9, 1), excluded={"acme/back": 9})
+        db.delivery_received["d-1"] = 5
+        db, _, _ = _run([_repo("acme/back")], db=db, enroll_change_gating=True,
+                        only_repos=["acme/back"], grant_delivery_id="d-1")
+        assert db.connected == {}
 
     def test_review_turned_off_after_queueing_is_respected(self):
         db, _, fetch = _run([_repo("acme/new")], owner=None, enroll_change_gating=True,
@@ -243,11 +263,11 @@ class TestStrictListing:
             raise AssertionError(f"{body!r} read as an empty installation")
 
     def test_lists_past_the_lenient_page_limit(self):
-        import routes.github.github_user_repos as repos_mod
+        from routes.github.github_user_repos import _PER_PAGE, _REPOS_PAGE_LIMIT
 
-        full = {"repositories": [_repo("a/b")] * repos_mod._PER_PAGE}
-        pages = [full] * (repos_mod._REPOS_PAGE_LIMIT + 1) + [{"repositories": []}]
-        assert len(self._list(pages)) == repos_mod._PER_PAGE * (repos_mod._REPOS_PAGE_LIMIT + 1)
+        full = {"repositories": [_repo("a/b")] * _PER_PAGE}
+        pages = [full] * (_REPOS_PAGE_LIMIT + 1) + [{"repositories": []}]
+        assert len(self._list(pages)) == _PER_PAGE * (_REPOS_PAGE_LIMIT + 1)
 
 
 class TestHourlySync:
@@ -274,12 +294,20 @@ class TestHourlySync:
         return task
 
     def test_install_whose_first_import_never_landed_gets_it(self):
-        task = self._sync([(_INSTALL, None)])
-        assert task.delay.call_args.kwargs["created_after"] is None
+        kwargs = self._sync([(_INSTALL, None, False)]).delay.call_args.kwargs
+        assert kwargs["created_after"] is None and kwargs["reconcile"] is False
 
-    def test_imported_install_only_gets_repos_created_since(self):
-        task = self._sync([(_INSTALL, datetime(2026, 9, 27, 0, 4))])
+    def test_imported_install_is_reconciled_against_everything_granted(self):
+        # Catches a repo granted on GitHub whose added webhook was lost,
+        # however old the repo is.
+        kwargs = self._sync([(_INSTALL, datetime(2026, 11, 12), False)]).delay.call_args.kwargs
+        assert kwargs["reconcile"] is True and kwargs["created_after"] is None
+
+    def test_legacy_install_only_gets_repos_created_since(self):
+        # Removals from before the exclusions table were never recorded.
+        task = self._sync([(_INSTALL, datetime(2026, 9, 27, 0, 4), True)])
         assert task.delay.call_args.kwargs["created_after"] == "2026-09-27T00:04:00Z"
+        assert task.delay.call_args.kwargs["reconcile"] is False
 
     def test_repo_existing_at_import_and_now_missing_is_not_readded(self):
         # End to end through the importer: removed on purpose stays removed.
@@ -290,8 +318,15 @@ class TestHourlySync:
         )
         assert set(db.connected) == {"acme/kept", "acme/new"}
 
+    def test_reconcile_adds_a_missed_grant_but_not_a_picker_removal(self):
+        db = _FakeDb(connected={"acme/kept": (_USER, True)}, imported_at=datetime(2026, 11, 12),
+                     excluded={"acme/removed"})
+        db, _, _ = _run([_repo("acme/kept"), _repo("acme/removed"), _repo("acme/old-grant")],
+                        db=db, enroll_change_gating=True, reconcile=True)
+        assert set(db.connected) == {"acme/kept", "acme/old-grant"}
+
     def test_install_with_review_turned_off_is_skipped(self):
-        task = self._sync([(_INSTALL, None)], owner=None)
+        task = self._sync([(_INSTALL, None, False)], owner=None)
         task.delay.assert_not_called()
 
 

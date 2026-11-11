@@ -1972,12 +1972,16 @@ def initialize_tables():
                 had_marker = cursor.fetchone() is not None
                 cursor.execute(
                     """ALTER TABLE user_github_installations
-                       ADD COLUMN IF NOT EXISTS repos_imported_at TIMESTAMP NULL;"""
+                       ADD COLUMN IF NOT EXISTS repos_imported_at TIMESTAMP NULL,
+                       ADD COLUMN IF NOT EXISTS repos_import_legacy BOOLEAN NOT NULL DEFAULT FALSE;"""
                 )
                 if not had_marker:
+                    # Legacy: removals before this deploy were never recorded,
+                    # so the sync only adds repos created after the marker.
                     cursor.execute(
                         """UPDATE user_github_installations
-                              SET repos_imported_at = COALESCE(linked_at, NOW())
+                              SET repos_imported_at = COALESCE(linked_at, NOW()),
+                                  repos_import_legacy = TRUE
                             WHERE disconnected_at IS NULL"""
                     )
                 conn.commit()
