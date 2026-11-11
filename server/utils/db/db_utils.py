@@ -2282,10 +2282,23 @@ def initialize_tables():
                 logging.warning(f"Error adding status column: {e}")
                 conn.rollback()
 
+            # Migration: heartbeat_at is written every 30 seconds by the worker
+            # running a background session (chat.background.liveness). NULL means
+            # no worker has picked the session up yet.
+            try:
+                cursor.execute("""
+                    ALTER TABLE chat_sessions
+                    ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMP NULL;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding heartbeat_at column: {e}")
+                conn.rollback()
+
             # Migration: Add incident_id column to chat_sessions if it doesn't exist
             try:
                 cursor.execute("""
-                    ALTER TABLE chat_sessions 
+                    ALTER TABLE chat_sessions
                     ADD COLUMN IF NOT EXISTS incident_id UUID;
                 """)
                 logging.info(

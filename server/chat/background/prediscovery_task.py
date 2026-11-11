@@ -236,15 +236,22 @@ def run_prediscovery(
             trigger_metadata=trigger_metadata,
         )
 
-        asyncio.run(_execute_background_chat(
-            user_id=user_id,
-            session_id=session_id,
-            initial_message=prompt,
-            trigger_metadata=trigger_metadata,
-            provider_preference=providers,
-            mode="prediscovery",
-            rail_text="",
-        ))
+        # Same heartbeat and watchdog as an investigation: the cleanup sweep
+        # fails an in-progress session whose worker stops beating.
+        from chat.background.liveness import run_watched
+        run_watched(
+            _execute_background_chat(
+                user_id=user_id,
+                session_id=session_id,
+                initial_message=prompt,
+                trigger_metadata=trigger_metadata,
+                provider_preference=providers,
+                mode="prediscovery",
+                rail_text="",
+            ),
+            session_id,
+            user_id,
+        )
 
         from chat.background.task import _update_session_status
         _update_session_status(session_id, "completed", user_id=user_id)

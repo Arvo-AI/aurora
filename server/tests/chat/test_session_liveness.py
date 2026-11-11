@@ -3,8 +3,8 @@
 The cleanup sweep called a running investigation dead after three minutes with
 no saved thought, no stream event and no tool call marked running. All three
 stand still while the model works through one long step. The worker now beats
-the session every 30 seconds on its own thread, and the sweep trusts a recent
-beat.
+the session every 30 seconds on its own thread (``heartbeat_at``), and the sweep
+trusts a recent beat.
 """
 
 from __future__ import annotations
@@ -150,7 +150,7 @@ def test_touch_only_refreshes_a_session_that_is_still_in_progress(monkeypatch):
     assert rls.call_args.args[2] == USER
     sql, params = pool.cursor.execute.call_args.args
     assert " ".join(sql.split()) == (
-        "UPDATE chat_sessions SET updated_at = NOW() WHERE id = %s AND status = 'in_progress'"
+        "UPDATE chat_sessions SET heartbeat_at = NOW() WHERE id = %s AND status = 'in_progress'"
     )
     assert params == (SESSION,)
     pool.conn.commit.assert_called_once()
@@ -287,16 +287,32 @@ def test_finished_task_is_not_dead(monkeypatch, task):
     assert task._is_task_dead("task-1", STALE_BEAT, THRESHOLD) is False
 
 
-def test_the_workflow_runs_inside_the_heartbeat(task):
-    """run_background_chat is too wide to drive here; pin the wiring instead.
+def _run_watched_calls(path: Path, function: str) -> list:
+    """Calls to run_watched inside *function*, read with ast so formatting does not matter.
 
     Read from the file: where Celery is stubbed the task decorator hides the function.
     """
-    module_source = Path(task.__file__).read_text(encoding="utf-8")
-    start = module_source.index("def run_background_chat(")
-    source = module_source[start:module_source.index("\ndef ", start + 1)]
-    beat = source.index("with session_heartbeat(session_id, user_id):")
-    run = source.index("asyncio.run(_execute_background_chat(")
-    assert beat < run
-    between = source[beat:run]
-    assert between.count("\n") <= 2, "something came between the heartbeat and the workflow it covers"
+    import ast
+
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    func = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == function)
+    return [
+        n for n in ast.walk(func)
+        if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "run_watched"
+    ]
+
+
+@pytest.mark.parametrize("module, function", [
+    ("chat/background/task.py", "run_background_chat"),
+    ("chat/background/prediscovery_task.py", "run_prediscovery"),
+])
+def test_every_background_run_goes_through_the_heartbeat_and_watchdog(module, function):
+    """Both callers of _execute_background_chat run it under run_watched, with the
+    session it vouches for. A run outside it never beats, and the sweep would fail
+    it as a dead worker after five minutes."""
+    server = Path(__file__).resolve().parents[2]
+    calls = _run_watched_calls(server / module, function)
+    assert len(calls) == 1
+    workflow, session_arg, user_arg = calls[0].args
+    assert getattr(workflow.func, "id", None) == "_execute_background_chat"
+    assert (session_arg.id, user_arg.id) == ("session_id", "user_id")

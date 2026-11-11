@@ -30,7 +30,24 @@ class CompletedProcess:
     stderr: str
 
 
-def terminal_run(
+def terminal_run(args: Union[str, List[str]], *, timeout: Optional[int] = None, **kwargs) -> CompletedProcess:
+    """Run a command (see :func:`_terminal_run`), reporting it to the stall watchdog.
+
+    The command enforces its own timeout, so while it runs a watched
+    investigation is not stuck: a 20-minute query is waited for, not cancelled.
+    """
+    from utils.progress_watch import bounded_call
+
+    if isinstance(args, str):
+        program = args.split(None, 1)[0] if args.strip() else "command"
+    else:
+        program = str(args[0]) if args else "command"
+    # Only the program name: arguments can carry identifiers or secrets.
+    with bounded_call(timeout or 300, f"command '{os.path.basename(program)}'"):
+        return _terminal_run(args, timeout=timeout, **kwargs)
+
+
+def _terminal_run(
     args: Union[str, List[str]],
     *,
     capture_output: bool = False,
