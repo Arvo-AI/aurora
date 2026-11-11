@@ -72,18 +72,21 @@ def chat_sends(monkeypatch):
 
 def test_early_slack_send_is_recorded_in_process_and_on_the_session(monkeypatch, chat_sends):
     marked = []
-    monkeypatch.setattr(task, "_mark_reply_delivered", lambda sid, uid: marked.append((sid, uid)))
+    monkeypatch.setattr(task, "_mark_reply_delivered", lambda sid, uid, meta: marked.append((sid, uid)))
     state = task.ChatReplyState()
+    meta = dict(SLACK_META)
 
-    assert task._send_early_slack_reply(USER, SESSION, SLACK_META, state) is True
+    assert task._send_early_slack_reply(USER, SESSION, meta, state) is True
 
     assert state.sent is True
     assert marked == [(SESSION, USER)]
+    # The workflow's own ui_state saves (the Jira phase) carry the flag too.
+    assert meta["replied"] is True
 
 
 def test_a_failed_early_send_records_nothing(monkeypatch):
     marked = []
-    monkeypatch.setattr(task, "_mark_reply_delivered", lambda sid, uid: marked.append(sid))
+    monkeypatch.setattr(task, "_mark_reply_delivered", lambda sid, uid, meta: marked.append(sid))
     monkeypatch.setattr(task, "_send_response_to_slack", lambda *a, **k: False)
     state = task.ChatReplyState()
 
@@ -159,10 +162,13 @@ def test_marking_the_reply_merges_into_the_trigger_metadata(monkeypatch):
     monkeypatch.setattr(task, "db_pool", pool)
     monkeypatch.setattr(task, "set_rls_context", lambda *a, **k: "org-1")
 
-    task._mark_reply_delivered(SESSION, USER)
+    task._mark_reply_delivered(SESSION, USER, SLACK_META)
 
-    sql, (payload, session_id) = pool.cursor.execute.call_args.args
-    assert sql == task._REMEMBER_REPLY_TARGET_SQL
+    sql, (payload, session_id, placeholder) = pool.cursor.execute.call_args.args
+    assert sql.startswith(task._REMEMBER_REPLY_TARGET_SQL.rstrip())
+    # A newer run on the same session has its own placeholder; leave it unanswered.
+    assert "'thinking_message_ts' IS NOT DISTINCT FROM %s" in sql
+    assert placeholder == SLACK_META["thinking_message_ts"]
     assert json.loads(payload) == {"replied": True}
     assert session_id == SESSION
     pool.conn.commit.assert_called_once()
@@ -248,6 +254,7 @@ def test_tailscale_local_ssh_reports_its_timeout(monkeypatch, tracker):
 
     def _run(cmd, **kwargs):
         seen["bounds"] = list(tracker._bounds.values())
+        seen["env"] = kwargs.get("env")
         return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr("subprocess.run", _run)
@@ -256,6 +263,8 @@ def test_tailscale_local_ssh_reports_its_timeout(monkeypatch, tracker):
     (started, deadline, label), = seen["bounds"]
     assert deadline - started == 1800 + 120
     assert label == "command 'ssh'"
+    # The server environment is not inherited.
+    assert set(seen["env"]) == {"PATH", "HOME"}
     assert tracker._bounds == {}
 
 
@@ -474,3 +483,21 @@ def test_a_watchdog_that_gives_up_after_the_run_finished_does_not_signal(monkeyp
 
     assert watchdog.gave_up is True
     assert kills == []
+
+
+def test_an_incident_follow_up_that_never_queued_leaves_in_progress(monkeypatch):
+    """A re-armed session with no task behind it would otherwise wait out the
+    20-minute queue allowance."""
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    import routes.incidents_routes as incidents_routes
+
+    pool = _RecordingPool()
+    monkeypatch.setattr(incidents_routes, "db_pool", pool)
+    monkeypatch.setattr(incidents_routes, "set_rls_context", lambda *a, **k: "org-1")
+
+    incidents_routes._fail_undispatched_session(USER, SESSION)
+
+    sql, params = pool.cursor.execute.call_args.args
+    assert "SET status = 'error'" in sql and "status = 'in_progress'" in sql
+    assert params == (SESSION,)
+    pool.conn.commit.assert_called_once()

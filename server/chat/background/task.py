@@ -2211,7 +2211,10 @@ def _send_early_slack_reply(
     if sent:
         if reply_state is not None:
             reply_state.sent = True
-        _mark_reply_delivered(session_id, user_id)
+        # The workflow saves ui_state from this same dict (wf._ui_state), so a
+        # later save (the Jira phase) keeps the flag instead of dropping it.
+        trigger_metadata["replied"] = True
+        _mark_reply_delivered(session_id, user_id, trigger_metadata)
     return sent
 
 
@@ -2865,7 +2868,15 @@ def _remember_reply_target(session_id: Optional[str], user_id: Optional[str],
                             "the reply target")
 
 
-def _mark_reply_delivered(session_id: Optional[str], user_id: Optional[str]) -> None:
+# Only flags the placeholder this run answered: a newer run on the same session
+# stores its own placeholder id, and its unanswered state must stand.
+_MARK_REPLIED_SQL = _REMEMBER_REPLY_TARGET_SQL.rstrip() + """
+      AND ui_state->'triggerMetadata'->>'thinking_message_ts' IS NOT DISTINCT FROM %s
+"""
+
+
+def _mark_reply_delivered(session_id: Optional[str], user_id: Optional[str],
+                          trigger_metadata: Optional[Dict[str, Any]] = None) -> None:
     """Record on the session that this run's answer is in the chat thread.
 
     The sweep reads it when the worker dies before the session finishes, and
@@ -2873,17 +2884,20 @@ def _mark_reply_delivered(session_id: Optional[str], user_id: Optional[str]) -> 
     """
     if not session_id or not user_id:
         return
-    _merge_trigger_metadata(session_id, user_id, {"replied": True}, "the delivered reply")
+    placeholder = (trigger_metadata or {}).get("thinking_message_ts")
+    _merge_trigger_metadata(session_id, user_id, {"replied": True}, "the delivered reply",
+                            sql=_MARK_REPLIED_SQL, extra_params=(placeholder,))
 
 
-def _merge_trigger_metadata(session_id: str, user_id: str, values: Dict[str, Any], what: str) -> None:
+def _merge_trigger_metadata(session_id: str, user_id: str, values: Dict[str, Any], what: str,
+                            *, sql: str = _REMEMBER_REPLY_TARGET_SQL, extra_params: tuple = ()) -> None:
     try:
         payload = json.dumps(values, default=str)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:ReplyTarget]"):
                     return
-                cursor.execute(_REMEMBER_REPLY_TARGET_SQL, (payload, session_id))
+                cursor.execute(sql, (payload, session_id, *extra_params))
             conn.commit()
     except Exception:
         # Best effort: the run itself does not depend on it.

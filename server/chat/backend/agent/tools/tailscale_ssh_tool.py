@@ -99,7 +99,13 @@ def _execute_ssh_local(
                 ssh_cmd,
                 capture_output=True,
                 text=True,
-                timeout=timeout
+                timeout=timeout,
+                # Only what ssh needs to find its binary and default keys; the
+                # server environment (and any credentials in it) stays out.
+                env={
+                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "HOME": os.environ.get("HOME", "/tmp"),
+                },
             )
 
         output = result.stdout if result.returncode == 0 else (result.stderr or result.stdout)
