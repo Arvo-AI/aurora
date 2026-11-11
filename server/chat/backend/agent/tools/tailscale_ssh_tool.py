@@ -89,13 +89,18 @@ def _execute_ssh_local(
         command
     ])
 
+    from utils.progress_watch import bounded_call
+
     try:
-        result = subprocess.run(
-            ssh_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout
-        )
+        # The agent picks the timeout; the stall watchdog waits for it instead of
+        # cancelling a long command as a hang. Label: program only, no arguments.
+        with bounded_call(timeout, "command 'ssh'"):
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
 
         output = result.stdout if result.returncode == 0 else (result.stderr or result.stdout)
 

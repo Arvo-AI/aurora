@@ -307,7 +307,7 @@ def _run_watched_calls(path: Path, function: str) -> list:
 
 @pytest.mark.parametrize("module, function", [
     ("chat/background/task.py", "run_background_chat"),
-    ("chat/background/prediscovery_task.py", "run_prediscovery"),
+    ("chat/background/prediscovery_task.py", "_run_prediscovery"),
 ])
 def test_every_background_run_goes_through_the_heartbeat_and_watchdog(module, function):
     """Both callers of _execute_background_chat run it under run_watched, with the

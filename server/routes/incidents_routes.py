@@ -1384,9 +1384,12 @@ def incident_chat(user_id, incident_id: str):
                             }
                         ), 404
 
-                    # Update session status to in_progress
+                    # Back to in_progress for the follow-up. Clearing the last
+                    # run's heartbeat keeps the queued-task allowance in the
+                    # stale-session sweep, and updated_at starts that clock now.
                     cursor.execute(
-                        "UPDATE chat_sessions SET status = %s WHERE id = %s",
+                        "UPDATE chat_sessions SET status = %s, heartbeat_at = NULL, "
+                        "updated_at = NOW() WHERE id = %s",
                         ("in_progress", existing_session_id),
                     )
                     conn.commit()

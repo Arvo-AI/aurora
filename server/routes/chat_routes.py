@@ -550,6 +550,9 @@ def post_chat_message(user_id, session_id):
                     UPDATE chat_sessions
                        SET messages = COALESCE(messages, '[]'::jsonb) || %s::jsonb,
                            status = 'in_progress',
+                           -- A beat from an earlier run would read as a dead
+                           -- worker; NULL keeps the queued-task allowance.
+                           heartbeat_at = NULL,
                            updated_at = %s
                      WHERE id = %s AND org_id = %s AND user_id = %s
                        AND is_active = true
