@@ -514,12 +514,16 @@ def github_app_install_callback():
     )
 
     # Auto-import the repos the user already granted on GitHub so they don't
-    # have to re-select them inside Aurora. Best-effort + async: a failure here
-    # must never break the install (the manual picker remains as a fallback).
+    # have to re-select them inside Aurora, with PR review on for the rows the
+    # import creates (existing per-repo choices are kept). Best-effort + async:
+    # a failure here must never break the install (the manual picker remains
+    # as a fallback).
     try:
         from routes.github.github_repo_metadata import import_installation_repos
 
-        import_installation_repos.delay(user_id, installation_id)
+        import_installation_repos.delay(
+            user_id, installation_id, enroll_change_gating=True
+        )
     except Exception:
         # Best-effort: the manual repo picker remains a fallback. Log with a
         # trace so a persistent broker/import failure is visible in ops.
@@ -876,6 +880,124 @@ def github_app_claim_installation(user_id, installation_id):
         "[GITHUB-APP-CLAIM] user=%s claimed installation_id=%d account=%s",
         user_id, installation_id, account_login,
     )
+    _enqueue_enrolled_import(user_id, installation_id, "[GITHUB-APP-CLAIM]")
+    return jsonify({"success": True, "installation_id": installation_id})
+
+
+def _enqueue_enrolled_import(user_id: str, installation_id: int, log_prefix: str) -> None:
+    """Import a just-linked installation's repos with PR review on (best-effort)."""
+    try:
+        from routes.github.github_repo_metadata import import_installation_repos
+
+        import_installation_repos.delay(
+            user_id, installation_id, enroll_change_gating=True
+        )
+    except Exception:
+        logger.warning(
+            "%s failed to enqueue repo auto-import installation_id=%d",
+            log_prefix, installation_id, exc_info=True,
+        )
+
+
+def _claim_refusal(cur, user_id: str, claim: dict) -> dict | None:
+    """Why ``user_id`` may not redeem ``claim``, or None when it may."""
+    cur.execute(
+        "SELECT LOWER(email), github_user_id FROM users WHERE id = %s", (user_id,)
+    )
+    row = cur.fetchone()
+    if not row or row[0] != claim["email"]:
+        logger.warning("[GITHUB-APP-CLAIM-PENDING] email mismatch user=%s", user_id)
+        return {"error": "Signed in as a different account", "code": "CLAIM_EMAIL_MISMATCH"}
+    if row[1] is not None and row[1] != claim["gh_id"]:
+        return {"error": "Account is linked to another GitHub user",
+                "code": "CLAIM_IDENTITY_MISMATCH"}
+    cur.execute(
+        "SELECT 1 FROM users WHERE github_user_id = %s AND id <> %s",
+        (claim["gh_id"], user_id),
+    )
+    if cur.fetchone():
+        return {"error": "GitHub user is linked to another account",
+                "code": "CLAIM_IDENTITY_MISMATCH"}
+    return None
+
+
+@github_app_bp.route("/app/claim-pending", methods=["POST", "OPTIONS"])
+@require_permission("connectors", "write")
+def github_app_claim_pending(user_id):
+    """Finish a one-click install whose GitHub email matched an existing account.
+
+    The signup callback verified the installation, the installer's identity
+    and their access to it, then sent them to sign in with a signed claim
+    token instead of logging them in (an email match alone must never be a
+    login). Having now signed in, the account is linked when its email is
+    the one GitHub reported for the installer.
+    """
+    from routes.github.github_signup import _verify_installation, verify_claim_token
+
+    if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
+        return jsonify({"error": _APP_NOT_CONFIGURED}), 503
+
+    body = request.get_json(silent=True) or {}
+    token = body.get("token") if isinstance(body, dict) else None
+    claim = verify_claim_token(token) if isinstance(token, str) else None
+    if claim is None:
+        return jsonify({"error": "Claim link expired", "code": "CLAIM_INVALID"}), 400
+
+    installation_id = claim["iid"]
+    org_id = get_org_id_for_user(user_id)
+    if not org_id:
+        return jsonify({"error": "No organization", "code": "MISSING_ORG_CONTEXT"}), 403
+    if _orgs_owning_install(installation_id) - {org_id}:
+        logger.warning(
+            "[GITHUB-APP-CLAIM-PENDING] cross-org claim refused user=%s installation_id=%d",
+            user_id, installation_id,
+        )
+        return jsonify({"error": "Installation belongs to another organization",
+                        "code": "CROSS_ORG_CLAIM_REFUSED"}), 403
+
+    install_data = _verify_installation(installation_id)
+    if install_data is None or install_data.get("id") != installation_id:
+        return jsonify({"error": "Could not verify installation with GitHub"}), 502
+    account = install_data.get("account") if isinstance(install_data.get("account"), dict) else {}
+    if account.get("type") not in ("User", "Organization") or not isinstance(
+        account.get("login"), str
+    ):
+        return jsonify({"error": "Invalid response from GitHub"}), 502
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                refusal = _claim_refusal(cur, user_id, claim)
+                if refusal is not None:
+                    return jsonify(refusal), 403
+                # Remember the GitHub identity so the next one-click install
+                # logs this person straight in.
+                cur.execute(
+                    "UPDATE users SET github_user_id = %s, github_login = %s WHERE id = %s",
+                    (claim["gh_id"], claim["gh_login"], user_id),
+                )
+                from routes.github.github_signup import _link_installation
+
+                _link_installation(cur, user_id, org_id, install_data)
+                conn.commit()
+    except Exception:
+        logger.exception(
+            "[GITHUB-APP-CLAIM-PENDING] DB write failed user=%s installation_id=%d",
+            user_id, installation_id,
+        )
+        return jsonify({"error": "Failed to link installation"}), 500
+
+    logger.info(
+        "[GITHUB-APP-CLAIM-PENDING] user=%s linked installation_id=%d",
+        user_id, installation_id,
+    )
+    _enqueue_enrolled_import(user_id, installation_id, "[GITHUB-APP-CLAIM-PENDING]")
+    try:
+        from utils.auth.tool_registry import seed_org_tool_permissions
+
+        seed_org_tool_permissions(org_id, user_id)
+    except Exception:
+        logger.warning("[GITHUB-APP-CLAIM-PENDING] tool permission seeding failed", exc_info=True)
     return jsonify({"success": True, "installation_id": installation_id})
 
 

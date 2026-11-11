@@ -180,14 +180,52 @@ class TestStateToken:
 
 
 class TestCallbackValidation:
-    @pytest.mark.parametrize("qs", [
-        "installation_id=1&code=c",               # no state
-        "state=s&code=c",                         # no installation_id
-    ])
-    def test_missing_params_rejected(self, signup_app, qs):
+    def test_missing_installation_id_rejected(self, signup_app):
         app, mod = signup_app
-        resp = app.test_client().get(f"/github/app/signup/callback?{qs}")
+        resp = app.test_client().get("/github/app/signup/callback?state=s&code=c")
         assert b"Missing required parameters" in resp.data
+
+    def test_install_request_lands_on_notice(self, signup_app):
+        # An org member without admin rights only requests the install; no
+        # installation exists yet, so this is a notice, not an error page.
+        app, mod = signup_app
+        resp = app.test_client().get(
+            "/github/app/signup/callback?setup_action=request&code=c"
+        )
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/sign-in?notice=github_install_requested")
+
+    def test_repo_change_without_code_goes_to_app(self, signup_app):
+        app, mod = signup_app
+        with patch.object(mod, "_verify_installation") as verify:
+            resp = app.test_client().get(
+                "/github/app/signup/callback?installation_id=1&setup_action=update"
+            )
+        assert resp.status_code == 302
+        assert "/connectors" in resp.headers["Location"]
+        verify.assert_not_called()
+
+    @pytest.mark.parametrize("state_qs", ["", "&state=forged"])
+    def test_install_not_started_on_website_still_provisions(self, signup_app, state_qs):
+        # Installs from the App's GitHub page, a README link or an expired tab
+        # carry no valid signup state. They get an account on the same three
+        # checks, without attribution.
+        app, mod = signup_app
+        with patch.object(mod, "_verify_installation", return_value=_install_payload()), \
+             patch.object(mod, "_exchange_code_for_identity",
+                          return_value=(self._IDENTITY, "gho_x")), \
+             patch.object(mod, "_user_authorized_for_installation", return_value=True) as authz, \
+             patch.object(mod, "_provision_and_handoff",
+                          return_value=(mod.flask.redirect("/sign-in?handoff=h"),
+                                        "user-1", 777, True)), \
+             patch("routes.github.github_repo_metadata.import_installation_repos") as task:
+            resp = app.test_client().get(
+                f"/github/app/signup/callback?installation_id=777&code=c{state_qs}"
+            )
+        assert resp.status_code == 302
+        assert "utm_" not in resp.headers["Location"]
+        authz.assert_called_once_with("gho_x", 777)
+        task.delay.assert_called_once_with("user-1", 777, enroll_change_gating=True)
 
     def test_signup_state_without_code_rejected(self, signup_app):
         # A valid signup state but no OAuth code means the App is missing
@@ -246,21 +284,12 @@ class TestCallbackValidation:
 
     def test_forged_state_is_not_delegated(self, signup_app):
         app, mod = signup_app
-        with patch("routes.github.github_app.github_app_install_callback") as delegate:
-            resp = app.test_client().get(
+        with patch("routes.github.github_app.github_app_install_callback") as delegate, \
+             patch.object(mod, "_verify_installation", return_value=None):
+            app.test_client().get(
                 "/github/app/signup/callback?installation_id=1&state=forged&code=c"
             )
-        assert b"could not be verified" in resp.data
         delegate.assert_not_called()
-
-    def test_bad_state_rejected_before_github_call(self, signup_app):
-        app, mod = signup_app
-        with patch.object(mod, "_verify_installation") as verify:
-            resp = app.test_client().get(
-                "/github/app/signup/callback?installation_id=1&state=forged&code=c"
-            )
-        assert b"could not be verified" in resp.data
-        verify.assert_not_called()
 
     @pytest.mark.parametrize("bad_id", ["abc", "-5", "0"])
     def test_bad_installation_id_rejected(self, signup_app, bad_id):
@@ -508,6 +537,19 @@ class TestProvisioning:
         assert "error=account_exists" in response.location
         # Nothing committed on this path.
         conn.commit.assert_not_called()
+        # The redirect carries a claim the sign-in page redeems once the
+        # account owner has proven who they are.
+        claim = response.location.split("gh_claim=", 1)[1]
+        with app.test_request_context():
+            payload = mod.verify_claim_token(claim)
+        assert payload == {"iid": 777, "gh_id": 42, "gh_login": "octocat", "email": "octo@cat.dev"}
+
+    def test_claim_token_does_not_verify_as_signup_state(self, signup_app):
+        app, mod = signup_app
+        with app.test_request_context():
+            claim = mod._sign_claim_token(777, self._IDENTITY)
+            assert mod._verify_signup_state(claim) is False
+            assert mod.verify_claim_token(mod._sign_signup_state()) is None
 
     def test_existing_github_identity_logs_in_without_insert(self, signup_app):
         app, mod = signup_app

@@ -24,9 +24,12 @@ Anti-spoofing invariants (mirrors ``github_app.py`` — do NOT relax):
 
     1. ``installation_id`` MUST be verified via ``GET
        /app/installations/{id}`` with the App JWT before any DB write.
-    2. ``state`` MUST verify under the signup salt (signed + expiring).
-       It carries no user (none exists yet); it proves the flow started
-       at ``/signup/start`` and bounds its age.
+    2. ``state`` is attribution only. Installs that start anywhere else
+       (the App's GitHub page, a README link, an expired tab) carry no
+       signup state and still get an account, because invariants 1, 3 and
+       6 are what bind the installation to the person: GitHub vouches for
+       the installation, the OAuth code names the user, and GitHub confirms
+       the user can access that installation.
     3. The user's identity comes ONLY from exchanging the OAuth ``code``
        with GitHub — never from query params.
     4. Error templates render HARD-CODED strings only.
@@ -39,6 +42,10 @@ Anti-spoofing invariants (mirrors ``github_app.py`` — do NOT relax):
        Installation ids are sequential and guessable; without this check a
        caller could swap in another org's installation and have Aurora link
        it — and import its repos — under the caller's account.
+
+Org members without admin rights can only *request* an install. GitHub then
+sends ``setup_action=request`` with no ``installation_id``; that lands on a
+notice page instead of an error.
 
 Interaction with the authenticated in-app install flow: once "Request user
 authorization (OAuth) during installation" is on, GitHub ignores the App's
@@ -80,11 +87,14 @@ _GH_JSON_MEDIA_TYPE = "application/vnd.github+json"
 
 _SIGNUP_STATE_TTL_SEC = 30 * 60
 _SIGNUP_STATE_SALT = "aurora.github.app.signup-state.v1"
+# Pending link for an installer whose GitHub email already has an Aurora
+# account: carried through password sign-in, redeemed by /app/claim-pending.
+_CLAIM_TOKEN_TTL_SEC = 30 * 60
+_CLAIM_TOKEN_SALT = "aurora.github.app.pending-claim.v1"
 
 # Hard-coded user-facing error strings. NEVER substitute query params.
 _ERROR_NOT_AVAILABLE = "One-click signup is not available on this deployment"
 _ERROR_MISSING_PARAMS = "Missing required parameters from GitHub callback"
-_ERROR_INVALID_STATE = "Signup request could not be verified. Please try again from the website."
 _ERROR_BAD_INSTALL_ID = "GitHub installation could not be verified"
 _ERROR_GITHUB_API = "Could not verify installation with GitHub"
 _ERROR_IDENTITY = "Could not verify your GitHub identity"
@@ -126,13 +136,48 @@ def _signup_ready() -> bool:
     )
 
 
-def _state_serializer() -> URLSafeTimedSerializer:
+def _state_serializer(salt: str = _SIGNUP_STATE_SALT) -> URLSafeTimedSerializer:
     secret = os.getenv("FLASK_SECRET_KEY") or flask.current_app.secret_key
     if not secret:
         raise RuntimeError(
             "FLASK_SECRET_KEY is not configured; cannot sign signup state"
         )
-    return URLSafeTimedSerializer(secret, salt=_SIGNUP_STATE_SALT)
+    return URLSafeTimedSerializer(secret, salt=salt)
+
+
+def _sign_claim_token(installation_id: int, identity: dict) -> str:
+    """Signed, expiring note that ``identity`` installed ``installation_id``.
+
+    Minted only after invariants 1, 3 and 6 passed. The email is the one the
+    collision matched, so redemption can require the signed-in account to
+    own that same address.
+    """
+    return _state_serializer(_CLAIM_TOKEN_SALT).dumps({
+        "iid": installation_id,
+        "gh_id": identity["id"],
+        "gh_login": identity["login"],
+        "email": identity["email"],
+    })
+
+
+def verify_claim_token(token: str) -> dict | None:
+    """Payload of a valid, unexpired claim token, else None."""
+    try:
+        payload = _state_serializer(_CLAIM_TOKEN_SALT).loads(
+            token, max_age=_CLAIM_TOKEN_TTL_SEC
+        )
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if not (
+        isinstance(payload.get("iid"), int)
+        and isinstance(payload.get("gh_id"), int)
+        and isinstance(payload.get("gh_login"), str)
+        and isinstance(payload.get("email"), str)
+    ):
+        return None
+    return payload
 
 
 def _sign_signup_state(attribution: dict | None = None) -> str:
@@ -531,13 +576,17 @@ def _provision_and_handoff(identity: dict, install_data: dict):
                         # Email belongs to an Aurora account never linked to
                         # this GitHub identity — auto-login here would be an
                         # account-takeover primitive (invariant #5).
+                        # Signing in with that account's password proves the
+                        # rest; the claim token lets sign-in finish the link.
                         logger.info(
                             "[GITHUB-SIGNUP] email collision with unlinked account; "
-                            "redirecting to sign-in"
+                            "redirecting to sign-in with a pending claim"
                         )
+                        claim = _sign_claim_token(installation_id, identity)
                         return (
                             flask.redirect(
-                                f"{FRONTEND_URL}/sign-in?error=account_exists",
+                                f"{FRONTEND_URL}/sign-in?error=account_exists"
+                                f"&gh_claim={claim}",
                                 code=302,
                             ),
                             None,
@@ -642,6 +691,57 @@ def _provision_and_handoff(identity: dict, install_data: dict):
     return (redirect, user_id, installation_id, created)
 
 
+def _response_without_install(installation_id_raw: str, code: str) -> flask.Response | None:
+    """Response for a callback that cannot provision anything, else None."""
+    setup_action = (request.args.get("setup_action") or "").strip()
+    if setup_action == "request" and not installation_id_raw:
+        # An org member asked the org's owners to approve the install.
+        # Nothing exists to link yet; the owner's approval arrives later.
+        logger.info("[GITHUB-SIGNUP] install requested; awaiting org owner approval")
+        return flask.redirect(
+            f"{FRONTEND_URL}/sign-in?notice=github_install_requested", code=302
+        )
+    if not installation_id_raw:
+        logger.warning("[GITHUB-SIGNUP] callback missing installation_id")
+        return _render_error(_ERROR_MISSING_PARAMS)
+    if code:
+        return None
+    # Without OAuth-during-install there is no identity to provision. Repo
+    # changes on an existing install also end here; send those people to
+    # the app, where their session (or sign-in) takes over.
+    logger.warning(
+        "[GITHUB-SIGNUP] callback without OAuth code setup_action=%s",
+        setup_action or "unknown",
+    )
+    if setup_action == "update":
+        return flask.redirect(f"{FRONTEND_URL}/connectors?installed=github", code=302)
+    return _render_error(_ERROR_MISSING_PARAMS)
+
+
+def _attribution_state(state: str) -> str:
+    """The signup state if it verifies, else "" (the install proceeds either way).
+
+    A missing, forged or stale state is not a reason to strand a real
+    install: invariants 1, 3 and 6 decide. Only attribution is lost.
+    """
+    if state and _verify_signup_state(state):
+        return state
+    logger.info(
+        "[GITHUB-SIGNUP] install did not start from the website; "
+        "continuing without attribution"
+    )
+    return ""
+
+
+def _parse_installation_id(raw: str) -> int | None:
+    try:
+        installation_id = int(raw)
+    except ValueError:
+        logger.warning("[GITHUB-SIGNUP] non-integer installation_id rejected")
+        return None
+    return installation_id if installation_id > 0 else None
+
+
 @github_signup_bp.route("/app/signup/callback", methods=["GET"])
 def github_app_signup_callback():
     """Public callback for the one-click signup install.
@@ -675,23 +775,13 @@ def github_app_signup_callback():
     if not _signup_ready():
         return _render_error(_ERROR_NOT_AVAILABLE)
 
-    if not installation_id_raw or not state:
-        logger.warning("[GITHUB-SIGNUP] callback missing required params")
-        return _render_error(_ERROR_MISSING_PARAMS)
+    early = _response_without_install(installation_id_raw, code)
+    if early is not None:
+        return early
 
-    if not _verify_signup_state(state):
-        return _render_error(_ERROR_INVALID_STATE)
-
-    if not code:
-        logger.warning("[GITHUB-SIGNUP] signup callback missing OAuth code")
-        return _render_error(_ERROR_MISSING_PARAMS)
-
-    try:
-        installation_id = int(installation_id_raw)
-    except ValueError:
-        logger.warning("[GITHUB-SIGNUP] non-integer installation_id rejected")
-        return _render_error(_ERROR_BAD_INSTALL_ID)
-    if installation_id <= 0:
+    state = _attribution_state(state)
+    installation_id = _parse_installation_id(installation_id_raw)
+    if installation_id is None:
         return _render_error(_ERROR_BAD_INSTALL_ID)
 
     install_data = _verify_installation(installation_id)
@@ -716,7 +806,9 @@ def github_app_signup_callback():
     response, user_id, linked_installation_id, created = _provision_and_handoff(
         identity, install_data
     )
-    response = _with_attribution(response, _signup_state_attribution(state))
+    response = _with_attribution(
+        response, _signup_state_attribution(state) if state else {}
+    )
     if user_id is None:
         return response
 
@@ -725,16 +817,15 @@ def github_app_signup_callback():
         user_id, linked_installation_id, identity["login"], created,
     )
 
-    # Auto-import granted repos. Incident Prevention is auto-enabled only for
-    # BRAND-NEW accounts — the user curated the repo list on GitHub's install
-    # screen and that's what makes the flow one-click. A returning user
-    # re-installing keeps their existing per-repo choices (the OR upsert must
-    # never flip back a repo they deliberately turned off).
+    # Auto-import granted repos with PR review on: the user picked them on
+    # GitHub's install screen, which is what makes the flow one-click. Only
+    # rows the import creates are enrolled; a returning user's existing
+    # per-repo choices are left as they were.
     try:
         from routes.github.github_repo_metadata import import_installation_repos
 
         import_installation_repos.delay(
-            user_id, linked_installation_id, enroll_change_gating=created
+            user_id, linked_installation_id, enroll_change_gating=True
         )
     except Exception:
         logger.warning(

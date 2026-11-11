@@ -433,12 +433,11 @@ def _handle_installation_repositories_event(
     """Apply an ``installation_repositories.<action>`` webhook.
 
     Supported actions:
-        * ``added``: on an all-repositories installation whose connected
-          repos are all enrolled, re-runs the repo import with change
-          gating on, so a repo created later gets reviewed like the ones
-          that existed at install time. Otherwise a no-op: Aurora
-          populates ``connected_repos`` lazily when a user fetches their
-          installation's repos via the auth router (Task 9).
+        * ``added``: re-runs the repo import with change gating on when
+          the installation's connected repos are all enrolled (or there are
+          none yet), so a repo created or granted later gets reviewed like
+          the ones that existed at install time. When someone turned review
+          off on a repo, new repos are left for them to pick.
         * ``removed``: DELETE matching rows from
           ``connected_repos`` for ALL users that have this
           ``(installation_id, repo_full_name)`` pair. Multi-user
@@ -457,14 +456,24 @@ def _handle_installation_repositories_event(
         repositories_added = payload.get("repositories_added")
         repo_count = len(repositories_added) if isinstance(repositories_added, list) else 0
         owner = None
-        if installation_id is not None and payload.get("repository_selection") == "all":
-            owner = _auto_enroll_owner(installation_id)
-        if owner:
+        if installation_id is not None:
+            owner = auto_enroll_owner(installation_id)
+        added_names = [
+            r["full_name"]
+            for r in (repositories_added if isinstance(repositories_added, list) else [])
+            if isinstance(r, dict) and isinstance(r.get("full_name"), str)
+        ]
+        if owner and added_names:
             from routes.github.github_repo_metadata import import_installation_repos
 
+            # Only the repos GitHub just granted: a full import would also
+            # bring back repos someone removed from Aurora's repo picker.
             import_installation_repos.delay(
-                owner, installation_id, enroll_change_gating=True
+                owner, installation_id, enroll_change_gating=True,
+                only_repos=added_names,
             )
+        else:
+            owner = None
         duration_ms = int((time.monotonic() - start) * 1000)
         logger.info(
             "gh_webhook_handler=installation_repositories action=added "
@@ -710,17 +719,20 @@ def _resolve_change_gating_owner(installation_id: int, repo_full_name: str) -> t
     return ("ok", owner) if owner else ("not_enrolled", None)
 
 
-def _auto_enroll_owner(installation_id: int) -> str | None:
-    """Linked user to import newly added repos for, or None to leave them alone.
+def enrollment_state(installation_id: int) -> tuple[str | None, int, Any]:
+    """``(owner, connected_count, first_connected_at)`` for auto-enrollment.
 
-    New repos are enrolled only when every repo already connected on this
-    installation is enrolled. One repo with change gating off means someone
-    chose per-repo control, so the choice stays theirs.
+    ``owner`` is the linked user to import newly added repos for, or None to
+    leave them alone. New repos are enrolled only when every repo already
+    connected on this installation is enrolled. One repo with change gating
+    off means someone chose per-repo control, so the choice stays theirs. An
+    installation with no connected repos qualifies: installing the App is the
+    opt-in, and an import that never landed (GitHub outage at signup) must
+    not lock it out.
     """
     from utils.auth.stateless_auth import set_rls_context
     from utils.db.connection_pool import db_pool
 
-    owner = None
     with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT user_id
@@ -731,28 +743,35 @@ def _auto_enroll_owner(installation_id: int) -> str | None:
             (installation_id,),
         )
         linked_users = [row[0] for row in cur.fetchall() if row[0]]
-        for linked_user_id in linked_users:
-            if not set_rls_context(
-                cur,
-                conn,
-                linked_user_id,
-                log_prefix="[gh_webhook:installation_repositories]",
-            ):
-                continue
-            cur.execute(
-                """SELECT COUNT(*),
-                          COUNT(*) FILTER (WHERE change_gating_enabled = TRUE)
-                     FROM connected_repos
-                    WHERE installation_id = %s""",
-                (installation_id,),
-            )
-            total, enrolled = cur.fetchone()
-            if total > 0 and total == enrolled:
-                owner = linked_user_id
-                break
-        if linked_users:
-            cur.execute(_RESET_RLS_SQL)
-    return owner
+        try:
+            for linked_user_id in linked_users:
+                if not set_rls_context(
+                    cur,
+                    conn,
+                    linked_user_id,
+                    log_prefix="[gh_webhook:installation_repositories]",
+                ):
+                    continue
+                cur.execute(
+                    """SELECT COUNT(*),
+                              COUNT(*) FILTER (WHERE change_gating_enabled = TRUE),
+                              MIN(created_at)
+                         FROM connected_repos
+                        WHERE installation_id = %s""",
+                    (installation_id,),
+                )
+                total, enrolled, first_connected_at = cur.fetchone()
+                if total == enrolled:
+                    return linked_user_id, total, first_connected_at
+        finally:
+            if linked_users:
+                cur.execute(_RESET_RLS_SQL)
+    return None, 0, None
+
+
+def auto_enroll_owner(installation_id: int) -> str | None:
+    """Linked user to enroll newly added repos for (see ``enrollment_state``)."""
+    return enrollment_state(installation_id)[0]
 
 
 def _record_gating_outcome(delivery_id: str, repo: str | None, outcome: str) -> None:

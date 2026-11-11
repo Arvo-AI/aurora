@@ -142,13 +142,21 @@ def _simplify_repo(
     }
 
 
-def _fetch_installation_repos(token: str, installation_id: int) -> list[dict[str, Any]]:
+class InstallationRepoListError(Exception):
+    """GitHub did not return the full repo list for an installation."""
+
+
+def _fetch_installation_repos(
+    token: str, installation_id: int, *, strict: bool = False
+) -> list[dict[str, Any]]:
     """Paginate ``GET /installation/repositories`` for a single App install.
 
     GitHub returns ``{"total_count": int, "repositories": [...]}`` for
     this endpoint (NOT a bare array — that's only for ``/user/repos``).
     Network/HTTP failures here log + return whatever was already fetched
-    so a single broken installation never sinks the whole listing.
+    so a single broken installation never sinks the whole listing. With
+    ``strict`` they raise :class:`InstallationRepoListError` instead, for
+    callers that would otherwise mistake a GitHub outage for "no repos".
     """
     headers = {
         "Authorization": f"token {token}",
@@ -170,12 +178,16 @@ def _fetch_installation_repos(token: str, installation_id: int) -> list[dict[str
                 "[USER-REPOS] App-mode list failed installation_id=%d: %s",
                 installation_id, type(exc).__name__,
             )
+            if strict:
+                raise InstallationRepoListError(type(exc).__name__) from exc
             break
         if resp.status_code != 200:
             logger.error(
                 "[USER-REPOS] App-mode list returned status=%d for installation_id=%d",
                 resp.status_code, installation_id,
             )
+            if strict:
+                raise InstallationRepoListError(f"status={resp.status_code}")
             break
         try:
             payload = resp.json()
@@ -184,6 +196,8 @@ def _fetch_installation_repos(token: str, installation_id: int) -> list[dict[str
                 "[USER-REPOS] App-mode response not JSON for installation_id=%d",
                 installation_id,
             )
+            if strict:
+                raise InstallationRepoListError("non-JSON response")
             break
         repos = payload.get("repositories", []) if isinstance(payload, dict) else []
         if not repos:

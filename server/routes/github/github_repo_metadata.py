@@ -177,8 +177,32 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
             _update_metadata(user_id, repo_full_name, None, "error")
 
 
+# Backoff for a failed import: 1, 2, 4 ... capped at 30 min. Eight retries
+# span about 2.5 hours, longer than the GitHub incidents that caused this.
+_IMPORT_MAX_RETRIES = 8
+_IMPORT_RETRY_CAP_SEC = 30 * 60
+
+
+def _retry_import(task, installation_id: int, what: str) -> None:
+    attempt = getattr(getattr(task, "request", None), "retries", 0) or 0
+    countdown = min(60 * (2 ** attempt), _IMPORT_RETRY_CAP_SEC)
+    try:
+        task.retry(countdown=countdown, max_retries=_IMPORT_MAX_RETRIES)
+    except task.MaxRetriesExceededError:
+        logger.error(
+            "[RepoImport] %s retries exhausted installation_id=%s; the hourly "
+            "sync will pick it up",
+            what, installation_id,
+        )
+
+
 def _import_installation_repos(
-    self, user_id: str, installation_id: int, enroll_change_gating: bool = False
+    self,
+    user_id: str,
+    installation_id: int,
+    enroll_change_gating: bool = False,
+    only_repos: list[str] | None = None,
+    created_after: str | None = None,
 ):
     """Auto-import a GitHub App installation's repos into ``connected_repos``.
 
@@ -193,6 +217,11 @@ def _import_installation_repos(
     path this NEVER deletes, so prior manual selections and other installations
     are preserved; the user can still trim the set from the repo picker.
 
+    ``only_repos`` limits the import to those full names (an
+    ``installation_repositories.added`` webhook). ``created_after`` (ISO 8601)
+    limits it to repos created on GitHub after that time, so the hourly sync
+    can pick up new repos without re-adding ones a user removed.
+
     Metadata generation is dispatched only for genuinely new rows, and the
     LLM-usage hook inside :func:`generate_repo_metadata` still gates cost.
     """
@@ -200,7 +229,10 @@ def _import_installation_repos(
         GitHubAppInstallationSuspended,
         get_installation_token,
     )
-    from routes.github.github_user_repos import _fetch_installation_repos
+    from routes.github.github_user_repos import (
+        InstallationRepoListError,
+        _fetch_installation_repos,
+    )
     from utils.auth.stateless_auth import set_rls_context
     from utils.db.connection_pool import db_pool
 
@@ -217,16 +249,27 @@ def _import_installation_repos(
             "[RepoImport] installation token mint failed installation_id=%s: %s",
             installation_id, type(exc).__name__,
         )
-        try:
-            self.retry(countdown=30)
-        except self.MaxRetriesExceededError:
-            logger.warning(
-                "[RepoImport] token mint retries exhausted installation_id=%s; giving up",
-                installation_id,
-            )
+        _retry_import(self, installation_id, "token mint")
         return
 
-    repos = _fetch_installation_repos(token, installation_id)
+    try:
+        repos = _fetch_installation_repos(token, installation_id, strict=True)
+    except InstallationRepoListError as exc:
+        # A GitHub outage is not "this install has no repos". Without the
+        # retry a signup during an incident is left with nothing enrolled.
+        logger.warning(
+            "[RepoImport] repo listing failed installation_id=%s: %s",
+            installation_id, exc,
+        )
+        _retry_import(self, installation_id, "repo listing")
+        return
+    if only_repos is not None:
+        wanted = set(only_repos)
+        repos = [r for r in repos if r.get("full_name") in wanted]
+    if created_after is not None:
+        # GitHub's created_at is ISO 8601 UTC ("...Z"); same-format strings
+        # compare correctly as text.
+        repos = [r for r in repos if str(r.get("created_at") or "") > created_after]
     if not repos:
         logger.info(
             "[RepoImport] no repos to import installation_id=%s user=%s",
@@ -298,10 +341,15 @@ def _import_installation_repos(
 @celery_app.task(
     name="routes.github.github_repo_metadata.import_installation_repos",
     bind=True,
-    max_retries=2,
+    max_retries=_IMPORT_MAX_RETRIES,
 )
 def import_installation_repos(
-    self, user_id: str, installation_id: int, enroll_change_gating: bool = False
+    self,
+    user_id: str,
+    installation_id: int,
+    enroll_change_gating: bool = False,
+    only_repos: list[str] | None = None,
+    created_after: str | None = None,
 ):
     """Celery entry point for the App repo auto-import.
 
@@ -310,5 +358,80 @@ def import_installation_repos(
     lightweight test env, turning a decorated task into a no-op MagicMock).
     """
     return _import_installation_repos(
-        self, user_id, installation_id, enroll_change_gating
+        self, user_id, installation_id, enroll_change_gating,
+        only_repos=only_repos, created_after=created_after,
+    )
+
+
+# A repo created on GitHub inside this window and still not connected missed
+# its webhook. Longer than the hourly beat so one late run loses nothing.
+_SYNC_LOOKBACK_SEC = 3 * 3600
+
+
+def _iso_utc(dt) -> str:
+    from datetime import timezone
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@celery_app.task(name="routes.github.github_repo_metadata.sync_installation_repos")
+def sync_installation_repos(backfill: bool = False):
+    """Hourly safety net: enroll repos that a webhook or an import missed.
+
+    For every linked, unsuspended installation that qualifies for
+    auto-enrollment (see ``enrollment_state``):
+
+    * no connected repos at all (the import never landed, e.g. GitHub was
+      down at signup): queue the full import;
+    * otherwise: import only repos created on GitHub in the last few hours,
+      or, with ``backfill``, since the installation's first import. Repos
+      that already existed are never re-added, so a repo someone removed
+      from Aurora stays removed.
+
+    Installations where someone turned review off on a repo are skipped.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from tasks.github_webhook_tasks import enrollment_state
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT DISTINCT gi.installation_id
+                 FROM github_installations gi
+                 JOIN user_github_installations ugi
+                   ON ugi.installation_id = gi.installation_id
+                WHERE ugi.disconnected_at IS NULL
+                  AND gi.suspended_at IS NULL
+                ORDER BY gi.installation_id"""
+        )
+        installation_ids = [row[0] for row in cur.fetchall()]
+
+    recent = datetime.now(timezone.utc) - timedelta(seconds=_SYNC_LOOKBACK_SEC)
+    queued = 0
+    for installation_id in installation_ids:
+        try:
+            owner, total, first_connected_at = enrollment_state(installation_id)
+            if not owner:
+                continue
+            if total == 0:
+                created_after = None
+            elif backfill and first_connected_at is not None:
+                created_after = _iso_utc(first_connected_at)
+            else:
+                created_after = _iso_utc(recent)
+            import_installation_repos.delay(
+                owner, installation_id, enroll_change_gating=True,
+                created_after=created_after,
+            )
+            queued += 1
+        except Exception:
+            logger.warning(
+                "[RepoSync] skipped installation_id=%s", installation_id, exc_info=True,
+            )
+    logger.info(
+        "[RepoSync] queued %d of %d linked installation(s) backfill=%s",
+        queued, len(installation_ids), backfill,
     )

@@ -10,6 +10,7 @@ import { useDarkPageBackground } from "@/hooks/useDarkPageBackground"
 import { usePasswordReset, usePasswordResetAvailable } from "@/hooks/usePasswordReset"
 import { ForgotPasswordPanel, ResetPasswordPanel } from "./PasswordResetPanels"
 import { SLACK_HANDOFF_MIN_MS, SlackHandoffPanel, ContinueWithSlack, AddAuroraToSlack, useSlackSignInAvailable, SLACK_ERRORS, SLACK_RESUME_KEY, resumeSlackConnect } from "./SlackSignIn"
+import { resumeGithubClaim, stashGithubClaim } from "./githubClaim"
 
 const AuroraShader = dynamic(() => import('@/app/components/AuroraShader'), { ssr: false })
 
@@ -69,9 +70,14 @@ const SSO_ERRORS: Record<string, string> = {
 
 const QUERY_ERRORS: Record<string, string> = {
   // GitHub email already has an (unlinked) Aurora account — sign in normally instead
-  account_exists: "An account with your email already exists. Sign in below, then finish connecting from the Connectors page.",
+  account_exists: "Your GitHub email already has an Aurora account. Sign in below and we'll finish connecting GitHub.",
   ...SSO_ERRORS,
   ...SLACK_ERRORS,
+}
+
+// ?notice=<code>: informational, not an error. Fixed strings only.
+const QUERY_NOTICES: Record<string, string> = {
+  github_install_requested: "Your request to install Aurora was sent to your GitHub organization's owners. Once one of them approves it, sign in here with GitHub to start getting PR reviews.",
 }
 
 function errorFromQuery(code: string | null): string | null {
@@ -235,8 +241,22 @@ function AuthPage() {
     if (message) setError(message)
     // Their email already had an account: finish the Slack install right after they sign in.
     if (code === "slack_account_exists") sessionStorage.setItem(SLACK_RESUME_KEY, "1")
+    // Their GitHub email already had an account: link the install right after they sign in.
+    if (code === "account_exists") {
+      stashGithubClaim(searchParams.get("gh_claim"))
+      const url = new URL(globalThis.location.href)
+      url.searchParams.delete("gh_claim")
+      globalThis.history.replaceState(null, "", url.toString())
+    }
+    const noticeCode = searchParams.get("notice")
+    if (noticeCode && Object.hasOwn(QUERY_NOTICES, noticeCode)) setNotice(QUERY_NOTICES[noticeCode])
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
+
+  // Already signed in when GitHub sent them here: link the install straight away.
+  useEffect(() => {
+    if (session?.user) void resumeGithubClaim()
+  }, [session?.user])
 
   useEffect(() => {
     if (resendCooldown <= 0) return
@@ -285,6 +305,7 @@ function AuthPage() {
         setError("Invalid email or password")
       } else if (result?.ok) {
         if (await resumeSlackConnect()) return
+        if (await resumeGithubClaim()) return
         router.push(callbackUrl)
         router.refresh()
       }

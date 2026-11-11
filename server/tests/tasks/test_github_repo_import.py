@@ -62,7 +62,7 @@ def _mock_db(existing_repos=()):
     return db_pool, conn, cur
 
 
-def _run(repos, existing=(), org="org-1", token_exc=None):
+def _run(repos, existing=(), org="org-1", token_exc=None, task=None, **kwargs):
     db_pool, conn, cur = _mock_db(existing)
     gen = MagicMock()
     with patch("utils.auth.github_app_token.get_installation_token") as get_tok, \
@@ -75,7 +75,9 @@ def _run(repos, existing=(), org="org-1", token_exc=None):
             get_tok.side_effect = token_exc
         else:
             get_tok.return_value = "ghs_installtoken"
-        mod._import_installation_repos(_task_self(), _USER, _INSTALL)
+        if isinstance(repos, Exception):
+            fetch.side_effect = repos
+        mod._import_installation_repos(task or _task_self(), _USER, _INSTALL, **kwargs)
     return conn, cur, gen, fetch
 
 
@@ -152,3 +154,44 @@ class TestImportInstallationRepos:
         assert _insert_calls(cur) == []
         conn.commit.assert_not_called()
         gen.delay.assert_not_called()
+
+
+class TestListingFailure:
+    """A GitHub outage during the listing must not read as "no repos"."""
+
+    def test_failed_listing_retries_and_writes_nothing(self):
+        from routes.github.github_user_repos import InstallationRepoListError
+
+        task = _task_self()
+        conn, cur, gen, fetch = _run(InstallationRepoListError("status=502"), task=task)
+        assert fetch.call_args.kwargs == {"strict": True}
+        task.retry.assert_called_once()
+        assert task.retry.call_args.kwargs["max_retries"] == mod._IMPORT_MAX_RETRIES
+        assert _insert_calls(cur) == []
+        conn.commit.assert_not_called()
+
+    def test_backoff_grows_and_is_capped(self):
+        countdowns = []
+        for attempt in (0, 3, 20):
+            task = _task_self()
+            task.request = SimpleNamespace(retries=attempt)
+            mod._retry_import(task, _INSTALL, "repo listing")
+            countdowns.append(task.retry.call_args.kwargs["countdown"])
+        assert countdowns == [60, 480, mod._IMPORT_RETRY_CAP_SEC]
+
+
+class TestImportScope:
+    _REPOS = [
+        {"full_name": "acme/old", "created_at": "2026-09-01T00:00:00Z"},
+        {"full_name": "acme/new", "created_at": "2026-10-10T12:00:00Z"},
+    ]
+
+    def test_only_repos_limits_the_import(self):
+        _, cur, gen, _ = _run(self._REPOS, only_repos=["acme/new"])
+        assert [c.args[1][2] for c in _insert_calls(cur)] == ["acme/new"]
+
+    def test_created_after_skips_repos_that_existed_at_install(self):
+        # Repos that existed at install and are missing were removed on
+        # purpose; only ones created since come back.
+        _, cur, gen, _ = _run(self._REPOS, created_after="2026-09-26T20:04:00Z")
+        assert [c.args[1][2] for c in _insert_calls(cur)] == ["acme/new"]

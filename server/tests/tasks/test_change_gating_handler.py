@@ -75,7 +75,7 @@ class _FakeCursor:
         if "FROM github_installations" in self._last_sql:
             return ("2026-01-01",) if self._state["suspended"] else (None,)
         if "COUNT(*)" in self._last_sql:
-            return self._state["repo_counts"]
+            return (*self._state["repo_counts"], None)
         if "FROM connected_repos" in self._last_sql:
             return (1,) if self._state["enrolled"] else None
         return None
@@ -279,9 +279,9 @@ class TestReposAddedAfterInstall:
         [
             ("all", (3, 3), [_USER_ID], True),
             ("all", (3, 2), [_USER_ID], False),  # someone opted a repo out
-            ("all", (0, 0), [_USER_ID], False),  # nothing connected yet
+            ("all", (0, 0), [_USER_ID], True),  # import never landed (GitHub outage)
             ("all", (3, 3), [], False),  # no Aurora user on this installation
-            ("selected", (3, 3), [_USER_ID], False),
+            ("selected", (3, 3), [_USER_ID], True),  # repo granted on GitHub
         ],
     )
     def test_import_only_when_every_connected_repo_is_enrolled(
@@ -300,6 +300,20 @@ class TestReposAddedAfterInstall:
 
         assert importer.delay.called is expect_import
         gating_env.update_status.assert_called_once_with(_DELIVERY_ID, status="processed")
+
+    def test_imports_only_the_added_repos(self, gating_env, importer):
+        # A full import would also bring back repos removed in Aurora's picker.
+        gating_env.state["linked_users"] = [_USER_ID]
+        payload = {
+            "action": "added",
+            "installation": {"id": _INSTALLATION_ID},
+            "repository_selection": "all",
+            "repositories_added": [{"full_name": "acme/new"}, {"full_name": "acme/two"}],
+        }
+
+        webhook_tasks._handle_installation_repositories_event(payload, "added", _DELIVERY_ID)
+
+        assert importer.delay.call_args.kwargs["only_repos"] == ["acme/new", "acme/two"]
 
 
 class TestProgressComment:
