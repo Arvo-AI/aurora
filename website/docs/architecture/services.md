@@ -118,12 +118,12 @@ Primary relational database.
 Host: postgres (in Docker) / localhost (external)
 Port: 5432
 Database: aurora_db
-User: postgres
+User: aurora (POSTGRES_USER)
 ```
 
 ### Access
 ```bash
-docker exec -it aurora-postgres psql -U postgres -d aurora_db
+docker exec -it aurora-postgres psql -U aurora -d aurora_db
 ```
 
 ## Redis
@@ -151,8 +151,11 @@ Secrets management.
 
 ### Access
 ```bash
+# The Vault container has no token; pass yours from the host shell
+export VAULT_TOKEN=<VAULT_TOKEN from .env>
+
 # CLI
-docker exec -it aurora-vault vault kv list aurora/users/
+docker exec -it -e VAULT_TOKEN aurora-vault vault kv list aurora/users/
 
 # UI
 http://localhost:8200

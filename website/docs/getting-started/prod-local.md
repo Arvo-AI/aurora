@@ -92,11 +92,14 @@ make prod-prebuilt   # or: make prod-local to build from source
 Verify Vault is working:
 
 ```bash
+# The Vault container has no token; pass yours from the host shell
+export VAULT_TOKEN=<VAULT_TOKEN from .env>
+
 # Write a test secret
-docker exec -it aurora-vault vault kv put aurora/users/test-secret value='hello'
+docker exec -it -e VAULT_TOKEN aurora-vault vault kv put aurora/users/test-secret value='hello'
 
 # Read it back
-docker exec -it aurora-vault vault kv get aurora/users/test-secret
+docker exec -it -e VAULT_TOKEN aurora-vault vault kv get aurora/users/test-secret
 ```
 
 ## Differences from Development

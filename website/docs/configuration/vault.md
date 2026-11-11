@@ -63,14 +63,17 @@ VAULT_KV_BASE_PATH=users
 ### Via CLI
 
 ```bash
+# The Vault container has no token; pass yours from the host shell
+export VAULT_TOKEN=<VAULT_TOKEN from .env>
+
 # Write a secret
-docker exec -it aurora-vault vault kv put aurora/users/test-secret value='hello'
+docker exec -it -e VAULT_TOKEN aurora-vault vault kv put aurora/users/test-secret value='hello'
 
 # Read a secret
-docker exec -it aurora-vault vault kv get aurora/users/test-secret
+docker exec -it -e VAULT_TOKEN aurora-vault vault kv get aurora/users/test-secret
 
 # List secrets
-docker exec -it aurora-vault vault kv list aurora/users/
+docker exec -it -e VAULT_TOKEN aurora-vault vault kv list aurora/users/
 ```
 
 ### Via UI
@@ -128,7 +131,7 @@ docker restart aurora-vault-init
 Check your token has the correct policies:
 
 ```bash
-docker exec -it aurora-vault vault token capabilities aurora/users/
+docker exec -it -e VAULT_TOKEN aurora-vault vault token capabilities aurora/users/
 ```
 
 ### Connection refused

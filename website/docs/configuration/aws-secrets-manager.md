@@ -34,10 +34,17 @@ Aurora supports AWS Secrets Manager as an alternative secrets backend to HashiCo
         "secretsmanager:DeleteSecret"
       ],
       "Resource": "arn:aws:secretsmanager:*:*:secret:aurora/users/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:*:*:secret:aurora/system/*"
     }
   ]
 }
 ```
+
+The second statement lets Aurora read operator-provisioned system secrets, such as the GitHub App private key and webhook secret. Without it the GitHub App cannot authenticate.
 
 Restrict the `Resource` ARN to your specific region and account for production use.
 

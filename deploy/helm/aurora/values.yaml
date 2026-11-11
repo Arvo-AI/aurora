@@ -88,7 +88,9 @@ slackSocketMode:
 #
 # IRSA (EKS) — the annotated role must have ALL of the following permissions:
 #   1. S3 access on your storage bucket (if not using static STORAGE_ACCESS_KEY/SECRET_KEY)
-#   2. secretsmanager:* on aurora/users/* (if SECRETS_BACKEND=aws_secrets_manager)
+#   2. If SECRETS_BACKEND=aws_secrets_manager: secretsmanager:* on aurora/users/*, plus
+#      secretsmanager:GetSecretValue on aurora/system/* (GitHub App private key and
+#      webhook secret; without it the GitHub App cannot authenticate)
 #   3. sts:AssumeRole on * (for the AWS connector — needs cross-account access, so resource must be *)
 #      Without this, the AWS connector cannot assume cross-account roles and will return
 #      "not authorized to perform: sts:AssumeRole" errors.

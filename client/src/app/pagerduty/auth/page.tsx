@@ -49,11 +49,17 @@ export default function PagerDutyAuthPage() {
     const result = await pagerdutyService.getStatus();
     setStatus(result);
 
-    if (typeof window !== 'undefined' && result) {
-      localStorage.setItem(CACHE_KEY, JSON.stringify(result));
+    if (typeof window !== 'undefined') {
+      if (result) {
+        localStorage.setItem(CACHE_KEY, JSON.stringify(result));
+      } else {
+        // Don't leave a stale "connected" status cached when the request fails.
+        localStorage.removeItem(CACHE_KEY);
+      }
     }
 
     updateLocalStorageConnection(result?.connected || false);
+    return result;
   };
 
   const loadStatus = async (skipCache = false) => {
@@ -240,7 +246,10 @@ export default function PagerDutyAuthPage() {
 
       setDisplayName("PagerDuty");
       // Status includes oauthAvailable. A local { connected: false } would hide the button.
-      await fetchAndUpdateStatus();
+      // Retry once if the refresh fails, so the OAuth option comes back without a reload.
+      if (!(await fetchAndUpdateStatus())) {
+        await fetchAndUpdateStatus();
+      }
 
       toast({
         title: 'Success',

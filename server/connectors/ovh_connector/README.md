@@ -57,7 +57,7 @@ To run locally with OVH OAuth:
    ngrok http 5080
    ```
 2. Copy the generated HTTPS URL (e.g., `https://your-ngrok-url.ngrok-free.dev`)
-3. Set `NGROK_URL` in `.env` to the tunnel URL
+3. Set `NGROK_URL` in `.env` to the tunnel URL, then recreate the server so it picks up the new value (`docker compose up -d --force-recreate aurora-server`, adding `-f docker-compose.prod-local.yml` if you run that file). Editing `.env` alone does not change a running container.
 4. Update your OVH OAuth app callback URL via the API console if needed
 
 **Alternative**: You can also use [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/tunnel-guide/local/) instead of ngrok.

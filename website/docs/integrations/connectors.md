@@ -514,12 +514,23 @@ These are read from whichever backend `SECRETS_BACKEND` selects, at the path
 
 Vault (`SECRETS_BACKEND=vault`, default). These commands need a `vault` CLI
 with `VAULT_ADDR` and a write-capable `VAULT_TOKEN` set; with Docker Compose,
-run them in the `vault` container. On a Helm install, follow
+see the container commands below. On a Helm install, follow
 [Writing the secrets on Kubernetes](#github-app-secrets-kubernetes) instead.
 
 ```bash
 vault kv put aurora/system/github-app/webhook-secret value=<the secret>
 vault kv put aurora/system/github-app/private-key value=@<path-to-pem>
+```
+
+With Docker Compose, the `.pem` is on the host, so copy it into the container
+first and pass your token in:
+
+```bash
+docker cp ./app-private-key.pem aurora-vault:/tmp/key.pem
+docker exec -it -e VAULT_TOKEN=<ROOT_TOKEN> aurora-vault sh -c '
+  vault kv put aurora/system/github-app/private-key value=@/tmp/key.pem &&
+  vault kv put aurora/system/github-app/webhook-secret value=<the secret>;
+  rm -f /tmp/key.pem'
 ```
 
 AWS Secrets Manager (`SECRETS_BACKEND=aws_secrets_manager`) — create the
@@ -604,27 +615,26 @@ export VAULT_TOKEN=<ROOT_TOKEN>
 vault kv put aurora/system/github-app/private-key value=@/tmp/key.pem
 vault kv put aurora/system/github-app/webhook-secret value=<the secret>
 rm -f /tmp/key.pem
-exit
-```
 
-Exporting the token inside the pod shell keeps it out of your local shell
-history.
-
-The `aurora-app` policy from the [Kubernetes guide](../deployment/kubernetes.md#6-initialize-vault)
-grants the app token read access to `aurora/data/system/*`, which is where
-the server reads these secrets. Installs whose Vault was initialized before
-that rule was added only grant `aurora/data/users/*`, so the server cannot
-read the key and the GitHub install fails. Check it from the same root-token
-shell, and add the rule if it is missing:
-
-```bash
+# Still inside the pod: make sure the app token can read these paths
 vault policy read aurora-app | grep 'data/system' || {
   vault policy read aurora-app > /tmp/aurora-app.hcl
   printf '\npath "aurora/data/system/*" { capabilities = ["read"] }\n' >> /tmp/aurora-app.hcl
   vault policy write aurora-app /tmp/aurora-app.hcl
   rm -f /tmp/aurora-app.hcl
 }
+exit
 ```
+
+Exporting the token inside the pod shell keeps it out of your local shell
+history.
+
+The policy step matters on older installs. The `aurora-app` policy from the
+[Kubernetes guide](../deployment/kubernetes.md#6-initialize-vault) now grants
+the app token read access to `aurora/data/system/*`, where the server reads
+these secrets. A Vault initialized before that rule was added only grants
+`aurora/data/users/*`, so the server cannot read the key and the GitHub
+install fails.
 
 Vault applies policy changes to existing tokens immediately, so no restart or
 new token is needed.

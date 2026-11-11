@@ -81,7 +81,7 @@ The init container will auto-unseal Vault.
 **Solution**: Your token may lack required policies. Use the root token or check token capabilities:
 
 ```bash
-docker exec -it aurora-vault vault token capabilities aurora/users/
+docker exec -it -e VAULT_TOKEN aurora-vault vault token capabilities aurora/users/
 ```
 
 ## Port Conflicts
