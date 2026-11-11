@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Chat: a reply left on "Thinking…" because its worker was killed (out of
   memory, eviction) or stopped is replaced with an error in Slack, Google Chat,
   Teams and the chat transcript.
+- Slack: a single @Aurora mention is answered once. Slack retries an event
+  that is not acknowledged within 3 seconds, and each retry used to start
+  another investigation (several "Thinking…" placeholders and answers). Events
+  are now deduplicated by event id over both the Events API and Socket Mode.
 - Chat: a Slack answer already posted is no longer replaced with an error when
   the run fails afterwards (for example while filing the Jira ticket), or when
   its worker dies in that window.
