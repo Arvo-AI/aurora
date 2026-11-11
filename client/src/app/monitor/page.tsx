@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Radar, HeartPulse, Timer, ShieldCheck, BookOpen, Wrench, MessagesSquare } from 'lucide-react';
+import { Radar, HeartPulse, Timer, ShieldCheck, BookOpen, MessagesSquare } from 'lucide-react';
 import { useUser } from '@/hooks/useAuthHooks';
 import { isAdmin } from '@/lib/roles';
 import { PeriodSelector, type Period } from './components/charts';
@@ -10,14 +10,12 @@ import SreTab from './components/sre-tab';
 import WaterfallTab from './components/waterfall-tab';
 import AuditTab from './components/audit-tab';
 import ArtifactsTab from './components/artifacts-tab';
-import ToolCallsTab from './components/tool-calls-tab';
 import ChatsTab from './components/chats-tab';
 
 const TABS = [
   { id: 'fleet', label: 'Fleet', icon: Radar },
   { id: 'sre', label: 'SRE Metrics', icon: HeartPulse },
   { id: 'waterfall', label: 'Execution', icon: Timer },
-  { id: 'tool-calls', label: 'Tool Calls', icon: Wrench },
   { id: 'chats', label: 'Conversations', icon: MessagesSquare, adminOnly: true },
   { id: 'artifacts', label: 'Artifacts', icon: BookOpen },
   { id: 'audit', label: 'Audit Log', icon: ShieldCheck },
@@ -41,8 +39,7 @@ export default function MonitorPage() {
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">Monitor</h1>
           <p className="text-sm text-zinc-500 mt-1">Observability, cost tracking, and compliance</p>
         </div>
-        {/* Tool Calls and Artifacts have their own time controls (or none) */}
-        {tab !== 'tool-calls' && tab !== 'chats' && tab !== 'artifacts' && <PeriodSelector value={period} onChange={setPeriod} />}
+        <PeriodSelector value={period} onChange={setPeriod} />
       </div>
 
       {/* Tab bar */}
@@ -72,8 +69,7 @@ export default function MonitorPage() {
         {tab === 'fleet' && <FleetTab period={period} />}
         {tab === 'sre' && <SreTab period={period} />}
         {tab === 'waterfall' && <WaterfallTab period={period} />}
-        {tab === 'tool-calls' && <ToolCallsTab />}
-        {tab === 'chats' && admin && <ChatsTab />}
+        {tab === 'chats' && admin && <ChatsTab period={period} />}
         {tab === 'artifacts' && <ArtifactsTab />}
         {tab === 'audit' && <AuditTab period={period} />}
       </div>

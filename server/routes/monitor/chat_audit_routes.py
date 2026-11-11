@@ -11,8 +11,8 @@ from flask import Blueprint, jsonify, request
 
 from services.monitor.chat_audit import (
     ChatFilters,
-    InvalidChatFilter,
-    chat_filter_error_message,
+    InvalidFilter,
+    filter_error_message,
     get_transcript,
     list_chats,
     validate_session_id,
@@ -34,8 +34,8 @@ def list_org_chats(user_id):
     """
     try:
         filters = ChatFilters.parse(request.args.to_dict())
-    except InvalidChatFilter as exc:
-        return jsonify({"error": chat_filter_error_message(exc)}), 400
+    except InvalidFilter as exc:
+        return jsonify({"error": filter_error_message(exc)}), 400
 
     org_id = get_org_id_from_request()
     if not org_id:
@@ -58,8 +58,8 @@ def get_org_chat(user_id, session_id):
     """Read-only transcript of one chat in the caller's org."""
     try:
         validate_session_id(session_id)
-    except InvalidChatFilter as exc:
-        return jsonify({"error": chat_filter_error_message(exc)}), 400
+    except InvalidFilter as exc:
+        return jsonify({"error": filter_error_message(exc)}), 400
 
     org_id = get_org_id_from_request()
     if not org_id:

@@ -5,50 +5,50 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock
 
 import chat.backend.agent.tools.introspection_tools as tools
-import services.monitor.tool_call_search as search_mod
+import services.monitor.chat_audit as audit
 
 
-def _patch(monkeypatch, result=None):
+def _patch(monkeypatch):
     cur = MagicMock()
+    captured = {}
 
     @contextmanager
     def fake_cursor(user_id):
         yield cur, "org-1"
 
+    def fake_search(c, org_id, raw, limit):
+        captured.update(cur=c, org_id=org_id, raw=raw, limit=limit)
+        return {"tool_calls": [{"tool_name": "cloud_exec", "reason": "AccessDenied"}], "by_issue": [], "period": "7d"}
+
     monkeypatch.setattr(tools, "_cursor", fake_cursor)
-    captured = {}
-
-    def fake_search(c, org_id, filters):
-        captured.update(cur=c, org_id=org_id, filters=filters)
-        return result or {
-            "items": [{"tool_name": "cloud_exec", "error": "x" * 5000, "reason": "AccessDenied"}],
-            "total": 1, "summary": {"failed": 1}, "tools": [], "filters": {},
-        }
-
-    monkeypatch.setattr(search_mod, "search_tool_calls", fake_search)
-    return captured
+    monkeypatch.setattr(audit, "search_failed_tool_calls", fake_search)
+    return cur, captured
 
 
-def test_defaults_to_failed_last_week(monkeypatch):
-    captured = _patch(monkeypatch)
+def test_defaults_to_last_week_scoped_to_the_callers_org(monkeypatch):
+    cur, captured = _patch(monkeypatch)
     out = json.loads(tools.search_tool_calls(user_id="user-1"))
-    f = captured["filters"]
-    assert (f.status, f.period, f.per_page) == ("failed", "7d", 20)
-    assert captured["org_id"] == "org-1"
-    assert out["total_matching"] == 1
-    assert len(out["tool_calls"][0]["error"]) <= tools.OUTPUT_EXCERPT_MAX_CHARS
+    assert captured["cur"] is cur and captured["org_id"] == "org-1"
+    assert captured["raw"]["period"] == "7d" and captured["limit"] == 20
+    assert out["tool_calls"][0]["reason"] == "AccessDenied"
 
 
-def test_limit_is_capped(monkeypatch):
-    captured = _patch(monkeypatch)
-    tools.search_tool_calls(limit=500, user_id="user-1")
-    assert captured["filters"].per_page == 50
+def test_passes_filters_and_caps_limit(monkeypatch):
+    _, captured = _patch(monkeypatch)
+    tools.search_tool_calls(issue="blocked_command", tool="cloud_exec", query="s3", limit=500, user_id="u")
+    assert captured["raw"] == {"period": "7d", "issue": "blocked_command", "tool": "cloud_exec",
+                               "q": "s3", "source": None}
+    assert captured["limit"] == 50
 
 
-def test_bad_filter_returns_clean_error(monkeypatch):
-    _patch(monkeypatch)
+def test_bad_filter_returns_constant_error(monkeypatch):
+    @contextmanager
+    def fake_cursor(user_id):
+        yield MagicMock(), "org-1"
+
+    monkeypatch.setattr(tools, "_cursor", fake_cursor)
     out = json.loads(tools.search_tool_calls(period="forever", user_id="user-1"))
-    assert "period" in out["error"]
+    assert out["error"] == audit.FILTER_ERRORS["period"]
 
 
 def test_requires_user():

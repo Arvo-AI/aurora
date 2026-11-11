@@ -858,13 +858,16 @@ def grafana_list_alerts(state=None, limit=50, *, user_id, **_) -> dict:
 # ---------------------------------------------------------------------------
 
 class SearchToolCallsArgs(BaseModel):
-    status: Optional[str] = Field(
-        default="failed",
-        description="failed (default), succeeded, running, or all.",
-    )
     period: Optional[str] = Field(
         default="7d",
         description="Time window ending now: 24h, 7d (default, 'last week'), 30d, or 90d.",
+    )
+    issue: Optional[str] = Field(
+        default=None,
+        description=(
+            "Only failures of one kind: missing_permission, blocked_command, not_connected, "
+            "timeout, or unavailable. Omit for every failure."
+        ),
     )
     tool: Optional[str] = Field(
         default=None,
@@ -883,38 +886,22 @@ class SearchToolCallsArgs(BaseModel):
 
 @introspection_tool
 def search_tool_calls(
-    status="failed", period="7d", tool=None, query=None, source=None, limit=20, *, user_id, **_
+    period="7d", issue=None, tool=None, query=None, source=None, limit=20, *, user_id, **_
 ) -> dict:
-    """Search this org's past agent tool calls, e.g. failures and their reasons.
+    """This org's failed agent tool calls with their reasons and issue type.
 
-    Read-only, and shares its query with the monitor page; secrets in inputs and
-    errors are redacted before they are returned.
+    Read-only, and shares its query layer with the monitor page's Conversations
+    tab; secrets in inputs and errors are redacted before they are returned.
     """
-    from services.monitor.tool_call_search import (
+    from services.monitor.chat_audit import (
         InvalidFilter,
-        ToolCallFilters,
         filter_error_message,
-        search_tool_calls as _search,
+        search_failed_tool_calls,
     )
 
-    try:
-        filters = ToolCallFilters.parse({
-            "status": status, "period": period, "tool": tool, "q": query,
-            "source": source, "page": 1, "per_page": clamp(limit, 1, 50),
-        })
-    except InvalidFilter as exc:
-        raise IntrospectionError(filter_error_message(exc)) from None
-
+    raw = {"period": period, "issue": issue, "tool": tool, "q": query, "source": source}
     with _cursor(user_id) as (cur, org_id):
-        result = _search(cur, org_id, filters)
-
-    # The chat doesn't need the full error body; reason + a short excerpt suffice.
-    for item in result["items"]:
-        item["error"] = item["error"][:OUTPUT_EXCERPT_MAX_CHARS]
-    return {
-        "tool_calls": result["items"],
-        "total_matching": result["total"],
-        "summary": result["summary"],
-        "by_tool": result["tools"][:15],
-        "filters": result["filters"],
-    }
+        try:
+            return search_failed_tool_calls(cur, org_id, raw, limit=clamp(limit, 1, 50))
+        except InvalidFilter as exc:
+            raise IntrospectionError(filter_error_message(exc)) from None

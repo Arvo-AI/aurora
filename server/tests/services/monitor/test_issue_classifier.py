@@ -88,3 +88,20 @@ def test_sql_case_binds_patterns_as_params():
 
 def test_every_issue_category_has_a_label():
     assert set(ic.ISSUE_CATEGORIES) | {ic.OTHER} == set(ic.CATEGORY_LABELS)
+
+
+def test_real_ask_mode_gate_messages_classify_as_blocked():
+    # Built by the gate itself, so a wording change there fails here instead of
+    # silently dropping issues from the audit view.
+    from chat.backend.agent.access.mode_access_controller import ModeAccessController
+    from utils.security.read_only_classifier import describe_rejection
+
+    command = "aws logs delete-log-group --log-group-name x"
+    allowed, message = ModeAccessController.ensure_cloud_command_allowed(
+        "ask", False, command, describe_rejection(command))
+    assert not allowed
+    assert ic.classify_tool_error(message) == ic.BLOCKED_COMMAND
+
+    allowed, message = ModeAccessController.ensure_iac_action_allowed("ask", "apply")
+    assert not allowed
+    assert ic.classify_tool_error(message) == ic.BLOCKED_COMMAND
