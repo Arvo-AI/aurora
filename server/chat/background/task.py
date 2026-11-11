@@ -526,6 +526,7 @@ def run_background_chat(
 
     logger.info(f"[BackgroundChat] Starting for user {user_id}, session {session_id}")
     logger.info(f"[BackgroundChat] Trigger: {trigger_metadata}")
+    _remember_reply_target(session_id, user_id, trigger_metadata)
 
     # Eagerly persist the initial user message so it's visible in the UI immediately (opt-in)
     if os.environ.get("DISPLAY__RCA_USER_MSG", "").lower() in ("1", "true", "yes"):
@@ -2747,6 +2748,49 @@ def _claim_orphaned_sessions(cursor, where: str, params: tuple) -> list:
         (_WORKER_LOST_REPLY, *params),
     )
     return cursor.fetchall()
+
+
+_CHAT_REPLY_SOURCES = frozenset({"slack", "slack_button", "google_chat", "google_chat_button", "teams"})
+
+# Merges into ui_state.triggerMetadata; a non-object value there is replaced.
+_REMEMBER_REPLY_TARGET_SQL = """
+    UPDATE chat_sessions
+    SET ui_state = jsonb_set(
+        CASE WHEN jsonb_typeof(ui_state) = 'object' THEN ui_state ELSE '{}'::jsonb END,
+        '{triggerMetadata}',
+        CASE WHEN jsonb_typeof(ui_state->'triggerMetadata') = 'object'
+             THEN ui_state->'triggerMetadata' ELSE '{}'::jsonb END || %s::jsonb
+    )
+    WHERE id = %s
+"""
+
+
+def _remember_reply_target(session_id: Optional[str], user_id: Optional[str],
+                           trigger_metadata: Optional[Dict[str, Any]]) -> None:
+    """Store where this run's chat reply goes on the session itself.
+
+    The chat handlers create the session before they post the "Thinking…"
+    placeholder, so its id (``thinking_message_ts``, ``thinking_message_name``,
+    ``thinking_activity_id``) only reaches the task. The cleanup sweep can only
+    read the session: without the id it posts a second message and leaves the
+    placeholder hanging when the worker dies.
+    """
+    if not session_id or not user_id or not trigger_metadata:
+        return
+    if trigger_metadata.get("source") not in _CHAT_REPLY_SOURCES:
+        return
+    try:
+        payload = json.dumps(trigger_metadata, default=str)
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:ReplyTarget]"):
+                    return
+                cursor.execute(_REMEMBER_REPLY_TARGET_SQL, (payload, session_id))
+            conn.commit()
+    except Exception:
+        # Best effort: the run itself does not depend on it.
+        logger.warning("[BackgroundChat] Could not store the reply target for session %s",
+                       session_id, exc_info=True)
 
 
 def _notify_orphaned_chat_reply(user_id: str, session_id: str, ui_state) -> None:
