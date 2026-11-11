@@ -51,7 +51,7 @@ export function GithubPendingInstall({ token }: Readonly<{ token: string }>) {
   useEffect(() => {
     if (status !== "authenticated" || link) return
     let cancelled = false
-    ;(async () => {
+    void (async () => {
       try {
         const res = await fetch("/api/proxy/github/app/link-pending/start", {
           method: "POST",
