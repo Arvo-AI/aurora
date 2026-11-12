@@ -6,7 +6,7 @@ import { useQuery, jsonFetcher } from '@/lib/query';
 import { ChartPanel, EmptyState, type Period } from './charts';
 import ChatTranscript from './chat-transcript';
 import ToolCallsView, { type ToolCallsResponse } from './tool-calls-view';
-import { FilterError, Pager, SearchBox, auditFetcher, filterErrorOf, selectCls, useDebounced, useKeptData, useUrlParam } from './audit-controls';
+import { FilterError, LiveStatus, Pager, SearchBox, UserFilter, auditFetcher, filterErrorOf, selectCls, useDebounced, useKeptData, useUrlParam } from './audit-controls';
 import {
   ISSUE_SHORT, ISSUE_STYLES, SOURCE_STYLES, STATUS_STYLES, formatTimestamp, type AuditLabels,
 } from './chat-audit-shared';
@@ -28,6 +28,7 @@ interface ChatRow {
 interface ChatsResponse {
   chats: ChatRow[];
   total: number;
+  search_capped?: boolean;
   page: number;
   total_pages: number;
   sources: { source: string; label: string; count: number }[];
@@ -123,6 +124,10 @@ function ChatHistoryView({ period, onOpen }: {
   const filterError = filterErrorOf(error);
   const labels = view?.labels;
   const hasFilters = source || status || user || search;
+  const capNote = view?.search_capped ? 'Search covers the 1,000 most recent matching chats; narrow the filters to reach older ones.' : '';
+  const liveText = isLoading ? 'Loading chat history…'
+    : filterError ? '' /* already announced by its role=alert */ : (error ? 'Could not load chat history.'
+      : view ? `${view.total} ${view.total === 1 ? 'chat' : 'chats'} found.` : '');
 
   return (
     <ChartPanel
@@ -139,10 +144,8 @@ function ChatHistoryView({ period, onOpen }: {
           <option value="">Any status</option>
           {Object.entries(labels?.statuses ?? {}).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
         </select>
-        <select aria-label="User" value={user} onChange={e => setUser(e.target.value)} className={selectCls}>
-          <option value="">All users</option>
-          {(view?.users ?? []).map(u => <option key={u.id} value={u.id}>{u.name || u.email || u.id} ({u.count})</option>)}
-        </select>
+        <UserFilter value={user} onChange={setUser}
+          users={(view?.users ?? []).map(u => ({ value: u.email || u.id, label: `${u.name || u.email || u.id} (${u.count})` }))} />
         <SearchBox value={search} onChange={setSearch} label="Search questions and replies"
           placeholder='Search questions and replies (e.g. "permission denied")' />
         {hasFilters && (
@@ -156,6 +159,7 @@ function ChatHistoryView({ period, onOpen }: {
       </div>
 
       <FilterError message={filterError} />
+      <LiveStatus text={liveText} />
 
       {/* A rejected filter shows only its message, not the last results as if they matched. */}
       {filterError ? null : error && !view ? (
@@ -163,7 +167,7 @@ function ChatHistoryView({ period, onOpen }: {
       ) : !view || view.chats.length === 0 ? (
         isLoading
           ? <div className="h-40 animate-pulse bg-zinc-800/30 rounded-lg" />
-          : <EmptyState icon={MessagesSquare} message="No chats match these filters" />
+          : <EmptyState icon={MessagesSquare} message="No chats match these filters" hint={capNote || undefined} />
       ) : (
         <>
           <div className={`overflow-x-auto rounded-lg border border-zinc-800/60 transition-opacity ${refreshing ? 'opacity-60' : ''}`} aria-busy={refreshing}>
@@ -184,6 +188,7 @@ function ChatHistoryView({ period, onOpen }: {
               </tbody>
             </table>
           </div>
+          {capNote && <p className="text-[11px] text-zinc-500 mt-2">{capNote}</p>}
           <Pager total={view.total} page={page} totalPages={view.total_pages}
             noun={['chat', 'chats']} onPage={setPage} />
         </>
@@ -199,7 +204,11 @@ function ChatRowView({ chat: c, labels, onOpen }: { chat: ChatRow; labels: Audit
   return (
     <tr
       onClick={onOpen}
-      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
+      onKeyDown={e => {
+        // Only keys pressed on the row itself; a focused control inside keeps its own behaviour.
+        if (e.target !== e.currentTarget) return;
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); }
+      }}
       tabIndex={0}
       className="border-b border-zinc-800/40 hover:bg-zinc-800/20 cursor-pointer transition-colors align-top focus:outline-none focus-visible:bg-zinc-800/30"
     >

@@ -133,12 +133,16 @@ class ToolContextCapture:
                 with conn.cursor() as cur:
                     set_rls_context(cur, conn, self.user_id, log_prefix="[ToolCapture:start]")
                     # step_index counts per incident; a chat has no incident,
-                    # so it counts per session instead. Concurrent inserts can
-                    # repeat an index (MAX+1 race); it's display-only, not unique.
+                    # so it counts per session instead.
                     scope_sql, scope_val = (
                         ("incident_id = %s", self.incident_id) if self.incident_id
                         else ("incident_id IS NULL AND session_id = %s", self.session_id)
                     )
+                    # Serialize MAX+1 per incident/chat (across writer threads and
+                    # processes) so concurrent calls never share an index. Released
+                    # at commit. Order follows the lock; started_at keeps call time.
+                    cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",
+                                (f"execution_steps:{scope_val}",))
                     cur.execute(
                         f"""INSERT INTO execution_steps
                            (incident_id, session_id, org_id, step_index, tool_name,

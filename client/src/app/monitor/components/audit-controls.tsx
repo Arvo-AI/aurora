@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
 
 /**
@@ -42,13 +42,59 @@ export function useDebounced<T>(value: T, ms: number): T {
 
 /**
  * Each filter change is a new query key, so `data` is empty until it loads.
- * Keep the previous response meanwhile, so nothing disappears or jumps;
- * `refreshing` lets the caller dim it.
+ * Keep the previous response only while the next one is loading, so nothing
+ * disappears or jumps; once a request fails, the old results are not shown as
+ * if they were current. `refreshing` lets the caller dim them.
  */
 export function useKeptData<T>(data: T | undefined, isLoading: boolean): { view: T | undefined; refreshing: boolean } {
   const [previous, setPrevious] = useState<T>();
   useEffect(() => { if (data) setPrevious(data); }, [data]);
-  return { view: data ?? previous, refreshing: !data && !!previous && isLoading };
+  const refreshing = !data && !!previous && isLoading;
+  return { view: data ?? (refreshing ? previous : undefined), refreshing };
+}
+
+/** Polite screen-reader announcement of a list's state after a filter change. */
+export function LiveStatus({ text }: { text: string }) {
+  return <p className="sr-only" role="status" aria-live="polite">{text}</p>;
+}
+
+export interface UserOption { value: string; label: string }
+
+/**
+ * User filter: pick a suggested user, or type any member's email (the list of
+ * suggestions is capped, so typing reaches everyone). Applied on pick, Enter or blur.
+ */
+export function UserFilter({ users, value, onChange }: {
+  users: UserOption[]; value: string; onChange: (v: string) => void;
+}) {
+  const [text, setText] = useState(value);
+  useEffect(() => { setText(value); }, [value]);
+  const listId = useId();
+  const commit = (v: string) => { const t = v.trim(); if (t !== value) onChange(t); };
+  return (
+    <>
+      <input
+        list={listId}
+        value={text}
+        maxLength={255}
+        placeholder="All users"
+        aria-label="User: pick one, or type an email"
+        title="Pick a user, or type any member's email"
+        onChange={(e) => {
+          const v = e.target.value;
+          setText(v);
+          // A suggestion picked from the list, or the box cleared: apply now.
+          if (v === '' || users.some(u => u.value === v)) commit(v);
+        }}
+        onBlur={() => commit(text)}
+        onKeyDown={(e) => { if (e.key === 'Enter') commit(text); }}
+        className={`${selectCls} w-44`}
+      />
+      <datalist id={listId}>
+        {users.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
+      </datalist>
+    </>
+  );
 }
 
 /** Read a query-string value after mount (the page is prerendered, so not during render). */

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { AlertTriangle, ExternalLink, Wrench, X } from 'lucide-react';
 import { useQuery } from '@/lib/query';
 import { ChartPanel, EmptyState, type Period } from './charts';
-import { FilterError, Pager, SearchBox, auditFetcher, filterErrorOf, selectCls, useDebounced, useKeptData } from './audit-controls';
+import { FilterError, LiveStatus, Pager, SearchBox, UserFilter, auditFetcher, filterErrorOf, selectCls, useDebounced, useKeptData } from './audit-controls';
 import {
   ISSUE_ORDER, ISSUE_SHORT, ISSUE_STYLES, SOURCE_STYLES, STATUS_STYLES, formatTimestamp,
   type AuditLabels, type IssueCount,
@@ -158,6 +158,11 @@ export default function ToolCallsView({ period, onOpen }: {
   const filterError = filterErrorOf(error);
   const labels = view?.labels;
   const hasFilters = status || issue || source || user || tool || search;
+  const capNote = view?.search_capped
+    ? 'Search covers the 500 most recent tool calls matching the other filters; narrow them to reach older ones.' : '';
+  const liveText = isLoading ? 'Loading tool calls…'
+    : filterError ? '' /* already announced by its role=alert */ : (error ? 'Could not load tool calls.'
+      : view ? `${view.total} ${view.total === 1 ? 'tool call' : 'tool calls'} found.` : '');
   const counts = view?.status_counts;
 
   return (
@@ -181,12 +186,8 @@ export default function ToolCallsView({ period, onOpen }: {
             <option key={s.value} value={s.value}>{labels?.sources[s.value] ?? s.value} ({s.count})</option>
           ))}
         </select>
-        <select aria-label="User" value={user} onChange={e => setUser(e.target.value)} className={selectCls}>
-          <option value="">All users</option>
-          {(view?.users ?? []).map(u => (
-            <option key={u.value} value={u.value}>{u.name || u.email || u.value} ({u.count})</option>
-          ))}
-        </select>
+        <UserFilter value={user} onChange={setUser}
+          users={(view?.users ?? []).map(u => ({ value: u.email || u.value, label: `${u.name || u.email || u.value} (${u.count})` }))} />
         <select aria-label="Tool" value={tool} onChange={e => setTool(e.target.value)} className={selectCls}>
           <option value="">All tools</option>
           {(view?.tools ?? []).map(t => <option key={t.value} value={t.value}>{t.value} ({t.count})</option>)}
@@ -204,6 +205,7 @@ export default function ToolCallsView({ period, onOpen }: {
       </div>
 
       <FilterError message={filterError} />
+      <LiveStatus text={liveText} />
 
       {/* A rejected filter shows only its message, not the last results as if they matched. */}
       {filterError ? null : error && !view ? (
@@ -211,11 +213,12 @@ export default function ToolCallsView({ period, onOpen }: {
       ) : !view || view.tool_calls.length === 0 ? (
         isLoading
           ? <div className="h-40 animate-pulse bg-zinc-800/30 rounded-lg" />
-          : <EmptyState icon={Wrench} message={hasFilters ? 'No tool calls match these filters' : 'No tool calls in this period'} />
+          : <EmptyState icon={Wrench} message={hasFilters ? 'No tool calls match these filters' : 'No tool calls in this period'}
+              hint={capNote || undefined} />
       ) : (
         <>
           {view.search_capped && (
-            <p className="text-[11px] text-zinc-500 mb-2">Search covers the 500 most recent tool calls matching the other filters.</p>
+            <p className="text-[11px] text-zinc-500 mb-2">{capNote}</p>
           )}
           <div className={`overflow-x-auto rounded-lg border border-zinc-800/60 transition-opacity ${refreshing ? 'opacity-60' : ''}`} aria-busy={refreshing}>
             <table className="w-full text-sm table-fixed min-w-[1000px]">
@@ -237,7 +240,11 @@ export default function ToolCallsView({ period, onOpen }: {
                     <tr
                       key={f.tool_call_id ?? `${f.chat_id}-${i}`}
                       onClick={open}
-                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } }}
+                      onKeyDown={e => {
+                        // Only keys pressed on the row itself: Enter on the Incident link follows the link.
+                        if (e.target !== e.currentTarget) return;
+                        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+                      }}
                       tabIndex={0}
                       className="border-b border-zinc-800/40 hover:bg-zinc-800/20 cursor-pointer transition-colors align-top focus:outline-none focus-visible:bg-zinc-800/30"
                     >

@@ -116,3 +116,17 @@ def test_large_tool_inputs_are_capped_and_stay_valid_json():
     assert len(stored) < mod.STEP_INPUT_MAX_CHARS + 100
     assert json.loads(stored)["_truncated"] is True
     assert json.loads(mod._capped_input_json({"command": "ls"})) == {"command": "ls"}
+
+
+def test_step_index_allocation_is_serialized_per_chat(db):
+    cap = ToolContextCapture("sess-1", "user-1", incident_id="inc-1", org_id="org-1")
+    cap._record_step_start("cloud_exec", {}, "tc-1")
+    sqls = [c.args[0] for c in db.execute.call_args_list]
+    lock = next(i for i, sql in enumerate(sqls) if "pg_advisory_xact_lock" in sql)
+    insert = next(i for i, sql in enumerate(sqls) if "INSERT INTO execution_steps" in sql)
+    assert lock < insert                                         # same transaction, before MAX+1
+    assert db.execute.call_args_list[lock].args[1] == ("execution_steps:inc-1",)
+    chat = ToolContextCapture("sess-9", "user-1", org_id="org-1")
+    chat._record_step_start("cloud_exec", {}, "tc-2").result(timeout=5)
+    assert ("execution_steps:sess-9",) in [c.args[1] for c in db.execute.call_args_list
+                                           if "pg_advisory_xact_lock" in c.args[0]]

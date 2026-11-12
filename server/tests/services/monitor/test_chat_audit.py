@@ -614,3 +614,27 @@ def test_transcript_tail_loads_the_last_messages_with_real_indexes():
                    [(*_chat_row(source="web"), 0, msgs)])])
     ca.get_transcript(cur, "org-1", "s1")
     assert "GREATEST(" not in cur.calls[0][0]                 # the page reads from the top
+
+
+@pytest.mark.parametrize("key", ["AccessKeyId", "access_key_id", "aws_access_key_id", "accessKey"])
+def test_flat_access_key_ids_are_redacted_by_name(key):
+    out = json.loads(ca.scrub_json_text(json.dumps({key: "opaque-id-value", "Region": "us-east-1"})))
+    assert out[key] == ca.REDACTED and out["Region"] == "us-east-1"
+
+
+def test_user_filter_matches_an_id_or_an_email():
+    sql, params = ca._chat_where(ChatFilters.parse({"user": "Ops@Example.com"}), "o")
+    assert ca.USER_MATCH_SQL in sql and params.count("Ops@Example.com") == 2
+    assert "um.org_id = cs.org_id" in ca.USER_MATCH_SQL         # never another org's user
+
+
+def test_tool_call_facets_drop_only_their_own_filter_with_two_param_user_clause():
+    cur = _ftc_cursor([])
+    ca.list_tool_calls(cur, "org-1", {"user": "a@x.io", "tool": "kubectl", "source": "slack"})
+    for needle, own, others in [
+        ("es.tool_name AS value", ["kubectl"], ["slack", "a@x.io"]),
+        ("AS value, COUNT(*), MAX(u.email)", ["a@x.io"], ["slack", "kubectl"]),
+    ]:
+        sql, params = next(c for c in cur.calls if needle in c[0])
+        assert sql.count("%s") == len(params)
+        assert not set(own) & set(params) and set(others) <= set(params)

@@ -81,9 +81,9 @@ _SECRET_NAMES = (
 _SECRET_FLAG_RE = re.compile(rf"(?i)(--?(?:{_SECRET_NAMES})(?:[= ]+))(\"[^\"]*\"|'[^']*'|\S+)")
 _SECRET_KV_RE = re.compile(rf"(?i)(\"?(?:{_SECRET_NAMES})\"?\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,}}]+)")
 # JSON key names whose values are credentials, matched as parts of a name:
-# SecretAccessKey, SessionToken, DB_PASS, tls.key, privateKey, client_secret.
+# SecretAccessKey, AccessKeyId, SessionToken, DB_PASS, tls.key, privateKey, client_secret.
 _SECRET_KEY_RE = re.compile(
-    r"(?i)secret|token|passw|pwd|credential|auth(?!or(?!iz))|(^|[^a-z])pass$|key(s)?$|key[-_.]"
+    r"(?i)secret|token|passw|pwd|credential|auth(?!or(?!iz))|access[-_]?key|(^|[^a-z])pass$|key(s)?$|key[-_.]"
 )
 # Kubernetes Secret objects: every value under these keys is secret material.
 _K8S_SECRET_DATA_KEYS = ("data", "stringData")
@@ -289,7 +289,7 @@ FILTER_ERRORS = {
     "source": f"source must be one of: {', '.join(SOURCE_LABELS)}, all",
     "status": "status must be one of: completed, failed, in_progress, all",
     "issue": f"issue must be one of: {', '.join((*ISSUE_CATEGORIES, OTHER))}, any, all",
-    "user": "user is not a valid user id",
+    "user": "user is not a valid user id or email",
     "session": "Invalid chat id",
     "secret_query": "Search can't look for secret values.",
 }
@@ -410,6 +410,13 @@ END)"""
 _MESSAGES_ARRAY = "(CASE WHEN jsonb_typeof(cs.messages) = 'array' THEN cs.messages ELSE '[]'::jsonb END)"
 _MESSAGE_COUNT = f"jsonb_array_length({_MESSAGES_ARRAY})"
 
+# The user filter takes a user id (from a facet) or an email (typed), so any
+# member can be picked even when the facet list is capped.
+USER_MATCH_SQL = (
+    "(cs.user_id = %s OR cs.user_id IN (SELECT um.id FROM users um "
+    "WHERE um.org_id = cs.org_id AND lower(um.email) = lower(%s)))"
+)
+
 # Chats and their sub-agents ("<chat>::sa_N") share a root session id.
 ROOT_SESSION_SQL = "split_part(es.session_id, '::', 1)"
 
@@ -425,8 +432,8 @@ def _chat_where(f: ChatFilters, org_id: str, *, skip: tuple[str, ...] = ()) -> t
         clauses.append(f"{STATUS_SQL} = %s")
         params.append(f.status)
     if f.user_id and "user" not in skip:
-        clauses.append("cs.user_id = %s")
-        params.append(f.user_id)
+        clauses.append(USER_MATCH_SQL)
+        params.extend([f.user_id, f.user_id])
     if f.query and "query" not in skip:
         clauses.append(f"{SEARCH_DOC_SQL} @@ websearch_to_tsquery('simple', %s)")
         params.append(f.query)
@@ -608,17 +615,17 @@ def list_tool_calls(cur, org_id: str, raw: dict) -> dict:
     tool = _opt(raw, "tool")
     case_sql, case_params = sql_category_case("es.error_message")
 
-    # Filters on the chat a call belongs to (source, user) and on the call (tool).
-    scope, scope_params = ["TRUE"], []
+    # Filters on the chat a call belongs to (source, user) and on the call (tool),
+    # by name so each facet can drop exactly its own.
+    named: dict[str, tuple[str, list]] = {}
     if f.source:
-        scope.append(f"{SOURCE_SQL} = %s")
-        scope_params.append(f.source)
+        named["source"] = (f"{SOURCE_SQL} = %s", [f.source])
     if f.user_id:
-        scope.append("cs.user_id = %s")
-        scope_params.append(f.user_id)
+        named["user"] = (USER_MATCH_SQL, [f.user_id, f.user_id])
     if tool:
-        scope.append("es.tool_name = %s")
-        scope_params.append(tool)
+        named["tool"] = ("es.tool_name = %s", [tool])
+    scope = ["TRUE", *(sql for sql, _ in named.values())]
+    scope_params = [p for _, ps in named.values() for p in ps]
     base = ["es.org_id = %s", _NOT_DELETED_SQL, "es.started_at >= NOW() - %s::interval", *scope]
     base_params = [org_id, PERIOD_INTERVALS[f.period], *scope_params]
     where, params = list(base), list(base_params)
@@ -693,19 +700,19 @@ def list_tool_calls(cur, org_id: str, raw: dict) -> dict:
         "search_capped": search_capped,
         "status_counts": status_counts,
         "issue_counts": _issue_totals(cur, org_id, f.period, counts_where, scope_params),
-        "tools": _step_facet(cur, org_id, f.period, "es.tool_name", scope, scope_params, skip="es.tool_name"),
-        "sources": _step_facet(cur, org_id, f.period, SOURCE_SQL, scope, scope_params, skip=SOURCE_SQL),
-        "users": _step_facet(cur, org_id, f.period, "cs.user_id", scope, scope_params, skip="cs.user_id",
+        "tools": _step_facet(cur, org_id, f.period, "es.tool_name", named, skip="tool"),
+        "sources": _step_facet(cur, org_id, f.period, SOURCE_SQL, named, skip="source"),
+        "users": _step_facet(cur, org_id, f.period, "cs.user_id", named, skip="user",
                              with_user=True),
         "labels": {"sources": SOURCE_LABELS, "issues": CATEGORY_LABELS, "statuses": STEP_STATUS_LABELS},
     }
 
 
-def _step_facet(cur, org_id: str, period: str, expr: str, scope: list[str], scope_params: list,
+def _step_facet(cur, org_id: str, period: str, expr: str, named: dict[str, tuple[str, list]],
                 *, skip: str, with_user: bool = False) -> list[dict]:
-    """Tool-call counts by ``expr`` in the period, within every scope filter but its own."""
-    kept = [(c, p) for c, p in zip(scope[1:], scope_params) if not c.startswith(skip)]
-    extra = "".join(f" AND {c}" for c, _ in kept)
+    """Tool-call counts by ``expr`` in the period, within every named filter but ``skip``."""
+    kept = [(sql, ps) for name, (sql, ps) in named.items() if name != skip]
+    extra = "".join(f" AND {sql}" for sql, _ in kept)
     user_cols = ", MAX(u.email), MAX(u.name)" if with_user else ""
     user_join = "LEFT JOIN users u ON u.id = cs.user_id" if with_user else ""
     cur.execute(
@@ -716,7 +723,7 @@ def _step_facet(cur, org_id: str, period: str, expr: str, scope: list[str], scop
             WHERE es.org_id = %s AND {_NOT_DELETED_SQL}
               AND es.started_at >= NOW() - %s::interval{extra}
             GROUP BY 1 ORDER BY 2 DESC LIMIT %s""",
-        tuple([org_id, PERIOD_INTERVALS[period], *[p for _, p in kept], USERS_FACET_LIMIT]),
+        tuple([org_id, PERIOD_INTERVALS[period], *[p for _, ps in kept for p in ps], USERS_FACET_LIMIT]),
     )
     out = []
     for row in cur.fetchall():
