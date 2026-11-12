@@ -63,6 +63,9 @@ class _FakeDb:
                     del self.excluded[name]
         elif s.startswith("SELECT repo_full_name, user_id FROM connected_repos"):
             self._result = [(n, r["owner"]) for n, r in self.connected.items()]
+        elif s.startswith("DELETE FROM connected_repos WHERE installation_id"):
+            for name in [n for n in self.connected if n not in params[1]]:
+                del self.connected[name]
         elif s.startswith("INSERT INTO connected_repos"):
             owner, _org, name = params[0], params[1], params[2]
             if name not in self.connected:
@@ -331,6 +334,13 @@ class TestHourlySync:
         db, _, _ = _run([_repo("acme/kept"), _repo("acme/removed"), _repo("acme/old-grant")],
                         db=db, enroll_change_gating=True, reconcile=True)
         assert set(db.connected) == {"acme/kept", "acme/old-grant"}
+
+    def test_reconcile_drops_a_repo_github_no_longer_grants(self):
+        # Its removed webhook was lost, or it raced an import.
+        db = _FakeDb(connected={"acme/kept": (_USER, True), "acme/revoked": (_USER, True)},
+                     imported_at=datetime(2026, 11, 12))
+        db, _, _ = _run([_repo("acme/kept")], db=db, enroll_change_gating=True, reconcile=True)
+        assert set(db.connected) == {"acme/kept"}
 
     def test_install_with_review_turned_off_is_skipped(self):
         task = self._sync([(_INSTALL, None, False)], owner=None)

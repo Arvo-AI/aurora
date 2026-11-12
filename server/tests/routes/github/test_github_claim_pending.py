@@ -134,10 +134,11 @@ def test_signed_in_user_links_a_new_install_without_taking_its_github_identity(e
          patch.object(mod, "validate_user_exists", return_value=True), \
          patch.object(mod, "get_org_id_for_user", return_value="org-1"), \
          patch("routes.github.github_signup._verify_installation", return_value=_INSTALL), \
+         patch("utils.auth.enforcer.enforce_with_reload", return_value=True), \
          patch("routes.github.github_repo_metadata.import_installation_repos") as task, \
          patch("utils.auth.tool_registry.seed_org_tool_permissions"):
         cur.fetchall.return_value = []
-        assert mod.link_pending_install("user-1", pending) is None
+        assert mod.link_pending_install("user-1", "org-1", pending) is None
     sql = " ".join(c.args[0] for c in cur.execute.call_args_list)
     assert "user_github_installations" in sql
     assert "github_user_id" not in sql
@@ -154,8 +155,9 @@ def test_link_pending_refuses_an_install_another_org_has(env):
          patch.object(mod, "validate_user_exists", return_value=True), \
          patch.object(mod, "get_org_id_for_user", return_value="org-1"), \
          patch("routes.github.github_signup._verify_installation", return_value=_INSTALL), \
+         patch("utils.auth.enforcer.enforce_with_reload", return_value=True), \
          patch("routes.github.github_repo_metadata.import_installation_repos") as task:
-        assert mod.link_pending_install("user-1", pending) is not None
+        assert mod.link_pending_install("user-1", "org-1", pending) is not None
     conn.commit.assert_not_called()
     task.delay.assert_not_called()
 
@@ -163,9 +165,29 @@ def test_link_pending_refuses_an_install_another_org_has(env):
 def test_link_state_only_works_for_the_token_it_was_minted_for(env):
     app, mod, _ = env
     token, _pending_payload = _pending(env)
-    with app.test_request_context(json={"token": token}):
+    with app.test_request_context(json={"token": token}), \
+         patch("utils.auth.stateless_auth.get_org_id_from_request", return_value="org-1"):
         out = mod.github_app_link_pending_start.__wrapped__("user-1")
         state = out.get_json()["state"]
         assert out.get_json()["account_login"] == "octo-org"
-        assert mod.verify_link_state(state, token) == "user-1"
+        assert mod.verify_link_state(state, token) == ("user-1", "org-1")
         assert mod.verify_link_state(state, token + "x") is None
+
+
+@pytest.mark.parametrize("user_org, allowed", [("org-2", True), ("org-1", False)])
+def test_confirm_refuses_a_user_who_moved_org_or_lost_connectors_write(env, user_org, allowed):
+    # The link state was minted for org-1 with connectors:write; both are
+    # checked again when Connect lands, up to 10 minutes later.
+    app, mod, _ = env
+    _token, pending = _pending(env)
+    pool, conn, _cur = _db([])
+    with app.test_request_context(), \
+         patch.object(mod, "db_pool", pool), \
+         patch.object(mod, "validate_user_exists", return_value=True), \
+         patch.object(mod, "get_org_id_for_user", return_value=user_org), \
+         patch("utils.auth.enforcer.enforce_with_reload", return_value=allowed), \
+         patch("routes.github.github_signup._verify_installation", return_value=_INSTALL), \
+         patch("routes.github.github_repo_metadata.import_installation_repos") as task:
+        assert mod.link_pending_install("user-1", "org-1", pending) is not None
+    conn.commit.assert_not_called()
+    task.delay.assert_not_called()

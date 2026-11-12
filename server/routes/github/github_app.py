@@ -114,15 +114,21 @@ _ERROR_LINKED_ELSEWHERE = "This GitHub installation is already connected to anot
 
 
 def _installer_can_access(code: str | None, installation_id: int) -> bool:
-    """False only when GitHub's OAuth code shows the installer lacks access.
+    """Whether the installer can access ``installation_id`` on GitHub.
 
-    Without a code (OAuth during install off, or no client secret to
-    exchange it) there is nothing to check; the cross-org refusal still
-    applies.
+    Hosted deployments (client secret set, OAuth during install on) require
+    the OAuth code and check it. Without a client secret there is nothing
+    to check it with; the cross-org refusal still applies.
     """
     code = (code or "").strip()
-    if not code or not os.getenv("GITHUB_APP_CLIENT_SECRET"):
+    if not os.getenv("GITHUB_APP_CLIENT_SECRET"):
+        # Self-hosted without OAuth during install: nothing to verify with.
         return True
+    if not code:
+        # With OAuth during install on, GitHub always sends a code; a
+        # callback without one was not produced by GitHub's install flow.
+        logger.warning("[GITHUB-APP-CALLBACK] callback without OAuth code refused")
+        return False
     from routes.github.github_signup import (
         _exchange_code_for_identity,
         _user_authorized_for_installation,
@@ -1102,8 +1108,8 @@ def _link_state_serializer():
     return _state_serializer(_LINK_STATE_SALT)
 
 
-def verify_link_state(state: str, token: str) -> str | None:
-    """User id a link state was minted for, if it is valid for ``token``."""
+def verify_link_state(state: str, token: str) -> tuple[str, str] | None:
+    """``(user_id, org_id)`` a link state was minted for, if valid for ``token``."""
     import hashlib
 
     try:
@@ -1114,7 +1120,9 @@ def verify_link_state(state: str, token: str) -> str | None:
         return None
     if payload.get("t") != hashlib.sha256(token.encode()).hexdigest():
         return None
-    return payload["uid"]
+    if not isinstance(payload.get("org"), str):
+        return None
+    return payload["uid"], payload["org"]
 
 
 @github_app_bp.route("/app/link-pending/start", methods=["POST", "OPTIONS"])
@@ -1136,9 +1144,13 @@ def github_app_link_pending_start(user_id):
     pending = verify_pending_signup(token)
     if pending is None:
         return jsonify({"error": "Install link expired", "code": "CLAIM_INVALID"}), 400
-    state = _link_state_serializer().dumps(
-        {"uid": user_id, "t": hashlib.sha256(token.encode()).hexdigest()}
-    )
+    from utils.auth.stateless_auth import get_org_id_from_request
+
+    state = _link_state_serializer().dumps({
+        "uid": user_id,
+        "org": get_org_id_from_request(),
+        "t": hashlib.sha256(token.encode()).hexdigest(),
+    })
     return jsonify({
         "state": state,
         "account_login": pending.get("acct") or "",
@@ -1146,7 +1158,7 @@ def github_app_link_pending_start(user_id):
     })
 
 
-def link_pending_install(user_id: str, pending: dict) -> str | None:
+def link_pending_install(user_id: str, authorized_org: str, pending: dict) -> str | None:
     """Link a pending new install to ``user_id``'s org; an error message or None.
 
     Only the installation is linked: the GitHub identity is not attached to
@@ -1164,7 +1176,12 @@ def link_pending_install(user_id: str, pending: dict) -> str | None:
     if not validate_user_exists(user_id):
         return _ERROR_UNKNOWN_USER
     org_id = get_org_id_for_user(user_id)
-    if not org_id:
+    if not org_id or org_id != authorized_org:
+        return _ERROR_UNKNOWN_USER
+    # Start checked connectors:write; check again, it may have been revoked.
+    from utils.auth.enforcer import enforce_with_reload
+
+    if not enforce_with_reload(user_id, org_id, "connectors", "write"):
         return _ERROR_UNKNOWN_USER
     install_data = _verify_installation(installation_id)
     if install_data is None or install_data.get("id") != installation_id:
@@ -1412,6 +1429,15 @@ def github_disconnect(user_id):
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                from utils.auth.stateless_auth import get_org_id_from_request
+
+                # First: set_rls_context commits, so it must run before any
+                # disconnect write or it could persist half of one.
+                rls_org = set_rls_context(
+                    cur, conn, user_id,
+                    org_id=get_org_id_from_request(),
+                    log_prefix="[GITHUB-DISCONNECT]",
+                )
                 cur.execute(
                     """UPDATE user_github_installations
                           SET disconnected_at = NOW(),
@@ -1423,14 +1449,17 @@ def github_disconnect(user_id):
                 )
                 soft_deleted_installs = cur.rowcount
 
-                rls_org = set_rls_context(
-                    cur, conn, user_id,
-                    log_prefix="[GITHUB-DISCONNECT]",
+                cur.execute(
+                    """SELECT 1 FROM user_github_installations
+                        WHERE org_id = %s AND disconnected_at IS NULL LIMIT 1""",
+                    (rls_org,),
                 )
-                if rls_org:
-                    # Disconnecting starts over: a reconnect imports every
-                    # granted repo again. Removals recorded while connected
-                    # (the app clears the picker first) must not block it.
+                if rls_org and cur.fetchone() is None:
+                    # The org's last link is gone, so this starts over: a
+                    # reconnect imports every granted repo again. Removals
+                    # recorded while connected (the app clears the picker
+                    # first) must not block it. Teammates still linked keep
+                    # their removals.
                     cur.execute(
                         "DELETE FROM github_repo_exclusions WHERE org_id = %s",
                         (rls_org,),

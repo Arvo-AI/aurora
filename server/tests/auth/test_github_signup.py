@@ -196,6 +196,19 @@ class TestCallbackValidation:
         assert resp.status_code == 302
         assert resp.headers["Location"].endswith("/sign-in?notice=github_install_requested")
 
+    def test_install_request_with_install_state_still_lands_on_notice(self, signup_app):
+        app, mod = signup_app
+        from routes.github.github_app import _sign_install_state
+
+        with app.test_request_context():
+            state = _sign_install_state("user-1")
+        with patch("routes.github.github_app.github_app_install_callback") as delegated:
+            resp = app.test_client().get(
+                f"/github/app/signup/callback?setup_action=request&state={state}"
+            )
+        delegated.assert_not_called()
+        assert resp.location.endswith("/sign-in?notice=github_install_requested")
+
     def test_repo_change_without_code_goes_to_app(self, signup_app):
         app, mod = signup_app
         with patch.object(mod, "_verify_installation") as verify:

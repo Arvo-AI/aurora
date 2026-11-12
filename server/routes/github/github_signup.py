@@ -945,8 +945,9 @@ def github_app_signup_callback():
     # clicked Install. Hand them to the authenticated handler, which
     # re-verifies everything itself. This runs BEFORE the hosted-signup
     # gate on purpose: flipping HOSTED_SIGNUP_ENABLED off must not break
-    # in-app installs while the App still points at this URL.
-    if state:
+    # in-app installs while the App still points at this URL. A request-only
+    # callback (no installation_id) has nothing to link and gets the notice.
+    if state and installation_id_raw:
         from routes.github.github_app import (
             _verify_install_state,
             github_app_install_callback,
@@ -1076,12 +1077,12 @@ def github_app_link_pending_confirm():
 
     token = request.args.get("t") or ""
     pending = verify_pending_signup(token)
-    user_id = verify_link_state(request.args.get("s") or "", token)
-    if pending is None or user_id is None or not pending_bound_to_this_browser(pending):
+    linker = verify_link_state(request.args.get("s") or "", token)
+    if pending is None or linker is None or not pending_bound_to_this_browser(pending):
         return _render_error(_ERROR_LINK_EXPIRED)
     if not reserve_pending_signup(token):
         return _render_error(_ERROR_LINK_EXPIRED)
-    error = link_pending_install(user_id, pending)
+    error = link_pending_install(linker[0], linker[1], pending)
     if error is not None:
         release_pending_signup(token)
         return _render_error(error)

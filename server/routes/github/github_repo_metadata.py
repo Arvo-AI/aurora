@@ -319,7 +319,8 @@ def _import_installation_repos(
     explicit choice, so it clears the exclusion.
 
     ``reconcile`` (the hourly sync) imports every granted repo that is not
-    connected and not excluded, without the once-per-link guard. It is
+    connected and not excluded, without the once-per-link guard, and drops
+    rows for repos GitHub no longer grants. It is
     safe once the link's removals are all recorded, i.e. not for links that
     predate the exclusions table (``repos_import_legacy``).
 
@@ -406,6 +407,16 @@ def _import_installation_repos(
                     "[RepoImport] no org for user=%s — cannot import (RLS)", user_id,
                 )
                 return
+            if reconcile:
+                # The listing is complete (strict), so it is GitHub's truth:
+                # a repo no longer granted (its removed webhook lost, or it
+                # raced this import) stops being shown and reviewed.
+                cur.execute(
+                    """DELETE FROM connected_repos
+                        WHERE installation_id = %s
+                          AND NOT (repo_full_name = ANY(%s))""",
+                    (installation_id, [r.get("full_name") for r in repos if r.get("full_name")]),
+                )
             repos = _apply_exclusions(
                 cur, org_id, repos,
                 regranted=only_repos is not None,
@@ -454,7 +465,7 @@ def _import_installation_repos(
                 cur.execute(
                     """UPDATE user_github_installations
                           SET repos_imported_at =
-                              NOW() - make_interval(secs => %s),
+                              (NOW() AT TIME ZONE 'UTC') - make_interval(secs => %s),
                               repos_import_legacy = FALSE
                         WHERE installation_id = %s
                           AND disconnected_at IS NULL
