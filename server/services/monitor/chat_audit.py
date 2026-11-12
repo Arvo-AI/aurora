@@ -2,13 +2,17 @@
 
 One query layer serves two callers:
 
-* the monitor page's Conversations tab (admins only): ``list_chats`` and
-  ``get_transcript``;
-* the agent's read-only ``search_tool_calls`` tool: ``search_failed_tool_calls``.
+* the monitor page's Conversations tab: ``list_chats``, ``list_tool_calls``
+  and ``get_transcript``;
+* the agent's read-only audit tools (``search_conversations``,
+  ``search_tool_calls``, ``get_conversation``), which call the same three
+  functions so a question in chat gets the page's answer.
 
-Both share the same scoping (every query filters on ``org_id``; callers also
-set RLS), the same issue classification (``issue_classifier``), the same
-failed-tool-call query (``_failed_tool_calls``) and the same redaction
+Who may call them is decided by ``utils.auth.viewer_run.may_audit_chats``
+(admins, or admins and editors, per the org's setting). This module only
+answers; it never widens or narrows access. Both callers share the same
+scoping (every query filters on ``org_id``; callers also set RLS), the same
+issue classification (``issue_classifier``) and the same redaction
 (``scrub``). Nothing leaves this module unredacted: transcripts and tool
 errors routinely carry credentials.
 
@@ -396,21 +400,17 @@ def _chat_where(f: ChatFilters, org_id: str, *, skip: tuple[str, ...] = ()) -> t
 
 
 # ---------------------------------------------------------------------------
-# Failed tool calls (shared by the page and the agent tool)
+# Tool calls (shared by the page and the agent tools)
 # ---------------------------------------------------------------------------
 
-# Restricts execution_steps ``es`` to chats (and RCA sessions) owned by one user.
-_OWNED_BY_SQL = (
-    "EXISTS (SELECT 1 FROM chat_sessions own WHERE own.id = split_part(es.session_id, '::', 1) "
-    "AND own.org_id = es.org_id AND own.user_id = %s)"
-)
 # A failure from a chat the user deleted (soft delete) stays out of every view.
 # RCA rows are kept: their incident is the anchor, not the chat.
 _NOT_DELETED_SQL = (
     "(es.incident_id IS NOT NULL OR EXISTS (SELECT 1 FROM chat_sessions act "
     "WHERE act.id = split_part(es.session_id, '::', 1) AND act.org_id = es.org_id AND act.is_active))"
 )
-# Recent failures examined when the agent tool filters by free text (see below).
+# Most recent rows examined when filtering by free text (matched in Python on
+# redacted fields, never in SQL on raw stored text).
 QUERY_POOL_SIZE = 500
 
 
@@ -435,9 +435,31 @@ _ANCHORS_SQL = """
             ) AS tc
             WHERE c.org_id = %s AND c.id IN (SELECT DISTINCT chat_id FROM f)
             GROUP BY 1, 2"""
-_NO_ANCHORS_SQL = """
-            SELECT NULL::text AS chat_id, NULL::text AS tool_call_id, NULL::int AS message_index
-            WHERE false"""
+
+
+def link_for(chat_id: Optional[str], incident_id: Optional[str]) -> Optional[str]:
+    """App-relative link to where a chat or tool call can be opened."""
+    if incident_id:
+        return f"/incidents/{incident_id}"
+    return f"/chat?sessionId={chat_id}" if chat_id else None
+
+
+# Channels whose answers stay with the person who asked. Anywhere else (a Slack
+# channel, Teams, Google Chat, a background run that may post to one), the agent
+# tools return metadata and links only, never other people's message text.
+def private_answer_channel(trigger_metadata: Optional[dict]) -> bool:
+    if trigger_metadata is None:
+        return True                                  # the web app sets none
+    if not isinstance(trigger_metadata, dict):
+        return False                                 # malformed: fail closed
+    meta = trigger_metadata
+    source = str(meta.get("source") or "").lower()
+    if source in ("", "chat"):
+        return True                                  # the web app
+    if source == "slack":
+        # Slack direct-message channel ids start with "D"; anything else is shared.
+        return str(meta.get("channel") or "").startswith("D")
+    return False
 
 
 def _shape_failure(r: dict) -> dict:
@@ -468,65 +490,29 @@ def _shape_step(r: dict) -> dict:
     }
 
 
-def _failed_tool_calls(
-    cur, org_id: str, *, chat_ids: Optional[list[str]] = None, period: Optional[str] = None,
-    category: Optional[str] = None, tool: Optional[str] = None, query: Optional[str] = None,
-    source: Optional[str] = None, owner_user_id: Optional[str] = None,
-    limit: int = 50, with_anchors: bool = True,
-) -> list[dict]:
-    """Failed ``execution_steps`` rows, classified, redacted and (optionally) anchored.
+def _failed_tool_calls(cur, org_id: str, chat_ids: list[str], limit: int) -> list[dict]:
+    """A chat's failed ``execution_steps`` rows (sub-agents included), newest first.
 
-    ``message_index`` is the transcript message holding the call: None for
-    sub-agent calls (not in the parent transcript) and when ``with_anchors`` is
-    off. Anchors are computed with one pass over each returned chat's messages.
-
-    ``query`` is matched in Python against the redacted command and reason over
-    the ``QUERY_POOL_SIZE`` most recent failures, so a search can't probe the
-    unredacted text stored in the database.
+    Classified, redacted and anchored: ``message_index`` is the transcript
+    message holding the call, or None for sub-agent calls that never reached it.
     """
-    case_sql, case_params = sql_category_case("es.error_message")
-    clauses = ["es.org_id = %s", "es.status = 'error'", _NOT_DELETED_SQL]
-    params: list = [org_id]
-    if chat_ids is not None:
-        clauses.append(f"{ROOT_SESSION_SQL} = ANY(%s)")
-        params.append(chat_ids)
-    if period:
-        clauses.append("es.started_at >= NOW() - %s::interval")
-        params.append(PERIOD_INTERVALS[period])
-    if category and category != "any":
-        clauses.append(f"{case_sql} = %s")
-        params.extend(case_params + [category])
-    if tool:
-        clauses.append("es.tool_name = %s")
-        params.append(tool)
-    if owner_user_id:
-        clauses.append(_OWNED_BY_SQL)
-        params.append(owner_user_id)
-    if source == "chat":
-        clauses.append("es.incident_id IS NULL")
-    elif source == "incident":
-        clauses.append("es.incident_id IS NOT NULL")
-    anchors_sql = _ANCHORS_SQL if with_anchors else _NO_ANCHORS_SQL
     cur.execute(
         f"""WITH f AS (
                 SELECT es.id, es.tool_name, es.tool_input, es.error_message, es.started_at,
                        es.tool_call_id, es.incident_id, {ROOT_SESSION_SQL} AS chat_id
                 FROM execution_steps es
-                WHERE {" AND ".join(clauses)}
+                WHERE es.org_id = %s AND es.status = 'error' AND {_NOT_DELETED_SQL}
+                  AND {ROOT_SESSION_SQL} = ANY(%s)
                 ORDER BY es.started_at DESC, es.id DESC
                 LIMIT %s
-            ), anchors AS ({anchors_sql}
+            ), anchors AS ({_ANCHORS_SQL}
             )
             SELECT f.*, a.message_index
             FROM f LEFT JOIN anchors a ON a.chat_id = f.chat_id AND a.tool_call_id = f.tool_call_id
             ORDER BY f.started_at DESC, f.id DESC""",
-        tuple(params + [QUERY_POOL_SIZE if query else limit]
-              + ([org_id] if with_anchors else [])),
+        (org_id, chat_ids, limit, org_id),
     )
-    failures = [_shape_failure(r) for r in fetch_dicts(cur)]
-    if query:
-        failures = [f for f in failures if _matches_query(f, query)][:limit]
-    return failures
+    return [_shape_failure(r) for r in fetch_dicts(cur)]
 
 
 def _issue_totals(cur, org_id: str, period: str, chat_where: str = "TRUE", chat_params=()) -> list[dict]:
@@ -549,37 +535,8 @@ def _issue_totals(cur, org_id: str, period: str, chat_where: str = "TRUE", chat_
     ]
 
 
-def search_failed_tool_calls(
-    cur, org_id: str, raw: dict, limit: int = 20, *, owner_user_id: Optional[str] = None,
-) -> dict:
-    """Agent tool entry point: failed tool calls with reasons, plus counts per issue.
-
-    ``owner_user_id`` limits every part of the result, counts included, to that
-    user's own chats and RCA sessions. The caller decides it from the role, never
-    from ``raw`` (the model's arguments).
-    """
-    period = _parse_period(raw)
-    source = (_opt(raw, "source") or "").lower() or None
-    if source and source not in ("chat", "incident"):
-        raise InvalidFilter("source")
-    calls = _failed_tool_calls(
-        cur, org_id, period=period, category=_parse_issue(raw), tool=_opt(raw, "tool"),
-        query=_parse_query(raw), source=source, owner_user_id=owner_user_id, limit=limit,
-        with_anchors=False,  # the tool links to the chat, not to a message
-    )
-    for c in calls:
-        c["link"] = f"/incidents/{c['incident_id']}" if c["incident_id"] else f"/chat?sessionId={c['chat_id']}"
-    owner_where, owner_params = ("cs.user_id = %s", [owner_user_id]) if owner_user_id else ("TRUE", [])
-    return {
-        "scope": "own" if owner_user_id else "org",
-        "tool_calls": calls,
-        "by_issue": _issue_totals(cur, org_id, period, owner_where, owner_params),
-        "period": period,
-    }
-
-
 # ---------------------------------------------------------------------------
-# Tool calls view (monitor page, admins)
+# Tool calls list (monitor page and agent tools)
 # ---------------------------------------------------------------------------
 
 def list_tool_calls(cur, org_id: str, raw: dict) -> dict:
@@ -655,6 +612,7 @@ def list_tool_calls(cur, org_id: str, raw: dict) -> dict:
     rows = [
         {
             **_shape_step(r),
+            "link": link_for(r.get("chat_id"), str(r["incident_id"]) if r.get("incident_id") else None),
             "chat_title": scrub(r.get("chat_title")) or "Untitled chat",
             "source": r.get("source"),
             "user": {"id": r.get("user_id"), "email": r.get("user_email"), "name": r.get("user_name")},
@@ -787,6 +745,7 @@ def _chat_summary(r: dict) -> dict:
         "updated_at": iso_utc(r.get("updated_at")),
         "message_count": r.get("message_count") or 0,
         "incident_id": str(r["incident_id"]) if r.get("incident_id") else None,
+        "link": link_for(r["id"], str(r["incident_id"]) if r.get("incident_id") else None),
     }
 
 

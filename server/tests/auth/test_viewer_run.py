@@ -116,3 +116,75 @@ def test_admins_always_modify_memory(monkeypatch):
     monkeypatch.setattr("utils.auth.viewer_run.org_allows_memory_edits", _unexpected)
     monkeypatch.setattr("utils.auth.viewer_run.org_allows_editor_memory_edits", _unexpected)
     assert viewer_may_edit_memory("uid", "org") is True
+
+
+# --- conversation audit ------------------------------------------------------
+
+from utils.auth.viewer_run import may_audit_chats  # noqa: E402
+
+
+def _roles(monkeypatch, roles):
+    monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", lambda *_a, **_k: roles)
+
+
+def test_admins_may_audit_whatever_the_setting(monkeypatch):
+    _roles(monkeypatch, ["admin"])
+    monkeypatch.setattr("utils.auth.viewer_run.org_allows_editor_audit", lambda _org: False)
+    assert may_audit_chats("u", "org") is True
+
+
+def test_editors_may_audit_only_when_the_org_allows(monkeypatch):
+    _roles(monkeypatch, ["editor"])
+    monkeypatch.setattr("utils.auth.viewer_run.org_allows_editor_audit", lambda _org: False)
+    assert may_audit_chats("u", "org") is False
+    monkeypatch.setattr("utils.auth.viewer_run.org_allows_editor_audit", lambda _org: True)
+    assert may_audit_chats("u", "org") is True
+
+
+def test_viewers_and_roleless_users_never_audit(monkeypatch):
+    monkeypatch.setattr("utils.auth.viewer_run.org_allows_editor_audit", lambda _org: True)
+    for roles in (["viewer"], [], None):
+        _roles(monkeypatch, roles)
+        assert may_audit_chats("u", "org") is False
+
+
+def test_audit_setting_defaults_to_admins_only(monkeypatch):
+    seen = {}
+
+    def _flag(_org, key, default=False):
+        seen[key] = default
+        return default
+
+    monkeypatch.setattr("utils.auth.viewer_run._org_flag", _flag)
+    from utils.auth.viewer_run import org_allows_editor_audit
+    assert org_allows_editor_audit("org") is False and seen == {"editor_can_audit_chats": False}
+
+
+def test_a_slack_guest_never_audits_even_under_an_admin_owner(monkeypatch):
+    _roles(monkeypatch, ["admin"])
+    monkeypatch.setattr(
+        "utils.auth.connector_access.general_viewer_access", lambda _uid: Access([], ["viewer"]),
+    )
+    with pin_sender_access("admin-uid", "general_viewer"):
+        assert may_audit_chats("admin-uid", "org") is False
+    assert may_audit_chats("admin-uid", "org") is True
+
+
+def test_role_lookup_error_or_missing_ids_mean_no(monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("casbin down")
+
+    monkeypatch.setattr("utils.auth.enforcer.get_user_roles_in_org", boom)
+    assert may_audit_chats("u", "org") is False
+    assert may_audit_chats("", "org") is False and may_audit_chats("u", "") is False
+
+
+def test_a_failed_setting_read_keeps_editors_out(monkeypatch):
+    _roles(monkeypatch, ["editor"])
+
+    class Pool:
+        def get_admin_connection(self):
+            raise RuntimeError("db down")
+
+    monkeypatch.setattr("utils.db.connection_pool.db_pool", Pool())
+    assert may_audit_chats("u", "org") is False

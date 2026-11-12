@@ -3,8 +3,7 @@
 import { useState } from 'react';
 import { useUrlParam } from './components/audit-controls';
 import { Radar, HeartPulse, Timer, ShieldCheck, BookOpen, MessagesSquare } from 'lucide-react';
-import { useUser } from '@/hooks/useAuthHooks';
-import { isAdmin } from '@/lib/roles';
+import { useCanAuditChats } from '@/hooks/useCanAuditChats';
 import { PeriodSelector, type Period } from './components/charts';
 import FleetTab from './components/fleet-tab';
 import SreTab from './components/sre-tab';
@@ -17,7 +16,7 @@ const TABS = [
   { id: 'fleet', label: 'Fleet', icon: Radar },
   { id: 'sre', label: 'SRE Metrics', icon: HeartPulse },
   { id: 'waterfall', label: 'Execution', icon: Timer },
-  { id: 'chats', label: 'Conversations', icon: MessagesSquare, adminOnly: true },
+  { id: 'chats', label: 'Conversations', icon: MessagesSquare, auditOnly: true },
   { id: 'artifacts', label: 'Artifacts', icon: BookOpen },
   { id: 'audit', label: 'Audit Log', icon: ShieldCheck },
 ] as const;
@@ -28,10 +27,10 @@ export default function MonitorPage() {
   // In the URL (?tab=chats) so a link can open a tab, e.g. ?tab=chats&view=tool-calls.
   const [tabParam, setTab] = useUrlParam('tab', 'fleet');
   const [period, setPeriod] = useState<Period>('30d');
-  const { user } = useUser();
-  // Conversations lists every user's chats; the backend enforces admin too.
-  const admin = isAdmin(user?.role);
-  const tabs = TABS.filter(t => !('adminOnly' in t && t.adminOnly) || admin);
+  // Conversations lists every user's chats: shown only to people the org's
+  // conversation-audit setting allows. The backend enforces the same rule.
+  const canAudit = useCanAuditChats();
+  const tabs = TABS.filter(t => !('auditOnly' in t && t.auditOnly) || canAudit);
   const tab: TabId = tabs.some(t => t.id === tabParam) ? (tabParam as TabId) : 'fleet';
 
   return (
@@ -72,7 +71,7 @@ export default function MonitorPage() {
         {tab === 'fleet' && <FleetTab period={period} />}
         {tab === 'sre' && <SreTab period={period} />}
         {tab === 'waterfall' && <WaterfallTab period={period} />}
-        {tab === 'chats' && admin && <ChatsTab period={period} />}
+        {tab === 'chats' && canAudit && <ChatsTab period={period} />}
         {tab === 'artifacts' && <ArtifactsTab />}
         {tab === 'audit' && <AuditTab period={period} />}
       </div>

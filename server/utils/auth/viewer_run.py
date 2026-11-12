@@ -1,8 +1,12 @@
-"""Org choices for chats and for who may modify memory.
+"""Org choices for chats, for who may modify memory, and for who may audit chats.
 
 Unset viewer chat stays on so an upgrade does not lock viewers out. An
 explicit false turns it off. Editors and admins can always chat. Memory
 edits follow their own switches; admins can always edit memory.
+
+Conversation audit (Monitor → Conversations, and the agent tools that answer
+the same questions) is admins only by default; the org can extend it to
+editors. Viewers and Slack guests never get it.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ logger = logging.getLogger(__name__)
 _CHAT_KEY = "viewer_can_chat"
 _MEMORY_KEY = "viewer_can_edit_memory"
 _EDITOR_MEMORY_KEY = "editor_can_edit_memory"
+_EDITOR_AUDIT_KEY = "editor_can_audit_chats"
 _DEFAULT = False
 
 
@@ -67,6 +72,39 @@ def org_allows_memory_edits(org_id: str) -> bool:
 def org_allows_editor_memory_edits(org_id: str) -> bool:
     # Unset stays on, so existing editors do not lose memory edits.
     return _org_flag(org_id, _EDITOR_MEMORY_KEY, True)
+
+
+def org_allows_editor_audit(org_id: str) -> bool:
+    # Unset means admins only.
+    return _org_flag(org_id, _EDITOR_AUDIT_KEY, False)
+
+
+def may_audit_chats(user_id: str, org_id: str) -> bool:
+    """Whether this person may read every user's chats and tool calls in the org.
+
+    The one rule behind the Conversations tab, its API routes and the agent's
+    audit tools. Fails closed: no org, no role, a Slack guest or a read error
+    all mean no.
+    """
+    if not user_id or not org_id:
+        return False
+    try:
+        from utils.auth.connector_access import pinned_roles
+        from utils.auth.enforcer import get_user_roles_in_org
+
+        # A Slack guest runs under the connector owner's id; never let the
+        # owner's role leak to the guest.
+        if pinned_roles() is not None:
+            return False
+        names = {str(role) for role in (get_user_roles_in_org(user_id, org_id) or []) if role}
+    except Exception:
+        logger.exception("Could not resolve audit access for org %s", sanitize(org_id))
+        return False
+    if ROLE_ADMIN in names:
+        return True
+    if ROLE_EDITOR in names:
+        return org_allows_editor_audit(org_id)
+    return False
 
 
 def _viewer_allowed(user_id: str, org_id: str, org_flag) -> bool:
@@ -162,4 +200,15 @@ def save_viewer_run(
                 _write_flag(cur, org_id, _MEMORY_KEY, memory)
             if editor_memory is not None:
                 _write_flag(cur, org_id, _EDITOR_MEMORY_KEY, editor_memory)
+        conn.commit()
+
+
+def save_editor_audit(org_id: str, user_id: str, editors: bool) -> None:
+    from utils.auth.stateless_auth import set_rls_context
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[ChatAudit]")
+            _write_flag(cur, org_id, _EDITOR_AUDIT_KEY, editors)
         conn.commit()

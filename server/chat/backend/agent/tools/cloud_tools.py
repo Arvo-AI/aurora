@@ -2128,6 +2128,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 postmortem_list, PostmortemListArgs,
                 grafana_list_alerts, GrafanaListAlertsArgs,
                 search_tool_calls, SearchToolCallsArgs,
+                search_conversations, SearchConversationsArgs,
+                get_conversation, GetConversationArgs,
             )
 
             _INTROSPECTION_TOOLS = [
@@ -2267,20 +2269,46 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "(alerting, ok, pending). Returns title, state, rule info, and dashboard link.",
                     GrafanaListAlertsArgs,
                 ),
-                (
-                    search_tool_calls,
-                    "search_tool_calls",
-                    "Search Aurora's own failed tool calls in chats and RCAs "
-                    "(default: last 7 days). Returns each failure's tool, redacted command, reason, "
-                    "issue type (missing_permission, blocked_command, not_connected, timeout, "
-                    "unavailable), timestamp and a link to its chat or incident, plus counts per "
-                    "issue type. Use to answer 'which tool calls failed last week and why' or "
-                    "'which permissions is Aurora missing'. Org admins see every chat in the org; "
-                    "other users see only their own chats and RCAs. The result's 'scope' field is "
-                    "'org' or 'own', so say which one the answer covers. Read-only.",
-                    SearchToolCallsArgs,
-                ),
             ]
+
+            # Conversation audit: every user's chats and tool calls, so only for
+            # people the org's rule allows (admins, or admins and editors). The
+            # tools check again on every call.
+            from utils.auth.stateless_auth import get_org_id_for_user
+            from utils.auth.viewer_run import may_audit_chats
+            if may_audit_chats(user_id, get_org_id_for_user(user_id)):
+                _INTROSPECTION_TOOLS += [
+                    (
+                        search_conversations,
+                        "search_conversations",
+                        "Search every chat in this org (all users and channels: web, Slack, Teams, "
+                        "Google Chat, RCAs, Actions, scheduled runs) by period, source, status, user, "
+                        "issue type and full text over questions and replies. Returns title, user, "
+                        "source, status, dates, message count, issue counts, a redacted matching "
+                        "snippet (only in private chats) and a link. Read-only.",
+                        SearchConversationsArgs,
+                    ),
+                    (
+                        search_tool_calls,
+                        "search_tool_calls",
+                        "Search the tool calls Aurora made across this org (default: failed calls in "
+                        "the last 7 days). Filters: status, period, issue type (missing_permission, "
+                        "blocked_command, not_connected, timeout, unavailable, other), tool, source, "
+                        "user and free text over the redacted command and reason. Returns each call's "
+                        "tool, redacted command, status, issue, reason, user, chat and link, plus counts "
+                        "by status and by issue. Use for 'which tool calls failed last week and why' or "
+                        "'which permissions is Aurora missing'. Read-only.",
+                        SearchToolCallsArgs,
+                    ),
+                    (
+                        get_conversation,
+                        "get_conversation",
+                        "Read one chat from search_conversations: its latest messages (redacted, capped) "
+                        "and every failed tool call with its reason. In a shared channel it returns only "
+                        "metadata, issues and the link. Read-only.",
+                        GetConversationArgs,
+                    ),
+                ]
 
             for _fn, _name, _desc, _schema in _INTROSPECTION_TOOLS:
                 _ctx_wrapped = with_user_context(_fn)

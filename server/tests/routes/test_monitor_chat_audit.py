@@ -1,13 +1,22 @@
-"""Admin chat audit routes: RBAC, org isolation, errors."""
+"""Conversation audit routes: who may audit, org isolation, errors."""
 
 from unittest.mock import MagicMock
 
 import pytest
 from flask import Flask
 
-# Fake Casbin: who holds which role in which org.
-ROLES = {("admin-1", "org-1"): "admin", ("viewer-1", "org-1"): "viewer", ("admin-2", "org-2"): "admin"}
-GRANTS = {"admin": {("admin", "access"), ("incidents", "read")}, "viewer": {("incidents", "read")}}
+# Fake Casbin: who holds which role in which org. Every member may chat; who
+# may audit is the org's conversation-audit rule (fake below).
+ROLES = {("admin-1", "org-1"): "admin", ("viewer-1", "org-1"): "viewer",
+         ("editor-1", "org-1"): "editor", ("admin-2", "org-2"): "admin"}
+GRANTS = {"admin": {("admin", "access"), ("chat", "read")}, "editor": {("chat", "read")},
+          "viewer": {("chat", "read")}}
+EDITORS_MAY_AUDIT = {"org-1": False}
+
+
+def _fake_may_audit(user_id, org_id):
+    role = ROLES.get((user_id, org_id))
+    return role == "admin" or (role == "editor" and EDITORS_MAY_AUDIT.get(org_id, False))
 
 
 @pytest.fixture
@@ -26,6 +35,7 @@ def call(monkeypatch):
         }.items():
             monkeypatch.setitem(rbac_globals, name, value)
         monkeypatch.setattr(mod, "get_org_id_from_request", lambda: org)
+        monkeypatch.setattr("utils.auth.viewer_run.may_audit_chats", _fake_may_audit)
         pool = MagicMock()
         monkeypatch.setattr(mod, "db_pool", pool)
         rls = MagicMock()
@@ -153,3 +163,28 @@ def test_tool_calls_bad_status_is_400_with_constant_message(call):
     m["failed"].side_effect = lambda cur, org_id, raw: list_tool_calls(cur, org_id, raw)
     body, status, _ = _rerun(mod, "admin-1", "org-1", "/api/monitor/tool-calls?status=<b>x</b>")
     assert status == 400 and body["error"] == FILTER_ERRORS["step_status"]
+
+
+
+# --- the org's conversation-audit setting ------------------------------------
+
+@pytest.mark.parametrize("handler, args, path", [
+    ("list_org_chats", (), "/api/monitor/chats"),
+    ("get_org_chat", ("s1",), "/api/monitor/chats/s1"),
+    ("list_org_tool_calls", (), "/api/monitor/tool-calls"),
+])
+def test_editors_follow_the_org_setting(call, monkeypatch, handler, args, path):
+    monkeypatch.setitem(EDITORS_MAY_AUDIT, "org-1", False)
+    body, status, _ = call(handler, "editor-1", "org-1", path, args=args, result={"chat": {}})
+    assert status == 403 and body["error"] == "Conversation audit isn't enabled for your role."
+    monkeypatch.setitem(EDITORS_MAY_AUDIT, "org-1", True)
+    _, status, _ = call(handler, "editor-1", "org-1", path, args=args, result={"chat": {}})
+    assert status == 200
+
+
+def test_access_is_checked_before_input_validation(call):
+    # A caller without access learns nothing from a bad filter: 403, not 400.
+    _, status, _ = call("list_org_chats", "viewer-1", "org-1", "/api/monitor/chats?source=<b>x</b>")
+    assert status == 403
+    _, status, _ = call("get_org_chat", "viewer-1", "org-1", "/api/monitor/chats/x", args=("../etc",))
+    assert status == 403

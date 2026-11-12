@@ -161,34 +161,25 @@ def test_list_shapes_rows_badges_and_facets():
         assert "org-1" in params, sql
 
 
-def test_anchors_are_computed_once_per_chat_and_skipped_for_the_agent_tool():
+def test_transcript_failures_compute_anchors_once_per_chat():
     cur = Cursor([])
-    ca._failed_tool_calls(cur, "org-1", chat_ids=["a"], limit=10)
-    sql = cur.calls[0][0]
+    ca._failed_tool_calls(cur, "org-1", ["a"], 10)
+    sql, params = cur.calls[0]
     assert sql.count("jsonb_array_elements(") == 2 and "c.id IN (SELECT DISTINCT chat_id FROM f)" in sql
-    cur = Cursor([])
-    ca._failed_tool_calls(cur, "org-1", limit=10, with_anchors=False)
-    assert "jsonb_array_elements(" not in cur.calls[0][0]
+    assert params == ("org-1", ["a"], 10, "org-1")
 
 
 def test_deleted_chats_are_excluded_but_rca_rows_kept():
     cur = Cursor([])
-    ca._failed_tool_calls(cur, "org-1", limit=10)
+    ca._failed_tool_calls(cur, "org-1", ["a"], 10)
     ca._issue_totals(cur, "org-1", "7d")
-    for sql, _ in cur.calls:
-        assert ca._NOT_DELETED_SQL in sql
+    calls = list(cur.calls)
+    page = _ftc_cursor([])
+    ca.list_tool_calls(page, "org-1", {})
+    for sql, _ in calls + page.calls:
+        if "execution_steps es" in sql:
+            assert ca._NOT_DELETED_SQL in sql, sql
     assert "es.incident_id IS NOT NULL OR" in ca._NOT_DELETED_SQL and "act.is_active" in ca._NOT_DELETED_SQL
-
-
-def test_free_text_never_matches_raw_stored_text():
-    # The stored error holds a password; a query for its prefix must not find it.
-    row = (1, "cloud_exec", {"command": "psql --password hunter2"}, "login failed for --password hunter2",
-           TS, "tc1", None, "s1", 1, None)
-    cur = Cursor([("WITH f AS", _FAIL_COLS, [row])])
-    assert ca._failed_tool_calls(cur, "org-1", query="hunt", limit=10) == []
-    assert "ILIKE" not in cur.calls[0][0]
-    cur = Cursor([("WITH f AS", _FAIL_COLS, [row])])
-    assert len(ca._failed_tool_calls(cur, "org-1", query="login failed", limit=10)) == 1
 
 
 def test_list_search_returns_redacted_snippet_with_message_anchor():
@@ -259,34 +250,6 @@ def test_transcript_tolerates_malformed_messages():
     assert len(out["messages"]) == 1 and out["messages"][0]["toolCalls"] == []
 
 
-# --- agent tool entry point -------------------------------------------------
-
-def test_search_failed_tool_calls_filters_and_links():
-    cur = Cursor([
-        ("WITH f AS", _FAIL_COLS, [
-            (1, "cloud_exec", {"command": "s3 ls"}, "AccessDenied", TS, "tc1", None, "s1", 1, None),
-            (2, "cloud_exec", {"command": "s3 cp x y"}, "forbidden", TS, "tc2",
-             "11111111-1111-1111-1111-111111111111", "s9", 1, 4),
-            (3, "cloud_exec", {"command": "ec2 describe-vpcs"}, "forbidden", TS, "tc3", None, "s2", 1, None),
-        ]),
-        ("COUNT(DISTINCT", ["category", "calls", "chats"], [("missing_permission", 2, 2)]),
-    ])
-    out = ca.search_failed_tool_calls(cur, "org-1", {"period": "7d", "issue": "missing_permission",
-                                                     "tool": "cloud_exec", "q": "s3"}, limit=20)
-    assert [c["link"] for c in out["tool_calls"]] == [
-        "/chat?sessionId=s1", "/incidents/11111111-1111-1111-1111-111111111111"]
-    sql, params = cur.calls[0]
-    assert "missing_permission" in params and "cloud_exec" in params
-    assert ca.QUERY_POOL_SIZE in params                 # free text filters a bounded pool in Python
-    assert out["by_issue"][0] == {"category": "missing_permission", "label": "Missing permission",
-                                  "calls": 2, "chats": 2}
-
-
-def test_search_failed_tool_calls_rejects_bad_source():
-    with pytest.raises(InvalidFilter):
-        ca.search_failed_tool_calls(Cursor([]), "org-1", {"source": "slack"})
-
-
 def test_titles_are_redacted():
     row = dict(zip(_CHAT_COLS, _chat_row()))
     row["title"] = "debug psql --password hunter2"
@@ -308,39 +271,6 @@ def test_snippet_window_is_taken_around_the_match():
     sql, params = cur.calls[0]
     assert "strpos(lower(e.m->>'text'), %s)" in sql
     assert params[:3] == ("permission", ca.SNIPPET_WINDOW // 2, ca.SNIPPET_WINDOW)
-
-
-# --- role scoping of the agent tool's query --------------------------------
-
-def _scoped_search(owner):
-    cur = Cursor([("COUNT(DISTINCT", ["category", "calls", "chats"], [])])
-    out = ca.search_failed_tool_calls(cur, "org-1", {"period": "7d"}, owner_user_id=owner)
-    return out, cur.calls
-
-
-def test_org_scope_has_no_owner_restriction():
-    out, calls = _scoped_search(None)
-    assert out["scope"] == "org"
-    assert all("own.user_id" not in sql and "cs.user_id" not in sql for sql, _ in calls)
-
-
-def test_own_scope_restricts_calls_and_issue_counts():
-    out, calls = _scoped_search("viewer-1")
-    assert out["scope"] == "own"
-    (list_sql, list_params), (totals_sql, totals_params) = calls
-    assert "own.user_id = %s" in list_sql and "own.org_id = es.org_id" in list_sql and "viewer-1" in list_params
-    assert "cs.user_id = %s" in totals_sql and "viewer-1" in totals_params   # counts can't leak org totals
-    for _, params in calls:
-        assert "org-1" in params                                            # still org-scoped
-
-
-def test_owner_cannot_come_from_the_model_arguments():
-    cur = Cursor([])
-    out = ca.search_failed_tool_calls(
-        cur, "org-1", {"owner_user_id": "someone", "scope": "org", "user": "other"}, owner_user_id="viewer-1")
-    assert out["scope"] == "own"
-    assert all("someone" not in p and "other" not in p for _, p in cur.calls)
-
 
 
 # --- redaction of real-world shapes (review findings) -----------------------
@@ -540,3 +470,26 @@ def test_search_matches_succeeded_rows_by_tool_and_command():
     rows = [_ftc_row(1, "s3 ls", None, status="success"), _ftc_row(2, "ec2 describe-vpcs", "AccessDenied")]
     out = ca.list_tool_calls(_ftc_cursor(rows), "org-1", {"q": "s3 ls"})
     assert [r["tool_call_id"] for r in out["tool_calls"]] == ["tc1"]
+
+
+
+# --- links and the shared-channel rule ---------------------------------------
+
+def test_links_point_to_the_incident_or_the_chat():
+    assert ca.link_for("s1", None) == "/chat?sessionId=s1"
+    assert ca.link_for("s1", "inc-1") == "/incidents/inc-1"
+    assert ca.link_for(None, None) is None
+
+
+@pytest.mark.parametrize("meta, private", [
+    (None, True), ({}, True), ({"source": "chat"}, True),
+    ({"source": "slack", "channel": "D0123"}, True),          # Slack DM
+    ({"source": "slack", "channel": "C0123"}, False),         # Slack channel
+    ({"source": "slack"}, False),
+    ({"source": "teams", "channel_id": "x"}, False),
+    ({"source": "google_chat", "space_name": "spaces/x"}, False),
+    ({"source": "action"}, False), ({"source": "pagerduty"}, False),
+    ("not-a-dict", False),                                   # malformed: fail closed
+])
+def test_private_answer_channel(meta, private):
+    assert ca.private_answer_channel(meta) is private

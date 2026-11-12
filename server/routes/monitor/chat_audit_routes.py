@@ -1,8 +1,9 @@
 """Admin chat audit for the monitor page.
 
 Lists every chat in the org (all users, all channels) with search, filters and
-detected issues, and serves a read-only transcript of any one chat. Admin-only:
-regular members only see their own chats in the chat UI. There is deliberately
+detected issues, and serves a read-only transcript of any one chat. Access follows
+the org's conversation-audit rule (``may_audit_chats``: admins, or admins and
+editors); everyone else only sees their own chats in the chat UI. There is deliberately
 no write endpoint here: an admin reads other users' chats, never posts into them.
 """
 import logging
@@ -24,23 +25,40 @@ from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
 
+AUDIT_FORBIDDEN = "Conversation audit isn't enabled for your role."
+
+
+def _audit_denied(user_id: str, org_id: str):
+    """403 unless the org's conversation-audit rule allows this caller.
+
+    The decorator only checks that the caller is signed in to the org; who may
+    audit (admins, or admins and editors) is the org's choice in Settings.
+    """
+    from utils.auth.viewer_run import may_audit_chats
+
+    if may_audit_chats(user_id, org_id):
+        return None
+    return jsonify({"error": AUDIT_FORBIDDEN}), 403
+
 chat_audit_bp = Blueprint("monitor_chat_audit", __name__)
 
 
 @chat_audit_bp.route("/api/monitor/chats", methods=["GET"])
-@require_permission("admin", "access")
+@require_permission("chat", "read")
 def list_org_chats(user_id):
     """Query params: period (24h|7d|30d|90d), source, status (completed|failed|in_progress),
     issue (a category or "any"), user (user id), q (full-text over messages), page, per_page.
     """
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization context"}), 403
+    denied = _audit_denied(user_id, org_id)
+    if denied:
+        return denied
     try:
         filters = ChatFilters.parse(request.args.to_dict())
     except InvalidFilter as exc:
         return jsonify({"error": filter_error_message(exc)}), 400
-
-    org_id = get_org_id_from_request()
-    if not org_id:
-        return jsonify({"error": "No organization context"}), 403
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -54,17 +72,19 @@ def list_org_chats(user_id):
 
 
 @chat_audit_bp.route("/api/monitor/chats/<session_id>", methods=["GET"])
-@require_permission("admin", "access")
+@require_permission("chat", "read")
 def get_org_chat(user_id, session_id):
     """Read-only transcript of one chat in the caller's org."""
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization context"}), 403
+    denied = _audit_denied(user_id, org_id)
+    if denied:
+        return denied
     try:
         validate_session_id(session_id)
     except InvalidFilter as exc:
         return jsonify({"error": filter_error_message(exc)}), 400
-
-    org_id = get_org_id_from_request()
-    if not org_id:
-        return jsonify({"error": "No organization context"}), 403
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -80,7 +100,7 @@ def get_org_chat(user_id, session_id):
 
 
 @chat_audit_bp.route("/api/monitor/tool-calls", methods=["GET"])
-@require_permission("admin", "access")
+@require_permission("chat", "read")
 def list_org_tool_calls(user_id):
     """Recorded tool calls across the org (any status), newest first.
 
@@ -91,6 +111,9 @@ def list_org_tool_calls(user_id):
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
+    denied = _audit_denied(user_id, org_id)
+    if denied:
+        return denied
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
