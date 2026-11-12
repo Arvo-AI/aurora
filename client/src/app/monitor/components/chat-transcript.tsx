@@ -82,7 +82,7 @@ export default function ChatTranscript({
       <div className="space-y-4">
         {back}
         {error
-          ? <ChartPanel title="Conversation"><EmptyState icon={AlertTriangle} message="Could not load this conversation" /></ChartPanel>
+          ? <ChartPanel title="Chat"><EmptyState icon={AlertTriangle} message="Could not load this chat" /></ChartPanel>
           : <div className="h-64 animate-pulse bg-zinc-900/60 border border-zinc-800/80 rounded-xl" />}
       </div>
     );
@@ -96,7 +96,7 @@ export default function ChatTranscript({
         <ChartPanel title={chat.title} subtitle={`${chat.message_count} messages`} className="min-w-0">
           <div className="flex items-center gap-2 mb-4 px-3 py-2 rounded-md bg-zinc-800/40 border border-zinc-700/40 text-xs text-zinc-400">
             <Eye className="h-3.5 w-3.5 shrink-0" />
-            Read-only view of another user&apos;s conversation. Secrets are redacted.
+            Read-only view of another user&apos;s chat. Secrets are redacted.
             {chat.truncated && ` Showing the first ${messages.length} messages.`}
           </div>
           <div className="space-y-1">

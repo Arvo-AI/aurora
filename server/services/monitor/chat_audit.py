@@ -2,7 +2,7 @@
 
 One query layer serves two callers:
 
-* the monitor page's Conversations tab: ``list_chats``, ``list_tool_calls``
+* the monitor page's Chat history tab: ``list_chats``, ``list_tool_calls``
   and ``get_transcript``;
 * the agent's read-only audit tools (``search_conversations``,
   ``search_tool_calls``, ``get_conversation``), which call the same three

@@ -409,9 +409,9 @@ function ViewerRunTable({
             <MessagesSquare className="h-3.5 w-3.5 text-foreground" />
           </div>
           <div className="min-w-0">
-            <span className="font-medium">Conversation audit</span>
+            <span className="font-medium">Chat history audit</span>
             <p className="text-xs text-muted-foreground">
-              Who can open Monitor → Conversations and ask Aurora about other users&apos; chats and tool calls.
+              Who can open Monitor → Chat history and ask Aurora about other users&apos; chats and tool calls.
               {auditEditors ? " Admins and editors." : " Admins only."}
             </p>
           </div>
@@ -420,7 +420,7 @@ function ViewerRunTable({
         <AccessCheck
           checked={auditEditors}
           disabled={auditDisabled}
-          label="Editors can audit conversations and tool calls"
+          label="Editors can audit chat history and tool calls"
           onChange={onAuditChange}
         />
         <LockedOn />
@@ -437,7 +437,7 @@ export default function ConnectorAccess() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [savingRun, setSavingRun] = useState(false);
-  // Conversation audit: false = admins only (default), true = admins and editors.
+  // Chat history audit: false = admins only (default), true = admins and editors.
   const [auditEditors, setAuditEditors] = useState(false);
   const [savingAudit, setSavingAudit] = useState(false);
   const audienceRef = useRef(audience);
@@ -575,10 +575,10 @@ export default function ConnectorAccess() {
         body: JSON.stringify({ editors }),
       });
       if (!res.ok) throw new Error("save failed");
-      // The Conversations tab and the sidebar shortcut read this too.
+      // The Chat history tab and the sidebar link read this too.
       void refreshChatAudit();
     } catch {
-      toast({ title: "Could not update conversation audit", variant: "destructive" });
+      toast({ title: "Could not update chat history access", variant: "destructive" });
       await load();
     } finally {
       setSavingAudit(false);

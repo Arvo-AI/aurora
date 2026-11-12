@@ -3,7 +3,7 @@
 import React, { useState, useContext, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Trash2, MoreVertical, Edit3, Loader2, Search } from 'lucide-react';
+import { Trash2, MoreVertical, Edit3, Loader2 } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -258,21 +258,23 @@ export default function ChatHistory({
       `}</style>
       <div className={cn("flex flex-col h-full", className)}>
         <div className="flex justify-between items-center mb-2 px-2 flex-shrink-0">
-        <div className="min-w-0 truncate text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-          Chat History
-        </div>
-        <div className="flex flex-shrink-0 items-center gap-1">
-            {/* Only for people the org's conversation-audit setting allows */}
-            {canAudit && (
-              <Link
-                href="/monitor?tab=chats"
-                title="Search all conversations"
-                aria-label="Search all conversations"
-                className="inline-flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <Search className="h-3.5 w-3.5" aria-hidden />
-              </Link>
-            )}
+        {/* For people the org's conversation-audit setting allows, the title opens
+            the whole organization's chat history; for everyone else it's plain text. */}
+        {canAudit ? (
+          <Link
+            href="/monitor?tab=chats"
+            title="Open chat history for the whole organization"
+            aria-label="Open chat history for the whole organization"
+            className="text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer rounded-sm transition-colors hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Chat History
+          </Link>
+        ) : (
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            Chat History
+          </div>
+        )}
+        <div className="flex items-center gap-1">
             {/* Clear all */}
             <AlertDialog open={showClearDialog} onOpenChange={setShowClearDialog}>
               <AlertDialogTrigger asChild>

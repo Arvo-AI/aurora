@@ -1,7 +1,7 @@
 """The agent's read-only conversation-audit tools.
 
 search_tool_calls, search_conversations and get_conversation answer the same
-questions as Monitor → Conversations, under the same rule (may_audit_chats),
+questions as Monitor → Chat history, under the same rule (may_audit_chats),
 checked on every call and never widened by arguments.
 """
 

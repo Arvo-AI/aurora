@@ -4,7 +4,7 @@ Unset viewer chat stays on so an upgrade does not lock viewers out. An
 explicit false turns it off. Editors and admins can always chat. Memory
 edits follow their own switches; admins can always edit memory.
 
-Conversation audit (Monitor → Conversations, and the agent tools that answer
+Chat history audit (Monitor → Chat history, and the agent tools that answer
 the same questions) is admins only by default; the org can extend it to
 editors. Viewers and Slack guests never get it.
 """
@@ -82,7 +82,7 @@ def org_allows_editor_audit(org_id: str) -> bool:
 def may_audit_chats(user_id: str, org_id: str) -> bool:
     """Whether this person may read every user's chats and tool calls in the org.
 
-    The one rule behind the Conversations tab, its API routes and the agent's
+    The one rule behind the Chat history tab, its API routes and the agent's
     audit tools. Fails closed: no org, no role, a Slack guest or a read error
     all mean no.
     """

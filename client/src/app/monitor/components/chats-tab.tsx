@@ -39,8 +39,8 @@ type View = 'conversations' | 'tool-calls';
 const PER_PAGE = 25;
 
 /**
- * Admin audit of every chat in the org, in two views: the conversations
- * themselves, and every tool call Aurora made in them. The view is kept in the
+ * Admin audit of every chat in the org, in two views: the chat history
+ * itself, and every tool call Aurora made in them. The view is kept in the
  * URL (?view=tool-calls) so a link opens the right one.
  */
 export default function ChatsTab({ period }: { period: Period }) {
@@ -61,13 +61,13 @@ export default function ChatsTab({ period }: { period: Period }) {
       {open && <ChatTranscript sessionId={open.id} focusMessage={open.messageIndex} onBack={() => setOpen(null)} />}
       {/* Kept mounted (hidden) while a transcript is open, so filters and page survive "back". */}
       <div className={`space-y-4 ${open ? 'hidden' : ''}`}>
-        {/* Wait for the URL so a ?view=tool-calls link doesn't show or load Conversations first. */}
+        {/* Wait for the URL so a ?view=tool-calls link doesn't show or load Chat history first. */}
         {viewReady
           ? <ViewToggle value={current} onChange={setView} callCount={callCount} />
           : <div className="h-[34px]" aria-hidden />}
         {viewReady && (current === 'tool-calls'
           ? <ToolCallsView period={period} onOpen={openChat} />
-          : <ConversationsView period={period} onOpen={openChat} />)}
+          : <ChatHistoryView period={period} onOpen={openChat} />)}
       </div>
     </>
   );
@@ -77,7 +77,7 @@ function ViewToggle({ value, onChange, callCount }: {
   value: View; onChange: (v: View) => void; callCount: number | undefined;
 }) {
   const options: { value: View; label: string }[] = [
-    { value: 'conversations', label: 'Conversations' },
+    { value: 'conversations', label: 'Chat history' },
     { value: 'tool-calls', label: `Tool calls${callCount === undefined ? '' : ` (${callCount})`}` },
   ];
   return (
@@ -98,7 +98,7 @@ function ViewToggle({ value, onChange, callCount }: {
   );
 }
 
-function ConversationsView({ period, onOpen }: {
+function ChatHistoryView({ period, onOpen }: {
   period: Period; onOpen: (chatId: string, messageIndex: number | null) => void;
 }) {
   const [source, setSource] = useState('');
@@ -125,7 +125,7 @@ function ConversationsView({ period, onOpen }: {
 
   return (
     <ChartPanel
-      title="Conversations"
+      title="Chat history"
       subtitle="Every chat in your organization, from every user and channel. Read-only; secrets are redacted."
       loading={isLoading}
     >
@@ -155,18 +155,18 @@ function ConversationsView({ period, onOpen }: {
       </div>
 
       {error && !view ? (
-        <EmptyState icon={AlertTriangle} message="Could not load conversations" hint="Only organization admins can view all chats." />
+        <EmptyState icon={AlertTriangle} message="Could not load chat history" hint="Only organization admins can view all chats." />
       ) : !view || view.chats.length === 0 ? (
         isLoading
           ? <div className="h-40 animate-pulse bg-zinc-800/30 rounded-lg" />
-          : <EmptyState icon={MessagesSquare} message="No conversations match these filters" />
+          : <EmptyState icon={MessagesSquare} message="No chats match these filters" />
       ) : (
         <>
           <div className={`overflow-x-auto rounded-lg border border-zinc-800/60 transition-opacity ${refreshing ? 'opacity-60' : ''}`} aria-busy={refreshing}>
             <table className="w-full text-sm min-w-[900px]">
               <thead>
                 <tr className="border-b border-zinc-800/60 text-zinc-500 text-xs uppercase tracking-wider">
-                  {['Conversation', 'User', 'Source', 'Status', 'Issues', 'Started', 'Updated'].map(h => (
+                  {['Chat', 'User', 'Source', 'Status', 'Issues', 'Started', 'Updated'].map(h => (
                     <th key={h} className="text-left px-3 py-2.5 font-medium">{h}</th>
                   ))}
                   <th className="text-right px-3 py-2.5 font-medium">Msgs</th>
@@ -181,7 +181,7 @@ function ConversationsView({ period, onOpen }: {
             </table>
           </div>
           <Pager total={view.total} page={page} totalPages={view.total_pages}
-            noun={['conversation', 'conversations']} onPage={setPage} />
+            noun={['chat', 'chats']} onPage={setPage} />
         </>
       )}
     </ChartPanel>

@@ -162,7 +162,7 @@ export default function ToolCallsView({ period, onOpen }: {
   return (
     <ChartPanel
       title="Tool calls"
-      subtitle="Every tool call Aurora made, newest first. Click a row to open the conversation at that call. Secrets are redacted."
+      subtitle="Every tool call Aurora made, newest first. Click a row to open the chat at that call. Secrets are redacted."
       loading={isLoading}
     >
       <IssueChips counts={view?.issue_counts} labels={labels} value={issue} onChange={setIssue} loading={refreshing} />

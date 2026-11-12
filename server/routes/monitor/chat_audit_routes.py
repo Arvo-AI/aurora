@@ -25,7 +25,7 @@ from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
 
-AUDIT_FORBIDDEN = "Conversation audit isn't enabled for your role."
+AUDIT_FORBIDDEN = "Access to the organization's chat history isn't enabled for your role."
 
 
 def _audit_denied(user_id: str, org_id: str):

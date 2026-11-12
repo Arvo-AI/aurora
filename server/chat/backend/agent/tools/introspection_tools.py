@@ -855,7 +855,7 @@ def grafana_list_alerts(state=None, limit=50, *, user_id, **_) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Conversation audit (same answers as Monitor → Conversations)
+# Chat history audit (same answers as Monitor → Chat history)
 # ---------------------------------------------------------------------------
 #
 # Who may call these is the org's conversation-audit rule (``may_audit_chats``:
@@ -866,12 +866,12 @@ def grafana_list_alerts(state=None, limit=50, *, user_id, **_) -> dict:
 
 GUEST_REFUSAL = "Tool-call history isn't available to guest users. Ask a member of the organization."
 AUDIT_REFUSAL = (
-    "Conversation audit isn't enabled for your role. "
+    "Access to the organization's chat history isn't enabled for your role. "
     "An admin can change this under Organization settings → Access."
 )
 SHARED_CHANNEL_NOTE = (
     "This chat is in a shared channel, so other people's message text is left out. "
-    "Open the links in Aurora to read the conversations."
+    "Open the links in Aurora to read the chats."
 )
 TRANSCRIPT_MESSAGES = 20          # most recent messages returned by get_conversation
 TRANSCRIPT_TEXT_CHARS = 1500      # per message, after redaction

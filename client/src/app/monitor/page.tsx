@@ -16,7 +16,7 @@ const TABS = [
   { id: 'fleet', label: 'Fleet', icon: Radar },
   { id: 'sre', label: 'SRE Metrics', icon: HeartPulse },
   { id: 'waterfall', label: 'Execution', icon: Timer },
-  { id: 'chats', label: 'Conversations', icon: MessagesSquare, auditOnly: true },
+  { id: 'chats', label: 'Chat history', icon: MessagesSquare, auditOnly: true },
   { id: 'artifacts', label: 'Artifacts', icon: BookOpen },
   { id: 'audit', label: 'Audit Log', icon: ShieldCheck },
 ] as const;
@@ -27,7 +27,7 @@ export default function MonitorPage() {
   // In the URL (?tab=chats) so a link can open a tab, e.g. ?tab=chats&view=tool-calls.
   const [tabParam, setTab] = useUrlParam('tab', 'fleet');
   const [period, setPeriod] = useState<Period>('30d');
-  // Conversations lists every user's chats: shown only to people the org's
+  // Chat history lists every user's chats: shown only to people the org's
   // conversation-audit setting allows. The backend enforces the same rule.
   const canAudit = useCanAuditChats();
   const tabs = TABS.filter(t => !('auditOnly' in t && t.auditOnly) || canAudit);

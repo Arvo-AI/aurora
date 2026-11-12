@@ -176,7 +176,7 @@ def test_tool_calls_bad_status_is_400_with_constant_message(call):
 def test_editors_follow_the_org_setting(call, monkeypatch, handler, args, path):
     monkeypatch.setitem(EDITORS_MAY_AUDIT, "org-1", False)
     body, status, _ = call(handler, "editor-1", "org-1", path, args=args, result={"chat": {}})
-    assert status == 403 and body["error"] == "Conversation audit isn't enabled for your role."
+    assert status == 403 and body["error"] == "Access to the organization's chat history isn't enabled for your role."
     monkeypatch.setitem(EDITORS_MAY_AUDIT, "org-1", True)
     _, status, _ = call(handler, "editor-1", "org-1", path, args=args, result={"chat": {}})
     assert status == 200
