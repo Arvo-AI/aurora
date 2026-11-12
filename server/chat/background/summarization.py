@@ -177,6 +177,28 @@ Style: descriptive, not advisory
     return prompt
 
 
+# Why an investigation ended before it finished, as the report states it.
+UNFINISHED_REASONS = {
+    "time_limit": "it reached its time limit",
+    "stalled": "it stopped making progress and was halted",
+}
+
+
+def _unfinished_investigation_note(reason: str) -> str:
+    """Instructions put in front of the summary prompt when the RCA did not finish."""
+    why = UNFINISHED_REASONS.get(reason, "it was interrupted")
+    return (
+        "IMPORTANT: this investigation did not finish; " + why + ". The evidence below is "
+        "everything it gathered before it stopped.\n"
+        "- Start the report with this line: \"Investigation incomplete: " + why + "; the "
+        "findings below are partial.\"\n"
+        "- Report only what the evidence establishes. Do not present an unconfirmed "
+        "hypothesis as the root cause: if it was not established, say \"Root cause not "
+        "determined\", then give the most likely candidates and what would confirm each.\n"
+        "- In the Not Checked section, list the areas the investigation had not reached."
+    )
+
+
 def _build_summary_prompt_with_chat(
     source_type: str,
     alert_title: str,
@@ -717,8 +739,13 @@ def generate_incident_summary_from_chat(
     user_id: str,
     session_id: str,
     announce_completion: bool = True,
+    unfinished_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Regenerate incident summary after RCA using the RCA chat transcript with citations.
+
+    unfinished_reason: set when the RCA was stopped before it finished
+    ("time_limit" or "stalled"). The summary then covers the partial evidence
+    and says up front that the investigation is incomplete.
 
     announce_completion: False when the summary is being regenerated after a
     follow-up chat (Slack/Google Chat reply on an existing incident). The
@@ -800,6 +827,9 @@ def generate_incident_summary_from_chat(
             fix_suggestions=fix_suggestions if fix_suggestions else None,
             agent_reasoning=agent_reasoning,
         )
+        if unfinished_reason:
+            prompt = _unfinished_investigation_note(unfinished_reason) + "\n\n" + prompt
+            logger.info("%s Summarizing unfinished investigation %s (%s)", _LOG_PREFIX, incident_id, unfinished_reason)
 
         logger.info(
             "%s incident_summary_prompt incident=%s citations=%d "

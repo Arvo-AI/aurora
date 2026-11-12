@@ -966,18 +966,23 @@ def run_background_chat(
         logger.error("[BackgroundChat] Timeout after %s for session %s", timed_out_after, session_id)
         _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id and not is_action_source:
-            _update_incident_aurora_status(incident_id, "error", user_id=user_id)
             _mark_inflight_findings_failed(incident_id, user_id, f"parent task timed out after {timed_out_after}")
-            if send_notifications:  # a follow-up chat failing is not the investigation failing
-                try:
-                    from utils.notifications.dispatcher import notify_investigation_failed
-                    notify_investigation_failed(
-                        user_id,
-                        incident_id,
-                        error_message=f"Investigation timed out after {timed_out_after}",
-                    )
-                except Exception:
-                    logger.debug("[BackgroundChat] Failed to send investigation failed notification after timeout")
+            # A primary RCA that gathered evidence ends with a partial report, not
+            # a bare failure. A follow-up chat failing is not the investigation failing.
+            if not (send_notifications and _summarize_unfinished_investigation(
+                incident_id, user_id, session_id, "time_limit",
+            )):
+                _update_incident_aurora_status(incident_id, "error", user_id=user_id)
+                if send_notifications:
+                    try:
+                        from utils.notifications.dispatcher import notify_investigation_failed
+                        notify_investigation_failed(
+                            user_id,
+                            incident_id,
+                            error_message=f"Investigation timed out after {timed_out_after}",
+                        )
+                    except Exception:
+                        logger.debug("[BackgroundChat] Failed to send investigation failed notification after timeout")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
@@ -1000,14 +1005,20 @@ def run_background_chat(
         logger.exception(f"[BackgroundChat] Failed for session {session_id}: {e}")
         _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id and not is_action_source:
-            _update_incident_aurora_status(incident_id, "error", user_id=user_id)
             _mark_inflight_findings_failed(incident_id, user_id, f"parent task failed: {e}")
-            if send_notifications:  # a follow-up chat failing is not the investigation failing
-                try:
-                    from utils.notifications.dispatcher import notify_investigation_failed
-                    notify_investigation_failed(user_id, incident_id, error_message=str(e))
-                except Exception:
-                    logger.debug("[BackgroundChat] Failed to send investigation failed notification")
+            from chat.background.liveness import InvestigationStalled
+
+            # A stalled primary RCA that gathered evidence ends with a partial
+            # report. Other errors, and follow-up chats, fail as before.
+            if not (send_notifications and isinstance(e, InvestigationStalled)
+                    and _summarize_unfinished_investigation(incident_id, user_id, session_id, "stalled")):
+                _update_incident_aurora_status(incident_id, "error", user_id=user_id)
+                if send_notifications:  # a follow-up chat failing is not the investigation failing
+                    try:
+                        from utils.notifications.dispatcher import notify_investigation_failed
+                        notify_investigation_failed(user_id, incident_id, error_message=str(e))
+                    except Exception:
+                        logger.debug("[BackgroundChat] Failed to send investigation failed notification")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
@@ -1973,6 +1984,48 @@ def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id
                     logger.error(f"[BackgroundChat] Failed to record lifecycle event '{event_type}' for incident {incident_id}: {le}")
     except Exception as e:
         logger.error(f"[BackgroundChat] Failed to update aurora_status: {e}")
+
+
+def _summarize_unfinished_investigation(incident_id: str, user_id: str, session_id: str, reason: str) -> bool:
+    """Send an RCA that was stopped early to the summary, marked incomplete.
+
+    Used when the time limit or the stall watchdog ends a primary RCA: the
+    evidence it gathered becomes a partial report instead of a bare failure.
+    Returns False, so the caller fails the incident as before, when the run
+    produced no tool results to summarize or the summary could not be queued.
+    Must stay quick: on the time limit it runs inside the last minute.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Unfinished]")
+                cursor.execute(
+                    "SELECT EXISTS (SELECT 1 FROM execution_steps WHERE incident_id = %s OR session_id = %s)",
+                    (incident_id, session_id),
+                )
+                row = cursor.fetchone()
+                if not (row and row[0]):
+                    logger.info("[BackgroundChat] Unfinished RCA %s gathered no evidence; failing it", incident_id)
+                    return False
+                # The run is over: a stale task id would read as a dead worker to the sweep.
+                cursor.execute(
+                    "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s", (incident_id,),
+                )
+            conn.commit()
+        _update_incident_status_and_aurora(incident_id, "analyzed", "summarizing", user_id=user_id)
+        from chat.background.summarization import generate_incident_summary_from_chat
+
+        generate_incident_summary_from_chat.delay(
+            incident_id=incident_id,
+            user_id=user_id,
+            session_id=session_id,
+            unfinished_reason=reason,
+        )
+        logger.warning("[BackgroundChat] RCA %s stopped early (%s); summarizing its partial evidence", incident_id, reason)
+        return True
+    except Exception:
+        logger.exception("[BackgroundChat] Could not summarize unfinished RCA %s; failing it", incident_id)
+        return False
 
 
 def _mark_inflight_findings_failed(incident_id: str, user_id: str, reason: str) -> int:

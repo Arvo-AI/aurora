@@ -434,3 +434,34 @@ def apply_rca_context_updates(state: Any) -> Optional[HumanMessage]:
         logger.debug("[RCA-UPDATE] Failed to append update to state messages: %s", exc)
 
     return update_message
+
+
+WRAP_UP_NOTICE = (
+    "TIME LIMIT: this investigation is about to reach its time limit. Do not start "
+    "any new tool calls or sub-agents. Write your final answer now, from the "
+    "evidence you already have: the most likely root cause and how confident you "
+    "are, the evidence for it, and what you could not check because time ran out. "
+    "If the root cause is not established, say so plainly instead of guessing."
+)
+
+
+def apply_wrap_up_notice(state: Any) -> Optional[HumanMessage]:
+    """Tell a background run once to conclude when it is past its wrap-up time.
+
+    Called before every model call, like ``apply_rca_context_updates``. The
+    notice is appended to ``state.messages`` as well, so later model calls in
+    the same run keep seeing it. No-op outside a watched background run.
+    """
+    if not state or not getattr(state, "is_background", False):
+        return None
+    from utils.progress_watch import claim_wrap_up
+
+    session_id = getattr(state, "session_id", None)
+    if not claim_wrap_up(session_id):
+        return None
+    message = HumanMessage(content=WRAP_UP_NOTICE)
+    messages = getattr(state, "messages", None)
+    if isinstance(messages, list):
+        messages.append(message)
+    logger.warning("[WRAP-UP] Told session %s to conclude before the time limit", session_id)
+    return message

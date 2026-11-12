@@ -208,11 +208,15 @@ def run_watched(
     Raises :class:`InvestigationStalled` when the watchdog stopped the run, so
     the caller's normal error path fails the session and tells the user.
     """
-    if idle_seconds is None:
-        from chat.investigation_timeout import investigation_stall_seconds
+    from chat.investigation_timeout import (
+        investigation_stall_seconds,
+        investigation_wrap_up_after_seconds,
+    )
 
+    if idle_seconds is None:
         idle_seconds = investigation_stall_seconds()
-    tracker = ProgressTracker(idle_seconds)
+    # Past this point the agent is told once to conclude (see progress_watch).
+    tracker = ProgressTracker(idle_seconds, wrap_up_after=investigation_wrap_up_after_seconds())
     watchdog = _Watchdog(tracker)
     # asyncio.run copies this context into the task, and tool threads copy it on.
     token = set_tracker(tracker)

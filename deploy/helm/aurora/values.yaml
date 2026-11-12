@@ -365,6 +365,13 @@ config:
   # Stop an investigation that makes no progress for this long, in seconds.
   # Minimum 120; "0" turns the check off.
   INVESTIGATION_STALL_SECONDS: "600"
+  # How long one model call may run before it counts as stuck, in seconds.
+  # Thinking models can take many minutes before their first token.
+  # Minimum 120; "0" makes a model call count against the stall window.
+  INVESTIGATION_MODEL_CALL_SECONDS: "1800"
+  # Seconds before the time limit at which the agent is told to stop and
+  # write its conclusions. Minimum 60; "0" turns it off.
+  INVESTIGATION_WRAPUP_SECONDS: "300"
 
   # --- AI Safety Guardrails ---
   # Input rail + signature matcher + LLM safety judge. All three activate with
