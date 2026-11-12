@@ -5,6 +5,8 @@ This tool provides structured GitHub investigation capabilities for RCA workflow
 wrapping existing GitHub MCP tools with timeline correlation and intelligent repo resolution.
 """
 
+import os
+import re
 import json
 import logging
 from datetime import datetime
@@ -12,6 +14,7 @@ from typing import Dict, Any, Optional, Tuple, List, Literal
 
 import requests
 from pydantic import BaseModel, Field
+from contextvars import ContextVar
 
 from utils.auth.github_auth_router import (
     NoGitHubAuthError,
@@ -20,6 +23,35 @@ from utils.auth.github_auth_router import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Set for 1 github_rca call when the repo is the incident's pinned public repo.
+# Lets _call_github_api read it without auth, without threading a flag through every action.
+
+_PUBLIC_REPO: ContextVar[Optional[str]] = ContextVar("github_rca_public_repo", default=None)
+_REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+
+def _public_auth_header() -> Dict[str, str]:
+    """Optional server-wide read token to lift GitHub's unauthenticated limit (60/h per IP)."""
+    token = os.getenv("GITHUB_PUBLIC_READ_TOKEN")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def check_public_repo(repo: str) -> Optional[str]:
+    """Return the canonical owner/repo if it is a public GitHub repo."""
+    if not _REPO_RE.fullmatch(repo or "") or ".." in repo:
+        return None
+    try:
+        resp = requests.get(
+            f"https://api.github.com/repos/{repo}",
+            headers={**_public_auth_header(), "Accept": "application/vnd.github+json"},
+            timeout=10,
+        )
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200:
+        return None
+    data = resp.json()
+    return None if data.get("private") else data.get("full_name")
 
 
 class GitHubRCAArgs(BaseModel):
@@ -179,13 +211,15 @@ def _call_github_api(
     try:
         auth = get_auth_for_user_repo(user_id, repo_full_name)
     except NoGitHubAuthError as exc:
-        return {"error": f"No GitHub credential for {repo_full_name}: {exc}"}
+        if (_PUBLIC_REPO.get() or "").lower() != repo_full_name.lower():
+            return {"error": f"No GitHub credential for {repo_full_name}: {exc}"}
+        auth = None  # pinned public repo: unauthenticated read
     except Exception as exc:
         logger.exception("Auth resolution failed for user=%s repo=%s", user_id, repo_full_name)
         return {"error": f"GitHub auth resolution failed: {type(exc).__name__}"}
 
     headers = {
-        **make_auth_header(auth),
+        **(make_auth_header(auth) if auth else _public_auth_header()),
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
@@ -592,6 +626,35 @@ def _format_output(
     return json.dumps(output, indent=2, default=str)
 
 
+def _resolve_rca_auth(
+    user_id: str, repo_full_name: str, public_repo: Optional[str], action: str
+) -> Tuple[Any, Optional[str]]:
+    """Return (auth, error_json).
+
+    ``(None, None)`` means the public-repo sandbox: the repo is the incident's
+    pinned public repo and there is no GitHub connection, so reads go unauthenticated.
+    """
+    try:
+        return get_auth_for_user_repo(user_id, repo_full_name), None
+    except NoGitHubAuthError:
+        if public_repo and public_repo.lower() == repo_full_name.lower():
+            return None, None
+        return None, json.dumps({
+            "status": "error",
+            "error": "GitHub not connected for this user. Install the GitHub App or connect via OAuth.",
+            "action": action,
+            "repository": repo_full_name,
+        })
+    except Exception as e:
+        logger.exception("Error resolving GitHub auth for user %s repo %s", user_id, repo_full_name)
+        return None, json.dumps({
+            "status": "error",
+            "error": f"Failed to resolve GitHub auth: {e}",
+            "action": action,
+            "repository": repo_full_name,
+        })
+
+
 def github_rca(
     action: str,
     incident_time: Optional[str] = None,
@@ -600,6 +663,7 @@ def github_rca(
     time_window_hours: int = 24,
     commit_sha: Optional[str] = None,
     workflow_name: Optional[str] = None,
+    public_repo: Optional[str] = None,
     user_id: Optional[str] = None,
     **kwargs
 ) -> str:
@@ -658,30 +722,14 @@ def github_rca(
     logger.info(f"Resolved repository: {owner}/{repo_name} (source: {repo_source})")
 
     repo_full_name = f"{owner}/{repo_name}"
-    try:
-        auth = get_auth_for_user_repo(user_id, repo_full_name)
-    except NoGitHubAuthError:
-        return json.dumps({
-            "status": "error",
-            "error": "GitHub not connected for this user. Install the GitHub App or connect via OAuth.",
-            "action": action,
-            "repository": repo_full_name,
-        })
-    except Exception as e:
-        logger.exception(
-            "Error resolving GitHub auth for user %s repo %s",
-            user_id, repo_full_name,
-        )
-        return json.dumps({
-            "status": "error",
-            "error": f"Failed to resolve GitHub auth: {e}",
-            "action": action,
-            "repository": repo_full_name,
-        })
-
+    auth, auth_error = _resolve_rca_auth(user_id, repo_full_name, public_repo, action)
+    if auth_error:
+        return auth_error
+    auth_method = auth.method if auth else "public"
+    installation_id = auth.installation_id if auth else None
     logger.info(
         f"Resolved GitHub auth for {user_id} {repo_full_name}: "
-        f"method={auth.method} installation_id={auth.installation_id}"
+        f"method={auth_method} installation_id={installation_id}"
     )
 
     # Calculate time windows
@@ -691,6 +739,7 @@ def github_rca(
     logger.info(f"Time window: {start_time} to {end_time}")
 
     # Execute action
+    _token = _PUBLIC_REPO.set(repo_full_name if auth is None else None)
     try:
         if action == "deployment_check":
             results = _action_deployment_check(
@@ -719,8 +768,8 @@ def github_rca(
             repo_name,
             repo_source,
             time_window,
-            auth_method=auth.method,
-            installation_id=auth.installation_id,
+            auth_method=auth_method,
+            installation_id=installation_id,
         )
 
     except Exception as e:
@@ -731,3 +780,5 @@ def github_rca(
             "action": action,
             "repository": f"{owner}/{repo_name}",
         })
+    finally:
+        _PUBLIC_REPO.reset(_token)

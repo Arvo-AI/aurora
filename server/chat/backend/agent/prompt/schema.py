@@ -16,6 +16,7 @@ class PromptSegments:
     manual_vm_access: str = ""  # Manual VM access hints with managed keys
     background_mode: str = ""  # Background chat autonomous operation instructions
     knowledge_base_memory: str = ""  # Org memory index (context, runbooks, infra, learnings)
+    sandbox_context: str = ""  # This chat's sandbox knowledge base (artifacts), if any
     integration_index: str = ""  # Skills-based: compact index of connected integrations
     security_policy: str = ""  # Org-level command allow/deny policy
     caller: str = ""  # This person's Aurora level and team

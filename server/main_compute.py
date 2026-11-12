@@ -636,6 +636,9 @@ app.register_blueprint(postmortem_bp)
 from routes.artifact_routes import artifact_bp
 app.register_blueprint(artifact_bp)
 
+from routes.sandbox_routes import sandbox_bp
+app.register_blueprint(sandbox_bp)
+
 # --- SRE Metrics Routes ---
 from routes.metrics_routes import metrics_bp
 app.register_blueprint(metrics_bp)

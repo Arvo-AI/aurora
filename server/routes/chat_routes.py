@@ -9,6 +9,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.web.limiter_ext import limiter
 from utils.db.connection_pool import db_pool
+from utils.validation import is_valid_uuid
 
 
 # Configure logging
@@ -153,10 +154,19 @@ def create_chat_session(user_id):
 
         set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
+        # Optional: start the chat inside a sandbox (project, most be visible to this org).
+        sandbox_id = data.get('sandbox_id') or None
+        if sandbox_id:
+            if not is_valid_uuid(sandbox_id):
+                return jsonify({"error": "Invalid sandbox_id"}), 400
+            cursor.execute("SELECT 1 FROM sandboxes WHERE id = %s AND org_id = %s", (sandbox_id, org_id))
+            if not cursor.fetchone():
+                return jsonify({"error": "Sandbox not found"}), 404
+
         cursor.execute("""
-            INSERT INTO chat_sessions (id, user_id, org_id, title, messages, ui_state, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """, (session_id, user_id, org_id, title, json.dumps(messages), json.dumps(ui_state), now, now))
+            INSERT INTO chat_sessions (id, user_id, org_id, title, messages, ui_state, created_at, updated_at, sandbox_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (session_id, user_id, org_id, title, json.dumps(messages), json.dumps(ui_state), now, now, sandbox_id))
 
         conn.commit()
 
@@ -167,7 +177,8 @@ def create_chat_session(user_id):
             'ui_state': ui_state,
             'created_at': now.isoformat(),
             'updated_at': now.isoformat(),
-            'status': 'active'
+            'status': 'active',
+            'sandbox_id': sandbox_id,
         }
         
         # Close connection BEFORE returning response to ensure transaction is fully committed

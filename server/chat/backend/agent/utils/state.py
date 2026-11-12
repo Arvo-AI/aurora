@@ -13,6 +13,8 @@ class State(BaseModel):
     session_id: Optional[str] = None  # Add session ID for tracking chat sessions
     incident_id: Optional[str] = None  # Incident ID for RCA sessions
     incident_start_time: Optional[str] = None  # ISO 8601 timestamp from incidents.started_at
+    sandbox_context: Optional[str] = None  # Rendered sandbox knowledge base, rebuilt each turn
+    sandbox_public_repo: Optional[str] = None  # Sandbox's public repo for read-only github_rca
     org_id: Optional[str] = None  # Org ID for tenant-scoped telemetry
     provider_preference: Optional[List[str]] = None  # Must be explicitly set, e.g. ["gcp", "aws", "azure"]
     selected_project_id: Optional[str] = None  # Selected project ID from frontend UI

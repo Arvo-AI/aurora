@@ -2539,6 +2539,7 @@ def create_background_chat_session(
     trigger_metadata: Optional[Dict[str, Any]] = None,
     incident_id: Optional[str] = None,
     question: Optional[str] = None,
+    sandbox_id: Optional[str] = None,
 ) -> str:
     """Create a new chat session for a background chat.
     
@@ -2584,8 +2585,8 @@ def create_background_chat_session(
                     initial_messages.append({"sender": "user", "text": question})
 
                 cursor.execute("""
-                    INSERT INTO chat_sessions (id, user_id, org_id, title, messages, ui_state, created_at, updated_at, is_active, status, incident_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO chat_sessions (id, user_id, org_id, title, messages, ui_state, created_at, updated_at, is_active, status, incident_id, sandbox_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     session_id,
                     user_id,
@@ -2598,6 +2599,7 @@ def create_background_chat_session(
                     True,
                     "in_progress",
                     incident_id,
+                    sandbox_id,
                 ))
             conn.commit()
             

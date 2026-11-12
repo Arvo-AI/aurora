@@ -1642,6 +1642,15 @@ async def handle_connection(websocket) -> None:
                 user_id, _incident_id, log_prefix="[Chatbot:StartTime]"
             )
 
+            # Sandbox (project) chats: load the knowledge base every turn so
+            # artifacts added mid-conversation are seen. Goes in the system
+            # prompt, not the message, so it is not copied into history.
+            from services.sandbox import load_session_sandbox
+            _sandbox = load_session_sandbox(user_id, session_id)
+            if _sandbox and not _incident_start_time:
+                # Pins github_rca's window like an incident would.
+                _incident_start_time = _sandbox["incident_time"]
+
             # Fetch org tool permissions for gate bypass
             _permitted_tools = None
             try:
@@ -1661,6 +1670,8 @@ async def handle_connection(websocket) -> None:
                 session_id=session_id,
                 incident_id=_incident_id,
                 incident_start_time=_incident_start_time,
+                sandbox_context=_sandbox["context"] if _sandbox else None,
+                sandbox_public_repo=_sandbox["public_repo"] if _sandbox else None,
                 org_id=org_id,
                 provider_preference=provider_preference,
                 selected_project_id=selected_project_id,
