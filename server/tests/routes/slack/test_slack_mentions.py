@@ -88,3 +88,25 @@ def test_reply_formatter_keeps_mentions():
     reply = f"*<@{ASKER}>* the pool is exhausted"
     formatted = format_response_for_slack(reply)
     assert f"<@{ASKER}>" in formatted
+
+
+def test_reply_formatter_preserves_comparisons_and_command_placeholders():
+    reply = (
+        "Cap the cache at < 150 MB.\n\n"
+        "Tradeoff: fewer cache hits.\n\n"
+        "```\nkubectl get pods -n <namespace> -l app=<app>\n```\n"
+        "Verify memory stays < 85% and restarts > 0 are investigated."
+    )
+    formatted = format_response_for_slack(reply)
+    assert "&lt; 150 MB" in formatted
+    assert "Tradeoff: fewer cache hits." in formatted
+    assert "kubectl get pods -n &lt;namespace&gt; -l app=&lt;app&gt;" in formatted
+    assert "&lt; 85%" in formatted and "&gt; 0" in formatted
+
+
+def test_reply_formatter_keeps_links_and_channel_mentions():
+    reply = f"Ask <@{ASKER}> in <#C012TEST|ops>: [runbook](https://example.com/runbook)."
+    formatted = format_response_for_slack(reply)
+    assert f"<@{ASKER}>" in formatted
+    assert "<#C012TEST|ops>" in formatted
+    assert "<https://example.com/runbook|runbook>" in formatted

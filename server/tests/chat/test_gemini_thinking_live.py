@@ -23,7 +23,7 @@ def _require_live_opt_in(request):
     ("vertex/gemini-4-argon", True),
 ])
 def test_live_tool_round_trip_and_slack_answer(model, streaming, workflow, send):
-    from langchain_core.messages import HumanMessage, ToolMessage
+    from langchain_core.messages import HumanMessage, ToolMessage, message_chunk_to_message
     from langchain_core.tools import tool
     from chat.backend.agent.providers.vertex_provider import VertexAIProvider
     from chat.backend.agent.utils.message_content import extract_text_from_content
@@ -36,7 +36,13 @@ def test_live_tool_round_trip_and_slack_answer(model, streaming, workflow, send)
     llm = VertexAIProvider().get_chat_model(model, timeout=120, max_retries=0)
     assert llm.include_thoughts is False
     messages = [HumanMessage(content="Call inspect_pod, explain the OOM root cause and give two fixes in at most four sentences.")]
-    call = llm.bind_tools([inspect_pod], tool_choice="inspect_pod").invoke(messages)
+    tool_model = llm.bind_tools([inspect_pod], tool_choice="inspect_pod")
+    if streaming:
+        call_chunks = list(tool_model.stream(messages))
+        assert call_chunks
+        call = message_chunk_to_message(sum(call_chunks[1:], call_chunks[0]))
+    else:
+        call = tool_model.invoke(messages)
     assert call.tool_calls and all(tc["name"] == "inspect_pod" for tc in call.tool_calls)
     messages += [call, *[
         ToolMessage(content=inspect_pod.invoke({}), tool_call_id=tc["id"])
