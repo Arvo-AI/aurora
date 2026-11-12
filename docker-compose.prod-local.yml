@@ -144,7 +144,6 @@ x-common-env: &common-env
   NEXT_PUBLIC_GITHUB_APP_SLUG: ${NEXT_PUBLIC_GITHUB_APP_SLUG}
   GITHUB_APP_WEBHOOK_URL: ${GITHUB_APP_WEBHOOK_URL}
   GITHUB_APP_SETUP_URL: ${GITHUB_APP_SETUP_URL}
-  GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
   GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
   GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
   # Enable/disable Incident Prevention (PR change-gating). Set to false to turn off entirely.
@@ -237,6 +236,8 @@ services:
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
       GUNICORN_THREADS: ${GUNICORN_THREADS:-32}
       <<: *common-env
+      # GitHub App key fallback: only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       OTEL_SERVICE_NAME: aurora-server
       FLASK_PORT: ${FLASK_PORT}
@@ -346,6 +347,8 @@ services:
         -Q high,celery
     environment:
       <<: *common-env
+      # GitHub App key fallback: only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       OTEL_SERVICE_NAME: celery-worker
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
@@ -503,6 +506,8 @@ services:
       - terraform-workdir:/app/terraform_workdir
     environment:
       <<: *common-env
+      # GitHub App key fallback: only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       OTEL_SERVICE_NAME: chatbot
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}

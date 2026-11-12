@@ -74,7 +74,6 @@ x-common-env: &common-env
   NEXT_PUBLIC_GITHUB_APP_SLUG: ${NEXT_PUBLIC_GITHUB_APP_SLUG}
   GITHUB_APP_WEBHOOK_URL: ${GITHUB_APP_WEBHOOK_URL}
   GITHUB_APP_SETUP_URL: ${GITHUB_APP_SETUP_URL}
-  GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
   # Enable/disable Incident Prevention (PR change-gating). Set to false to turn off entirely.
   NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION: ${NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION:-true}
   # Slack OAuth (needed by celery_worker for formatting responses)
@@ -218,6 +217,8 @@ services:
     command: ["sh", "-c", "gunicorn main_compute:app --bind 0.0.0.0:${FLASK_PORT:-5080} -k gthread --threads ${GUNICORN_THREADS:-32} --workers ${GUNICORN_WORKERS:-2} --timeout 300 --preload"]
     environment:
       <<: *common-env
+      # GitHub App key fallback: only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       OTEL_SERVICE_NAME: aurora-server
       # The SSE stream cap in routes/incidents_sse.py is bounded by the thread
       # count; pass it in so the cap matches the command line above.
@@ -298,6 +299,8 @@ services:
         -Q high,celery
     environment:
       <<: *common-env
+      # GitHub App key fallback: only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       OTEL_SERVICE_NAME: celery-worker
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
@@ -455,6 +458,8 @@ services:
       - terraform-workdir:/app/terraform_workdir
     environment:
       <<: *common-env
+      # GitHub App key fallback: only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       OTEL_SERVICE_NAME: chatbot
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}

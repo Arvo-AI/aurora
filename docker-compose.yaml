@@ -100,7 +100,6 @@ x-common-env: &common-env
   NEXT_PUBLIC_GITHUB_APP_SLUG: ${NEXT_PUBLIC_GITHUB_APP_SLUG}
   GITHUB_APP_WEBHOOK_URL: ${GITHUB_APP_WEBHOOK_URL}
   GITHUB_APP_SETUP_URL: ${GITHUB_APP_SETUP_URL}
-  GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
   GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
   GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
   # Enable/disable Incident Prevention (PR change-gating). Set to false to turn off entirely.
@@ -241,6 +240,8 @@ services:
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
       GUNICORN_THREADS: ${GUNICORN_THREADS:-32}
       <<: *common-env
+      # GitHub App key fallback: only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       FLASK_PORT: ${FLASK_PORT:-5080}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
@@ -347,6 +348,8 @@ services:
         -Q high,celery
     environment:
       <<: *common-env
+      # GitHub App key fallback: only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
@@ -484,6 +487,8 @@ services:
       - terraform-workdir:/app/terraform_workdir
     environment:
       <<: *common-env
+      # GitHub App key fallback: only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
 

@@ -67,7 +67,12 @@ def clear_cache() -> None:
 
 def _read_system_secret(logical_name: str, *, secret_label: str) -> str:
     """Read a system secret from the active backend (Vault or AWS SM)."""
-    backend = get_secrets_backend()
+    try:
+        backend = get_secrets_backend()
+    except Exception as exc:
+        raise GitHubAppConfigError(
+            f"Secrets backend is misconfigured while reading GitHub App {secret_label}."
+        ) from exc
 
     if not backend.is_available():
         raise GitHubAppConfigError(
@@ -116,7 +121,7 @@ def _is_permission_denied(exc: BaseException) -> bool:
     return False
 
 
-def _normalize_private_key(raw: str) -> str:
+def _decode_private_key_text(raw: str) -> str:
     """Accept PEM text (real or escaped newlines) or base64 of the PEM file."""
     value = raw.strip()
     if _PEM_MARKER in value:
@@ -130,6 +135,25 @@ def _normalize_private_key(raw: str) -> str:
     raise GitHubAppConfigError(
         f"{_PRIVATE_KEY_ENV_VAR} is set but is neither a PEM key nor base64 of one."
     )
+
+
+def _normalize_private_key(raw: str) -> str:
+    """Decode the env value and check it parses as a private key.
+
+    PyJWT signs the App JWT with ``cryptography``'s PEM loader, so loading the
+    key here catches a truncated or non-private PEM at startup instead of on
+    the first GitHub call.
+    """
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+    pem = _decode_private_key_text(raw)
+    try:
+        load_pem_private_key(pem.encode("utf-8"), password=None)
+    except (ValueError, TypeError) as exc:
+        raise GitHubAppConfigError(
+            f"{_PRIVATE_KEY_ENV_VAR} does not contain a valid unencrypted PEM private key."
+        ) from exc
+    return pem
 
 
 def _read_private_key_from_env() -> str:

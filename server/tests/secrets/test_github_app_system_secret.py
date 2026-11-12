@@ -27,9 +27,22 @@ _WEBHOOK_LOGICAL = "github-app/webhook-secret"
 # mocked in these tests, so this is never parsed as a real PEM — kept
 # intentionally non-PEM-shaped so secret scanners (gitleaks) don't flag it.
 _FAKE_PEM = "test-github-app-private-key-material-0000"
-# PEM-shaped only by its marker line, so the env fallback accepts it; the body
-# is not key material.
-_FAKE_PEM_TEXT = "-----BEGIN TEST KEY-----\nnot-real-key-material\n-----END TEST KEY-----"
+
+
+def _generate_test_pem() -> str:
+    """A throwaway RSA key made at test time, so no key material is committed."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode().strip()
+
+
+_FAKE_PEM_TEXT = _generate_test_pem()
 
 
 @pytest.fixture(autouse=True)
@@ -142,7 +155,7 @@ class TestGetAppPrivateKey:
     def test_backend_wins_over_env(self, monkeypatch):
         backend = _mock_backend(value=_FAKE_PEM_TEXT)
         monkeypatch.setattr(vault_keys, "get_secrets_backend", lambda: backend)
-        monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "-----BEGIN other\\nenv-key")
+        monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "env-value-must-be-ignored")
 
         assert vault_keys.get_app_private_key() == _FAKE_PEM_TEXT
 
@@ -176,6 +189,33 @@ class TestGetAppPrivateKey:
 
         with pytest.raises(GitHubAppConfigError, match="neither a PEM key nor base64"):
             vault_keys.get_app_private_key()
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "-----BEGIN",
+            "-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADANBgkq\\n-----END PRIVATE KEY-----",
+            "-----BEGIN PUBLIC KEY-----\\nMFkwEwYHKoZIzj0CAQ\\n-----END PUBLIC KEY-----",
+        ],
+        ids=["marker-only", "truncated-body", "not-a-private-key"],
+    )
+    def test_env_value_that_does_not_parse_raises(self, monkeypatch, value):
+        backend = _mock_backend(available=False)
+        monkeypatch.setattr(vault_keys, "get_secrets_backend", lambda: backend)
+        monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", value)
+
+        with pytest.raises(GitHubAppConfigError, match="valid unencrypted PEM private key"):
+            vault_keys.get_app_private_key()
+        assert vault_keys._cached_private_key is None
+
+    def test_invalid_backend_setting_still_uses_env(self, monkeypatch):
+        def _bad_backend():
+            raise ValueError("unknown SECRETS_BACKEND")
+
+        monkeypatch.setattr(vault_keys, "get_secrets_backend", _bad_backend)
+        monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", _FAKE_PEM_TEXT)
+
+        assert vault_keys.get_app_private_key() == _FAKE_PEM_TEXT
 
     def test_no_env_keeps_backend_error(self, monkeypatch):
         backend = _mock_backend(available=False)
