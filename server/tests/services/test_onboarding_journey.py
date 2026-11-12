@@ -39,12 +39,26 @@ def test_unverified_or_unsubscribed_accounts_get_nothing():
 
 
 def test_a_new_connection_is_announced_once_and_bursts_are_batched():
-    s = state(sent={"welcome": at(minutes=4)}, parts_done=["alerts"], pending_parts=["alerts"])
-    # Right after the welcome: hold, so a second connect can join the same email.
-    assert due_email(s, at(minutes=10)) is None
-    assert due_email(s, at(minutes=30)) == Due("connected", ("alerts",))
-    s.sent["connected:alerts"] = at(minutes=30)
-    assert due_email(s, at(minutes=50)) is None
+    # Welcome went out hours ago; the burst window still starts at the first connect.
+    s = state(sent={"welcome": at(minutes=4)}, parts_done=["alerts", "cloud"],
+              pending_parts=["alerts", "cloud"], pending_since=at(hours=5))
+    assert due_email(s, at(hours=5, minutes=5)) is None
+    assert due_email(s, at(hours=5, minutes=25)) == Due("connected", ("alerts", "cloud"))
+    s.sent["connected:alerts"] = s.sent["connected:cloud"] = at(hours=5, minutes=25)
+    assert due_email(s, at(hours=5, minutes=50)) is None
+
+
+def test_a_tool_removed_before_the_email_is_not_announced():
+    s = state(sent={"welcome": at(minutes=4)}, parts_done=[], parts_ever=["alerts"],
+              pending_parts=["alerts"], pending_since=at(hours=1))
+    assert due_email(s, at(hours=2)) is None
+
+
+def test_a_failed_check_does_not_count_as_nothing_connected():
+    # The live check said nothing, but alerts were seen connected before.
+    sent = {"welcome": at(minutes=4), "checkin": at(days=1)}
+    s = state(sent=sent, parts_done=[], parts_ever=["alerts"])
+    assert due_email(s, at(days=3, hours=1)) is None
 
 
 def test_checkin_a_day_in_unless_the_stack_is_done():
@@ -81,7 +95,8 @@ def test_guide_photo_can_live_on_the_app_but_not_on_another_host():
         {"key": "b", "name": "Bo Kim", "email": "bo@example.com", "avatar_url": "//evil.example/bo.jpg"},
     ])
     a, b = guides.load_guides(raw)
-    assert a.avatar_url == "/guides/ada.jpg" and b.avatar_url == ""
+    assert a.avatar_url == "/guides/ada.jpg"
+    assert b.avatar_url == ""
 
 
 def test_guide_links_must_be_https():
@@ -90,7 +105,8 @@ def test_guide_links_must_be_https():
         "avatar_url": "javascript:alert(1)", "booking_url": "http://cal.example.com/ada",
     }])
     (g,) = guides.load_guides(raw)
-    assert g.avatar_url == "" and g.booking_url == ""
+    assert g.avatar_url == ""
+    assert g.booking_url == ""
 
 
 def test_guides_without_an_address_are_skipped_and_bad_json_means_none():
@@ -118,6 +134,19 @@ def test_unsubscribe_token_only_works_for_its_own_user(monkeypatch):
     assert unsubscribe_token_ok("user-1", tok)
     assert not unsubscribe_token_ok("user-2", tok)
     assert not unsubscribe_token_ok("user-1", "")
+
+
+def test_no_emails_when_the_unsubscribe_link_would_point_at_localhost(monkeypatch):
+    monkeypatch.setenv("ONBOARDING_EMAILS_ENABLED", "true")
+    monkeypatch.setenv("ONBOARDING_UNSUBSCRIBE_SECRET", "s3cret")
+    for v in ("ONBOARDING_GRAPH_TENANT_ID", "ONBOARDING_GRAPH_CLIENT_ID", "ONBOARDING_GRAPH_CLIENT_SECRET"):
+        monkeypatch.setenv(v, "x")
+    monkeypatch.delenv("NGROK_URL", raising=False)
+    from services.onboarding import sender
+    monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "http://localhost:5080")
+    assert not sender.emails_enabled()
+    monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "https://api.example.com")
+    assert sender.emails_enabled()
 
 
 def test_no_secret_means_no_valid_tokens(monkeypatch):

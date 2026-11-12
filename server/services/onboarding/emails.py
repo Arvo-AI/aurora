@@ -55,6 +55,9 @@ class Stack:
 
 Block = P | Button | Stack
 
+CONTINUE_SETUP = "Continue setup"
+OPEN_SETUP = "Open setup"
+
 
 def _app_url(ctx: EmailContext) -> str:
     parts = urlsplit(ctx.setup_url)
@@ -91,7 +94,7 @@ def _welcome(ctx: EmailContext) -> tuple[str, list[Block]]:
         blocks += [
             P("Aurora gets really useful once it can see four parts of your stack. Here's where you are:"),
             Stack(ctx.parts_done),
-            Button("Continue setup", ctx.setup_url),
+            Button(CONTINUE_SETUP, ctx.setup_url),
         ]
     if g.booking_url:
         blocks += [
@@ -114,7 +117,7 @@ def _connected(ctx: EmailContext, parts: tuple[str, ...]) -> tuple[str, list[Blo
     if nxt:
         blocks += [
             P(f"Next up is {nxt}. It takes a few minutes."),
-            Button("Continue setup", ctx.setup_url),
+            Button(CONTINUE_SETUP, ctx.setup_url),
             P("If anything in setup was confusing, reply and tell me. I read everything."),
         ]
     else:
@@ -133,14 +136,14 @@ def _checkin(ctx: EmailContext) -> tuple[str, list[Block]]:
               "something got in the way: a permission you don't have, a tool we don't support yet, or just no time."),
             P("Which was it? Reply and I'll help, or grab 15 minutes and we'll connect it together."),
             *_booking(ctx, quiet=False),
-            Button("Open setup", ctx.setup_url, quiet=bool(ctx.guide.booking_url)),
+            Button(OPEN_SETUP, ctx.setup_url, quiet=bool(ctx.guide.booking_url)),
         ]
     done = join_words([PARTS[p].noun for p in ctx.parts_done])
     return "How's the setup going?", [
         P(f"Aurora can see {done} so far."),
         Stack(ctx.parts_done),
         P(f"The piece that makes the biggest difference next is {_next_phrase(ctx)}. Is anything blocking you there?"),
-        Button("Continue setup", ctx.setup_url),
+        Button(CONTINUE_SETUP, ctx.setup_url),
         *([P("Happy to do it with you on a call."), *_booking(ctx)] if ctx.guide.booking_url else []),
     ]
 
@@ -153,9 +156,9 @@ def _nudge3(ctx: EmailContext) -> tuple[str, list[Block]]:
 
 def _nudge7(ctx: EmailContext) -> tuple[str, list[Block]]:
     return "Should I stop emailing?", [
-        P("Nothing is connected yet, so this is my last setup email. If you come back to it, "
+        P("Nothing is connected yet, so this is the last time I'll nudge you about it. If you come back to it, "
           "everything is where you left it."),
-        Button("Open setup", ctx.setup_url),
+        Button(OPEN_SETUP, ctx.setup_url),
         *([P("A call works too, or just reply."), *_booking(ctx)] if ctx.guide.booking_url else [P("A reply works too.")]),
         P("Thanks for trying Aurora."),
     ]
@@ -208,7 +211,7 @@ def _html_block(b: Block) -> str:
             f'<span style="display:inline-block;width:16px;height:16px;line-height:16px;border-radius:8px;vertical-align:-3px;'
             f'background:{_GREEN};color:#fff;font-size:11px;text-align:center;font-weight:700">&#10003;</span>'
             if on else
-            f'<span style="display:inline-block;width:14px;height:14px;border-radius:8px;border:1px solid #c4c9cf;vertical-align:-3px"></span>'
+            '<span style="display:inline-block;width:14px;height:14px;border-radius:8px;border:1px solid #c4c9cf;vertical-align:-3px"></span>'
         )
         cells.append(
             f'<td style="padding:10px 12px;font-family:{_FONT};font-size:13px;color:{_INK if on else _MUTED};'

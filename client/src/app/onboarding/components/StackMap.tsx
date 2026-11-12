@@ -31,6 +31,13 @@ const ICONS: Record<StackPartId, LucideIcon> = {
 
 const pct = (v: number, of: number) => `${(v / of) * 100}%`
 
+// Lit on first load: draw in sequence. Lit later: draw right away.
+function drawDelay(reduce: boolean, sequenceIndex: number): number {
+  if (reduce) return 0
+  if (sequenceIndex >= 0) return 0.25 + sequenceIndex * 0.18
+  return 0.05
+}
+
 function Spark({ path, delay }: Readonly<{ path: string; delay: number }>) {
   // SMIL begin times count from page load, so a spark added later is started
   // by hand; begin="indefinite" keeps it still until then.
@@ -84,7 +91,7 @@ export default function StackMap({ connected, initiallyLit, reduce, onSelect }: 
           const n = NODES[p.id]
           const lit = connectedIn(p, connected).length > 0
           const seq = initialOrder.indexOf(p.id)
-          const delay = reduce ? 0 : seq >= 0 ? 0.25 + seq * 0.18 : 0.05
+          const delay = drawDelay(reduce, seq)
           return (
             <g key={p.id}>
               <path d={n.path} fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="1.5" strokeDasharray="2 5" strokeLinecap="round" />

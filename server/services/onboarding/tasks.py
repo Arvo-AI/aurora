@@ -58,4 +58,4 @@ def kick_org(org_id: str | None) -> None:
         for user_id in journeys_in_org(org_id):
             evaluate_journey_task.apply_async(args=[user_id], countdown=KICK_DELAY_S)
     except Exception:
-        logger.debug("[ONBOARDING] kick failed", exc_info=True)
+        logger.warning("[ONBOARDING] kick failed; the periodic sweep will pick it up", exc_info=True)

@@ -20,6 +20,7 @@ import hmac
 import logging
 import os
 import smtplib
+import ssl
 import threading
 import time
 from email.mime.multipart import MIMEMultipart
@@ -48,6 +49,9 @@ def emails_enabled() -> bool:
         os.getenv("ONBOARDING_EMAILS_ENABLED", "").lower() == "true"
         and bool(_unsubscribe_secret())
         and transport() is not None
+        # Every email carries an unsubscribe link; one pointing at localhost
+        # can't be opened by the recipient, so don't send at all.
+        and external_backend_url().startswith("https://")
     )
 
 
@@ -150,7 +154,7 @@ def _send_graph(guide: Guide, msg: MIMEMultipart) -> bool:
 def _send_smtp(msg: MIMEMultipart) -> bool:
     try:
         with smtplib.SMTP(os.getenv("SMTP_HOST"), int(os.getenv("SMTP_PORT", "587")), timeout=30) as server:
-            server.starttls()
+            server.starttls(context=ssl.create_default_context())
             server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASSWORD"))
             server.send_message(msg)
         return True

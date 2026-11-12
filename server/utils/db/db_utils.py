@@ -1255,6 +1255,7 @@ def initialize_tables():
                         emails_enabled BOOLEAN NOT NULL DEFAULT FALSE,
                         known_connectors TEXT[] NOT NULL DEFAULT '{}',
                         pending_parts TEXT[] NOT NULL DEFAULT '{}',
+                        pending_since TIMESTAMP,
                         unsubscribed_at TIMESTAMP,
                         last_checked_at TIMESTAMP,
                         created_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -1263,6 +1264,7 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_onboarding_journeys_active
                         ON onboarding_journeys(created_at) WHERE emails_enabled AND unsubscribed_at IS NULL;
                     CREATE INDEX IF NOT EXISTS idx_onboarding_journeys_org ON onboarding_journeys(org_id);
+                    ALTER TABLE onboarding_journeys ADD COLUMN IF NOT EXISTS pending_since TIMESTAMP;
                 """,
                 "onboarding_emails": """
                     CREATE TABLE IF NOT EXISTS onboarding_emails (

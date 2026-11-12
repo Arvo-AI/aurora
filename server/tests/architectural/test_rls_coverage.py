@@ -17,6 +17,7 @@ RLS_EXCLUSIONS: Set[str] = {
     "users",                      # queried during login before org context is set
     "audit_log",                  # written with explicit org_id outside RLS session scope
     "org_invitations",            # queried during invite/join flows before org context
+    "onboarding_journeys",        # cross-org setup-email sweep; every query filters by user_id or explicit org_id
     "knowledge_base_documents",   # Legacy KB tables kept as migration source data
     "knowledge_base_memory",      # Legacy KB tables kept as migration source data
     "infrastructure_context",     # org_id is the PK; single row per org, queried directly

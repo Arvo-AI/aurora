@@ -224,10 +224,14 @@ x-common-env: &common-env
   ONBOARDING_SKIP_EMAIL_DOMAINS: ${ONBOARDING_SKIP_EMAIL_DOMAINS:-}
   ONBOARDING_UNSUBSCRIBE_SECRET: ${ONBOARDING_UNSUBSCRIBE_SECRET:-}
   ONBOARDING_TEAM_WEBHOOK_URL: ${ONBOARDING_TEAM_WEBHOOK_URL:-}
+  FRONTEND_URL: ${FRONTEND_URL}
+
+# Microsoft Graph credentials for setup emails: only the API server (which
+# checks whether email is on) and the Celery worker (which sends) get them.
+x-onboarding-mail-env: &onboarding-mail-env
   ONBOARDING_GRAPH_TENANT_ID: ${ONBOARDING_GRAPH_TENANT_ID:-}
   ONBOARDING_GRAPH_CLIENT_ID: ${ONBOARDING_GRAPH_CLIENT_ID:-}
   ONBOARDING_GRAPH_CLIENT_SECRET: ${ONBOARDING_GRAPH_CLIENT_SECRET:-}
-  FRONTEND_URL: ${FRONTEND_URL}
 
 services:
   aurora-server:
@@ -248,7 +252,7 @@ services:
     environment:
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
       GUNICORN_THREADS: ${GUNICORN_THREADS:-32}
-      <<: *common-env
+      <<: [*common-env, *onboarding-mail-env]
       TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       OTEL_SERVICE_NAME: aurora-server
       FLASK_PORT: ${FLASK_PORT}
@@ -357,7 +361,7 @@ services:
         --concurrency=${CELERY_CONCURRENCY:-4}
         -Q high,celery
     environment:
-      <<: *common-env
+      <<: [*common-env, *onboarding-mail-env]
       TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       OTEL_SERVICE_NAME: celery-worker
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
