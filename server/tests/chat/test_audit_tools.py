@@ -164,7 +164,7 @@ def test_search_conversations_snippets_only_in_private_chats(env, meta, private)
 def test_get_conversation_caps_messages_fields_and_lists_failures(env):
     out = json.loads(tools.get_conversation(user_id="a", conversation_id="s1"))
     assert env["calls"]["transcript"] == {"org_id": "org-1", "sid": "s1"}
-    assert len(out["messages"]) == tools.TRANSCRIPT_MESSAGES and out["messages_shown"] == "last 20 of 30"
+    assert len(out["messages"]) == tools.TRANSCRIPT_MESSAGES and out["messages_shown"].startswith("last 20 of 30")
     last = out["messages"][-1]
     assert len(last["text"]) <= tools.TRANSCRIPT_TEXT_CHARS + 20
     (failed,) = last["failed_tool_calls"]            # only the failed call, not the successful one
@@ -192,3 +192,71 @@ def test_unknown_context_is_treated_as_shared(env, monkeypatch):
 
 def test_requires_user():
     assert "error" in json.loads(tools.search_conversations())
+
+
+
+# --- finding exact text in a conversation -----------------------------------
+
+PHRASE = "Nothing was validated because no root cause was confirmed"
+
+
+@pytest.fixture
+def tail_transcript(env, monkeypatch):
+    # The phrase sits past the 1,500-character excerpt of message 4, next to a secret.
+    text = ("Classification: INCONCLUSIVE. " + "x" * 2500 + " " + PHRASE
+            + ". Then psql --password hunter2 was run.")
+    monkeypatch.setattr(audit, "get_transcript", lambda c, org_id, sid: {
+        "chat": {"id": sid, "title": "RCA", "user": {"email": "b@x.io"}, "source": "rca", "status": "completed",
+                 "created_at": "t", "updated_at": "t", "message_count": 6, "link": f"/chat?sessionId={sid}"},
+        "messages": [{"id": i, "sender": "bot", "toolCalls": [],
+                      "text": audit.scrub(text) if i == 4 else f"m{i} " + ("root cause " if i == 2 else "")}
+                     for i in range(6)],
+        "issues": [],
+    })
+    return text
+
+
+def test_query_finds_a_sentence_past_the_excerpt_limit(tail_transcript):
+    assert tail_transcript.index(PHRASE) > tools.TRANSCRIPT_TEXT_CHARS
+    out = json.loads(tools.get_conversation(user_id="a", conversation_id="s1", query=PHRASE))
+    (hit,) = out["query"]["occurrences"]
+    assert hit["message_index"] == 4 and PHRASE in hit["text"]
+    assert "hunter2" not in hit["text"]                      # redaction holds inside the window
+    assert len(hit["text"]) <= len(PHRASE) + 2 * tools.QUERY_WINDOW_RADIUS + 2
+
+
+def test_query_tolerates_case_punctuation_and_line_breaks(tail_transcript):
+    out = json.loads(tools.get_conversation(user_id="a", conversation_id="s1", query='"nothing was\nvalidated"'))
+    assert out["query"]["found"] == 1
+
+
+def test_query_lists_every_message_that_contains_it(tail_transcript):
+    out = json.loads(tools.get_conversation(user_id="a", conversation_id="s1", query="root cause"))
+    assert [h["message_index"] for h in out["query"]["occurrences"]] == [2, 4]
+
+
+def test_message_index_reads_one_message_in_full(tail_transcript):
+    out = json.loads(tools.get_conversation(user_id="a", conversation_id="s1", message_index=4))
+    assert PHRASE in out["message"]["text"] and "hunter2" not in out["message"]["text"]
+    missing = json.loads(tools.get_conversation(user_id="a", conversation_id="s1", message_index=99))
+    assert "error" in missing
+
+
+@pytest.mark.parametrize("kwargs", [{"query": PHRASE}, {"message_index": 4}])
+def test_shared_channels_still_get_metadata_only(env, tail_transcript, kwargs):
+    env["meta"] = {"source": "slack", "channel": "C0123"}
+    out = json.loads(tools.get_conversation(user_id="a", conversation_id="s1", **kwargs))
+    assert out["note"] == tools.SHARED_CHANNEL_NOTE
+    assert "query" not in out and "message" not in out and "messages" not in out
+
+
+def test_search_conversations_reports_match_type(env, monkeypatch):
+    monkeypatch.setattr(audit, "list_chats", lambda c, org_id, f: {
+        "chats": [{"id": "s1", "title": "t", "user": {}, "source": "rca", "status": "completed",
+                   "created_at": "t", "updated_at": "t", "message_count": 6, "issues": {}, "failed_tool_calls": 0,
+                   "match": {"message_index": 4, "sender": "aurora", "text": PHRASE, "match_type": "exact"},
+                   "match_type": "exact", "link": "/chat?sessionId=s1"}],
+        "total": 1, "issue_counts": [],
+    })
+    out = json.loads(tools.search_conversations(user_id="a", query=PHRASE))
+    assert out["conversations"][0]["match_type"] == "exact"

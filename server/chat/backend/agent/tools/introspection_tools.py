@@ -876,6 +876,9 @@ SHARED_CHANNEL_NOTE = (
 TRANSCRIPT_MESSAGES = 20          # most recent messages returned by get_conversation
 TRANSCRIPT_TEXT_CHARS = 1500      # per message, after redaction
 TRANSCRIPT_INPUT_CHARS = 300      # per failed tool call input
+QUERY_WINDOW_RADIUS = 300         # chars shown on each side of a query occurrence
+QUERY_MAX_HITS = 20               # occurrences returned per conversation
+FULL_MESSAGE_CHARS = 12_000       # cap when reading one message in full
 AUDIT_PAGE_MAX = 50
 
 
@@ -1028,6 +1031,8 @@ def search_conversations(
             # Snippets are other people's words: only where the answer stays private.
             "match": ({"sender": match["sender"], "text": match["text"]} if private else {"matched": True})
             if match else None,
+            # exact: one message contains the phrase; all_words: the words appear somewhere.
+            **({"match_type": c["match_type"]} if "match_type" in c else {}),
             "link": c["link"],
         })
     out = {"conversations": chats, "total_matching": result["total"], "offset": start,
@@ -1040,11 +1045,48 @@ def search_conversations(
 
 class GetConversationArgs(BaseModel):
     conversation_id: str = Field(description="The conversation id, from search_conversations or a link.")
+    query: Optional[str] = Field(
+        default=None,
+        description=(
+            "Exact text to look for. Returns every message containing it, with the redacted text "
+            "around each occurrence. Use this to confirm and quote an exact sentence."
+        ),
+    )
+    message_index: Optional[int] = Field(
+        default=None, description="Read this one message in full (redacted, up to 12,000 characters).",
+    )
+
+
+def _query_hits(messages: list, query: str) -> list[dict]:
+    """Redacted windows around every occurrence of ``query`` (already-redacted message text)."""
+    from services.monitor.chat_audit import phrase_pattern
+
+    words = re.findall(r"\w+", query or "")
+    if not words:
+        raise IntrospectionError("query needs at least one word.")
+    pattern = phrase_pattern(" ".join(words))
+    hits = []
+    for m in messages:
+        for found in pattern.finditer(m["text"]):
+            start = max(0, found.start() - QUERY_WINDOW_RADIUS)
+            end = min(len(m["text"]), found.end() + QUERY_WINDOW_RADIUS)
+            hits.append({
+                "message_index": m["id"], "from": "user" if m["sender"] == "user" else "aurora",
+                "position": found.start(),
+                "text": ("…" if start else "") + m["text"][start:end] + ("…" if end < len(m["text"]) else ""),
+            })
+            if len(hits) >= QUERY_MAX_HITS:
+                return hits
+    return hits
 
 
 @introspection_tool
-def get_conversation(conversation_id, *, user_id, **_) -> dict:
-    """One chat's read-only, redacted summary: its latest messages and every failed tool call."""
+def get_conversation(conversation_id, query=None, message_index=None, *, user_id, **_) -> dict:
+    """One chat's read-only, redacted summary: its latest messages and every failed tool call.
+
+    With ``query``, every occurrence of that text instead; with ``message_index``,
+    that one message in full. Message text is already redacted by get_transcript.
+    """
     from services.monitor.chat_audit import get_transcript
 
     private = _answer_is_private()
@@ -1073,8 +1115,30 @@ def get_conversation(conversation_id, *, user_id, **_) -> dict:
         out["note"] = SHARED_CHANNEL_NOTE
         return out
 
+    if query:
+        hits = _query_hits(transcript["messages"], query)
+        out["query"] = {"text": query, "found": len(hits), "occurrences": hits}
+        return out
+    if message_index is not None:
+        message = next((m for m in transcript["messages"] if m["id"] == message_index), None)
+        if message is None:
+            raise IntrospectionError("No message with that index in this conversation.")
+        out["message"] = {
+            "index": message["id"], "from": "user" if message["sender"] == "user" else "aurora",
+            "text": truncate(message["text"], FULL_MESSAGE_CHARS),
+            "failed_tool_calls": [
+                {"tool": tc["tool_name"], "input": truncate(tc["input"], TRANSCRIPT_INPUT_CHARS),
+                 "reason": tc["error"] or ""}
+                for tc in message["toolCalls"] if tc["status"] == "error"
+            ],
+        }
+        return out
+
     shown = transcript["messages"][-TRANSCRIPT_MESSAGES:]
-    out["messages_shown"] = f"last {len(shown)} of {chat['message_count']}"
+    out["messages_shown"] = (
+        f"last {len(shown)} of {chat['message_count']}, each up to {TRANSCRIPT_TEXT_CHARS} characters; "
+        "pass query to find exact text anywhere, or message_index to read one message in full"
+    )
     out["messages"] = [
         {
             "index": m["id"], "from": "user" if m["sender"] == "user" else "aurora",

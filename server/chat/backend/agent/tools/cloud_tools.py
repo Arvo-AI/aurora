@@ -2283,7 +2283,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                         "search_conversations",
                         "Search every chat in this org (all users and channels: web, Slack, Teams, "
                         "Google Chat, RCAs, Actions, scheduled runs) by period, source, status, user, "
-                        "issue type and full text over questions and replies. Returns title, user, "
+                        "issue type and full text over questions and replies. A quoted query or one of 3+ "
+                        "words is matched as a phrase first: match_type 'exact' means one message "
+                        "contains it, 'all_words' only that the words appear. Returns title, user, "
                         "source, status, dates, message count, issue counts, a redacted matching "
                         "snippet (only in private chats) and a link. Read-only.",
                         SearchConversationsArgs,
@@ -2303,9 +2305,12 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     (
                         get_conversation,
                         "get_conversation",
-                        "Read one chat from search_conversations: its latest messages (redacted, capped) "
-                        "and every failed tool call with its reason. In a shared channel it returns only "
-                        "metadata, issues and the link. Read-only.",
+                        "Read one chat from search_conversations: its latest messages (redacted, capped "
+                        "at 1,500 characters each) and every failed tool call with its reason. To check "
+                        "an exact sentence, pass query: it returns every message containing that text, "
+                        "with the redacted text around each occurrence. To read one message in full, pass "
+                        "message_index. In a shared channel it returns only metadata, issues and the link. "
+                        "Read-only.",
                         GetConversationArgs,
                     ),
                 ]

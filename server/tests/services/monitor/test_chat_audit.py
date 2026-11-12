@@ -187,7 +187,7 @@ def test_list_search_returns_redacted_snippet_with_message_anchor():
     cur = Cursor([
         ("SELECT COUNT(*) FROM chat_sessions", ["count"], [(1,)]),
         ("ORDER BY cs.updated_at DESC", _CHAT_COLS, [_chat_row(source="web")]),
-        ("JOIN LATERAL", ["id", "msg_index", "sender", "text"], [("s1", 1, "bot", text)]),
+        ("JOIN LATERAL", ["id", "msg_index", "sender", "text", "exact"], [("s1", 1, "bot", text, False)]),
     ])
     match = ca.list_chats(cur, "org-1", ChatFilters.parse({"q": "AccessDenied"}))["chats"][0]["match"]
     assert match["message_index"] == 1 and match["sender"] == "aurora"
@@ -270,7 +270,9 @@ def test_snippet_window_is_taken_around_the_match():
     ca._snippets_for(cur, "o", ["s1"], '"permission denied"')
     sql, params = cur.calls[0]
     assert "strpos(lower(e.m->>'text'), %s)" in sql
-    assert params[:3] == ("permission", ca.SNIPPET_WINDOW // 2, ca.SNIPPET_WINDOW)
+    # A quoted query anchors on the whole phrase, falling back to its first word.
+    assert params[:4] == ("permission denied", "permission", ca.SNIPPET_WINDOW // 2, ca.SNIPPET_WINDOW)
+    assert params[4] is True and params[5] == "permission denied"
 
 
 # --- redaction of real-world shapes (review findings) -----------------------
@@ -493,3 +495,59 @@ def test_links_point_to_the_incident_or_the_chat():
 ])
 def test_private_answer_channel(meta, private):
     assert ca.private_answer_channel(meta) is private
+
+
+
+# --- phrase search (exact vs all words) ------------------------------------
+
+PHRASE = "Nothing was validated because no root cause was confirmed"
+TAIL_MESSAGE = ("Classification: INCONCLUSIVE. " + "Evidence was reviewed across services. " * 60
+                + PHRASE + ". Next steps: rerun with --password hunter2 removed.")
+
+
+@pytest.mark.parametrize("query, phrase", [
+    (PHRASE, "Nothing was validated because no root cause was confirmed"),
+    ('"root cause"', "root cause"),
+    ("root cause", None),             # two unquoted words: not a phrase
+    ("", None), ('""', None),
+])
+def test_phrase_of(query, phrase):
+    assert ca.phrase_of(query) == phrase
+
+
+def test_phrase_hits_rank_first_using_the_indexed_expression():
+    cur = Cursor([("SELECT COUNT(*) FROM chat_sessions", ["count"], [(2,)])])
+    ca.list_chats(cur, "org-1", ChatFilters.parse({"q": PHRASE}))
+    sql, params = next(c for c in cur.calls if "ORDER BY" in c[0] and "LIMIT %s OFFSET %s" in c[0])
+    assert f"ORDER BY ({ca.SEARCH_DOC_SQL} @@ phraseto_tsquery('simple', %s)) DESC, cs.updated_at DESC" in sql
+    assert PHRASE in params
+    # Short unquoted searches keep plain recency order.
+    cur = Cursor([("SELECT COUNT(*) FROM chat_sessions", ["count"], [(2,)])])
+    ca.list_chats(cur, "org-1", ChatFilters.parse({"q": "timeout"}))
+    sql, _ = next(c for c in cur.calls if "LIMIT %s OFFSET %s" in c[0])
+    assert "phraseto_tsquery" not in sql
+
+
+def test_exact_and_all_words_matches_are_labelled_exact_first():
+    rows = [_chat_row("exact"), _chat_row("spread")]
+    cur = Cursor([
+        ("SELECT COUNT(*) FROM chat_sessions", ["count"], [(2,)]),
+        ("JOIN LATERAL", ["id", "msg_index", "sender", "text", "exact"], [("exact", 4, "bot", TAIL_MESSAGE, True)]),
+        ("LIMIT %s OFFSET %s", _CHAT_COLS, rows),
+    ])
+    out = ca.list_chats(cur, "org-1", ChatFilters.parse({"q": PHRASE}))
+    exact, spread = out["chats"]
+    assert exact["match_type"] == "exact" and exact["match"]["message_index"] == 4
+    assert spread["match_type"] == "all_words" and spread["match"] is None   # words only across messages
+
+
+def test_snippet_centres_on_the_phrase_in_a_messages_tail_and_redacts():
+    snippet = ca._snippet(TAIL_MESSAGE, PHRASE)
+    assert PHRASE in snippet and "Classification" not in snippet
+    assert "hunter2" not in ca._snippet(TAIL_MESSAGE, "rerun removed next steps")
+
+
+def test_snippet_without_phrase_picks_the_densest_cluster_of_words():
+    text = "alpha " + "filler " * 200 + "alpha beta gamma together " + "filler " * 200 + "gamma"
+    snippet = ca._snippet(text, "alpha beta")
+    assert "alpha beta gamma together" in snippet

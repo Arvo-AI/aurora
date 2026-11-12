@@ -210,13 +210,54 @@ def _terms(query: str) -> list[str]:
     return [t for t in re.findall(r"[\w.-]+", query.lower()) if len(t) > 1 and t not in ("or", "and")]
 
 
-def _snippet(text: str, query: str) -> str:
-    """A window of ``text`` around the first query term (or its start), cut after redaction."""
-    text = scrub(text)
+# A search reads as a phrase when it is quoted or has this many words; phrase
+# hits then rank first and are labelled "exact".
+PHRASE_MIN_WORDS = 3
+
+
+def phrase_of(query: Optional[str]) -> Optional[str]:
+    """The words of ``query`` as a phrase to look for, or None for a short unquoted search."""
+    q = (query or "").strip()
+    quoted = len(q) >= 2 and q[0] == q[-1] == '"'
+    words = re.findall(r"\w+", q[1:-1] if quoted else q)
+    if words and (quoted or len(words) >= PHRASE_MIN_WORDS):
+        return " ".join(words)
+    return None
+
+
+def phrase_pattern(phrase: str) -> re.Pattern:
+    """Case-insensitive pattern for a phrase, tolerant of punctuation and line breaks between words."""
+    return re.compile(r"\W+".join(re.escape(w) for w in phrase.split()), re.IGNORECASE)
+
+
+def _best_center(text: str, query: str) -> int:
+    """Where to centre a snippet: the phrase if present, else the densest cluster of query words."""
+    phrase = phrase_of(query)
+    if phrase:
+        m = phrase_pattern(phrase).search(text)
+        if m:
+            return (m.start() + m.end()) // 2
     terms = _terms(query)
     lower = text.lower()
-    pos = min((p for p in (lower.find(t) for t in terms) if p >= 0), default=0)
-    start, end = max(0, pos - SNIPPET_RADIUS), min(len(text), pos + SNIPPET_RADIUS)
+    hits = sorted((m.start(), t) for t in terms for m in re.finditer(re.escape(t), lower))
+    if not hits:
+        return 0
+    best, best_count, j = hits[0][0], 0, 0
+    for i, (pos, _) in enumerate(hits):
+        while hits[j][0] < pos - 2 * SNIPPET_RADIUS:
+            j += 1
+        count = len({t for _, t in hits[j:i + 1]})
+        if count > best_count:
+            best, best_count = (hits[j][0] + pos) // 2, count
+    return best
+
+
+def _snippet(text: str, query: str) -> str:
+    """A window of ``text`` around the phrase, or the densest query words, cut after redaction."""
+    text = scrub(text)
+    center = _best_center(text, query) if query else 0
+    start = max(0, center - SNIPPET_RADIUS)
+    end = min(len(text), start + 2 * SNIPPET_RADIUS)
     snippet = text[start:end].replace("\n", " ").strip()
     return ("…" if start else "") + snippet + ("…" if end < len(text) else "")
 
@@ -704,27 +745,38 @@ def _issue_counts_for(cur, org_id: str, chat_ids: list[str], period: str) -> dic
 
 
 def _snippets_for(cur, org_id: str, chat_ids: list[str], query: str) -> dict[str, dict]:
-    """First matching message per chat (bounded to the page's chats)."""
+    """The best matching message per chat (bounded to the page's chats).
+
+    A message containing the phrase wins (``match_type`` "exact"); otherwise the
+    first message containing every word ("all_words"). The window is fetched
+    around the phrase (or the first word) and narrowed in ``_snippet``.
+    """
+    phrase = phrase_of(query)
+    first_term = (_terms(query) or [""])[0]
+    anchor = phrase.lower() if phrase else first_term
     cur.execute(
-        f"""SELECT cs.id, hit.msg_index, hit.sender, hit.text
+        f"""SELECT cs.id, hit.msg_index, hit.sender, hit.text, hit.exact
             FROM chat_sessions cs
             JOIN LATERAL (
-                -- A bounded window around the first term, wherever it is in the message.
                 SELECT (e.idx - 1)::int AS msg_index, e.m->>'sender' AS sender,
                        substr(e.m->>'text',
-                              greatest(strpos(lower(e.m->>'text'), %s) - %s, 1), %s) AS text
+                              greatest(COALESCE(NULLIF(strpos(lower(e.m->>'text'), %s), 0),
+                                                strpos(lower(e.m->>'text'), %s)) - %s, 1), %s) AS text,
+                       (%s AND to_tsvector('simple', COALESCE(e.m->>'text', ''))
+                               @@ phraseto_tsquery('simple', %s)) AS exact
                 FROM jsonb_array_elements({_MESSAGES_ARRAY}) WITH ORDINALITY AS e(m, idx)
                 WHERE to_tsvector('simple', COALESCE(e.m->>'text', ''))
                       @@ websearch_to_tsquery('simple', %s)
-                ORDER BY e.idx LIMIT 1
+                ORDER BY exact DESC, e.idx LIMIT 1
             ) hit ON true
             WHERE cs.org_id = %s AND cs.id = ANY(%s)""",
-        ((_terms(query) or [""])[0], SNIPPET_WINDOW // 2, SNIPPET_WINDOW, query, org_id, chat_ids),
+        (anchor, first_term, SNIPPET_WINDOW // 2, SNIPPET_WINDOW, phrase is not None, phrase or query,
+         query, org_id, chat_ids),
     )
     return {
         sid: {"message_index": idx, "sender": "user" if sender == "user" else "aurora",
-              "text": _snippet(text or "", query)}
-        for sid, idx, sender, text in cur.fetchall()
+              "text": _snippet(text or "", query), "match_type": "exact" if exact else "all_words"}
+        for sid, idx, sender, text, exact in cur.fetchall()
     }
 
 
@@ -755,13 +807,21 @@ def list_chats(cur, org_id: str, f: ChatFilters) -> dict:
     cur.execute(f"SELECT COUNT(*) FROM chat_sessions cs WHERE {where}", tuple(params))
     total = cur.fetchone()[0] or 0
 
+    # A phrase search ranks chats containing the phrase first; the rest only
+    # contain all the words somewhere. Same indexed expression as the filter.
+    phrase = phrase_of(f.query)
+    phrase_order, phrase_params = "", []
+    if phrase:
+        phrase_order = f"({SEARCH_DOC_SQL} @@ phraseto_tsquery('simple', %s)) DESC, "
+        phrase_params = [phrase]
+
     cur.execute(
         f"""SELECT {_CHAT_COLUMNS}
             FROM chat_sessions cs LEFT JOIN users u ON u.id = cs.user_id
             WHERE {where}
-            ORDER BY cs.updated_at DESC, cs.id DESC
+            ORDER BY {phrase_order}cs.updated_at DESC, cs.id DESC
             LIMIT %s OFFSET %s""",
-        tuple(params + [f.per_page, (f.page - 1) * f.per_page]),
+        tuple(params + phrase_params + [f.per_page, (f.page - 1) * f.per_page]),
     )
     rows = fetch_dicts(cur)
     ids = [r["id"] for r in rows]
@@ -780,6 +840,9 @@ def list_chats(cur, org_id: str, f: ChatFilters) -> dict:
             "issues": {cat: n for cat, n in by_cat.items() if cat != OTHER},
             "failed_tool_calls": sum(by_cat.values()),
             "match": snippets.get(r["id"]),
+            # "exact": one message contains the phrase; "all_words": the words
+            # appear, possibly spread across messages.
+            **({"match_type": (snippets.get(r["id"]) or {}).get("match_type", "all_words")} if f.query else {}),
         })
 
     counts_where, counts_params = _chat_where(f, org_id, skip=("status", "issue", "query"))
