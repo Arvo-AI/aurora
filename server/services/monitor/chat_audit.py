@@ -149,8 +149,45 @@ def summarize_input(tool_input) -> str:
     return "" if tool_input in (None, {}, "") else truncate(str(tool_input), INPUT_SUMMARY_MAX_CHARS)
 
 
+# Where tools put the useful part of an error, most specific first.
+# terminal_exec: {"success": false, "chat_output": "<stderr>", ...}
+# cloud_exec multi-target: {"results_by_subscription": {"<id>": {"success": false, "error"|"output": ...}}}
+_ERROR_TEXT_KEYS = ("error", "message", "detail", "details", "stderr", "chat_output", "output", "stdout")
+_MULTI_RESULT_KEYS = ("results_by_subscription", "results_by_account")
+
+
+def _error_text(value, depth: int = 0) -> str:
+    """The human-readable error inside a tool's JSON error payload, or ''."""
+    if depth > 4:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return next((t for t in (_error_text(v, depth + 1) for v in value) if t), "")
+    if not isinstance(value, dict):
+        return ""
+    for key in _MULTI_RESULT_KEYS:
+        results = value.get(key)
+        if isinstance(results, dict):
+            for target, result in results.items():
+                if isinstance(result, dict) and result.get("success") is False:
+                    text = _error_text(result, depth + 1)
+                    if text:
+                        return f"{target}: {text}"
+    for key in (*_ERROR_TEXT_KEYS, "errors"):
+        text = _error_text(value.get(key), depth + 1)
+        if text:
+            return text
+    return ""
+
+
 def failure_reason(error: Optional[str]) -> str:
-    """One redacted line from a stored error body (unwraps ``{"error": ...}`` envelopes)."""
+    """One redacted, readable line from a stored error body.
+
+    Tool errors are often JSON (``{"error": ...}``, terminal_exec's
+    ``chat_output``, per-subscription results); the useful text is pulled out
+    of the envelope, so the reason is never just ``{``.
+    """
     if not error:
         return ""
     text = error.strip()
@@ -158,18 +195,9 @@ def failure_reason(error: Optional[str]) -> str:
         parsed = json.loads(text)
     except (ValueError, TypeError):
         parsed = None
-    if isinstance(parsed, dict):
-        for key in ("error", "message", "detail", "details", "stderr"):
-            value = parsed.get(key)
-            if isinstance(value, dict):
-                value = value.get("message") or json.dumps(_scrub_value(value), default=str)
-            if isinstance(value, str) and value.strip():
-                text = value.strip()
-                break
-        else:
-            errors = parsed.get("errors")
-            if isinstance(errors, list) and errors:
-                text = str(errors[0])
+    if isinstance(parsed, (dict, list)):
+        # Nothing readable inside: show the compact, redacted payload instead.
+        text = _error_text(parsed) or json.dumps(_scrub_value(parsed), default=str)
     text = scrub(text)
     first = next((line.strip() for line in text.splitlines() if line.strip()), "")
     return truncate(first, REASON_MAX_CHARS)

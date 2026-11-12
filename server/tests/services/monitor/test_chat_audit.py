@@ -413,3 +413,41 @@ def test_failure_reason_and_transcript_redact_before_truncating():
     secret_key = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
     assert secret_key[:12] not in ca.scrub_json_text("token: " + secret_key, limit=14)
     assert "hunter2" not in ca.summarize_input({"command": "psql --password hunter2"})
+
+
+# --- readable reasons from JSON tool errors -------------------------------
+
+KUBECTL_STDERR = (
+    'E1112 10:01:02.123456   4242 memcache.go:265] couldn\'t get current server API group list: '
+    'Get "https://10.0.0.5:6443/api?timeout=32s": dial tcp 10.0.0.5:6443: connect: connection refused\n'
+    "The connection to the server 10.0.0.5:6443 was refused - did you specify the right host or port?"
+)
+
+
+def test_reason_from_a_real_terminal_exec_error():
+    # Exactly what terminal_exec returns for a failed command (json.dumps(..., indent=2)).
+    payload = json.dumps({
+        "success": False, "command": "kubectl get pods -A", "final_command": "kubectl get pods -A",
+        "return_code": 1, "chat_output": KUBECTL_STDERR, "working_dir": "/home/aurora", "provider": "terminal",
+    }, indent=2)
+    reason = ca.failure_reason(payload)
+    assert reason != "{" and "connection refused" in reason
+    assert reason.startswith("E1112")
+
+
+def test_reason_from_a_multi_subscription_cloud_exec_error():
+    payload = json.dumps({
+        "success": False, "multi_subscription": True, "command": "az vm list", "provider": "azure",
+        "results_by_subscription": {
+            "sub-ok": {"subscription_id": "sub-ok", "success": True, "output": "[]", "return_code": 0},
+            "sub-bad": {"subscription_id": "sub-bad", "success": False, "return_code": 1,
+                        "output": "(AuthorizationFailed) The client does not have authorization to perform action"},
+        },
+    })
+    assert ca.failure_reason(payload) == (
+        "sub-bad: (AuthorizationFailed) The client does not have authorization to perform action")
+
+
+def test_reason_falls_back_to_redacted_compact_json_never_a_brace():
+    reason = ca.failure_reason(json.dumps({"success": False, "api_key": "abc", "code": 7}, indent=2))
+    assert reason not in ("{", "") and "abc" not in reason

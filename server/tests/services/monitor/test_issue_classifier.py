@@ -110,3 +110,28 @@ def test_real_ask_mode_gate_messages_classify_as_blocked():
 @pytest.mark.parametrize("text", ["Datadog is connected and returning metrics.", "Splunk is now connected."])
 def test_connected_is_not_an_issue(text):
     assert ic.classify_reply(text) is None
+
+
+KUBECTL_REFUSED = (
+    'E1112 10:01:02.123456   4242 memcache.go:265] couldn\'t get current server API group list: '
+    'Get "https://10.0.0.5:6443/api?timeout=32s": dial tcp 10.0.0.5:6443: connect: connection refused\n'
+    "The connection to the server 10.0.0.5:6443 was refused - did you specify the right host or port?"
+)
+
+
+def test_connection_refused_url_timeout_param_is_not_a_timeout():
+    assert ic.classify_tool_error(KUBECTL_REFUSED) == ic.NOT_CONNECTED
+
+
+@pytest.mark.parametrize("text, category", [
+    ("error: current-context is not set", ic.NOT_CONNECTED),
+    ("The connection to the server localhost:8080 was refused", ic.NOT_CONNECTED),
+    ("error: no configuration has been provided, try setting KUBERNETES_MASTER", ic.NOT_CONNECTED),
+    ("context deadline exceeded", ic.TIMEOUT),
+    ("dial tcp 10.0.0.1:443: i/o timeout", ic.TIMEOUT),
+    ("subprocess.TimeoutExpired: Command 'x' timed out after 60 seconds", ic.TIMEOUT),
+    ("504 Gateway Timeout", ic.TIMEOUT),
+    ("aws: error: --cli-read-timeout must be an integer", ic.OTHER),   # the bare word isn't a timeout
+])
+def test_timeout_and_connection_phrases(text, category):
+    assert ic.classify_tool_error(text) == category

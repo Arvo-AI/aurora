@@ -58,7 +58,10 @@ TOOL_ERROR_PATTERNS: tuple[tuple[str, str], ...] = (
     # --- connectors ----------------------------------------------------------
     (NOT_CONNECTED, r"not connected|no (valid )?credentials (found|configured)|please connect|"
                     r"token (may be |has |is )?expired|expired token|credentials (have )?expired|"
-                    r"invalid_grant|re-?authenticate|reconnect"),
+                    r"invalid_grant|re-?authenticate|reconnect|"
+                    # kubectl with no reachable or configured cluster
+                    r"connection refused|connection to the server .* was refused|"
+                    r"current-context is not set|no configuration has been provided"),
     # --- permissions ---------------------------------------------------------
     (MISSING_PERMISSION, r"accessdenied|access denied|unauthorizedoperation|authorizationfailed|"
                          r"is not authorized to perform|not authorized|permission denied|"
@@ -66,7 +69,10 @@ TOOL_ERROR_PATTERNS: tuple[tuple[str, str], ...] = (
                          r"does not have (the )?(required )?permission|forbidden|"
                          r"(^|[^0-9])403([^0-9]|$)|iam permission"),
     # --- timeouts ------------------------------------------------------------
-    (TIMEOUT, r"timed out|timeout|deadline exceeded|timeoutexpired"),
+    # Phrases only: the bare word appears in healthy text, e.g. kubectl's
+    # "GET .../api?timeout=32s" on a connection-refused error.
+    (TIMEOUT, r"timed out|deadline exceeded|timeout ?expired|i/o timeout|"
+              r"(request|gateway|read|connect|connection) time-?out"),
     # --- command unavailable -------------------------------------------------
     (UNAVAILABLE, r"command not found|not installed|executable file not found|"
                   r"no such file or directory|unknown command|is not recognized as"),
