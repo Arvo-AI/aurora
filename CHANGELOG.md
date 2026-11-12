@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.23] - 2026-11-12
+
+### Fixed
+- Slack, RCA: a Gemini 4 model's thinking no longer replaces the answer. A
+  reply whose final message came back as content blocks (thinking plus text)
+  was treated as empty and overwritten with the streamed text, thinking
+  included, so Slack could show the model's reasoning instead of its answer.
+  Gemini 4 no longer returns thought summaries at all; the model still reasons.
+- Slack: replies keep text after a `<` comparison (for example
+  `< 150 MB`). Angle brackets used to be stripped as HTML and could swallow the
+  remediation steps that followed.
+- Safety judge: Gemini 4 models use the `low` thinking level, which they
+  support, instead of `minimal`.
+
+### Changed
+- Python dependencies: `google-genai` 2.20.0 and `langchain-google-genai`
+  4.4.1, which handle Gemini 4 content and tool-call thought signatures.
+
 ## [1.5.22] - 2026-11-11
 
 ### Added
