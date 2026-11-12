@@ -58,12 +58,24 @@ const ISSUE_ICONS: Record<string, React.ComponentType<{ className?: string }>> =
   other: XCircle,
 };
 
+// Fixed order and short card labels, so the row never changes shape while
+// counts load. Full labels come from the API (CATEGORY_LABELS) for title/aria.
+const ISSUE_CARDS: { category: string; short: string }[] = [
+  { category: 'missing_permission', short: 'Permission' },
+  { category: 'blocked_command', short: 'Blocked' },
+  { category: 'not_connected', short: 'Not connected' },
+  { category: 'timeout', short: 'Timeout' },
+  { category: 'unavailable', short: 'Unavailable' },
+  { category: 'other', short: 'Other' },
+];
+
 const PER_PAGE = 25;
 const selectCls = 'bg-zinc-800/50 border border-zinc-700/50 rounded-md px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:ring-1 focus:ring-zinc-600 max-w-[180px]';
 
 interface IssueCard {
   value: string;
   label: string;
+  fullLabel?: string;
   icon: React.ComponentType<{ className?: string }>;
   count: number | undefined;
   sub: string;
@@ -75,7 +87,9 @@ interface IssueCard {
  * by default). A radiogroup with roving focus, so arrow keys move the selection
  * and Tab enters and leaves the group as one stop.
  */
-function IssueCardGroup({ cards, value, onChange }: { cards: IssueCard[]; value: string; onChange: (v: string) => void }) {
+function IssueCardGroup({
+  cards, value, onChange, loading,
+}: { cards: IssueCard[]; value: string; onChange: (v: string) => void; loading: boolean }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const selected = Math.max(0, cards.findIndex(c => c.value === value));
 
@@ -96,7 +110,8 @@ function IssueCardGroup({ cards, value, onChange }: { cards: IssueCard[]; value:
 
   return (
     <div role="radiogroup" aria-label="Filter conversations by issue"
-      className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
+      aria-busy={loading}
+      className="grid grid-cols-2 md:grid-cols-4 2xl:grid-cols-8 gap-3">
       {cards.map((c, i) => {
         const checked = i === selected;
         const Icon = c.icon;
@@ -106,22 +121,25 @@ function IssueCardGroup({ cards, value, onChange }: { cards: IssueCard[]; value:
             ref={el => { refs.current[i] = el; }}
             role="radio"
             aria-checked={checked}
+            aria-label={`${c.fullLabel ?? c.label}: ${c.count ?? 'loading'}, ${c.sub}`}
+            title={c.fullLabel ?? c.label}
             tabIndex={checked ? 0 : -1}
             onClick={() => onChange(c.value)}
             onKeyDown={e => onKeyDown(e, i)}
-            className={`text-left border rounded-xl p-3.5 transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 ${
+            className={`flex flex-col justify-start h-full text-left border rounded-xl p-3.5 transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 ${
               checked
                 ? 'bg-zinc-800/80 border-zinc-400 ring-1 ring-zinc-400/50'
                 : 'bg-zinc-900/60 border-zinc-800/80 hover:border-zinc-700'
             }`}
           >
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <Icon className={`h-3.5 w-3.5 ${c.count ? (c.tone ?? 'text-zinc-300') : 'text-zinc-600'}`} />
-              <span className={`text-[11px] font-medium uppercase tracking-wider truncate ${checked ? 'text-zinc-200' : 'text-zinc-500'}`}>
+            <div className="flex items-start gap-1.5 mb-1.5">
+              <Icon className={`h-3.5 w-3.5 mt-px shrink-0 ${c.count ? (c.tone ?? 'text-zinc-300') : 'text-zinc-600'}`} />
+              <span className={`text-[11px] font-medium uppercase tracking-wider leading-tight ${checked ? 'text-zinc-200' : 'text-zinc-500'}`}>
                 {c.label}
               </span>
             </div>
-            <p className="text-2xl font-semibold text-zinc-100" style={{ fontVariantNumeric: 'tabular-nums' }}>
+            <p className={`text-2xl font-semibold transition-opacity ${loading ? 'text-zinc-400 opacity-70' : 'text-zinc-100'}`}
+              style={{ fontVariantNumeric: 'tabular-nums' }}>
               {c.count ?? '—'}
             </p>
             <p className="text-[11px] text-zinc-500 mt-0.5">{c.sub}</p>
@@ -160,12 +178,19 @@ export default function ChatsTab({ period }: { period: Period }) {
   const { data, error, isLoading } = useQuery<ChatsResponse>(
     `/api/monitor/chats?${params.toString()}`, jsonFetcher, { staleTime: 15_000 },
   );
+  // Each filter change is a new query key, so `data` is empty until it loads.
+  // Keep showing the previous response meanwhile, so nothing disappears.
+  const [previous, setPrevious] = useState<ChatsResponse>();
+  useEffect(() => { if (data) setPrevious(data); }, [data]);
+  const view = data ?? previous;
+  const refreshing = !data && !!previous && isLoading;
 
   if (open) {
     return <ChatTranscript sessionId={open.id} focusMessage={open.messageIndex} onBack={() => setOpen(null)} />;
   }
 
-  const labels = data?.labels;
+  const labels = view?.labels;
+  const countsByIssue = new Map((view?.issue_counts ?? []).map(c => [c.category, c]));
   const hasFilters = source || status || issue || user || search;
 
   return (
@@ -174,16 +199,21 @@ export default function ChatsTab({ period }: { period: Period }) {
         value={issue}
         onChange={setIssue}
         cards={[
-          { value: '', label: 'All chats', icon: MessagesSquare, count: data?.all_chats, sub: 'conversations in the period' },
+          { value: '', label: 'All chats', icon: MessagesSquare, count: view?.all_chats, sub: 'conversations in the period' },
           {
             value: 'any', label: 'All failures', icon: AlertTriangle,
-            count: data?.issue_counts.reduce((n, c) => n + c.calls, 0), sub: 'failed tool calls',
+            count: view?.issue_counts.reduce((n, c) => n + c.calls, 0), sub: 'failed tool calls',
           },
-          ...(data?.issue_counts ?? []).map(c => ({
-            value: c.category, label: c.label, icon: ISSUE_ICONS[c.category] ?? AlertTriangle, count: c.calls,
-            sub: `failed calls in ${c.chats} ${c.chats === 1 ? 'chat' : 'chats'}`, tone: ISSUE_STYLES[c.category]?.text,
-          })),
+          ...ISSUE_CARDS.map(({ category, short }) => {
+            const c = countsByIssue.get(category);
+            return {
+              value: category, label: short, fullLabel: labels?.issues[category] ?? c?.label ?? short,
+              icon: ISSUE_ICONS[category] ?? AlertTriangle, count: c?.calls, tone: ISSUE_STYLES[category]?.text,
+              sub: c ? `failed calls in ${c.chats} ${c.chats === 1 ? 'chat' : 'chats'}` : 'failed calls',
+            };
+          }),
         ]}
+        loading={refreshing}
       />
 
       <ChartPanel
@@ -194,7 +224,7 @@ export default function ChatsTab({ period }: { period: Period }) {
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <select aria-label="Source" value={source} onChange={e => setSource(e.target.value)} className={selectCls}>
             <option value="">All sources</option>
-            {(data?.sources ?? []).map(s => <option key={s.source} value={s.source}>{s.label} ({s.count})</option>)}
+            {(view?.sources ?? []).map(s => <option key={s.source} value={s.source}>{s.label} ({s.count})</option>)}
           </select>
           <select aria-label="Status" value={status} onChange={e => setStatus(e.target.value)} className={selectCls}>
             <option value="">Any status</option>
@@ -202,7 +232,7 @@ export default function ChatsTab({ period }: { period: Period }) {
           </select>
           <select aria-label="User" value={user} onChange={e => setUser(e.target.value)} className={selectCls}>
             <option value="">All users</option>
-            {(data?.users ?? []).map(u => <option key={u.id} value={u.id}>{u.name || u.email || u.id} ({u.count})</option>)}
+            {(view?.users ?? []).map(u => <option key={u.id} value={u.id}>{u.name || u.email || u.id} ({u.count})</option>)}
           </select>
           <div className="relative flex-1 min-w-[200px]">
             <Search className="h-3.5 w-3.5 text-zinc-500 absolute left-2 top-1/2 -translate-y-1/2" />
@@ -226,15 +256,15 @@ export default function ChatsTab({ period }: { period: Period }) {
           )}
         </div>
 
-        {error && !data ? (
+        {error && !view ? (
           <EmptyState icon={AlertTriangle} message="Could not load conversations" hint="Only organization admins can view all chats." />
-        ) : !data || data.chats.length === 0 ? (
+        ) : !view || view.chats.length === 0 ? (
           isLoading
             ? <div className="h-40 animate-pulse bg-zinc-800/30 rounded-lg" />
             : <EmptyState icon={MessagesSquare} message="No conversations match these filters" />
         ) : (
           <>
-            <div className="overflow-x-auto rounded-lg border border-zinc-800/60">
+            <div className={`overflow-x-auto rounded-lg border border-zinc-800/60 transition-opacity ${refreshing ? 'opacity-60' : ''}`} aria-busy={refreshing}>
               <table className="w-full text-sm min-w-[900px]">
                 <thead>
                   <tr className="border-b border-zinc-800/60 text-zinc-500 text-xs uppercase tracking-wider">
@@ -249,8 +279,8 @@ export default function ChatsTab({ period }: { period: Period }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.chats.map(c => (
-                    <ChatRowView key={c.id} chat={c} labels={data.labels} showFailures={!!issue}
+                  {view.chats.map(c => (
+                    <ChatRowView key={c.id} chat={c} labels={view.labels} showFailures={!!issue}
                       onOpen={(messageIndex) => setOpen({ id: c.id, messageIndex })} />
                   ))}
                 </tbody>
@@ -258,15 +288,15 @@ export default function ChatsTab({ period }: { period: Period }) {
             </div>
             <div className="flex items-center justify-between mt-4">
               <p className="text-xs text-zinc-500">
-                {data.total.toLocaleString()} {data.total === 1 ? 'conversation' : 'conversations'} — page {data.page} of {data.total_pages}
+                {view.total.toLocaleString()} {view.total === 1 ? 'conversation' : 'conversations'} — page {view.page} of {view.total_pages}
               </p>
-              {data.total_pages > 1 && (
+              {view.total_pages > 1 && (
                 <div className="flex items-center gap-1">
                   <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} aria-label="Previous page"
                     className="p-1 rounded-md text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-30 disabled:cursor-not-allowed">
                     <ChevronLeft className="h-4 w-4" />
                   </button>
-                  <button onClick={() => setPage(p => Math.min(data.total_pages, p + 1))} disabled={page >= data.total_pages} aria-label="Next page"
+                  <button onClick={() => setPage(p => Math.min(view.total_pages, p + 1))} disabled={page >= view.total_pages} aria-label="Next page"
                     className="p-1 rounded-md text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-30 disabled:cursor-not-allowed">
                     <ChevronRight className="h-4 w-4" />
                   </button>
