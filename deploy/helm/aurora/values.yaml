@@ -589,6 +589,7 @@ secrets:
     GITHUB_APP_SETUP_URL: ""               # https://<your-host>/github
     GITHUB_APP_CLIENT_SECRET: ""            # OAuth client secret (for hosted signup flow)
     GITHUB_APP_WEBHOOK_SECRET: ""          # openssl rand -hex 32 (also stored in secrets backend)
+    GITHUB_APP_PRIVATE_KEY: ""             # Fallback when the key is not in the secrets backend: base64 of the .pem (base64 -w0 key.pem)
 
     # --- GitHub OAuth (only when GITHUB_AUTH_MODE=oauth or hybrid) ---
     GH_OAUTH_CLIENT_ID: ""       # Get from: https://github.com/settings/developers

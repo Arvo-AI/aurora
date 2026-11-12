@@ -74,6 +74,7 @@ x-common-env: &common-env
   NEXT_PUBLIC_GITHUB_APP_SLUG: ${NEXT_PUBLIC_GITHUB_APP_SLUG}
   GITHUB_APP_WEBHOOK_URL: ${GITHUB_APP_WEBHOOK_URL}
   GITHUB_APP_SETUP_URL: ${GITHUB_APP_SETUP_URL}
+  GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
   # Enable/disable Incident Prevention (PR change-gating). Set to false to turn off entirely.
   NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION: ${NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION:-true}
   # Slack OAuth (needed by celery_worker for formatting responses)

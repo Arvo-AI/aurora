@@ -10,6 +10,7 @@ entirely. These tests pin the backend-agnostic ``build_system_ref`` mapping and
 the ``vault_keys`` read paths so the App key resolves on both backends.
 """
 
+import base64
 from unittest.mock import MagicMock
 
 import pytest
@@ -26,6 +27,9 @@ _WEBHOOK_LOGICAL = "github-app/webhook-secret"
 # mocked in these tests, so this is never parsed as a real PEM — kept
 # intentionally non-PEM-shaped so secret scanners (gitleaks) don't flag it.
 _FAKE_PEM = "test-github-app-private-key-material-0000"
+# PEM-shaped only by its marker line, so the env fallback accepts it; the body
+# is not key material.
+_FAKE_PEM_TEXT = "-----BEGIN TEST KEY-----\nnot-real-key-material\n-----END TEST KEY-----"
 
 
 @pytest.fixture(autouse=True)
@@ -135,15 +139,65 @@ class TestGetAppPrivateKey:
         with pytest.raises(GitHubAppConfigError):
             vault_keys.get_app_private_key()
 
-    def test_no_env_fallback_for_private_key(self, monkeypatch):
-        """Private key must come from the backend — GITHUB_APP_PRIVATE_KEY is
-        intentionally NOT a fallback (scope: AWS SM read only)."""
+    def test_backend_wins_over_env(self, monkeypatch):
+        backend = _mock_backend(value=_FAKE_PEM_TEXT)
+        monkeypatch.setattr(vault_keys, "get_secrets_backend", lambda: backend)
+        monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "-----BEGIN other\\nenv-key")
+
+        assert vault_keys.get_app_private_key() == _FAKE_PEM_TEXT
+
+    def test_env_fallback_pem_with_escaped_newlines(self, monkeypatch):
         backend = _mock_backend(available=False)
         monkeypatch.setattr(vault_keys, "get_secrets_backend", lambda: backend)
-        monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", _FAKE_PEM)  # must be ignored
+        monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", _FAKE_PEM_TEXT.replace("\n", "\\n"))
 
-        with pytest.raises(GitHubAppConfigError):
+        assert vault_keys.get_app_private_key() == _FAKE_PEM_TEXT
+
+    def test_env_fallback_base64(self, monkeypatch):
+        backend = _mock_backend(available=False)
+        monkeypatch.setattr(vault_keys, "get_secrets_backend", lambda: backend)
+        encoded = base64.b64encode(_FAKE_PEM_TEXT.encode()).decode()
+        monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", encoded)
+
+        assert vault_keys.get_app_private_key() == _FAKE_PEM_TEXT
+
+    def test_env_fallback_when_backend_read_fails(self, monkeypatch):
+        backend = _mock_backend()
+        backend.get_secret.side_effect = RuntimeError("boom")
+        monkeypatch.setattr(vault_keys, "get_secrets_backend", lambda: backend)
+        monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", _FAKE_PEM_TEXT)
+
+        assert vault_keys.get_app_private_key() == _FAKE_PEM_TEXT
+
+    def test_env_value_that_is_not_a_key_raises(self, monkeypatch):
+        backend = _mock_backend(available=False)
+        monkeypatch.setattr(vault_keys, "get_secrets_backend", lambda: backend)
+        monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "not-a-key")
+
+        with pytest.raises(GitHubAppConfigError, match="neither a PEM key nor base64"):
             vault_keys.get_app_private_key()
+
+    def test_no_env_keeps_backend_error(self, monkeypatch):
+        backend = _mock_backend(available=False)
+        monkeypatch.setattr(vault_keys, "get_secrets_backend", lambda: backend)
+        monkeypatch.delenv("GITHUB_APP_PRIVATE_KEY", raising=False)
+
+        with pytest.raises(GitHubAppConfigError, match="unavailable"):
+            vault_keys.get_app_private_key()
+
+    def test_permission_denied_names_the_path(self, monkeypatch):
+        class Forbidden(Exception):
+            pass
+
+        ref = "vault:kv/data/aurora/system/github-app/private-key"
+        backend = _mock_backend(ref=ref)
+        backend.get_secret.side_effect = Forbidden("permission denied")
+        monkeypatch.setattr(vault_keys, "get_secrets_backend", lambda: backend)
+        monkeypatch.delenv("GITHUB_APP_PRIVATE_KEY", raising=False)
+
+        with pytest.raises(GitHubAppConfigError, match="denied access") as info:
+            vault_keys.get_app_private_key()
+        assert ref in str(info.value)
 
     def test_empty_backend_value_raises(self, monkeypatch):
         backend = _mock_backend(value="")
