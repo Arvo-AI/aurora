@@ -30,7 +30,8 @@ def test_chat_session_persists_and_counts_steps_per_session(db):
     cap = ToolContextCapture("sess-1", "user-1", incident_id=None, org_id="org-1")
     assert cap._persist_steps
 
-    assert cap._record_step_start("cloud_exec", {"command": "s3 ls"}, "tc-1") == 42
+    step = cap._record_step_start("cloud_exec", {"command": "s3 ls"}, "tc-1")
+    assert step.result(timeout=5) == 42   # regular chats write off the event loop
     sql, params = db.execute.call_args.args
     assert "incident_id IS NULL AND session_id = %s" in sql
     assert params[0] is None            # incident_id
@@ -74,3 +75,44 @@ def test_org_moves_carry_chat_tool_calls():
         assert moved, fn.__name__
         assert "es.incident_id IS NULL" in moved[0]
         assert "split_part(es.session_id, '::', 1)" in moved[0]
+
+
+def test_incident_steps_stay_synchronous(db):
+    cap = ToolContextCapture("sess-1", "user-1", incident_id="inc-1", org_id="org-1")
+    assert cap._record_step_start("cloud_exec", {}, "tc-1") == 42
+
+
+def test_chat_step_end_runs_after_its_start_with_call_time_timestamp(db, monkeypatch):
+    import threading
+    from concurrent.futures import Future
+
+    gate = threading.Event()
+    real_insert = ToolContextCapture._insert_step
+
+    def slow_insert(self, *args):
+        gate.wait(timeout=5)                       # hold the INSERT until end() is queued
+        return real_insert(self, *args)
+
+    monkeypatch.setattr(ToolContextCapture, "_insert_step", slow_insert)
+    cap = ToolContextCapture("sess-1", "user-1", org_id="org-1")
+    step = cap._record_step_start("cloud_exec", {}, "tc-1")
+    assert isinstance(step, Future)
+    cap._record_step_end(step, '{"error": "AccessDenied"}')
+    gate.set()
+    mod._STEP_WRITER.submit(lambda: None).result(timeout=5)   # drain the queue
+    for _ in range(50):
+        if any("UPDATE execution_steps" in c.args[0] for c in db.execute.call_args_list):
+            break
+        threading.Event().wait(0.02)
+    statements = [c.args[0] for c in db.execute.call_args_list if c.args[0].lstrip().startswith(("INSERT", "UPDATE"))]
+    assert "INSERT" in statements[0] and "UPDATE" in statements[-1]
+    update_params = next(c.args[1] for c in db.execute.call_args_list if "UPDATE execution_steps" in c.args[0])
+    assert update_params[0] == "error" and update_params[-1] == 42
+
+
+def test_large_tool_inputs_are_capped_and_stay_valid_json():
+    import json
+    stored = mod._capped_input_json({"command": "x" * 50_000})
+    assert len(stored) < mod.STEP_INPUT_MAX_CHARS + 100
+    assert json.loads(stored)["_truncated"] is True
+    assert json.loads(mod._capped_input_json({"command": "ls"})) == {"command": "ls"}

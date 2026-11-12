@@ -3378,40 +3378,26 @@ def initialize_tables():
                 logging.warning(f"Error adding tool_call_id to execution_steps: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_es_tcid")
 
-            # Regular chats record their tool calls too, so incident_id
-            # is optional. The monitor's tool-call search filters on status/time.
+            # Regular chats record their tool calls too, so incident_id is
+            # optional. Checked first: DROP NOT NULL takes an ACCESS EXCLUSIVE
+            # lock, which every boot would otherwise take again.
             try:
                 cursor.execute("SAVEPOINT sp_es_chat")
                 cursor.execute(
-                    "ALTER TABLE execution_steps ALTER COLUMN incident_id DROP NOT NULL;"
+                    "SELECT a.attnotnull FROM pg_attribute a "
+                    "WHERE a.attrelid = 'execution_steps'::regclass AND a.attname = 'incident_id'"
                 )
-                cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_execution_steps_org_status_time "
-                    "ON execution_steps(org_id, status, started_at DESC);"
-                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    cursor.execute(
+                        "ALTER TABLE execution_steps ALTER COLUMN incident_id DROP NOT NULL;"
+                    )
                 cursor.execute("RELEASE SAVEPOINT sp_es_chat")
             except Exception as e:
                 logging.warning(f"Error relaxing execution_steps.incident_id: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_es_chat")
-
-            # Chat audit (monitor page): find a chat's tool calls by root session
-            # (sub-agents run as "<chat>::sa_N"), and full-text search message texts.
-            try:
-                from services.monitor.chat_audit import SEARCH_INDEX_SQL
-                cursor.execute("SAVEPOINT sp_chat_audit_idx")
-                cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_execution_steps_root_session "
-                    "ON execution_steps (org_id, (split_part(session_id, '::', 1)));"
-                )
-                cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_chat_sessions_org_updated "
-                    "ON chat_sessions (org_id, updated_at DESC);"
-                )
-                cursor.execute(SEARCH_INDEX_SQL)
-                cursor.execute("RELEASE SAVEPOINT sp_chat_audit_idx")
-            except Exception as e:
-                logging.warning(f"Error creating chat audit indexes: {e}")
-                cursor.execute("ROLLBACK TO SAVEPOINT sp_chat_audit_idx")
+            # The chat audit's indexes are built concurrently after this
+            # transaction commits (see utils/db/chat_audit_indexes.py).
 
             # DB triggers: auto-inherit org_id from parent incident on INSERT.
             # This means no INSERT statement in the codebase ever needs to set
@@ -4008,6 +3994,11 @@ def initialize_tables():
 
             logging.info("Database tables initialized successfully.")
             cursor.close()
+
+        # Outside the init transaction: CREATE INDEX CONCURRENTLY can't run in
+        # one, and a plain build would block chat writes on large tables.
+        from utils.db.chat_audit_indexes import build_indexes_in_background
+        build_indexes_in_background(DB_PARAMS)
 
     except Exception as e:
         logging.error(f"Error initializing tables: {e}")

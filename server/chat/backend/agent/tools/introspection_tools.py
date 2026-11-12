@@ -857,6 +857,9 @@ def grafana_list_alerts(state=None, limit=50, *, user_id, **_) -> dict:
 # Tool calls (self-audit)
 # ---------------------------------------------------------------------------
 
+GUEST_REFUSAL = "Tool-call history isn't available to guest users. Ask a member of the organization."
+
+
 class SearchToolCallsArgs(BaseModel):
     period: Optional[str] = Field(
         default="7d",
@@ -900,6 +903,14 @@ def search_tool_calls(
         filter_error_message,
         search_failed_tool_calls,
     )
+
+    from utils.auth.connector_access import pinned_roles
+
+    # A Slack guest runs under the connector owner's user id with a pinned
+    # viewer role, so neither "org" nor "own" scope would be theirs. Refuse
+    # before touching the database (same rule as trigger_rca and viewer_run).
+    if pinned_roles() is not None:
+        raise IntrospectionError(GUEST_REFUSAL)
 
     raw = {"period": period, "issue": issue, "tool": tool, "q": query, "source": source}
     with _cursor(user_id) as (cur, org_id):

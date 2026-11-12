@@ -13,9 +13,8 @@ failed-tool-call query (``_failed_tool_calls``) and the same redaction
 errors routinely carry credentials.
 
 Full-text search uses a GIN index over the message texts
-(``idx_chat_sessions_message_fts``, created in ``db_utils`` from
-``SEARCH_INDEX_SQL``); ``SEARCH_DOC_SQL`` must stay identical to that index
-expression or Postgres won't use it.
+(``idx_chat_sessions_message_fts``, built in ``utils.db.chat_audit_indexes``,
+which also defines ``SEARCH_DOC_SQL`` so the two can't drift apart).
 """
 
 from __future__ import annotations
@@ -35,6 +34,7 @@ from services.monitor.issue_classifier import (
     classify_tool_output,
     sql_category_case,
 )
+from utils.db.chat_audit_indexes import SEARCH_DOC_SQL  # identical to the GIN index expression
 from utils.metrics_periods import PERIOD_MAP
 from utils.query_helpers import clamp_int, fetch_dicts, iso_utc
 from utils.security.output_redaction import redact
@@ -65,6 +65,10 @@ TOOL_IO_MAX_CHARS = 4_000
 # Redaction and shaping
 # ---------------------------------------------------------------------------
 
+# Redaction always runs on the *full* text before anything is cut: a window or a
+# truncation that drops ``--password`` but keeps its value, or keeps only part of
+# a key, would defeat the patterns.
+#
 # ``redact`` (gitleaks rules) catches token *shapes*; these catch a plaintext
 # secret that only its flag or key name gives away (``--password hunter2``).
 _SECRET_NAMES = (
@@ -73,7 +77,14 @@ _SECRET_NAMES = (
 )
 _SECRET_FLAG_RE = re.compile(rf"(?i)(--?(?:{_SECRET_NAMES})(?:[= ]+))(\"[^\"]*\"|'[^']*'|\S+)")
 _SECRET_KV_RE = re.compile(rf"(?i)(\"?(?:{_SECRET_NAMES})\"?\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,}}]+)")
-_SECRET_KEY_RE = re.compile(rf"(?i)^({_SECRET_NAMES})$")
+# JSON key names whose values are credentials, matched as parts of a name:
+# SecretAccessKey, SessionToken, DB_PASS, tls.key, privateKey, client_secret.
+_SECRET_KEY_RE = re.compile(
+    r"(?i)secret|token|passw|pwd|credential|auth(?!or(?!iz))|(^|[^a-z])pass$|key(s)?$|key[-_.]"
+)
+# Kubernetes Secret objects: every value under these keys is secret material.
+_K8S_SECRET_DATA_KEYS = ("data", "stringData")
+REDACTED = "[REDACTED]"
 
 
 def scrub(text: Optional[str]) -> str:
@@ -81,28 +92,33 @@ def scrub(text: Optional[str]) -> str:
     if not text:
         return ""
     cleaned, _ = redact(text)
-    cleaned = _SECRET_FLAG_RE.sub(lambda m: f"{m.group(1)}[REDACTED]", cleaned)
-    return _SECRET_KV_RE.sub(lambda m: f"{m.group(1)}[REDACTED]", cleaned)
+    cleaned = _SECRET_FLAG_RE.sub(lambda m: f"{m.group(1)}{REDACTED}", cleaned)
+    return _SECRET_KV_RE.sub(lambda m: f"{m.group(1)}{REDACTED}", cleaned)
 
 
 def _scrub_value(value):
+    """Redact a parsed JSON value: secret-named keys entirely, every string by pattern."""
     if isinstance(value, str):
         return scrub(value)
     if isinstance(value, list):
         return [_scrub_value(v) for v in value]
-    if isinstance(value, dict):
-        return {
-            k: "[REDACTED]" if isinstance(k, str) and _SECRET_KEY_RE.match(k) else _scrub_value(v)
-            for k, v in value.items()
-        }
-    return value
+    if not isinstance(value, dict):
+        return value
+    is_k8s_secret = value.get("kind") == "Secret"
+    out = {}
+    for k, v in value.items():
+        secret_key = isinstance(k, str) and (
+            _SECRET_KEY_RE.search(k) or (is_k8s_secret and k in _K8S_SECRET_DATA_KEYS)
+        )
+        out[k] = REDACTED if secret_key and v not in (None, "", [], {}) else _scrub_value(v)
+    return out
 
 
-def scrub_json_text(text: Optional[str], limit: int = TOOL_IO_MAX_CHARS) -> str:
-    """Scrub a tool input/output, keeping it valid JSON when it is JSON.
+def scrub_json_text(text, limit: int = TOOL_IO_MAX_CHARS) -> str:
+    """Scrub a tool input/output, keeping it valid JSON when it is JSON, then cap it.
 
-    The chat's tool widgets parse these strings per tool, so redaction must
-    happen on the values, not on the serialized text.
+    The chat's tool widgets parse these strings per tool, so redaction happens
+    on the parsed values; the serialized text is scrubbed again as a backstop.
     """
     if not text:
         return ""
@@ -111,19 +127,20 @@ def scrub_json_text(text: Optional[str], limit: int = TOOL_IO_MAX_CHARS) -> str:
     try:
         parsed = json.loads(text)
     except (ValueError, TypeError):
-        return scrub(truncate(text, limit))
-    if not isinstance(parsed, (dict, list)):
-        return scrub(truncate(text, limit))
-    return truncate(json.dumps(_scrub_value(parsed), default=str), limit)
+        parsed = None
+    if isinstance(parsed, (dict, list)):
+        return truncate(json.dumps(_scrub_value(parsed), default=str), limit)
+    return truncate(scrub(text), limit)
 
 
 def summarize_input(tool_input) -> str:
-    """The command a tool ran, or a compact rendering of its arguments (unredacted)."""
+    """The command a tool ran, or a compact rendering of its arguments; redacted, then capped."""
     if isinstance(tool_input, str):
         try:
             tool_input = json.loads(tool_input)
         except (ValueError, TypeError):
-            return truncate(tool_input, INPUT_SUMMARY_MAX_CHARS)
+            return truncate(scrub(tool_input), INPUT_SUMMARY_MAX_CHARS)
+    tool_input = _scrub_value(tool_input)
     command = derive_command(tool_input, INPUT_SUMMARY_MAX_CHARS)
     if command:
         return command
@@ -133,7 +150,7 @@ def summarize_input(tool_input) -> str:
 
 
 def failure_reason(error: Optional[str]) -> str:
-    """One-line reason from a stored error body (unwraps ``{"error": ...}`` envelopes)."""
+    """One redacted line from a stored error body (unwraps ``{"error": ...}`` envelopes)."""
     if not error:
         return ""
     text = error.strip()
@@ -145,7 +162,7 @@ def failure_reason(error: Optional[str]) -> str:
         for key in ("error", "message", "detail", "details", "stderr"):
             value = parsed.get(key)
             if isinstance(value, dict):
-                value = value.get("message") or json.dumps(value, default=str)
+                value = value.get("message") or json.dumps(_scrub_value(value), default=str)
             if isinstance(value, str) and value.strip():
                 text = value.strip()
                 break
@@ -153,6 +170,7 @@ def failure_reason(error: Optional[str]) -> str:
             errors = parsed.get("errors")
             if isinstance(errors, list) and errors:
                 text = str(errors[0])
+    text = scrub(text)
     first = next((line.strip() for line in text.splitlines() if line.strip()), "")
     return truncate(first, REASON_MAX_CHARS)
 
@@ -162,13 +180,14 @@ def _terms(query: str) -> list[str]:
 
 
 def _snippet(text: str, query: str) -> str:
-    """A redacted window of ``text`` around the first query term (or its start)."""
+    """A window of ``text`` around the first query term (or its start), cut after redaction."""
+    text = scrub(text)
     terms = _terms(query)
     lower = text.lower()
     pos = min((p for p in (lower.find(t) for t in terms) if p >= 0), default=0)
     start, end = max(0, pos - SNIPPET_RADIUS), min(len(text), pos + SNIPPET_RADIUS)
     snippet = text[start:end].replace("\n", " ").strip()
-    return scrub(("…" if start else "") + snippet + ("…" if end < len(text) else ""))
+    return ("…" if start else "") + snippet + ("…" if end < len(text) else "")
 
 
 # ---------------------------------------------------------------------------
@@ -307,17 +326,6 @@ END)"""
 _MESSAGES_ARRAY = "(CASE WHEN jsonb_typeof(cs.messages) = 'array' THEN cs.messages ELSE '[]'::jsonb END)"
 _MESSAGE_COUNT = f"jsonb_array_length({_MESSAGES_ARRAY})"
 
-# Must match idx_chat_sessions_message_fts exactly.
-SEARCH_DOC_SQL = (
-    "to_tsvector('simple'::regconfig, "
-    "left((jsonb_path_query_array(cs.messages, '$[*].text'::jsonpath))::text, 200000))"
-)
-SEARCH_INDEX_SQL = (
-    "CREATE INDEX IF NOT EXISTS idx_chat_sessions_message_fts ON chat_sessions USING GIN "
-    "((to_tsvector('simple'::regconfig, "
-    "left((jsonb_path_query_array(messages, '$[*].text'::jsonpath))::text, 200000))))"
-)
-
 # Chats and their sub-agents ("<chat>::sa_N") share a root session id.
 ROOT_SESSION_SQL = "split_part(es.session_id, '::', 1)"
 
@@ -365,21 +373,40 @@ _OWNED_BY_SQL = (
     "EXISTS (SELECT 1 FROM chat_sessions own WHERE own.id = split_part(es.session_id, '::', 1) "
     "AND own.org_id = es.org_id AND own.user_id = %s)"
 )
+# A failure from a chat the user deleted (soft delete) stays out of every view.
+# RCA rows are kept: their incident is the anchor, not the chat.
+_NOT_DELETED_SQL = (
+    "(es.incident_id IS NOT NULL OR EXISTS (SELECT 1 FROM chat_sessions act "
+    "WHERE act.id = split_part(es.session_id, '::', 1) AND act.org_id = es.org_id AND act.is_active))"
+)
+# Recent failures examined when the agent tool filters by free text (see below).
+QUERY_POOL_SIZE = 500
+
+
+def _matches_query(failure: dict, query: str) -> bool:
+    """Free text matched against what the caller can see: never raw inputs or errors."""
+    haystack = " ".join((failure["tool_name"], failure["category"], failure["input"], failure["reason"])).lower()
+    return query.lower() in haystack
 
 
 def _failed_tool_calls(
     cur, org_id: str, *, chat_ids: Optional[list[str]] = None, period: Optional[str] = None,
     category: Optional[str] = None, tool: Optional[str] = None, query: Optional[str] = None,
     source: Optional[str] = None, owner_user_id: Optional[str] = None,
-    per_chat: Optional[int] = None, limit: int = 50,
+    per_chat: Optional[int] = None, limit: int = 50, with_anchors: bool = True,
 ) -> list[dict]:
-    """Failed ``execution_steps`` rows, classified, redacted and anchored to their message.
+    """Failed ``execution_steps`` rows, classified, redacted and (optionally) anchored.
 
-    ``message_index`` is the transcript message holding the call (None for
-    sub-agent calls, which don't appear in the parent transcript).
+    ``message_index`` is the transcript message holding the call: None for
+    sub-agent calls (not in the parent transcript) and when ``with_anchors`` is
+    off. Anchors are computed with one pass over each returned chat's messages.
+
+    ``query`` is matched in Python against the redacted command and reason over
+    the ``QUERY_POOL_SIZE`` most recent failures, so a search can't probe the
+    unredacted text stored in the database.
     """
     case_sql, case_params = sql_category_case("es.error_message")
-    clauses = ["es.org_id = %s", "es.status = 'error'"]
+    clauses = ["es.org_id = %s", "es.status = 'error'", _NOT_DELETED_SQL]
     params: list = [org_id]
     if chat_ids is not None:
         clauses.append(f"{ROOT_SESSION_SQL} = ANY(%s)")
@@ -400,24 +427,23 @@ def _failed_tool_calls(
         clauses.append("es.incident_id IS NULL")
     elif source == "incident":
         clauses.append("es.incident_id IS NOT NULL")
-    if query:
-        like = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-        clauses.append("(es.tool_name ILIKE %s OR es.tool_input::text ILIKE %s OR es.error_message ILIKE %s)")
-        params.extend([like, like, like])
     # Cap per chat *before* the overall limit, so one noisy chat can't crowd out the rest.
     rank_filter = "ranked.rn <= %s" if per_chat else "TRUE"
+    anchors_sql = f"""
+            SELECT c.id AS chat_id, tc->>'id' AS tool_call_id, MIN(e.idx - 1)::int AS message_index
+            FROM chat_sessions c
+            CROSS JOIN LATERAL jsonb_array_elements(
+                CASE WHEN jsonb_typeof(c.messages) = 'array' THEN c.messages ELSE '[]'::jsonb END
+            ) WITH ORDINALITY AS e(m, idx)
+            CROSS JOIN LATERAL jsonb_array_elements(
+                CASE WHEN jsonb_typeof(e.m->'toolCalls') = 'array' THEN e.m->'toolCalls' ELSE '[]'::jsonb END
+            ) AS tc
+            WHERE c.org_id = %s AND c.id IN (SELECT DISTINCT chat_id FROM f)
+            GROUP BY 1, 2""" if with_anchors else """
+            SELECT NULL::text AS chat_id, NULL::text AS tool_call_id, NULL::int AS message_index
+            WHERE false"""
     cur.execute(
-        f"""SELECT f.*, (
-                SELECT (e.idx - 1)::int
-                FROM chat_sessions c,
-                     jsonb_array_elements(CASE WHEN jsonb_typeof(c.messages) = 'array'
-                                               THEN c.messages ELSE '[]'::jsonb END)
-                         WITH ORDINALITY AS e(m, idx)
-                WHERE c.id = f.chat_id AND c.org_id = %s AND f.tool_call_id IS NOT NULL
-                  AND e.m->'toolCalls' @> jsonb_build_array(jsonb_build_object('id', f.tool_call_id))
-                LIMIT 1
-            ) AS message_index
-            FROM (
+        f"""WITH f AS (
                 SELECT * FROM (
                     SELECT es.id, es.tool_name, es.tool_input, es.error_message, es.started_at,
                            es.tool_call_id, es.incident_id, {ROOT_SESSION_SQL} AS chat_id,
@@ -429,24 +455,31 @@ def _failed_tool_calls(
                 WHERE {rank_filter}
                 ORDER BY ranked.started_at DESC, ranked.id DESC
                 LIMIT %s
-            ) f
+            ), anchors AS ({anchors_sql}
+            )
+            SELECT f.*, a.message_index
+            FROM f LEFT JOIN anchors a ON a.chat_id = f.chat_id AND a.tool_call_id = f.tool_call_id
             ORDER BY f.started_at DESC, f.id DESC""",
-        tuple([org_id] + params + ([per_chat] if per_chat else []) + [limit]),
+        tuple(params + ([per_chat] if per_chat else []) + [QUERY_POOL_SIZE if query else limit]
+              + ([org_id] if with_anchors else [])),
     )
-    return [
+    failures = [
         {
             "chat_id": r["chat_id"],
             "incident_id": str(r["incident_id"]) if r.get("incident_id") else None,
             "message_index": r.get("message_index"),
             "tool_call_id": r.get("tool_call_id"),
             "tool_name": r.get("tool_name") or "unknown",
-            "input": scrub(summarize_input(r.get("tool_input"))),
+            "input": summarize_input(r.get("tool_input")),
             "category": classify_tool_error(r.get("error_message")),
-            "reason": scrub(failure_reason(r.get("error_message"))),
+            "reason": failure_reason(r.get("error_message")),
             "started_at": iso_utc(r.get("started_at")),
         }
         for r in fetch_dicts(cur)
     ]
+    if query:
+        failures = [f for f in failures if _matches_query(f, query)][:limit]
+    return failures
 
 
 def _issue_totals(cur, org_id: str, period: str, chat_where: str = "TRUE", chat_params=()) -> list[dict]:
@@ -456,7 +489,7 @@ def _issue_totals(cur, org_id: str, period: str, chat_where: str = "TRUE", chat_
         f"""SELECT {case_sql} AS category, COUNT(*), COUNT(DISTINCT {ROOT_SESSION_SQL})
             FROM execution_steps es
             LEFT JOIN chat_sessions cs ON cs.id = {ROOT_SESSION_SQL} AND cs.org_id = es.org_id
-            WHERE es.org_id = %s AND es.status = 'error'
+            WHERE es.org_id = %s AND es.status = 'error' AND {_NOT_DELETED_SQL}
               AND es.started_at >= NOW() - %s::interval AND {chat_where}
             GROUP BY 1""",
         tuple(case_params + [org_id, PERIOD_INTERVALS[period]] + list(chat_params)),
@@ -485,6 +518,7 @@ def search_failed_tool_calls(
     calls = _failed_tool_calls(
         cur, org_id, period=period, category=_parse_issue(raw), tool=_opt(raw, "tool"),
         query=_parse_query(raw), source=source, owner_user_id=owner_user_id, limit=limit,
+        with_anchors=False,  # the tool links to the chat, not to a message
     )
     for c in calls:
         c["link"] = f"/incidents/{c['incident_id']}" if c["incident_id"] else f"/chat?sessionId={c['chat_id']}"
@@ -657,7 +691,7 @@ def _transcript_tool_call(tc: dict, step: Optional[dict]) -> tuple[dict, Optiona
     error_text = (step or {}).get("error_message") or output or ""
     issue = classify_tool_error(error_text) if step_failed else classify_tool_output(output)
     failed = step_failed or issue is not None
-    reason = scrub(failure_reason(error_text)) if failed else ""
+    reason = failure_reason(error_text) if failed else ""
     shaped = {
         "id": tc.get("id") or "",
         "tool_name": tc.get("tool_name") or "unknown",
@@ -712,7 +746,7 @@ def get_transcript(cur, org_id: str, session_id: str) -> Optional[dict]:
         if reply_issue:
             issues.append({"category": reply_issue, "message_index": index, "tool_call_id": None,
                            "tool_name": None, "summary": _snippet(text, ""), "from_reply": True})
-        messages.append({"id": index, "sender": sender, "text": scrub(truncate(text, MESSAGE_TEXT_MAX_CHARS)),
+        messages.append({"id": index, "sender": sender, "text": truncate(scrub(text), MESSAGE_TEXT_MAX_CHARS),
                          "timestamp": raw.get("timestamp"), "toolCalls": tool_calls})
 
     # Failures of sub-agent calls that never reached this transcript.

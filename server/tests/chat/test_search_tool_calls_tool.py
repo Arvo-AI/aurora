@@ -97,3 +97,15 @@ def test_non_admin_cannot_widen_scope_through_arguments(monkeypatch):
     assert captured["owner_user_id"] == "viewer-1"
     # The schema the model sees has no way to name a scope or another user.
     assert not {"owner_user_id", "scope", "user", "user_id"} & set(tools.SearchToolCallsArgs.model_fields)
+
+
+def test_slack_guest_is_refused_before_any_query(monkeypatch):
+    import utils.auth.connector_access as access
+
+    _, captured = _patch(monkeypatch)
+    opened = []
+    monkeypatch.setattr(tools, "_cursor", lambda user_id: opened.append(user_id))
+    monkeypatch.setattr(access, "pinned_roles", lambda: ["general_viewer"])
+    out = json.loads(tools.search_tool_calls(user_id="owner-admin"))
+    assert out == {"error": tools.GUEST_REFUSAL}
+    assert opened == [] and captured == {}

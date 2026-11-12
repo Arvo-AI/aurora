@@ -115,7 +115,9 @@ def test_search_uses_the_indexed_expression():
     sql, params = ca._chat_where(ChatFilters.parse({"q": "AccessDenied"}), "org-1")
     assert ca.SEARCH_DOC_SQL in sql and params[-1] == "AccessDenied"
     # Postgres only uses the GIN index when the query expression is identical.
-    assert ca.SEARCH_DOC_SQL.replace("cs.messages", "messages") in ca.SEARCH_INDEX_SQL
+    from utils.db.chat_audit_indexes import INDEXES
+    fts = dict((name, d) for name, _, d in INDEXES)["idx_chat_sessions_message_fts"]
+    assert ca.SEARCH_DOC_SQL.replace("cs.messages", "messages") in fts
 
 
 def test_issue_filter_binds_patterns_and_category():
@@ -140,11 +142,11 @@ def test_list_shapes_rows_badges_failures_and_facets():
     cur = Cursor([
         ("SELECT COUNT(*) FROM chat_sessions", ["count"], [(1,)]),
         ("ORDER BY cs.updated_at DESC", _CHAT_COLS, [_chat_row()]),
-        ("GROUP BY 1, 2", ["sid", "category", "count"], [("s1", "missing_permission", 2), ("s1", "other", 1)]),
-        ("ROW_NUMBER()", _FAIL_COLS, [
+        ("WITH f AS", _FAIL_COLS, [
             (7, "cloud_exec", {"provider": "aws", "command": "ec2 describe-instances"},
              '{"error": "AccessDenied: not authorized"}', TS, "tc1", None, "s1", 1, 3),
         ]),
+        ("GROUP BY 1, 2", ["sid", "category", "count"], [("s1", "missing_permission", 2), ("s1", "other", 1)]),
         ("COUNT(DISTINCT", ["category", "calls", "chats"], [("missing_permission", 12, 3)]),
         ("GROUP BY cs.user_id", ["uid", "email", "name", "n"], [("u1", "a@x.io", "A", 5)]),
         ("FROM chat_sessions cs WHERE", ["source", "count"], [("slack", 4)]),
@@ -171,7 +173,37 @@ def test_failures_are_capped_per_chat_before_the_overall_limit():
     ca._failed_tool_calls(cur, "org-1", chat_ids=["a", "b"], per_chat=5, limit=10)
     sql, params = cur.calls[0]
     assert sql.index("ranked.rn <= %s") < sql.index("LIMIT %s\n")
-    assert params[-2:] == (5, 10)
+    assert params[-3:] == (5, 10, "org-1")          # per-chat cap, limit, then the anchors' org
+
+
+def test_anchors_are_computed_once_per_chat_and_skipped_for_the_agent_tool():
+    cur = Cursor([])
+    ca._failed_tool_calls(cur, "org-1", chat_ids=["a"], limit=10)
+    sql = cur.calls[0][0]
+    assert sql.count("jsonb_array_elements(") == 2 and "c.id IN (SELECT DISTINCT chat_id FROM f)" in sql
+    cur = Cursor([])
+    ca._failed_tool_calls(cur, "org-1", limit=10, with_anchors=False)
+    assert "jsonb_array_elements(" not in cur.calls[0][0]
+
+
+def test_deleted_chats_are_excluded_but_rca_rows_kept():
+    cur = Cursor([])
+    ca._failed_tool_calls(cur, "org-1", limit=10)
+    ca._issue_totals(cur, "org-1", "7d")
+    for sql, _ in cur.calls:
+        assert ca._NOT_DELETED_SQL in sql
+    assert "es.incident_id IS NOT NULL OR" in ca._NOT_DELETED_SQL and "act.is_active" in ca._NOT_DELETED_SQL
+
+
+def test_free_text_never_matches_raw_stored_text():
+    # The stored error holds a password; a query for its prefix must not find it.
+    row = (1, "cloud_exec", {"command": "psql --password hunter2"}, "login failed for --password hunter2",
+           TS, "tc1", None, "s1", 1, None)
+    cur = Cursor([("WITH f AS", _FAIL_COLS, [row])])
+    assert ca._failed_tool_calls(cur, "org-1", query="hunt", limit=10) == []
+    assert "ILIKE" not in cur.calls[0][0]
+    cur = Cursor([("WITH f AS", _FAIL_COLS, [row])])
+    assert len(ca._failed_tool_calls(cur, "org-1", query="login failed", limit=10)) == 1
 
 
 def test_list_search_returns_redacted_snippet_with_message_anchor():
@@ -193,7 +225,7 @@ def _transcript(messages, steps=(), failures=()):
         ("jsonb_path_query_array", _CHAT_COLS + ["messages"],
          [(*_chat_row(source="web"), messages)]),
         ("SELECT tool_call_id, status, error_message", ["tool_call_id", "status", "error_message"], list(steps)),
-        ("ROW_NUMBER()", _FAIL_COLS, list(failures)),
+        ("WITH f AS", _FAIL_COLS, list(failures)),
     ])
     return ca.get_transcript(cur, "org-1", "s1"), cur
 
@@ -246,9 +278,11 @@ def test_transcript_tolerates_malformed_messages():
 
 def test_search_failed_tool_calls_filters_and_links():
     cur = Cursor([
-        ("ROW_NUMBER()", _FAIL_COLS, [
+        ("WITH f AS", _FAIL_COLS, [
             (1, "cloud_exec", {"command": "s3 ls"}, "AccessDenied", TS, "tc1", None, "s1", 1, None),
-            (2, "kubectl", {}, "forbidden", TS, "tc2", "11111111-1111-1111-1111-111111111111", "s9", 1, 4),
+            (2, "cloud_exec", {"command": "s3 cp x y"}, "forbidden", TS, "tc2",
+             "11111111-1111-1111-1111-111111111111", "s9", 1, 4),
+            (3, "cloud_exec", {"command": "ec2 describe-vpcs"}, "forbidden", TS, "tc3", None, "s2", 1, None),
         ]),
         ("COUNT(DISTINCT", ["category", "calls", "chats"], [("missing_permission", 2, 2)]),
     ])
@@ -257,7 +291,8 @@ def test_search_failed_tool_calls_filters_and_links():
     assert [c["link"] for c in out["tool_calls"]] == [
         "/chat?sessionId=s1", "/incidents/11111111-1111-1111-1111-111111111111"]
     sql, params = cur.calls[0]
-    assert "missing_permission" in params and "cloud_exec" in params and "%s3%" in params
+    assert "missing_permission" in params and "cloud_exec" in params
+    assert ca.QUERY_POOL_SIZE in params                 # free text filters a bounded pool in Python
     assert out["by_issue"][0] == {"category": "missing_permission", "label": "Missing permission",
                                   "calls": 2, "chats": 2}
 
@@ -333,3 +368,48 @@ def test_all_chats_count_ignores_only_the_issue_filter():
     cur = Cursor([("SELECT COUNT(*) FROM chat_sessions", ["count"], [(9,)])])
     assert ca.list_chats(cur, "org-1", ChatFilters.parse({}))["all_chats"] == 9
     assert sum("SELECT COUNT(*) FROM chat_sessions" in sql for sql, _ in cur.calls) == 1
+
+
+# --- redaction of real-world shapes (review findings) -----------------------
+
+STS_OUTPUT = json.dumps({"Credentials": {
+    "AccessKeyId": "ASIAEXAMPLEID", "SecretAccessKey": "wJalrXUtnFEMIexamplesecretvalue",
+    "SessionToken": "FwoGZXIvYXdzEXAMPLEsessiontokenvalue", "Expiration": "2026-11-12T10:00:00Z"}})
+K8S_SECRET = json.dumps({"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "db"},
+                         "data": {"DATABASE_URL": "cG9zdGdyZXM6Ly91OnBAaA==", "tls.key": "LS0tLS1CRUdJTg=="}})
+
+
+def test_sts_credentials_are_redacted_by_key_name():
+    # The whole "Credentials" object goes; its fields are caught on their own too.
+    assert json.loads(ca.scrub_json_text(STS_OUTPUT))["Credentials"] == ca.REDACTED
+    inner = json.loads(ca.scrub_json_text(json.dumps(json.loads(STS_OUTPUT)["Credentials"])))
+    assert inner["SecretAccessKey"] == inner["SessionToken"] == ca.REDACTED
+    assert inner["Expiration"] == "2026-11-12T10:00:00Z"
+
+
+def test_kubernetes_secret_data_is_redacted_whatever_the_key():
+    out = json.loads(ca.scrub_json_text(K8S_SECRET))
+    assert out["data"] == ca.REDACTED and out["metadata"] == {"name": "db"}
+
+
+@pytest.mark.parametrize("key, secret", [
+    ("DB_PASS", True), ("tls.key", True), ("client_secret", True), ("privateKey", True),
+    ("Authorization", True), ("keyboard_layout", False), ("PrivateIpAddress", False),
+    ("author", False), ("authorName", False), ("KeyName", False),
+])
+def test_secret_key_names(key, secret):
+    out = json.loads(ca.scrub_json_text(json.dumps({key: "value123"})))
+    assert (out[key] == ca.REDACTED) is secret
+
+
+def test_snippet_never_shows_a_secret_whose_flag_falls_outside_the_window():
+    text = "run --password " + "s3cretvalue" + " x" * (ca.SNIPPET_RADIUS // 2) + " needle " + "y" * 50
+    assert "s3cretvalue" not in ca._snippet(text, "needle")
+
+
+def test_failure_reason_and_transcript_redact_before_truncating():
+    long_error = "x" * (ca.REASON_MAX_CHARS - 12) + " --password hunter2longer"
+    assert "hunter2" not in ca.failure_reason(long_error)
+    secret_key = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+    assert secret_key[:12] not in ca.scrub_json_text("token: " + secret_key, limit=14)
+    assert "hunter2" not in ca.summarize_input({"command": "psql --password hunter2"})
