@@ -282,6 +282,8 @@ _OPEN_PREFIXES = (
     "/aws/setup-script-ps1",
     "/aws/setup-role-ps1",
     "/aws/cloudwatch/webhook/",
+    # Setup-email unsubscribe links: authorized by an HMAC of the user id.
+    "/onboarding/unsubscribe",
 )
 
 @app.before_request
@@ -748,8 +750,9 @@ from routes.debug import bp as debug_bp
 app.register_blueprint(debug_bp)
 
 # --- Onboarding Routes ---
-from routes.onboarding_routes import onboarding_bp
+from routes.onboarding_routes import onboarding_bp, onboarding_public_bp
 app.register_blueprint(onboarding_bp, url_prefix="/api/onboarding")
+app.register_blueprint(onboarding_public_bp, url_prefix="/onboarding")
 
 # ============================================================================
 # Global Error Handlers

@@ -858,6 +858,8 @@ def _provision_and_handoff(
         from utils.hooks import get_hook
 
         get_hook("after_user_created")(user_id, org_id, identity["email"], "github", True)
+        from services.onboarding.journey import on_user_created
+        on_user_created(user_id, org_id, identity["email"], "github", True)
 
     if org_id:
         try:

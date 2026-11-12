@@ -173,6 +173,7 @@ celery_app.conf.update(
         'utils.repo_metadata',
         'services.actions.scheduler',
         'services.connectors.heal',
+        'services.onboarding.tasks',
     ],
     # Periodic task schedule
     beat_schedule={
@@ -223,6 +224,11 @@ celery_app.conf.update(
         'sync-github-installation-repos': {
             'task': 'routes.github.github_repo_metadata.sync_installation_repos',
             'schedule': 3600.0,
+        },
+        # Setup emails from each new account's guide (off unless configured).
+        'sweep-onboarding-journeys': {
+            'task': 'services.onboarding.tasks.sweep_journeys',
+            'schedule': 900.0,
         },
         'backfill-teams-channel-descriptions': {
             'task': 'routes.teams.teams_channel_metadata.backfill_channel_descriptions',

@@ -494,6 +494,12 @@ config:
   HOSTED_SIGNUP_ENABLED: "false"             # One-click GitHub App / "Add to Slack" signup from website (GitHub needs GITHUB_APP_CLIENT_SECRET)
   MARKETING_SITE_URL: ""                     # Website a cancelled "Add to Slack" returns to; empty = app sign-in page
   SSO_ENFORCE_DOMAIN_VERIFICATION: "false"   # SAML SSO: require DNS proof of email-domain ownership (set true when multi-tenant)
+  # Guided onboarding: a guide per new account + setup emails from them (see .env.example)
+  ONBOARDING_GUIDES: ""                      # JSON list of {key,name,email,title,avatar_url,booking_url}
+  ONBOARDING_EMAILS_ENABLED: "false"         # needs SMTP_* and an unsubscribe secret
+  ONBOARDING_SEND_AS_GUIDE: "false"          # From: the guide's own address (SMTP account must be allowed)
+  ONBOARDING_BCC_GUIDE: "false"
+  ONBOARDING_SKIP_EMAIL_DOMAINS: ""          # e.g. "yourcompany.com"
   
   # --- Pod Isolation Settings ---
   # When enabled, the chart automatically creates:
@@ -649,6 +655,8 @@ secrets:
     SMTP_PASSWORD: ""
     SMTP_FROM_EMAIL: ""
     SMTP_FROM_NAME: "Aurora"
+    ONBOARDING_UNSUBSCRIBE_SECRET: ""   # Optional: signs setup-email unsubscribe links (defaults to FLASK_SECRET_KEY)
+    ONBOARDING_TEAM_WEBHOOK_URL: ""     # Optional: Slack incoming webhook for signup/connect/email pings
     
     # --- Optional: Rate Limiting Bypass ---
     RATE_LIMIT_BYPASS_TOKEN: ""  # Custom token to bypass rate limits

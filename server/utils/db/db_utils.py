@@ -1244,6 +1244,36 @@ def initialize_tables():
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_onboarding_selections_org
                         ON onboarding_selections(org_id);
                 """,
+                # Guided onboarding (services/onboarding). Not RLS-scoped: the
+                # journey sweep is cross-org, and every query filters by user_id.
+                "onboarding_journeys": """
+                    CREATE TABLE IF NOT EXISTS onboarding_journeys (
+                        user_id VARCHAR(255) PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) REFERENCES organizations(id) ON DELETE CASCADE,
+                        via VARCHAR(32),
+                        guide_key VARCHAR(64),
+                        emails_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                        known_connectors TEXT[] NOT NULL DEFAULT '{}',
+                        pending_parts TEXT[] NOT NULL DEFAULT '{}',
+                        unsubscribed_at TIMESTAMP,
+                        last_checked_at TIMESTAMP,
+                        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_onboarding_journeys_active
+                        ON onboarding_journeys(created_at) WHERE emails_enabled AND unsubscribed_at IS NULL;
+                    CREATE INDEX IF NOT EXISTS idx_onboarding_journeys_org ON onboarding_journeys(org_id);
+                """,
+                "onboarding_emails": """
+                    CREATE TABLE IF NOT EXISTS onboarding_emails (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        kind VARCHAR(40) NOT NULL,
+                        subject VARCHAR(255),
+                        sent_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                        UNIQUE (user_id, kind)
+                    );
+                """,
                 "org_command_policies": """
                     CREATE TABLE IF NOT EXISTS org_command_policies (
                         id SERIAL PRIMARY KEY,
