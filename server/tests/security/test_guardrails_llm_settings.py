@@ -56,6 +56,14 @@ def test_pro_and_argon_use_low_because_they_reject_minimal(monkeypatch):
     assert safety_judge_thinking_overrides("vertex/gemini-4-argon")["thinking_level"] == "low"
 
 
+@pytest.mark.parametrize("provider", ["vertex", "google"])
+def test_carbon_judge_uses_supported_low_level(provider):
+    assert safety_judge_thinking_overrides(f"{provider}/gemini-4-carbon") == {
+        "thinking_level": "low",
+        "include_thoughts": False,
+    }
+
+
 def test_gemini_25_uses_a_zero_budget(monkeypatch):
     monkeypatch.setenv("GUARDRAILS_DISABLE_THINKING", "1")
     assert safety_judge_thinking_overrides("vertex/gemini-2.5-flash") == {

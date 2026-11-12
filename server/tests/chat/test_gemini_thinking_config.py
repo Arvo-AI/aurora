@@ -1,4 +1,5 @@
-"""Smoke check: flash-lite models must not get thinking config."""
+"""Thinking summaries must be safe for the API used by each Gemini family."""
+import pytest
 from chat.backend.agent.providers.base_provider import apply_gemini_thinking_config
 
 
@@ -8,13 +9,13 @@ def test_flash_lite_skips_thinking():
     assert config == {}
 
 
-def test_argon_gets_thoughts_without_forcing_a_level(monkeypatch):
-    # Argon's API default is medium; only preview ids get an explicit level.
-    monkeypatch.delenv("GEMINI_DISABLE_THINKING", raising=False)
+@pytest.mark.parametrize("model", ["gemini-4-argon", "gemini-4-carbon", "gemini-4-carbon-preview"])
+@pytest.mark.parametrize("disable", ["", "true"])
+def test_gemini_4_suppresses_summaries_without_disabling_reasoning(monkeypatch, model, disable):
+    monkeypatch.setenv("GEMINI_DISABLE_THINKING", disable)
     config: dict = {}
-    apply_gemini_thinking_config(config, "gemini-4-argon")
-    assert config.get("include_thoughts") is True
-    assert "thinking_level" not in config
+    apply_gemini_thinking_config(config, model)
+    assert config == {"include_thoughts": False}
 
 
 def test_flash_gets_thinking_when_enabled(monkeypatch):

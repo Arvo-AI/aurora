@@ -105,11 +105,10 @@ def safety_judge_thinking_overrides(model_name: str) -> dict:
         if "2.5" in native:
             budget = 128 if "pro" in native else 0
             return {"thinking_budget": budget, "include_thoughts": False}
-        # 3+ and 4 think at high unless a level is sent. include_thoughts only
-        # returns the trace; it does not shorten it.
+        # include_thoughts only returns the trace; it does not shorten reasoning.
         if "gemini-3" in native or "gemini-4" in native:
-            # 3.8 Flash, Pro, and Argon return 400 for minimal.
-            level = "low" if ("pro" in native or "argon" in native or "3.8" in native) else "minimal"
+            # Gemini 4 (Carbon and Argon), 3.8 Flash, and Pro reject minimal.
+            level = "low" if ("gemini-4" in native or "pro" in native or "3.8" in native) else "minimal"
             return {"thinking_level": level, "include_thoughts": False}
     # The OpenAI provider sets effort=high, then applies kwargs, so this
     # replaces that default. gpt-4 has no reasoning parameter.

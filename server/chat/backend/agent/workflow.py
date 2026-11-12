@@ -51,7 +51,9 @@ class Workflow:
         self.app = self.get_compiled_workflow()
         self._last_state = None
         self._ui_state = None  # Store UI state to save with messages
-        self._stream_text_by_id: dict[str, str] = {}
+        # Answer text only: background progress also contains thinking and must
+        # never be used to recover a saved reply (which can be posted to Slack).
+        self._stream_answer_by_id: dict[str, str] = {}
         self._history_prefix_len: int = 0
         # This turn's capture. Agent.tool_capture_instance is shared across workflows.
         self.tool_capture = None
@@ -910,7 +912,7 @@ class Workflow:
 
         # Reset per-turn; recovers streamed AI text on cancellation when
         # LangGraph hasn't committed the final AIMessage to state yet.
-        self._stream_text_by_id.clear()
+        self._stream_answer_by_id.clear()
 
         # Initialize tool context capture for this session
         tool_capture = None
@@ -1116,19 +1118,21 @@ class Workflow:
                         # this is safe to call unconditionally.
                         is_background = getattr(input_state, "is_background", False)
                         if hasattr(chunk_obj, 'content') and chunk_obj.content:
+                            answer = extract_text_from_content(chunk_obj.content)
+                            chunk_id = getattr(chunk_obj, 'id', None)
+                            if answer and chunk_id:
+                                self._stream_answer_by_id[chunk_id] = (
+                                    self._stream_answer_by_id.get(chunk_id, "") + answer
+                                )
                             content = extract_text_from_content(chunk_obj.content, include_thinking=is_background)
 
                         # For background RCA chats, reasoning feeds into incident thoughts
                         if not content and reasoning and is_background:
                             content = reasoning
 
-                        # Only yield if we have actual text content (not reasoning)
+                        # Background progress may include thinking; the recovery
+                        # buffer above deliberately contains only answer text.
                         if content:
-                            chunk_id = getattr(chunk_obj, 'id', None)
-                            if chunk_id:
-                                self._stream_text_by_id[chunk_id] = (
-                                    self._stream_text_by_id.get(chunk_id, "") + content
-                                )
                             _model_turn_tokens += 1
                             yield ("token", content)
                             if _token_count <= 5:
@@ -1190,6 +1194,13 @@ class Workflow:
                     chunk_data = event.get("data", {})
                     output = chunk_data.get("output")
                     if output:
+                        # Prefer the complete answer, including when a provider
+                        # streamed thinking but only returned text at model end.
+                        answer = extract_text_from_content(getattr(output, 'content', None))
+                        msg_id = getattr(output, 'id', None)
+                        if answer and msg_id:
+                            self._stream_answer_by_id[msg_id] = answer
+
                         # Process tool calls
                         has_tool_calls = getattr(output, 'tool_calls', None)
                         has_raw_tool_calls = getattr(output, 'additional_kwargs', {}).get('tool_calls')
@@ -1212,11 +1223,6 @@ class Workflow:
                                     content = reasoning
                             if content:
                                 logger.info(f"[STREAM FALLBACK] Extracted {len(content)} chars from on_chat_model_end (streaming didn't fire)")
-                                msg_id = getattr(output, 'id', None)
-                                if msg_id:
-                                    self._stream_text_by_id[msg_id] = (
-                                        self._stream_text_by_id.get(msg_id, "") + content
-                                    )
                                 yield ("token", content)
 
                         # Extract provider-reported usage_metadata for accurate tracking
@@ -1498,18 +1504,23 @@ class Workflow:
         # Remove duplicates
         final_messages = self._deduplicate_messages(consolidated_messages)
 
-        # Recover text streamed to UI but missing from the final AIMessage
+        # Recover answer text missing from the final AIMessage
         # (cancellation before LangGraph commits the complete response).
-        if self._stream_text_by_id:
+        if self._stream_answer_by_id:
             for msg in final_messages:
                 if not isinstance(msg, AIMessage):
                     continue
-                current = msg.content if isinstance(msg.content, str) else ""
+                current = extract_text_from_content(msg.content)
                 if current:
                     continue
-                recovered = self._stream_text_by_id.get(getattr(msg, "id", None), "")
+                recovered = self._stream_answer_by_id.get(getattr(msg, "id", None), "")
                 if recovered:
-                    msg.content = recovered
+                    if isinstance(msg.content, list):
+                        # Keep thought/tool signatures in context for the next
+                        # model call. UI conversion drops the thinking blocks.
+                        msg.content = [*msg.content, {"type": "text", "text": recovered}]
+                    else:
+                        msg.content = recovered
         
         # DEBUG: Log all ToolMessage IDs after deduplication
         for i, msg in enumerate(final_messages):
