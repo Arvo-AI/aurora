@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from flask import Flask
@@ -134,7 +135,6 @@ def test_signed_in_user_links_a_new_install_without_taking_its_github_identity(e
          patch.object(mod, "validate_user_exists", return_value=True), \
          patch.object(mod, "get_org_id_for_user", return_value="org-1"), \
          patch("routes.github.github_signup._verify_installation", return_value=_INSTALL), \
-         patch("utils.auth.enforcer.enforce_with_reload", return_value=True), \
          patch("routes.github.github_repo_metadata.import_installation_repos") as task, \
          patch("utils.auth.tool_registry.seed_org_tool_permissions"):
         cur.fetchall.return_value = []
@@ -155,39 +155,58 @@ def test_link_pending_refuses_an_install_another_org_has(env):
          patch.object(mod, "validate_user_exists", return_value=True), \
          patch.object(mod, "get_org_id_for_user", return_value="org-1"), \
          patch("routes.github.github_signup._verify_installation", return_value=_INSTALL), \
-         patch("utils.auth.enforcer.enforce_with_reload", return_value=True), \
          patch("routes.github.github_repo_metadata.import_installation_repos") as task:
         assert mod.link_pending_install("user-1", "org-1", pending) is not None
     conn.commit.assert_not_called()
     task.delay.assert_not_called()
 
 
-def test_link_state_only_works_for_the_token_it_was_minted_for(env):
+def _finish(env, token, ticket, request_org="org-1", linked=None):
     app, mod, _ = env
-    token, _pending_payload = _pending(env)
-    with app.test_request_context(json={"token": token}), \
-         patch("utils.auth.stateless_auth.get_org_id_from_request", return_value="org-1"):
-        out = mod.github_app_link_pending_start.__wrapped__("user-1")
-        state = out.get_json()["state"]
-        assert out.get_json()["account_login"] == "octo-org"
-        assert mod.verify_link_state(state, token) == ("user-1", "org-1")
-        assert mod.verify_link_state(state, token + "x") is None
+    rc = MagicMock()
+    used = set()
+    rc.set.side_effect = lambda key, *a, **k: not (key in used or used.add(key))
+    with app.test_request_context(json={"token": token, "ticket": ticket}), \
+         patch("utils.auth.stateless_auth.get_org_id_from_request", return_value=request_org), \
+         patch("utils.cache.redis_client.get_redis_client", return_value=rc), \
+         patch.object(mod, "link_pending_install", return_value=None) as link:
+        out = mod.github_app_link_pending_finish.__wrapped__("user-1")
+    return out, link
 
 
-@pytest.mark.parametrize("user_org, allowed", [("org-2", True), ("org-1", False)])
-def test_confirm_refuses_a_user_who_moved_org_or_lost_connectors_write(env, user_org, allowed):
-    # The link state was minted for org-1 with connectors:write; both are
-    # checked again when Connect lands, up to 10 minutes later.
+def test_finish_needs_a_ticket_from_the_installers_browser(env):
+    # Without the confirm step's ticket (only the browser holding the
+    # install cookie gets one) a token alone links nothing.
     app, mod, _ = env
-    _token, pending = _pending(env)
-    pool, conn, _cur = _db([])
-    with app.test_request_context(), \
-         patch.object(mod, "db_pool", pool), \
-         patch.object(mod, "validate_user_exists", return_value=True), \
-         patch.object(mod, "get_org_id_for_user", return_value=user_org), \
-         patch("utils.auth.enforcer.enforce_with_reload", return_value=allowed), \
-         patch("routes.github.github_signup._verify_installation", return_value=_INSTALL), \
-         patch("routes.github.github_repo_metadata.import_installation_repos") as task:
-        assert mod.link_pending_install("user-1", "org-1", pending) is not None
-    conn.commit.assert_not_called()
-    task.delay.assert_not_called()
+    token, _p = _pending(env)
+    with app.test_request_context():
+        other = mod.sign_link_ticket(token + "other")
+    for ticket in (None, "garbage", other):
+        out, link = _finish(env, token, ticket)
+        assert out[1] == 400
+        link.assert_not_called()
+
+
+def test_finish_links_into_the_signed_in_users_org(env):
+    app, mod, _ = env
+    token, _p = _pending(env)
+    with app.test_request_context():
+        ticket = mod.sign_link_ticket(token)
+    out, link = _finish(env, token, ticket, request_org="org-7")
+    assert link.call_args.args[:2] == ("user-1", "org-7")
+
+
+def test_confirm_hands_a_ticket_only_to_the_installers_browser(env):
+    app, mod, _ = env
+    from routes.github import github_signup
+
+    token, _p = _pending(env)
+    app.register_blueprint(github_signup.github_signup_bp, url_prefix="/github")
+    client = app.test_client()
+    resp = client.get(f"/github/app/link-pending/confirm?t={token}")
+    assert "gh_link=" not in (resp.location or "")
+    client.set_cookie(github_signup._PENDING_BIND_COOKIE, "bind-1", path="/github/app")
+    resp = client.get(f"/github/app/link-pending/confirm?t={token}")
+    ticket = parse_qs(urlparse(resp.location).query)["gh_link"][0]
+    with app.test_request_context():
+        assert mod.verify_link_ticket(ticket, token)

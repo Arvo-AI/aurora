@@ -203,7 +203,7 @@ function AuthPage() {
   // A brand-new GitHub installer, account not created yet (see GithubPendingInstall).
   const [githubPending] = useState(() => {
     const token = searchParams.get("gh_new")
-    return token ? { token } : null
+    return token ? { token, linkTicket: searchParams.get("gh_link") } : null
   })
   const isSsoHandoff = handoffVia === "sso"
   const isSlackHandoff = handoffVia?.startsWith("slack") ?? false
@@ -567,7 +567,7 @@ function AuthPage() {
           </div>
 
           {githubPending && (
-            <GithubPendingInstall token={githubPending.token} />
+            <GithubPendingInstall token={githubPending.token} linkTicket={githubPending.linkTicket} />
           )}
 
           {handoffInFlight && isSlackHandoff && <SlackHandoffPanel via={handoffVia} />}

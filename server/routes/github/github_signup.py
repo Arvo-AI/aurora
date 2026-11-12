@@ -957,6 +957,9 @@ def github_app_signup_callback():
             logger.info("[GITHUB-SIGNUP] install-flow state; delegating to install callback")
             return github_app_install_callback()
 
+    if not installation_id_raw and (request.args.get("setup_action") or "").strip() == "request":
+        # Nothing to link or sign up; works with hosted signup off too.
+        return _response_without_install(installation_id_raw, code)
     if not _signup_ready():
         return _render_error(_ERROR_NOT_AVAILABLE)
 
@@ -1067,25 +1070,18 @@ def github_app_signup_complete():
 
 @github_signup_bp.route("/app/link-pending/confirm", methods=["GET"])
 def github_app_link_pending_confirm():
-    """Connect a new install to the signed-in user's org (the card's Connect).
+    """First half of the card's Connect: prove this is the installer's browser.
 
-    A top-level navigation from the app, so it carries both proofs: the
-    cookie set on the browser that did the install, and a link state the
-    app minted for the signed-in user (``POST /github/app/link-pending/start``).
+    A top-level navigation, so it carries the cookie the callback set. It
+    swaps that for a two-minute ticket and sends the browser back to the
+    app, which finishes the link as whoever is signed in there
+    (``POST /github/app/link-pending/finish``).
     """
-    from routes.github.github_app import link_pending_install, verify_link_state
+    from routes.github.github_app import sign_link_ticket
 
     token = request.args.get("t") or ""
     pending = verify_pending_signup(token)
-    linker = verify_link_state(request.args.get("s") or "", token)
-    if pending is None or linker is None or not pending_bound_to_this_browser(pending):
+    if pending is None or not pending_bound_to_this_browser(pending):
         return _render_error(_ERROR_LINK_EXPIRED)
-    if not reserve_pending_signup(token):
-        return _render_error(_ERROR_LINK_EXPIRED)
-    error = link_pending_install(linker[0], linker[1], pending)
-    if error is not None:
-        release_pending_signup(token)
-        return _render_error(error)
-    return clear_pending_cookie(
-        flask.redirect(f"{FRONTEND_URL}/connectors?installed=github", code=302)
-    )
+    back = urlencode({"gh_new": token, "gh_link": sign_link_ticket(token)})
+    return clear_pending_cookie(flask.redirect(f"{FRONTEND_URL}/sign-in?{back}", code=302))
