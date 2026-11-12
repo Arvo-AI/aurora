@@ -505,15 +505,7 @@ def private_answer_channel(trigger_metadata: Optional[dict], *, is_background: b
         # Slack direct-message channel ids start with "D"; anything else is shared.
         return str(meta.get("channel") or "").startswith("D")
     # The web app: an interactive chat with no trigger at all.
-    return not meta and not is_background                                 # malformed: fail closed
-    meta = trigger_metadata
-    source = str(meta.get("source") or "").lower()
-    if source in ("", "chat"):
-        return True                                  # the web app
-    if source == "slack":
-        # Slack direct-message channel ids start with "D"; anything else is shared.
-        return str(meta.get("channel") or "").startswith("D")
-    return False
+    return not meta and not is_background
 
 
 def _shape_failure(r: dict) -> dict:

@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { AlertTriangle, ExternalLink, Wrench, X } from 'lucide-react';
-import { useQuery, jsonFetcher } from '@/lib/query';
+import { useQuery } from '@/lib/query';
 import { ChartPanel, EmptyState, type Period } from './charts';
-import { Pager, SearchBox, selectCls, useDebounced, useKeptData } from './audit-controls';
+import { FilterError, Pager, SearchBox, auditFetcher, filterErrorOf, selectCls, useDebounced, useKeptData } from './audit-controls';
 import {
   ISSUE_ORDER, ISSUE_SHORT, ISSUE_STYLES, SOURCE_STYLES, STATUS_STYLES, formatTimestamp,
   type AuditLabels, type IssueCount,
@@ -152,9 +152,10 @@ export default function ToolCallsView({ period, onOpen }: {
   if (q) params.set('q', q);
 
   const { data, error, isLoading } = useQuery<ToolCallsResponse>(
-    `/api/monitor/tool-calls?${params.toString()}`, jsonFetcher, { staleTime: 15_000 },
+    `/api/monitor/tool-calls?${params.toString()}`, auditFetcher, { staleTime: 15_000 },
   );
   const { view, refreshing } = useKeptData(data, isLoading);
+  const filterError = filterErrorOf(error);
   const labels = view?.labels;
   const hasFilters = status || issue || source || user || tool || search;
   const counts = view?.status_counts;
@@ -202,7 +203,10 @@ export default function ToolCallsView({ period, onOpen }: {
         )}
       </div>
 
-      {error && !view ? (
+      <FilterError message={filterError} />
+
+      {/* A rejected filter shows only its message, not the last results as if they matched. */}
+      {filterError ? null : error && !view ? (
         <EmptyState icon={AlertTriangle} message="Could not load tool calls" hint="Only organization admins can view this." />
       ) : !view || view.tool_calls.length === 0 ? (
         isLoading

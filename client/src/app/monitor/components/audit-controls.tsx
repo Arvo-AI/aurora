@@ -3,6 +3,34 @@
 import { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
 
+/**
+ * Fetcher for the audit endpoints that keeps the API's error message and status,
+ * so a rejected filter (400, e.g. "Search can't look for secret values.") can be
+ * shown to the user instead of a generic failure.
+ */
+export async function auditFetcher<T>(key: string, signal: AbortSignal): Promise<T> {
+  const res = await fetch(key, { credentials: 'include', signal });
+  if (res.ok) return res.json() as Promise<T>;
+  let message = `Request failed (${res.status})`;
+  try {
+    const body = await res.json();
+    if (typeof body?.error === 'string') message = body.error;
+  } catch {
+    // Not JSON: keep the generic message.
+  }
+  throw Object.assign(new Error(message), { status: res.status });
+}
+
+/** The constant message of a rejected filter (400), or null for any other outcome. */
+export function filterErrorOf(error: Error | null): string | null {
+  return error && (error as Error & { status?: number }).status === 400 ? error.message : null;
+}
+
+export function FilterError({ message }: { message: string | null }) {
+  if (!message) return null;
+  return <p role="alert" className="-mt-2 mb-3 text-xs text-amber-400">{message}</p>;
+}
+
 export const selectCls =
   'bg-zinc-800/50 border border-zinc-700/50 rounded-md px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:ring-1 focus:ring-zinc-600 max-w-[180px]';
 

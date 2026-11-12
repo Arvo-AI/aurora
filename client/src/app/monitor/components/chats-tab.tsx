@@ -6,7 +6,7 @@ import { useQuery, jsonFetcher } from '@/lib/query';
 import { ChartPanel, EmptyState, type Period } from './charts';
 import ChatTranscript from './chat-transcript';
 import ToolCallsView, { type ToolCallsResponse } from './tool-calls-view';
-import { Pager, SearchBox, selectCls, useDebounced, useKeptData, useUrlParam } from './audit-controls';
+import { FilterError, Pager, SearchBox, auditFetcher, filterErrorOf, selectCls, useDebounced, useKeptData, useUrlParam } from './audit-controls';
 import {
   ISSUE_SHORT, ISSUE_STYLES, SOURCE_STYLES, STATUS_STYLES, formatTimestamp, type AuditLabels,
 } from './chat-audit-shared';
@@ -117,9 +117,10 @@ function ChatHistoryView({ period, onOpen }: {
   if (q) params.set('q', q);
 
   const { data, error, isLoading } = useQuery<ChatsResponse>(
-    `/api/monitor/chats?${params.toString()}`, jsonFetcher, { staleTime: 15_000 },
+    `/api/monitor/chats?${params.toString()}`, auditFetcher, { staleTime: 15_000 },
   );
   const { view, refreshing } = useKeptData(data, isLoading);
+  const filterError = filterErrorOf(error);
   const labels = view?.labels;
   const hasFilters = source || status || user || search;
 
@@ -154,7 +155,10 @@ function ChatHistoryView({ period, onOpen }: {
         )}
       </div>
 
-      {error && !view ? (
+      <FilterError message={filterError} />
+
+      {/* A rejected filter shows only its message, not the last results as if they matched. */}
+      {filterError ? null : error && !view ? (
         <EmptyState icon={AlertTriangle} message="Could not load chat history" hint="Only organization admins can view all chats." />
       ) : !view || view.chats.length === 0 ? (
         isLoading
