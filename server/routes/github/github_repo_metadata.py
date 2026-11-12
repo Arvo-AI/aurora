@@ -242,7 +242,10 @@ def _apply_exclusions(
     When GitHub granted these repos again (``regranted``), exclusions older
     than the grant's webhook are cleared and the repos come back; one
     recorded after it still wins. Both times come from the database clock;
-    without a known delivery the exclusion stands.
+    without a known delivery the exclusion stands. ``excluded_at`` is the
+    picker save's transaction start, so a save that starts before the grant
+    webhook arrives and commits after it loses to the grant; GitHub's grant
+    is the later intent in that case, so that is accepted.
     """
     names = [r.get("full_name") for r in repos if r.get("full_name")]
     if not names:
@@ -265,27 +268,6 @@ def _apply_exclusions(
     return [r for r in repos if r.get("full_name") not in excluded]
 
 
-def _disconnect_installation(installation_id: int) -> None:
-    from utils.db.connection_pool import db_pool
-
-    try:
-        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
-            cur.execute(
-                """UPDATE user_github_installations
-                      SET disconnected_at = NOW(),
-                          repos_imported_at = NULL,
-                          repos_import_legacy = FALSE
-                    WHERE installation_id = %s
-                      AND disconnected_at IS NULL""",
-                (installation_id,),
-            )
-            conn.commit()
-    except Exception:
-        logger.warning(
-            "[RepoImport] disconnect failed installation_id=%s", installation_id, exc_info=True,
-        )
-
-
 def _import_installation_repos(
     self,
     user_id: str,
@@ -304,7 +286,7 @@ def _import_installation_repos(
     inside Aurora, the repos they already granted on GitHub. Each repo is
     UPSERTed with its ``installation_id`` set; new rows get
     ``change_gating_enabled = enroll_change_gating`` and existing rows keep
-    theirs. This NEVER deletes.
+    theirs. Only ``reconcile`` deletes (see below).
 
     A full import (no ``only_repos`` / ``created_after``) runs once per
     link: after it lands, ``user_github_installations.repos_imported_at`` is
@@ -318,11 +300,13 @@ def _import_installation_repos(
     skipped, except ``only_repos``: granting a repo on GitHub again is an
     explicit choice, so it clears the exclusion.
 
-    ``reconcile`` (the hourly sync) imports every granted repo that is not
-    connected and not excluded, without the once-per-link guard, and drops
-    rows for repos GitHub no longer grants. It is
-    safe once the link's removals are all recorded, i.e. not for links that
-    predate the exclusions table (``repos_import_legacy``).
+    ``reconcile`` (the hourly sync) drops rows for repos GitHub no longer
+    grants and imports granted repos that are not connected and not
+    excluded, without the once-per-link guard. Rows already connected are
+    left as they are. For links that predate the exclusions table
+    (``repos_import_legacy``) the sync also passes ``created_after``, since
+    an older repo missing there may have been removed on purpose; the
+    pruning still applies to them.
 
     ``grant_delivery_id`` is the ``installation_repositories.added`` webhook
     that granted ``only_repos``. A picker removal recorded after that
@@ -362,13 +346,14 @@ def _import_installation_repos(
         )
         return
     except GitHubAppInstallationNotFound:
-        # Uninstalled on GitHub. Drop the links so the sync stops picking it
-        # and auth falls back to OAuth (the token helper's 404 contract).
-        logger.info(
-            "[RepoImport] installation gone, disconnecting installation_id=%s",
+        # Not disconnected here: one 404 (a GitHub incident, or the wrong App
+        # identity configured) would cut off every org's link. An uninstall
+        # arrives as the installation.deleted webhook, and sign-in confirms
+        # stale links with GitHub.
+        logger.warning(
+            "[RepoImport] installation not found, skipping installation_id=%s",
             installation_id,
         )
-        _disconnect_installation(installation_id)
         return
     except Exception as exc:
         logger.warning(
@@ -390,6 +375,7 @@ def _import_installation_repos(
         )
         _retry_import(self, installation_id, "repo listing")
         return
+    granted = [r.get("full_name") for r in repos if r.get("full_name")]
     if only_repos is not None:
         wanted = set(only_repos)
         repos = [r for r in repos if r.get("full_name") in wanted]
@@ -415,7 +401,7 @@ def _import_installation_repos(
                     """DELETE FROM connected_repos
                         WHERE installation_id = %s
                           AND NOT (repo_full_name = ANY(%s))""",
-                    (installation_id, [r.get("full_name") for r in repos if r.get("full_name")]),
+                    (installation_id, granted),
                 )
             repos = _apply_exclusions(
                 cur, org_id, repos,
@@ -435,6 +421,10 @@ def _import_installation_repos(
             for repo in repos:
                 full_name = repo.get("full_name")
                 if not full_name:
+                    continue
+                if reconcile and full_name in existing:
+                    # Only fill gaps: rewriting every row hourly would also
+                    # move OAuth-connected rows onto the App.
                     continue
                 owner_id = existing.get(full_name, user_id)
                 cur.execute(
@@ -544,8 +534,9 @@ def _sync_installation_repos():
       connected nor removed in the picker. That also catches a repo granted
       on GitHub whose ``added`` webhook was lost;
     * links from before removals were recorded (``repos_import_legacy``):
-      only repos created on GitHub after the marker, since a repo missing
-      from those may have been removed on purpose.
+      the same, but only repos created on GitHub after the marker are
+      added, since an older one missing there may have been removed on
+      purpose.
 
     Installations where someone turned review off on a repo are skipped.
     """
@@ -575,7 +566,7 @@ def _sync_installation_repos():
             import_installation_repos.delay(
                 owner, installation_id, enroll_change_gating=True,
                 created_after=_iso_utc(imported_at) if imported_at and legacy else None,
-                reconcile=bool(imported_at) and not legacy,
+                reconcile=bool(imported_at),
                 require_enrollment=True,
             )
             queued += 1

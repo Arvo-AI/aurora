@@ -661,7 +661,11 @@ def _linked_elsewhere(cur, installation_id: int, org_id: str | None) -> bool:
     """
     # Held until the caller's transaction ends, so two orgs linking the same
     # installation at once cannot both see it unowned.
-    cur.execute("SELECT pg_advisory_xact_lock(%s)", (installation_id,))
+    # Prefixed key, so it cannot collide with other advisory locks.
+    cur.execute(
+        "SELECT pg_advisory_xact_lock(hashtext(%s))",
+        (f"github_installation:{installation_id}",),
+    )
     cur.execute(
         """SELECT DISTINCT org_id
              FROM user_github_installations

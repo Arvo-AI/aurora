@@ -83,17 +83,54 @@ def _orgs_owning_install(installation_id: int) -> set[str | None]:
             return {row[0] for row in cur.fetchall()}
 
 
-def _org_linked_before(installation_id: int, org_id: str) -> bool:
-    """Whether ``org_id`` ever linked this installation (disconnected included)."""
-    with db_pool.get_admin_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """SELECT 1 FROM user_github_installations
-                    WHERE installation_id = %s AND org_id = %s
-                    LIMIT 1""",
-                (installation_id, org_id),
-            )
-            return cur.fetchone() is not None
+# Installs this user may relink: they held a link to it in this org, and
+# this org held it last. Nothing else proves access to an install no org
+# holds now, and linking it imports every repo it covers.
+_RELINKABLE_SQL = """
+    SELECT mine.installation_id
+      FROM user_github_installations mine
+     WHERE mine.user_id = %s
+       AND mine.org_id = %s
+       AND mine.disconnected_at IS NOT NULL
+       AND (SELECT latest.org_id
+              FROM user_github_installations latest
+             WHERE latest.installation_id = mine.installation_id
+             ORDER BY latest.disconnected_at DESC NULLS FIRST
+             LIMIT 1) = %s"""
+
+
+def _relinkable_installs(cur, user_id: str, org_id: str) -> set[int]:
+    cur.execute(_RELINKABLE_SQL, (user_id, org_id, org_id))
+    return {row[0] for row in cur.fetchall()}
+
+
+def _can_relink(user_id: str, org_id: str, installation_id: int) -> bool:
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        return installation_id in _relinkable_installs(cur, user_id, org_id)
+
+
+def hand_off_import_state(cur, user_id: str, installation_ids: list[int] | None = None) -> None:
+    """Move a leaving user's import marker to teammates still linked.
+
+    The marker and the legacy flag describe the org's repos, not the user:
+    without this, a teammate's unmarked link would trigger a full import
+    that brings back repos the org removed.
+    """
+    cur.execute(
+        """UPDATE user_github_installations other
+              SET repos_imported_at = COALESCE(other.repos_imported_at, mine.repos_imported_at),
+                  repos_import_legacy = other.repos_import_legacy OR mine.repos_import_legacy
+             FROM user_github_installations mine
+            WHERE mine.user_id = %s
+              AND mine.disconnected_at IS NULL
+              AND (%s::bigint[] IS NULL OR mine.installation_id = ANY(%s::bigint[]))
+              AND other.installation_id = mine.installation_id
+              AND other.org_id = mine.org_id
+              AND other.user_id <> mine.user_id
+              AND other.disconnected_at IS NULL""",
+        (user_id, installation_ids, installation_ids),
+    )
+
 
 # Install-state TTL: GitHub's install flow takes seconds in practice, but
 # allow 30 minutes to absorb account-creation, 2FA, OAuth-grant, popup-block
@@ -754,16 +791,10 @@ def github_app_discover_installations(user_id):
                 bindings: dict[int, set[str | None]] = {}
                 for inst_id, bound_org in cur.fetchall():
                     bindings.setdefault(inst_id, set()).add(bound_org)
-                # Installs this org disconnected and nobody else holds can be
-                # relinked: the App stays installed on GitHub, so the install
-                # popup has nothing to send back.
-                cur.execute(
-                    """SELECT DISTINCT installation_id
-                         FROM user_github_installations
-                        WHERE org_id = %s AND disconnected_at IS NOT NULL""",
-                    (requesting_org_id,),
-                )
-                for (inst_id,) in cur.fetchall():
+                # Installs this user disconnected, while this org held them
+                # last, can be relinked: the App stays installed on GitHub,
+                # so the install popup has nothing to send back.
+                for inst_id in _relinkable_installs(cur, user_id, requesting_org_id):
                     bindings.setdefault(inst_id, {requesting_org_id})
                 cur.execute(
                     """SELECT installation_id
@@ -831,13 +862,11 @@ def github_app_claim_installation(user_id, installation_id):
             "error": "install is already linked to a different organization",
             "code": "CROSS_ORG_CLAIM_REFUSED",
         }), 403
-    if requesting_org_id not in owning_orgs and not _org_linked_before(
-        installation_id, requesting_org_id
+    if requesting_org_id not in owning_orgs and not _can_relink(
+        user_id, requesting_org_id, installation_id
     ):
-        # Claim joins an install a teammate linked, or relinks one this org
-        # disconnected (what discovery lists). Nothing here proves the caller
-        # can access an install the org never had, and linking it would
-        # import every repo it covers.
+        # Claim joins an install a teammate linked, or relinks one this user
+        # disconnected while their org held it last (what discovery lists).
         logger.warning(
             "[GITHUB-APP-CLAIM] claim of unlinked install refused user=%s installation_id=%d",
             user_id, installation_id,
@@ -916,6 +945,14 @@ def github_app_claim_installation(user_id, installation_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                # Lock first, like every other link path.
+                from routes.github.github_signup import _linked_elsewhere
+
+                if _linked_elsewhere(cur, installation_id, org_id):
+                    return jsonify({
+                        "error": "install is already linked to a different organization",
+                        "code": "CROSS_ORG_CLAIM_REFUSED",
+                    }), 403
                 cur.execute(
                     """INSERT INTO github_installations (
                             installation_id, account_login, account_id, account_type,
@@ -944,13 +981,6 @@ def github_app_claim_installation(user_id, installation_id):
                         suspended_at,
                     ),
                 )
-                from routes.github.github_signup import _linked_elsewhere
-
-                if _linked_elsewhere(cur, installation_id, org_id):
-                    return jsonify({
-                        "error": "install is already linked to a different organization",
-                        "code": "CROSS_ORG_CLAIM_REFUSED",
-                    }), 403
                 cur.execute(
                     """INSERT INTO user_github_installations
                             (user_id, org_id, installation_id)
@@ -1243,6 +1273,7 @@ def github_app_unlink_installation(user_id, installation_id):
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                hand_off_import_state(cur, user_id, [installation_id])
                 cur.execute(
                     """DELETE FROM user_github_installations
                         WHERE user_id = %s AND installation_id = %s""",
@@ -1450,6 +1481,7 @@ def github_disconnect(user_id):
                     org_id=get_org_id_from_request(),
                     log_prefix="[GITHUB-DISCONNECT]",
                 )
+                hand_off_import_state(cur, user_id)
                 cur.execute(
                     """UPDATE user_github_installations
                           SET disconnected_at = NOW(),

@@ -166,15 +166,15 @@ class TestImportInstallationRepos:
             GitHubAppInstallationSuspended,
         )
 
-        for exc, disconnects in ((GitHubAppInstallationSuspended("x"), False),
-                                 (GitHubAppInstallationNotFound("x"), True)):
+        for exc in (GitHubAppInstallationSuspended("x"), GitHubAppInstallationNotFound("x")):
             task = _task_self()
             db, _, fetch = _run([_repo("acme/api")], token_exc=exc, task=task)
             fetch.assert_not_called()
             task.retry.assert_not_called()
             assert db.imported_at is None
-            # Uninstalled on GitHub: the link goes so the sync stops picking it.
-            assert db.disconnected is disconnects
+            # One 404 can be a GitHub incident or a misconfigured App: the
+            # link stays; the installation.deleted webhook removes it.
+            assert db.disconnected is False
 
     def test_no_org_aborts_before_writing(self):
         db, gen, _ = _run([_repo("acme/api")], org=None)
@@ -317,7 +317,18 @@ class TestHourlySync:
         # Removals from before the exclusions table were never recorded.
         task = self._sync([(_INSTALL, datetime(2026, 9, 27, 0, 4), True)])
         assert task.delay.call_args.kwargs["created_after"] == "2026-09-27T00:04:00Z"
-        assert task.delay.call_args.kwargs["reconcile"] is False
+        # Still pruned: dropping what GitHub no longer grants loses no intent.
+        assert task.delay.call_args.kwargs["reconcile"] is True
+
+    def test_legacy_reconcile_prunes_but_only_adds_new_repos(self):
+        db = _FakeDb(connected={"acme/kept": (_USER, True), "acme/revoked": (_USER, True)},
+                     imported_at=datetime(2026, 9, 27))
+        db, _, _ = _run(
+            [_repo("acme/kept"), _repo("acme/removed"), _repo("acme/new", "2026-10-10T00:00:00Z")],
+            db=db, enroll_change_gating=True, reconcile=True,
+            created_after="2026-09-27T00:00:00Z",
+        )
+        assert set(db.connected) == {"acme/kept", "acme/new"}
 
     def test_repo_existing_at_import_and_now_missing_is_not_readded(self):
         # End to end through the importer: removed on purpose stays removed.
