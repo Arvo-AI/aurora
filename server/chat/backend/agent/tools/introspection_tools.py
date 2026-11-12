@@ -905,7 +905,11 @@ def _answer_is_private() -> bool:
     state = get_state_context()
     if state is None:
         return False  # unknown context: treat as shared
-    return private_answer_channel(getattr(state, "trigger_metadata", None))
+    return private_answer_channel(
+        getattr(state, "trigger_metadata", None),
+        # A state without the flag is not known to be interactive: treat as background.
+        is_background=bool(getattr(state, "is_background", True)),
+    )
 
 
 def _page(limit, offset) -> tuple[int, int, int]:
@@ -968,24 +972,34 @@ def search_tool_calls(
     per_page, page, start = _page(limit, offset)
     raw = {"status": status, "period": period, "issue": issue, "tool": tool, "source": source,
            "user": user, "q": query, "page": page, "per_page": per_page}
+    private = _answer_is_private()
     with _audit_cursor(user_id) as (cur, org_id):
         result = _audit_call(list_tool_calls, cur, org_id, raw)
-    return {
-        "tool_calls": [
-            {
-                "started_at": r["started_at"], "tool": r["tool_name"], "command": r["input"],
-                "status": r["status"], "issue": r["category"], "reason": r["reason"],
-                "user": r["user"].get("email") or r["user"].get("name"), "user_id": r["user"].get("id"),
-                "source": r["source"], "chat_title": r["chat_title"], "link": r["link"],
-            }
-            for r in result["tool_calls"]
-        ],
+    calls = []
+    for r in result["tool_calls"]:
+        call = {
+            "started_at": r["started_at"], "tool": r["tool_name"], "status": r["status"], "issue": r["category"],
+            "user": r["user"].get("email") or r["user"].get("name"), "user_id": r["user"].get("id"),
+            "source": r["source"], "link": r["link"],
+        }
+        # Commands, reasons and chat titles carry other people's words.
+        if private:
+            call.update(command=r["input"], reason=r["reason"], chat_title=r["chat_title"])
+        calls.append(call)
+    out = {
+        "tool_calls": calls,
         "total_matching": result["total"],
+        # With free text, only the most recent matches are searched: then the
+        # total is a lower bound ("at least N").
+        "total_is_lower_bound": bool(result.get("search_capped")),
         "offset": start,
         "status_counts": result["status_counts"],
         "failures_by_issue": [{"issue": c["category"], "calls": c["calls"], "chats": c["chats"]}
                               for c in result["issue_counts"]],
     }
+    if not private:
+        out["note"] = SHARED_CHANNEL_NOTE
+    return out
 
 
 class SearchConversationsArgs(BaseModel):
@@ -1023,7 +1037,8 @@ def search_conversations(
     for c in result["chats"]:
         match = c.get("match")
         chats.append({
-            "id": c["id"], "title": c["title"],
+            "id": c["id"],
+            **({"title": c["title"]} if private else {}),   # titles are users' first messages
             "user": c["user"].get("email") or c["user"].get("name"), "user_id": c["user"].get("id"),
             "source": c["source"], "status": c["status"],
             "started_at": c["created_at"], "updated_at": c["updated_at"],
@@ -1035,7 +1050,8 @@ def search_conversations(
             **({"match_type": c["match_type"]} if "match_type" in c else {}),
             "link": c["link"],
         })
-    out = {"conversations": chats, "total_matching": result["total"], "offset": start,
+    out = {"conversations": chats, "total_matching": result["total"],
+           "total_is_lower_bound": bool(result.get("search_capped")), "offset": start,
            "failures_by_issue": [{"issue": c["category"], "calls": c["calls"], "chats": c["chats"]}
                                  for c in result["issue_counts"]]}
     if not private:
@@ -1048,8 +1064,9 @@ class GetConversationArgs(BaseModel):
     query: Optional[str] = Field(
         default=None,
         description=(
-            "Exact text to look for. Returns every message containing it, with the redacted text "
-            "around each occurrence. Use this to confirm and quote an exact sentence."
+            "Exact text to look for. Returns every message containing it (within the first 20,000 "
+            "characters of each of the latest 2,000 messages), with the redacted text around each "
+            "occurrence. Use this to confirm and quote an exact sentence."
         ),
     )
     message_index: Optional[int] = Field(
@@ -1092,14 +1109,16 @@ def get_conversation(conversation_id, query=None, message_index=None, *, user_id
     private = _answer_is_private()
     with _audit_cursor(user_id) as (cur, org_id):
         # get_transcript validates the id (constant message on a bad one).
-        transcript = _audit_call(lambda c, o, _r: get_transcript(c, o, conversation_id), cur, org_id, None)
+        # tail: the agent reports a chat's latest messages, so load the last ones.
+        transcript = _audit_call(lambda c, o, _r: get_transcript(c, o, conversation_id, tail=True),
+                                 cur, org_id, None)
     if transcript is None:
         raise IntrospectionError("Conversation not found.")
 
     chat = transcript["chat"]
     out = {
         "conversation": {
-            "id": chat["id"], "title": chat["title"],
+            "id": chat["id"], **({"title": chat["title"]} if private else {}),
             "user": chat["user"].get("email") or chat["user"].get("name"),
             "source": chat["source"], "status": chat["status"],
             "started_at": chat["created_at"], "updated_at": chat["updated_at"],

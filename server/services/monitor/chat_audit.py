@@ -52,7 +52,7 @@ DEFAULT_PER_PAGE = 25
 MAX_PER_PAGE = 100
 QUERY_MAX_CHARS = 200
 SNIPPET_RADIUS = 120
-SNIPPET_WINDOW = 4000  # chars fetched around a search match
+SEARCH_CANDIDATES = 1000  # most recent word matches ranked by a free-text search
 USERS_FACET_LIMIT = 200
 USER_ID_MAX_CHARS = 255
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_:-]{1,64}$")
@@ -291,6 +291,7 @@ FILTER_ERRORS = {
     "issue": f"issue must be one of: {', '.join((*ISSUE_CATEGORIES, OTHER))}, any, all",
     "user": "user is not a valid user id",
     "session": "Invalid chat id",
+    "secret_query": "Search can't look for secret values.",
 }
 
 
@@ -325,7 +326,14 @@ def _parse_issue(raw: dict) -> Optional[str]:
 
 def _parse_query(raw: dict) -> Optional[str]:
     query = _opt(raw, "q")
-    return query[:QUERY_MAX_CHARS] if query else None
+    if not query:
+        return None
+    query = query[:QUERY_MAX_CHARS]
+    # Search runs over raw text, so a query that looks like a secret would let
+    # a caller confirm a guessed credential exists. Refuse it outright.
+    if scrub(query) != query:
+        raise InvalidFilter("secret_query")
+    return query
 
 
 @dataclass
@@ -485,14 +493,19 @@ def link_for(chat_id: Optional[str], incident_id: Optional[str]) -> Optional[str
     return f"/chat?sessionId={chat_id}" if chat_id else None
 
 
-# Channels whose answers stay with the person who asked. Anywhere else (a Slack
-# channel, Teams, Google Chat, a background run that may post to one), the agent
-# tools return metadata and links only, never other people's message text.
-def private_answer_channel(trigger_metadata: Optional[dict]) -> bool:
-    if trigger_metadata is None:
-        return True                                  # the web app sets none
-    if not isinstance(trigger_metadata, dict):
+# Whether an answer stays with the person who asked. Only then may the agent
+# tools quote other users' chats; anywhere else (a Slack channel, Teams, Google
+# Chat, any background run, including an RCA started from chat that lands on an
+# org-visible incident) they return metadata and links only.
+def private_answer_channel(trigger_metadata: Optional[dict], *, is_background: bool) -> bool:
+    if trigger_metadata is not None and not isinstance(trigger_metadata, dict):
         return False                                 # malformed: fail closed
+    meta = trigger_metadata or {}
+    if str(meta.get("source") or "").lower() == "slack":
+        # Slack direct-message channel ids start with "D"; anything else is shared.
+        return str(meta.get("channel") or "").startswith("D")
+    # The web app: an interactive chat with no trigger at all.
+    return not meta and not is_background                                 # malformed: fail closed
     meta = trigger_metadata
     source = str(meta.get("source") or "").lower()
     if source in ("", "chat"):
@@ -744,40 +757,81 @@ def _issue_counts_for(cur, org_id: str, chat_ids: list[str], period: str) -> dic
     return out
 
 
-def _snippets_for(cur, org_id: str, chat_ids: list[str], query: str) -> dict[str, dict]:
-    """The best matching message per chat (bounded to the page's chats).
+# Messages per chat fetched to build a snippet and to check the match survives
+# redaction, and the per-message cap (redaction runs on the whole capped text).
+SNIPPET_MESSAGES_PER_CHAT = 50
+SNIPPET_MESSAGE_CHARS = 100_000
 
-    A message containing the phrase wins (``match_type`` "exact"); otherwise the
-    first message containing every word ("all_words"). The window is fetched
-    around the phrase (or the first word) and narrowed in ``_snippet``.
+
+def _redacted_match(texts: list[tuple[int, str, str]], query: str) -> Optional[dict]:
+    """Best match among one chat's (index, sender, text) messages, judged on redacted text.
+
+    Returns None when the query no longer matches once secrets are redacted, so
+    a search can't confirm that a hidden value exists.
     """
     phrase = phrase_of(query)
-    first_term = (_terms(query) or [""])[0]
-    anchor = phrase.lower() if phrase else first_term
+    terms = set(_terms(query))
+    redacted = [(idx, sender, scrub(text or "")) for idx, sender, text in texts]
+    if phrase:
+        pattern = phrase_pattern(phrase)
+        for idx, sender, text in redacted:
+            if pattern.search(text):
+                return {"index": idx, "sender": sender, "text": text, "match_type": "exact"}
+    lowered = [(idx, sender, text, text.lower()) for idx, sender, text in redacted]
+    present = {t for t in terms for *_, low in lowered if t in low}
+    if terms and present != terms:
+        return None                     # some word only appears inside a redacted secret
+    for idx, sender, text, low in lowered:
+        if all(t in low for t in terms):
+            return {"index": idx, "sender": sender, "text": text, "match_type": "all_words"}
+    # The words are spread across messages: no single message to quote.
+    return {"index": None, "sender": None, "text": None, "match_type": "all_words"}
+
+
+def _snippets_for(cur, org_id: str, chat_ids: list[str], query: str) -> dict[str, Optional[dict]]:
+    """Per chat: the redacted match ({message_index, sender, text, match_type}), or None.
+
+    Fetches the messages that mention any query word (bounded), redacts each in
+    full, then picks the message (phrase first) and cuts the snippet. A chat whose
+    match disappears once redacted maps to None so the caller can drop it.
+    """
+    words = sorted({w.lower() for w in re.findall(r"\w+", query)})
+    if not words:
+        return {}
+    any_word = " | ".join(words)        # \w only: safe in to_tsquery
     cur.execute(
-        f"""SELECT cs.id, hit.msg_index, hit.sender, hit.text, hit.exact
+        f"""SELECT cs.id, hit.msg_index, hit.sender, hit.text
             FROM chat_sessions cs
             JOIN LATERAL (
                 SELECT (e.idx - 1)::int AS msg_index, e.m->>'sender' AS sender,
-                       substr(e.m->>'text',
-                              greatest(COALESCE(NULLIF(strpos(lower(e.m->>'text'), %s), 0),
-                                                strpos(lower(e.m->>'text'), %s)) - %s, 1), %s) AS text,
-                       (%s AND to_tsvector('simple', COALESCE(e.m->>'text', ''))
-                               @@ phraseto_tsquery('simple', %s)) AS exact
+                       LEFT(e.m->>'text', %s) AS text
                 FROM jsonb_array_elements({_MESSAGES_ARRAY}) WITH ORDINALITY AS e(m, idx)
-                WHERE to_tsvector('simple', COALESCE(e.m->>'text', ''))
-                      @@ websearch_to_tsquery('simple', %s)
-                ORDER BY exact DESC, e.idx LIMIT 1
+                WHERE to_tsvector('simple', COALESCE(e.m->>'text', '')) @@ to_tsquery('simple', %s)
+                ORDER BY e.idx LIMIT %s
             ) hit ON true
-            WHERE cs.org_id = %s AND cs.id = ANY(%s)""",
-        (anchor, first_term, SNIPPET_WINDOW // 2, SNIPPET_WINDOW, phrase is not None, phrase or query,
-         query, org_id, chat_ids),
+            WHERE cs.org_id = %s AND cs.id = ANY(%s)
+            ORDER BY cs.id, hit.msg_index""",
+        (SNIPPET_MESSAGE_CHARS, any_word, SNIPPET_MESSAGES_PER_CHAT, org_id, chat_ids),
     )
-    return {
-        sid: {"message_index": idx, "sender": "user" if sender == "user" else "aurora",
-              "text": _snippet(text or "", query), "match_type": "exact" if exact else "all_words"}
-        for sid, idx, sender, text, exact in cur.fetchall()
-    }
+    by_chat: dict[str, list] = {}
+    for sid, idx, sender, text in cur.fetchall():
+        by_chat.setdefault(sid, []).append((idx, sender, text))
+    out: dict[str, Optional[dict]] = {}
+    for sid in chat_ids:
+        found = _redacted_match(by_chat.get(sid, []), query)
+        if found is None:
+            out[sid] = None
+        elif found["index"] is None:
+            out[sid] = {"message_index": None, "sender": None, "text": None, "match_type": "all_words"}
+        else:
+            out[sid] = {
+                "message_index": found["index"],
+                "sender": "user" if found["sender"] == "user" else "aurora",
+                # Already redacted in full: _snippet's scrub is a no-op, then it cuts.
+                "text": _snippet(found["text"], query),
+                "match_type": found["match_type"],
+            }
+    return out
 
 
 _CHAT_COLUMNS = f"""cs.id, cs.title, cs.user_id, u.email AS user_email, u.name AS user_name,
@@ -804,25 +858,45 @@ def _chat_summary(r: dict) -> dict:
 def list_chats(cur, org_id: str, f: ChatFilters) -> dict:
     """One page of the org's chats with issue badges, plus facets and counts."""
     where, params = _chat_where(f, org_id)
-    cur.execute(f"SELECT COUNT(*) FROM chat_sessions cs WHERE {where}", tuple(params))
-    total = cur.fetchone()[0] or 0
-
-    # A phrase search ranks chats containing the phrase first; the rest only
-    # contain all the words somewhere. Same indexed expression as the filter.
-    phrase = phrase_of(f.query)
-    phrase_order, phrase_params = "", []
-    if phrase:
-        phrase_order = f"({SEARCH_DOC_SQL} @@ phraseto_tsquery('simple', %s)) DESC, "
-        phrase_params = [phrase]
-
-    cur.execute(
-        f"""SELECT {_CHAT_COLUMNS}
-            FROM chat_sessions cs LEFT JOIN users u ON u.id = cs.user_id
-            WHERE {where}
-            ORDER BY {phrase_order}cs.updated_at DESC, cs.id DESC
-            LIMIT %s OFFSET %s""",
-        tuple(params + phrase_params + [f.per_page, (f.page - 1) * f.per_page]),
-    )
+    offset = (f.page - 1) * f.per_page
+    search_capped = False
+    if f.query:
+        # Free text: take the most recent SEARCH_CANDIDATES word matches (GIN
+        # index + org/updated_at index), and rank only those, phrase hits
+        # first. Ranking recomputes the full-text vector per row, so it never
+        # runs over every matching chat.
+        candidates = (f"SELECT cs.id FROM chat_sessions cs WHERE {where} "
+                      "ORDER BY cs.updated_at DESC, cs.id DESC LIMIT %s")
+        cand_params = params + [SEARCH_CANDIDATES]
+        cur.execute(f"SELECT COUNT(*) FROM ({candidates}) c", tuple(cand_params))
+        total = cur.fetchone()[0] or 0
+        search_capped = total >= SEARCH_CANDIDATES
+        phrase = phrase_of(f.query)
+        order, order_params = "", []
+        if phrase:
+            order = f"({SEARCH_DOC_SQL} @@ phraseto_tsquery('simple', %s)) DESC, "
+            order_params = [phrase]
+        cur.execute(
+            f"""WITH cand AS ({candidates})
+                SELECT {_CHAT_COLUMNS}
+                FROM chat_sessions cs JOIN cand ON cand.id = cs.id
+                LEFT JOIN users u ON u.id = cs.user_id
+                WHERE cs.org_id = %s
+                ORDER BY {order}cs.updated_at DESC, cs.id DESC
+                LIMIT %s OFFSET %s""",
+            tuple(cand_params + [org_id] + order_params + [f.per_page, offset]),
+        )
+    else:
+        cur.execute(f"SELECT COUNT(*) FROM chat_sessions cs WHERE {where}", tuple(params))
+        total = cur.fetchone()[0] or 0
+        cur.execute(
+            f"""SELECT {_CHAT_COLUMNS}
+                FROM chat_sessions cs LEFT JOIN users u ON u.id = cs.user_id
+                WHERE {where}
+                ORDER BY cs.updated_at DESC, cs.id DESC
+                LIMIT %s OFFSET %s""",
+            tuple(params + [f.per_page, offset]),
+        )
     rows = fetch_dicts(cur)
     ids = [r["id"] for r in rows]
 
@@ -831,24 +905,30 @@ def list_chats(cur, org_id: str, f: ChatFilters) -> dict:
         issues = _issue_counts_for(cur, org_id, ids, f.period)
         if f.query:
             snippets = _snippets_for(cur, org_id, ids, f.query)
+            # A chat that only matched inside a redacted secret is not a match.
+            hidden = [i for i in ids if snippets.get(i) is None]
+            rows = [r for r in rows if r["id"] not in hidden]
+            total = max(0, total - len(hidden))
 
     chats = []
     for r in rows:
         by_cat = issues.get(r["id"], {})
+        match = snippets.get(r["id"])
         chats.append({
             **_chat_summary(r),
             "issues": {cat: n for cat, n in by_cat.items() if cat != OTHER},
             "failed_tool_calls": sum(by_cat.values()),
-            "match": snippets.get(r["id"]),
+            "match": match if match and match.get("text") else None,
             # "exact": one message contains the phrase; "all_words": the words
             # appear, possibly spread across messages.
-            **({"match_type": (snippets.get(r["id"]) or {}).get("match_type", "all_words")} if f.query else {}),
+            **({"match_type": match["match_type"]} if f.query else {}),
         })
 
     counts_where, counts_params = _chat_where(f, org_id, skip=("status", "issue", "query"))
     return {
         "chats": chats,
         "total": total,
+        "search_capped": search_capped,
         "page": f.page,
         "per_page": f.per_page,
         "total_pages": max(1, -(-total // f.per_page)),
@@ -904,12 +984,21 @@ def _transcript_tool_call(tc: dict, step: Optional[dict]) -> tuple[dict, Optiona
     return shaped, issue if failed else None, reason
 
 
-def get_transcript(cur, org_id: str, session_id: str) -> Optional[dict]:
-    """A chat in the chat UI's message shape, with detected issues; None if not in this org."""
+def get_transcript(cur, org_id: str, session_id: str, *, tail: bool = False) -> Optional[dict]:
+    """A chat in the chat UI's message shape, with detected issues; None if not in this org.
+
+    Loads at most ``MAX_TRANSCRIPT_MESSAGES`` messages: the first ones (the page,
+    which reads from the top), or with ``tail`` the last ones (the agent, which
+    reports the latest messages). Message indexes are always the real ones.
+    """
     validate_session_id(session_id)
+    first = (f"GREATEST({_MESSAGE_COUNT} - {MAX_TRANSCRIPT_MESSAGES}, 0)" if tail else "0")
     cur.execute(
-        f"""SELECT {_CHAT_COLUMNS},
-                   jsonb_path_query_array({_MESSAGES_ARRAY}, '$[0 to {MAX_TRANSCRIPT_MESSAGES - 1}]') AS messages
+        f"""SELECT {_CHAT_COLUMNS}, {first} AS first_index,
+                   COALESCE((SELECT jsonb_agg(e.m ORDER BY e.idx)
+                             FROM jsonb_array_elements({_MESSAGES_ARRAY}) WITH ORDINALITY AS e(m, idx)
+                             WHERE e.idx > {first} AND e.idx <= {first} + {MAX_TRANSCRIPT_MESSAGES}),
+                            '[]'::jsonb) AS messages
             FROM chat_sessions cs LEFT JOIN users u ON u.id = cs.user_id
             WHERE cs.id = %s AND cs.org_id = %s AND cs.is_active = true""",
         (session_id, org_id),
@@ -927,7 +1016,7 @@ def get_transcript(cur, org_id: str, session_id: str) -> Optional[dict]:
     steps = {s["tool_call_id"]: s for s in fetch_dicts(cur)}
 
     messages, issues, seen_calls = [], [], set()
-    for index, raw in enumerate(row.get("messages") or []):
+    for index, raw in enumerate(row.get("messages") or [], start=row.get("first_index") or 0):
         if not isinstance(raw, dict):
             continue
         sender = "user" if raw.get("sender") == "user" else "bot"

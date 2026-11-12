@@ -62,6 +62,8 @@ def count_tokens(text: str, model: str = "gpt-4o") -> int:
     return LLMUsageTracker.count_tokens(text, model)
 
 # Regular-chat execution_steps writes run here, off the agent's event loop.
+# Writes still queued when a worker process hard-exits (e.g. Celery's os._exit)
+# are lost; that only drops audit rows, never chat state.
 _STEP_WRITER = ThreadPoolExecutor(max_workers=4, thread_name_prefix="execution-steps")
 # Stored tool inputs are capped; a larger input keeps a preview and stays valid JSON.
 STEP_INPUT_MAX_CHARS = 8_000
@@ -131,7 +133,8 @@ class ToolContextCapture:
                 with conn.cursor() as cur:
                     set_rls_context(cur, conn, self.user_id, log_prefix="[ToolCapture:start]")
                     # step_index counts per incident; a chat has no incident,
-                    # so it counts per session instead.
+                    # so it counts per session instead. Concurrent inserts can
+                    # repeat an index (MAX+1 race); it's display-only, not unique.
                     scope_sql, scope_val = (
                         ("incident_id = %s", self.incident_id) if self.incident_id
                         else ("incident_id IS NULL AND session_id = %s", self.session_id)

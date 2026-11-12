@@ -2287,7 +2287,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                         "words is matched as a phrase first: match_type 'exact' means one message "
                         "contains it, 'all_words' only that the words appear. Returns title, user, "
                         "source, status, dates, message count, issue counts, a redacted matching "
-                        "snippet (only in private chats) and a link. Read-only.",
+                        "snippet and title (only in private chats) and a link. When total_is_lower_bound is true, "
+                        "say 'at least N'. Read-only.",
                         SearchConversationsArgs,
                     ),
                     (
@@ -2298,7 +2299,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                         "blocked_command, not_connected, timeout, unavailable, other), tool, source, "
                         "user and free text over the redacted command and reason. Returns each call's "
                         "tool, redacted command, status, issue, reason, user, chat and link, plus counts "
-                        "by status and by issue. Use for 'which tool calls failed last week and why' or "
+                        "by status and by issue. When total_is_lower_bound is true, say 'at least N'. In a "
+                        "shared channel, commands, reasons and chat titles are left out. "
+                        "Use for 'which tool calls failed last week and why' or "
                         "'which permissions is Aurora missing'. Read-only.",
                         SearchToolCallsArgs,
                     ),
@@ -2307,8 +2310,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                         "get_conversation",
                         "Read one chat from search_conversations: its latest messages (redacted, capped "
                         "at 1,500 characters each) and every failed tool call with its reason. To check "
-                        "an exact sentence, pass query: it returns every message containing that text, "
-                        "with the redacted text around each occurrence. To read one message in full, pass "
+                        "an exact sentence, pass query: it returns every message containing that text "
+                        "(within the first 20,000 characters of each of the latest 2,000 messages), with "
+                        "the redacted text around each occurrence. To read one message in full, pass "
                         "message_index. In a shared channel it returns only metadata, issues and the link. "
                         "Read-only.",
                         GetConversationArgs,

@@ -140,7 +140,7 @@ def _chat_row(sid="s1", source="slack"):
 
 def test_list_shapes_rows_badges_and_facets():
     cur = Cursor([
-        ("SELECT COUNT(*) FROM chat_sessions", ["count"], [(1,)]),
+        ("SELECT COUNT(*) FROM", ["count"], [(1,)]),
         ("ORDER BY cs.updated_at DESC", _CHAT_COLS, [_chat_row()]),
         ("GROUP BY 1, 2", ["sid", "category", "count"], [("s1", "missing_permission", 2), ("s1", "other", 1)]),
         ("COUNT(DISTINCT", ["category", "calls", "chats"], [("missing_permission", 12, 3)]),
@@ -185,9 +185,9 @@ def test_deleted_chats_are_excluded_but_rca_rows_kept():
 def test_list_search_returns_redacted_snippet_with_message_anchor():
     text = "Tried again with --password hunter2 and got AccessDenied from IAM"
     cur = Cursor([
-        ("SELECT COUNT(*) FROM chat_sessions", ["count"], [(1,)]),
-        ("ORDER BY cs.updated_at DESC", _CHAT_COLS, [_chat_row(source="web")]),
-        ("JOIN LATERAL", ["id", "msg_index", "sender", "text", "exact"], [("s1", 1, "bot", text, False)]),
+        ("SELECT COUNT(*) FROM", ["count"], [(1,)]),
+        ("JOIN LATERAL", ["id", "msg_index", "sender", "text"], [("s1", 1, "bot", text)]),
+        ("LIMIT %s OFFSET %s", _CHAT_COLS, [_chat_row(source="web")]),
     ])
     match = ca.list_chats(cur, "org-1", ChatFilters.parse({"q": "AccessDenied"}))["chats"][0]["match"]
     assert match["message_index"] == 1 and match["sender"] == "aurora"
@@ -198,8 +198,8 @@ def test_list_search_returns_redacted_snippet_with_message_anchor():
 
 def _transcript(messages, steps=(), failures=()):
     cur = Cursor([
-        ("jsonb_path_query_array", _CHAT_COLS + ["messages"],
-         [(*_chat_row(source="web"), messages)]),
+        ("AS first_index", _CHAT_COLS + ["first_index", "messages"],
+         [(*_chat_row(source="web"), 0, messages)]),
         ("SELECT tool_call_id, status, error_message", ["tool_call_id", "status", "error_message"], list(steps)),
         ("WITH f AS", _FAIL_COLS, list(failures)),
     ])
@@ -265,14 +265,20 @@ def test_issue_badges_and_filters_use_the_selected_period():
     assert "es.started_at >= NOW()" in cur.calls[0][0] and "30 days" in cur.calls[0][1]
 
 
-def test_snippet_window_is_taken_around_the_match():
+def test_snippets_fetch_messages_mentioning_any_word_and_redact_before_cutting():
     cur = Cursor([])
     ca._snippets_for(cur, "o", ["s1"], '"permission denied"')
     sql, params = cur.calls[0]
-    assert "strpos(lower(e.m->>'text'), %s)" in sql
-    # A quoted query anchors on the whole phrase, falling back to its first word.
-    assert params[:4] == ("permission denied", "permission", ca.SNIPPET_WINDOW // 2, ca.SNIPPET_WINDOW)
-    assert params[4] is True and params[5] == "permission denied"
+    assert "to_tsquery('simple', %s)" in sql and "substr(" not in sql   # whole (capped) messages
+    assert params[:3] == (ca.SNIPPET_MESSAGE_CHARS, "denied | permission", ca.SNIPPET_MESSAGES_PER_CHAT)
+
+
+def test_a_secret_straddling_the_old_window_edge_is_never_half_shown():
+    # The secret sits right where a fixed-size window used to cut.
+    text = "x" * 1990 + " --password s3cretvalue " + "y" * 100 + " AccessDenied"
+    match = ca._redacted_match([(0, "bot", text)], "AccessDenied")
+    snippet = ca._snippet(match["text"], "AccessDenied")
+    assert "s3cret" not in snippet and "cretvalue" not in snippet
 
 
 # --- redaction of real-world shapes (review findings) -----------------------
@@ -483,18 +489,22 @@ def test_links_point_to_the_incident_or_the_chat():
     assert ca.link_for(None, None) is None
 
 
-@pytest.mark.parametrize("meta, private", [
-    (None, True), ({}, True), ({"source": "chat"}, True),
-    ({"source": "slack", "channel": "D0123"}, True),          # Slack DM
-    ({"source": "slack", "channel": "C0123"}, False),         # Slack channel
-    ({"source": "slack"}, False),
-    ({"source": "teams", "channel_id": "x"}, False),
-    ({"source": "google_chat", "space_name": "spaces/x"}, False),
-    ({"source": "action"}, False), ({"source": "pagerduty"}, False),
-    ("not-a-dict", False),                                   # malformed: fail closed
+@pytest.mark.parametrize("meta, background, private", [
+    (None, False, True), ({}, False, True),                  # the web app
+    (None, True, False),                                     # any background run without metadata
+    ({"source": "chat"}, True, False),                       # background chat
+    ({"source": "chat", "incident_id": "i1"}, True, False),  # RCA started from chat
+    ({"source": "slack", "channel": "D0123"}, True, True),   # Slack DM
+    ({"source": "slack", "channel": "C0123"}, True, False),  # Slack channel
+    ({"source": "slack"}, True, False),
+    ({"source": "teams", "channel_id": "x"}, True, False),
+    ({"source": "google_chat", "space_name": "spaces/x"}, True, False),
+    ({"source": "action"}, True, False), ({"source": "pagerduty"}, True, False),
+    ({"source": "chat"}, False, False),                      # metadata on an interactive chat: not the web app
+    ("not-a-dict", False, False),                            # malformed: fail closed
 ])
-def test_private_answer_channel(meta, private):
-    assert ca.private_answer_channel(meta) is private
+def test_private_answer_channel(meta, background, private):
+    assert ca.private_answer_channel(meta, is_background=background) is private
 
 
 
@@ -516,13 +526,15 @@ def test_phrase_of(query, phrase):
 
 
 def test_phrase_hits_rank_first_using_the_indexed_expression():
-    cur = Cursor([("SELECT COUNT(*) FROM chat_sessions", ["count"], [(2,)])])
+    cur = Cursor([("SELECT COUNT(*) FROM", ["count"], [(2,)])])
     ca.list_chats(cur, "org-1", ChatFilters.parse({"q": PHRASE}))
-    sql, params = next(c for c in cur.calls if "ORDER BY" in c[0] and "LIMIT %s OFFSET %s" in c[0])
+    sql, params = next(c for c in cur.calls if "LIMIT %s OFFSET %s" in c[0])
     assert f"ORDER BY ({ca.SEARCH_DOC_SQL} @@ phraseto_tsquery('simple', %s)) DESC, cs.updated_at DESC" in sql
     assert PHRASE in params
+    # Ranking only runs over a capped candidate set of recent word matches.
+    assert sql.lstrip().startswith("WITH cand AS (") and ca.SEARCH_CANDIDATES in params
     # Short unquoted searches keep plain recency order.
-    cur = Cursor([("SELECT COUNT(*) FROM chat_sessions", ["count"], [(2,)])])
+    cur = Cursor([("SELECT COUNT(*) FROM", ["count"], [(2,)])])
     ca.list_chats(cur, "org-1", ChatFilters.parse({"q": "timeout"}))
     sql, _ = next(c for c in cur.calls if "LIMIT %s OFFSET %s" in c[0])
     assert "phraseto_tsquery" not in sql
@@ -531,8 +543,13 @@ def test_phrase_hits_rank_first_using_the_indexed_expression():
 def test_exact_and_all_words_matches_are_labelled_exact_first():
     rows = [_chat_row("exact"), _chat_row("spread")]
     cur = Cursor([
-        ("SELECT COUNT(*) FROM chat_sessions", ["count"], [(2,)]),
-        ("JOIN LATERAL", ["id", "msg_index", "sender", "text", "exact"], [("exact", 4, "bot", TAIL_MESSAGE, True)]),
+        ("SELECT COUNT(*) FROM", ["count"], [(2,)]),
+        ("JOIN LATERAL", ["id", "msg_index", "sender", "text"], [
+            ("exact", 4, "bot", TAIL_MESSAGE),
+            # The words appear, but across two messages.
+            ("spread", 1, "user", "Nothing was validated because no checks ran"),
+            ("spread", 3, "bot", "the root cause was confirmed later"),
+        ]),
         ("LIMIT %s OFFSET %s", _CHAT_COLS, rows),
     ])
     out = ca.list_chats(cur, "org-1", ChatFilters.parse({"q": PHRASE}))
@@ -551,3 +568,49 @@ def test_snippet_without_phrase_picks_the_densest_cluster_of_words():
     text = "alpha " + "filler " * 200 + "alpha beta gamma together " + "filler " * 200 + "gamma"
     snippet = ca._snippet(text, "alpha beta")
     assert "alpha beta gamma together" in snippet
+
+
+
+# --- search can't confirm secrets ----------------------------------------------
+
+@pytest.mark.parametrize("query", ["--password hunter2", "password=swordfish", 'token: "abc123"'])
+def test_queries_that_look_like_secrets_are_refused(query):
+    with pytest.raises(InvalidFilter) as exc:
+        ChatFilters.parse({"q": query})
+    assert ca.filter_error_message(exc.value) == "Search can't look for secret values."
+    with pytest.raises(InvalidFilter):
+        ca.list_tool_calls(Cursor([]), "org-1", {"q": query})
+
+
+def test_a_chat_that_only_matches_inside_a_secret_is_dropped():
+    # "hunter2" passes the query check (it doesn't look like a secret on its
+    # own), and the raw text matches, but once redacted the word is gone.
+    cur = Cursor([
+        ("SELECT COUNT(*) FROM", ["count"], [(2,)]),
+        ("JOIN LATERAL", ["id", "msg_index", "sender", "text"], [
+            ("leak", 0, "user", "connect with --password hunter2"),
+            ("real", 2, "bot", "the word hunter2 is our team mascot"),
+        ]),
+        ("LIMIT %s OFFSET %s", _CHAT_COLS, [_chat_row("leak"), _chat_row("real")]),
+    ])
+    out = ca.list_chats(cur, "org-1", ChatFilters.parse({"q": "hunter2"}))
+    assert [c["id"] for c in out["chats"]] == ["real"] and out["total"] == 1
+
+
+def test_search_reports_when_candidates_were_capped():
+    cur = Cursor([("SELECT COUNT(*) FROM", ["count"], [(ca.SEARCH_CANDIDATES,)])])
+    assert ca.list_chats(cur, "org-1", ChatFilters.parse({"q": "timeout"}))["search_capped"] is True
+
+
+def test_transcript_tail_loads_the_last_messages_with_real_indexes():
+    msgs = [{"sender": "bot", "text": f"m{i}"} for i in range(3)]
+    cur = Cursor([("AS first_index", _CHAT_COLS + ["first_index", "messages"],
+                   [(*_chat_row(source="web"), 2500, msgs)])])
+    out = ca.get_transcript(cur, "org-1", "s1", tail=True)
+    assert [m["id"] for m in out["messages"]] == [2500, 2501, 2502]
+    sql = cur.calls[0][0]
+    assert f"GREATEST(" in sql and f"- {ca.MAX_TRANSCRIPT_MESSAGES}, 0)" in sql
+    cur = Cursor([("AS first_index", _CHAT_COLS + ["first_index", "messages"],
+                   [(*_chat_row(source="web"), 0, msgs)])])
+    ca.get_transcript(cur, "org-1", "s1")
+    assert "GREATEST(" not in cur.calls[0][0]                 # the page reads from the top

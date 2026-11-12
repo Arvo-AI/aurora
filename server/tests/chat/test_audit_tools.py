@@ -7,12 +7,12 @@ checked on every call and never widened by arguments.
 
 import json
 from contextlib import contextmanager
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 import chat.backend.agent.tools.introspection_tools as tools
+from chat.backend.agent.utils.state import State
 import services.monitor.chat_audit as audit
 
 REAL_LIST_TOOL_CALLS = audit.list_tool_calls  # before the fixture stubs it
@@ -23,7 +23,8 @@ ISSUES = [{"category": "missing_permission", "label": "Missing permission", "cal
 @pytest.fixture
 def env(monkeypatch):
     cur = MagicMock()
-    state = {"allowed": True, "meta": None, "calls": {}}
+    # Default: an interactive web-app chat (no trigger metadata, not background).
+    state = {"allowed": True, "meta": None, "background": False, "calls": {}}
 
     @contextmanager
     def fake_cursor(user_id):
@@ -32,8 +33,9 @@ def env(monkeypatch):
     monkeypatch.setattr(tools, "_cursor", fake_cursor)
     monkeypatch.setattr("utils.auth.viewer_run.may_audit_chats", lambda u, o: state["allowed"])
     monkeypatch.setattr("utils.auth.connector_access.pinned_roles", lambda: None)
-    monkeypatch.setattr("utils.cloud.cloud_utils.get_state_context",
-                        lambda: SimpleNamespace(trigger_metadata=state["meta"]))
+    # The real agent State, as set by set_user_context, not a stand-in object.
+    monkeypatch.setattr("utils.cloud.cloud_utils.get_state_context", lambda: State(
+        question="q", trigger_metadata=state["meta"], is_background=state["background"]))
 
     def recorder(name, result):
         def fn(c, org_id, raw):
@@ -62,7 +64,7 @@ def env(monkeypatch):
             "total": 1, "issue_counts": ISSUES,
         }))
     long_text = "word " * 1000
-    monkeypatch.setattr(audit, "get_transcript", lambda c, org_id, sid: (
+    monkeypatch.setattr(audit, "get_transcript", lambda c, org_id, sid, **_kw: (
         state["calls"].__setitem__("transcript", {"org_id": org_id, "sid": sid}) or {
             "chat": {"id": sid, "title": "Deploy check", "user": {"email": "b@x.io"}, "source": "slack",
                      "status": "completed", "created_at": "t", "updated_at": "t", "message_count": 30,
@@ -144,12 +146,16 @@ def test_bad_filters_return_constant_messages(env, monkeypatch):
     assert out == {"error": audit.FILTER_ERRORS["step_status"]}
 
 
-@pytest.mark.parametrize("meta, private", [
-    (None, True), ({"source": "slack", "channel": "D01"}, True),
-    ({"source": "slack", "channel": "C01"}, False), ({"source": "teams"}, False),
+@pytest.mark.parametrize("meta, background, private", [
+    (None, False, True),                                     # web app
+    ({"source": "slack", "channel": "D01"}, True, True),     # Slack DM
+    ({"source": "slack", "channel": "C01"}, True, False),    # Slack channel
+    ({"source": "teams"}, True, False),
+    ({"source": "chat", "incident_id": "i1"}, True, False),  # RCA started from chat
+    (None, True, False),                                     # background with no metadata
 ])
-def test_search_conversations_snippets_only_in_private_chats(env, meta, private):
-    env["meta"] = meta
+def test_search_conversations_snippets_only_in_private_chats(env, meta, background, private):
+    env["meta"], env["background"] = meta, background
     out = json.loads(tools.search_conversations(user_id="a", query="AccessDenied", source="slack"))
     match = out["conversations"][0]["match"]
     if private:
@@ -177,7 +183,7 @@ def test_get_conversation_caps_messages_fields_and_lists_failures(env):
 
 
 def test_get_conversation_in_a_shared_channel_returns_metadata_only(env):
-    env["meta"] = {"source": "slack", "channel": "C0123"}
+    env["meta"], env["background"] = {"source": "slack", "channel": "C0123"}, True
     out = json.loads(tools.get_conversation(user_id="a", conversation_id="s1"))
     assert "messages" not in out and out["note"] == tools.SHARED_CHANNEL_NOTE
     assert out["issues"] == [{"issue": "missing_permission", "tool": "cloud_exec", "message_index": 29}]
@@ -205,7 +211,7 @@ def tail_transcript(env, monkeypatch):
     # The phrase sits past the 1,500-character excerpt of message 4, next to a secret.
     text = ("Classification: INCONCLUSIVE. " + "x" * 2500 + " " + PHRASE
             + ". Then psql --password hunter2 was run.")
-    monkeypatch.setattr(audit, "get_transcript", lambda c, org_id, sid: {
+    monkeypatch.setattr(audit, "get_transcript", lambda c, org_id, sid, **_kw: {
         "chat": {"id": sid, "title": "RCA", "user": {"email": "b@x.io"}, "source": "rca", "status": "completed",
                  "created_at": "t", "updated_at": "t", "message_count": 6, "link": f"/chat?sessionId={sid}"},
         "messages": [{"id": i, "sender": "bot", "toolCalls": [],
@@ -244,7 +250,7 @@ def test_message_index_reads_one_message_in_full(tail_transcript):
 
 @pytest.mark.parametrize("kwargs", [{"query": PHRASE}, {"message_index": 4}])
 def test_shared_channels_still_get_metadata_only(env, tail_transcript, kwargs):
-    env["meta"] = {"source": "slack", "channel": "C0123"}
+    env["meta"], env["background"] = {"source": "slack", "channel": "C0123"}, True
     out = json.loads(tools.get_conversation(user_id="a", conversation_id="s1", **kwargs))
     assert out["note"] == tools.SHARED_CHANNEL_NOTE
     assert "query" not in out and "message" not in out and "messages" not in out
@@ -260,3 +266,47 @@ def test_search_conversations_reports_match_type(env, monkeypatch):
     })
     out = json.loads(tools.search_conversations(user_id="a", query=PHRASE))
     assert out["conversations"][0]["match_type"] == "exact"
+
+
+# --- shared channels: every tool trims other people's words -----------------
+
+def test_search_tool_calls_in_a_shared_channel_drops_commands_reasons_and_titles(env):
+    env["meta"], env["background"] = {"source": "slack", "channel": "C0123"}, True
+    out = json.loads(tools.search_tool_calls(user_id="admin-1"))
+    (call,) = out["tool_calls"]
+    assert not {"command", "reason", "chat_title"} & set(call)
+    assert call["tool"] == "cloud_exec" and call["issue"] == "missing_permission" and call["link"]
+    assert out["note"] == tools.SHARED_CHANNEL_NOTE
+
+
+def test_search_conversations_in_a_shared_channel_drops_titles(env):
+    env["meta"], env["background"] = {"source": "teams"}, True
+    out = json.loads(tools.search_conversations(user_id="a"))
+    assert "title" not in out["conversations"][0] and out["conversations"][0]["link"]
+
+
+def test_lower_bound_totals_are_reported(env, monkeypatch):
+    monkeypatch.setattr(audit, "list_tool_calls", lambda c, o, r: {
+        "tool_calls": [], "total": 500, "search_capped": True,
+        "status_counts": {"failed": 0, "succeeded": 0, "running": 0, "total": 0}, "issue_counts": []})
+    assert json.loads(tools.search_tool_calls(user_id="a", query="x"))["total_is_lower_bound"] is True
+
+
+def test_get_conversation_loads_the_latest_messages(env, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(audit, "get_transcript", lambda c, o, sid, **kw: seen.update(kw) or None)
+    tools.get_conversation(user_id="a", conversation_id="s1")
+    assert seen == {"tail": True}
+
+
+def test_background_chats_carry_their_trigger_metadata_into_state():
+    # The rule is only as good as the metadata it reads: the background task
+    # must put it on the State the tools see.
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "chat" / "background" / "task.py").read_text()
+    assert "trigger_metadata=dict(trigger_metadata) if trigger_metadata else None" in source
+    state = State(question="q", is_background=True,
+                  trigger_metadata={"source": "slack", "channel": "C0123"})
+    assert audit.private_answer_channel(state.trigger_metadata, is_background=state.is_background) is False
+    assert "trigger_metadata" in State.model_fields
