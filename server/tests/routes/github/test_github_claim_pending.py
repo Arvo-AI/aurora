@@ -180,33 +180,54 @@ def test_finish_needs_a_ticket_from_the_installers_browser(env):
     app, mod, _ = env
     token, _p = _pending(env)
     with app.test_request_context():
-        other = mod.sign_link_ticket(token + "other")
+        other = mod.sign_link_ticket(token + "other", "user-1", "org-1")
     for ticket in (None, "garbage", other):
         out, link = _finish(env, token, ticket)
         assert out[1] == 400
         link.assert_not_called()
 
 
-def test_finish_links_into_the_signed_in_users_org(env):
+def test_a_ticket_minted_for_one_session_cannot_be_finished_from_another(env):
+    # The installer can mint tickets for themselves with their own cookie.
+    # Sent to a signed-in victim, those must not link into the victim's org.
     app, mod, _ = env
     token, _p = _pending(env)
     with app.test_request_context():
-        ticket = mod.sign_link_ticket(token)
+        ticket = mod.sign_link_ticket(token, "attacker", "attacker-org")
+    out, link = _finish(env, token, ticket, request_org="org-1")
+    assert out[1] == 400
+    link.assert_not_called()
+    with app.test_request_context():
+        ticket = mod.sign_link_ticket(token, "user-1", "org-1")
+    out, link = _finish(env, token, ticket, request_org="org-2")
+    assert out[1] == 400
+    link.assert_not_called()
+
+
+def test_finish_links_into_the_org_named_in_the_ticket(env):
+    app, mod, _ = env
+    token, _p = _pending(env)
+    with app.test_request_context():
+        ticket = mod.sign_link_ticket(token, "user-1", "org-7")
     out, link = _finish(env, token, ticket, request_org="org-7")
     assert link.call_args.args[:2] == ("user-1", "org-7")
 
 
-def test_confirm_hands_a_ticket_only_to_the_installers_browser(env):
+def test_confirm_needs_the_installers_browser_and_a_link_state(env):
     app, mod, _ = env
     from routes.github import github_signup
 
     token, _p = _pending(env)
+    with app.test_request_context():
+        state = mod.sign_link_state(token, "user-1", "org-1")
     app.register_blueprint(github_signup.github_signup_bp, url_prefix="/github")
     client = app.test_client()
-    resp = client.get(f"/github/app/link-pending/confirm?t={token}")
+    resp = client.get(f"/github/app/link-pending/confirm?t={token}&s={state}")
     assert "gh_link=" not in (resp.location or "")
     client.set_cookie(github_signup._PENDING_BIND_COOKIE, "bind-1", path="/github/app")
     resp = client.get(f"/github/app/link-pending/confirm?t={token}")
+    assert "gh_link=" not in (resp.location or "")
+    resp = client.get(f"/github/app/link-pending/confirm?t={token}&s={state}")
     ticket = parse_qs(urlparse(resp.location).query)["gh_link"][0]
     with app.test_request_context():
-        assert mod.verify_link_ticket(ticket, token)
+        assert mod.verify_link_ticket(ticket, token) == ("user-1", "org-1")

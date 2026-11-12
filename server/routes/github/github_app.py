@@ -1128,14 +1128,10 @@ def github_app_claim_pending(user_id):
     return jsonify({"success": True, "installation_id": installation_id})
 
 
-_LINK_TICKET_SALT = "aurora.github.app.link-pending-ticket.v1"
+_LINK_TICKET_SALT = "aurora.github.app.link-pending-ticket.v2"
 _LINK_TICKET_TTL_SEC = 2 * 60
-
-
-def _link_ticket_serializer():
-    from routes.github.github_signup import _state_serializer
-
-    return _state_serializer(_LINK_TICKET_SALT)
+_LINK_STATE_SALT = "aurora.github.app.link-pending-state.v1"
+_LINK_STATE_TTL_SEC = 10 * 60
 
 
 def _token_hash(token: str) -> str:
@@ -1144,32 +1140,70 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def sign_link_ticket(token: str) -> str:
-    """Short-lived proof that ``token`` was opened in the installer's browser."""
-    return _link_ticket_serializer().dumps({"t": _token_hash(token)})
+def _sign_link(salt: str, token: str, user_id: str, org_id: str) -> str:
+    from routes.github.github_signup import _state_serializer
+
+    return _state_serializer(salt).dumps({"t": _token_hash(token), "u": user_id, "o": org_id})
 
 
-def verify_link_ticket(ticket: str, token: str) -> bool:
+def _verify_link(salt: str, max_age: int, signed, token: str) -> tuple[str, str] | None:
+    from routes.github.github_signup import _state_serializer
+
+    if not isinstance(signed, str) or not signed:
+        return None
     try:
-        payload = _link_ticket_serializer().loads(ticket, max_age=_LINK_TICKET_TTL_SEC)
+        payload = _state_serializer(salt).loads(signed, max_age=max_age)
     except Exception:
-        return False
-    return isinstance(payload, dict) and payload.get("t") == _token_hash(token)
+        return None
+    if not isinstance(payload, dict) or payload.get("t") != _token_hash(token):
+        return None
+    user_id, org_id = payload.get("u"), payload.get("o")
+    if not isinstance(user_id, str) or not isinstance(org_id, str):
+        return None
+    return user_id, org_id
+
+
+def sign_link_state(token: str, user_id: str, org_id: str) -> str:
+    """Issued by the card to the signed-in session that is about to click Connect."""
+    return _sign_link(_LINK_STATE_SALT, token, user_id, org_id)
+
+
+def verify_link_state(state, token: str) -> tuple[str, str] | None:
+    return _verify_link(_LINK_STATE_SALT, _LINK_STATE_TTL_SEC, state, token)
+
+
+def sign_link_ticket(token: str, user_id: str, org_id: str) -> str:
+    """Short-lived proof that this user's Connect was confirmed in the installer's browser."""
+    return _sign_link(_LINK_TICKET_SALT, token, user_id, org_id)
+
+
+def verify_link_ticket(ticket, token: str) -> tuple[str, str] | None:
+    return _verify_link(_LINK_TICKET_SALT, _LINK_TICKET_TTL_SEC, ticket, token)
 
 
 @github_app_bp.route("/app/link-pending/start", methods=["POST", "OPTIONS"])
 @require_permission("connectors", "write")
-def github_app_link_pending_start(user_id):  # noqa: ARG001 — user_id required by decorator
-    """What the "Connect GitHub to <org>?" card shows, read from the signed token."""
+def github_app_link_pending_start(user_id):
+    """What the "Connect GitHub to <org>?" card shows, read from the signed token.
+
+    Also issues the link state that Connect carries through the installer's
+    browser, so the link can only finish for this user and org.
+    """
     from routes.github.github_signup import verify_pending_signup
+    from utils.auth.stateless_auth import get_org_id_from_request
 
     body = request.get_json(silent=True) or {}
-    pending = verify_pending_signup(body.get("token") if isinstance(body, dict) else None)
+    token = body.get("token") if isinstance(body, dict) else None
+    pending = verify_pending_signup(token)
     if pending is None:
         return jsonify({"error": "Install link expired", "code": "CLAIM_INVALID"}), 400
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization context", "code": "MISSING_ORG_CONTEXT"}), 403
     return jsonify({
         "account_login": pending.get("acct") or "",
         "installer_login": pending["identity"]["login"],
+        "link_state": sign_link_state(token, user_id, org_id),
     })
 
 
@@ -1179,9 +1213,10 @@ def github_app_link_pending_finish(user_id):
     """Connect: link the pending install to the signed-in user's org.
 
     Needs the ticket ``/github/app/link-pending/confirm`` hands out only to
-    the browser that did the install, and links into the org of whoever is
-    signed in there. A link someone else prepared can therefore only
-    connect the installer's install to the installer's own org.
+    the browser that did the install, in exchange for the link state this
+    user's card was issued. The ticket names that user and org, and must
+    match the session finishing it: a ticket the installer minted for
+    themselves cannot link their install into someone else's org.
     """
     from routes.github.github_signup import (
         release_pending_signup,
@@ -1194,11 +1229,13 @@ def github_app_link_pending_finish(user_id):
     token = body.get("token") if isinstance(body, dict) else None
     ticket = body.get("ticket") if isinstance(body, dict) else None
     pending = verify_pending_signup(token)
-    if pending is None or not isinstance(ticket, str) or not verify_link_ticket(ticket, token):
+    bound = verify_link_ticket(ticket, token) if pending is not None else None
+    org_id = get_org_id_from_request()
+    if bound is None or bound != (user_id, org_id):
         return jsonify({"error": "Install link expired", "code": "CLAIM_INVALID"}), 400
     if not reserve_pending_signup(token):
         return jsonify({"error": "Install link already used", "code": "CLAIM_INVALID"}), 400
-    error = link_pending_install(user_id, get_org_id_from_request(), pending)
+    error = link_pending_install(user_id, org_id, pending)
     if error is not None:
         release_pending_signup(token)
         return jsonify({"error": error, "code": "LINK_FAILED"}), 409

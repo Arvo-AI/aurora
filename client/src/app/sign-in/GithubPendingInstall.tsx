@@ -27,13 +27,14 @@ function Spinner() {
   )
 }
 
-type LinkStart = { account_login: string; installer_login: string }
+type LinkStart = { account_login: string; installer_login: string; link_state: string }
 
 // Connect first visits the backend so it can see the cookie set on the
-// browser that did the install; it comes back here with a short ticket.
-function confirmUrl(token: string): string {
+// browser that did the install; it comes back here with a short ticket
+// bound to this signed-in user and org.
+function confirmUrl(token: string, linkState: string): string {
   const base = getEnv("NEXT_PUBLIC_BACKEND_URL") || ""
-  return `${base}/github/app/link-pending/confirm?t=${encodeURIComponent(token)}`
+  return `${base}/github/app/link-pending/confirm?t=${encodeURIComponent(token)}&s=${encodeURIComponent(linkState)}`
 }
 
 export function GithubPendingInstall({ token, linkTicket }: Readonly<{ token: string; linkTicket: string | null }>) {
@@ -49,7 +50,8 @@ export function GithubPendingInstall({ token, linkTicket }: Readonly<{ token: st
     globalThis.location.replace(completeUrl(token))
   }, [status, token])
 
-  // Back from the browser check: finish as whoever is signed in here.
+  // Back from the browser check. The ticket names the user and org that
+  // clicked Connect; the backend refuses it for any other session.
   useEffect(() => {
     if (status !== "authenticated" || !linkTicket || leaving.current) return
     leaving.current = true
@@ -88,7 +90,7 @@ export function GithubPendingInstall({ token, linkTicket }: Readonly<{ token: st
         })
         const body = await res.json().catch(() => null)
         if (cancelled) return
-        if (res.ok && body && typeof body.installer_login === "string") setLink(body as LinkStart)
+        if (res.ok && body && typeof body.installer_login === "string" && typeof body.link_state === "string") setLink(body as LinkStart)
         else setError(LINK_ERRORS[body?.code] ?? "GitHub could not be connected. Install Aurora again from Connectors.")
       } catch {
         if (!cancelled) setError("We couldn't reach Aurora. Please reload to try again.")
@@ -123,7 +125,7 @@ export function GithubPendingInstall({ token, linkTicket }: Readonly<{ token: st
   const connectHere = () => {
     setBusy(true)
     leaving.current = true
-    globalThis.location.href = confirmUrl(token)
+    globalThis.location.href = confirmUrl(token, link.link_state)
   }
 
   const createSeparate = async () => {

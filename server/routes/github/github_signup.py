@@ -1077,15 +1077,17 @@ def github_app_link_pending_confirm():
     """First half of the card's Connect: prove this is the installer's browser.
 
     A top-level navigation, so it carries the cookie the callback set. It
-    swaps that for a two-minute ticket and sends the browser back to the
-    app, which finishes the link as whoever is signed in there
-    (``POST /github/app/link-pending/finish``).
+    swaps that, plus the link state the card was issued for one signed-in
+    user and org, for a two-minute ticket naming that user and org, and
+    sends the browser back to the app to finish
+    (``POST /github/app/link-pending/finish``, which checks they match).
     """
-    from routes.github.github_app import sign_link_ticket
+    from routes.github.github_app import sign_link_ticket, verify_link_state
 
     token = request.args.get("t") or ""
     pending = verify_pending_signup(token)
-    if pending is None or not pending_bound_to_this_browser(pending):
+    bound = verify_link_state(request.args.get("s"), token) if pending is not None else None
+    if bound is None or not pending_bound_to_this_browser(pending):
         return _render_error(_ERROR_LINK_EXPIRED)
-    back = urlencode({"gh_new": token, "gh_link": sign_link_ticket(token)})
+    back = urlencode({"gh_new": token, "gh_link": sign_link_ticket(token, *bound)})
     return clear_pending_cookie(flask.redirect(f"{FRONTEND_URL}/sign-in?{back}", code=302))
