@@ -3,7 +3,7 @@
 import React, { useState, useContext, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Trash2, MoreVertical, Edit3, Loader2, ScanSearch } from 'lucide-react';
+import { Trash2, MoreVertical, Edit3, Loader2, Search } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -270,7 +270,7 @@ export default function ChatHistory({
                 aria-label="Search all conversations"
                 className="inline-flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <ScanSearch className="h-3.5 w-3.5" aria-hidden />
+                <Search className="h-3.5 w-3.5" aria-hidden />
               </Link>
             )}
             {/* Clear all */}
