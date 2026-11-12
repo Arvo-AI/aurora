@@ -23,37 +23,30 @@ export interface SetupJourney {
 
 const EMPTY: SetupJourney = { guide: null, via: null, first_name: null }
 
-// One request per signed-in account per page load. Keyed by account so a
-// sign-in as someone else in the same tab never shows the previous guide.
-const cache = new Map<string, Promise<SetupJourney>>()
-
-function load(accountKey: string): Promise<SetupJourney> {
-  const hit = cache.get(accountKey)
-  if (hit) return hit
-  const pending = fetch("/api/onboarding/journey", { cache: "no-store" })
-    .then(async (r) => {
-      if (!r.ok) throw new Error(`journey ${r.status}`)
-      const d = await r.json()
-      return { guide: d?.guide ?? null, via: d?.via ?? null, first_name: d?.first_name ?? null }
-    })
-    .catch(() => {
-      // A failure isn't an answer: let the next mount ask again.
-      cache.delete(accountKey)
-      return EMPTY
-    })
-  cache.set(accountKey, pending)
-  return pending
+async function load(): Promise<SetupJourney> {
+  try {
+    const r = await fetch("/api/onboarding/journey", { cache: "no-store" })
+    if (!r.ok) return EMPTY
+    const d = await r.json()
+    return { guide: d?.guide ?? null, via: d?.via ?? null, first_name: d?.first_name ?? null }
+  } catch {
+    return EMPTY
+  }
 }
 
+// Asked once per mount, and again when someone signs in or out, so nothing
+// from one account is ever shown to another. The server decides whose
+// journey it is from the session; the client never names an account.
+// (Switching accounts or orgs reloads the page, which remounts this.)
 export function useSetupJourney(): SetupJourney | null {
-  const { data: session, status } = useSession()
-  const accountKey = session?.user?.id ?? ""
+  const { status } = useSession()
   const [journey, setJourney] = useState<SetupJourney | null>(null)
   useEffect(() => {
-    if (status !== "authenticated" || !accountKey) return
+    setJourney(null)
+    if (status !== "authenticated") return
     let alive = true
-    void load(accountKey).then((j) => { if (alive) setJourney(j) })
+    void load().then((j) => { if (alive) setJourney(j) })
     return () => { alive = false }
-  }, [accountKey, status])
+  }, [status])
   return journey
 }

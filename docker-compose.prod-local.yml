@@ -222,13 +222,13 @@ x-common-env: &common-env
   ONBOARDING_SEND_AS_GUIDE: ${ONBOARDING_SEND_AS_GUIDE:-false}
   ONBOARDING_BCC_GUIDE: ${ONBOARDING_BCC_GUIDE:-false}
   ONBOARDING_SKIP_EMAIL_DOMAINS: ${ONBOARDING_SKIP_EMAIL_DOMAINS:-}
-  ONBOARDING_UNSUBSCRIBE_SECRET: ${ONBOARDING_UNSUBSCRIBE_SECRET:-}
-  ONBOARDING_TEAM_WEBHOOK_URL: ${ONBOARDING_TEAM_WEBHOOK_URL:-}
   FRONTEND_URL: ${FRONTEND_URL}
 
-# Microsoft Graph credentials for setup emails: only the API server (which
-# checks whether email is on) and the Celery worker (which sends) get them.
+# Setup-email secrets (Graph credentials, unsubscribe signing key, team
+# webhook): only the API server and the Celery worker use them.
 x-onboarding-mail-env: &onboarding-mail-env
+  ONBOARDING_UNSUBSCRIBE_SECRET: ${ONBOARDING_UNSUBSCRIBE_SECRET:-}
+  ONBOARDING_TEAM_WEBHOOK_URL: ${ONBOARDING_TEAM_WEBHOOK_URL:-}
   ONBOARDING_GRAPH_TENANT_ID: ${ONBOARDING_GRAPH_TENANT_ID:-}
   ONBOARDING_GRAPH_CLIENT_ID: ${ONBOARDING_GRAPH_CLIENT_ID:-}
   ONBOARDING_GRAPH_CLIENT_SECRET: ${ONBOARDING_GRAPH_CLIENT_SECRET:-}

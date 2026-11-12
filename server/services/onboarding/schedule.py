@@ -64,10 +64,11 @@ def _connected_due(s: JourneyState, now: datetime) -> Due | None:
 
 
 def _followup_due(s: JourneyState, age: timedelta) -> Due | None:
-    ever = set(s.parts_ever) | set(s.parts_done)
-    if "checkin" not in s.sent and CHECKIN_AT <= age < CHECKIN_UNTIL and len(ever) < TOTAL_PARTS:
+    if "checkin" not in s.sent and CHECKIN_AT <= age < CHECKIN_UNTIL and len(s.parts_done) < TOTAL_PARTS:
         return Due("checkin")
-    if ever:
+    # Nudges assume nothing was ever connected; a check that fails for a
+    # moment mustn't make someone who did connect look like they didn't.
+    if set(s.parts_ever) | set(s.parts_done):
         return None
     if "nudge_day3" not in s.sent and NUDGE3_AT <= age < NUDGE3_UNTIL:
         return Due("nudge_day3")

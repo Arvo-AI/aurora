@@ -154,7 +154,8 @@ def _send_graph(guide: Guide, msg: MIMEMultipart) -> bool:
 def _send_smtp(msg: MIMEMultipart) -> bool:
     try:
         with smtplib.SMTP(os.getenv("SMTP_HOST"), int(os.getenv("SMTP_PORT", "587")), timeout=30) as server:
-            server.starttls(context=ssl.create_default_context())
+            tls = ssl.create_default_context()
+            server.starttls(context=tls)
             server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASSWORD"))
             server.send_message(msg)
         return True

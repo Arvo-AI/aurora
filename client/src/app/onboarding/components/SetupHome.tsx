@@ -71,10 +71,16 @@ function useInitiallyLit(connected: Set<string> | null) {
   return lit
 }
 
-function useLeave(connected: ReadonlySet<string>) {
+function useLeave(connected: ReadonlySet<string> | null) {
   const [leaving, setLeaving] = useState(false)
   const leave = async () => {
     setLeaving(true)
+    // Without a status answer there's nothing true to save; the saved
+    // selections stay as they were.
+    if (connected === null) {
+      globalThis.location.href = "/"
+      return
+    }
     try {
       await fetch("/api/onboarding/complete", {
         method: "POST",
@@ -133,7 +139,7 @@ export default function SetupHome({ via: viaProp }: Readonly<{ via?: string }>) 
 
   const { openStep, toggle, focusStep } = useOpenStep(connected, next, stepFromParam(params.get("step")), reduce)
   const initiallyLit = useInitiallyLit(connected)
-  const { leaving, leave } = useLeave(set)
+  const { leaving, leave } = useLeave(connected)
 
   // Arriving here means the way back worked; the app shouldn't offer it again.
   useEffect(() => {
@@ -193,9 +199,9 @@ export default function SetupHome({ via: viaProp }: Readonly<{ via?: string }>) 
         </motion.p>
 
         {statusFailed && connected === null && (
-          <p role="status" className="mt-4 text-[13px] text-amber-200/80">
+          <output className="mt-4 block text-[13px] text-amber-200/80">
             Aurora couldn&apos;t check your connections just now. It will try again in a few seconds; you can still connect tools below.
-          </p>
+          </output>
         )}
 
         {!joined && (

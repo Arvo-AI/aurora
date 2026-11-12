@@ -188,3 +188,36 @@ def test_user_supplied_names_are_escaped_in_html():
     msg = compose("welcome", _ctx(first_name="<script>x</script>"))
     assert "<script>" not in msg.html
 
+
+
+# ── what counts as news ──
+
+
+def _row(**kw):
+    from services.onboarding.journey import _Row
+    base = dict(org_id="o", via="github", guide=guides.Guide(key="a", name="Ada Lane", email="ada@example.com"),
+                created_at=T0, unsubscribed=False, known=set(), pending=[], pending_since=None,
+                email="dana@example.com", name="Dana", verified=True)
+    base.update(kw)
+    return _Row(**base)
+
+
+def test_a_second_tool_in_an_already_connected_part_is_not_news(monkeypatch):
+    from services.onboarding import journey, sender
+    monkeypatch.setattr(sender, "ping_team", lambda text: None)
+    r = _row(known={"github"})
+    journey._note_new_connections(r, frozenset({"github", "gitlab", "datadog"}), {"welcome": T0})
+    assert r.pending == ["alerts"]
+
+
+def test_what_was_connected_before_the_welcome_is_not_news(monkeypatch):
+    from services.onboarding import journey, sender
+    monkeypatch.setattr(sender, "ping_team", lambda text: None)
+    r = _row()
+    journey._note_new_connections(r, frozenset({"github"}), {})
+    assert r.pending == []
+
+
+def test_checkin_still_goes_out_when_a_finished_stack_came_apart():
+    s = state(sent={"welcome": at(minutes=4)}, parts_done=["code"], parts_ever=["alerts", "cloud", "code", "chat"])
+    assert due_email(s, at(hours=23)) == Due("checkin")

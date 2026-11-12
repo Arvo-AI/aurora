@@ -28,7 +28,10 @@ export function slackDeepLink(s: SlackStatus | null): string {
 export function useSlackStatus(relevant: boolean, refreshKey: unknown): SlackStatus | null {
   const [slack, setSlack] = useState<SlackStatus | null>(null)
   useEffect(() => {
-    if (!relevant) return
+    if (!relevant) {
+      setSlack(null)
+      return
+    }
     let cancelled = false
     void (async () => {
       try {

@@ -219,9 +219,10 @@ def _note_new_connections(r: _Row, providers: frozenset[str], sent: dict) -> Non
         return
     from services.onboarding.sender import ping_team
     ping_team(f"{r.email} connected {', '.join(label(p) for p in new)}.")
-    for p in new:
-        part = part_of(p)
-        if part and part not in r.pending:
+    # A second tool in a part that was already connected (or announced) isn't news.
+    already = set(parts_connected(frozenset(r.known))) | {k.split(":", 1)[1] for k in sent if k.startswith("connected:")}
+    for part in dict.fromkeys(part_of(p) for p in new):
+        if part and part not in already and part not in r.pending:
             r.pending.append(part)
             r.pending_since = r.pending_since or _now()
 
@@ -236,7 +237,7 @@ def _send_due(cur, user_id: str, r: _Row, providers: frozenset[str], state: sche
         first_name=_first_name(r.name),
         via=r.via,
         providers=providers,
-        parts_done=tuple(state.parts_ever),
+        parts_done=tuple(state.parts_done),
         setup_url=f"{(os.getenv('FRONTEND_URL') or '').rstrip('/')}/onboarding",
         unsubscribe_url=unsubscribe_url(user_id),
     )

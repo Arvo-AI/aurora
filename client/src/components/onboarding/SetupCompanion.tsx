@@ -203,7 +203,7 @@ function CompanionPanel({ panelRef, connected, guide, allDone, canConnect, reduc
               <Link
                 href={`/onboarding?step=${p.id}`}
                 onClick={onClose}
-                className="flex items-center gap-3 px-4 py-2 text-[13px] transition-colors hover:bg-white/[0.04] focus:outline-none focus-visible:bg-white/[0.06]"
+                className="flex items-center gap-3 px-4 py-2 text-[13px] transition-colors hover:bg-white/[0.04] focus:outline-none focus-visible:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/60"
               >
                 <Check done={on} reduce={reduce} size={18} />
                 <span className={on ? "text-white/55" : "text-white/85"}>{p.short}</span>
@@ -228,7 +228,7 @@ function CompanionPanel({ panelRef, connected, guide, allDone, canConnect, reduc
         <button
           type="button"
           onClick={onShrink}
-          className="w-full rounded-b-2xl border-t border-white/[0.06] py-2 text-xs text-white/35 transition-colors hover:text-white/70 focus:outline-none focus-visible:bg-white/[0.04]"
+          className="w-full rounded-b-2xl border-t border-white/[0.06] py-2 text-xs text-white/35 transition-colors hover:text-white/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/60 focus-visible:text-white/80"
         >
           Make this smaller
         </button>
@@ -289,7 +289,7 @@ export default function SetupCompanion() {
             canConnect={!isViewer}
             reduce={reduce}
             onClose={close}
-            onShrink={() => { setOpen(false); setMin(true); writeMin(true) }}
+            onShrink={() => { setOpen(false); setMin(true); writeMin(true); buttonRef.current?.focus() }}
           />
         )}
       </AnimatePresence>
