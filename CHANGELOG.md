@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.24] - 2026-11-12
+
+### Fixed
+- GitHub App: every install ends with an Aurora account and repos enrolled
+  for PR review. Installs that did not start on the website no longer hit an
+  error page, a GitHub outage during install no longer counts as "no repos",
+  and repos granted after install are enrolled.
+- GitHub App: an installation another organization has linked is never linked
+  again, and every link path takes a per-installation lock.
+- GitHub App: repos removed in the repo picker stay removed across logins,
+  relinks and the hourly sync.
+
+### Added
+- GitHub App: a new installer whose GitHub email already has an account can
+  finish linking after signing in, and a signed-in user can connect a new
+  install to their current organization.
+- GitHub App: an hourly sync enrolls repos whose webhook was missed and drops
+  repos GitHub no longer grants. `backfill_installation_repos` repairs named
+  installations by hand.
+
 ## [1.5.23] - 2026-11-12
 
 ### Fixed
