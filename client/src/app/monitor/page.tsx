@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useUrlParam } from './components/audit-controls';
 import { Radar, HeartPulse, Timer, ShieldCheck, BookOpen, MessagesSquare } from 'lucide-react';
 import { useUser } from '@/hooks/useAuthHooks';
 import { isAdmin } from '@/lib/roles';
@@ -24,12 +25,14 @@ const TABS = [
 type TabId = typeof TABS[number]['id'];
 
 export default function MonitorPage() {
-  const [tab, setTab] = useState<TabId>('fleet');
+  // In the URL (?tab=chats) so a link can open a tab, e.g. ?tab=chats&view=tool-calls.
+  const [tabParam, setTab] = useUrlParam('tab', 'fleet');
   const [period, setPeriod] = useState<Period>('30d');
   const { user } = useUser();
   // Conversations lists every user's chats; the backend enforces admin too.
   const admin = isAdmin(user?.role);
   const tabs = TABS.filter(t => !('adminOnly' in t && t.adminOnly) || admin);
+  const tab: TabId = tabs.some(t => t.id === tabParam) ? (tabParam as TabId) : 'fleet';
 
   return (
     <div className="max-w-[1400px] mx-auto py-8 px-4 sm:px-6">

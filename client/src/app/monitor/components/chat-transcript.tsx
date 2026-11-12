@@ -74,7 +74,7 @@ export default function ChatTranscript({
 
   const back = (
     <button onClick={onBack} className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors">
-      <ArrowLeft className="h-3.5 w-3.5" /> All conversations
+      <ArrowLeft className="h-3.5 w-3.5" /> Back
     </button>
   );
   if (!data) {

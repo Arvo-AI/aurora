@@ -50,7 +50,6 @@ QUERY_MAX_CHARS = 200
 SNIPPET_RADIUS = 120
 SNIPPET_WINDOW = 4000  # chars fetched around a search match
 USERS_FACET_LIMIT = 200
-FAILURES_PER_CHAT = 5
 USER_ID_MAX_CHARS = 255
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_:-]{1,64}$")
 
@@ -417,11 +416,44 @@ def _matches_query(failure: dict, query: str) -> bool:
     return query.lower() in haystack
 
 
+# Transcript message holding each tool call of the chats in CTE ``f``: one pass
+# over each chat's messages. Takes the org as its one parameter.
+_ANCHORS_SQL = """
+            SELECT c.id AS chat_id, tc->>'id' AS tool_call_id, MIN(e.idx - 1)::int AS message_index
+            FROM chat_sessions c
+            CROSS JOIN LATERAL jsonb_array_elements(
+                CASE WHEN jsonb_typeof(c.messages) = 'array' THEN c.messages ELSE '[]'::jsonb END
+            ) WITH ORDINALITY AS e(m, idx)
+            CROSS JOIN LATERAL jsonb_array_elements(
+                CASE WHEN jsonb_typeof(e.m->'toolCalls') = 'array' THEN e.m->'toolCalls' ELSE '[]'::jsonb END
+            ) AS tc
+            WHERE c.org_id = %s AND c.id IN (SELECT DISTINCT chat_id FROM f)
+            GROUP BY 1, 2"""
+_NO_ANCHORS_SQL = """
+            SELECT NULL::text AS chat_id, NULL::text AS tool_call_id, NULL::int AS message_index
+            WHERE false"""
+
+
+def _shape_failure(r: dict) -> dict:
+    """A failed execution_steps row as returned to callers: classified and redacted."""
+    return {
+        "chat_id": r["chat_id"],
+        "incident_id": str(r["incident_id"]) if r.get("incident_id") else None,
+        "message_index": r.get("message_index"),
+        "tool_call_id": r.get("tool_call_id"),
+        "tool_name": r.get("tool_name") or "unknown",
+        "input": summarize_input(r.get("tool_input")),
+        "category": classify_tool_error(r.get("error_message")),
+        "reason": failure_reason(r.get("error_message")),
+        "started_at": iso_utc(r.get("started_at")),
+    }
+
+
 def _failed_tool_calls(
     cur, org_id: str, *, chat_ids: Optional[list[str]] = None, period: Optional[str] = None,
     category: Optional[str] = None, tool: Optional[str] = None, query: Optional[str] = None,
     source: Optional[str] = None, owner_user_id: Optional[str] = None,
-    per_chat: Optional[int] = None, limit: int = 50, with_anchors: bool = True,
+    limit: int = 50, with_anchors: bool = True,
 ) -> list[dict]:
     """Failed ``execution_steps`` rows, classified, redacted and (optionally) anchored.
 
@@ -455,56 +487,24 @@ def _failed_tool_calls(
         clauses.append("es.incident_id IS NULL")
     elif source == "incident":
         clauses.append("es.incident_id IS NOT NULL")
-    # Cap per chat *before* the overall limit, so one noisy chat can't crowd out the rest.
-    rank_filter = "ranked.rn <= %s" if per_chat else "TRUE"
-    anchors_sql = f"""
-            SELECT c.id AS chat_id, tc->>'id' AS tool_call_id, MIN(e.idx - 1)::int AS message_index
-            FROM chat_sessions c
-            CROSS JOIN LATERAL jsonb_array_elements(
-                CASE WHEN jsonb_typeof(c.messages) = 'array' THEN c.messages ELSE '[]'::jsonb END
-            ) WITH ORDINALITY AS e(m, idx)
-            CROSS JOIN LATERAL jsonb_array_elements(
-                CASE WHEN jsonb_typeof(e.m->'toolCalls') = 'array' THEN e.m->'toolCalls' ELSE '[]'::jsonb END
-            ) AS tc
-            WHERE c.org_id = %s AND c.id IN (SELECT DISTINCT chat_id FROM f)
-            GROUP BY 1, 2""" if with_anchors else """
-            SELECT NULL::text AS chat_id, NULL::text AS tool_call_id, NULL::int AS message_index
-            WHERE false"""
+    anchors_sql = _ANCHORS_SQL if with_anchors else _NO_ANCHORS_SQL
     cur.execute(
         f"""WITH f AS (
-                SELECT * FROM (
-                    SELECT es.id, es.tool_name, es.tool_input, es.error_message, es.started_at,
-                           es.tool_call_id, es.incident_id, {ROOT_SESSION_SQL} AS chat_id,
-                           ROW_NUMBER() OVER (PARTITION BY {ROOT_SESSION_SQL}
-                                              ORDER BY es.started_at DESC, es.id DESC) AS rn
-                    FROM execution_steps es
-                    WHERE {" AND ".join(clauses)}
-                ) ranked
-                WHERE {rank_filter}
-                ORDER BY ranked.started_at DESC, ranked.id DESC
+                SELECT es.id, es.tool_name, es.tool_input, es.error_message, es.started_at,
+                       es.tool_call_id, es.incident_id, {ROOT_SESSION_SQL} AS chat_id
+                FROM execution_steps es
+                WHERE {" AND ".join(clauses)}
+                ORDER BY es.started_at DESC, es.id DESC
                 LIMIT %s
             ), anchors AS ({anchors_sql}
             )
             SELECT f.*, a.message_index
             FROM f LEFT JOIN anchors a ON a.chat_id = f.chat_id AND a.tool_call_id = f.tool_call_id
             ORDER BY f.started_at DESC, f.id DESC""",
-        tuple(params + ([per_chat] if per_chat else []) + [QUERY_POOL_SIZE if query else limit]
+        tuple(params + [QUERY_POOL_SIZE if query else limit]
               + ([org_id] if with_anchors else [])),
     )
-    failures = [
-        {
-            "chat_id": r["chat_id"],
-            "incident_id": str(r["incident_id"]) if r.get("incident_id") else None,
-            "message_index": r.get("message_index"),
-            "tool_call_id": r.get("tool_call_id"),
-            "tool_name": r.get("tool_name") or "unknown",
-            "input": summarize_input(r.get("tool_input")),
-            "category": classify_tool_error(r.get("error_message")),
-            "reason": failure_reason(r.get("error_message")),
-            "started_at": iso_utc(r.get("started_at")),
-        }
-        for r in fetch_dicts(cur)
-    ]
+    failures = [_shape_failure(r) for r in fetch_dicts(cur)]
     if query:
         failures = [f for f in failures if _matches_query(f, query)][:limit]
     return failures
@@ -557,6 +557,129 @@ def search_failed_tool_calls(
         "by_issue": _issue_totals(cur, org_id, period, owner_where, owner_params),
         "period": period,
     }
+
+
+# ---------------------------------------------------------------------------
+# Failed tool calls view (monitor page, admins)
+# ---------------------------------------------------------------------------
+
+def list_failed_tool_calls(cur, org_id: str, raw: dict) -> dict:
+    """One page of failed tool calls, newest first, with chat, user and source.
+
+    Filters: period, issue, source, user, tool and free text. Free text matches
+    the redacted command and reason (never raw stored text), so with ``q`` the
+    page is taken from the ``QUERY_POOL_SIZE`` most recent matches of the other
+    filters, and ``search_capped`` says when that pool was full.
+    """
+    f = ChatFilters.parse(raw)
+    tool = _opt(raw, "tool")
+    case_sql, case_params = sql_category_case("es.error_message")
+
+    # Filters on the chat a failure belongs to (source, user) and on the call (tool).
+    scope, scope_params = ["TRUE"], []
+    if f.source:
+        scope.append(f"{SOURCE_SQL} = %s")
+        scope_params.append(f.source)
+    if f.user_id:
+        scope.append("cs.user_id = %s")
+        scope_params.append(f.user_id)
+    if tool:
+        scope.append("es.tool_name = %s")
+        scope_params.append(tool)
+    where = [
+        "es.org_id = %s", "es.status = 'error'", _NOT_DELETED_SQL,
+        "es.started_at >= NOW() - %s::interval", *scope,
+    ]
+    params = [org_id, PERIOD_INTERVALS[f.period], *scope_params]
+    if f.issue and f.issue != "any":
+        where.append(f"{case_sql} = %s")
+        params.extend(case_params + [f.issue])
+    from_sql = f"""FROM execution_steps es
+            LEFT JOIN chat_sessions cs ON cs.id = {ROOT_SESSION_SQL} AND cs.org_id = es.org_id
+            WHERE {" AND ".join(where)}"""
+
+    if f.query:
+        limit, offset = QUERY_POOL_SIZE, 0
+    else:
+        cur.execute(f"SELECT COUNT(*) {from_sql}", tuple(params))
+        total = cur.fetchone()[0] or 0
+        limit, offset = f.per_page, (f.page - 1) * f.per_page
+    cur.execute(
+        f"""WITH f AS (
+                SELECT es.id, es.tool_name, es.tool_input, es.error_message, es.started_at,
+                       es.tool_call_id, es.incident_id, {ROOT_SESSION_SQL} AS chat_id,
+                       cs.title AS chat_title, cs.user_id, {SOURCE_SQL} AS source
+                {from_sql}
+                ORDER BY es.started_at DESC, es.id DESC
+                LIMIT %s OFFSET %s
+            ), anchors AS ({_ANCHORS_SQL}
+            )
+            SELECT f.*, a.message_index, u.email AS user_email, u.name AS user_name
+            FROM f
+            LEFT JOIN anchors a ON a.chat_id = f.chat_id AND a.tool_call_id = f.tool_call_id
+            LEFT JOIN users u ON u.id = f.user_id
+            ORDER BY f.started_at DESC, f.id DESC""",
+        tuple(params + [limit, offset, org_id]),
+    )
+    rows = [
+        {
+            **_shape_failure(r),
+            "chat_title": scrub(r.get("chat_title")) or "Untitled chat",
+            "source": r.get("source"),
+            "user": {"id": r.get("user_id"), "email": r.get("user_email"), "name": r.get("user_name")},
+        }
+        for r in fetch_dicts(cur)
+    ]
+    search_capped = False
+    if f.query:
+        search_capped = len(rows) >= QUERY_POOL_SIZE
+        rows = [r for r in rows if _matches_query(r, f.query)]
+        total = len(rows)
+        rows = rows[(f.page - 1) * f.per_page: f.page * f.per_page]
+
+    counts_where = " AND ".join(scope)
+    return {
+        "tool_calls": rows,
+        "total": total,
+        "page": f.page,
+        "per_page": f.per_page,
+        "total_pages": max(1, -(-total // f.per_page)),
+        "search_capped": search_capped,
+        "issue_counts": _issue_totals(cur, org_id, f.period, counts_where, scope_params),
+        "tools": _failure_facet(cur, org_id, f.period, "es.tool_name", scope, scope_params, skip="es.tool_name"),
+        "sources": _failure_facet(cur, org_id, f.period, SOURCE_SQL, scope, scope_params, skip=SOURCE_SQL),
+        "users": _failure_facet(cur, org_id, f.period, "cs.user_id", scope, scope_params, skip="cs.user_id",
+                                with_user=True),
+        "labels": {"sources": SOURCE_LABELS, "issues": CATEGORY_LABELS, "statuses": STATUS_LABELS},
+    }
+
+
+def _failure_facet(cur, org_id: str, period: str, expr: str, scope: list[str], scope_params: list,
+                   *, skip: str, with_user: bool = False) -> list[dict]:
+    """Failed-call counts by ``expr`` in the period, within every scope filter but its own."""
+    kept = [(c, p) for c, p in zip(scope[1:], scope_params) if not c.startswith(skip)]
+    extra = "".join(f" AND {c}" for c, _ in kept)
+    user_cols = ", MAX(u.email), MAX(u.name)" if with_user else ""
+    user_join = "LEFT JOIN users u ON u.id = cs.user_id" if with_user else ""
+    cur.execute(
+        f"""SELECT {expr} AS value, COUNT(*){user_cols}
+            FROM execution_steps es
+            LEFT JOIN chat_sessions cs ON cs.id = {ROOT_SESSION_SQL} AND cs.org_id = es.org_id
+            {user_join}
+            WHERE es.org_id = %s AND es.status = 'error' AND {_NOT_DELETED_SQL}
+              AND es.started_at >= NOW() - %s::interval{extra}
+            GROUP BY 1 ORDER BY 2 DESC LIMIT %s""",
+        tuple([org_id, PERIOD_INTERVALS[period], *[p for _, p in kept], USERS_FACET_LIMIT]),
+    )
+    out = []
+    for row in cur.fetchall():
+        if row[0] is None:
+            continue
+        item = {"value": row[0], "count": row[1]}
+        if with_user:
+            item.update(email=row[2], name=row[3])
+        out.append(item)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -625,16 +748,10 @@ def _chat_summary(r: dict) -> dict:
 
 
 def list_chats(cur, org_id: str, f: ChatFilters) -> dict:
-    """One page of the org's chats with issue badges and failures, plus facets and counts."""
+    """One page of the org's chats with issue badges, plus facets and counts."""
     where, params = _chat_where(f, org_id)
     cur.execute(f"SELECT COUNT(*) FROM chat_sessions cs WHERE {where}", tuple(params))
     total = cur.fetchone()[0] or 0
-    # The "All chats" card: the same filters minus the issue type.
-    all_chats = total
-    if f.issue:
-        all_where, all_params = _chat_where(f, org_id, skip=("issue",))
-        cur.execute(f"SELECT COUNT(*) FROM chat_sessions cs WHERE {all_where}", tuple(all_params))
-        all_chats = cur.fetchone()[0] or 0
 
     cur.execute(
         f"""SELECT {_CHAT_COLUMNS}
@@ -647,17 +764,9 @@ def list_chats(cur, org_id: str, f: ChatFilters) -> dict:
     rows = fetch_dicts(cur)
     ids = [r["id"] for r in rows]
 
-    issues, failures, snippets = {}, {}, {}
+    issues, snippets = {}, {}
     if ids:
         issues = _issue_counts_for(cur, org_id, ids, f.period)
-        # Only fetch failure detail for chats that have failures.
-        failing = [i for i in ids if issues.get(i)]
-        if failing:
-            for fail in _failed_tool_calls(
-                cur, org_id, chat_ids=failing, period=f.period, category=f.issue, per_chat=FAILURES_PER_CHAT,
-                limit=FAILURES_PER_CHAT * len(failing),
-            ):
-                failures.setdefault(fail["chat_id"], []).append(fail)
         if f.query:
             snippets = _snippets_for(cur, org_id, ids, f.query)
 
@@ -668,7 +777,6 @@ def list_chats(cur, org_id: str, f: ChatFilters) -> dict:
             **_chat_summary(r),
             "issues": {cat: n for cat, n in by_cat.items() if cat != OTHER},
             "failed_tool_calls": sum(by_cat.values()),
-            "failures": failures.get(r["id"], []),
             "match": snippets.get(r["id"]),
         })
 
@@ -676,7 +784,6 @@ def list_chats(cur, org_id: str, f: ChatFilters) -> dict:
     return {
         "chats": chats,
         "total": total,
-        "all_chats": all_chats,
         "page": f.page,
         "per_page": f.per_page,
         "total_pages": max(1, -(-total // f.per_page)),

@@ -32,14 +32,16 @@ def call(monkeypatch):
         monkeypatch.setattr(mod, "set_rls_context", rls)
         listing = MagicMock(return_value=result if result is not None else {"chats": []})
         transcript = MagicMock(return_value=result)
+        failed = MagicMock(return_value=result if result is not None else {"tool_calls": []})
         monkeypatch.setattr(mod, "list_chats", listing)
         monkeypatch.setattr(mod, "get_transcript", transcript)
+        monkeypatch.setattr(mod, "list_failed_tool_calls", failed)
 
         app = Flask(__name__)
         with app.test_request_context(path):
             rv = getattr(mod, handler_name)(*args)
             resp, status = rv if isinstance(rv, tuple) else (rv, rv.status_code)
-        return resp.get_json(), status, {"rls": rls, "list": listing, "transcript": transcript}
+        return resp.get_json(), status, {"rls": rls, "list": listing, "transcript": transcript, "failed": failed}
 
     return _run
 
@@ -101,3 +103,42 @@ def test_there_is_no_write_route():
     methods = {m for rule in app.url_map.iter_rules() if rule.rule.startswith("/api/monitor/chats")
                for m in rule.methods}
     assert methods <= {"GET", "HEAD", "OPTIONS"}
+
+
+
+# --- GET /api/monitor/tool-calls (failed tool calls view) ------------------
+
+def test_admin_lists_failed_tool_calls_scoped_to_their_org(call):
+    body, status, m = call("list_org_failed_tool_calls", "admin-1", "org-1",
+                           "/api/monitor/tool-calls?issue=missing_permission&tool=cloud_exec")
+    assert status == 200 and body == {"tool_calls": []}
+    assert m["rls"].call_args.kwargs["org_id"] == "org-1"
+    _, org_id, raw = m["failed"].call_args.args
+    assert org_id == "org-1" and raw["issue"] == "missing_permission" and raw["tool"] == "cloud_exec"
+
+
+@pytest.mark.parametrize("user, org", [("viewer-1", "org-1"), ("admin-2", "org-1")])
+def test_failed_tool_calls_forbidden_for_non_admins_and_other_orgs(call, user, org):
+    _, status, m = call("list_org_failed_tool_calls", user, org, "/api/monitor/tool-calls")
+    assert status == 403
+    m["failed"].assert_not_called()
+
+
+def test_failed_tool_calls_bad_filter_is_400_with_constant_message(call):
+    import routes.monitor.chat_audit_routes as mod
+    from services.monitor.chat_audit import FILTER_ERRORS, InvalidFilter
+
+    # First call installs the fixture's patches; then make the service reject the filter.
+    _, _, m = call("list_org_failed_tool_calls", "admin-1", "org-1", "/api/monitor/tool-calls")
+    m["failed"].side_effect = InvalidFilter("issue")
+    body, status, _ = _rerun(mod, "admin-1", "org-1", "/api/monitor/tool-calls?issue=<b>x</b>")
+    assert status == 400 and body["error"] == FILTER_ERRORS["issue"] and "<b>" not in body["error"]
+
+
+def _rerun(mod, user, org, path):
+    # Re-invoke the handler with the fixture's patches still in place.
+    app = Flask(__name__)
+    with app.test_request_context(path):
+        rv = mod.list_org_failed_tool_calls()
+        resp, status = rv if isinstance(rv, tuple) else (rv, rv.status_code)
+    return resp.get_json(), status, None

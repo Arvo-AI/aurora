@@ -1,0 +1,85 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
+
+export const selectCls =
+  'bg-zinc-800/50 border border-zinc-700/50 rounded-md px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:ring-1 focus:ring-zinc-600 max-w-[180px]';
+
+export function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => { const t = setTimeout(() => setV(value), ms); return () => clearTimeout(t); }, [value, ms]);
+  return v;
+}
+
+/**
+ * Each filter change is a new query key, so `data` is empty until it loads.
+ * Keep the previous response meanwhile, so nothing disappears or jumps;
+ * `refreshing` lets the caller dim it.
+ */
+export function useKeptData<T>(data: T | undefined, isLoading: boolean): { view: T | undefined; refreshing: boolean } {
+  const [previous, setPrevious] = useState<T>();
+  useEffect(() => { if (data) setPrevious(data); }, [data]);
+  return { view: data ?? previous, refreshing: !data && !!previous && isLoading };
+}
+
+/** Read a query-string value after mount (the page is prerendered, so not during render). */
+export function useUrlParam(key: string, fallback: string): [string, (v: string) => void, boolean] {
+  const [value, setValue] = useState(fallback);
+  const [ready, setReady] = useState(false);  // false until the URL has been read
+  useEffect(() => {
+    const v = new URLSearchParams(window.location.search).get(key);
+    if (v) setValue(v);
+    setReady(true);
+  }, [key]);
+  const update = (v: string) => {
+    setValue(v);
+    const url = new URL(window.location.href);
+    if (v === fallback) url.searchParams.delete(key);
+    else url.searchParams.set(key, v);
+    window.history.replaceState(window.history.state, '', url);
+  };
+  return [value, update, ready];
+}
+
+export function SearchBox({ value, onChange, placeholder, label }: {
+  value: string; onChange: (v: string) => void; placeholder: string; label: string;
+}) {
+  return (
+    <div className="relative flex-1 min-w-[200px]">
+      <Search className="h-3.5 w-3.5 text-zinc-500 absolute left-2 top-1/2 -translate-y-1/2" />
+      <input
+        type="search"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        maxLength={200}
+        placeholder={placeholder}
+        aria-label={label}
+        className="w-full bg-zinc-800/50 border border-zinc-700/50 rounded-md pl-7 pr-2.5 py-1 text-xs text-zinc-300 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600"
+      />
+    </div>
+  );
+}
+
+export function Pager({ total, page, totalPages, noun, onPage }: {
+  total: number; page: number; totalPages: number; noun: [string, string]; onPage: (p: number) => void;
+}) {
+  const btn = 'p-1 rounded-md text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-30 disabled:cursor-not-allowed';
+  return (
+    <div className="flex items-center justify-between mt-4">
+      <p className="text-xs text-zinc-500">
+        {total.toLocaleString()} {total === 1 ? noun[0] : noun[1]} — page {page} of {totalPages}
+      </p>
+      {totalPages > 1 && (
+        <div className="flex items-center gap-1">
+          <button onClick={() => onPage(Math.max(1, page - 1))} disabled={page <= 1} aria-label="Previous page" className={btn}>
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <button onClick={() => onPage(Math.min(totalPages, page + 1))} disabled={page >= totalPages} aria-label="Next page" className={btn}>
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

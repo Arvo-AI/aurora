@@ -138,14 +138,10 @@ def _chat_row(sid="s1", source="slack"):
     return (sid, "Why is checkout slow", "u1", "a@x.io", "A", source, source, "completed", TS, TS, None, 6)
 
 
-def test_list_shapes_rows_badges_failures_and_facets():
+def test_list_shapes_rows_badges_and_facets():
     cur = Cursor([
         ("SELECT COUNT(*) FROM chat_sessions", ["count"], [(1,)]),
         ("ORDER BY cs.updated_at DESC", _CHAT_COLS, [_chat_row()]),
-        ("WITH f AS", _FAIL_COLS, [
-            (7, "cloud_exec", {"provider": "aws", "command": "ec2 describe-instances"},
-             '{"error": "AccessDenied: not authorized"}', TS, "tc1", None, "s1", 1, 3),
-        ]),
         ("GROUP BY 1, 2", ["sid", "category", "count"], [("s1", "missing_permission", 2), ("s1", "other", 1)]),
         ("COUNT(DISTINCT", ["category", "calls", "chats"], [("missing_permission", 12, 3)]),
         ("GROUP BY cs.user_id", ["uid", "email", "name", "n"], [("u1", "a@x.io", "A", 5)]),
@@ -156,24 +152,13 @@ def test_list_shapes_rows_badges_failures_and_facets():
     chat = out["chats"][0]
     assert chat["source"] == "slack" and chat["user"]["email"] == "a@x.io"
     assert chat["issues"] == {"missing_permission": 2} and chat["failed_tool_calls"] == 3
-    failure = chat["failures"][0]
-    assert failure["message_index"] == 3 and failure["tool_call_id"] == "tc1"
-    assert failure["input"] == "aws ec2 describe-instances" and failure["category"] == "missing_permission"
-    assert failure["reason"] == "AccessDenied: not authorized"
+    assert "failures" not in chat                     # failures have their own view now
 
     totals = {c["category"]: c for c in out["issue_counts"]}
     assert totals["missing_permission"]["calls"] == 12 and totals["blocked_command"]["calls"] == 0
     assert {s["source"]: s["count"] for s in out["sources"]}["slack"] == 4
     for sql, params in cur.calls:  # every query is scoped to the caller's org
         assert "org-1" in params, sql
-
-
-def test_failures_are_capped_per_chat_before_the_overall_limit():
-    cur = Cursor([])
-    ca._failed_tool_calls(cur, "org-1", chat_ids=["a", "b"], per_chat=5, limit=10)
-    sql, params = cur.calls[0]
-    assert sql.index("ranked.rn <= %s") < sql.index("LIMIT %s\n")
-    assert params[-3:] == (5, 10, "org-1")          # per-chat cap, limit, then the anchors' org
 
 
 def test_anchors_are_computed_once_per_chat_and_skipped_for_the_agent_tool():
@@ -357,18 +342,6 @@ def test_owner_cannot_come_from_the_model_arguments():
     assert all("someone" not in p and "other" not in p for _, p in cur.calls)
 
 
-def test_all_chats_count_ignores_only_the_issue_filter():
-    cur = Cursor([("SELECT COUNT(*) FROM chat_sessions", ["count"], [(4,)])])
-    out = ca.list_chats(cur, "org-1", ChatFilters.parse({"issue": "timeout", "source": "slack"}))
-    filtered_sql, all_sql = cur.calls[0][0], cur.calls[1][0]
-    assert "EXISTS (SELECT 1 FROM execution_steps" in filtered_sql
-    assert "EXISTS (SELECT 1 FROM execution_steps" not in all_sql and "= %s" in all_sql  # source kept
-    assert out["all_chats"] == 4
-
-    cur = Cursor([("SELECT COUNT(*) FROM chat_sessions", ["count"], [(9,)])])
-    assert ca.list_chats(cur, "org-1", ChatFilters.parse({}))["all_chats"] == 9
-    assert sum("SELECT COUNT(*) FROM chat_sessions" in sql for sql, _ in cur.calls) == 1
-
 
 # --- redaction of real-world shapes (review findings) -----------------------
 
@@ -451,3 +424,74 @@ def test_reason_from_a_multi_subscription_cloud_exec_error():
 def test_reason_falls_back_to_redacted_compact_json_never_a_brace():
     reason = ca.failure_reason(json.dumps({"success": False, "api_key": "abc", "code": 7}, indent=2))
     assert reason not in ("{", "") and "abc" not in reason
+
+
+
+# --- failed tool calls view -------------------------------------------------
+
+_FTC_COLS = ["id", "tool_name", "tool_input", "error_message", "started_at", "tool_call_id",
+             "incident_id", "chat_id", "chat_title", "user_id", "source", "message_index",
+             "user_email", "user_name"]
+
+
+def _ftc_row(i, command, error, *, title="Deploy check", user="u1", source="slack", msg=2):
+    return (i, "cloud_exec", {"provider": "aws", "command": command}, error, TS, f"tc{i}",
+            None, "s1", title, user, source, msg, "a@x.io", "A")
+
+
+def _ftc_cursor(rows, total=None):
+    return Cursor([
+        ("SELECT COUNT(*) FROM execution_steps", ["count"], [(len(rows) if total is None else total,)]),
+        ("WITH f AS", _FTC_COLS, rows),
+        ("COUNT(DISTINCT", ["category", "calls", "chats"], [("missing_permission", 19, 4)]),
+        ("es.tool_name AS value", ["value", "count"], [("cloud_exec", 19)]),
+        ("AS value, COUNT(*), MAX(u.email)", ["value", "count", "email", "name"], [("u1", 19, "a@x.io", "A")]),
+        ("AS value, COUNT(*)", ["value", "count"], [("slack", 19)]),
+    ])
+
+
+def test_failed_tool_calls_page_is_shaped_redacted_and_org_scoped():
+    cur = _ftc_cursor([_ftc_row(1, "ec2 describe-instances --password hunter2",
+                                '{"error": "AccessDenied: not authorized"}',
+                                title="psql --password hunter2")], total=19)
+    out = ca.list_failed_tool_calls(cur, "org-1", {"period": "7d", "per_page": "10", "page": "2"})
+    row = out["tool_calls"][0]
+    assert row["tool_name"] == "cloud_exec" and row["category"] == "missing_permission"
+    assert row["reason"] == "AccessDenied: not authorized" and row["message_index"] == 2
+    assert "hunter2" not in row["input"] and "hunter2" not in row["chat_title"]
+    assert row["source"] == "slack" and row["user"]["email"] == "a@x.io"
+    assert (out["total"], out["page"], out["total_pages"]) == (19, 2, 2)
+    assert out["issue_counts"][0]["calls"] == 19
+    assert out["tools"] == [{"value": "cloud_exec", "count": 19}]
+    page_sql, page_params = next(c for c in cur.calls if "WITH f AS" in c[0])
+    assert ca._NOT_DELETED_SQL in page_sql and page_params[-3:] == (10, 10, "org-1")
+    for sql, params in cur.calls:
+        assert "org-1" in params, sql
+
+
+def test_failed_tool_calls_filters_bind_source_user_tool_and_issue():
+    cur = _ftc_cursor([])
+    ca.list_failed_tool_calls(cur, "org-1", {"source": "slack", "user": "u9", "tool": "kubectl",
+                                             "issue": "blocked_command"})
+    count_sql, count_params = cur.calls[0]
+    assert ca.SOURCE_SQL in count_sql and "cs.user_id = %s" in count_sql and "es.tool_name = %s" in count_sql
+    assert {"slack", "u9", "kubectl", "blocked_command"} <= set(count_params)
+    # A facet drops only its own filter, so the dropdown still lists the alternatives.
+    tool_sql, tool_params = next(c for c in cur.calls if "es.tool_name AS value" in c[0])
+    assert "kubectl" not in tool_params and "slack" in tool_params and "u9" in tool_params
+
+
+def test_failed_tool_calls_search_matches_only_redacted_text():
+    rows = [_ftc_row(1, "psql --password hunter2", "login failed"),
+            _ftc_row(2, "kubectl get pods", "Error from server (Forbidden): pods is forbidden")]
+    cur = _ftc_cursor(rows)
+    assert ca.list_failed_tool_calls(cur, "org-1", {"q": "hunt"})["tool_calls"] == []
+    out = ca.list_failed_tool_calls(_ftc_cursor(rows), "org-1", {"q": "forbidden"})
+    assert [r["tool_call_id"] for r in out["tool_calls"]] == ["tc2"] and out["total"] == 1
+    assert not any("ILIKE" in sql for sql, _ in cur.calls)
+    assert not any(sql.startswith("SELECT COUNT(*) FROM execution_steps") for sql, _ in cur.calls)
+
+
+def test_failed_tool_calls_rejects_bad_filters():
+    with pytest.raises(InvalidFilter):
+        ca.list_failed_tool_calls(Cursor([]), "org-1", {"issue": "bogus"})

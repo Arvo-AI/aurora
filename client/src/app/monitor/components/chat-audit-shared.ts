@@ -4,13 +4,13 @@ export interface AuditLabels {
   statuses: Record<string, string>;
 }
 
-export const ISSUE_STYLES: Record<string, { text: string; badge: string }> = {
-  missing_permission: { text: 'text-amber-400', badge: 'bg-amber-500/10 text-amber-300' },
-  blocked_command: { text: 'text-violet-400', badge: 'bg-violet-500/10 text-violet-300' },
-  not_connected: { text: 'text-sky-400', badge: 'bg-sky-500/10 text-sky-300' },
-  timeout: { text: 'text-orange-400', badge: 'bg-orange-500/10 text-orange-300' },
-  unavailable: { text: 'text-rose-400', badge: 'bg-rose-500/10 text-rose-300' },
-  other: { text: 'text-zinc-400', badge: 'bg-zinc-700/40 text-zinc-300' },
+export const ISSUE_STYLES: Record<string, { text: string; badge: string; dot: string }> = {
+  missing_permission: { text: 'text-amber-400', badge: 'bg-amber-500/10 text-amber-300', dot: 'bg-amber-400' },
+  blocked_command: { text: 'text-violet-400', badge: 'bg-violet-500/10 text-violet-300', dot: 'bg-violet-400' },
+  not_connected: { text: 'text-sky-400', badge: 'bg-sky-500/10 text-sky-300', dot: 'bg-sky-400' },
+  timeout: { text: 'text-orange-400', badge: 'bg-orange-500/10 text-orange-300', dot: 'bg-orange-400' },
+  unavailable: { text: 'text-rose-400', badge: 'bg-rose-500/10 text-rose-300', dot: 'bg-rose-400' },
+  other: { text: 'text-zinc-400', badge: 'bg-zinc-700/40 text-zinc-300', dot: 'bg-zinc-400' },
 };
 
 export const SOURCE_STYLES: Record<string, string> = {
@@ -34,3 +34,20 @@ export function formatTimestamp(iso: string | null | undefined): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
+
+// Fixed order and short labels for issue chips and badges; full labels come
+// from the API (CATEGORY_LABELS) and are used for title/aria.
+export const ISSUE_ORDER = [
+  'missing_permission', 'blocked_command', 'not_connected', 'timeout', 'unavailable', 'other',
+] as const;
+
+export const ISSUE_SHORT: Record<string, string> = {
+  missing_permission: 'Permission',
+  blocked_command: 'Blocked',
+  not_connected: 'Not connected',
+  timeout: 'Timeout',
+  unavailable: 'Unavailable',
+  other: 'Other',
+};
+
+export interface IssueCount { category: string; label: string; calls: number; chats: number }
