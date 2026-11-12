@@ -107,6 +107,14 @@ def test_thinking_only_response_is_not_an_answer(workflow):
     assert answers == [""]
 
 
+def test_cancellation_buffer_without_committed_state_is_answer_only(workflow):
+    # main_chatbot's cancellation handler reads this buffer directly if there
+    # is no final LangGraph state yet; preserve its contract and exclude thoughts.
+    chunks = [AIMessageChunk(id="reply", content=BLOCKS)]
+    run_stream(workflow, chunks, None, None, interrupt=True)
+    assert "".join(workflow._stream_text_by_id.values()) == ANSWER
+
+
 def test_model_end_recovers_answer_when_only_thinking_streamed(workflow):
     saved = AIMessage(id="reply", content=[BLOCKS[0]])
     _, answers = run_stream(workflow, [AIMessageChunk(id="reply", content=[BLOCKS[0]])],

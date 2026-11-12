@@ -1,21 +1,20 @@
 """Opt-in Vertex smoke test: real model, synthetic tool, stubbed DB and Slack.
 
 With Vertex credentials configured, run from server/:
-    AURORA_GEMINI_LIVE_TESTS=1 python -m pytest tests/chat/test_gemini_thinking_live.py -q -s
+    python -m pytest tests/chat/test_gemini_thinking_live.py --run-gemini-live -q -s
 
 This incurs model usage. No cloud command executes and no message reaches Slack.
 """
-
-import os
 
 import pytest
 
 from tests.chat.test_slack_reply_aurora_link import send  # noqa: F401
 from tests.chat.test_workflow_thinking_isolation import run_stream, workflow  # noqa: F401
 
-pytestmark = pytest.mark.skipif(
-    os.getenv("AURORA_GEMINI_LIVE_TESTS") != "1", reason="opt-in live Vertex test"
-)
+@pytest.fixture(autouse=True)
+def _require_live_opt_in(request):
+    if not request.config.getoption("--run-gemini-live"):
+        pytest.skip("opt-in live Vertex test")
 
 
 @pytest.mark.parametrize("model,streaming", [
