@@ -280,6 +280,22 @@ def test_supported_model_still_gets_a_hard_forced_tool_choice(force_tool_module)
     assert calls == [{"type": "tool", "name": "trigger_rca"}]
 
 
+def test_deepseek_uses_directive_without_rejected_forced_request(force_tool_module):
+    calls = []
+
+    def call_next(request):
+        calls.append(request)
+        return "ok"
+
+    request = _messages_request()
+    force_tool_module.ForceToolChoice("trigger_rca", provider="deepseek").wrap_model_call(
+        request, call_next
+    )
+    assert len(calls) == 1
+    assert calls[0].tool_choice == "auto"
+    assert "trigger_rca" in calls[0].messages[-1].content
+
+
 def test_later_turns_pass_through_untouched(force_tool_module):
     """The middleware forces only the first turn, then steps aside."""
     calls = []

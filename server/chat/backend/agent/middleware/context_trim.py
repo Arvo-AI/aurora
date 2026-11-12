@@ -50,25 +50,19 @@ class ContextSafetyMiddleware(AgentMiddleware):
             f"max_tokens={self.max_tokens}"
         )
 
+    async def abefore_model(self, state, runtime):
+        # Commit the update through the graph's message reducer so subsequent
+        # model turns retain it; a request override only changes one call.
+        update_message = apply_rca_context_updates(get_state_context())
+        if update_message:
+            return {"messages": [update_message]}
+
     async def awrap_model_call(
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        # 1. Inject correlated incident updates into background RCA sessions.
-        state = get_state_context()
-        update_message = apply_rca_context_updates(state)
-        if update_message:
-            try:
-                request = request.override(messages=[*request.messages, update_message])
-                logger.info(
-                    f"[ContextSafety] Appended RCA context update "
-                    f"(messages={len(request.messages)})"
-                )
-            except Exception as e:
-                logger.warning(f"[ContextSafety] Failed to append context update: {e}")
-
-        # 2. Safety net — trim if still over budget despite upstream capping.
+        # Safety net — trim if still over budget despite upstream capping.
         estimated_tokens = count_tokens_approximately(request.messages)
         if estimated_tokens <= self.max_tokens:
             return await handler(request)

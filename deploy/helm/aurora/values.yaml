@@ -665,11 +665,12 @@ secrets:
     # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
     # When set, the chart will not create secret-llm and all pods will reference
     # this secret directly. It must contain at least one of: OPENROUTER_API_KEY,
-    # OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY.
+    # OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY, DEEPSEEK_API_KEY.
     # existingSecret: ""
     OPENROUTER_API_KEY: ""       # Get from: https://openrouter.ai/keys
     OPENAI_API_KEY: ""           # Get from: https://platform.openai.com/api-keys
     ANTHROPIC_API_KEY: ""        # Get from: https://console.anthropic.com/
+    DEEPSEEK_API_KEY: ""         # Get from: https://platform.deepseek.com/
     GOOGLE_AI_API_KEY: ""        # Get from: https://makersuite.google.com/app/apikey
     # AWS Bedrock — non-secret BEDROCK_BASE_URL/REGION/PROFILE live in config above.
     BEDROCK_API_KEY: ""              # gateway mode only (often unneeded — VPC handles auth)

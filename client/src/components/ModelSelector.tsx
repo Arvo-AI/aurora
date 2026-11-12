@@ -39,6 +39,7 @@ interface ModelSelectorProps {
 
 // Pricing information mapping (input/output per 1M tokens)
 const modelPricing: Record<string, string> = {
+  'deepseek/deepseek-flash': 'Peak estimate: $0.30/$1.20 per 1M input/output; cached input $0.006. Off-peak rates are half.',
   'openai/gpt-6-astra': 'Premium Cost ($10/$50 per 1M)',
   'openai/gpt-5.6-sol': 'High Cost ($4/$20 per 1M)',
   'openai/gpt-5.6-terra': 'Medium Cost ($2/$12 per 1M)',
@@ -70,6 +71,7 @@ type ModelOverrides = Partial<Pick<ModelOption, 'hasReasoning' | 'isSlow' | 'con
 const providerLabels: Record<string, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
+  deepseek: 'DeepSeek',
   google: 'Google',
   vertex: 'Vertex',
 };
@@ -78,6 +80,7 @@ const providerLabels: Record<string, string> = {
 // 1M context / reasoning defaults are derived from the id below, so adding a model
 // stays a one-liner instead of another near-identical object literal.
 const modelCatalog: Array<[string, string, ModelTier, ModelOverrides?]> = [
+  ['deepseek/deepseek-flash', 'DeepSeek Flash (V4.1-Flash-1017)', 'free'],
   ['anthropic/claude-fable-5.1', 'Claude Fable 5.1', 'premium', { isSlow: true }],
   ['anthropic/claude-fable-5', 'Claude Fable 5', 'premium', { isSlow: true }],
   ['anthropic/claude-opus-5.5', 'Claude Opus 5.5', 'premium', { isSlow: true }],
@@ -122,13 +125,16 @@ interface PickerConfig {
 function modelsForPrefixes(prefixes: string[] | null): ModelOption[] {
   // OpenRouter / no keys: full catalog minus Vertex-only ids (those are not Google AI / OpenRouter picks).
   if (!prefixes) {
-    return modelOptions.filter((m) => m.id.split('/')[0] !== 'vertex');
+    // DeepSeek's native alias is not an OpenRouter model ID.
+    return modelOptions.filter((m) => !['vertex', 'deepseek'].includes(m.id.split('/')[0]));
   }
 
   const out: ModelOption[] = [];
   for (const model of modelOptions) {
     const prefix = model.id.split('/')[0];
     if (prefix === 'openai' && prefixes.includes('openai')) {
+      out.push(model);
+    } else if (prefix === 'deepseek' && prefixes.includes('deepseek')) {
       out.push(model);
     } else if (prefix === 'anthropic' && (prefixes.includes('anthropic') || prefixes.includes('bedrock'))) {
       out.push(model);

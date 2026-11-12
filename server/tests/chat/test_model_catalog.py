@@ -164,6 +164,37 @@ def test_default_model_is_fully_registered():
     assert default in _picker_ids(), "default model must be selectable in the picker"
 
 
+def test_deepseek_catalog_and_native_alias(picker_ids):
+    mid = "deepseek/deepseek-flash"
+    assert mid in picker_ids
+    assert mid in LLMUsageTracker.MODEL_PRICING
+    assert ChatContextManager.get_context_limit(mid) == 950000
+    assert ModelMapper.detect_provider(mid) == "deepseek"
+    assert ModelMapper.detect_provider("deepseek-flash") == "deepseek"
+    assert ModelMapper.get_native_name(mid, "deepseek") == "deepseek-flash"
+    assert ModelMapper.get_openrouter_name("deepseek-flash") == mid
+    # The vendor has not published a cutoff. Do not invent a training date.
+    assert mid not in ModelCutoffManager().models
+
+
+def test_deepseek_memory_selector_stays_on_deepseek(monkeypatch):
+    monkeypatch.delenv("MEMORY_SELECTOR_MODEL", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER_MODE", "deepseek")
+    assert ModelConfig.memory_selector_model() == "deepseek/deepseek-flash"
+    monkeypatch.setenv("LLM_PROVIDER_MODE", "direct")
+    monkeypatch.setenv("MAIN_MODEL", "deepseek/deepseek-flash")
+    assert ModelConfig.memory_selector_model() == "deepseek/deepseek-flash"
+
+
+def test_deepseek_cost_uses_peak_rates_and_cache_reads():
+    # 100K total input: 80K cached + 20K fresh, plus 1K output.
+    for mid in ("deepseek/deepseek-flash", "deepseek-flash"):
+        assert LLMUsageTracker.calculate_cost(
+            100000, 1000, mid, use_dynamic_pricing=False,
+            provider_mode="deepseek", cached_input_tokens=80000,
+        ) == pytest.approx(0.00768)
+
+
 def test_models_that_reject_forcing_have_a_middleware_fallback():
     """Trigger RCA and /action pin tool_choice on their first turn. Opus 5.5 (the
     default) and Fable 5.1 reject that, so ForceToolChoice must carry the auto +

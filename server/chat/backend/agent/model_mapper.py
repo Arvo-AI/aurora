@@ -22,6 +22,10 @@ _OR_CLAUDE_FABLE_5_1 = "anthropic/claude-fable-5.1"
 
 # Model name mappings from OpenRouter format to native provider formats
 MODEL_MAPPINGS = {
+    "deepseek/deepseek-flash": {
+        "deepseek": "deepseek-flash",
+        "provider": "deepseek",
+    },
     "openai/gpt-6-astra": {
         "openrouter": "openai/gpt-6-astra",
         "openai": "gpt-6-astra",
@@ -274,7 +278,7 @@ class ModelMapper:
         # Check if it's in OpenRouter format (provider/model)
         if "/" in model_name:
             provider_prefix = model_name.split("/")[0]
-            known_providers = {"openai", "anthropic", "google", "vertex", "ollama", "bedrock"}
+            known_providers = {"openai", "anthropic", "google", "vertex", "ollama", "bedrock", "deepseek"}
             if provider_prefix in known_providers:
                 return provider_prefix
             return "openrouter"
@@ -285,6 +289,7 @@ class ModelMapper:
                 mappings.get("openai"),
                 mappings.get("anthropic"),
                 mappings.get("google"),
+                mappings.get("deepseek"),
             ]:
                 return mappings.get("provider")
 

@@ -92,6 +92,8 @@ class ModelConfig:
             return override
 
         mode = (os.getenv("LLM_PROVIDER_MODE") or "direct").strip().lower()
+        if mode == "deepseek":
+            return "deepseek/deepseek-flash"
         # Flash-lite is the current small Gemini, and both of these providers can call it.
         if mode in ("openrouter", "google"):
             return ModelConfig._SELECTOR_FLASH_LITE
@@ -115,6 +117,8 @@ class ModelConfig:
             return main
 
         prefix = main.split("/", 1)[0] if "/" in main else ""
+        if prefix == "deepseek":
+            return "deepseek/deepseek-flash"
         if prefix == "google":
             return ModelConfig._SELECTOR_FLASH_LITE
         if prefix == "vertex":
