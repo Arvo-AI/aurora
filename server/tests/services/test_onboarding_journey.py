@@ -75,6 +75,15 @@ def test_journey_ends_after_two_weeks():
 # ── guides ──
 
 
+def test_guide_photo_can_live_on_the_app_but_not_on_another_host():
+    raw = json.dumps([
+        {"key": "a", "name": "Ada Lane", "email": "ada@example.com", "avatar_url": "/guides/ada.jpg"},
+        {"key": "b", "name": "Bo Kim", "email": "bo@example.com", "avatar_url": "//evil.example/bo.jpg"},
+    ])
+    a, b = guides.load_guides(raw)
+    assert a.avatar_url == "/guides/ada.jpg" and b.avatar_url == ""
+
+
 def test_guide_links_must_be_https():
     raw = json.dumps([{
         "key": "a", "name": "Ada Lane", "email": "ada@example.com",

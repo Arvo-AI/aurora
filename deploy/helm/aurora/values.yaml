@@ -657,6 +657,9 @@ secrets:
     SMTP_FROM_NAME: "Aurora"
     ONBOARDING_UNSUBSCRIBE_SECRET: ""   # Optional: signs setup-email unsubscribe links (defaults to FLASK_SECRET_KEY)
     ONBOARDING_TEAM_WEBHOOK_URL: ""     # Optional: Slack incoming webhook for signup/connect/email pings
+    ONBOARDING_GRAPH_TENANT_ID: ""      # Optional: send setup emails via Microsoft 365 (Entra app, Mail.Send)
+    ONBOARDING_GRAPH_CLIENT_ID: ""
+    ONBOARDING_GRAPH_CLIENT_SECRET: ""
     
     # --- Optional: Rate Limiting Bypass ---
     RATE_LIMIT_BYPASS_TOKEN: ""  # Custom token to bypass rate limits

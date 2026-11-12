@@ -11,6 +11,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class StackPart:
     id: str
+    short: str  # "Alerts", as the setup page labels it
     noun: str  # "your alerts", used in sentences
     ask: str  # what to connect, as an instruction
     examples: str
@@ -21,6 +22,7 @@ class StackPart:
 STACK: tuple[StackPart, ...] = (
     StackPart(
         id="alerts",
+        short="Alerts",
         noun="your alerts",
         ask="connect where your alerts come from",
         examples="PagerDuty, Datadog, Grafana, Opsgenie",
@@ -33,6 +35,7 @@ STACK: tuple[StackPart, ...] = (
     ),
     StackPart(
         id="cloud",
+        short="Cloud",
         noun="where your services run",
         ask="connect where your services run",
         examples="AWS, Google Cloud, Azure, Kubernetes",
@@ -44,6 +47,7 @@ STACK: tuple[StackPart, ...] = (
     ),
     StackPart(
         id="code",
+        short="Code",
         noun="your code",
         ask="connect your code",
         examples="GitHub, GitLab, Bitbucket",
@@ -52,6 +56,7 @@ STACK: tuple[StackPart, ...] = (
     ),
     StackPart(
         id="chat",
+        short="Chat",
         noun="your team chat",
         ask="bring Aurora into your team chat",
         examples="Slack, Microsoft Teams, Google Chat",

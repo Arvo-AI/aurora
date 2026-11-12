@@ -13,6 +13,7 @@ import { STACK, SETUP_RETURN_KEY, connectedIn, progress, type StackPartId } from
 import StackMap from "./StackMap"
 import SetupSteps from "./SetupSteps"
 import GuideStrip from "./GuideStrip"
+import FirstQuestions from "./FirstQuestions"
 
 // One setup page for every way in: email signup, the GitHub App, Add to Slack.
 // It is live: connect something in another tab and the map lights up here.
@@ -292,6 +293,10 @@ export default function SetupHome({ via: viaProp }: Readonly<{ via?: string }>) 
             orgName={orgName}
             guide={guide}
           />
+        </motion.div>
+
+        <motion.div {...reveal(0.46)} className="mt-4">
+          <FirstQuestions connected={set} />
         </motion.div>
 
         <motion.div {...reveal(0.5)} className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

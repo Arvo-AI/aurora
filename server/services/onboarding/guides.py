@@ -6,7 +6,8 @@ config, not in this repo::
     [{"key": "sam", "name": "Sam Doe", "email": "sam@example.com",
       "title": "Co-founder", "avatar_url": "https://...", "booking_url": "https://..."}]
 
-Only ``key``, ``name`` and ``email`` are required.
+Only ``key``, ``name`` and ``email`` are required. ``avatar_url`` may also be
+a path on the app (``/guides/sam.jpg``).
 """
 
 from __future__ import annotations
@@ -48,6 +49,14 @@ def _https_or_blank(url: object) -> str:
     return url if isinstance(url, str) and url.startswith("https://") else ""
 
 
+def _image_or_blank(url: object) -> str:
+    """https, or a path on the app itself ("/guides/sam.jpg"), so a team photo
+    can ship in a private frontend build instead of a public host."""
+    if isinstance(url, str) and url.startswith("/") and not url.startswith("//") and "\\" not in url:
+        return url
+    return _https_or_blank(url)
+
+
 def load_guides(raw: str | None = None) -> list[Guide]:
     raw = os.getenv("ONBOARDING_GUIDES", "") if raw is None else raw
     if not raw.strip():
@@ -70,7 +79,7 @@ def load_guides(raw: str | None = None) -> list[Guide]:
             name=name.strip(),
             email=email.strip(),
             title=str(item.get("title") or "").strip(),
-            avatar_url=_https_or_blank(item.get("avatar_url")),
+            avatar_url=_image_or_blank(item.get("avatar_url")),
             booking_url=_https_or_blank(item.get("booking_url")),
         ))
     return guides
