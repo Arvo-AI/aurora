@@ -10,6 +10,8 @@ import { useDarkPageBackground } from "@/hooks/useDarkPageBackground"
 import { usePasswordReset, usePasswordResetAvailable } from "@/hooks/usePasswordReset"
 import { ForgotPasswordPanel, ResetPasswordPanel } from "./PasswordResetPanels"
 import { SLACK_HANDOFF_MIN_MS, SlackHandoffPanel, ContinueWithSlack, AddAuroraToSlack, useSlackSignInAvailable, SLACK_ERRORS, SLACK_RESUME_KEY, resumeSlackConnect } from "./SlackSignIn"
+import { resumeGithubClaim, stashGithubClaim } from "@/app/sign-in/githubClaim"
+import { GithubPendingInstall } from "@/app/sign-in/GithubPendingInstall"
 
 const AuroraShader = dynamic(() => import('@/app/components/AuroraShader'), { ssr: false })
 
@@ -69,9 +71,15 @@ const SSO_ERRORS: Record<string, string> = {
 
 const QUERY_ERRORS: Record<string, string> = {
   // GitHub email already has an (unlinked) Aurora account — sign in normally instead
-  account_exists: "An account with your email already exists. Sign in below, then finish connecting from the Connectors page.",
+  account_exists: "Your GitHub email already has an Aurora account. Sign in below and we'll finish connecting GitHub.",
+  github_signup_expired: "That GitHub install link expired or was already used. Sign in below, or install Aurora again from GitHub.",
   ...SSO_ERRORS,
   ...SLACK_ERRORS,
+}
+
+// ?notice=<code>: informational, not an error. Fixed strings only.
+const QUERY_NOTICES: Record<string, string> = {
+  github_install_requested: "Your request to install Aurora was sent to your GitHub organization's owners. When one of them approves it, their install sets up Aurora for your organization and they can invite you. Already have an account? Sign in below.",
 }
 
 function errorFromQuery(code: string | null): string | null {
@@ -192,6 +200,11 @@ function AuthPage() {
   // not flip to another flow's text while the browser is navigating away.
   const [handoffVia] = useState(() => searchParams.get("via"))
   const [handoffSlackAuth] = useState(() => searchParams.get("slack_auth"))
+  // A brand-new GitHub installer, account not created yet (see GithubPendingInstall).
+  const [githubPending] = useState(() => {
+    const token = searchParams.get("gh_new")
+    return token ? { token, linkTicket: searchParams.get("gh_link") } : null
+  })
   const isSsoHandoff = handoffVia === "sso"
   const isSlackHandoff = handoffVia?.startsWith("slack") ?? false
   useEffect(() => {
@@ -208,6 +221,14 @@ function AuthPage() {
         const result = await signIn("handoff", { token: handoffToken, redirect: false })
         if (result?.ok) {
           await panelShown
+          // A pending GitHub link from this tab finishes before navigating.
+          const claim = await resumeGithubClaim()
+          if (claim.status === "linked") return
+          if (claim.status === "failed") {
+            setHandoffInFlight(false)
+            setError(claim.message)
+            return
+          }
           globalThis.location.href = handoffDestination(handoffVia, handoffSlackAuth)
         } else {
           setHandoffInFlight(false)
@@ -235,8 +256,26 @@ function AuthPage() {
     if (message) setError(message)
     // Their email already had an account: finish the Slack install right after they sign in.
     if (code === "slack_account_exists") sessionStorage.setItem(SLACK_RESUME_KEY, "1")
+    // Their GitHub email already had an account: link the install right after they sign in.
+    if (code === "account_exists") {
+      stashGithubClaim(searchParams.get("gh_claim"))
+      const url = new URL(globalThis.location.href)
+      url.searchParams.delete("gh_claim")
+      globalThis.history.replaceState(null, "", url.toString())
+    }
+    const noticeCode = searchParams.get("notice")
+    if (noticeCode && Object.hasOwn(QUERY_NOTICES, noticeCode)) setNotice(QUERY_NOTICES[noticeCode])
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
+
+  // Already signed in when GitHub sent them here: link the install straight away.
+  // A handoff redeems the claim itself before it navigates.
+  useEffect(() => {
+    if (!session?.user || handoffAttempted.current) return
+    void resumeGithubClaim().then((claim) => {
+      if (claim.status === "failed") setError(claim.message)
+    })
+  }, [session?.user])
 
   useEffect(() => {
     if (resendCooldown <= 0) return
@@ -285,6 +324,12 @@ function AuthPage() {
         setError("Invalid email or password")
       } else if (result?.ok) {
         if (await resumeSlackConnect()) return
+        const claim = await resumeGithubClaim()
+        if (claim.status === "linked") return
+        if (claim.status === "failed") {
+          setError(claim.message)
+          return
+        }
         router.push(callbackUrl)
         router.refresh()
       }
@@ -521,6 +566,10 @@ function AuthPage() {
             </div>
           </div>
 
+          {githubPending && (
+            <GithubPendingInstall token={githubPending.token} linkTicket={githubPending.linkTicket} />
+          )}
+
           {handoffInFlight && isSlackHandoff && <SlackHandoffPanel via={handoffVia} />}
 
           {handoffInFlight && !isSlackHandoff && (
@@ -536,7 +585,7 @@ function AuthPage() {
             </div>
           )}
 
-          <div className={`${handoffInFlight ? 'hidden' : ''} transition-opacity duration-300 ease-in-out ${formVisible ? 'opacity-100' : 'opacity-0'}`}>
+          <div className={`${handoffInFlight || githubPending ? 'hidden' : ''} transition-opacity duration-300 ease-in-out ${formVisible ? 'opacity-100' : 'opacity-0'}`}>
             {mode === 'signin' && (
               <div className="space-y-8">
                 <div>

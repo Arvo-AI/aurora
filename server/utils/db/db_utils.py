@@ -383,6 +383,17 @@ def initialize_tables():
                         UNIQUE(user_id, installation_id)
                     );
                 """,
+                # Repos an org removed in the repo picker. Automatic imports
+                # skip them; picking one again, or granting it again on
+                # GitHub, clears the row.
+                "github_repo_exclusions": """
+                    CREATE TABLE IF NOT EXISTS github_repo_exclusions (
+                        org_id VARCHAR(255) NOT NULL,
+                        repo_full_name VARCHAR(512) NOT NULL,
+                        excluded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (org_id, repo_full_name)
+                    );
+                """,
                 "webhook_deliveries": """
                     CREATE TABLE IF NOT EXISTS webhook_deliveries (
                         id SERIAL PRIMARY KEY,
@@ -392,7 +403,9 @@ def initialize_tables():
                         received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         processed_at TIMESTAMP NULL,
                         status VARCHAR(20) NOT NULL DEFAULT 'received',
-                        error TEXT NULL
+                        error TEXT NULL,
+                        repo_full_name VARCHAR(255) NULL,
+                        gating_outcome VARCHAR(32) NULL
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_received_at
@@ -1691,6 +1704,7 @@ def initialize_tables():
             #   Celery task runs cross-org sweeps with no user context; needs SECURITY
             #   DEFINER function or BYPASSRLS role before RLS can be added
             rls_tables.append("workspaces")
+            rls_tables.append("github_repo_exclusions")
             rls_tables.append("aurora_deployments")
             rls_tables.append("cloud_feed_metadata")
             rls_tables.append("cloud_ingestion_state")
@@ -1928,6 +1942,53 @@ def initialize_tables():
                 logging.warning(
                     f"Error adding installation_id column/FK to connected_repos: {e}"
                 )
+                conn.rollback()
+
+            # Migration: record which repo a webhook came from and what change
+            # gating did with it, so a PR without a review can be explained.
+            try:
+                cursor.execute(
+                    """ALTER TABLE webhook_deliveries
+                       ADD COLUMN IF NOT EXISTS repo_full_name VARCHAR(255) NULL,
+                       ADD COLUMN IF NOT EXISTS gating_outcome VARCHAR(32) NULL;"""
+                )
+                conn.commit()
+                logging.info("Ensured gating outcome columns exist on webhook_deliveries table.")
+            except Exception as e:
+                logging.warning(f"Error adding gating outcome columns to webhook_deliveries: {e}")
+                conn.rollback()
+
+            # Migration: remember when an installation's first full repo
+            # import landed, so later automatic imports only add repos created
+            # after it (github_repo_exclusions covers removals). Links that
+            # exist when the column is added count as imported: the backfill
+            # repairs specific installations by id instead of guessing.
+            try:
+                cursor.execute(
+                    """SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'user_github_installations'
+                          AND column_name = 'repos_imported_at'"""
+                )
+                had_marker = cursor.fetchone() is not None
+                cursor.execute(
+                    """ALTER TABLE user_github_installations
+                       ADD COLUMN IF NOT EXISTS disconnected_at TIMESTAMP NULL,
+                       ADD COLUMN IF NOT EXISTS repos_imported_at TIMESTAMP NULL,
+                       ADD COLUMN IF NOT EXISTS repos_import_legacy BOOLEAN NOT NULL DEFAULT FALSE;"""
+                )
+                if not had_marker:
+                    # Legacy: removals before this deploy were never recorded,
+                    # so the sync only adds repos created after the marker.
+                    cursor.execute(
+                        """UPDATE user_github_installations
+                              SET repos_imported_at = COALESCE(linked_at, NOW() AT TIME ZONE 'UTC'),
+                                  repos_import_legacy = TRUE
+                            WHERE disconnected_at IS NULL"""
+                    )
+                conn.commit()
+                logging.info("Ensured GitHub repo import marker exists.")
+            except Exception as e:
+                logging.warning(f"Error adding GitHub repo import marker: {e}")
                 conn.rollback()
 
             # Migration: Add change_gating_enabled to connected_repos so

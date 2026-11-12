@@ -142,13 +142,26 @@ def _simplify_repo(
     }
 
 
-def _fetch_installation_repos(token: str, installation_id: int) -> list[dict[str, Any]]:
+# An import must see every repo or none: a truncated list would be taken as
+# the whole installation. 1,000 pages is 100,000 repos.
+_STRICT_PAGE_LIMIT = 1000
+
+
+class InstallationRepoListError(Exception):
+    """GitHub did not return the full repo list for an installation."""
+
+
+def _fetch_installation_repos(
+    token: str, installation_id: int, *, strict: bool = False
+) -> list[dict[str, Any]]:
     """Paginate ``GET /installation/repositories`` for a single App install.
 
     GitHub returns ``{"total_count": int, "repositories": [...]}`` for
     this endpoint (NOT a bare array — that's only for ``/user/repos``).
     Network/HTTP failures here log + return whatever was already fetched
-    so a single broken installation never sinks the whole listing.
+    so a single broken installation never sinks the whole listing. With
+    ``strict`` they raise :class:`InstallationRepoListError` instead, for
+    callers that would otherwise mistake a GitHub outage for "no repos".
     """
     headers = {
         "Authorization": f"token {token}",
@@ -170,12 +183,16 @@ def _fetch_installation_repos(token: str, installation_id: int) -> list[dict[str
                 "[USER-REPOS] App-mode list failed installation_id=%d: %s",
                 installation_id, type(exc).__name__,
             )
+            if strict:
+                raise InstallationRepoListError(type(exc).__name__) from exc
             break
         if resp.status_code != 200:
             logger.error(
                 "[USER-REPOS] App-mode list returned status=%d for installation_id=%d",
                 resp.status_code, installation_id,
             )
+            if strict:
+                raise InstallationRepoListError(f"status={resp.status_code}")
             break
         try:
             payload = resp.json()
@@ -184,19 +201,27 @@ def _fetch_installation_repos(token: str, installation_id: int) -> list[dict[str
                 "[USER-REPOS] App-mode response not JSON for installation_id=%d",
                 installation_id,
             )
+            if strict:
+                raise InstallationRepoListError("non-JSON response")
             break
-        repos = payload.get("repositories", []) if isinstance(payload, dict) else []
+        repos = payload.get("repositories") if isinstance(payload, dict) else None
+        if not isinstance(repos, list):
+            if strict:
+                raise InstallationRepoListError("unexpected response shape")
+            repos = []
         if not repos:
             break
         all_repos.extend(repos)
         if len(repos) < _PER_PAGE:
             break
         page += 1
-        if page > _REPOS_PAGE_LIMIT:
+        if page > (_STRICT_PAGE_LIMIT if strict else _REPOS_PAGE_LIMIT):
             logger.warning(
                 "[USER-REPOS] App-mode pagination safety limit hit for installation_id=%d",
                 installation_id,
             )
+            if strict:
+                raise InstallationRepoListError("pagination limit hit")
             break
     return all_repos
 
