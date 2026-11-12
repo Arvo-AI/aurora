@@ -5,7 +5,7 @@ import { AlertTriangle, MessagesSquare, X } from 'lucide-react';
 import { useQuery, jsonFetcher } from '@/lib/query';
 import { ChartPanel, EmptyState, type Period } from './charts';
 import ChatTranscript from './chat-transcript';
-import FailedCallsView, { type FailedCallsResponse } from './failed-calls-view';
+import ToolCallsView, { type ToolCallsResponse } from './tool-calls-view';
 import { Pager, SearchBox, selectCls, useDebounced, useKeptData, useUrlParam } from './audit-controls';
 import {
   ISSUE_SHORT, ISSUE_STYLES, SOURCE_STYLES, STATUS_STYLES, formatTimestamp, type AuditLabels,
@@ -40,18 +40,18 @@ const PER_PAGE = 25;
 
 /**
  * Admin audit of every chat in the org, in two views: the conversations
- * themselves, and the tool calls that failed in them. The view is kept in the
+ * themselves, and every tool call Aurora made in them. The view is kept in the
  * URL (?view=tool-calls) so a link opens the right one.
  */
 export default function ChatsTab({ period }: { period: Period }) {
   const [view, setView, viewReady] = useUrlParam('view', 'conversations');
   const [open, setOpen] = useState<{ id: string; messageIndex: number | null } | null>(null);
 
-  // Failed-call total for the period, for the toggle label (one row is enough).
-  const { data: failedTotal } = useQuery<FailedCallsResponse>(
+  // Tool-call total for the period, for the toggle label (one row is enough).
+  const { data: callTotals } = useQuery<ToolCallsResponse>(
     `/api/monitor/tool-calls?period=${period}&per_page=1`, jsonFetcher, { staleTime: 15_000 },
   );
-  const failedCount = failedTotal?.issue_counts.reduce((n, c) => n + c.calls, 0);
+  const callCount = callTotals?.status_counts.total;
 
   const openChat = (id: string, messageIndex: number | null) => setOpen({ id, messageIndex });
   const current: View = view === 'tool-calls' ? 'tool-calls' : 'conversations';
@@ -63,22 +63,22 @@ export default function ChatsTab({ period }: { period: Period }) {
       <div className={`space-y-4 ${open ? 'hidden' : ''}`}>
         {/* Wait for the URL so a ?view=tool-calls link doesn't show or load Conversations first. */}
         {viewReady
-          ? <ViewToggle value={current} onChange={setView} failedCount={failedCount} />
+          ? <ViewToggle value={current} onChange={setView} callCount={callCount} />
           : <div className="h-[34px]" aria-hidden />}
         {viewReady && (current === 'tool-calls'
-          ? <FailedCallsView period={period} onOpen={openChat} />
+          ? <ToolCallsView period={period} onOpen={openChat} />
           : <ConversationsView period={period} onOpen={openChat} />)}
       </div>
     </>
   );
 }
 
-function ViewToggle({ value, onChange, failedCount }: {
-  value: View; onChange: (v: View) => void; failedCount: number | undefined;
+function ViewToggle({ value, onChange, callCount }: {
+  value: View; onChange: (v: View) => void; callCount: number | undefined;
 }) {
   const options: { value: View; label: string }[] = [
     { value: 'conversations', label: 'Conversations' },
-    { value: 'tool-calls', label: `Failed tool calls${failedCount === undefined ? '' : ` (${failedCount})`}` },
+    { value: 'tool-calls', label: `Tool calls${callCount === undefined ? '' : ` (${callCount})`}` },
   ];
   return (
     <div role="group" aria-label="Audit view" className="inline-flex rounded-lg border border-zinc-800 p-0.5 bg-zinc-900/60">

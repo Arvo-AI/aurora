@@ -7,18 +7,21 @@ import { useQuery, jsonFetcher } from '@/lib/query';
 import { ChartPanel, EmptyState, type Period } from './charts';
 import { Pager, SearchBox, selectCls, useDebounced, useKeptData } from './audit-controls';
 import {
-  ISSUE_ORDER, ISSUE_SHORT, ISSUE_STYLES, SOURCE_STYLES, formatTimestamp,
+  ISSUE_ORDER, ISSUE_SHORT, ISSUE_STYLES, SOURCE_STYLES, STATUS_STYLES, formatTimestamp,
   type AuditLabels, type IssueCount,
 } from './chat-audit-shared';
 
-interface FailedCall {
+type StepStatus = 'failed' | 'succeeded' | 'running';
+
+interface ToolCallRow {
   chat_id: string;
   incident_id: string | null;
   message_index: number | null;
   tool_call_id: string | null;
   tool_name: string;
   input: string;
-  category: string;
+  status: StepStatus;
+  category: string | null;
   reason: string;
   started_at: string | null;
   chat_title: string;
@@ -28,12 +31,13 @@ interface FailedCall {
 
 interface Facet { value: string; count: number; email?: string | null; name?: string | null }
 
-export interface FailedCallsResponse {
-  tool_calls: FailedCall[];
+export interface ToolCallsResponse {
+  tool_calls: ToolCallRow[];
   total: number;
   page: number;
   total_pages: number;
   search_capped: boolean;
+  status_counts: Record<StepStatus | 'total', number>;
   issue_counts: IssueCount[];
   tools: Facet[];
   sources: Facet[];
@@ -43,8 +47,15 @@ export interface FailedCallsResponse {
 
 const PER_PAGE = 25;
 
+const STEP_STATUS: { value: StepStatus; label: string; style: string }[] = [
+  { value: 'failed', label: 'Failed', style: `bg-red-500/10 ${STATUS_STYLES.failed}` },
+  { value: 'succeeded', label: 'Succeeded', style: `bg-zinc-500/10 ${STATUS_STYLES.completed}` },
+  { value: 'running', label: 'Running', style: `bg-sky-500/10 ${STATUS_STYLES.in_progress}` },
+];
+
 /**
- * Single-select issue chips: exactly one is always checked ("All" by default).
+ * Single-select issue chips (they describe failures): exactly one is always
+ * checked ("All" by default; choosing a category also filters to failed calls).
  * A radiogroup with roving focus: arrow keys, Home and End move the selection,
  * and Tab enters and leaves the group as one stop. Empty categories are dimmed,
  * never hidden, so the row keeps its shape.
@@ -56,7 +67,7 @@ function IssueChips({ counts, labels, value, onChange, loading }: {
   const byCategory = new Map((counts ?? []).map(c => [c.category, c.calls]));
   const total = counts?.reduce((n, c) => n + c.calls, 0);
   const chips = [
-    { value: '', label: 'All', full: 'All failed tool calls', count: total },
+    { value: '', label: 'All', full: 'All failures', count: total },
     ...ISSUE_ORDER.map(cat => ({
       value: cat as string, label: ISSUE_SHORT[cat], full: labels?.issues[cat] ?? ISSUE_SHORT[cat],
       count: counts ? byCategory.get(cat) ?? 0 : undefined,
@@ -80,7 +91,7 @@ function IssueChips({ counts, labels, value, onChange, loading }: {
   };
 
   return (
-    <div role="radiogroup" aria-label="Filter failed tool calls by issue" aria-busy={loading}
+    <div role="radiogroup" aria-label="Filter failures by issue" aria-busy={loading}
       className="flex flex-wrap items-center gap-1.5 mb-3">
       {chips.map((c, i) => {
         const checked = i === selected;
@@ -114,10 +125,15 @@ function IssueChips({ counts, labels, value, onChange, loading }: {
   );
 }
 
-export default function FailedCallsView({ period, onOpen }: {
+export default function ToolCallsView({ period, onOpen }: {
   period: Period; onOpen: (chatId: string, messageIndex: number | null) => void;
 }) {
-  const [issue, setIssue] = useState('');
+  const [status, setStatus] = useState<'' | StepStatus>('');
+  const [issue, setIssueState] = useState('');
+  // An issue describes a failure, so choosing one also filters to failed calls;
+  // choosing another status clears it.
+  const setIssue = (v: string) => { setIssueState(v); if (v) setStatus('failed'); };
+  const changeStatus = (v: '' | StepStatus) => { setStatus(v); if (v !== 'failed') setIssueState(''); };
   const [source, setSource] = useState('');
   const [user, setUser] = useState('');
   const [tool, setTool] = useState('');
@@ -125,31 +141,39 @@ export default function FailedCallsView({ period, onOpen }: {
   const [page, setPage] = useState(1);
   const q = useDebounced(search.trim(), 350);
 
-  useEffect(() => { setPage(1); }, [period, issue, source, user, tool, q]);
+  useEffect(() => { setPage(1); }, [period, status, issue, source, user, tool, q]);
 
   const params = new URLSearchParams({ period, page: String(page), per_page: String(PER_PAGE) });
+  if (status) params.set('status', status);
   if (issue) params.set('issue', issue);
   if (source) params.set('source', source);
   if (user) params.set('user', user);
   if (tool) params.set('tool', tool);
   if (q) params.set('q', q);
 
-  const { data, error, isLoading } = useQuery<FailedCallsResponse>(
+  const { data, error, isLoading } = useQuery<ToolCallsResponse>(
     `/api/monitor/tool-calls?${params.toString()}`, jsonFetcher, { staleTime: 15_000 },
   );
   const { view, refreshing } = useKeptData(data, isLoading);
   const labels = view?.labels;
-  const hasFilters = issue || source || user || tool || search;
+  const hasFilters = status || issue || source || user || tool || search;
+  const counts = view?.status_counts;
 
   return (
     <ChartPanel
-      title="Failed tool calls"
-      subtitle="Every tool call that failed, newest first. Click a row to open the conversation at that call. Secrets are redacted."
+      title="Tool calls"
+      subtitle="Every tool call Aurora made, newest first. Click a row to open the conversation at that call. Secrets are redacted."
       loading={isLoading}
     >
       <IssueChips counts={view?.issue_counts} labels={labels} value={issue} onChange={setIssue} loading={refreshing} />
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
+        <select aria-label="Status" value={status} onChange={e => changeStatus(e.target.value as '' | StepStatus)} className={selectCls}>
+          <option value="">All statuses{counts ? ` (${counts.total})` : ''}</option>
+          {STEP_STATUS.map(s => (
+            <option key={s.value} value={s.value}>{s.label}{counts ? ` (${counts[s.value]})` : ''}</option>
+          ))}
+        </select>
         <select aria-label="Source" value={source} onChange={e => setSource(e.target.value)} className={selectCls}>
           <option value="">All sources</option>
           {(view?.sources ?? []).map(s => (
@@ -170,7 +194,7 @@ export default function FailedCallsView({ period, onOpen }: {
           placeholder='Search tool, command or reason (e.g. "forbidden")' />
         {hasFilters && (
           <button
-            onClick={() => { setIssue(''); setSource(''); setUser(''); setTool(''); setSearch(''); }}
+            onClick={() => { setStatus(''); setIssueState(''); setSource(''); setUser(''); setTool(''); setSearch(''); }}
             className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
           >
             <X className="h-3 w-3" /> Clear
@@ -179,25 +203,25 @@ export default function FailedCallsView({ period, onOpen }: {
       </div>
 
       {error && !view ? (
-        <EmptyState icon={AlertTriangle} message="Could not load failed tool calls" hint="Only organization admins can view this." />
+        <EmptyState icon={AlertTriangle} message="Could not load tool calls" hint="Only organization admins can view this." />
       ) : !view || view.tool_calls.length === 0 ? (
         isLoading
           ? <div className="h-40 animate-pulse bg-zinc-800/30 rounded-lg" />
-          : <EmptyState icon={Wrench} message={hasFilters ? 'No failed tool calls match these filters' : 'No failed tool calls in this period'} />
+          : <EmptyState icon={Wrench} message={hasFilters ? 'No tool calls match these filters' : 'No tool calls in this period'} />
       ) : (
         <>
           {view.search_capped && (
-            <p className="text-[11px] text-zinc-500 mb-2">Search covers the 500 most recent failed tool calls matching the other filters.</p>
+            <p className="text-[11px] text-zinc-500 mb-2">Search covers the 500 most recent tool calls matching the other filters.</p>
           )}
           <div className={`overflow-x-auto rounded-lg border border-zinc-800/60 transition-opacity ${refreshing ? 'opacity-60' : ''}`} aria-busy={refreshing}>
             <table className="w-full text-sm table-fixed min-w-[1000px]">
               <colgroup>
-                <col className="w-[112px]" /><col className="w-[24%]" /><col className="w-[118px]" />
-                <col /><col className="w-[130px]" /><col className="w-[110px]" /><col className="w-[17%]" />
+                <col className="w-[112px]" /><col className="w-[22%]" /><col className="w-[96px]" /><col className="w-[110px]" />
+                <col /><col className="w-[124px]" /><col className="w-[108px]" /><col className="w-[16%]" />
               </colgroup>
               <thead>
                 <tr className="border-b border-zinc-800/60 text-zinc-500 text-xs uppercase tracking-wider">
-                  {['Time', 'Tool', 'Issue', 'Reason', 'User', 'Source', 'Chat'].map(h => (
+                  {['Time', 'Tool', 'Status', 'Issue', 'Reason', 'User', 'Source', 'Chat'].map(h => (
                     <th key={h} className="text-left px-3 py-2.5 font-medium">{h}</th>
                   ))}
                 </tr>
@@ -219,13 +243,20 @@ export default function FailedCallsView({ period, onOpen }: {
                         {f.input && <div className="font-mono text-[11px] text-zinc-500 truncate mt-0.5" title={f.input}>{f.input}</div>}
                       </td>
                       <td className="px-3 py-2.5">
-                        <span title={labels?.issues[f.category]}
-                          className={`px-1.5 py-0.5 rounded text-[11px] font-medium whitespace-nowrap ${ISSUE_STYLES[f.category]?.badge ?? ISSUE_STYLES.other.badge}`}>
-                          {ISSUE_SHORT[f.category] ?? f.category}
-                        </span>
+                        <StatusBadge status={f.status} />
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {f.category ? (
+                          <span title={labels?.issues[f.category]}
+                            className={`px-1.5 py-0.5 rounded text-[11px] font-medium whitespace-nowrap ${ISSUE_STYLES[f.category]?.badge ?? ISSUE_STYLES.other.badge}`}>
+                            {ISSUE_SHORT[f.category] ?? f.category}
+                          </span>
+                        ) : <span className="text-xs text-zinc-600">—</span>}
                       </td>
                       <td className="px-3 py-2.5 text-xs text-red-300/90 min-w-0">
-                        <div className="line-clamp-2 break-words" title={f.reason}>{f.reason || 'Failed (no error text)'}</div>
+                        {f.status === 'failed' && (
+                          <div className="line-clamp-2 break-words" title={f.reason}>{f.reason || 'Failed (no error text)'}</div>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 text-xs text-zinc-400 truncate" title={f.user.email ?? undefined}>
                         {f.user.name || f.user.email || '—'}
@@ -256,9 +287,18 @@ export default function FailedCallsView({ period, onOpen }: {
             </table>
           </div>
           <Pager total={view.total} page={page} totalPages={view.total_pages}
-            noun={['failed tool call', 'failed tool calls']} onPage={setPage} />
+            noun={['tool call', 'tool calls']} onPage={setPage} />
         </>
       )}
     </ChartPanel>
+  );
+}
+
+function StatusBadge({ status }: { status: StepStatus }) {
+  const s = STEP_STATUS.find(x => x.value === status);
+  return (
+    <span className={`px-1.5 py-0.5 rounded text-[11px] font-medium whitespace-nowrap ${s?.style ?? 'text-zinc-400'}`}>
+      {s?.label ?? status}
+    </span>
   );
 }

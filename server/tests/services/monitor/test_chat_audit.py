@@ -427,15 +427,15 @@ def test_reason_falls_back_to_redacted_compact_json_never_a_brace():
 
 
 
-# --- failed tool calls view -------------------------------------------------
+# --- tool calls view ----------------------------------------------------------
 
-_FTC_COLS = ["id", "tool_name", "tool_input", "error_message", "started_at", "tool_call_id",
+_FTC_COLS = ["id", "tool_name", "tool_input", "status", "error_message", "started_at", "tool_call_id",
              "incident_id", "chat_id", "chat_title", "user_id", "source", "message_index",
              "user_email", "user_name"]
 
 
-def _ftc_row(i, command, error, *, title="Deploy check", user="u1", source="slack", msg=2):
-    return (i, "cloud_exec", {"provider": "aws", "command": command}, error, TS, f"tc{i}",
+def _ftc_row(i, command, error, *, title="Deploy check", user="u1", source="slack", msg=2, status="error"):
+    return (i, "cloud_exec", {"provider": "aws", "command": command}, status, error, TS, f"tc{i}",
             None, "s1", title, user, source, msg, "a@x.io", "A")
 
 
@@ -444,6 +444,7 @@ def _ftc_cursor(rows, total=None):
         ("SELECT COUNT(*) FROM execution_steps", ["count"], [(len(rows) if total is None else total,)]),
         ("WITH f AS", _FTC_COLS, rows),
         ("COUNT(DISTINCT", ["category", "calls", "chats"], [("missing_permission", 19, 4)]),
+        ("SELECT es.status, COUNT(*)", ["status", "count"], [("error", 19), ("success", 40), ("running", 1)]),
         ("es.tool_name AS value", ["value", "count"], [("cloud_exec", 19)]),
         ("AS value, COUNT(*), MAX(u.email)", ["value", "count", "email", "name"], [("u1", 19, "a@x.io", "A")]),
         ("AS value, COUNT(*)", ["value", "count"], [("slack", 19)]),
@@ -454,7 +455,7 @@ def test_failed_tool_calls_page_is_shaped_redacted_and_org_scoped():
     cur = _ftc_cursor([_ftc_row(1, "ec2 describe-instances --password hunter2",
                                 '{"error": "AccessDenied: not authorized"}',
                                 title="psql --password hunter2")], total=19)
-    out = ca.list_failed_tool_calls(cur, "org-1", {"period": "7d", "per_page": "10", "page": "2"})
+    out = ca.list_tool_calls(cur, "org-1", {"period": "7d", "per_page": "10", "page": "2"})
     row = out["tool_calls"][0]
     assert row["tool_name"] == "cloud_exec" and row["category"] == "missing_permission"
     assert row["reason"] == "AccessDenied: not authorized" and row["message_index"] == 2
@@ -462,6 +463,8 @@ def test_failed_tool_calls_page_is_shaped_redacted_and_org_scoped():
     assert row["source"] == "slack" and row["user"]["email"] == "a@x.io"
     assert (out["total"], out["page"], out["total_pages"]) == (19, 2, 2)
     assert out["issue_counts"][0]["calls"] == 19
+    assert out["status_counts"] == {"failed": 19, "succeeded": 40, "running": 1, "total": 60}
+    assert row["status"] == "failed"
     assert out["tools"] == [{"value": "cloud_exec", "count": 19}]
     page_sql, page_params = next(c for c in cur.calls if "WITH f AS" in c[0])
     assert ca._NOT_DELETED_SQL in page_sql and page_params[-3:] == (10, 10, "org-1")
@@ -471,7 +474,7 @@ def test_failed_tool_calls_page_is_shaped_redacted_and_org_scoped():
 
 def test_failed_tool_calls_filters_bind_source_user_tool_and_issue():
     cur = _ftc_cursor([])
-    ca.list_failed_tool_calls(cur, "org-1", {"source": "slack", "user": "u9", "tool": "kubectl",
+    ca.list_tool_calls(cur, "org-1", {"source": "slack", "user": "u9", "tool": "kubectl",
                                              "issue": "blocked_command"})
     count_sql, count_params = cur.calls[0]
     assert ca.SOURCE_SQL in count_sql and "cs.user_id = %s" in count_sql and "es.tool_name = %s" in count_sql
@@ -485,8 +488,8 @@ def test_failed_tool_calls_search_matches_only_redacted_text():
     rows = [_ftc_row(1, "psql --password hunter2", "login failed"),
             _ftc_row(2, "kubectl get pods", "Error from server (Forbidden): pods is forbidden")]
     cur = _ftc_cursor(rows)
-    assert ca.list_failed_tool_calls(cur, "org-1", {"q": "hunt"})["tool_calls"] == []
-    out = ca.list_failed_tool_calls(_ftc_cursor(rows), "org-1", {"q": "forbidden"})
+    assert ca.list_tool_calls(cur, "org-1", {"q": "hunt"})["tool_calls"] == []
+    out = ca.list_tool_calls(_ftc_cursor(rows), "org-1", {"q": "forbidden"})
     assert [r["tool_call_id"] for r in out["tool_calls"]] == ["tc2"] and out["total"] == 1
     assert not any("ILIKE" in sql for sql, _ in cur.calls)
     assert not any(sql.startswith("SELECT COUNT(*) FROM execution_steps") for sql, _ in cur.calls)
@@ -494,4 +497,46 @@ def test_failed_tool_calls_search_matches_only_redacted_text():
 
 def test_failed_tool_calls_rejects_bad_filters():
     with pytest.raises(InvalidFilter):
-        ca.list_failed_tool_calls(Cursor([]), "org-1", {"issue": "bogus"})
+        ca.list_tool_calls(Cursor([]), "org-1", {"issue": "bogus"})
+
+
+
+def test_tool_calls_default_to_every_status():
+    cur = _ftc_cursor([])
+    ca.list_tool_calls(cur, "org-1", {})
+    count_sql, _ = cur.calls[0]
+    assert "es.status = %s" not in count_sql and "es.status = 'error'" not in count_sql
+
+
+@pytest.mark.parametrize("raw, stored", [
+    ({"status": "succeeded"}, "success"), ({"status": "running"}, "running"), ({"status": "failed"}, "error"),
+    ({"issue": "timeout"}, "error"), ({"issue": "any"}, "error"),
+    ({"status": "succeeded", "issue": "timeout"}, "error"),   # an issue implies failed
+])
+def test_status_filter_binding(raw, stored):
+    cur = _ftc_cursor([])
+    ca.list_tool_calls(cur, "org-1", raw)
+    count_sql, count_params = cur.calls[0]
+    assert "es.status = %s" in count_sql and stored in count_params
+
+
+def test_bad_status_is_a_constant_error_and_chat_status_values_are_rejected():
+    for bad in ("weird", "completed", "<b>x</b>"):
+        with pytest.raises(InvalidFilter) as exc:
+            ca.list_tool_calls(Cursor([]), "org-1", {"status": bad})
+        assert ca.filter_error_message(exc.value) == ca.FILTER_ERRORS["step_status"]
+
+
+def test_succeeded_rows_have_no_issue_or_reason_and_never_show_output():
+    row = _ftc_row(5, "kubectl get pods", None, status="success")
+    out = ca.list_tool_calls(_ftc_cursor([row]), "org-1", {})
+    shaped = out["tool_calls"][0]
+    assert shaped["status"] == "succeeded" and shaped["category"] is None and shaped["reason"] == ""
+    assert "output" not in shaped and "error" not in shaped
+    assert shaped["input"] == "kubectl get pods"
+
+
+def test_search_matches_succeeded_rows_by_tool_and_command():
+    rows = [_ftc_row(1, "s3 ls", None, status="success"), _ftc_row(2, "ec2 describe-vpcs", "AccessDenied")]
+    out = ca.list_tool_calls(_ftc_cursor(rows), "org-1", {"q": "s3 ls"})
+    assert [r["tool_call_id"] for r in out["tool_calls"]] == ["tc1"]

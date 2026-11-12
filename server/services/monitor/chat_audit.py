@@ -232,10 +232,14 @@ SOURCE_LABELS = {
     "background": "Background",
 }
 STATUS_LABELS = {"completed": "Completed", "failed": "Failed", "in_progress": "In progress"}
+# Tool-call (execution_steps) statuses: UI name → stored value.
+STEP_STATUSES = {"failed": "error", "succeeded": "success", "running": "running"}
+STEP_STATUS_LABELS = {"succeeded": "Succeeded", "failed": "Failed", "running": "Running"}
 
 # Constant, user-facing messages: responses look them up by code and never
 # echo exception text.
 FILTER_ERRORS = {
+    "step_status": "status must be one of: failed, succeeded, running, all",
     "period": f"period must be one of: {', '.join(PERIOD_INTERVALS)}",
     "source": f"source must be one of: {', '.join(SOURCE_LABELS)}, all",
     "status": "status must be one of: completed, failed, in_progress, all",
@@ -412,7 +416,9 @@ QUERY_POOL_SIZE = 500
 
 def _matches_query(failure: dict, query: str) -> bool:
     """Free text matched against what the caller can see: never raw inputs or errors."""
-    haystack = " ".join((failure["tool_name"], failure["category"], failure["input"], failure["reason"])).lower()
+    haystack = " ".join(
+        (failure["tool_name"], failure["category"] or "", failure["input"], failure["reason"])
+    ).lower()
     return query.lower() in haystack
 
 
@@ -446,6 +452,19 @@ def _shape_failure(r: dict) -> dict:
         "category": classify_tool_error(r.get("error_message")),
         "reason": failure_reason(r.get("error_message")),
         "started_at": iso_utc(r.get("started_at")),
+    }
+
+
+def _shape_step(r: dict) -> dict:
+    """Any execution_steps row: failures get their issue and reason, others don't."""
+    status = r.get("status")
+    if status == "error":
+        return {**_shape_failure(r), "status": "failed"}
+    return {
+        **_shape_failure({**r, "error_message": None}),
+        "category": None,
+        "reason": "",
+        "status": {"success": "succeeded", "running": "running"}.get(status, status),
     }
 
 
@@ -560,22 +579,33 @@ def search_failed_tool_calls(
 
 
 # ---------------------------------------------------------------------------
-# Failed tool calls view (monitor page, admins)
+# Tool calls view (monitor page, admins)
 # ---------------------------------------------------------------------------
 
-def list_failed_tool_calls(cur, org_id: str, raw: dict) -> dict:
-    """One page of failed tool calls, newest first, with chat, user and source.
+def list_tool_calls(cur, org_id: str, raw: dict) -> dict:
+    """One page of recorded tool calls (any status), newest first, with chat, user and source.
 
-    Filters: period, issue, source, user, tool and free text. Free text matches
-    the redacted command and reason (never raw stored text), so with ``q`` the
-    page is taken from the ``QUERY_POOL_SIZE`` most recent matches of the other
-    filters, and ``search_capped`` says when that pool was full.
+    Filters: period, status (failed | succeeded | running), issue, source, user,
+    tool and free text. An issue (a category, or "any") implies failed. Free text
+    matches the redacted tool, command and reason (never raw stored text), so
+    with ``q`` the page is taken from the ``QUERY_POOL_SIZE`` most recent
+    matches of the other filters, and ``search_capped`` says when that pool was full.
+
+    ``total`` and ``status_counts`` cover every status; ``issue_counts`` covers
+    failures only.
     """
-    f = ChatFilters.parse(raw)
+    # ``status`` here is the tool call's status, not a chat's, so it's checked
+    # separately from the shared chat filters.
+    step_status = (_opt(raw, "status") or "").lower() or None
+    if step_status and step_status not in STEP_STATUSES:
+        raise InvalidFilter("step_status")
+    f = ChatFilters.parse({k: v for k, v in raw.items() if k != "status"})
+    if f.issue:
+        step_status = "failed"
     tool = _opt(raw, "tool")
     case_sql, case_params = sql_category_case("es.error_message")
 
-    # Filters on the chat a failure belongs to (source, user) and on the call (tool).
+    # Filters on the chat a call belongs to (source, user) and on the call (tool).
     scope, scope_params = ["TRUE"], []
     if f.source:
         scope.append(f"{SOURCE_SQL} = %s")
@@ -586,11 +616,12 @@ def list_failed_tool_calls(cur, org_id: str, raw: dict) -> dict:
     if tool:
         scope.append("es.tool_name = %s")
         scope_params.append(tool)
-    where = [
-        "es.org_id = %s", "es.status = 'error'", _NOT_DELETED_SQL,
-        "es.started_at >= NOW() - %s::interval", *scope,
-    ]
-    params = [org_id, PERIOD_INTERVALS[f.period], *scope_params]
+    base = ["es.org_id = %s", _NOT_DELETED_SQL, "es.started_at >= NOW() - %s::interval", *scope]
+    base_params = [org_id, PERIOD_INTERVALS[f.period], *scope_params]
+    where, params = list(base), list(base_params)
+    if step_status:
+        where.append("es.status = %s")
+        params.append(STEP_STATUSES[step_status])
     if f.issue and f.issue != "any":
         where.append(f"{case_sql} = %s")
         params.extend(case_params + [f.issue])
@@ -606,7 +637,7 @@ def list_failed_tool_calls(cur, org_id: str, raw: dict) -> dict:
         limit, offset = f.per_page, (f.page - 1) * f.per_page
     cur.execute(
         f"""WITH f AS (
-                SELECT es.id, es.tool_name, es.tool_input, es.error_message, es.started_at,
+                SELECT es.id, es.tool_name, es.tool_input, es.status, es.error_message, es.started_at,
                        es.tool_call_id, es.incident_id, {ROOT_SESSION_SQL} AS chat_id,
                        cs.title AS chat_title, cs.user_id, {SOURCE_SQL} AS source
                 {from_sql}
@@ -623,7 +654,7 @@ def list_failed_tool_calls(cur, org_id: str, raw: dict) -> dict:
     )
     rows = [
         {
-            **_shape_failure(r),
+            **_shape_step(r),
             "chat_title": scrub(r.get("chat_title")) or "Untitled chat",
             "source": r.get("source"),
             "user": {"id": r.get("user_id"), "email": r.get("user_email"), "name": r.get("user_name")},
@@ -637,6 +668,17 @@ def list_failed_tool_calls(cur, org_id: str, raw: dict) -> dict:
         total = len(rows)
         rows = rows[(f.page - 1) * f.per_page: f.page * f.per_page]
 
+    # Per-status counts within the period and scope filters (not status, issue or text).
+    cur.execute(
+        f"""SELECT es.status, COUNT(*) FROM execution_steps es
+            LEFT JOIN chat_sessions cs ON cs.id = {ROOT_SESSION_SQL} AND cs.org_id = es.org_id
+            WHERE {" AND ".join(base)} GROUP BY 1""",
+        tuple(base_params),
+    )
+    by_status = dict(cur.fetchall())
+    status_counts = {name: by_status.get(stored, 0) for name, stored in STEP_STATUSES.items()}
+    status_counts["total"] = sum(by_status.values())
+
     counts_where = " AND ".join(scope)
     return {
         "tool_calls": rows,
@@ -645,18 +687,19 @@ def list_failed_tool_calls(cur, org_id: str, raw: dict) -> dict:
         "per_page": f.per_page,
         "total_pages": max(1, -(-total // f.per_page)),
         "search_capped": search_capped,
+        "status_counts": status_counts,
         "issue_counts": _issue_totals(cur, org_id, f.period, counts_where, scope_params),
-        "tools": _failure_facet(cur, org_id, f.period, "es.tool_name", scope, scope_params, skip="es.tool_name"),
-        "sources": _failure_facet(cur, org_id, f.period, SOURCE_SQL, scope, scope_params, skip=SOURCE_SQL),
-        "users": _failure_facet(cur, org_id, f.period, "cs.user_id", scope, scope_params, skip="cs.user_id",
-                                with_user=True),
-        "labels": {"sources": SOURCE_LABELS, "issues": CATEGORY_LABELS, "statuses": STATUS_LABELS},
+        "tools": _step_facet(cur, org_id, f.period, "es.tool_name", scope, scope_params, skip="es.tool_name"),
+        "sources": _step_facet(cur, org_id, f.period, SOURCE_SQL, scope, scope_params, skip=SOURCE_SQL),
+        "users": _step_facet(cur, org_id, f.period, "cs.user_id", scope, scope_params, skip="cs.user_id",
+                             with_user=True),
+        "labels": {"sources": SOURCE_LABELS, "issues": CATEGORY_LABELS, "statuses": STEP_STATUS_LABELS},
     }
 
 
-def _failure_facet(cur, org_id: str, period: str, expr: str, scope: list[str], scope_params: list,
-                   *, skip: str, with_user: bool = False) -> list[dict]:
-    """Failed-call counts by ``expr`` in the period, within every scope filter but its own."""
+def _step_facet(cur, org_id: str, period: str, expr: str, scope: list[str], scope_params: list,
+                *, skip: str, with_user: bool = False) -> list[dict]:
+    """Tool-call counts by ``expr`` in the period, within every scope filter but its own."""
     kept = [(c, p) for c, p in zip(scope[1:], scope_params) if not c.startswith(skip)]
     extra = "".join(f" AND {c}" for c, _ in kept)
     user_cols = ", MAX(u.email), MAX(u.name)" if with_user else ""
@@ -666,7 +709,7 @@ def _failure_facet(cur, org_id: str, period: str, expr: str, scope: list[str], s
             FROM execution_steps es
             LEFT JOIN chat_sessions cs ON cs.id = {ROOT_SESSION_SQL} AND cs.org_id = es.org_id
             {user_join}
-            WHERE es.org_id = %s AND es.status = 'error' AND {_NOT_DELETED_SQL}
+            WHERE es.org_id = %s AND {_NOT_DELETED_SQL}
               AND es.started_at >= NOW() - %s::interval{extra}
             GROUP BY 1 ORDER BY 2 DESC LIMIT %s""",
         tuple([org_id, PERIOD_INTERVALS[period], *[p for _, p in kept], USERS_FACET_LIMIT]),

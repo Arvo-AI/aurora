@@ -15,7 +15,7 @@ from services.monitor.chat_audit import (
     filter_error_message,
     get_transcript,
     list_chats,
-    list_failed_tool_calls,
+    list_tool_calls,
     validate_session_id,
 )
 from utils.auth.rbac_decorators import require_permission
@@ -81,11 +81,12 @@ def get_org_chat(user_id, session_id):
 
 @chat_audit_bp.route("/api/monitor/tool-calls", methods=["GET"])
 @require_permission("admin", "access")
-def list_org_failed_tool_calls(user_id):
-    """Failed tool calls across the org, newest first.
+def list_org_tool_calls(user_id):
+    """Recorded tool calls across the org (any status), newest first.
 
-    Query params: period, issue (a category or "any"), source, user, tool,
-    q (matches the redacted command and reason), page, per_page (<= 100).
+    Query params: period, status (failed|succeeded|running|all), issue (a
+    category or "any"; implies failed), source, user, tool, q (matches the
+    redacted tool, command and reason), page, per_page (<= 100).
     """
     org_id = get_org_id_from_request()
     if not org_id:
@@ -94,10 +95,10 @@ def list_org_failed_tool_calls(user_id):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, org_id=org_id, log_prefix="[CHAT_AUDIT]")
-                result = list_failed_tool_calls(cur, org_id, request.args.to_dict())
+                result = list_tool_calls(cur, org_id, request.args.to_dict())
         return jsonify(result), 200
     except InvalidFilter as exc:
         return jsonify({"error": filter_error_message(exc)}), 400
     except Exception:
-        logger.exception("list_org_failed_tool_calls failed")
-        return jsonify({"error": "Failed to list failed tool calls"}), 500
+        logger.exception("list_org_tool_calls failed")
+        return jsonify({"error": "Failed to list tool calls"}), 500
