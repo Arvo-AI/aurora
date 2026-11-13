@@ -1,0 +1,9 @@
+# Synthetic example: removing the delay also pages on a one-minute spike.
+groups:
+  - name: checkout
+    rules:
+      - alert: CheckoutErrors
+        expr: checkout_error_ratio > 0.05
+        for: 0m
+        labels:
+          severity: page

@@ -1,0 +1,43 @@
+# All samples and expectations are synthetic, authored before the candidates.
+# The same suite is evaluated unchanged against all three rule files.
+# checkout_error_ratio is a supplied gauge, not a query against live telemetry.
+rule_files:
+  - rules.yml
+evaluation_interval: 1m
+tests:
+  - name: sustained incident must page by minute three and clear on recovery
+    interval: 1m
+    input_series:
+      - series: 'checkout_error_ratio{service="checkout"}'
+        values: '0.01 0.08 0.08 0.08 0.08 0.08 0.08 0.01'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CheckoutErrors
+        exp_alerts:
+          - exp_labels:
+              service: checkout
+              severity: page
+      - eval_time: 7m
+        alertname: CheckoutErrors
+        exp_alerts: []
+  - name: healthy service must stay quiet
+    interval: 1m
+    input_series:
+      - series: 'checkout_error_ratio{service="checkout"}'
+        values: '0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CheckoutErrors
+        exp_alerts: []
+  - name: brief error spike must not page
+    interval: 1m
+    input_series:
+      - series: 'checkout_error_ratio{service="checkout"}'
+        values: '0.01 0.08 0.01 0.01 0.01 0.01 0.01 0.01'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CheckoutErrors
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: CheckoutErrors
+        exp_alerts: []
