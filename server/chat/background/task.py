@@ -1045,6 +1045,12 @@ def run_background_chat(
             if isinstance(e, ContinuationBlocked):
                 # Nothing ran: the earlier report stands and the attempt is returned.
                 give_back_continuation(incident_id, user_id)
+                try:
+                    # A Slack click marked the card and its thread as continuing.
+                    from utils.notifications.slack_notification_service import finish_continue_notice
+                    finish_continue_notice(user_id, {"incident_id": incident_id}, blocked=True)
+                except Exception:
+                    logger.debug("[BackgroundChat] Could not close the continuation notice", exc_info=True)
                 ended = REPORTED
             elif owns_rca:
                 ended = _summarize_unfinished_investigation(

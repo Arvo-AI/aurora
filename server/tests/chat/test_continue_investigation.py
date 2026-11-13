@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import utils.notifications.slack_notification_service as slack_service
 from chat.background import continuation
 from chat.background.continuation import (
     CONTINUE_SOURCE,
@@ -416,8 +417,7 @@ def test_the_prompt_names_the_alert_even_without_a_report():
 # --- the card and thread notice while a continuation runs ----------------------------
 
 def test_the_button_gives_way_to_a_continuing_note():
-    from utils.notifications.slack_notification_service import build_continue_blocks, continuing_blocks
-
+    build_continue_blocks, continuing_blocks = slack_service.build_continue_blocks, slack_service.continuing_blocks
     header = {"type": "header", "text": {"type": "plain_text", "text": "Initial Analysis"}}
     card = [header, *build_continue_blocks(
         {"incident_id": INCIDENT, "unfinished_reason": "time_limit", "continuations": 0},
@@ -446,8 +446,8 @@ class _FakeRedis:
 @pytest.fixture
 def notice(monkeypatch):
     import utils.cache.redis_client as redis_mod
-    import utils.notifications.slack_notification_service as slack
 
+    slack = slack_service
     fake = _FakeRedis()
     client = MagicMock()
     monkeypatch.setattr(redis_mod, "get_redis_client", lambda: fake)
@@ -481,8 +481,8 @@ def test_a_slack_click_marks_the_card_and_remembers_the_notice(monkeypatch):
     import routes.slack.slack_events as events
     import utils.auth.enforcer as enforcer
     import utils.auth.stateless_auth as auth
-    import utils.notifications.slack_notification_service as slack
 
+    slack = slack_service
     feedback = MagicMock()
     feedback.send_message.return_value = {"ts": "999.000"}
     remembered = []
@@ -491,7 +491,7 @@ def test_a_slack_click_marks_the_card_and_remembers_the_notice(monkeypatch):
     monkeypatch.setattr(auth, "get_org_id_for_user", lambda _u: "org-1")
     monkeypatch.setattr(enforcer, "enforce_with_reload", lambda *_a: True)
     monkeypatch.setattr(continuation, "continue_investigation", lambda *_a: {"continuationsLeft": 2})
-    monkeypatch.setattr(slack, "remember_continue_notice", lambda *a: remembered.append(a))
+    monkeypatch.setattr(slack, "remember_continue_notice", lambda *a, **k: remembered.append(a))
 
     card = slack.build_continue_blocks({"incident_id": INCIDENT, "unfinished_reason": "stalled", "continuations": 0})
     events._handle_continue_investigation(
@@ -501,3 +501,58 @@ def test_a_slack_click_marks_the_card_and_remembers_the_notice(monkeypatch):
     blocks = feedback.update_message.call_args.kwargs["blocks"]
     assert blocks[0]["type"] == "context" and "requested by olivier" in blocks[0]["elements"][0]["text"]
     assert remembered == [(INCIDENT, "C1", "999.000", "olivier")]
+
+
+def test_a_failed_slack_update_keeps_the_notice_for_a_retry(notice):
+    slack, client, fake = notice
+    client.update_message.side_effect = RuntimeError("slack down")
+    assert slack.finish_continue_notice(OWNER, {"incident_id": INCIDENT}) is False
+    assert fake.store  # the next notification can still update it
+
+
+def test_a_blocked_continuation_gives_the_card_its_button_back(monkeypatch):
+    import utils.cache.redis_client as redis_mod
+
+    fake = _FakeRedis()
+    client = MagicMock()
+    monkeypatch.setattr(redis_mod, "get_redis_client", lambda: fake)
+    monkeypatch.setattr(slack_service, "get_slack_client_for_user", lambda _u: client)
+    card = [{"type": "header"}]
+    slack_service.remember_continue_notice(INCIDENT, "C1", "111.333", "olivier", card_ts="111.222", card_blocks=card)
+
+    assert slack_service.finish_continue_notice(OWNER, {"incident_id": INCIDENT}, blocked=True) is True
+    notice_call, card_call = client.update_message.call_args_list
+    assert "could not start" in notice_call[0][2]
+    assert card_call[0][:2] == ("C1", "111.222") and card_call.kwargs["blocks"] == card
+
+
+def test_a_refused_slack_click_puts_the_card_back(monkeypatch):
+    import routes.slack.slack_events as events
+    import utils.auth.enforcer as enforcer
+    import utils.auth.stateless_auth as auth
+
+    feedback = MagicMock()
+    feedback.send_message.return_value = {"ts": "999.000"}
+    forgotten = []
+    monkeypatch.setattr(events, "aurora_user_for_slack_sender", lambda *_a: CLICKER)
+    monkeypatch.setattr(events, "_slack_client_for_feedback", lambda *_a: feedback)
+    monkeypatch.setattr(events, "_send_ephemeral", lambda *_a: None)
+    monkeypatch.setattr(auth, "get_org_id_for_user", lambda _u: "org-1")
+    monkeypatch.setattr(enforcer, "enforce_with_reload", lambda *_a: True)
+    monkeypatch.setattr(slack_service, "remember_continue_notice", lambda *a, **k: None)
+    monkeypatch.setattr(slack_service, "forget_continue_notice", lambda *a: forgotten.append(a))
+
+    def _refuse(*_a):
+        raise ContinueRefused("The investigation is already running")
+
+    monkeypatch.setattr(continuation, "continue_investigation", _refuse)
+    card = slack_service.build_continue_blocks(
+        {"incident_id": INCIDENT, "unfinished_reason": "stalled", "continuations": 0},
+    )
+    events._handle_continue_investigation(
+        payload={"user": {"name": "olivier"}, "message": {"ts": "111.222", "text": "card", "blocks": card}},
+        action={"value": INCIDENT}, slack_user_id="U1", team_id="T1", channel_id="C1",
+    )
+    feedback.delete_message.assert_called_once_with("C1", "999.000")
+    assert feedback.update_message.call_args.kwargs["blocks"] == card  # button back
+    assert forgotten == [(INCIDENT, "999.000")]
