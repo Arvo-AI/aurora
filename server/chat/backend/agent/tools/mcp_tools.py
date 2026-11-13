@@ -245,6 +245,9 @@ class RealMCPServerManager:
                 cmd = [node_cmd, full_path]
             # Set up environment with cloud provider credentials
             env = os.environ.copy()
+            # Third-party MCP servers must not inherit the GitHub App signing
+            # key: with it they could mint installation tokens for every install.
+            env.pop("GITHUB_APP_PRIVATE_KEY", None)
             # Add cloud provider credentials to environment
             if user_credentials:
                 if server_type == "aws" and "aws" in user_credentials:
