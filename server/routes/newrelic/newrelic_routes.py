@@ -144,7 +144,7 @@ def connect(user_id):
     }
 
     try:
-        store_tokens_in_db(user_id, token_payload, "newrelic")
+        store_tokens_in_db(user_id, token_payload, "newrelic", schedule_prediscovery=True)
         logger.info("[NEWRELIC] Stored credentials for user %s (account=%s)", sanitize(user_id), sanitize(account_id))
     except Exception as exc:
         logger.exception("[NEWRELIC] Failed to store credentials: %s", exc)

@@ -176,7 +176,7 @@ def connect(user_id):
             **user_fields,
         }
 
-        store_tokens_in_db(user_id, token_payload, "confluence")
+        store_tokens_in_db(user_id, token_payload, "confluence", schedule_prediscovery=True)
         return jsonify({
             "success": True,
             "connected": True,
@@ -256,7 +256,7 @@ def connect(user_id):
         **user_fields,
     }
 
-    store_tokens_in_db(user_id, token_payload, "confluence")
+    store_tokens_in_db(user_id, token_payload, "confluence", schedule_prediscovery=True)
     return jsonify({
         "success": True,
         "connected": True,

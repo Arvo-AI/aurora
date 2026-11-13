@@ -49,7 +49,7 @@ def oauth(routes, monkeypatch):
     monkeypatch.setattr(routes, "exchange_code_for_token", lambda code: state["token"])
     monkeypatch.setattr(routes, "_tenant_from_graph", lambda token: state["graph_tenant"])
     monkeypatch.setattr(routes, "_decode_id_token", _fake_verified_decode)
-    monkeypatch.setattr(routes, "store_tokens_in_db", lambda uid, data, prov: state["stored"].append((uid, data, prov)))
+    monkeypatch.setattr(routes, "store_tokens_in_db", lambda uid, data, prov, **_kw: state["stored"].append((uid, data, prov)))
     monkeypatch.setattr(routes, "get_org_id_for_user", lambda user_id: "org-a")
     monkeypatch.setattr(routes, "_tenant_bound_elsewhere", lambda tenant_id, org_id: bool(state.get("bound_elsewhere")))
     monkeypatch.setattr(routes, "_clear_teams_displacement", lambda org_id: None)

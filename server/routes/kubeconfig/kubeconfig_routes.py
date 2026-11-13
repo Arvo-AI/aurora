@@ -101,7 +101,7 @@ def _process_kubeconfig_entry(entry, user_id, org_id, registered, errors):
 
     vault_provider = _make_vault_key(org_id, filename)
     try:
-        store_tokens_in_db(user_id, {"kubeconfig_yaml": content}, vault_provider, org_id=org_id)
+        store_tokens_in_db(user_id, {"kubeconfig_yaml": content}, vault_provider, org_id=org_id, schedule_prediscovery=True)
     except Exception:
         logger.exception("[Kubeconfig] Vault store failed for %s", filename)
         errors.append({"filename": filename, "error": "Failed to store credentials"})

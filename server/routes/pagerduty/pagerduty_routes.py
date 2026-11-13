@@ -189,7 +189,7 @@ def pagerduty_connect(user_id):
     }
 
     try:
-        store_tokens_in_db(user_id, token_data, "pagerduty")
+        store_tokens_in_db(user_id, token_data, "pagerduty", schedule_prediscovery=True)
     except Exception:
         logger.exception("[PAGERDUTY] Failed to store token data for user %s", user_id)
         return jsonify({"error": "Storage failed"}), 500
@@ -281,7 +281,7 @@ def oauth_callback():
             **token_info
         }
         
-        store_tokens_in_db(user_id, oauth_token_data, "pagerduty")
+        store_tokens_in_db(user_id, oauth_token_data, "pagerduty", schedule_prediscovery=True)
         # A reconnect without incidents.write must not leave the toggle on
         try:
             _disable_notes_if_unwritable(get_org_id_for_user(user_id), token_info["capabilities"])

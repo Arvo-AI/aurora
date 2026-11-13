@@ -167,7 +167,7 @@ def connect(user_id):
                     "site_url": base_url.rstrip("/"),
                     "cloud_id": data.get("cloudId"),
                 }
-                store_tokens_in_db(user_id, token_payload_jsm, "opsgenie")
+                store_tokens_in_db(user_id, token_payload_jsm, "opsgenie", schedule_prediscovery=True)
                 results[product] = {"connected": True, "authType": "jsm_pat", "baseUrl": base_url}
             else:
                 token_payload: Dict[str, Any] = {
@@ -175,7 +175,7 @@ def connect(user_id):
                     "base_url": base_url.rstrip("/"),
                     "pat_token": pat_token,
                 }
-                store_tokens_in_db(user_id, token_payload, product)
+                store_tokens_in_db(user_id, token_payload, product, schedule_prediscovery=True)
                 results[product] = {"connected": True, "authType": "pat", "baseUrl": base_url}
 
         return jsonify({"success": True, "results": results})
@@ -268,7 +268,7 @@ def connect(user_id):
                 "cloud_id": cloud_id,
                 "site_url": base_url.rstrip("/") if base_url else "",
             }
-            store_tokens_in_db(user_id, jsm_payload, "opsgenie")
+            store_tokens_in_db(user_id, jsm_payload, "opsgenie", schedule_prediscovery=True)
             results[product] = {"connected": True, "authType": "jsm_oauth", "baseUrl": base_url, "cloudId": cloud_id}
         else:
             payload: Dict[str, Any] = {
@@ -278,7 +278,7 @@ def connect(user_id):
                 "refresh_token": refresh_token,
                 "cloud_id": cloud_id,
             }
-            store_tokens_in_db(user_id, payload, product)
+            store_tokens_in_db(user_id, payload, product, schedule_prediscovery=True)
             results[product] = {"connected": True, "authType": "oauth", "baseUrl": base_url, "cloudId": cloud_id}
 
     return jsonify({"success": True, "connected": True, "results": results})

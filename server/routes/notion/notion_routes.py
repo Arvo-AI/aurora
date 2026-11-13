@@ -82,7 +82,7 @@ def _handle_oauth_callback(
 
     payload = _build_oauth_payload(token_data)
     try:
-        store_tokens_in_db(user_id, payload, "notion")
+        store_tokens_in_db(user_id, payload, "notion", schedule_prediscovery=True)
     except Exception as exc:
         logger.exception("[NOTION] Failed to persist OAuth credentials: %s", exc)
         return jsonify({"error": "Failed to persist Notion credentials"}), 500
@@ -157,7 +157,7 @@ def connect(user_id):
         }
 
         try:
-            store_tokens_in_db(user_id, payload, "notion")
+            store_tokens_in_db(user_id, payload, "notion", schedule_prediscovery=True)
         except Exception as exc:
             logger.exception(
                 "[NOTION] Failed to persist IIT credentials for user %s: %s",
