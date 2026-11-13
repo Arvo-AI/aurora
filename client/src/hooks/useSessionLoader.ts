@@ -1,6 +1,6 @@
 import { useCallback, useRef, useEffect, useState } from 'react';
 import { Message } from '@/app/chat/types';
-import { useChatHistory } from '@/hooks/useChatHistory';
+import { ChatAccessDeniedError, useChatHistory } from '@/hooks/useChatHistory';
 import { SimpleChatUiState } from '@/hooks/useSessionPersistence';
 
 interface UseSessionLoaderProps {
@@ -105,6 +105,11 @@ export const useSessionLoader = ({
       console.debug(`Loaded session ${sessionId} with ${sessionData.messages?.length || 0} messages`);
       return true;
     } catch (error) {
+      // The chat exists but isn't readable: the page shows why, so let it through.
+      if (error instanceof ChatAccessDeniedError) {
+        lastIncidentIdRef.current = null;
+        throw error;
+      }
       console.error(`Failed to load session ${sessionId}:`, error);
       lastIncidentIdRef.current = null;
       return false;

@@ -29,6 +29,7 @@ Usage:
 import json
 import logging
 import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from .llm_usage_tracker import LLMUsageTracker
@@ -59,6 +60,21 @@ def count_tokens(text: str, model: str = "gpt-4o") -> int:
     """Count tokens in text using LLMUsageTracker (for context management, not billing)."""
     return LLMUsageTracker.count_tokens(text, model)
 
+# Regular-chat execution_steps writes run here, off the agent's event loop.
+# Writes still queued when a worker process hard-exits (e.g. Celery's os._exit)
+# are lost; that only drops audit rows, never chat state.
+_STEP_WRITER = ThreadPoolExecutor(max_workers=4, thread_name_prefix="execution-steps")
+# Stored tool inputs are capped; a larger input keeps a preview and stays valid JSON.
+STEP_INPUT_MAX_CHARS = 8_000
+
+
+def _capped_input_json(tool_input: Any) -> str:
+    input_json = json.dumps(tool_input, default=str) if isinstance(tool_input, dict) else json.dumps(str(tool_input))
+    if len(input_json) <= STEP_INPUT_MAX_CHARS:
+        return input_json
+    return json.dumps({"_truncated": True, "preview": input_json[:STEP_INPUT_MAX_CHARS]})
+
+
 class ToolContextCapture:
     """Captures complete tool interactions for LLM context history."""
     
@@ -67,13 +83,15 @@ class ToolContextCapture:
         self.user_id = user_id
         self.incident_id = incident_id
         self.org_id = org_id
-        if self.incident_id and not self.org_id:
+        if not self.org_id:
             try:
                 from utils.auth.stateless_auth import get_org_id_for_user
                 self.org_id = get_org_id_for_user(user_id)
             except Exception as e:
                 logger.warning(f"Failed to resolve org_id for user {user_id}, execution-step persistence disabled: {e}")
-        self._persist_steps = bool(self.incident_id and self.org_id)
+        # Every agent tool call is recorded — incident (RCA) and regular chat alike —
+        # so the monitor page can search failures without opening each chat.
+        self._persist_steps = bool(self.org_id)
         self.current_tool_calls = {}  # Track ongoing tool calls
         # Append-only audit log of completed tool calls. current_tool_calls is GC'd
         # after 60s of staleness, so consumers that run later (e.g. orchestrator
@@ -89,30 +107,52 @@ class ToolContextCapture:
         self.execution_lock = threading.Lock()
 
     # ------------------------------------------------------------------
-    # execution_steps persistence (only for incident-linked sessions)
+    # execution_steps persistence (incident_id is NULL for regular chats)
     # ------------------------------------------------------------------
 
-    def _record_step_start(self, tool_name: str, tool_input: Any, tool_call_id: str | None = None) -> Optional[int]:
-        """INSERT a running execution_step row. Returns the row id or None."""
+    def _record_step_start(self, tool_name: str, tool_input: Any, tool_call_id: str | None = None):
+        """Record a running execution_step.
+
+        Incident (RCA) sessions write synchronously and return the row id: their
+        live views and findings read the row right away. Regular chats write on
+        ``_STEP_WRITER`` and return a Future of the id, so a chat's tool call
+        never waits on the database.
+        """
         if not self._persist_steps:
             return None
+        args = (tool_name, tool_call_id, _capped_input_json(tool_input), datetime.now(timezone.utc))
+        if self.incident_id:
+            return self._insert_step(*args)
+        return _STEP_WRITER.submit(self._insert_step, *args)
+
+    def _insert_step(self, tool_name: str, tool_call_id: str | None, input_json: str, started_at) -> Optional[int]:
+        """INSERT a running execution_step row. Returns the row id or None."""
         try:
-            input_json = json.dumps(tool_input) if isinstance(tool_input, dict) else json.dumps(str(tool_input))
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
                     set_rls_context(cur, conn, self.user_id, log_prefix="[ToolCapture:start]")
+                    # step_index counts per incident; a chat has no incident,
+                    # so it counts per session instead.
+                    scope_sql, scope_val = (
+                        ("incident_id = %s", self.incident_id) if self.incident_id
+                        else ("incident_id IS NULL AND session_id = %s", self.session_id)
+                    )
+                    # Serialize MAX+1 per incident/chat (across writer threads and
+                    # processes) so concurrent calls never share an index. Released
+                    # at commit. Order follows the lock; started_at keeps call time.
+                    cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",
+                                (f"execution_steps:{scope_val}",))
                     cur.execute(
-                        """INSERT INTO execution_steps
+                        f"""INSERT INTO execution_steps
                            (incident_id, session_id, org_id, step_index, tool_name,
                             tool_call_id, tool_input, status, started_at)
                            SELECT %s, %s, %s,
                                   COALESCE(MAX(step_index), 0) + 1,
                                   %s, %s, %s, 'running', %s
-                           FROM execution_steps WHERE incident_id = %s
+                           FROM execution_steps WHERE {scope_sql}
                            RETURNING id""",
                         (self.incident_id, self.session_id, self.org_id,
-                         tool_name, tool_call_id, input_json,
-                         datetime.now(timezone.utc), self.incident_id),
+                         tool_name, tool_call_id, input_json, started_at, scope_val),
                     )
                     row_id = cur.fetchone()[0]
                 conn.commit()
@@ -144,13 +184,22 @@ class ToolContextCapture:
             logger.debug("Non-JSON tool output, skipping structured error check")
         return False
 
-    def _record_step_end(self, step_id: Optional[int], output: str, is_error: bool = False):
+    def _record_step_end(self, step, output: str, is_error: bool = False):
+        """Complete an execution_step: ``step`` is a row id, or a Future of one (regular chats)."""
+        if step is None:
+            return
+        finished_at = datetime.now(timezone.utc)
+        if isinstance(step, Future):
+            # FIFO pool: this start was queued first, so waiting on it can't deadlock.
+            _STEP_WRITER.submit(lambda: self._update_step(step.result(), output, is_error, finished_at))
+        else:
+            self._update_step(step, output, is_error, finished_at)
+
+    def _update_step(self, step_id: Optional[int], output: str, is_error: bool, finished_at):
         """UPDATE an execution_step row with completion data."""
         if step_id is None:
             return
         try:
-            from utils.db.connection_pool import db_pool
-            now = datetime.now(timezone.utc)
             truncated_output = output[:10240] if output else ""
 
             if not is_error:
@@ -172,12 +221,12 @@ class ToolContextCapture:
                                tool_output = %s,
                                error_message = %s
                            WHERE id = %s""",
-                        (status, now, now, truncated_output, error_msg, step_id),
+                        (status, finished_at, finished_at, truncated_output, error_msg, step_id),
                     )
                 conn.commit()
         except Exception:
             logger.exception("Failed to record execution_step end")
-        
+
     def capture_tool_start(self, tool_name: str, tool_input: Any, tool_call_id: Optional[str] = None) -> str:
         """Capture the start of a tool execution with improved ID management."""    
         

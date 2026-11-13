@@ -4,6 +4,14 @@ import { CompleteUiState, getDefaultUiState } from '@/utils/sessionStateUtils';
 import { cleanupStaleToolCalls } from '@/utils/toolStateCleanup';
 import { useQuery, queryClient, type Fetcher } from '@/lib/query';
 
+/** The chat exists, but this person may not read it (403). The message is the backend's. */
+export class ChatAccessDeniedError extends Error {
+  constructor(message?: string) {
+    super(message || "You don't have access to this chat. Ask an admin if you need to see it.");
+    this.name = 'ChatAccessDeniedError';
+  }
+}
+
 export interface ChatSession {
   id: string;
   title: string;
@@ -209,6 +217,11 @@ export function useChatHistory(): UseChatHistoryReturn {
         return null;
       }
 
+      if (response.status === 403) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new ChatAccessDeniedError(errorData.error);
+      }
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         console.error('Failed to load chat session:', errorData);
@@ -259,6 +272,8 @@ export function useChatHistory(): UseChatHistoryReturn {
       // DON'T refresh sessions when just loading - this prevents sessions from moving to top
       return { messages: messagesWithPending, uiState, incidentId: data.incident_id || null, status: data.status || null };
     } catch (err) {
+      // Not a failure to report: the caller shows the access message instead of the chat.
+      if (err instanceof ChatAccessDeniedError) throw err;
       console.error('[useChatHistory] Error loading chat session:', err);
       setCrudError(err instanceof Error ? err.message : 'Failed to load chat session');
       return null;
