@@ -454,6 +454,29 @@ def get_incidents(user_id):
         return jsonify({"error": "Failed to retrieve incidents"}), 500
 
 
+def _continuation_fields(cursor, incident_id: str) -> dict[str, Any]:
+    """Whether the incident's RCA stopped early, and how often it can still be continued.
+
+    Best effort: the incident itself is served even if this lookup fails.
+    """
+    from chat.background.continuation import continuations_left
+
+    try:
+        cursor.execute(
+            "SELECT rca_unfinished_reason, rca_continuations FROM incidents WHERE id = %s",
+            (incident_id,),
+        )
+        row = cursor.fetchone()
+        reason, used = (row[0], int(row[1] or 0)) if row and len(row) == 2 else (None, 0)
+    except Exception:
+        logger.warning("[INCIDENTS] Could not read continuation state for %s", sanitize(incident_id))
+        reason, used = None, 0
+    return {
+        "unfinishedReason": reason if isinstance(reason, str) else None,
+        "continuationsLeft": continuations_left(used),
+    }
+
+
 @incidents_bp.route("/api/incidents/<incident_id>", methods=["GET"])
 @require_permission("incidents", "read")
 def get_incident(user_id, incident_id: str):
@@ -483,14 +506,7 @@ def get_incident(user_id, incident_id: str):
                 )
 
                 # An RCA that stopped before it finished can be continued.
-                from chat.background.continuation import continuations_left
-                cursor.execute(
-                    "SELECT rca_unfinished_reason, rca_continuations FROM incidents WHERE id = %s",
-                    (incident_id,),
-                )
-                unfinished = cursor.fetchone()
-                incident["unfinishedReason"] = unfinished[0] if unfinished else None
-                incident["continuationsLeft"] = continuations_left(unfinished[1] if unfinished else 0)
+                incident.update(_continuation_fields(cursor, incident_id))
 
                 # Fetch raw alert data from source table
                 source_type = incident["sourceType"]
@@ -1926,7 +1942,7 @@ def continue_incident_investigation(user_id, incident_id: str):
     try:
         result = continue_investigation(incident_id, user_id)
     except ContinueRefused as refused:
-        return jsonify({"error": str(refused)}), refused.status
+        return jsonify({"error": refused.public_message}), refused.status
     except Exception:
         logger.exception("[INCIDENTS] Failed to continue investigation %s", sanitize(incident_id))
         return jsonify({"error": "Failed to continue the investigation"}), 500

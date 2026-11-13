@@ -108,6 +108,9 @@ def test_an_unfinished_rca_is_continued_in_its_own_session(db):
     sql = _sql(db)
     assert any("FOR UPDATE" in s for s in sql)
     assert any("aurora_status = 'running'" in s and "rca_continuations + 1" in s for s in sql)
+    # The stopped run's session is reopened, so the heartbeat keeps the continuation alive.
+    assert any("UPDATE chat_sessions" in s and "status = 'in_progress'" in s and "heartbeat_at = NULL" in s
+               for s in sql)
 
 
 @pytest.mark.parametrize("row, words, status", [
@@ -221,7 +224,11 @@ def dead_rca(monkeypatch):
     import chat.background.task as task_mod
     import utils.notifications.dispatcher as dispatcher
 
-    calls = SimpleNamespace(summarized=[], failed=[], summarize_ok=True)
+    calls = SimpleNamespace(summarized=[], failed=[], summarize_ok=True, findings=[])
+    monkeypatch.setattr(
+        task_mod, "_mark_inflight_findings_failed",
+        lambda incident_id, user_id, reason: calls.findings.append(incident_id) or 0,
+    )
 
     def _summarize(incident_id, user_id, session_id, reason):
         calls.summarized.append((incident_id, session_id, reason))
@@ -240,6 +247,8 @@ def test_a_dead_workers_rca_with_evidence_becomes_a_report(dead_rca):
     task_mod._report_or_fail_dead_rca(OWNER, INCIDENT, SESSION, "worker died")
     assert calls.summarized == [(INCIDENT, SESSION, "interrupted")]
     assert calls.failed == []
+    # Sub-agent rows stop spinning before the incident leaves 'error'.
+    assert calls.findings == [INCIDENT]
 
 
 def test_a_dead_worker_with_nothing_to_report_still_fails(dead_rca):

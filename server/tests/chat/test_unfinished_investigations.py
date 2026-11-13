@@ -27,9 +27,9 @@ INCIDENT = "55555555-5555-5555-5555-555555555555"
     ("stalled", "stopped making progress"),
 ])
 def test_the_summary_is_told_the_investigation_is_incomplete(reason, words):
-    from chat.background.summarization import _unfinished_investigation_note
+    import chat.background.summarization as summarization
 
-    note = _unfinished_investigation_note(reason)
+    note = summarization._unfinished_investigation_note(reason)
     assert f"Investigation incomplete: it {words}" in note
     assert "Root cause not determined" in note
     assert "Not Checked" in note
@@ -159,7 +159,8 @@ def test_a_failed_step_read_gives_no_citations(monkeypatch):
 
 def test_an_unwritten_partial_report_is_announced(monkeypatch):
     import utils.notifications.dispatcher as dispatcher
-    from chat.background.summarization import _notify_unwritten_partial_report
+    import chat.background.summarization as summarization
+    _notify_unwritten_partial_report = summarization._notify_unwritten_partial_report
 
     sent = []
     monkeypatch.setattr(

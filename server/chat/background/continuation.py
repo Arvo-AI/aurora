@@ -20,6 +20,7 @@ from langchain_core.messages import BaseMessage, HumanMessage
 
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,8 @@ class ContinueRefused(Exception):
 
     def __init__(self, message: str, status: int = 409):
         super().__init__(message)
+        # A fixed, user-facing sentence: safe to return to the caller.
+        self.public_message = message
         self.status = status
 
 
@@ -108,6 +111,16 @@ def continue_investigation(incident_id: str, requested_by: str) -> Dict[str, Any
                        WHERE id = %s""",
                     (incident_id,),
                 )
+                # The run that stopped left its session failed. Reopen it, so the
+                # worker's heartbeat (which only touches an in-progress session)
+                # keeps the continuation alive to the cleanup sweep, and it is not
+                # judged on the old run's last beat.
+                cursor.execute(
+                    """UPDATE chat_sessions
+                       SET status = 'in_progress', heartbeat_at = NULL, updated_at = NOW()
+                       WHERE id = %s""",
+                    (session_id,),
+                )
         if refusal is None:
             conn.commit()
         else:
@@ -136,7 +149,7 @@ def continue_investigation(incident_id: str, requested_by: str) -> Dict[str, Any
         # Nothing was queued: put the incident back as it was.
         _undo_claim(incident_id, requested_by)
         raise
-    logger.info("[ContinueRCA] Continuing incident %s (continuation %s)", incident_id, int(used or 0) + 1)
+    logger.info("[ContinueRCA] Continuing incident %s (continuation %s)", sanitize(incident_id), int(used or 0) + 1)
     return {"continuationsLeft": continuations_left(int(used or 0) + 1)}
 
 
@@ -172,7 +185,7 @@ def history_from_execution_steps(incident_id: str, user_id: str) -> List[BaseMes
                 )
                 rows = cursor.fetchall()
     except Exception:
-        logger.exception("[ContinueRCA] Could not read execution steps for incident %s", incident_id)
+        logger.exception("[ContinueRCA] Could not read execution steps for incident %s", sanitize(incident_id))
         return []
 
     entries: List[str] = []
@@ -224,9 +237,16 @@ def _undo_claim(incident_id: str, requested_by: str) -> None:
                     """UPDATE incidents
                        SET aurora_status = 'complete',
                            rca_continuations = GREATEST(rca_continuations - 1, 0)
-                       WHERE id = %s AND aurora_status = 'running'""",
+                       WHERE id = %s AND aurora_status = 'running'
+                       RETURNING aurora_chat_session_id""",
                     (incident_id,),
                 )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    cursor.execute(
+                        "UPDATE chat_sessions SET status = 'failed' WHERE id = %s AND status = 'in_progress'",
+                        (row[0],),
+                    )
             conn.commit()
     except Exception:
-        logger.exception("[ContinueRCA] Could not restore incident %s after a failed enqueue", incident_id)
+        logger.exception("[ContinueRCA] Could not restore incident %s after a failed enqueue", sanitize(incident_id))

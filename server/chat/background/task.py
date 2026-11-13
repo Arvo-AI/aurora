@@ -2071,8 +2071,12 @@ def _report_or_fail_dead_rca(user_id: str, incident_id: str, session_id, error_m
     on an incident that already has its report; that, and a run with nothing to
     report, is announced as failed.
     """
-    if session_id and _summarize_unfinished_investigation(incident_id, user_id, str(session_id), "interrupted"):
-        return
+    if session_id:
+        # The report path leaves the incident 'summarizing', so the sweep's own
+        # cascade (which keys on 'error') would no longer stop these spinning.
+        _mark_inflight_findings_failed(incident_id, user_id, "worker stopped")
+        if _summarize_unfinished_investigation(incident_id, user_id, str(session_id), "interrupted"):
+            return
     try:
         from utils.notifications.dispatcher import notify_investigation_failed
         notify_investigation_failed(user_id, incident_id, error_message=error_message)
