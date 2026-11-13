@@ -143,6 +143,17 @@ OUTPUT FORMAT (respond with this JSON as your final message):
 
 If verdict is SAFE, findings should be an empty array."""
 
+# Prepended when Aurora reviews a PR that is ALREADY MERGED: on a brand-new
+# install with no open PRs, the most recent merged PR is reviewed once so the
+# team sees a real result immediately instead of waiting for the next PR.
+_RETROSPECTIVE_NOTE = """RETROSPECTIVE REVIEW:
+This pull request is ALREADY MERGED. Aurora was just installed on this
+repository and is reviewing its most recent merged change so the team can see
+what Aurora would have said before merge. Review it exactly as if it were about
+to merge and apply the same VERDICT DECISION TEST. If it has likely been
+deployed already, live signals about the affected services are especially
+relevant. Begin your summary with "Looking back at this merged change"."""
+
 # Re-review appendix (design doc section 5.3 — verbatim, with
 # {prior_findings_json} substituted at build time). Used only in the
 # full-diff re-review fallback, NOT in incremental mode.
@@ -192,6 +203,7 @@ def build_review_prompt(
     diff: Optional[str] = None,
     prior_findings: Optional[List[Dict[str, Any]]] = None,
     incremental: bool = False,
+    retrospective: bool = False,
 ) -> str:
     """Compose the full agent prompt for a PR risk review.
 
@@ -209,6 +221,10 @@ def build_review_prompt(
     commits since the last review: an incremental note is prepended and the
     full-diff re-review appendix is suppressed. Otherwise the re-review
     appendix is included when ``prior_findings`` is non-empty.
+
+    ``retrospective=True`` marks an already-merged PR reviewed once at
+    install time (see ``routes.github.github_repo_metadata``); the agent is
+    told the PR has merged and to review it as if it were about to.
     """
     base = pr.get("base") or {}
     head = pr.get("head") or {}
@@ -245,6 +261,8 @@ def build_review_prompt(
     )
 
     sections = [_REVIEW_PROMPT]
+    if retrospective:
+        sections.append(_RETROSPECTIVE_NOTE)
     if incremental:
         sections.append(_INCREMENTAL_NOTE)
     sections += [metadata, description, files_block, diff_block]
@@ -524,6 +542,15 @@ _RISKY_FOOTER = (
     "This is advisory only and does not block merge.*"
 )
 _SAFE_FOOTER = "*Aurora reviews PRs for incident prevention.*"
+_RETROSPECTIVE_INTRO = (
+    "_Aurora was just installed on this repository and there were no open pull "
+    "requests to review, so here is what it would have said about this one "
+    "before it merged._"
+)
+_RETROSPECTIVE_FOOTER = (
+    "*Aurora reviews PRs for incident prevention. From now on it reviews new "
+    "pull requests on this repository before they merge.*"
+)
 
 
 # GitHub rejects review bodies over 65536 chars; stay well below.
@@ -567,17 +594,24 @@ def render_review_body(
     findings: List[Dict[str, Any]],
     head_sha: str,
     incremental: bool = False,
+    retrospective: bool = False,
 ) -> str:
     """Render the top-level review body, ending with the hidden marker.
 
     In incremental mode the heading and SAFE message scope the verdict to
     the latest changes (the review only looked at the new commits), so a
-    clean delta does not read as a whole-PR sign-off.
+    clean delta does not read as a whole-PR sign-off. ``retrospective``
+    words the review for an already-merged PR reviewed once at install time.
     """
-    heading = (
-        "## Aurora Risk Review — Latest changes" if incremental
-        else "## Aurora Risk Review"
-    )
+    if retrospective:
+        heading = (
+            "## Aurora Risk Review — Looking back at a merged PR\n\n"
+            + _RETROSPECTIVE_INTRO
+        )
+    elif incremental:
+        heading = "## Aurora Risk Review — Latest changes"
+    else:
+        heading = "## Aurora Risk Review"
     if verdict == "RISKY":
         rows = []
         for index, finding in enumerate(findings[:_MAX_TABLE_ROWS], start=1):
@@ -608,13 +642,15 @@ def render_review_body(
             + "\n"
             "\n"
             "---\n"
-            f"{_RISKY_FOOTER}"
+            f"{_RETROSPECTIVE_FOOTER if retrospective else _RISKY_FOOTER}"
         )
     else:
-        safe_message = (
-            "No new incident risk in the latest changes." if incremental
-            else "No risks identified. This change looks safe to ship."
-        )
+        if retrospective:
+            safe_message = "No incident risk found in this merged change."
+        elif incremental:
+            safe_message = "No new incident risk in the latest changes."
+        else:
+            safe_message = "No risks identified. This change looks safe to ship."
         body = (
             f"{heading}\n"
             "\n"
@@ -623,7 +659,7 @@ def render_review_body(
             f"{safe_message}\n"
             "\n"
             "---\n"
-            f"{_SAFE_FOOTER}"
+            f"{_RETROSPECTIVE_FOOTER if retrospective else _SAFE_FOOTER}"
         )
     marker = encode_marker(_marker_findings(findings), head_sha)
     if len(body) + len(marker) > _MAX_BODY_CHARS:
