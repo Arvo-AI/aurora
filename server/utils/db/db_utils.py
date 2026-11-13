@@ -912,7 +912,8 @@ def initialize_tables():
                 "execution_steps": """
                     CREATE TABLE IF NOT EXISTS execution_steps (
                         id SERIAL PRIMARY KEY,
-                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        -- NULL for tool calls made in a regular chat (no incident)
+                        incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE,
                         session_id VARCHAR(50) NOT NULL,
                         org_id VARCHAR(255),
                         step_index INTEGER NOT NULL,
@@ -3451,6 +3452,27 @@ def initialize_tables():
                 logging.warning(f"Error adding tool_call_id to execution_steps: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_es_tcid")
 
+            # Regular chats record their tool calls too, so incident_id is
+            # optional. Checked first: DROP NOT NULL takes an ACCESS EXCLUSIVE
+            # lock, which every boot would otherwise take again.
+            try:
+                cursor.execute("SAVEPOINT sp_es_chat")
+                cursor.execute(
+                    "SELECT a.attnotnull FROM pg_attribute a "
+                    "WHERE a.attrelid = 'execution_steps'::regclass AND a.attname = 'incident_id'"
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    cursor.execute(
+                        "ALTER TABLE execution_steps ALTER COLUMN incident_id DROP NOT NULL;"
+                    )
+                cursor.execute("RELEASE SAVEPOINT sp_es_chat")
+            except Exception as e:
+                logging.warning(f"Error relaxing execution_steps.incident_id: {e}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_es_chat")
+            # The chat audit's indexes are built concurrently after this
+            # transaction commits (see utils/db/chat_audit_indexes.py).
+
             # DB triggers: auto-inherit org_id from parent incident on INSERT.
             # This means no INSERT statement in the codebase ever needs to set
             # org_id on these tables — the trigger handles it unconditionally.
@@ -3463,8 +3485,11 @@ def initialize_tables():
                         CREATE OR REPLACE FUNCTION {fn_name}()
                         RETURNS TRIGGER AS $trg$
                         BEGIN
-                            NEW.org_id := (
-                                SELECT org_id FROM incidents WHERE id = NEW.incident_id
+                            -- Rows without a parent incident (chat tool calls in
+                            -- execution_steps) keep the org_id they were inserted with.
+                            NEW.org_id := COALESCE(
+                                (SELECT org_id FROM incidents WHERE id = NEW.incident_id),
+                                NEW.org_id
                             );
                             RETURN NEW;
                         END;
@@ -4043,6 +4068,11 @@ def initialize_tables():
 
             logging.info("Database tables initialized successfully.")
             cursor.close()
+
+        # Outside the init transaction: CREATE INDEX CONCURRENTLY can't run in
+        # one, and a plain build would block chat writes on large tables.
+        from utils.db.chat_audit_indexes import build_indexes_in_background
+        build_indexes_in_background(DB_PARAMS)
 
     except Exception as e:
         logging.error(f"Error initializing tables: {e}")

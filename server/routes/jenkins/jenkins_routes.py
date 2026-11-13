@@ -92,7 +92,7 @@ def connect(user_id):
     }
 
     try:
-        store_tokens_in_db(user_id, token_payload, JENKINS_PROVIDER)
+        store_tokens_in_db(user_id, token_payload, JENKINS_PROVIDER, schedule_prediscovery=True)
         logger.info("[JENKINS] Stored credentials for user %s (url=%s)", user_id, base_url)
     except Exception:
         logger.exception("[JENKINS] Failed to store credentials for user %s", user_id)

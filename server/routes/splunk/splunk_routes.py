@@ -265,7 +265,7 @@ def connect(user_id):
     accounts, replaced = upsert_account(existing, incoming)
 
     try:
-        store_splunk_accounts(user_id, accounts)
+        store_splunk_accounts(user_id, accounts, schedule_prediscovery=True)
         logger.info(
             "[SPLUNK] Stored credentials for user %s (accounts=%d, replaced=%s)",
             hash_for_log(user_id),

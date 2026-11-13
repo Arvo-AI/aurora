@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useChatHistory, type ChatSession } from '@/hooks/useChatHistory';
+import { useCanAuditChats } from '@/hooks/useCanAuditChats';
 import { useChatExpansion } from '@/app/components/ClientShell';
 import {
   DropdownMenu,
@@ -62,6 +63,7 @@ export default function ChatHistory({
   const [newTitle, setNewTitle] = useState<string>('');
   const [isClearingAll, setIsClearingAll] = useState<boolean>(false);
   const [showClearDialog, setShowClearDialog] = useState<boolean>(false);
+  const canAudit = useCanAuditChats();
   const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
 
   // Register refresh function with context on mount (only once)
@@ -256,9 +258,22 @@ export default function ChatHistory({
       `}</style>
       <div className={cn("flex flex-col h-full", className)}>
         <div className="flex justify-between items-center mb-2 px-2 flex-shrink-0">
-        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-          Chat History
-        </div>
+        {/* For people the org's conversation-audit setting allows, the title opens
+            the whole organization's chat history; for everyone else it's plain text. */}
+        {canAudit ? (
+          <Link
+            href="/monitor?tab=chats"
+            title="Open chat history for the whole organization"
+            aria-label="Open chat history for the whole organization"
+            className="text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer rounded-sm transition-colors hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Chat History
+          </Link>
+        ) : (
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            Chat History
+          </div>
+        )}
         <div className="flex items-center gap-1">
             {/* Clear all */}
             <AlertDialog open={showClearDialog} onOpenChange={setShowClearDialog}>

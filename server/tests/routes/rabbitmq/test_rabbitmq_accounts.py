@@ -256,9 +256,14 @@ def _fake_broker_calls(monkeypatch, routes, fail_hosts=()):
 
 def test_connect_adds_a_second_broker(monkeypatch, routes):
     _fake_broker_calls(monkeypatch, routes)
-    stored = []
+    stored, prediscovery = [], []
     monkeypatch.setattr(routes, "list_rabbitmq_accounts", lambda user_id, raise_on_error=False: [_broker("10.0.0.1:15672", name="prod")])
-    monkeypatch.setattr(routes, "store_rabbitmq_accounts", lambda user_id, accounts: stored.append(accounts))
+
+    def store(user_id, accounts, schedule_prediscovery=None):
+        stored.append(accounts)
+        prediscovery.append(schedule_prediscovery)
+
+    monkeypatch.setattr(routes, "store_rabbitmq_accounts", store)
 
     with _app().test_request_context("/rabbitmq/connect", method="POST", json={
         "url": "http://10.0.0.2:15672", "username": "monitor", "password": "pw2", "name": "staging",
@@ -272,13 +277,14 @@ def test_connect_adds_a_second_broker(monkeypatch, routes):
     assert "pw2" not in json.dumps(body)
     assert [a["account_id"] for a in stored[0]] == ["10.0.0.1:15672", "10.0.0.2:15672"]
     assert stored[0][1]["password"] == "pw2"
+    assert prediscovery == [True]
 
 
 def test_connect_rejects_a_duplicate_name(monkeypatch, routes):
     _fake_broker_calls(monkeypatch, routes)
     stored = []
     monkeypatch.setattr(routes, "list_rabbitmq_accounts", lambda user_id, raise_on_error=False: [_broker("10.0.0.1:15672", name="prod")])
-    monkeypatch.setattr(routes, "store_rabbitmq_accounts", lambda user_id, accounts: stored.append(accounts))
+    monkeypatch.setattr(routes, "store_rabbitmq_accounts", lambda user_id, accounts, **kwargs: stored.append(accounts))
 
     with _app().test_request_context("/rabbitmq/connect", method="POST", json={
         "url": "http://10.0.0.2:15672", "username": "monitor", "password": "pw", "name": "Prod",
@@ -363,7 +369,7 @@ def test_disconnect_one_broker_keeps_the_others(monkeypatch, routes):
     monkeypatch.setattr(routes, "list_rabbitmq_accounts", lambda user_id, raise_on_error=False: [
         _broker("10.0.0.1:15672", name="prod"), _broker("10.0.0.2:15672", name="staging"),
     ])
-    monkeypatch.setattr(routes, "store_rabbitmq_accounts", lambda user_id, accounts: stored.append(accounts))
+    monkeypatch.setattr(routes, "store_rabbitmq_accounts", lambda user_id, accounts, **kwargs: stored.append(accounts))
     monkeypatch.setattr(routes, "delete_user_secret", lambda *args: deleted.append(args) or (True, 1))
 
     with _app().test_request_context("/rabbitmq/disconnect?account=staging", method="DELETE"):

@@ -249,7 +249,9 @@ def list_rabbitmq_accounts(user_id: str, *, raise_on_error: bool = False) -> Lis
     return accounts_from_creds(creds)
 
 
-def store_rabbitmq_accounts(user_id: str, accounts: List[Dict[str, Any]]) -> None:
+def store_rabbitmq_accounts(
+    user_id: str, accounts: List[Dict[str, Any]], schedule_prediscovery: Optional[bool] = None
+) -> None:
     """Save brokers in Vault and one connection row per host:port.
 
     The first broker is also kept at the top level, so a reader that predates
@@ -265,7 +267,7 @@ def store_rabbitmq_accounts(user_id: str, accounts: List[Dict[str, Any]]) -> Non
         raise ValueError("no rabbitmq accounts")
     stored = dict(records[0])
     stored["accounts"] = records
-    store_tokens_in_db(user_id, stored, PROVIDER)
+    store_tokens_in_db(user_id, stored, PROVIDER, schedule_prediscovery=schedule_prediscovery)
     sync_rabbitmq_connections(user_id, records)
 
 

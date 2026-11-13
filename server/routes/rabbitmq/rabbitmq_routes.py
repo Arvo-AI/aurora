@@ -233,7 +233,7 @@ def connect(user_id):
     accounts, replaced = upsert_account(existing, incoming)
 
     try:
-        store_rabbitmq_accounts(user_id, accounts)
+        store_rabbitmq_accounts(user_id, accounts, schedule_prediscovery=True)
     except Exception:
         logger.exception("[RABBITMQ] Failed to store credentials")
         return jsonify({"error": "Failed to store RabbitMQ credentials"}), 500

@@ -32,7 +32,7 @@ def _log_store_fail(provider: str, elapsed_ms: float, exc: Exception) -> None:
 
 def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                       subscription_name: str = None, subscription_id: str = None,
-                      org_id: str = None, schedule_prediscovery: bool = True) -> None:
+                      org_id: str = None, schedule_prediscovery: Optional[bool] = None) -> None:
     """
     Store token data in Vault and save secret reference in database.
 
@@ -43,7 +43,12 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         subscription_name: Azure subscription name (optional)
         subscription_id: Azure subscription ID (optional)
         org_id: Organization ID for multi-tenant scoping (optional, auto-resolved from request context)
-        schedule_prediscovery: False on token refresh; a new connector keeps the default.
+        schedule_prediscovery: True always schedules prediscovery; user-initiated
+            connect routes pass it, since re-connecting with different credentials
+            (another project, account or cluster) changes what there is to discover.
+            False never schedules it (token refresh). None (default) schedules it
+            only when the org had no active row for this provider before the write,
+            so refresh and re-save paths that don't opt out stay quiet.
     """
     start_time = time.perf_counter()
 
@@ -85,6 +90,14 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             resolved_org_id = set_rls_context(cursor, conn, user_id, log_prefix="[STORE-TOKENS]")
             if resolved_org_id:
                 request_org_id = resolved_org_id
+
+            # Every write below is an upsert, so token refreshes land here too.
+            # Without an explicit choice from the caller, only a provider the org
+            # has no active row for counts as a new connector.
+            if schedule_prediscovery is None:
+                should_schedule = not _has_active_token_row(cursor, request_org_id, provider)
+            else:
+                should_schedule = schedule_prediscovery
 
             # Store only metadata and secret reference in database
             if provider == "azure":
@@ -482,8 +495,10 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         except Exception as cache_error:
             logger.warning(f"[STORE-TOKENS] Failed to clear secret cache: {cache_error}")
 
-        # A token refresh is not a new connector, so those callers opt out.
-        if schedule_prediscovery:
+        # Prediscovery maps the infrastructure a connected provider can see.
+        # Refreshing or re-saving an existing connector's credentials changes
+        # nothing to discover, and on a busy org it re-ran discovery every hour.
+        if should_schedule:
             _schedule_prediscovery(user_id)
 
         elapsed_time = (time.perf_counter() - start_time) * 1000
@@ -566,6 +581,33 @@ def get_token_data(
         elapsed_time = (time.perf_counter() - start_time) * 1000
         logger.error("[GET-TOKENS] Failed to fetch credentials for provider(s) %s after %.2fms: %s", provider, elapsed_time, e)
         return {}
+
+
+def _has_active_token_row(cursor, org_id: Optional[str], provider: str) -> bool:
+    """True when the org already has an active credential row for this provider.
+
+    Matches the (org_id, provider) key the upserts conflict on. On a failed
+    lookup it returns False, which keeps the old behaviour (schedule
+    prediscovery) and rolls back to a savepoint so the upsert can still run.
+    """
+    try:
+        cursor.execute("SAVEPOINT sp_token_row_check")
+        cursor.execute(
+            "SELECT 1 FROM user_tokens WHERE org_id IS NOT DISTINCT FROM %s "
+            "AND provider = %s AND is_active = TRUE LIMIT 1",
+            (org_id, provider),
+        )
+        exists = cursor.fetchone() is not None
+        cursor.execute("RELEASE SAVEPOINT sp_token_row_check")
+        return exists
+    except Exception as e:
+        logger.debug("[STORE-TOKENS] Existing-token lookup failed: %s", type(e).__name__)
+        try:
+            cursor.execute("ROLLBACK TO SAVEPOINT sp_token_row_check")
+        except Exception as rollback_error:
+            # The SAVEPOINT itself failed, so there is nothing to roll back to.
+            logger.debug("[STORE-TOKENS] Savepoint rollback skipped: %s", type(rollback_error).__name__)
+        return False
 
 
 def _schedule_prediscovery(user_id: str) -> None:

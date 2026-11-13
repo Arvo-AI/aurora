@@ -193,7 +193,9 @@ def list_splunk_accounts(user_id: str, *, raise_on_error: bool = False) -> List[
     return accounts_from_creds(creds)
 
 
-def store_splunk_accounts(user_id: str, accounts: List[Dict[str, Any]]) -> None:
+def store_splunk_accounts(
+    user_id: str, accounts: List[Dict[str, Any]], schedule_prediscovery: Optional[bool] = None
+) -> None:
     """Save instances in Vault and one connection row per host:port.
 
     Those rows are the scopes the Access tab grants per team.
@@ -208,7 +210,7 @@ def store_splunk_accounts(user_id: str, accounts: List[Dict[str, Any]]) -> None:
         raise ValueError("no splunk accounts")
     stored = dict(records[0])
     stored["accounts"] = records
-    store_tokens_in_db(user_id, stored, "splunk")
+    store_tokens_in_db(user_id, stored, "splunk", schedule_prediscovery=schedule_prediscovery)
     sync_splunk_connections(user_id, records)
 
 

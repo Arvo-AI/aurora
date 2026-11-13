@@ -1,8 +1,13 @@
-"""Org choices for chats and for who may modify memory.
+"""Org choices for chats, for who may modify memory, and for who may audit chats.
 
 Unset viewer chat stays on so an upgrade does not lock viewers out. An
 explicit false turns it off. Editors and admins can always chat. Memory
 edits follow their own switches; admins can always edit memory.
+
+Chat history audit (Monitor → Chat history, and the agent tools that answer
+the same questions) is admins only by default; the org can extend it to
+editors. Viewers and Slack guests never get it. The same rule decides who may
+open another person's chat by id (``may_read_chat``).
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ logger = logging.getLogger(__name__)
 _CHAT_KEY = "viewer_can_chat"
 _MEMORY_KEY = "viewer_can_edit_memory"
 _EDITOR_MEMORY_KEY = "editor_can_edit_memory"
+_EDITOR_AUDIT_KEY = "editor_can_audit_chats"
 _DEFAULT = False
 
 
@@ -67,6 +73,79 @@ def org_allows_memory_edits(org_id: str) -> bool:
 def org_allows_editor_memory_edits(org_id: str) -> bool:
     # Unset stays on, so existing editors do not lose memory edits.
     return _org_flag(org_id, _EDITOR_MEMORY_KEY, True)
+
+
+def org_allows_editor_audit(org_id: str) -> bool:
+    # Unset means admins only.
+    return _org_flag(org_id, _EDITOR_AUDIT_KEY, False)
+
+
+def may_audit_chats(user_id: str, org_id: str) -> bool:
+    """Whether this person may read every user's chats and tool calls in the org.
+
+    The one rule behind the Chat history tab, its API routes and the agent's
+    audit tools. Fails closed: no org, no role, a Slack guest or a read error
+    all mean no.
+    """
+    if not user_id or not org_id:
+        return False
+    try:
+        from utils.auth.connector_access import pinned_roles
+        from utils.auth.enforcer import get_user_roles_in_org
+
+        # A Slack guest runs under the connector owner's id; never let the
+        # owner's role leak to the guest.
+        if pinned_roles() is not None:
+            return False
+        names = {str(role) for role in (get_user_roles_in_org(user_id, org_id) or []) if role}
+    except Exception:
+        logger.exception("Could not resolve audit access for org %s", sanitize(org_id))
+        return False
+    if ROLE_ADMIN in names:
+        return True
+    if ROLE_EDITOR in names:
+        return org_allows_editor_audit(org_id)
+    return False
+
+
+# Shown when a chat exists but the caller may not read it (or continue it).
+CHAT_ACCESS_DENIED = "You don't have access to this chat. Ask an admin if you need to see it."
+
+# Over chat_sessions ``cs``: whether a chat belongs to an incident (its own link,
+# or the RCA session the incident points at) and whether it is an action run.
+# Selected with the chat so ``may_read_chat`` needs no second query.
+CHAT_SCOPE_SQL = """(cs.incident_id IS NOT NULL OR EXISTS (
+        SELECT 1 FROM incidents i
+        WHERE i.org_id = cs.org_id AND i.aurora_chat_session_id::text = cs.id)) AS incident_linked,
+    EXISTS (SELECT 1 FROM action_runs ar
+            WHERE ar.org_id = cs.org_id AND ar.chat_session_id = cs.id) AS action_run"""
+
+
+def may_read_chat(user_id: str, org_id: str, owner_id, incident_linked: bool, action_run: bool) -> bool:
+    """Whether this person may open one chat by its id.
+
+    The owner always may. Otherwise only someone the org lets read other
+    people's chats (``may_audit_chats``), except that an incident's chats
+    follow the incident (``incidents:read``: the incident page already shows
+    them) and an action run's chat follows the action (``actions:read``: the
+    actions page lists its runs). Callers answer 403 on False (a missing
+    chat is 404). Fails closed: a failed lookup is a refusal.
+    """
+    if not user_id or not org_id:
+        return False
+    if owner_id and owner_id == user_id:
+        return True
+    try:
+        from utils.auth.enforcer import enforce_with_reload
+
+        if incident_linked and enforce_with_reload(user_id, org_id, "incidents", "read"):
+            return True
+        if action_run and enforce_with_reload(user_id, org_id, "actions", "read"):
+            return True
+    except Exception:
+        logger.exception("Could not resolve chat access for org %s", sanitize(org_id))
+        return False
+    return may_audit_chats(user_id, org_id)
 
 
 def _viewer_allowed(user_id: str, org_id: str, org_flag) -> bool:
@@ -162,4 +241,15 @@ def save_viewer_run(
                 _write_flag(cur, org_id, _MEMORY_KEY, memory)
             if editor_memory is not None:
                 _write_flag(cur, org_id, _EDITOR_MEMORY_KEY, editor_memory)
+        conn.commit()
+
+
+def save_editor_audit(org_id: str, user_id: str, editors: bool) -> None:
+    from utils.auth.stateless_auth import set_rls_context
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[ChatAudit]")
+            _write_flag(cur, org_id, _EDITOR_AUDIT_KEY, editors)
         conn.commit()

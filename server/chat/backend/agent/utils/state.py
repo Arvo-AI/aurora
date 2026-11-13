@@ -39,6 +39,11 @@ class State(BaseModel):
         # every background session — including non-RCA ones like "team_routing"
         # that have no rca_context. Used to pick source-specific policy memories.
     )
+    trigger_metadata: Optional[Dict[str, Any]] = (
+        None  # The background trigger's metadata (source, Slack channel, ...).
+        # Decides whether an answer may quote other users' chats: only in the web
+        # app or a Slack DM (see services.monitor.chat_audit.private_answer_channel).
+    )
     storage_chat_files: Optional[List[Dict[str, Any]]] = (
         None  # Files found in the chat's storage directory
     )
