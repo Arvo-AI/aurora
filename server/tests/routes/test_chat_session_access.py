@@ -80,7 +80,7 @@ def _session_row(owner, *, incident_linked=False, action_run=False):
 
 ROUTES = {
     # route: the row its query returns for a chat owned by ``owner``
-    "get_chat_session": lambda owner, **kw: _session_row(owner, **kw),
+    "get_chat_session": _session_row,
     "get_chat_session_status": lambda owner, **kw: ("active", 1, owner, kw.get("incident_linked", False),
                                                      kw.get("action_run", False)),
     "get_chat_messages": lambda owner, **kw: ([{"sender": "user", "text": "hello"}], "active", owner,
