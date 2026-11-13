@@ -578,16 +578,22 @@ GITHUB_APP_SETUP_URL=<API_URL>/github/app/install/callback
 GITHUB_APP_WEBHOOK_SECRET=<openssl rand -hex 32>
 ```
 
-The private key (PEM) is **not** an env var — it lives in your secrets
-backend at `aurora/system/github-app/private-key` (Step 3).
+The private key (PEM) usually lives in your secrets backend at
+`aurora/system/github-app/private-key` (Step 3). Alternatively set
+`GITHUB_APP_PRIVATE_KEY` (PEM text or `base64 -w0 key.pem`) and skip the
+backend. Set each secret in one place: an env var that is set always wins,
+and the backend is then not read.
 
 :::note Kubernetes (Helm)
 A Helm deployment has no `.env`. All the `GITHUB_APP_*` keys (including
 `GITHUB_APP_WEBHOOK_SECRET`) already live under `config:` in the chart's
 `values.yaml` — fill in your values there and apply with `helm upgrade`.
-The private key is **not** a values field — it is read from your secrets
-backend at `aurora/system/github-app/private-key`, so store it there
-(`vault kv put` or `aws secretsmanager create-secret`) exactly as in Step 3.
+For the private key, either store it in your secrets backend at
+`aurora/system/github-app/private-key` (`vault kv put` or
+`aws secretsmanager create-secret`) exactly as in Step 3, or put it in
+`secrets.githubAppKey` (inline or via `existingSecret`), which is mounted only
+into the server, celery-worker and chatbot pods. If `secrets.githubAppKey` is
+set, the backend is not read for the key.
 :::
 
 **Per-environment Apps**: create separate `aurora-<customer>-prod`,

@@ -588,7 +588,7 @@ secrets:
     GITHUB_APP_WEBHOOK_URL: ""             # https://<your-host>/github/webhook
     GITHUB_APP_SETUP_URL: ""               # https://<your-host>/github
     GITHUB_APP_CLIENT_SECRET: ""            # OAuth client secret (for hosted signup flow)
-    GITHUB_APP_WEBHOOK_SECRET: ""          # openssl rand -hex 32 (also stored in secrets backend)
+    GITHUB_APP_WEBHOOK_SECRET: ""          # openssl rand -hex 32. If set, used instead of the secrets backend; leave empty to read it from the backend
 
     # --- GitHub OAuth (only when GITHUB_AUTH_MODE=oauth or hybrid) ---
     GH_OAUTH_CLIENT_ID: ""       # Get from: https://github.com/settings/developers
@@ -681,8 +681,9 @@ secrets:
   # Mounted by: server, celery-worker, chatbot only (the services that sign App
   # JWTs), as a single secretKeyRef rather than envFrom. Kept out of `backend`
   # because that Secret is envFrom'd into every backend pod.
-  # Only used when the key is not in the secrets backend, which takes precedence.
-  # Leave both empty to skip it.
+  # Precedence: set the key in one place; the env var wins if set. When this is
+  # set, the secrets backend is never consulted for the key. Leave both empty to
+  # read it from the secrets backend (aurora/system/github-app/private-key).
   githubAppKey:
     # Use a pre-existing Kubernetes Secret holding the key under
     # GITHUB_APP_PRIVATE_KEY instead of a chart-managed one. The chart cannot

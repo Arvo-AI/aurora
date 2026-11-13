@@ -16,26 +16,28 @@ Setup (AWS Secrets Manager):
   aws secretsmanager create-secret --name aurora/system/github-app/webhook-secret \
     --secret-string 'your-github-app-webhook-secret' --region "$AWS_SM_REGION"
 
-Both secrets fall back to environment variables when the backend cannot
-supply them, so a deployment can provide them through its own secret store
-(for example a Kubernetes Secret) without writing to Vault:
+Either secret can instead come from an environment variable, so a deployment
+can provide it through its own secret store (for example a Kubernetes Secret)
+without writing to the secrets backend:
 
 * webhook secret: ``GITHUB_APP_WEBHOOK_SECRET`` / ``GH_APP_WEBHOOK_SECRET`` /
-  ``GITHUB_WEBHOOK_SECRET``
+  ``GITHUB_WEBHOOK_SECRET`` (first non-blank one wins)
 * private key: ``GITHUB_APP_PRIVATE_KEY``, as the PEM text (real or ``\\n``-escaped
-  newlines) or as the base64 of the PEM file
+  newlines) or as the base64 of the PEM file (wrapped or not)
 
-The secrets backend is always tried first. A value read from the backend is
-cached for the life of the process; an environment fallback is cached only for
-``_ENV_FALLBACK_TTL_SECONDS``, so a backend outage at startup does not pin a
-stale env value after the backend recovers (e.g. after a key rotation).
+Precedence: set each secret in one place; the environment wins if set. When the
+env var is set (non-blank) it is used and the secrets backend is never
+consulted. The backend is read only when the env var is not set. Either way the
+value is read once and cached for the life of the process: an env var cannot
+change while the process runs, so rotating a key means restarting the pods. The
+source is logged once, at INFO, the first time each secret is read; the value
+is never logged.
 """
 
 import base64
 import binascii
 import logging
 import os
-import time
 
 from utils.secrets import get_secrets_backend  # pyright: ignore[reportImplicitRelativeImport]
 
@@ -54,18 +56,12 @@ _WEBHOOK_SECRET_ENV_VARS = (
     "GITHUB_WEBHOOK_SECRET",
 )
 
-# How long an env-fallback value is reused before the backend is retried.
-_ENV_FALLBACK_TTL_SECONDS = 60.0
-
-# A cache entry is (value, expires_at). expires_at is a monotonic deadline for
-# an env-fallback value, or None for a backend value, which does not expire.
-# Each entry is replaced by one item assignment so concurrent request threads
-# never pair a value with another value's expiry.
-_CacheEntry = tuple[str, float | None]
-
+# Resolved secrets, cached for the life of the process whichever source they
+# came from. Filled with dict.setdefault so that when request threads race on
+# the first read, one value wins and only the winner logs its source.
 _PRIVATE_KEY_CACHE_KEY = "private_key"
 _WEBHOOK_SECRET_CACHE_KEY = "webhook_secret"
-_cache: dict[str, _CacheEntry] = {}
+_cache: dict[str, str] = {}
 
 
 class GitHubAppConfigError(RuntimeError):
@@ -75,20 +71,6 @@ class GitHubAppConfigError(RuntimeError):
 def clear_cache() -> None:
     """Clear cached GitHub App secrets (useful for tests)."""
     _cache.clear()
-
-
-def _fresh_value(entry: _CacheEntry | None) -> str | None:
-    """Return the cached value unless it is missing or its TTL has passed."""
-    if entry is None:
-        return None
-    value, expires_at = entry
-    if expires_at is None or time.monotonic() < expires_at:
-        return value
-    return None
-
-
-def _env_fallback_entry(value: str) -> _CacheEntry:
-    return (value, time.monotonic() + _ENV_FALLBACK_TTL_SECONDS)
 
 
 def _read_system_secret(logical_name: str, *, secret_label: str) -> str:
@@ -109,8 +91,7 @@ def _read_system_secret(logical_name: str, *, secret_label: str) -> str:
     try:
         # build_system_ref is inside the try so a backend that doesn't
         # implement it (NotImplementedError) — or any other unexpected error —
-        # surfaces as GitHubAppConfigError. get_app_webhook_secret's env
-        # fallback relies on this being the only exception type raised here.
+        # surfaces as GitHubAppConfigError, the only error type callers handle.
         secret_ref = backend.build_system_ref(logical_name)
         secret_value = backend.get_secret(secret_ref)
     except GitHubAppConfigError:
@@ -185,75 +166,80 @@ def _normalize_private_key(raw: str) -> str:
     return pem
 
 
-def _read_private_key_from_env() -> str:
-    value = os.getenv(_PRIVATE_KEY_ENV_VAR)
-    if not value or not value.strip():
-        raise GitHubAppConfigError(
-            "GitHub App private key is not configured in secrets backend or environment."
-        )
-    logger.info("Using GitHub App private key from environment fallback")
-    return _normalize_private_key(value)
+def _env_value(env_var: str) -> str | None:
+    """The env var's value, or None when it is unset or blank."""
+    value = os.getenv(env_var)
+    if value and value.strip():
+        return value
+    return None
 
 
-def _read_webhook_secret_from_env() -> str:
+def _webhook_secret_from_env() -> tuple[str, str] | None:
+    """(env var name, value) of the first webhook secret env var that is set."""
     for env_var in _WEBHOOK_SECRET_ENV_VARS:
-        value = os.getenv(env_var)
-        if value:
-            logger.info("Using GitHub App webhook secret from environment fallback")
-            return value
+        value = _env_value(env_var)
+        if value is not None:
+            return env_var, value
+    return None
 
-    raise GitHubAppConfigError(
-        "GitHub App webhook secret is not configured in secrets backend or environment."
-    )
+
+def _read_backend_or_explain(logical_name: str, *, secret_label: str, env_hint: str) -> str:
+    """Read from the backend; on failure, say the env var is the alternative."""
+    try:
+        return _read_system_secret(logical_name, secret_label=secret_label)
+    except GitHubAppConfigError as exc:
+        raise GitHubAppConfigError(
+            f"{exc} Store it in the secrets backend or set {env_hint}."
+        ) from exc
+
+
+def _cache_once(cache_key: str, value: str, *, secret_label: str, source: str) -> str:
+    """Cache the value; the first writer logs where it came from (never the value)."""
+    cached = _cache.setdefault(cache_key, value)
+    if cached is value:
+        logger.info("GitHub App %s loaded from %s", secret_label, source)
+    return cached
 
 
 def get_app_private_key() -> str:
-    """Return the GitHub App private key from the backend, with env fallback."""
-    cached = _fresh_value(_cache.get(_PRIVATE_KEY_CACHE_KEY))
+    """Return the GitHub App private key: env var if set, else the backend."""
+    cached = _cache.get(_PRIVATE_KEY_CACHE_KEY)
     if cached is not None:
         return cached
 
-    try:
-        value = _read_system_secret(
+    raw = _env_value(_PRIVATE_KEY_ENV_VAR)
+    if raw is not None:
+        value = _normalize_private_key(raw)
+        source = f"environment ({_PRIVATE_KEY_ENV_VAR})"
+    else:
+        value = _read_backend_or_explain(
             _PRIVATE_KEY_LOGICAL_NAME,
             secret_label="private key",
+            env_hint=_PRIVATE_KEY_ENV_VAR,
         )
-        _cache[_PRIVATE_KEY_CACHE_KEY] = (value, None)
-        return value
-    except GitHubAppConfigError as backend_error:
-        if not os.getenv(_PRIVATE_KEY_ENV_VAR, "").strip():
-            raise
-        logger.warning(
-            "GitHub App private key lookup from secrets backend failed; "
-            "using environment fallback (%s)",
-            backend_error,
-        )
-
-    value = _read_private_key_from_env()
-    _cache[_PRIVATE_KEY_CACHE_KEY] = _env_fallback_entry(value)
-    return value
+        source = "secrets backend"
+    return _cache_once(
+        _PRIVATE_KEY_CACHE_KEY, value, secret_label="private key", source=source
+    )
 
 
 def get_app_webhook_secret() -> str:
-    """Return the GitHub App webhook secret from the backend, with env fallback."""
-    cached = _fresh_value(_cache.get(_WEBHOOK_SECRET_CACHE_KEY))
+    """Return the GitHub App webhook secret: env var if set, else the backend."""
+    cached = _cache.get(_WEBHOOK_SECRET_CACHE_KEY)
     if cached is not None:
         return cached
 
-    try:
-        value = _read_system_secret(
+    from_env = _webhook_secret_from_env()
+    if from_env is not None:
+        env_var, value = from_env
+        source = f"environment ({env_var})"
+    else:
+        value = _read_backend_or_explain(
             _WEBHOOK_SECRET_LOGICAL_NAME,
             secret_label="webhook secret",
+            env_hint=_WEBHOOK_SECRET_ENV_VARS[0],
         )
-        _cache[_WEBHOOK_SECRET_CACHE_KEY] = (value, None)
-        return value
-    except GitHubAppConfigError as backend_error:
-        logger.warning(
-            "GitHub App webhook secret lookup from secrets backend failed; "
-            "trying environment fallback (%s)",
-            type(backend_error).__name__,
-        )
-
-    value = _read_webhook_secret_from_env()
-    _cache[_WEBHOOK_SECRET_CACHE_KEY] = _env_fallback_entry(value)
-    return value
+        source = "secrets backend"
+    return _cache_once(
+        _WEBHOOK_SECRET_CACHE_KEY, value, secret_label="webhook secret", source=source
+    )

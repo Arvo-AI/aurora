@@ -400,8 +400,8 @@ on-prem deployments that cannot expose a public webhook URL.
 | `NEXT_PUBLIC_GITHUB_APP_SLUG` | | The App's URL slug (e.g. `aurora-acme`). Used by the frontend to build install management URLs. |
 | `GITHUB_APP_WEBHOOK_URL` | | Public URL Aurora exposes for webhooks. Must match what's configured on the App. Example: `https://aurora.example.com/github/webhook`. |
 | `GITHUB_APP_SETUP_URL` | | Post-install redirect URL. Example: `https://aurora.example.com/github/app/install/callback`. |
-| `GITHUB_APP_WEBHOOK_SECRET` | | Fallback only — the secrets backend path `aurora/system/github-app/webhook-secret` (Vault or AWS Secrets Manager) takes precedence. |
-| `GITHUB_APP_PRIVATE_KEY` | | Fallback only — the secrets backend path `aurora/system/github-app/private-key` takes precedence. The PEM text, or base64 of the `.pem` file (`base64 -w0 key.pem`). Lets a deployment supply the key from its own secret store (for example a Kubernetes Secret through `secrets.githubAppKey` in the Helm chart, which mounts it only into the server, celery-worker and chatbot pods) without writing to Vault. |
+| `GITHUB_APP_WEBHOOK_SECRET` | | The App's webhook secret. Set it in one place: if set (or one of its aliases `GH_APP_WEBHOOK_SECRET` / `GITHUB_WEBHOOK_SECRET`), it is used and the secrets backend is not read; if empty, Aurora reads `aurora/system/github-app/webhook-secret` from the secrets backend (Vault or AWS Secrets Manager). Read once per process, so a change needs a restart. |
+| `GITHUB_APP_PRIVATE_KEY` | | The App's private key: the PEM text, or base64 of the `.pem` file (`base64 -w0 key.pem`). Set it in one place: if set, it is used and the secrets backend is not read; if empty, Aurora reads `aurora/system/github-app/private-key` from the secrets backend. Lets a deployment supply the key from its own secret store (for example a Kubernetes Secret through `secrets.githubAppKey` in the Helm chart, which mounts it only into the server, celery-worker and chatbot pods) without writing to Vault. Read once per process, so rotating it needs a restart. |
 | `GH_OAUTH_CLIENT_ID` | | OAuth App Client ID. Required only when `GITHUB_AUTH_MODE` is `oauth` or `hybrid`. |
 | `GH_OAUTH_CLIENT_SECRET` | | OAuth App Client Secret. Required only when `GITHUB_AUTH_MODE` is `oauth` or `hybrid`. |
 | `HOSTED_SIGNUP_ENABLED` | `false` | Hosted deployments only. Enables the one-click website signup flow (`/github/app/signup/start`): installing the GitHub App provisions an Aurora org + admin account from the GitHub identity and auto-enrolls the granted repos in Incident Prevention. Leave off for self-hosted installs (registration stays invite-only). |
@@ -419,8 +419,9 @@ NEXT_PUBLIC_GITHUB_APP_SLUG=aurora-acme
 GITHUB_APP_WEBHOOK_URL=https://aurora.example.com/github/webhook
 GITHUB_APP_SETUP_URL=https://aurora.example.com/github/app/install/callback
 GITHUB_APP_WEBHOOK_SECRET=
-# (private key PEM lives in your secrets backend — Vault or AWS Secrets
-#  Manager — at aurora/system/github-app/private-key, not in .env)
+# Private key: either set GITHUB_APP_PRIVATE_KEY here, or leave it unset and
+# store it in your secrets backend (Vault or AWS Secrets Manager) at
+# aurora/system/github-app/private-key. The env var wins if set.
 ```
 
 Hybrid (App + OAuth, e.g. for a migration window):
