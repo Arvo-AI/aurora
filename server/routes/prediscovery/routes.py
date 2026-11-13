@@ -94,7 +94,8 @@ def get_prediscovery_status(user_id):
                 set_rls_context(cur, conn, user_id, log_prefix="[Prediscovery]")
 
                 cur.execute("""
-                    SELECT id, status, created_at, updated_at
+                    SELECT id, status, created_at, updated_at,
+                           GREATEST(heartbeat_at, updated_at) AS last_activity
                     FROM chat_sessions
                     WHERE org_id = %s
                       AND ui_state->'triggerMetadata'->>'source' = 'prediscovery'
@@ -107,10 +108,12 @@ def get_prediscovery_status(user_id):
             return jsonify({"status": "never_run", "last_run": None})
 
         session_status = row[1]
-        # Treat stale in_progress as failed (task was killed mid-run)
-        if session_status == "in_progress" and row[3]:
+        # Treat stale in_progress as failed (task was killed mid-run). The
+        # worker's heartbeat, not updated_at, says whether it is still running.
+        last_activity = row[4] if len(row) > 4 and row[4] else row[3]
+        if session_status == "in_progress" and last_activity:
             from datetime import datetime, timedelta
-            if datetime.now() - row[3] > timedelta(minutes=35):
+            if datetime.now() - last_activity > timedelta(minutes=35):
                 session_status = "failed"
 
         return jsonify({

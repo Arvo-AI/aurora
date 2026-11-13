@@ -196,14 +196,19 @@ def run_prediscovery(
         user_id: User to run prediscovery for (uses their connected integrations)
         trigger: What triggered this run ('manual', 'scheduled', 'new_connector')
     """
+    return _run_prediscovery(self.request.id, user_id, trigger)
+
+
+def _run_prediscovery(task_id: str, user_id: str, trigger: str) -> Dict[str, Any]:
+    """The task body, kept off the Celery decorator so tests can call it."""
     from celery.exceptions import SoftTimeLimitExceeded
     from chat.background.task import (
         _get_connected_integrations,
         _execute_background_chat,
+        _update_session_status,
         create_background_chat_session,
     )
     from chat.background.rca_prompt_builder import get_user_providers
-    import asyncio
 
     logger.info(f"[Prediscovery] Starting for user {user_id} (trigger={trigger})")
 
@@ -217,6 +222,7 @@ def run_prediscovery(
         logger.warning(f"[Prediscovery] Hook blocked for user {user_id}: {hook_message}")
         return {"status": "hook_blocked", "error": hook_message}
 
+    session_id = None
     try:
         providers = get_user_providers(user_id)
         integrations = _get_connected_integrations(user_id)
@@ -228,7 +234,6 @@ def run_prediscovery(
 
         prompt = build_prediscovery_prompt(user_id, providers, integrations)
 
-        task_id = self.request.id
         trigger_metadata = {"source": "prediscovery", "trigger": trigger, "task_id": task_id}
         session_id = create_background_chat_session(
             user_id=user_id,
@@ -253,7 +258,6 @@ def run_prediscovery(
             user_id,
         )
 
-        from chat.background.task import _update_session_status
         _update_session_status(session_id, "completed", user_id=user_id)
 
         logger.info(f"[Prediscovery] Completed for user {user_id}, session {session_id}")
@@ -261,9 +265,14 @@ def run_prediscovery(
 
     except SoftTimeLimitExceeded:
         logger.error(f"[Prediscovery] Timeout for user {user_id}")
+        # Fail the session now; otherwise it reads as running until the sweep.
+        if session_id:
+            _update_session_status(session_id, "failed", user_id=user_id)
         return {"status": "timeout", "user_id": user_id}
     except Exception as e:
         logger.exception(f"[Prediscovery] Failed for user {user_id}: {e}")
+        if session_id:
+            _update_session_status(session_id, "failed", user_id=user_id)
         return {"status": "error", "user_id": user_id, "error": str(e)}
 
 

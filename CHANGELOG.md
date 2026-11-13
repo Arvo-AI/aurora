@@ -69,12 +69,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   noted the same PagerDuty incident.
 - Investigations: a long model step or a long command no longer gets an
   investigation reported as a dead worker. A running investigation refreshes
-  its session every 30 seconds, so a killed worker is caught within 3 minutes
-  (incidents) or 5 minutes (chats), and one stuck on a call that never returns
-  is stopped after 10 minutes without progress instead of at the time limit.
+  its session every 30 seconds. The cleanup sweep runs every 5 minutes, so a
+  killed worker is caught in about 3 to 8 minutes (incidents) or 5 to 10
+  minutes (chats), and one stuck on a call that never returns is stopped after
+  10 minutes without progress instead of at the time limit.
 - Chat: a reply left on "Thinking…" because its worker was killed (out of
   memory, eviction) or stopped is replaced with an error in Slack, Google Chat,
   Teams and the chat transcript.
+- Slack: a single @Aurora mention is answered once. Slack retries an event
+  that is not acknowledged within 3 seconds, and each retry used to start
+  another investigation (several "Thinking…" placeholders and answers). Events
+  are now deduplicated by event id over both the Events API and Socket Mode.
+- Chat: a Slack answer already posted is no longer replaced with an error when
+  the run fails afterwards (for example while filing the Jira ticket), or when
+  its worker dies in that window.
+- Investigations: a follow-up question on an existing chat or incident session
+  that waits in the queue is no longer failed as a dead worker after 5 minutes;
+  it gets the same 20-minute queue allowance as a new run.
+- Investigations: SSH commands to Tailscale devices and on-prem kubectl commands
+  that run longer than 10 minutes within their own timeout are no longer
+  stopped as stalled.
+- Prediscovery: a run is no longer shown as failed after 35 minutes while its
+  worker is still alive, and a run that errors or times out now marks its
+  session failed right away.
+- Investigations: a run that finishes just as the stall watchdog gives up no
+  longer has its result replaced by a time-limit error.
 
 ## [1.5.21] - 2026-11-09
 
