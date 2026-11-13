@@ -23,6 +23,8 @@ from routes.slack.slack_events_helpers import (
     classify_slack_sender,
     org_allows_unregistered_slack,
     aurora_user_for_slack_sender,
+    claim_slack_event_once,
+    slack_event_already_claimed,
 )
 from utils.secrets.secret_ref_utils import get_user_token_data
 from chat.background.task import run_background_chat
@@ -116,6 +118,14 @@ def process_event_callback(data: dict) -> None:
     """
     try:
         if data.get('type') != 'event_callback':
+            return
+
+        # Slack redelivers events it was not acked for in time. Claim the
+        # event_id before any side effect so each event runs exactly once,
+        # whichever transport (HTTP or Socket Mode) delivered it.
+        event_id = data.get('event_id')
+        if not claim_slack_event_once(event_id):
+            logger.info("Ignoring duplicate Slack event %s", sanitize(event_id))
             return
 
         event = data.get('event', {})
@@ -373,7 +383,20 @@ def slack_events():
         if data.get('type') == 'url_verification':
             return jsonify({"challenge": data.get('challenge')})
 
-        # Shared core (also used by Socket Mode)
+        # A retry of an event we already took: ack at once. A retry for an id
+        # never seen falls through, since the first delivery may have failed.
+        retry_num = request.headers.get('X-Slack-Retry-Num')
+        if retry_num is not None:
+            event_id = data.get('event_id')
+            logger.info(
+                "Slack event %s redelivered (retry %s, reason %s)",
+                sanitize(event_id), sanitize(retry_num),
+                sanitize(request.headers.get('X-Slack-Retry-Reason', '')),
+            )
+            if slack_event_already_claimed(event_id):
+                return jsonify({"ok": True}), 200
+
+        # Shared core (also used by Socket Mode); dedupes on event_id
         process_event_callback(data)
         return jsonify({"ok": True}), 200
 

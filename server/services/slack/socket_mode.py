@@ -159,6 +159,13 @@ def _dispatch(client, req) -> None:
             # Ack immediately; the event is processed synchronously after, and
             # the handlers themselves never raise.
             client.send_socket_mode_response(SocketModeResponse(envelope_id=req.envelope_id))
+            if getattr(req, "retry_attempt", None):
+                # process_event_callback dedupes on event_id, so a redelivery
+                # of an event already handled is dropped there.
+                logger.info(
+                    "Slack Socket Mode event redelivered (attempt %r, reason %r)",
+                    req.retry_attempt, getattr(req, "retry_reason", None),
+                )
             process_event_callback(payload)
             return
 

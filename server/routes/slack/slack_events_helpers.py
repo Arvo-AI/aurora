@@ -9,6 +9,7 @@ import hashlib
 import time
 from typing import Optional
 from utils.db.connection_pool import db_pool
+from utils.cache.redis_client import get_redis_client
 from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import sanitize
 import re
@@ -37,6 +38,50 @@ SLACK_SECTION_TEXT_BUFFER = 2900  # Safe buffer for section text with formatting
 COMMAND_DISPLAY_TRUNCATE_LENGTH = 150  # Length for truncating commands in thread replies
 COMMAND_FULL_DISPLAY_LENGTH = 500  # Length for truncating full command display in suggestions
 SLACK_MAX_BLOCKS = 50  # Slack Block Kit blocks limit per message
+
+
+# Slack redelivers an event it did not get a 200 for within 3s (immediately,
+# then ~1 min and ~5 min later). An hour comfortably covers every retry.
+SLACK_EVENT_DEDUPE_TTL_SECONDS = 3600
+
+
+def _slack_event_key(event_id: str) -> str:
+    return f"slack:event:{event_id}"
+
+
+def claim_slack_event_once(event_id: Optional[str]) -> bool:
+    """True the first time an Events API ``event_id`` is seen, False on a redelivery.
+
+    Must run before any side effect, so a retry that lands while the first
+    delivery is still working is dropped too. Fails open: with Redis down, a
+    rare duplicate reply beats Slack going silent.
+    """
+    # No id to key on: nothing to dedupe
+    if not event_id:
+        return True
+    try:
+        redis = get_redis_client()
+        if not redis:
+            logger.warning("Slack event dedupe unavailable (no Redis); processing anyway")
+            return True
+        return bool(redis.set(_slack_event_key(event_id), "1", nx=True, ex=SLACK_EVENT_DEDUPE_TTL_SECONDS))
+    except Exception:
+        logger.warning("Slack event dedupe unavailable; processing anyway", exc_info=True)
+        return True
+
+
+def slack_event_already_claimed(event_id: Optional[str]) -> bool:
+    """True when ``event_id`` was already claimed. False when unseen or Redis is down."""
+    if not event_id:
+        return False
+    try:
+        redis = get_redis_client()
+        if not redis:
+            return False
+        return bool(redis.exists(_slack_event_key(event_id)))
+    except Exception:
+        logger.warning("Slack event dedupe lookup failed; processing anyway", exc_info=True)
+        return False
 
 
 def verify_slack_signature(request_body: bytes, timestamp: str, signature: str) -> bool:
