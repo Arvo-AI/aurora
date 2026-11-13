@@ -20,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   time limit or the stall check still stops an RCA, the evidence it gathered is
   summarized as a partial report, marked "Investigation incomplete", instead of
   the incident failing with nothing.
+- Investigations: the same applies when an RCA stops on an error or its worker
+  dies, so "Investigation Failed" now only appears for a run that gathered no
+  evidence at all. The incident page no longer shows an error on its own after
+  five quiet minutes; it keeps checking while the investigation runs.
+
+### Added
+- Investigations: an RCA that stopped before it finished can be continued from
+  the incident page or its Slack card ("Continue investigating"). It picks up
+  in the same session with everything gathered so far and a fresh time budget,
+  then updates the report and the card in place. Up to three continuations per
+  incident.
 
 ## [1.5.24] - 2026-11-12
 

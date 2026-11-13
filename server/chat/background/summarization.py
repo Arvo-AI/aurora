@@ -181,6 +181,8 @@ Style: descriptive, not advisory
 UNFINISHED_REASONS = {
     "time_limit": "it reached its time limit",
     "stalled": "it stopped making progress and was halted",
+    "error": "it hit an error it could not recover from",
+    "interrupted": "the worker running it stopped unexpectedly",
 }
 
 
@@ -744,7 +746,7 @@ def generate_incident_summary_from_chat(
     """Regenerate incident summary after RCA using the RCA chat transcript with citations.
 
     unfinished_reason: set when the RCA was stopped before it finished
-    ("time_limit" or "stalled"). The summary then covers the partial evidence
+    (a key of UNFINISHED_REASONS). The summary then covers the partial evidence
     and says up front that the investigation is incomplete.
 
     announce_completion: False when the summary is being regenerated after a

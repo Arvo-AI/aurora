@@ -815,6 +815,8 @@ def initialize_tables():
                          aurora_status VARCHAR(20) DEFAULT 'idle',
                          aurora_summary TEXT,
                          aurora_chat_session_id UUID,
+                         rca_unfinished_reason VARCHAR(20),
+                         rca_continuations INTEGER NOT NULL DEFAULT 0,
                          started_at TIMESTAMP NOT NULL,
                          analyzed_at TIMESTAMP,
                          slack_message_ts VARCHAR(50),
@@ -1766,6 +1768,20 @@ def initialize_tables():
                 )
             except Exception as e:
                 logging.warning(f"Error adding rca_celery_task_id column to incidents: {e}")
+                conn.rollback()
+
+            # Migration: an RCA stopped before it finished (time limit, stall, error)
+            # keeps why, so it can be continued; and how often it was continued.
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS rca_unfinished_reason VARCHAR(20),
+                    ADD COLUMN IF NOT EXISTS rca_continuations INTEGER NOT NULL DEFAULT 0;
+                """)
+                conn.commit()
+            except Exception as e:
+                # Table may not exist yet (new install); CREATE TABLE includes the columns.
+                logging.warning(f"Error adding RCA continuation columns to incidents: {e}")
                 conn.rollback()
 
             # Migration: Add merged_into_incident_id column to incidents table if it exists

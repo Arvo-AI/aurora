@@ -457,7 +457,8 @@ def send_slack_investigation_completed_notification(
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": "Analysis Complete"
+                    # Partial findings are still a result; the note below says why.
+                    "text": "Initial Analysis" if incident_data.get("unfinished_reason") else "Analysis Complete"
                 }
             },
             {
@@ -498,6 +499,9 @@ def send_slack_investigation_completed_notification(
             }
         ]
         
+        # An RCA that stopped early says so plainly and offers to keep going.
+        blocks.extend(build_continue_blocks(incident_data))
+
         # Add the top suggestion (most valuable next step — fixes prioritized)
         try:
             suggestions = get_incident_suggestions(incident_id)
@@ -550,6 +554,41 @@ def send_slack_investigation_completed_notification(
         logger.exception("[SlackNotification] Error sending completed notification for incident %s",
                          incident_data.get("incident_id", "unknown"))
         return False
+
+
+CONTINUE_ACTION_PREFIX = "continue_investigation_"
+
+_UNFINISHED_SLACK_TEXT = {
+    "time_limit": "Aurora reached its time limit before finishing this investigation.",
+    "stalled": "Aurora paused this investigation before finishing.",
+}
+
+
+def build_continue_blocks(incident_data: Dict[str, Any]) -> list:
+    """A note and a Continue button for an RCA that stopped early; [] otherwise."""
+    from chat.background.continuation import continuations_left
+
+    reason = incident_data.get("unfinished_reason")
+    if not reason:
+        return []
+    text = _UNFINISHED_SLACK_TEXT.get(
+        reason, "Aurora was interrupted before finishing this investigation.",
+    )
+    if continuations_left(incident_data.get("continuations")) <= 0:
+        return [{"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}]
+    return [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": text + " It can pick up where it left off."},
+            "accessory": {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "Continue investigating"},
+                "action_id": CONTINUE_ACTION_PREFIX + str(incident_data.get("incident_id")),
+                "value": str(incident_data.get("incident_id")),
+            },
+        },
+        {"type": "divider"},
+    ]
 
 
 def send_slack_investigation_failed_notification(

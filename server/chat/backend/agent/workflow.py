@@ -944,7 +944,12 @@ class Workflow:
             logger.info(f"Context load took {_ctx_ms:.1f} ms for session {input_state.session_id}")
 
             if existing_context:
-                rca_info = self._get_rca_context_for_session(
+                # A continuation picks up the same investigation, so it keeps the
+                # full history: compressing it would drop the evidence (and its
+                # citations) the run already gathered. Context trimming still
+                # keeps each model call within its window.
+                continuing = getattr(input_state, "trigger_source", None) == "continue_investigation"
+                rca_info = None if continuing else self._get_rca_context_for_session(
                     input_state.session_id, input_state.user_id
                 )
                 compressed = self._compress_rca_context(existing_context, rca_info) if rca_info else None

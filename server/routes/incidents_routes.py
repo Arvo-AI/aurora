@@ -482,6 +482,16 @@ def get_incident(user_id, incident_id: str):
                     row, include_metadata=True, include_correlation=True, include_merge_target=True
                 )
 
+                # An RCA that stopped before it finished can be continued.
+                from chat.background.continuation import continuations_left
+                cursor.execute(
+                    "SELECT rca_unfinished_reason, rca_continuations FROM incidents WHERE id = %s",
+                    (incident_id,),
+                )
+                unfinished = cursor.fetchone()
+                incident["unfinishedReason"] = unfinished[0] if unfinished else None
+                incident["continuationsLeft"] = continuations_left(unfinished[1] if unfinished else 0)
+
                 # Fetch raw alert data from source table
                 source_type = incident["sourceType"]
                 source_alert_id = incident["sourceAlertId"]
@@ -1904,6 +1914,23 @@ def get_incident_action_runs(user_id, incident_id: str):
     except Exception:
         logger.exception("[INCIDENTS] Failed to get action runs for incident %s", sanitize(incident_id))
         return jsonify({"error": "Failed to retrieve action runs"}), 500
+
+
+@incidents_bp.route("/api/incidents/<incident_id>/continue", methods=["POST"])
+@require_permission("incidents", "write")
+def continue_incident_investigation(user_id, incident_id: str):
+    """Continue an RCA that stopped before it finished, with a fresh time budget."""
+    if not is_valid_uuid(incident_id):
+        return jsonify({"error": "Invalid incident ID format"}), 400
+    from chat.background.continuation import ContinueRefused, continue_investigation
+    try:
+        result = continue_investigation(incident_id, user_id)
+    except ContinueRefused as refused:
+        return jsonify({"error": str(refused)}), refused.status
+    except Exception:
+        logger.exception("[INCIDENTS] Failed to continue investigation %s", sanitize(incident_id))
+        return jsonify({"error": "Failed to continue the investigation"}), 500
+    return jsonify(result), 202
 
 
 @incidents_bp.route("/api/incidents/trigger-rca", methods=["POST"])

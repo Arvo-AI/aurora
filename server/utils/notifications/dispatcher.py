@@ -121,7 +121,8 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                            i.recurrence_of_incident_id, anchor.slack_message_ts, anchor.alert_title,
                            grp.occurrence_number, grp.group_size, grp.last_fired_at,
                            i.alert_metadata, i.pagerduty_note_id,
-                           i.incidentio_update_id, i.source_alert_id, i.servicenow_note_id
+                           i.incidentio_update_id, i.source_alert_id, i.servicenow_note_id,
+                           i.rca_unfinished_reason, i.rca_continuations
                     FROM incidents i
                     LEFT JOIN incidents anchor ON anchor.id = i.recurrence_of_incident_id
                     JOIN grp ON grp.id = i.id
@@ -163,6 +164,8 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                         'incidentio_update_id': result[22],
                         'source_alert_id': result[23],
                         'servicenow_note_id': result[24],
+                        'unfinished_reason': result[25],
+                        'continuations': result[26] or 0,
                     }
         return None
     except Exception:

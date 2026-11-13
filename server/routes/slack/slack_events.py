@@ -26,6 +26,7 @@ from routes.slack.slack_events_helpers import (
 )
 from utils.secrets.secret_ref_utils import get_user_token_data
 from chat.background.task import run_background_chat
+from utils.notifications.slack_notification_service import CONTINUE_ACTION_PREFIX
 from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import sanitize
 from routes.slack.slack_onboarding import (
@@ -420,6 +421,16 @@ def process_interaction(payload: dict) -> dict:
                     channel_id=channel_id
                 )
 
+            # "Continue investigating" on the card of an RCA that stopped early
+            if action_id.startswith(CONTINUE_ACTION_PREFIX):
+                return _handle_continue_investigation(
+                    payload=payload,
+                    action=action,
+                    slack_user_id=slack_user_id,
+                    team_id=team_id,
+                    channel_id=channel_id,
+                )
+
             # Handle "More details" button
             if action_id.startswith('suggestion_details_'):
                 return _handle_suggestion_details(
@@ -674,6 +685,59 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
     except Exception as e:
         logger.error(f"Error handling run_suggestion action: {e}", exc_info=True)
         return {"text": "WARNING: Failed to execute command. Please try again."}
+
+
+def _handle_continue_investigation(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:
+    """Continue an RCA that stopped early, for a clicker who may write incidents.
+
+    Always acks with an empty body so the card stays as it is; the outcome goes
+    to the clicker (ephemeral) or the thread, and the finished report updates
+    the card in place.
+    """
+    from chat.background.continuation import ContinueRefused, continue_investigation
+    from utils.auth.enforcer import enforce_with_reload
+    from utils.auth.stateless_auth import get_org_id_for_user
+
+    incident_id = action.get('value') or action.get('action_id', '')[len(CONTINUE_ACTION_PREFIX):]
+    clicker_user_id = aurora_user_for_slack_sender(slack_user_id, team_id)
+    feedback = _slack_client_for_feedback(clicker_user_id, team_id) if clicker_user_id else None
+    if not clicker_user_id:
+        workspace_user_id = get_user_id_from_slack_team(team_id)
+        client = get_slack_client_for_user(workspace_user_id) if workspace_user_id else None
+        _send_ephemeral(
+            client, channel_id, slack_user_id,
+            f"Connect your Aurora account to continue investigations: {FRONTEND_URL}/settings/integrations",
+        )
+        return {"text": ""}
+    try:
+        org_id = get_org_id_for_user(clicker_user_id)
+        if not org_id or not enforce_with_reload(clicker_user_id, org_id, "incidents", "write"):
+            _send_ephemeral(feedback, channel_id, slack_user_id,
+                            "Your role can't continue investigations. Ask an admin for access.")
+            return {"text": ""}
+        continue_investigation(incident_id, clicker_user_id)
+    except ContinueRefused as refused:
+        _send_ephemeral(feedback, channel_id, slack_user_id, f"Can't continue: {refused}.")
+        return {"text": ""}
+    except Exception:
+        logger.exception("Failed to continue investigation %s from Slack", sanitize(incident_id))
+        _send_ephemeral(feedback, channel_id, slack_user_id,
+                        "Something went wrong continuing the investigation. Please try again.")
+        return {"text": ""}
+
+    message_ts = (payload.get('message') or {}).get('ts')
+    clicker_name = (payload.get('user') or {}).get('name', 'someone')
+    if feedback and message_ts:
+        try:
+            feedback.send_message(
+                channel=channel_id,
+                text=f"Continuing the investigation (requested by {clicker_name}). "
+                     "The report above will update when it finishes.",
+                thread_ts=message_ts,
+            )
+        except Exception:
+            logger.warning("Could not post the continuation notice for incident %s", sanitize(incident_id))
+    return {"text": ""}
 
 
 def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:
