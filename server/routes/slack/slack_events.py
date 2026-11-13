@@ -698,7 +698,12 @@ def _handle_continue_investigation(payload: dict, action: dict, slack_user_id: s
     from utils.auth.enforcer import enforce_with_reload
     from utils.auth.stateless_auth import get_org_id_for_user
 
+    from utils.validation import is_valid_uuid
+
     incident_id = action.get('value') or action.get('action_id', '')[len(CONTINUE_ACTION_PREFIX):]
+    if not is_valid_uuid(incident_id):
+        logger.warning("Ignoring a Continue click with an invalid incident id")
+        return {"text": ""}
     clicker_user_id = aurora_user_for_slack_sender(slack_user_id, team_id)
     feedback = _slack_client_for_feedback(clicker_user_id, team_id) if clicker_user_id else None
     if not clicker_user_id:

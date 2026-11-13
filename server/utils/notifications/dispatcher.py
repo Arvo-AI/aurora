@@ -467,6 +467,11 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
         if session_id:
             _enrich_incident_summary(incident_data, session_id, user_id)
 
+        # A partial report (the RCA stopped before it finished) updates the
+        # cards people watch, but is not a conclusion: nothing is posted back
+        # to the source incident or routed to team channels until it finishes.
+        concluded = not incident_data.get('unfinished_reason')
+
         # --- Email ---
         email_enabled = bool(get_org_preference(org_id, 'rca_email_notifications', default=False))
         if email_enabled and not refresh_only:
@@ -523,7 +528,7 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
         # recurrence gets a short note pointing at its anchor instead of the RCA;
         # the service itself checks the stored credentials can write, default-deny)
         pd_enabled = bool(get_org_preference(org_id, 'pagerduty_incident_notes', default=False))
-        if pd_enabled and not refresh_only:
+        if pd_enabled and concluded and not refresh_only:
             try:
                 from utils.notifications.pagerduty_notification_service import send_pagerduty_incident_note
                 send_pagerduty_incident_note(user_id, incident_data)
@@ -534,7 +539,7 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
         # post too since each is a distinct incident.io incident. The post-back
         # toggle is the one on the incident.io connector page, stored org-wide
         # with the other incident.io RCA settings)
-        if (not refresh_only and incident_data.get('source_type') == 'incidentio'
+        if (not refresh_only and concluded and incident_data.get('source_type') == 'incidentio'
                 and bool(get_user_preference(user_id, 'incidentio_postback_enabled', default=False))):
             try:
                 from utils.notifications.incidentio_notification_service import send_incidentio_incident_update
@@ -545,7 +550,7 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
         # --- ServiceNow work note --- (completion only, anchors only, once; opt-in
         # per user on the ServiceNow connector page; the service checks the stored
         # credentials can still write)
-        if not refresh_only and incident_data.get('source_type') == 'servicenow':
+        if not refresh_only and concluded and incident_data.get('source_type') == 'servicenow':
             try:
                 from routes.servicenow.tasks import work_notes_enabled as _sn_work_notes_enabled
                 from utils.notifications.servicenow_notification_service import send_servicenow_work_note
@@ -555,7 +560,7 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
                 logger.exception("[Dispatcher] ServiceNow work note failed")
 
         # --- Team-channel routing (once per incident, any connected chat platform) ---
-        if not refresh_only and (_has_slack_connected(user_id) or _has_teams_connected(user_id)):
+        if not refresh_only and concluded and (_has_slack_connected(user_id) or _has_teams_connected(user_id)):
             try:
                 from utils.notifications.team_routing import trigger_team_routing_agent
                 trigger_team_routing_agent(user_id, incident_data)

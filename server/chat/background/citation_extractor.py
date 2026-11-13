@@ -215,12 +215,14 @@ class CitationExtractor:
             return []
 
     def extract_citations_from_steps(self, incident_id: str, user_id: str) -> List[Citation]:
-        """Citations from the incident's execution_steps, in the order they ran.
+        """Citations from the RCA's execution_steps, in the order they ran.
 
         Each tool call is written there as it starts and ends, so this survives a
-        run whose chat context was never saved (its worker died, say). Used when
-        the session has no citations of its own.
+        run whose chat context was never saved (its worker died, say). Only the
+        RCA's own session and its sub-agents count: action runs on the incident
+        record steps too, and they are not the investigation's evidence.
         """
+        from chat.background.continuation import RCA_STEPS_WHERE
         from utils.db.connection_pool import db_pool
         from utils.auth.stateless_auth import set_rls_context
 
@@ -229,10 +231,10 @@ class CitationExtractor:
                 with conn.cursor() as cursor:
                     set_rls_context(cursor, conn, user_id, log_prefix="[CitationExtractor:steps]")
                     cursor.execute(
-                        """SELECT tool_name, tool_call_id, tool_input, tool_output, started_at
-                           FROM execution_steps
-                           WHERE incident_id = %s AND tool_output IS NOT NULL
-                           ORDER BY step_index""",
+                        f"""SELECT es.tool_name, es.tool_call_id, es.tool_input, es.tool_output, es.started_at
+                            FROM execution_steps es
+                            WHERE {RCA_STEPS_WHERE} AND es.tool_output IS NOT NULL
+                            ORDER BY es.step_index""",
                         (incident_id,),
                     )
                     rows = cursor.fetchall()

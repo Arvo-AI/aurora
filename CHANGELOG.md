@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   report, marked "Investigation incomplete", with what was not checked.
   "Investigation Failed" now only appears for a run that gathered nothing.
   A partial report is not used to fold recurrences or added to the Incident
-  Index. The incident page no longer marks a quiet investigation as an error
+  Index, and it updates the Slack, Teams and email cards without posting back
+  to PagerDuty, incident.io or ServiceNow or routing to team channels; those
+  wait for a finished report. The incident page no longer marks a quiet investigation as an error
   on its own; it keeps checking while it runs.
 
 ### Added

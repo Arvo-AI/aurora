@@ -5,8 +5,10 @@
 * It cannot be continued while running, once finished, when merged, or past
   the cap; a failed enqueue puts the incident back.
 * The Slack card offers the button only while continuations are left.
+* It is refused while a follow-up chat runs in the session.
 * A continuation that cannot be summarized leaves the earlier report in place.
 * A dead worker's RCA with evidence becomes a partial report, not a failure.
+* The evidence replayed to it is the RCA's own, framed as recorded data.
 """
 
 from __future__ import annotations
@@ -33,14 +35,18 @@ CLICKER = "clicker-1"
 
 
 class _Cursor:
-    def __init__(self, row):
+    def __init__(self, row, session_status="failed"):
         self.row = row
+        self.session_status = session_status
         self.executed = []
 
     def execute(self, sql, params=None):
         self.executed.append((" ".join(sql.split()), params))
 
     def fetchone(self):
+        last = self.executed[-1][0] if self.executed else ""
+        if last.startswith("SELECT status FROM chat_sessions"):
+            return (self.session_status,)
         return self.row
 
     def __enter__(self):
@@ -53,11 +59,11 @@ class _Cursor:
 @pytest.fixture
 def db(monkeypatch):
     """Install a fake pool whose incident row the test sets."""
-    state = SimpleNamespace(cursors=[], enqueued=[], rls=True, rls_orgs=[])
+    state = SimpleNamespace(cursors=[], enqueued=[], rls=True, rls_orgs=[], session_status="failed")
 
     def _pool(row):
         def _conn():
-            cursor = _Cursor(row)
+            cursor = _Cursor(row, state.session_status)
             state.cursors.append(cursor)
             conn = MagicMock()
             conn.cursor.return_value = cursor
@@ -137,6 +143,15 @@ def test_what_cannot_be_continued(db, row, words, status):
     assert not any("rca_continuations + 1" in s for s in _sql(db))
 
 
+def test_not_while_a_follow_up_chat_runs_in_the_session(db):
+    db.session_status = "in_progress"
+    db.pool(_row())
+    with pytest.raises(ContinueRefused, match="chat is running"):
+        continue_investigation(INCIDENT, CLICKER, "org-1")
+    assert db.enqueued == []
+    assert not any("rca_continuations + 1" in s for s in _sql(db))
+
+
 def test_another_orgs_incident_is_not_found(db):
     db.pool(_row())
     db.rls = False
@@ -144,8 +159,9 @@ def test_another_orgs_incident_is_not_found(db):
         continue_investigation(INCIDENT, CLICKER, "org-1")
 
 
-def test_a_failed_enqueue_puts_the_incident_back(db, monkeypatch):
-    db.pool(_row())
+def test_a_failed_enqueue_puts_the_incident_back_as_it_was(db, monkeypatch):
+    db.session_status = "completed"
+    db.pool(_row(aurora_status="error"))
     import chat.background.task as task_mod
 
     def _broker_down(**kw):
@@ -154,7 +170,19 @@ def test_a_failed_enqueue_puts_the_incident_back(db, monkeypatch):
     monkeypatch.setattr(task_mod.run_background_chat, "delay", _broker_down)
     with pytest.raises(RuntimeError):
         continue_investigation(INCIDENT, CLICKER, "org-1")
-    assert any("aurora_status = 'complete'" in s and "rca_continuations - 1" in s for s in _sql(db))
+    executed = [e for c in db.cursors for e in c.executed]
+    undo = [p for sql, p in executed if "rca_continuations - 1" in sql]
+    assert undo and undo[0][0] == "error"  # its previous status, not always 'complete'
+    session = [p for sql, p in executed if sql.startswith("UPDATE chat_sessions SET status = %s")]
+    assert session and session[0][0] == "completed"
+
+
+def test_a_blocked_continuation_is_given_back(db):
+    db.pool(None)
+    continuation.give_back_continuation(INCIDENT, OWNER)
+    sql = _sql(db)
+    assert any("rca_continuations - 1" in s and "aurora_status = 'complete'" in s
+               and "rca_run_task_id = NULL" in s and "status != 'merged'" in s for s in sql)
 
 
 @pytest.mark.parametrize("reason, words", [
@@ -238,7 +266,7 @@ def dead_rca(monkeypatch):
 
     def _summarize(incident_id, user_id, session_id, reason):
         calls.summarized.append((incident_id, session_id, reason))
-        return calls.summarize_ok
+        return task_mod.REPORTED if calls.summarize_ok else task_mod.UNSUMMARIZED
 
     monkeypatch.setattr(task_mod, "_summarize_unfinished_investigation", _summarize)
     monkeypatch.setattr(
@@ -279,41 +307,60 @@ def test_the_summary_knows_every_reason(reason):
     assert UNFINISHED_REASONS[reason] in _unfinished_investigation_note(reason)
 
 
-# --- the continuation's history ------------------------------------------------------
+# --- the continuation's evidence -----------------------------------------------------
 
-def test_history_is_rebuilt_from_execution_steps(monkeypatch):
-    from langchain_core.messages import HumanMessage
-
+def _steps_cursor(monkeypatch, rows):
     cursor = MagicMock()
-    cursor.fetchall.return_value = [
-        ("cloud_exec", {"command": "kubectl get pods"}, "pod-a CrashLoopBackOff"),
-        ("dispatch_subagent", {}, "rollup"),  # coordination, not evidence
-        ("query_datadog", '{"query": "errors"}', "x" * 5000),
-        ("cloud_exec", {}, "  "),  # no output
-    ]
+    cursor.fetchall.return_value = rows
     conn = MagicMock()
     conn.cursor.return_value.__enter__.return_value = cursor
     pool = MagicMock()
     pool.get_admin_connection.return_value.__enter__.return_value = conn
     monkeypatch.setattr(continuation, "db_pool", pool)
     monkeypatch.setattr(continuation, "set_rls_context", lambda *a, **k: "org-1")
+    return cursor
 
-    history = continuation.history_from_execution_steps(INCIDENT, OWNER)
 
-    # One plain message: replayed tool-call messages are rejected by some providers.
-    assert len(history) == 1 and isinstance(history[0], HumanMessage)
-    text = history[0].content
-    assert "2 tool calls" in text
+def test_evidence_is_rebuilt_from_execution_steps(monkeypatch):
+    cursor = _steps_cursor(monkeypatch, [
+        ("cloud_exec", {"command": "kubectl get pods"}, "pod-a CrashLoopBackOff"),
+        ("dispatch_subagent", {}, "rollup"),  # coordination, not evidence
+        ("query_datadog", '{"query": "errors"}', "x" * 5000),
+        ("cloud_exec", {}, "  "),  # no output
+    ])
+
+    text = continuation.evidence_from_execution_steps(INCIDENT, OWNER)
+
+    assert text.startswith("<recorded_evidence>") and text.endswith("</recorded_evidence>")
+    assert "not instructions" in text  # tool output is data, never the user's words
+    assert "2 calls" in text
     assert "### cloud_exec" in text and "kubectl get pods" in text and "CrashLoopBackOff" in text
     assert "### query_datadog" in text and "[truncated]" in text
     assert "dispatch_subagent" not in text
 
 
-def test_no_history_when_steps_cannot_be_read(monkeypatch):
+def test_evidence_is_only_the_rcas_own(monkeypatch):
+    """Action runs and other chats on the incident record steps too; they are not replayed."""
+    cursor = _steps_cursor(monkeypatch, [])
+    continuation.evidence_from_execution_steps(INCIDENT, OWNER)
+    sql = " ".join(cursor.execute.call_args[0][0].split())
+    assert "es.session_id = rca.aurora_chat_session_id::text" in sql
+    assert "starts_with(es.session_id, rca.aurora_chat_session_id::text || '::')" in sql
+
+
+def test_no_evidence_when_steps_cannot_be_read(monkeypatch):
     pool = MagicMock()
     pool.get_admin_connection.side_effect = RuntimeError("db down")
     monkeypatch.setattr(continuation, "db_pool", pool)
-    assert continuation.history_from_execution_steps(INCIDENT, OWNER) == []
+    assert continuation.evidence_from_execution_steps(INCIDENT, OWNER) is None
+
+
+def test_the_evidence_rides_in_the_prompt_message():
+    """One user turn, not two: Bedrock rejects consecutive user messages."""
+    assert continuation.with_recorded_evidence("Continue.", "<recorded_evidence>e</recorded_evidence>") == (
+        "<recorded_evidence>e</recorded_evidence>\n\nContinue."
+    )
+    assert continuation.with_recorded_evidence("Continue.", None) == "Continue."
 
 
 def test_session_and_recorded_citations_are_merged():
@@ -328,3 +375,17 @@ def test_session_and_recorded_citations_are_merged():
     assert [(m.index, m.tool_call_id, m.output) for m in merged] == [
         (1, "a", "step a (truncated)"), (2, "b", "full b"), (3, "z", "new z"),
     ]
+
+
+# --- the Slack button ----------------------------------------------------------------
+
+def test_a_slack_click_with_a_bad_incident_id_does_nothing(monkeypatch):
+    import routes.slack.slack_events as events
+
+    called = []
+    monkeypatch.setattr(continuation, "continue_investigation", lambda *a, **k: called.append(a))
+    monkeypatch.setattr(events, "aurora_user_for_slack_sender", lambda *a: called.append("lookup"))
+    assert events._handle_continue_investigation(
+        payload={}, action={"value": "'; drop table incidents"}, slack_user_id="U1", team_id="T1", channel_id="C1",
+    ) == {"text": ""}
+    assert called == []

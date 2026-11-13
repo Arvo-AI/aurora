@@ -462,14 +462,22 @@ def _continuation_fields(cursor, incident_id: str) -> dict[str, Any]:
     from chat.background.continuation import continuations_left
 
     try:
+        # A savepoint, so a failed read leaves the request's transaction usable
+        # for the queries that follow it.
+        cursor.execute("SAVEPOINT continuation_fields")
         cursor.execute(
             "SELECT rca_unfinished_reason, rca_continuations FROM incidents WHERE id = %s",
             (incident_id,),
         )
         row = cursor.fetchone()
+        cursor.execute("RELEASE SAVEPOINT continuation_fields")
         reason, used = (row[0], int(row[1] or 0)) if row and len(row) == 2 else (None, 0)
     except Exception:
         logger.warning("[INCIDENTS] Could not read continuation state for %s", sanitize(incident_id))
+        try:
+            cursor.execute("ROLLBACK TO SAVEPOINT continuation_fields")
+        except Exception:
+            logger.debug("[INCIDENTS] Savepoint rollback failed", exc_info=True)
         reason, used = None, 0
     return {
         "unfinishedReason": reason if isinstance(reason, str) else None,
