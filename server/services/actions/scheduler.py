@@ -17,6 +17,7 @@ _ACTIONS_QUERY = """
     FROM actions a
     LEFT JOIN action_runs r ON r.action_id = a.id
     WHERE a.trigger_type = 'on_schedule' AND a.enabled = true
+      AND a.org_id = %s
       AND NOT EXISTS (
         SELECT 1 FROM action_runs ar
         WHERE ar.action_id = a.id AND ar.status IN ('pending', 'running')
@@ -71,7 +72,9 @@ def run_scheduled_actions():
                         # Rollback drops session SETs that were not yet committed.
                         if not set_rls_context(cur, conn, user_id, log_prefix="[ActionScheduler]"):
                             continue
-                    cur.execute(_ACTIONS_QUERY)
+                    # Filter by org explicitly: if the DB role bypasses RLS, every
+                    # iteration would otherwise return every org's actions.
+                    cur.execute(_ACTIONS_QUERY, (org_id,))
                     rows.extend(cur.fetchall())
     except Exception:
         logger.exception("[ActionScheduler] Failed to query scheduled actions")
