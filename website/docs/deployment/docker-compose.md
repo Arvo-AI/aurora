@@ -70,7 +70,7 @@ After first startup, get the Vault token:
 
 ```bash
 # Get root token
-docker logs vault-init 2>&1 | grep "Root Token:"
+docker logs aurora-vault-init 2>&1 | grep "Root Token:"
 
 # Add to .env
 echo "VAULT_TOKEN=hvs.xxxxx" >> .env
@@ -233,10 +233,10 @@ cat .env | grep -E "^(OPENROUTER_API_KEY|VAULT_TOKEN)"
 
 ```bash
 # Check postgres is running
-docker exec aurora-postgres-1 pg_isready
+docker exec aurora-postgres pg_isready
 
 # Test connection
-docker exec aurora-postgres-1 psql -U aurora -d aurora_db -c "SELECT 1"
+docker exec aurora-postgres psql -U aurora -d aurora_db -c "SELECT 1"
 ```
 
 ### Vault Sealed After Restart
@@ -245,10 +245,10 @@ Vault requires manual unsealing after container restarts:
 
 ```bash
 # Get unseal key from vault-init logs
-docker logs vault-init 2>&1 | grep "Unseal Key"
+docker logs aurora-vault-init 2>&1 | grep "Unseal Key"
 
 # Unseal Vault
-docker exec -it aurora-vault-1 vault operator unseal <UNSEAL_KEY>
+docker exec -it aurora-vault vault operator unseal <UNSEAL_KEY>
 ```
 
 ### Out of Disk Space

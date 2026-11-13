@@ -35,6 +35,9 @@ PostgreSQL connection settings.
 | `POSTGRES_DB` | `aurora_db` | Database name |
 | `POSTGRES_HOST` | `postgres` | Database host (container name in Docker) |
 | `POSTGRES_PORT` | `5432` | Database port |
+| `POSTGRES_SSLMODE` | `prefer` | libpq SSL mode. `require` enforces TLS; `verify-ca` / `verify-full` also need `POSTGRES_SSLROOTCERT` |
+| `POSTGRES_SSLROOTCERT` | - | CA bundle path for `verify-ca` / `verify-full` |
+| `DB_MIGRATION_LOCK_TIMEOUT` | `240` | Seconds a starting server waits for the migration lock before failing |
 
 ```bash
 POSTGRES_USER=aurora
@@ -81,7 +84,9 @@ Redis connection for Celery task queue and caching.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `REDIS_URL` | `redis://redis:6379/0` | Full Redis connection URL |
+| `REDIS_URL` | `redis://redis:6379/0` | Full Redis connection URL. Use `rediss://` for TLS |
+| `REDIS_SSL_CA_CERTS` | - | CA bundle path. Only read when `REDIS_URL` is `rediss://` |
+| `REDIS_SSL_CERT_REQS` | - | Passed to redis-py as `ssl_cert_reqs` (for example `required` or `none`). Only read when `REDIS_URL` is `rediss://` |
 
 ```bash
 REDIS_URL=redis://redis:6379/0
@@ -212,7 +217,7 @@ VAULT_KV_BASE_PATH=users
 :::info Getting Vault Token
 On first startup, get the root token from:
 ```bash
-docker logs vault-init 2>&1 | grep "Root Token:"
+docker logs aurora-vault-init 2>&1 | grep "Root Token:"
 ```
 :::
 
@@ -331,6 +336,15 @@ MAIN_MODEL=anthropic/claude-sonnet-5    # auto-translated to us.anthropic.claude
 | `RCA_ORCHESTRATOR_MODEL` | - | *Only when `ORCHESTRATOR_ENABLED=true`.* Brain model for triage + synthesis. Format: `provider/model`. |
 | `RCA_SUBAGENT_MODEL` | - | *Only when `ORCHESTRATOR_ENABLED=true`.* Sub-agent investigator model. Per-role overrides in `orchestrator/roles/*.md` frontmatter take precedence. Format: `provider/model`. |
 | `GEMINI_DISABLE_THINKING` | - | Disable Gemini thinking mode |
+| `VISION_MODEL` | _(MAIN_MODEL)_ | Model for multimodal tasks |
+| `EMBEDDING_MODEL` | - | Embedding model for alert correlation, as `provider/model` (for example `openai/text-embedding-3-small`). Needs a direct provider key; OpenRouter has no embeddings. Unset falls back to token similarity |
+| `RCA_SKILLS_TOKEN_BUDGET` | `12000` | Token budget for integration skills auto-loaded into a background RCA. `RCA_TOKEN_BUDGET` is read when this is unset |
+| `RECURRENCE_DETECTION_MODE` | `live` | Root-cause recurrence detection: `off`, `shadow` (record verdicts only) or `live` (fold recurrences). An unknown value is treated as `off` |
+| `RECURRENCE_AGENT_TIMEOUT_SECONDS` | `120` | Wall-clock budget for one recurrence check |
+| `RECURRENCE_AGENT_MODEL` | _(MAIN_MODEL)_ | Model for the recurrence agent |
+| `VISUALIZATION_ENABLED` | `false` | Run the LLM extraction behind the incident infrastructure graph |
+| `NEXT_PUBLIC_ENABLE_VISUALIZATION` | `false` | Show the visualization panel in the incident UI. Keep in sync with `VISUALIZATION_ENABLED` |
+| `DISPLAY__RCA_USER_MSG` | `false` | Show the auto-generated RCA prompt as the first message in the chat UI |
 
 ### AI Safety Guardrails
 
@@ -444,8 +458,7 @@ See the [GitHub connector setup walkthroughs](../integrations/connectors.md#gith
 ### Bitbucket
 
 Bitbucket connects via a scoped API token entered in the UI (no env vars) or
-optional OAuth (`BB_OAUTH_CLIENT_ID` / `BB_OAUTH_CLIENT_SECRET` +
-`NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH=true`).
+optional OAuth (`BB_OAUTH_CLIENT_ID` / `BB_OAUTH_CLIENT_SECRET`).
 
 **Incident Prevention on Bitbucket** needs no additional environment
 variables: connect Bitbucket, flip the per-repo **Incident Prevention**
@@ -485,6 +498,8 @@ See the [Bitbucket connector guide](../integrations/connectors.md#bitbucket) for
 | `SLACK_CLIENT_SECRET` | Slack App Client Secret |
 | `SLACK_SIGNING_SECRET` | Slack App Signing Secret |
 | `SLACK_APP_TOKEN` | App-level token (`xapp-...`) with `connections:write`. Set it to enable Socket Mode (outbound WebSocket) instead of HTTP webhooks — for private/self-hosted deployments with no public URL. Leave empty to use HTTP webhooks. |
+| `SLACK_PROGRESS_UPDATES_ENABLED` | Default `true`. Edit the "Thinking…" placeholder with progress (elapsed time, current tool, latest thought) while an investigation runs. |
+| `SLACK_PROGRESS_UPDATE_INTERVAL_SECONDS` | Default `30`, minimum `10`. Seconds between progress edits. |
 
 ```bash
 SLACK_CLIENT_ID=your-client-id
@@ -513,12 +528,10 @@ GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH` | `false` | Enable PagerDuty OAuth in UI |
 | `PAGERDUTY_CLIENT_ID` | - | PagerDuty OAuth Client ID |
 | `PAGERDUTY_CLIENT_SECRET` | - | PagerDuty OAuth Client Secret |
 
 ```bash
-NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=true
 PAGERDUTY_CLIENT_ID=your-client-id
 PAGERDUTY_CLIENT_SECRET=your-client-secret
 ```
@@ -529,7 +542,6 @@ OAuth now requests `incidents.write` (for posting RCA notes); register it on the
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEXT_PUBLIC_ENABLE_OVH` | `false` | Enable OVH connector in UI |
 | `OVH_EU_CLIENT_ID` | - | OVH EU region Client ID |
 | `OVH_EU_CLIENT_SECRET` | - | OVH EU region Client Secret |
 | `OVH_CA_CLIENT_ID` | - | OVH CA region Client ID |
@@ -538,7 +550,6 @@ OAuth now requests `incidents.write` (for posting RCA notes); register it on the
 | `OVH_US_CLIENT_SECRET` | - | OVH US region Client Secret |
 
 ```bash
-NEXT_PUBLIC_ENABLE_OVH=true
 OVH_EU_CLIENT_ID=your-eu-client-id
 OVH_EU_CLIENT_SECRET=your-eu-client-secret
 ```
@@ -549,31 +560,58 @@ The Scaleway connector is always available. Users connect with an API key; no se
 
 ### Confluence
 
+One Atlassian OAuth app covers Confluence and Jira.
+
 | Variable | Description |
 |----------|-------------|
-| `CONFLUENCE_CLIENT_ID` | Confluence OAuth Client ID |
-| `CONFLUENCE_CLIENT_SECRET` | Confluence OAuth Client Secret |
+| `ATLASSIAN_CLIENT_ID` | Atlassian OAuth Client ID |
+| `ATLASSIAN_CLIENT_SECRET` | Atlassian OAuth Client Secret |
 
 ```bash
-CONFLUENCE_CLIENT_ID=your-client-id
-CONFLUENCE_CLIENT_SECRET=your-client-secret
+ATLASSIAN_CLIENT_ID=your-client-id
+ATLASSIAN_CLIENT_SECRET=your-client-secret
 ```
 
 ### SharePoint
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEXT_PUBLIC_ENABLE_SHAREPOINT` | `false` | Enable SharePoint connector in UI |
 | `SHAREPOINT_CLIENT_ID` | - | Azure App Client ID |
 | `SHAREPOINT_CLIENT_SECRET` | - | Azure App Client Secret |
 | `SHAREPOINT_TENANT_ID` | `common` | Azure Tenant ID |
 
 ```bash
-NEXT_PUBLIC_ENABLE_SHAREPOINT=true
 SHAREPOINT_CLIENT_ID=your-client-id
 SHAREPOINT_CLIENT_SECRET=your-client-secret
 SHAREPOINT_TENANT_ID=your-tenant-id
 ```
+
+### Notion
+
+Optional. The integration-token flow in the UI needs no env vars.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NOTION_CLIENT_ID` | - | Notion OAuth Client ID |
+| `NOTION_CLIENT_SECRET` | - | Notion OAuth Client Secret |
+| `NOTION_REDIRECT_URI` | `<FRONTEND_URL>/notion/callback` | OAuth redirect URI |
+
+### Splunk
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SPLUNK_SSL_VERIFY` | `false` | TLS verification for Splunk: `false`, `true`, or a path to a private CA bundle |
+
+## Memgraph (Graph Database)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MEMGRAPH_HOST` | `memgraph` | Memgraph host |
+| `MEMGRAPH_PORT` | `7687` | Bolt port |
+| `MEMGRAPH_SCHEME` | `bolt` | `bolt`, or `bolt+ssc` for Memgraph Cloud |
+| `MEMGRAPH_USER` | - | Only for hosted or auth-enabled Memgraph |
+| `MEMGRAPH_PASSWORD` | - | Only for hosted or auth-enabled Memgraph |
+| `DISCOVERY_INTERVAL_HOURS` | `1` | Hours between infrastructure discovery runs |
 
 ## Email (SMTP)
 
@@ -646,6 +684,9 @@ RATE_LIMIT_HEADERS_ENABLED=true
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NGROK_URL` | - | ngrok tunnel URL for local development |
+| `FRONTEND_DEV_RUNTIME` | `bun` | `make dev` only: `bun` (Turbopack) or `node` (Webpack, if the frontend dev server runs out of memory in Docker Desktop) |
+| `AURORA_HOOKS_MODULE` | - | Python module path with custom extensibility hook implementations |
+| `NEXT_PUBLIC_ENABLE_PAYWALL` | `false` | Show an upgrade prompt instead of Add member for free-tier orgs. Seat enforcement itself needs the `before_add_member` hook |
 
 ## Environment File Locations
 

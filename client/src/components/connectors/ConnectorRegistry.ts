@@ -1,5 +1,4 @@
 import { Plug, Server } from "lucide-react";
-import { isOvhEnabled, isSharePointEnabled, isSpinnakerEnabled, isNotionEnabled, isCloudBeesEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -225,31 +224,27 @@ class ConnectorRegistry {
       storageKey: "isJiraConnected",
     });
 
-    if (isSharePointEnabled()) {
-      this.register({
-        id: "sharepoint",
-        name: "SharePoint",
-        description: "Fetch documents, site pages, and search across SharePoint Online sites to automate incident response workflows.",
-        iconPath: "/sharepoint.png",
-        iconBgColor: "bg-white dark:bg-white",
-        category: "Documentation",
-        path: "/sharepoint/connect",
-        storageKey: "isSharePointConnected",
-      });
-    }
+    this.register({
+      id: "sharepoint",
+      name: "SharePoint",
+      description: "Fetch documents, site pages, and search across SharePoint Online sites to automate incident response workflows.",
+      iconPath: "/sharepoint.png",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Documentation",
+      path: "/sharepoint/connect",
+      storageKey: "isSharePointConnected",
+    });
 
-    if (isNotionEnabled()) {
-      this.register({
-        id: "notion",
-        name: "Notion",
-        description: "Export postmortems, search workspace docs, and let Aurora create runbooks and action-item rows in your Notion workspace.",
-        iconPath: "/notion.svg",
-        iconBgColor: "bg-white dark:bg-white",
-        category: "Documentation",
-        path: "/notion/connect",
-        storageKey: "isNotionConnected",
-      });
-    }
+    this.register({
+      id: "notion",
+      name: "Notion",
+      description: "Export postmortems, search workspace docs, and let Aurora create runbooks and action-item rows in your Notion workspace.",
+      iconPath: "/notion.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Documentation",
+      path: "/notion/connect",
+      storageKey: "isNotionConnected",
+    });
 
     this.register({
       id: "kubectl",
@@ -376,19 +371,17 @@ class ConnectorRegistry {
       useCustomConnection: true,
     });
 
-    if (isOvhEnabled()) {
-      this.register({
-        id: "ovh",
-        name: "OVH Cloud",
-        description: "Connect to OVH Cloud to manage your Public Cloud projects, monitor resources, and deploy applications across OVH infrastructure.",
-        iconPath: "/ovh.svg",
-        iconBgColor: "bg-white dark:bg-white",
-        category: "Infrastructure",
-        path: "/ovh/onboarding",
-        storageKey: "isOVHConnected",
-        useCustomConnection: true,
-      });
-    }
+    this.register({
+      id: "ovh",
+      name: "OVH Cloud",
+      description: "Connect to OVH Cloud to manage your Public Cloud projects, monitor resources, and deploy applications across OVH infrastructure.",
+      iconPath: "/ovh.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Infrastructure",
+      path: "/ovh/onboarding",
+      storageKey: "isOVHConnected",
+      useCustomConnection: true,
+    });
 
     this.register({
       id: "scaleway",
@@ -469,31 +462,27 @@ class ConnectorRegistry {
       storageKey: "isJenkinsConnected",
     });
 
-    if (isCloudBeesEnabled()) {
-      this.register({
-        id: "cloudbees",
-        name: "CloudBees CI",
-        description: "Connect to CloudBees CI to view jobs, builds, pipeline status, and build agents. Enterprise Jenkins with Operations Center support.",
-        iconPath: "/cloudbees.svg",
-        iconBgColor: "bg-muted",
-        category: "CI/CD",
-        path: "/cloudbees/auth",
-        storageKey: "isCloudBeesConnected",
-      });
-    }
+    this.register({
+      id: "cloudbees",
+      name: "CloudBees CI",
+      description: "Connect to CloudBees CI to view jobs, builds, pipeline status, and build agents. Enterprise Jenkins with Operations Center support.",
+      iconPath: "/cloudbees.svg",
+      iconBgColor: "bg-muted",
+      category: "CI/CD",
+      path: "/cloudbees/auth",
+      storageKey: "isCloudBeesConnected",
+    });
 
-    if (isSpinnakerEnabled()) {
-      this.register({
-        id: "spinnaker",
-        name: "Spinnaker",
-        description: "Connect to Spinnaker for deployment pipeline visibility, application health monitoring, and automated incident correlation with CD events.",
-        iconPath: "/spinnaker.svg",
-        iconBgColor: "bg-white dark:bg-white",
-        category: "CI/CD",
-        path: "/spinnaker/auth",
-        storageKey: "isSpinnakerConnected",
-      });
-    }
+    this.register({
+      id: "spinnaker",
+      name: "Spinnaker",
+      description: "Connect to Spinnaker for deployment pipeline visibility, application health monitoring, and automated incident correlation with CD events.",
+      iconPath: "/spinnaker.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "CI/CD",
+      path: "/spinnaker/auth",
+      storageKey: "isSpinnakerConnected",
+    });
   }
 
   register(connector: ConnectorConfig): void {

@@ -9,34 +9,38 @@ Aurora is an automated **root cause analysis** investigation tool that uses AI a
 
 ## What is Aurora?
 
-Aurora connects to your cloud infrastructure (GCP, AWS, Azure) and observability tools (Datadog, Grafana, PagerDuty) to help you investigate incidents using natural language. Instead of manually querying logs, metrics, and traces across multiple dashboards, you can ask Aurora questions like:
+An alert becomes an incident. Aurora investigates across your cloud accounts, Kubernetes clusters, and observability tools, then leaves a structured root cause and whatever follow-up you configured as an Action. The Generate Postmortem action writes the postmortem when the incident is resolved.
+
+You can also just ask:
 
 - "Why did the API latency spike at 3am?"
-- "Show me all errors from the payment service in the last hour"
+- "Show me errors from the checkout service in the last hour"
 - "What changed in our Kubernetes deployments this week?"
 
-Aurora uses LLM-powered agents to understand your question, query the relevant systems, and synthesize the findings into actionable insights.
+The product surfaces (Chat, Incidents, Actions, Monitor, Memory) are described in [Product](/docs/product).
 
 ## Key Features
 
-- **AI-Powered Investigation** - Natural language queries powered by LLMs (OpenRouter, OpenAI, Anthropic)
-- **Multi-Cloud Support** - Connect to GCP, AWS, Azure, and OVH
-- **Observability Integrations** - Datadog, Grafana, PagerDuty, Netdata
-- **Communication Tools** - Slack and GitHub integrations
-- **Local-First** - Run entirely on your machine with Docker
-- **Secure** - HashiCorp Vault for secrets management
+- **Investigation** — Agent or Ask mode. The agent runs `kubectl`, cloud CLIs, and log queries in a sandbox and cites what came back.
+- **Incidents** — Alerts from PagerDuty, Datadog, Grafana, ServiceNow, incident.io, CloudWatch, and the other [connectors](/docs/integrations/connectors) start a background RCA.
+- **Actions** — Instructions that run on an incident, on a schedule, or when you click Run. Built-ins write the postmortem, audit alert gaps, right-size workloads, and consolidate memory.
+- **Monitor** — Fleet runs, SRE timings, tool usage, living artifacts, and an audit log.
+- **Memory** — Runbooks and notes the agent reads and updates, shared across the org.
+- **Anywhere you already talk** — Slack, Microsoft Teams, and Google Chat.
+- **Your model** — OpenRouter, OpenAI, Anthropic, Gemini, Vertex AI, AWS Bedrock, or Ollama. See [LLM providers](/docs/integrations/llm-providers).
+- **Self-hosted** — Docker Compose or Helm. Credentials stay in Vault or AWS Secrets Manager. [Command safety](/docs/configuration/command-safety) guardrails are on by default.
 
 ## Quick Links
 
-- [**Quickstart**](/docs/getting-started/quickstart) - Get Aurora running in 5 minutes
-- [**Development Setup**](/docs/getting-started/dev-setup) - Set up for local development
-- [**Architecture**](/docs/architecture/overview) - Understand how Aurora works
-- [**Configuration**](/docs/configuration/environment) - Environment variables reference
+- [**Product**](/docs/product) — What each screen does
+- [**Quickstart**](/docs/getting-started/quickstart) — Running in a few minutes
+- [**Connectors**](/docs/integrations/connectors) — Cloud, Kubernetes, alerts, chat, and docs
+- [**Architecture**](/docs/architecture/overview) — How the services fit together
 
 ## Requirements
 
 - Docker and Docker Compose >= 28.x
-- At least one LLM API key (OpenRouter, OpenAI, or Anthropic)
+- At least one LLM: an API key for OpenRouter, OpenAI, Anthropic, or Gemini; Vertex AI (`VERTEX_AI_PROJECT` and service account credentials); Bedrock (a gateway URL in `BEDROCK_BASE_URL`, or a region plus AWS credentials or an IAM role); or a reachable Ollama (`OLLAMA_BASE_URL`, no key)
 
 **No cloud provider accounts required** to get started. Cloud connectors are optional.
 

@@ -6,7 +6,6 @@ import requests
 import urllib.parse
 from time import time
 from typing import Dict, Optional, Tuple
-from utils.flags.feature_flags import is_pagerduty_oauth_enabled
 from utils.auth.token_management import store_tokens_in_db
 
 logger = logging.getLogger(__name__)
@@ -19,25 +18,21 @@ PAGERDUTY_TOKEN_URL = "https://app.pagerduty.com/oauth/token"
 # dropped and PagerDuty issues an openid-only token.
 DEFAULT_SCOPES = "openid users.read incidents.read incidents.write services.read"
 
-# Only load OAuth credentials if feature flag is enabled
-if is_pagerduty_oauth_enabled():
-    PAGERDUTY_CLIENT_ID = os.getenv("PAGERDUTY_CLIENT_ID")
-    PAGERDUTY_CLIENT_SECRET = os.getenv("PAGERDUTY_CLIENT_SECRET")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL").rstrip("/")
-    PAGERDUTY_REDIRECT_URI = f"{backend_url}/pagerduty/oauth/callback"
-    
-    if not PAGERDUTY_CLIENT_ID or not PAGERDUTY_CLIENT_SECRET or not PAGERDUTY_REDIRECT_URI:
-        raise ValueError("PagerDuty OAuth credentials not configured. Please set PAGERDUTY_CLIENT_ID, PAGERDUTY_CLIENT_SECRET, and NEXT_PUBLIC_BACKEND_URL environment variables.")
-else:
-    PAGERDUTY_CLIENT_ID = None
-    PAGERDUTY_CLIENT_SECRET = None
-    PAGERDUTY_REDIRECT_URI = None
+# Missing credentials must not stop the server. The token form still works.
+PAGERDUTY_CLIENT_ID = os.getenv("PAGERDUTY_CLIENT_ID")
+PAGERDUTY_CLIENT_SECRET = os.getenv("PAGERDUTY_CLIENT_SECRET")
+_backend_url = (os.getenv("NEXT_PUBLIC_BACKEND_URL") or "").rstrip("/")
+PAGERDUTY_REDIRECT_URI = f"{_backend_url}/pagerduty/oauth/callback" if _backend_url else None
+
+
+def oauth_configured() -> bool:
+    return bool(PAGERDUTY_CLIENT_ID and PAGERDUTY_CLIENT_SECRET and PAGERDUTY_REDIRECT_URI)
 
 
 def get_auth_url(state: Optional[str] = None) -> str:
     """Generate PagerDuty OAuth URL."""
-    if not is_pagerduty_oauth_enabled():
-        raise ValueError("PagerDuty OAuth is not enabled")
+    if not oauth_configured():
+        raise ValueError("PagerDuty OAuth credentials are not configured")
     
     
     params = {
@@ -65,8 +60,8 @@ def _oauth_request(grant_data: Dict) -> Optional[Dict]:
 
 def exchange_code_for_token(code: str) -> Optional[Dict]:
     """Exchange authorization code for tokens."""
-    if not is_pagerduty_oauth_enabled():
-        logger.error("[PAGERDUTY_OAUTH] OAuth is not enabled")
+    if not oauth_configured():
+        logger.error("[PAGERDUTY_OAUTH] OAuth credentials are not configured")
         return None
 
     
@@ -81,7 +76,7 @@ def exchange_code_for_token(code: str) -> Optional[Dict]:
 
 def refresh_token_if_needed(token_data: Dict) -> Tuple[bool, Optional[Dict]]:
     """Refresh OAuth token if expired."""
-    if not is_pagerduty_oauth_enabled():
+    if not oauth_configured():
         return False, None
     
     refresh_token = token_data.get("refresh_token")

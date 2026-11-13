@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { GitHubIntegrationService } from "@/components/github-provider-integration";
 
 import { BitbucketIntegrationService } from "@/components/bitbucket-provider-integration";
-import { isOvhEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "@/components/connectors/types";
 import { slackService } from "@/lib/services/slack";
 import { teamsService, type TeamsStatus } from "@/lib/services/teams";
@@ -216,17 +215,15 @@ export function useConnectorStatus(
 
       if (!userId) { setIsConnected(false); return; }
 
-      if (isOvhEnabled()) {
-        try {
-          const r = await fetchR(`/api/proxy/ovh/instances`, {
-            credentials: "include",
-          });
-          if (r.ok) {
-            const d = await r.json();
-            if ((d.instances || []).some((i: any) => i.sshConfig)) { setIsConnected(true); return; }
-          }
-        } catch { /* not configured */ }
-      }
+      try {
+        const r = await fetchR(`/api/proxy/ovh/instances`, {
+          credentials: "include",
+        });
+        if (r.ok) {
+          const d = await r.json();
+          if ((d.instances || []).some((i: any) => i.sshConfig)) { setIsConnected(true); return; }
+        }
+      } catch { /* not configured */ }
 
       try {
         const r = await fetchR(`/api/proxy/scaleway/instances`, {

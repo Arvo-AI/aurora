@@ -61,9 +61,9 @@ server/main_compute.py
 ### Environment Variables
 ```bash
 FLASK_SECRET_KEY=<secret>
-FLASK_ENV=production
+AURORA_ENV=production
 POSTGRES_HOST=postgres
-REDIS_HOST=redis
+REDIS_URL=redis://redis:6379/0
 ```
 
 ### Rebuild
@@ -118,12 +118,12 @@ Primary relational database.
 Host: postgres (in Docker) / localhost (external)
 Port: 5432
 Database: aurora_db
-User: postgres
+User: aurora (POSTGRES_USER)
 ```
 
 ### Access
 ```bash
-docker exec -it aurora-postgres-1 psql -U postgres -d aurora_db
+docker exec -it aurora-postgres psql -U aurora -d aurora_db
 ```
 
 ## Redis
@@ -151,8 +151,11 @@ Secrets management.
 
 ### Access
 ```bash
+# The Vault container has no token; pass yours from the host shell
+export VAULT_TOKEN=<VAULT_TOKEN from .env>
+
 # CLI
-docker exec -it vault vault kv list aurora/users/
+docker exec -it -e VAULT_TOKEN aurora-vault vault kv list aurora/users/
 
 # UI
 http://localhost:8200

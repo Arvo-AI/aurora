@@ -124,7 +124,8 @@ class StorageConfig:
             secret_key=secret_key,
             use_ssl=use_ssl,
             verify_ssl=verify_ssl,
-            # Other settings use dataclass defaults (region, cache_enabled, cache_ttl, max_file_size_mb)
+            region=(os.getenv("STORAGE_REGION") or "").strip() or "us-east-1",
+            # Other settings use dataclass defaults (cache_enabled, cache_ttl, max_file_size_mb)
         )
 
 

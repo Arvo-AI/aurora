@@ -9,7 +9,7 @@ This page explains how to configure a GCP service account for Aurora that cannot
 
 ## Service account roles
 
-Every Aurora GCP service account receives the following infrastructure roles. These provide full investigation capability (pod status, metrics, deployments, events, resource inventory) without exposing logs, Cloud SQL contents, or traces. The BigQuery roles are the exception: they can read table rows, which may contain PII.
+Grant these roles yourself when the service account must investigate without reading logs, Cloud SQL contents, or traces. Aurora does not assign this set. An OAuth connection creates two service accounts. The Agent account receives `roles/owner`, `roles/iam.serviceAccountUser`, and `roles/iam.serviceAccountTokenCreator` on the organization when Aurora can see one, and on each project. The Ask-mode account receives viewer roles on each project, including `roles/viewer` and `roles/logging.viewer`, plus those same two impersonation roles. See [OAuth setup](/docs/integrations/connectors#gcp-oauth). The BigQuery roles below can read table rows, which may contain PII.
 
 ```bash
 export PROJECT_ID="your-project-id"

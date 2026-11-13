@@ -6,6 +6,8 @@ export type PagerDutyApiKeyAccess = 'user' | 'account' | 'oauth';
 
 export interface PagerDutyStatus {
   connected: boolean;
+  /** False when the server has no PagerDuty OAuth client or public backend URL. */
+  oauthAvailable?: boolean;
   displayName?: string;
   externalUserEmail?: string;
   externalUserName?: string;

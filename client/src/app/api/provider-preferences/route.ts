@@ -1,15 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
-import { isOvhEnabled } from '@/lib/feature-flags';
-
 const API_BASE_URL = process.env.BACKEND_URL
 
 function getValidProviders(): string[] {
-  const providers = ['gcp', 'azure', 'aws', 'scaleway', 'tailscale', 'grafana', 'datadog', 'cloudbees', 'newrelic', 'cloudflare', 'flyio'];
-  if (isOvhEnabled()) {
-    providers.push('ovh');
-  }
-  return providers;
+  return ['gcp', 'azure', 'aws', 'ovh', 'scaleway', 'tailscale', 'grafana', 'datadog', 'cloudbees', 'newrelic', 'cloudflare', 'flyio'];
 }
 
 // ---------------------------------------------------------------------------

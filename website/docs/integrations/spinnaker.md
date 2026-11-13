@@ -23,12 +23,7 @@ If you already have a running Spinnaker instance, skip straight to [Connecting t
 ## Prerequisites
 
 - A running Spinnaker instance with **Gate** (API gateway) accessible from the Aurora server
-- `NEXT_PUBLIC_ENABLE_SPINNAKER=true` in your `.env` file
 - Aurora with Vault configured and unsealed
-
-:::info Feature Flag
-The Spinnaker connector is behind a feature flag. Set `NEXT_PUBLIC_ENABLE_SPINNAKER=true` in your `.env` and restart Aurora. The connector will appear under the **CI/CD** category on the Connectors page.
-:::
 
 ---
 
@@ -702,7 +697,6 @@ Then in Aurora chat, ask: *"Show me recent Spinnaker deployments"* to verify the
 
 | Error | Solution |
 |-------|----------|
-| **Spinnaker connector not visible** | Set `NEXT_PUBLIC_ENABLE_SPINNAKER=true` in `.env` and restart Aurora |
 | **"Failed to store Spinnaker credentials"** | Vault is sealed. Unseal it: `docker exec aurora-vault vault operator unseal <unseal-key>`. Then restart the Aurora server |
 | **"Unable to reach Spinnaker Gate API"** | Verify Gate is accessible from the Aurora server container. Use `host.docker.internal` instead of `localhost` for Docker setups |
 | **"CERTIFICATE_VERIFY_FAILED: Hostname mismatch"** | The server certificate SAN doesn't include the hostname Aurora uses. Regenerate with the correct hostname in `gate-san.ext` |

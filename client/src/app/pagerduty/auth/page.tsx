@@ -9,7 +9,6 @@ import { PagerDutyNotesCard } from "@/components/pagerduty/PagerDutyNotesCard";
 import { PagerDutyWebhookStep } from "@/components/pagerduty/PagerDutyWebhookStep";
 import { TokenInputModal } from "@/components/pagerduty/TokenInputModal";
 import { ConnectionLoadingOverlay } from "@/components/ui/connection-loading-overlay";
-import { isPagerDutyOAuthEnabled } from "@/lib/feature-flags";
 import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
 import { getUserFriendlyError } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
@@ -50,11 +49,17 @@ export default function PagerDutyAuthPage() {
     const result = await pagerdutyService.getStatus();
     setStatus(result);
 
-    if (typeof window !== 'undefined' && result) {
-      localStorage.setItem(CACHE_KEY, JSON.stringify(result));
+    if (typeof window !== 'undefined') {
+      if (result) {
+        localStorage.setItem(CACHE_KEY, JSON.stringify(result));
+      } else {
+        // Don't leave a stale "connected" status cached when the request fails.
+        localStorage.removeItem(CACHE_KEY);
+      }
     }
 
     updateLocalStorageConnection(result?.connected || false);
+    return result;
   };
 
   const loadStatus = async (skipCache = false) => {
@@ -239,15 +244,12 @@ export default function PagerDutyAuthPage() {
     try {
       await pagerdutyService.disconnect();
 
-      setStatus({ connected: false });
       setDisplayName("PagerDuty");
-
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem(CACHE_KEY);
-        localStorage.removeItem('isPagerDutyConnected');
+      // Status includes oauthAvailable. A local { connected: false } would hide the button.
+      // Retry once if the refresh fails, so the OAuth option comes back without a reload.
+      if (!(await fetchAndUpdateStatus())) {
+        await fetchAndUpdateStatus();
       }
-
-      updateLocalStorageConnection(false);
 
       toast({
         title: 'Success',
@@ -302,7 +304,7 @@ export default function PagerDutyAuthPage() {
               loading={loading}
               error={null}
               onConnect={handleConnect}
-              onOAuthConnect={isPagerDutyOAuthEnabled() ? handleOAuthConnect : undefined}
+              onOAuthConnect={status?.oauthAvailable ? handleOAuthConnect : undefined}
             />
           ) : status ? (
             <div className="space-y-4">

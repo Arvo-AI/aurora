@@ -36,7 +36,7 @@ Because guardrails are enabled by default, the LLM judge and NeMo input rail nee
 At a minimum, you need:
 
 - Either `MAIN_MODEL` or `GUARDRAILS_LLM_MODEL` set to a reachable model.
-- The corresponding provider credentials (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, or `OLLAMA_BASE_URL`).
+- The corresponding provider credentials (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_AI_API_KEY`, or `OLLAMA_BASE_URL`).
 - Outbound network access from the `chatbot` and `celery-worker` containers to the provider endpoint (or to your Ollama host).
 
 If your environment genuinely cannot reach an LLM, set `GUARDRAILS_ENABLED=false` explicitly. Do not rely on guardrails silently being inactive -- they are on unless you turn them off.

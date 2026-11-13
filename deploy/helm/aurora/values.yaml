@@ -88,7 +88,9 @@ slackSocketMode:
 #
 # IRSA (EKS) — the annotated role must have ALL of the following permissions:
 #   1. S3 access on your storage bucket (if not using static STORAGE_ACCESS_KEY/SECRET_KEY)
-#   2. secretsmanager:* on aurora/users/* (if SECRETS_BACKEND=aws_secrets_manager)
+#   2. If SECRETS_BACKEND=aws_secrets_manager: secretsmanager:* on aurora/users/*, plus
+#      secretsmanager:GetSecretValue on aurora/system/* (GitHub App private key and
+#      webhook secret; without it the GitHub App cannot authenticate)
 #   3. sts:AssumeRole on * (for the AWS connector — needs cross-account access, so resource must be *)
 #      Without this, the AWS connector cannot assume cross-account roles and will return
 #      "not authorized to perform: sts:AssumeRole" errors.
@@ -485,11 +487,6 @@ config:
   # --- Optional Features (enable as needed) ---
   ENABLE_POD_ISOLATION: "false"               # Isolate terminal commands in separate pods
   # NEXT_PUBLIC_* feature flags — written to window.__ENV by docker-entrypoint.sh at startup, no image rebuild needed
-  NEXT_PUBLIC_ENABLE_OVH: "false"            # OVH Cloud integration
-  NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: "false" # PagerDuty integration
-  NEXT_PUBLIC_ENABLE_SHAREPOINT: "false"     # SharePoint integration
-  NEXT_PUBLIC_ENABLE_NOTION: "false"         # Notion integration
-  NEXT_PUBLIC_ENABLE_SPINNAKER: "false"      # Spinnaker integration
   NEXT_PUBLIC_ENABLE_VISUALIZATION: "false"  # Incident infra visualization UI (pairs with VISUALIZATION_ENABLED)
   HOSTED_SIGNUP_ENABLED: "false"             # One-click GitHub App / "Add to Slack" signup from website (GitHub needs GITHUB_APP_CLIENT_SECRET)
   MARKETING_SITE_URL: ""                     # Website a cancelled "Add to Slack" returns to; empty = app sign-in page
@@ -585,10 +582,12 @@ secrets:
     GITHUB_APP_ID: ""                      # Numeric App ID from App settings
     GITHUB_APP_CLIENT_ID: ""               # Starts with Iv23l...
     NEXT_PUBLIC_GITHUB_APP_SLUG: ""        # URL slug (e.g. aurora-acme-prod)
-    GITHUB_APP_WEBHOOK_URL: ""             # https://<your-host>/github/webhook
-    GITHUB_APP_SETUP_URL: ""               # https://<your-host>/github
+    GITHUB_APP_WEBHOOK_URL: ""             # https://<api-host>/github/webhook (API host, not the frontend host)
+    GITHUB_APP_SETUP_URL: ""               # https://<api-host>/github/app/install/callback (API host, not the frontend host)
     GITHUB_APP_CLIENT_SECRET: ""            # OAuth client secret (for hosted signup flow)
-    GITHUB_APP_WEBHOOK_SECRET: ""          # openssl rand -hex 32 (also stored in secrets backend)
+    GITHUB_APP_WEBHOOK_SECRET: ""          # openssl rand -hex 32. Fallback only: the secrets backend copy at aurora/system/github-app/webhook-secret wins.
+    # The GitHub App private key has no values/env field. Write it to the secrets
+    # backend at aurora/system/github-app/private-key (see the GitHub connector docs).
 
     # --- GitHub OAuth (only when GITHUB_AUTH_MODE=oauth or hybrid) ---
     GH_OAUTH_CLIENT_ID: ""       # Get from: https://github.com/settings/developers
