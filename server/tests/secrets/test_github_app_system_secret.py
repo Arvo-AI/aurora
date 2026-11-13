@@ -242,7 +242,7 @@ class TestGetAppPrivateKey:
 
         with pytest.raises(GitHubAppConfigError, match="valid unencrypted PEM private key"):
             vault_keys.get_app_private_key()
-        assert vault_keys._private_key_cache is None
+        assert "private_key" not in vault_keys._cache
 
     def test_invalid_backend_setting_still_uses_env(self, monkeypatch):
         def _bad_backend():

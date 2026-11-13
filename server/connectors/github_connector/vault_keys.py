@@ -59,12 +59,13 @@ _ENV_FALLBACK_TTL_SECONDS = 60.0
 
 # A cache entry is (value, expires_at). expires_at is a monotonic deadline for
 # an env-fallback value, or None for a backend value, which does not expire.
-# Each entry is replaced by one assignment so concurrent request threads never
-# pair a value with another value's expiry.
+# Each entry is replaced by one item assignment so concurrent request threads
+# never pair a value with another value's expiry.
 _CacheEntry = tuple[str, float | None]
 
-_private_key_cache: _CacheEntry | None = None
-_webhook_secret_cache: _CacheEntry | None = None
+_PRIVATE_KEY_CACHE_KEY = "private_key"
+_WEBHOOK_SECRET_CACHE_KEY = "webhook_secret"
+_cache: dict[str, _CacheEntry] = {}
 
 
 class GitHubAppConfigError(RuntimeError):
@@ -73,9 +74,7 @@ class GitHubAppConfigError(RuntimeError):
 
 def clear_cache() -> None:
     """Clear cached GitHub App secrets (useful for tests)."""
-    global _private_key_cache, _webhook_secret_cache
-    _private_key_cache = None
-    _webhook_secret_cache = None
+    _cache.clear()
 
 
 def _fresh_value(entry: _CacheEntry | None) -> str | None:
@@ -210,9 +209,7 @@ def _read_webhook_secret_from_env() -> str:
 
 def get_app_private_key() -> str:
     """Return the GitHub App private key from the backend, with env fallback."""
-    global _private_key_cache
-
-    cached = _fresh_value(_private_key_cache)
+    cached = _fresh_value(_cache.get(_PRIVATE_KEY_CACHE_KEY))
     if cached is not None:
         return cached
 
@@ -221,7 +218,7 @@ def get_app_private_key() -> str:
             _PRIVATE_KEY_LOGICAL_NAME,
             secret_label="private key",
         )
-        _private_key_cache = (value, None)
+        _cache[_PRIVATE_KEY_CACHE_KEY] = (value, None)
         return value
     except GitHubAppConfigError as backend_error:
         if not os.getenv(_PRIVATE_KEY_ENV_VAR, "").strip():
@@ -233,15 +230,13 @@ def get_app_private_key() -> str:
         )
 
     value = _read_private_key_from_env()
-    _private_key_cache = _env_fallback_entry(value)
+    _cache[_PRIVATE_KEY_CACHE_KEY] = _env_fallback_entry(value)
     return value
 
 
 def get_app_webhook_secret() -> str:
     """Return the GitHub App webhook secret from the backend, with env fallback."""
-    global _webhook_secret_cache
-
-    cached = _fresh_value(_webhook_secret_cache)
+    cached = _fresh_value(_cache.get(_WEBHOOK_SECRET_CACHE_KEY))
     if cached is not None:
         return cached
 
@@ -250,7 +245,7 @@ def get_app_webhook_secret() -> str:
             _WEBHOOK_SECRET_LOGICAL_NAME,
             secret_label="webhook secret",
         )
-        _webhook_secret_cache = (value, None)
+        _cache[_WEBHOOK_SECRET_CACHE_KEY] = (value, None)
         return value
     except GitHubAppConfigError as backend_error:
         logger.warning(
@@ -260,5 +255,5 @@ def get_app_webhook_secret() -> str:
         )
 
     value = _read_webhook_secret_from_env()
-    _webhook_secret_cache = _env_fallback_entry(value)
+    _cache[_WEBHOOK_SECRET_CACHE_KEY] = _env_fallback_entry(value)
     return value
