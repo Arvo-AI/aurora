@@ -606,7 +606,7 @@ class TestProvisioning:
                 self._IDENTITY, _install_payload()
             )
         assert user_id is None and created is False
-        assert response.location.endswith("/connectors?installed=github")
+        assert response.location.endswith("/connectors?highlight=GitHub")
         sql = " ".join(c.args[0] for c in cur.execute.call_args_list)
         assert "INSERT INTO users" not in sql
         assert "user_github_installations (user_id" not in sql

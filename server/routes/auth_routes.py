@@ -376,6 +376,8 @@ def register():
 
                 from utils.hooks import get_hook
                 get_hook("after_user_created")(user_id, org_id, email, "password", True)
+                from services.onboarding.journey import on_user_created
+                on_user_created(user_id, org_id, email, "password", True)
 
                 try:
                     from utils.auth.command_policy import seed_default_command_policy

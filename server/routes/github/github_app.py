@@ -629,6 +629,9 @@ def github_app_install_callback():
             exc_info=True,
         )
 
+    from services.onboarding.tasks import kick_org
+    kick_org(org_id)
+
     # Ensure tool permissions include GitHub tools for this org (idempotent).
     try:
         from utils.auth.tool_registry import seed_org_tool_permissions

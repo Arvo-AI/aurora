@@ -291,6 +291,14 @@ If existingSecret is set, use the user-provided name; otherwise use the chart-ma
 {{- end -}}
 {{- end -}}
 
+{{- define "aurora.secretName.onboarding" -}}
+{{- if .Values.secrets.onboarding.existingSecret -}}
+{{- .Values.secrets.onboarding.existingSecret -}}
+{{- else -}}
+{{- include "aurora.fullname" . -}}-secrets-onboarding
+{{- end -}}
+{{- end -}}
+
 {{- define "aurora.secretName.llm" -}}
 {{- if .Values.secrets.llm.existingSecret -}}
 {{- .Values.secrets.llm.existingSecret -}}

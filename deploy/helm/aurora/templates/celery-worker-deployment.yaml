@@ -30,6 +30,9 @@ spec:
         {{- if not .Values.secrets.app.existingSecret }}
         checksum/secret-app: {{ include (print $.Template.BasePath "/secret-app.yaml") . | sha256sum }}
         {{- end }}
+        {{- if not .Values.secrets.onboarding.existingSecret }}
+        checksum/secret-onboarding: {{ include (print $.Template.BasePath "/secret-onboarding.yaml") . | sha256sum }}
+        {{- end }}
         {{- if not .Values.secrets.llm.existingSecret }}
         checksum/secret-llm: {{ include (print $.Template.BasePath "/secret-llm.yaml") . | sha256sum }}
         {{- end }}
@@ -62,6 +65,8 @@ spec:
                 name: {{ include "aurora.secretName.backend" . }}
             - secretRef:
                 name: {{ include "aurora.secretName.app" . }}
+            - secretRef:
+                name: {{ include "aurora.secretName.onboarding" . }}
             - secretRef:
                 name: {{ include "aurora.secretName.llm" . }}
           env:

@@ -682,7 +682,7 @@ def _linked_elsewhere_redirect() -> flask.Response:
     # repo selection on GitHub): their session, or sign-in, takes it from
     # Connectors.
     logger.warning("[GITHUB-SIGNUP] installation already linked to another org; not provisioning")
-    return flask.redirect(f"{FRONTEND_URL}/connectors?installed=github", code=302)
+    return flask.redirect(f"{FRONTEND_URL}/connectors?highlight=GitHub", code=302)
 
 
 def _pending_signup_redirect(
@@ -858,6 +858,8 @@ def _provision_and_handoff(
         from utils.hooks import get_hook
 
         get_hook("after_user_created")(user_id, org_id, identity["email"], "github", True)
+        from services.onboarding.journey import on_user_created
+        on_user_created(user_id, org_id, identity["email"], "github", True)
 
     if org_id:
         try:
@@ -902,7 +904,7 @@ def _response_without_install(installation_id_raw: str, code: str) -> flask.Resp
         setup_action or "unknown",
     )
     if setup_action == "update":
-        return flask.redirect(f"{FRONTEND_URL}/connectors?installed=github", code=302)
+        return flask.redirect(f"{FRONTEND_URL}/connectors?highlight=GitHub", code=302)
     return _render_error(_ERROR_MISSING_PARAMS)
 
 

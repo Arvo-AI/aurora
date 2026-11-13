@@ -285,6 +285,8 @@ def _provision_user(identity: dict):
 
     from utils.hooks import get_hook
     get_hook("after_user_created")(user_id, org_id, identity["email"], "slack", True)
+    from services.onboarding.journey import on_user_created
+    on_user_created(user_id, org_id, identity["email"], "slack", True)
     return user_id, org_id
 
 
