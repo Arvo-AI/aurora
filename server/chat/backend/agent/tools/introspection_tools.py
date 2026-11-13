@@ -871,12 +871,9 @@ AUDIT_REFUSAL = (
 )
 SHARED_CHANNEL_NOTE = (
     "This answer is visible to others (a shared channel or an incident), so other people's "
-    "message text and chat links are left out. Admins can read the chats in Aurora under "
-    "Monitor → Chat history."
+    "message text is left out. Open the links in Aurora to read the chats; a link only "
+    "opens for people allowed to read that chat."
 )
-# Where links point when the answer is shared: a chat link opens the raw chat for
-# any org member, while this page applies the audit rule and redaction.
-CHAT_HISTORY_LINK = "/monitor?tab=chats"
 TRANSCRIPT_MESSAGES = 20          # most recent messages returned by get_conversation
 TRANSCRIPT_TEXT_CHARS = 1500      # per message, after redaction
 TRANSCRIPT_INPUT_CHARS = 300      # per failed tool call input
@@ -918,13 +915,6 @@ def _answer_is_private() -> bool:
         is_background=bool(getattr(state, "is_background", True)),
         incident_id=getattr(state, "incident_id", None),
     )
-
-
-def _link(link: Optional[str], private: bool) -> Optional[str]:
-    """A result's link as the answer may show it: chat links only where the answer is private."""
-    if private or not link or link.startswith("/incidents/"):
-        return link
-    return CHAT_HISTORY_LINK
 
 
 def _page(limit, offset) -> tuple[int, int, int]:
@@ -995,7 +985,7 @@ def search_tool_calls(
         call = {
             "started_at": r["started_at"], "tool": r["tool_name"], "status": r["status"], "issue": r["category"],
             "user": r["user"].get("email") or r["user"].get("name"), "user_id": r["user"].get("id"),
-            "source": r["source"], "link": _link(r["link"], private),
+            "source": r["source"], "link": r["link"],
         }
         # Commands, reasons and chat titles carry other people's words.
         if private:
@@ -1063,7 +1053,7 @@ def search_conversations(
             if match else None,
             # exact: one message contains the phrase; all_words: the words appear somewhere.
             **({"match_type": c["match_type"]} if "match_type" in c else {}),
-            "link": _link(c["link"], private),
+            "link": c["link"],
         })
     out = {"conversations": chats, "total_matching": result["total"],
            "total_is_lower_bound": bool(result.get("search_capped")), "offset": start,
@@ -1137,7 +1127,7 @@ def get_conversation(conversation_id, query=None, message_index=None, *, user_id
             "user": chat["user"].get("email") or chat["user"].get("name"),
             "source": chat["source"], "status": chat["status"],
             "started_at": chat["created_at"], "updated_at": chat["updated_at"],
-            "messages": chat["message_count"], "link": _link(chat["link"], private),
+            "messages": chat["message_count"], "link": chat["link"],
         },
         "issues": [
             {"issue": i["category"], "tool": i["tool_name"], "message_index": i["message_index"],

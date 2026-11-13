@@ -163,7 +163,7 @@ def test_search_conversations_snippets_only_in_private_chats(env, meta, backgrou
         assert match == {"sender": "aurora", "text": "it was AccessDenied"} and "note" not in out
     else:
         assert match == {"matched": True} and out["note"] == tools.SHARED_CHANNEL_NOTE
-    assert out["conversations"][0]["link"] == ("/chat?sessionId=s1" if private else tools.CHAT_HISTORY_LINK)
+    assert out["conversations"][0]["link"] == "/chat?sessionId=s1"
     f = env["calls"]["chats"]["filters"]
     assert env["calls"]["chats"]["org_id"] == "org-1" and f.query == "AccessDenied" and f.source == "slack"
 
@@ -188,7 +188,7 @@ def test_get_conversation_in_a_shared_channel_returns_metadata_only(env):
     out = json.loads(tools.get_conversation(user_id="a", conversation_id="s1"))
     assert "messages" not in out and out["note"] == tools.SHARED_CHANNEL_NOTE
     assert out["issues"] == [{"issue": "missing_permission", "tool": "cloud_exec", "message_index": 29}]
-    assert out["conversation"]["link"] == tools.CHAT_HISTORY_LINK
+    assert out["conversation"]["link"] == "/chat?sessionId=s1"
 
 
 def test_unknown_context_is_treated_as_shared(env, monkeypatch):
@@ -276,23 +276,15 @@ def test_search_tool_calls_in_a_shared_channel_drops_commands_reasons_and_titles
     out = json.loads(tools.search_tool_calls(user_id="admin-1"))
     (call,) = out["tool_calls"]
     assert not {"command", "reason", "chat_title"} & set(call)
-    assert call["tool"] == "cloud_exec" and call["issue"] == "missing_permission"
-    # A chat link would open the raw chat for any org member: point at the audit page instead.
-    assert call["link"] == tools.CHAT_HISTORY_LINK
+    # The chat route itself refuses people who may not read the chat, so the link stays.
+    assert call["tool"] == "cloud_exec" and call["issue"] == "missing_permission" and call["link"]
     assert out["note"] == tools.SHARED_CHANNEL_NOTE
 
 
 def test_search_conversations_in_a_shared_channel_drops_titles(env):
     env["meta"], env["background"] = {"source": "teams"}, True
     out = json.loads(tools.search_conversations(user_id="a"))
-    assert "title" not in out["conversations"][0]
-    assert out["conversations"][0]["link"] == tools.CHAT_HISTORY_LINK
-
-
-def test_shared_answers_keep_incident_links_and_private_ones_keep_chat_links():
-    assert tools._link("/incidents/inc-1", False) == "/incidents/inc-1"
-    assert tools._link("/chat?sessionId=s1", True) == "/chat?sessionId=s1"
-    assert tools._link(None, False) is None
+    assert "title" not in out["conversations"][0] and out["conversations"][0]["link"]
 
 
 def test_a_follow_up_in_an_incident_chat_gets_the_shared_answer(env):
