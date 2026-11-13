@@ -1,6 +1,7 @@
 """Extract citations from RCA chat sessions for evidence linking."""
 
 import json
+import re
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -129,6 +130,9 @@ _TOOL_NAME_MAPPING: Dict[str, str] = {
 
 # Internal coordination tools that show up as tool messages but aren't real
 # evidence — filter them out of citations entirely.
+# Start of a RabbitMQ tool result: its ``brokers`` list is always the first key.
+_LEADING_BROKERS_RE = re.compile(r'\s*\{\s*"brokers"\s*:\s*')
+
 _NON_EVIDENCE_TOOLS = frozenset({
     "dispatch_subagent",
     "write_findings",
@@ -487,6 +491,18 @@ class CitationExtractor:
         return ""
 
     @staticmethod
+    def _leading_brokers(content: str) -> Optional[Dict[str, Any]]:
+        """Decode just a leading ``{"brokers": [...]`` from a truncated JSON string."""
+        match = _LEADING_BROKERS_RE.match(content)
+        if not match:
+            return None
+        try:
+            brokers, _end = json.JSONDecoder().raw_decode(content, match.end())
+        except (json.JSONDecodeError, ValueError):
+            return None
+        return {"brokers": brokers} if isinstance(brokers, list) else None
+
+    @staticmethod
     def _rabbitmq_broker_label(args: Any, content: Any) -> str:
         """Which RabbitMQ brokers a call hit, from its ``brokers`` list or the requested account."""
         parsed: Any = content if isinstance(content, dict) else None
@@ -494,7 +510,9 @@ class CitationExtractor:
             try:
                 parsed = json.loads(content)
             except (json.JSONDecodeError, TypeError):
-                parsed = None
+                # History keeps only an excerpt. ``brokers`` leads every result,
+                # so it usually survives truncation even when the rest doesn't.
+                parsed = CitationExtractor._leading_brokers(content)
         brokers = parsed.get("brokers") if isinstance(parsed, dict) else None
         labels = CitationExtractor._rabbitmq_labels(brokers) if isinstance(brokers, list) else []
         if labels:

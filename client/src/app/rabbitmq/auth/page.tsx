@@ -136,8 +136,20 @@ export default function RabbitMQAuthPage() {
       await rabbitmqService.disconnect(accountId);
       toast({ title: accountId ? "RabbitMQ broker removed" : "RabbitMQ disconnected" });
       if (accountId) {
-        // Other brokers stay connected. Refresh so the list and cache match the server.
-        await fetchAndUpdateStatus();
+        // Drop the broker locally first, so a failed refresh can't leave it listed.
+        const remaining = rabbitmqAccounts(status).filter((a) => a.accountId !== accountId);
+        const next: RabbitMQStatus = { ...(status ?? { connected: false }), connected: remaining.length > 0, accounts: remaining };
+        setStatus(next);
+        if (typeof window !== "undefined") {
+          localStorage.setItem(CACHE_KEY, JSON.stringify(next));
+        }
+        updateLocalStorageConnection(next.connected);
+        // Removal already succeeded. A refresh failure must not look like a failed disconnect.
+        try {
+          await fetchAndUpdateStatus();
+        } catch {
+          console.warn("[rabbitmq] Status refresh after removing a broker failed");
+        }
       } else {
         setStatus({ connected: false, accounts: [] });
         if (typeof window !== "undefined") {

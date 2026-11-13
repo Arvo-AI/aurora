@@ -567,3 +567,37 @@ def test_status_card_reads_a_legacy_blob(monkeypatch):
     result = connector_status._check_rabbitmq({"url": "http://10.0.0.1:15672", "username": "u", "password": "p"})
     assert result == {"connected": False, "accountCount": 1}
     assert connector_status._check_rabbitmq({}) == {"connected": False}
+
+
+@pytest.mark.parametrize("body", [{"accountId": 123}, {"accountId": "  "}, {"account": None}, ["10.0.0.1:15672"]])
+def test_disconnect_post_rejects_a_bad_selector(monkeypatch, routes, body):
+    retired = []
+    monkeypatch.setattr(routes, "list_rabbitmq_accounts", lambda user_id, raise_on_error=False: [_broker("10.0.0.1:15672")])
+    monkeypatch.setattr(routes, "retire_rabbitmq_connections", lambda user_id: retired.append(user_id))
+    with _app().test_request_context("/rabbitmq/disconnect", method="POST", json=body):
+        _body, status = _call(routes.disconnect_post)
+    assert status == 400
+    assert retired == []
+
+
+def test_disconnect_delete_rejects_a_blank_selector(monkeypatch, routes):
+    retired = []
+    monkeypatch.setattr(routes, "retire_rabbitmq_connections", lambda user_id: retired.append(user_id))
+    with _app().test_request_context("/rabbitmq/disconnect?account=", method="DELETE"):
+        _body, status = _call(routes.disconnect)
+    assert status == 400
+    assert retired == []
+
+
+def test_citation_label_survives_a_truncated_result():
+    from chat.background.citation_extractor import CitationExtractor
+
+    full = json.dumps({
+        "brokers": [{"account_id": "10.0.0.1:15672", "name": "prod"}, {"account_id": "10.0.0.2:15672", "name": "staging"}],
+        "results_by_account": {"10.0.0.1:15672": {"items": ["q"] * 500}},
+    })
+    excerpt = full[:1000]
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(excerpt)
+    label = CitationExtractor._rabbitmq_broker_label({}, excerpt)
+    assert label == "10.0.0.1:15672, 10.0.0.2:15672"

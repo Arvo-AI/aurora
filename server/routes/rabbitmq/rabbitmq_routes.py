@@ -1,7 +1,7 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Blueprint, jsonify, request
 
@@ -285,25 +285,43 @@ def status(user_id):
     return jsonify(body)
 
 
-def _selector_from_body() -> Optional[str]:
-    data = request.get_json(silent=True) or {}
+_BAD_SELECTOR = "Invalid RabbitMQ broker selector. Omit it to disconnect every broker."
+
+
+def _selector_from_body() -> Tuple[Optional[str], bool]:
+    """(selector, valid). A selector that is present must be a non-blank string."""
+    data = request.get_json(silent=True)
+    if data is None:
+        return None, True
     if not isinstance(data, dict):
-        return None
-    selector = data.get("accountId") or data.get("account")
-    return selector if isinstance(selector, str) else None
+        return None, False
+    for key in ("accountId", "account"):
+        if key in data:
+            selector = data[key]
+            if not isinstance(selector, str) or not selector.strip():
+                return None, False
+            return selector, True
+    return None, True
 
 
 @rabbitmq_bp.route("/disconnect", methods=["POST"])
 @require_permission("connectors", "write")
 def disconnect_post(user_id):
     # The broker name belongs in the body, not the query string.
-    return _disconnect(user_id, _selector_from_body())
+    selector, valid = _selector_from_body()
+    if not valid:
+        return jsonify({"error": _BAD_SELECTOR}), 400
+    return _disconnect(user_id, selector)
 
 
 @rabbitmq_bp.route("/disconnect", methods=["DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
-    return _disconnect(user_id, request.args.get("account"))
+    selector = request.args.get("account")
+    # "?account=" is a mistake, not a request to remove every broker.
+    if selector is not None and not selector.strip():
+        return jsonify({"error": _BAD_SELECTOR}), 400
+    return _disconnect(user_id, selector)
 
 
 def _disconnect(user_id, selector: Optional[str]):
