@@ -42,6 +42,7 @@ CONTINUE_PROMPT = (
     "- Start with the areas listed as Not Checked and the open hypotheses.\n"
     "- Confirm or rule out the root cause, then write your conclusions."
 )
+CONTINUE_RAIL_TEXT = "Continue this investigation."
 # The report rides in the prompt, so it survives context trimming; cap it.
 _MAX_REPORT_CHARS = 8000
 
@@ -127,6 +128,9 @@ def continue_investigation(incident_id: str, requested_by: str) -> Dict[str, Any
             # report updates the existing card instead (see task.py).
             send_notifications=False,
             mode="ask",
+            # The prompt embeds Aurora's own report; nothing in it comes from the
+            # requester, so only the fixed instruction goes through the input rail.
+            rail_text=CONTINUE_RAIL_TEXT,
         )
     except Exception:
         # Nothing was queued: put the incident back as it was.

@@ -100,6 +100,8 @@ def test_an_unfinished_rca_is_continued_in_its_own_session(db):
     assert job["incident_id"] == INCIDENT
     assert job["send_notifications"] is False
     assert job["mode"] == "ask"
+    # Aurora's own report is not checked as user input; only the fixed instruction is.
+    assert job["rail_text"] == continuation.CONTINUE_RAIL_TEXT
     assert job["trigger_metadata"] == {"source": CONTINUE_SOURCE, "requested_by": CLICKER}
     assert "reached its time limit" in job["initial_message"]
     assert "Root cause not determined. Not Checked: db." in job["initial_message"]

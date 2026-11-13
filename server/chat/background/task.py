@@ -1685,6 +1685,11 @@ async def _execute_background_chat(
         if (_agent_error and incident_id and not is_action_source
                 and (send_notifications or is_continuation(trigger_metadata))):
             raise RuntimeError(f"The investigation agent stopped on an error: {_agent_error}")
+        # A continuation the input rail stopped never ran: the investigation is
+        # still unfinished, and its earlier report stands.
+        if (incident_id and is_continuation(trigger_metadata) and wf._last_state
+                and wf._get_state_attr(wf._last_state, "guardrail_blocked")):
+            raise RuntimeError("The continuation was blocked by the input guardrail")
 
         # Send Slack response immediately — don't wait for post-processing
         _slack_early_sent = False
